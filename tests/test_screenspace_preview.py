@@ -134,6 +134,11 @@ def test_build_overlay_layer_shape_matches_scope(
         # Use a slice that includes the gradient (non-zero std) so the
         # heatmap layer can be computed.
         params["template_image"] = synthetic_frame[10:50, 10:50].copy()
+    elif tool == "shape":
+        # A drawn outline guarantees enough Canny edges at every ladder scale.
+        ref = np.zeros((40, 40, 3), dtype=np.uint8)
+        cv2.rectangle(ref, (5, 5), (35, 35), (255, 255, 255), 2)
+        params["shape_image"] = ref
     elif tool == "similarity":
         # The SSIM-diff layer needs a region-sized reference crop.
         params["reference_frame"] = prev_frame[

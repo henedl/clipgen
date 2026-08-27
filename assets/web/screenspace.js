@@ -28,7 +28,7 @@
 
   var SS_TASK_ICON_TYPES = {
     multitool: 1, color: 1, change: 1, similarity: 1, text: 1,
-    numbers: 1, template: 1, flow: 1, scene: 1, inactivity: 1,
+    numbers: 1, template: 1, shape: 1, flow: 1, scene: 1, inactivity: 1,
     boundary: 1, attention: 1, timelapse: 1,
   };
 
@@ -238,6 +238,7 @@
     previewRegions: null,
     resultOverlay: null,
     heatmapOverlay: null,
+    capturedRefPreview: null,
     uploadedTemplate: null,
     uploadedTemplateImg: null,
     templateScalePreview: 1.0,
@@ -891,6 +892,7 @@
     text: "Skips unchanged frames",
     numbers: "Skips unchanged frames",
     template: "Downscales template 2\u00D7, skips unchanged frames",
+    shape: "Downscales reference 2\u00D7, skips unchanged frames; thin outlines may vanish",
     flow: "Lower resolution, skips unchanged frames",
     scene: "Lower resolution, skips unchanged frames",
     inactivity: "Lower resolution, skips unchanged frames",
@@ -955,8 +957,19 @@
       "Format":           "Output file format: video or animated GIF",
     },
     template: {
-      "Template":         "Capture or upload the picture to search for anywhere on screen",
+      "Template":         "Capture or upload the picture to search for. The selected region scopes where",
       "Threshold":        "How closely the picture must match. Lower it to allow looser matches",
+    },
+    shape: {
+      "Shape":            "Capture or upload the shape to search for. Only its outline is matched; the selected region scopes where",
+      "Threshold":        "How closely the outline must match. Lower it to allow looser matches",
+      "Scale min":        "Smallest size to search at, as a percent of the reference. Width-only when axes are unlinked",
+      "Scale max":        "Largest size to search at, as a percent of the reference. Width-only when axes are unlinked",
+      "Scale steps":      "How many sizes to try between min and max. More steps = finer size coverage, slower scan",
+      "Link axes":        "Uncheck to search width and height independently — for buttons that stretch with their content. Every width is tried at every height, so the scan slows accordingly",
+      "V scale min":      "Smallest height to search at, as a percent of the reference",
+      "V scale max":      "Largest height to search at, as a percent of the reference",
+      "V scale steps":    "How many heights to try between min and max",
     },
     flow: {
       "Magnitude":        "Minimum movement strength to count. Raise it to ignore small or slow motion",
@@ -2369,7 +2382,8 @@
     text: "Reads on-screen text in your region (OCR) and flags frames matching your search words, allowing for small misreads. Draw a tight region around the text; raise the OCR confidence if you get false hits. Good for catching specific labels, error messages, or button text. To compare on-screen numbers (e.g. score over 1000), use Numbers.",
     numbers: "Reads a number from your region (OCR) and flags frames where it meets a rule you set: equals, greater than, less than, or within a range. Draw a tight region around just the number, then pick the operator and target value. Great for scores, timers, lives, or any changing count. For words rather than numbers, use Text.",
     timelapse: "Produces one sped-up video or GIF of your region over the time range you choose: a fast way to skim a long session. Unlike every other tool it doesn't mark individual moments on the timeline; it outputs a single clip. Set the speed, and optionally sample every N seconds for a shorter file.",
-    template: "Capture or upload a small reference image, then this looks for that exact picture anywhere on screen, not just inside a region. Ideal for finding an icon, button, or logo wherever it appears. Lower the Threshold to allow looser matches. Unlike Color (which matches an average shade) it matches the picture itself; unlike Similarity it searches the whole frame, not one region.",
+    template: "Capture or upload a small reference image, then this looks for that exact picture within the selected region — pick Full frame to search the whole screen. Ideal for finding an icon, button, or logo wherever it appears. Lower the Threshold to allow looser matches. Unlike Color (which matches an average shade) it matches the picture itself; unlike Similarity it can find the picture anywhere, not just where it was sampled.",
+    shape: "Capture or upload a reference image, then this looks for its outline within the selected region, sweeping a range of sizes — pick Full frame to search the whole screen. Because only edges are matched, it finds the shape even when its colors change (dark mode, hover states, hollow vs filled) or it appears larger or smaller than the reference. Text inside the reference counts as part of the outline, so a button sampled with one label scores lower against the same button with another; sample the chrome without the label when labels vary. Use Template when the exact pixels matter. Thin or tiny outlines are hard to match; prefer references at least ~20 px across.",
     flow: "Detects movement inside your region: a character running, an animation playing, or activity in one corner. Raise the strength threshold to ignore small or slow motion. Unlike Change (which fires on any pixel difference, including flicker) Flow responds only to real movement, so it stays steadier on noisy footage.",
     scene: "Capture and label several reference screens, then this tags each frame with whichever one it most resembles. This builds a timeline of which screen is showing (title, map, level, pause menu). It tolerates lighting and minor changes better than Similarity, and handles many screens at once where Similarity matches just one. Lower the Threshold if frames go untagged.",
     inactivity: "Finds stretches where your region barely changes for a while — loading screens, frozen states, or a player standing idle. It's the opposite of Change: it fires when nothing happens, not when something does. Set the minimum duration so brief pauses are ignored and only real stalls are reported.",
@@ -2512,7 +2526,7 @@
   var TOOL_CATEGORIES = [
     { label: "Multitool", tools: ["multitool"], alwaysIcon: true, standalone: true },
     { label: "Difference", tools: ["change", "similarity", "inactivity"], icon: "square-2-stack" },
-    { label: "Detection", tools: ["template", "color", "text", "numbers"], icon: "magnifying-glass" },
+    { label: "Detection", tools: ["template", "shape", "color", "text", "numbers"], icon: "magnifying-glass" },
     { label: "Classification", tools: ["scene", "boundary"], icon: "tag" },
     { label: "Attention", tools: ["flow", "attention"], icon: "cursor-arrow-rays" },
     { label: "Utility", tools: ["timelapse"], icon: "cog-6-tooth" },
@@ -2524,7 +2538,8 @@
   var TOOL_ICON_NAMES = {
     multitool: "wrench-screwdriver", color: "eye-dropper", change: "bolt",
     similarity: "photo", text: "language", numbers: "hashtag",
-    template: "viewfinder-circle", flow: "arrows-right-left", scene: "squares-2x2",
+    template: "viewfinder-circle", shape: "star", flow: "arrows-right-left",
+    scene: "squares-2x2",
     inactivity: "pause-circle", boundary: "flag", timelapse: "forward",
     attention: "eye",
   };
@@ -2947,12 +2962,15 @@
     var refBtn = el("button", "btn btn-small", "Capture Current Frame");
     refBtn.addEventListener("click", function () {
       state.referenceTimestamp = state.currentTimestamp;
+      state.capturedRefPreview = captureRefSnapshot(state.currentTimestamp);
       renderWorkflowParams();
       showToast("Reference frame captured at " + formatTime(state.currentTimestamp, { decimals: 1 }));
     });
     refControl.appendChild(refBtn);
     if (state.referenceTimestamp !== null) {
       refControl.appendChild(refTimeChip(state.referenceTimestamp));
+      var simSnapInfo = refSnapshotInfo("reference");
+      if (simSnapInfo) refControl.appendChild(simSnapInfo);
     }
     refRow.appendChild(refLabel);
     refRow.appendChild(refControl);
@@ -3064,9 +3082,62 @@
     container.appendChild(fmtRow);
   }
 
-  function renderTemplateParams(container) {
+  // Snapshot the active region's pixels at capture time so the reference row
+  // can show what will be matched (the run re-extracts server-side; this
+  // thumbnail is a same-frame client-side crop of the same rect).
+  function captureRefSnapshot(ts) {
+    var img = state.frameImage;
+    var regs = state.previewRegions || state.regions;
+    var name = state.activeRegion && regs[state.activeRegion] ? state.activeRegion : null;
+    if (!name) {
+      for (var i = state.runRegions.length - 1; i >= 0; i--) {
+        var ref = normalizeRegionRef(state.runRegions[i]);
+        if (ref && ref.name && regs[ref.name]) { name = ref.name; break; }
+      }
+    }
+    var r = name && regs[name];
+    if (!img || !img.naturalWidth || !r) return null;
+    var sw = Math.max(1, Math.round(r.w * img.naturalWidth));
+    var sh = Math.max(1, Math.round(r.h * img.naturalHeight));
+    var c = document.createElement("canvas");
+    c.width = sw;
+    c.height = sh;
+    c.getContext("2d").drawImage(
+      img,
+      r.x * img.naturalWidth, r.y * img.naturalHeight, sw, sh,
+      0, 0, sw, sh
+    );
+    return { dataUrl: c.toDataURL("image/png"), region: name, ts: ts };
+  }
+
+  // Thumbnail + source-region label for the last capture. Shared by the
+  // Template/Shape reference row and Similarity. A task-Edit restore knows
+  // the region name but has no pixels (the server strips binaries), so the
+  // thumbnail is optional.
+  function refSnapshotInfo(labelText) {
+    var snap = state.capturedRefPreview;
+    if (!snap || snap.ts !== state.referenceTimestamp) return null;
+    if (!snap.dataUrl && !snap.region) return null;
+    var capInfo = el("span", "param-value template-upload-info");
+    if (snap.dataUrl) {
+      var capThumb = document.createElement("img");
+      capThumb.decoding = "async";
+      capThumb.src = snap.dataUrl;
+      capThumb.alt = "Captured " + labelText.toLowerCase();
+      capThumb.title = snap.region;
+      capInfo.appendChild(capThumb);
+    }
+    if (snap.region) capInfo.appendChild(el("span", "param-hint", snap.region));
+    return capInfo;
+  }
+
+  // Shared by Template and Shape: the capture-region / upload-PNG reference
+  // row. Both tools read state.referenceTimestamp / state.uploadedTemplate;
+  // the drag overlay stays template-only (templateOverlayBounds gates on the
+  // active tool).
+  function renderRefCaptureRow(container, labelText) {
     var tmplRefRow = el("div", "param-row");
-    tmplRefRow.appendChild(el("span", "param-label", "Template"));
+    tmplRefRow.appendChild(el("span", "param-label", labelText));
     var tmplRefCtrl = el("div", "param-control");
     var tmplCapBtn = el("button", "btn btn-small ss-template-icon-btn ss-template-icon-btn--capture");
     tmplCapBtn.setAttribute("type", "button");
@@ -3075,10 +3146,18 @@
     var tmplCapGlyph = el("span", "ss-template-icon-btn__glyph");
     tmplCapBtn.appendChild(tmplCapGlyph);
     tmplCapBtn.addEventListener("click", function () {
+      var snap = captureRefSnapshot(state.currentTimestamp);
+      // Refuse a region-less capture: the sample would silently become the
+      // task's run region (the whole frame under a Full-frame target).
+      if (!snap) {
+        showToast("Select or draw a region to capture from");
+        return;
+      }
       state.referenceTimestamp = state.currentTimestamp;
       state.uploadedTemplate = null;
+      state.capturedRefPreview = snap;
       renderWorkflowParams();
-      showToast("Template captured at " + formatTime(state.currentTimestamp, { decimals: 1 }));
+      showToast(labelText + " captured at " + formatTime(state.currentTimestamp, { decimals: 1 }));
     });
     tmplRefCtrl.appendChild(tmplCapBtn);
 
@@ -3095,13 +3174,14 @@
         var b64 = dataUrl.split(",")[1];
         state.uploadedTemplate = { name: file.name, data: b64 };
         state.referenceTimestamp = null;
+        state.capturedRefPreview = null;
         state.templateOverlayPos = null;
         var previewImg = new Image();
         previewImg.onload = function () { renderOverlay(); };
         previewImg.src = dataUrl;
         state.uploadedTemplateImg = previewImg;
         renderWorkflowParams();
-        showToast("Template loaded");
+        showToast(labelText + " loaded");
       };
       reader.readAsDataURL(file);
     });
@@ -3126,7 +3206,7 @@
       var uploadThumb = document.createElement("img");
       uploadThumb.decoding = "async";
       uploadThumb.src = "data:image/png;base64," + state.uploadedTemplate.data;
-      uploadThumb.alt = "Uploaded template";
+      uploadThumb.alt = "Uploaded " + labelText.toLowerCase();
       uploadThumb.title = state.uploadedTemplate.name;
       uploadInfo.appendChild(uploadThumb);
       var clearBtn = el("button", "btn btn-small", "\u00d7");
@@ -3141,9 +3221,18 @@
       tmplRefCtrl.appendChild(uploadInfo);
     } else if (state.referenceTimestamp !== null) {
       tmplRefCtrl.appendChild(refTimeChip(state.referenceTimestamp));
+      // Show what was captured: a crop thumbnail + the source region's name.
+      // A restore from task Edit has no snapshot (server strips the binary),
+      // so the ts guard degrades those to the plain time chip.
+      var capInfo = refSnapshotInfo(labelText);
+      if (capInfo) tmplRefCtrl.appendChild(capInfo);
     }
     tmplRefRow.appendChild(tmplRefCtrl);
     container.appendChild(tmplRefRow);
+  }
+
+  function renderTemplateParams(container) {
+    renderRefCaptureRow(container, "Template");
     addParamRow(container, "Threshold", rangeInput("paramTemplateThresh", 0.50, 1.00, 0.70, 0.01), "paramTemplateThreshVal");
     addParamRow(container, "Template scale", rangeInput("paramTemplateScale", 25, 200, 100, 5), "paramTemplateScaleVal");
     var scaleHint = el("span", "param-hint", "% \u2014 resize the uploaded PNG before matching");
@@ -3160,6 +3249,37 @@
     renderIntervalSlot("paramTemplateInterval", 0.5, 60, 1.0, 0.5);
   }
 
+  function renderShapeParams(container) {
+    renderRefCaptureRow(container, "Shape");
+    addParamRow(container, "Threshold", rangeInput("paramShapeThresh", 0.30, 1.00, 0.55, 0.01), "paramShapeThreshVal");
+    addParamRow(container, "Scale min", rangeInput("paramShapeScaleMin", 25, 400, 50, 5), "paramShapeScaleMinVal");
+    addParamRow(container, "Scale max", rangeInput("paramShapeScaleMax", 25, 400, 200, 5), "paramShapeScaleMaxVal");
+    addParamRow(container, "Scale steps", numberInput("paramShapeSteps", 1, 12, 7, 1));
+    // Unlinked axes: the sliders above become horizontal-only and a vertical
+    // ladder appears — for buttons that keep their height but stretch in
+    // width. The sweep crosses the ladders, so cost multiplies.
+    var linkCb = document.createElement("input");
+    linkCb.type = "checkbox";
+    linkCb.id = "paramShapeLinkAxes";
+    linkCb.checked = true;
+    addParamRow(container, "Link axes", linkCb);
+    addParamRow(container, "V scale min", rangeInput("paramShapeScaleYMin", 25, 400, 90, 5), "paramShapeScaleYMinVal");
+    var rowYMin = container.lastChild;
+    addParamRow(container, "V scale max", rangeInput("paramShapeScaleYMax", 25, 400, 110, 5), "paramShapeScaleYMaxVal");
+    var rowYMax = container.lastChild;
+    addParamRow(container, "V scale steps", numberInput("paramShapeStepsY", 1, 12, 3, 1));
+    var rowYSteps = container.lastChild;
+    function syncAxisRows() {
+      var show = !linkCb.checked;
+      rowYMin.style.display = show ? "" : "none";
+      rowYMax.style.display = show ? "" : "none";
+      rowYSteps.style.display = show ? "" : "none";
+    }
+    linkCb.addEventListener("change", syncAxisRows);
+    syncAxisRows();
+    renderIntervalSlot("paramShapeInterval", 0.5, 60, 1.0, 0.5);
+  }
+
   function renderSceneParams(container) {
     var sceneList = el("div", "scene-reference-list");
     sceneList.id = "sceneRefList";
@@ -3167,6 +3287,16 @@
       if (ref.threshold === undefined) ref.threshold = 0.75;
       var item = el("div", "scene-ref-item");
       item.appendChild(el("span", "scene-ref-name", ref.name));
+      if (ref._thumb) {
+        var scThumbWrap = el("span", "param-value template-upload-info");
+        var scThumb = document.createElement("img");
+        scThumb.decoding = "async";
+        scThumb.src = ref._thumb;
+        scThumb.alt = "Scene sample";
+        if (ref._thumbRegion) scThumb.title = ref._thumbRegion;
+        scThumbWrap.appendChild(scThumb);
+        item.appendChild(scThumbWrap);
+      }
       item.appendChild(refTimeChip(ref.timestamp));
       var threshSlider = document.createElement("input");
       threshSlider.type = "range";
@@ -3203,7 +3333,16 @@
       var nameEl = qs("#paramSceneName");
       var name = nameEl ? nameEl.value.trim() : "";
       if (!name) { showToast("Enter a scene name"); return; }
-      state.sceneReferences.push({ name: name, timestamp: state.currentTimestamp, threshold: 0.75 });
+      // Underscore fields are display-only; gather maps refs to
+      // {name, timestamp, threshold} so they never reach the server.
+      var scSnap = captureRefSnapshot(state.currentTimestamp);
+      state.sceneReferences.push({
+        name: name,
+        timestamp: state.currentTimestamp,
+        threshold: 0.75,
+        _thumb: scSnap && scSnap.dataUrl,
+        _thumbRegion: scSnap && scSnap.region,
+      });
       renderWorkflowParams();
       showToast("Scene '" + name + "' at " + formatTime(state.currentTimestamp, { decimals: 1 }));
     });
@@ -3458,6 +3597,7 @@
     else if (type === "numbers") renderNumbersParams(container);
     else if (type === "timelapse") renderTimelapseParams(container);
     else if (type === "template") renderTemplateParams(container);
+    else if (type === "shape") renderShapeParams(container);
     else if (type === "flow") {
       addParamRow(container, "Magnitude", rangeInput("paramFlowMag", 0.5, 20.0, 2.0, 0.5), "paramFlowMagVal");
       renderIntervalSlot("paramFlowInterval", 0.5, 60, 1.0, 0.5);
@@ -3670,18 +3810,20 @@
         btn.removeAttribute("data-tooltip");
       }
     } else {
-      var isTemplate = state.activeWorkflow === "template";
+      var isTemplate = state.activeWorkflow === "template"
+        || state.activeWorkflow === "shape";
       var isFullFrameTool = state.activeWorkflow === "boundary"
         || state.activeWorkflow === "attention";
       var hasUploadedTemplate = !!state.uploadedTemplate;
-      // Template scans full frames regardless of region selection; the region
-      // (or uploaded image) only supplies the template patch.
+      // Template scans full frames regardless of region selection; shape
+      // scopes matches to the run region. Either way the region (or uploaded
+      // image) supplies the reference patch, so one of the two is required.
       var templateMissingPatch = isTemplate && !hasRegion && !hasUploadedTemplate;
       // Boundary and Attention are full-frame only — they need no region at all.
       var nonTemplateMissingRegion = !isTemplate && !isFullFrameTool && !hasRegion;
       btn.disabled = nonTemplateMissingRegion || templateMissingPatch || !hasParticipants;
       if (templateMissingPatch) {
-        btn.setAttribute("data-tooltip", "Upload a template image or pick a region first");
+        btn.setAttribute("data-tooltip", "Upload a reference image or pick a region first");
       } else if (nonTemplateMissingRegion) {
         btn.setAttribute("data-tooltip", "Select a region first");
       } else if (!hasParticipants) {
@@ -3715,8 +3857,10 @@
             : (state.activeRegion ? [activeRegionRef(state.activeRegion)] : []));
       // Multitool uses per-step regions; skip global region requirement
       var isMultitool = type === "multitool";
-      // Template with uploaded image can run without a region (full-frame scan)
-      if (!isMultitool && !isFullFrameTool && regions.length === 0 && !(type === "template" && state.uploadedTemplate)) return;
+      // Template/shape with an uploaded image can run without a region
+      // (full-frame scan).
+      if (!isMultitool && !isFullFrameTool && regions.length === 0
+          && !((type === "template" || type === "shape") && state.uploadedTemplate)) return;
       if (regions.length === 0) regions = [""];
       var participants = state.runParticipants.length > 0
         ? state.runParticipants
@@ -4014,6 +4158,12 @@
         if (state.uploadedTemplate.name) params.template_name = state.uploadedTemplate.name;
       } else if (state.referenceTimestamp !== null) {
         params.reference_timestamp = state.referenceTimestamp;
+        // Pin the sample to its capture region so the run target (e.g. Full
+        // frame) only scopes the search, never the reference extraction.
+        var tplSnap = state.capturedRefPreview;
+        if (tplSnap && tplSnap.ts === state.referenceTimestamp && tplSnap.region) {
+          params.reference_region = tplSnap.region;
+        }
       } else {
         toast("Capture a template region or upload a PNG");
         return null;
@@ -4024,6 +4174,33 @@
       if (!isNaN(scalePct) && scalePct > 0 && scalePct !== 100) {
         params.template_scale = scalePct / 100;
       }
+    } else if (type === "shape") {
+      if (state.uploadedTemplate) {
+        params.shape_image_data = state.uploadedTemplate.data;
+        if (state.uploadedTemplate.name) params.shape_name = state.uploadedTemplate.name;
+      } else if (state.referenceTimestamp !== null) {
+        params.reference_timestamp = state.referenceTimestamp;
+        // Pin the sample to its capture region so the run target (e.g. Full
+        // frame) only scopes the search, never the reference extraction.
+        var capSnap = state.capturedRefPreview;
+        if (capSnap && capSnap.ts === state.referenceTimestamp && capSnap.region) {
+          params.reference_region = capSnap.region;
+        }
+      } else {
+        toast("Capture a shape region or upload a PNG");
+        return null;
+      }
+      params.threshold = num("paramShapeThresh", 0.55);
+      params.scale_min = num("paramShapeScaleMin", 50) / 100;
+      params.scale_max = num("paramShapeScaleMax", 200) / 100;
+      params.scale_steps = intv("paramShapeSteps", 7);
+      var linkEl = qs("#paramShapeLinkAxes");
+      if (linkEl && !linkEl.checked) {
+        params.scale_y_min = num("paramShapeScaleYMin", 90) / 100;
+        params.scale_y_max = num("paramShapeScaleYMax", 110) / 100;
+        params.scale_y_steps = intv("paramShapeStepsY", 3);
+      }
+      params.interval = num("paramShapeInterval", 1.0);
     } else if (type === "flow") {
       params.magnitude_threshold = num("paramFlowMag", 2.0);
       params.interval = num("paramFlowInterval", 1.0);

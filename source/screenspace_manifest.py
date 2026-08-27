@@ -26,6 +26,8 @@ TASK_BINARY_KEYS = (
     "reference_frame",
     "template_image",
     "template_mask",
+    "shape_image",
+    "shape_mask",
     "reference_scenes",
 )
 
@@ -118,6 +120,12 @@ def _describe(task_type: str, params: dict[str, Any]) -> str:
     elif task_type == "template":
         if params.get("template_name"):
             return f"{label}: {params['template_name']}"
+        if params.get("reference_timestamp") is not None:
+            ts = utils.seconds_to_timestamp(float(params["reference_timestamp"]))
+            return f"{label} @ {ts}"
+    elif task_type == "shape":
+        if params.get("shape_name"):
+            return f"{label}: {params['shape_name']}"
         if params.get("reference_timestamp") is not None:
             ts = utils.seconds_to_timestamp(float(params["reference_timestamp"]))
             return f"{label} @ {ts}"
@@ -333,7 +341,7 @@ def generate_events_from_results(
             metadata["text_found"] = r.get("text_found", "")
         elif task_type == "numbers":
             metadata["value"] = r.get("number_found", 0)
-        elif task_type == "template":
+        elif task_type in ("template", "shape"):
             metadata["match_count"] = r.get("match_count", 0)
             metadata["best_score"] = r.get("best_score", 0.0)
         elif task_type == "flow":

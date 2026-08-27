@@ -30,7 +30,7 @@ _INLINE_SVG = {
 
 # JS files allowed to define SVG path data, with counts.
 _JS_PATH_DATA = {
-    "viewer.js": 15,  # SS_DETECTOR_ICON_PATHS; exports have no /icons/
+    "viewer.js": 16,  # SS_DETECTOR_ICON_PATHS; exports have no /icons/
 }
 
 # Files allowed to embed data-URI SVG at all.

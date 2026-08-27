@@ -440,7 +440,8 @@ Note: Non-interactive mode (using -b, -l, -r, -C, -c, -p, -k, -S, -M, -R, or -T)
         help=(
             "Run a Screenspace analysis task headlessly. "
             "TYPE is one of color, change, similarity, text, numbers, timelapse, "
-            "template, flow, inactivity, scene, attention. REGION is optional and must "
+            "template, shape, flow, inactivity, scene, attention. REGION is optional "
+            "and must "
             "already "
             "exist in the active manifest or in a stash (use --ss-list-regions / "
             "--ss-list-stashes); omit it (or pass 'full_frame') to scan the whole frame."
@@ -515,13 +516,49 @@ Note: Non-interactive mode (using -b, -l, -r, -C, -c, -p, -k, -S, -M, -R, or -T)
         "--ss-threshold",
         type=float,
         metavar="FLOAT",
-        help="Match threshold (color, change, similarity, template, flow, inactivity).",
+        help="Match threshold (color, change, similarity, template, shape, flow, inactivity).",
     )
     screenspace_cli.add_argument(
         "--ss-reference-timestamp",
         type=float,
         metavar="SECONDS",
-        help="Reference frame timestamp (similarity, template).",
+        help="Reference frame timestamp (similarity, template, shape).",
+    )
+    screenspace_cli.add_argument(
+        "--ss-scale-min",
+        type=float,
+        metavar="FLOAT",
+        help="Shape scale ladder minimum (default from config).",
+    )
+    screenspace_cli.add_argument(
+        "--ss-scale-max",
+        type=float,
+        metavar="FLOAT",
+        help="Shape scale ladder maximum (default from config).",
+    )
+    screenspace_cli.add_argument(
+        "--ss-scale-steps",
+        type=int,
+        metavar="INT",
+        help="Shape scale ladder rungs (default from config).",
+    )
+    screenspace_cli.add_argument(
+        "--ss-scale-y-min",
+        type=float,
+        metavar="FLOAT",
+        help="Shape vertical scale ladder minimum (unlinks the axes).",
+    )
+    screenspace_cli.add_argument(
+        "--ss-scale-y-max",
+        type=float,
+        metavar="FLOAT",
+        help="Shape vertical scale ladder maximum (unlinks the axes).",
+    )
+    screenspace_cli.add_argument(
+        "--ss-scale-y-steps",
+        type=int,
+        metavar="INT",
+        help="Shape vertical scale ladder rungs.",
     )
     screenspace_cli.add_argument(
         "--ss-scene-ref",
@@ -1528,6 +1565,7 @@ _SS_VALID_TASK_TYPES = (
     "numbers",
     "timelapse",
     "template",
+    "shape",
     "flow",
     "inactivity",
     "scene",
@@ -1737,6 +1775,31 @@ def _ss_build_params(
                 f"Could not extract template frame at {args.ss_reference_timestamp}s"
             )
         params["template_image"] = screenspace.extract_region(frame, region_coords)
+
+    elif task_type == "shape":
+        if args.ss_reference_timestamp is None:
+            raise ValueError("shape task requires --ss-reference-timestamp SECONDS")
+        params["reference_timestamp"] = args.ss_reference_timestamp
+        if args.ss_threshold is not None:
+            params["threshold"] = args.ss_threshold
+        if args.ss_scale_min is not None:
+            params["scale_min"] = args.ss_scale_min
+        if args.ss_scale_max is not None:
+            params["scale_max"] = args.ss_scale_max
+        if args.ss_scale_steps is not None:
+            params["scale_steps"] = args.ss_scale_steps
+        if args.ss_scale_y_min is not None:
+            params["scale_y_min"] = args.ss_scale_y_min
+        if args.ss_scale_y_max is not None:
+            params["scale_y_max"] = args.ss_scale_y_max
+        if args.ss_scale_y_steps is not None:
+            params["scale_y_steps"] = args.ss_scale_y_steps
+        frame = frame_at(float(args.ss_reference_timestamp))
+        if frame is None:
+            raise ValueError(
+                f"Could not extract shape frame at {args.ss_reference_timestamp}s"
+            )
+        params["shape_image"] = screenspace.extract_region(frame, region_coords)
 
     elif task_type == "scene":
         raw_refs = getattr(args, "ss_scene_ref", None) or []
@@ -2194,6 +2257,28 @@ def _ss_extract_scene_frames(
     return reference_scenes
 
 
+def _ss_reference_coords(
+    parameters: dict[str, Any],
+    region_coords: dict[str, int],
+    manifest: dict[str, Any],
+    dims: tuple[int, int] | None,
+) -> dict[str, int]:
+    """Pixel rect a template/shape re-run cuts its sample from.
+
+    The persisted capture region (``reference_region``) wins over the run
+    region, mirroring screenspace_server._prepare_task_media.
+    """
+    import screenspace
+
+    ref_name = str(parameters.get("reference_region") or "").strip()
+    if not ref_name:
+        return region_coords
+    _rn, ref_norm = screenspace.resolve_region_request(ref_name, None, manifest)
+    if dims is None:
+        return region_coords
+    return screenspace.denormalize_region(ref_norm, dims[0], dims[1])
+
+
 def _ss_rehydrate_task_media(
     task_type: str,
     parameters: dict[str, Any],
@@ -2233,7 +2318,21 @@ def _ss_rehydrate_task_media(
                 "manifest (no reference timestamp was saved)"
             )
         parameters["template_image"] = _extract_frame(
-            parameters["reference_timestamp"], region_coords, "template"
+            parameters["reference_timestamp"],
+            _ss_reference_coords(parameters, region_coords, manifest, dims),
+            "template",
+        )
+
+    elif task_type == "shape":
+        if parameters.get("reference_timestamp") is None:
+            raise ValueError(
+                "shape task built from an uploaded image cannot be re-run from the "
+                "manifest (no reference timestamp was saved)"
+            )
+        parameters["shape_image"] = _extract_frame(
+            parameters["reference_timestamp"],
+            _ss_reference_coords(parameters, region_coords, manifest, dims),
+            "shape",
         )
 
     elif task_type == "scene":

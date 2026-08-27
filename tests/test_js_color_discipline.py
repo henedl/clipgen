@@ -29,7 +29,7 @@ _BASELINE = {
     "screenspace.js": 3,
     "settings-modal.js": 4,
     "transcripts-video.js": 4,
-    "utils.js": 33,
+    "utils.js": 34,
     "viewer.js": 3,
     "workflows-canvas.js": 2,
 }

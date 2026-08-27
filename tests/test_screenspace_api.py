@@ -1146,7 +1146,7 @@ def test_create_ocr_task_rejects_incompatible_languages(client, monkeypatch):
     assert "incompatible" in resp.get_json()["error"]
 
 
-@pytest.mark.parametrize("task_type", ["template", "flow", "scene"])
+@pytest.mark.parametrize("task_type", ["template", "shape", "flow", "scene"])
 def test_create_task_new_types_accepted(client, task_type):
     """New phase-4 types pass type validation (fail at video, not type)."""
     screenspace_server._manifest["regions"]["r"] = {
@@ -1579,6 +1579,178 @@ def test_create_template_task_invalid_reference_timestamp(client, monkeypatch):
     )
     assert resp.status_code == 400
     assert "reference_timestamp" in resp.get_json()["error"]
+
+
+@pytest.mark.parametrize(
+    "tool,image_key,mask_key",
+    [
+        ("template", "template_image", "template_mask"),
+        ("shape", "shape_image", "shape_mask"),
+    ],
+)
+def test_extract_media_shaped_region_sets_mask(tool, image_key, mask_key):
+    """A shaped capture region rides along as the reference alpha mask."""
+    from typing import Any
+
+    import numpy as np
+
+    frame = np.zeros((100, 100, 3), dtype=np.uint8)
+    spec: dict[str, Any] = {"reference_timestamp": 0.0}
+    region_coords = {
+        "x": 10,
+        "y": 10,
+        "w": 40,
+        "h": 40,
+        "mask_points": [[[0.5, 0.0], [1.0, 1.0], [0.0, 1.0]]],
+    }
+    error = screenspace_server._extract_tool_media(
+        spec, tool, lambda ts: frame, region_coords
+    )
+    assert error is None
+    assert spec[image_key].shape[:2] == (40, 40)
+    assert spec[mask_key] is not None
+    assert spec[mask_key].shape == (40, 40)
+    # Rect-only capture regions keep the unmasked path.
+    rect_spec: dict[str, Any] = {"reference_timestamp": 0.0}
+    error = screenspace_server._extract_tool_media(
+        rect_spec, tool, lambda ts: frame, {"x": 10, "y": 10, "w": 40, "h": 40}
+    )
+    assert error is None
+    assert mask_key not in rect_spec
+
+
+@pytest.mark.parametrize(
+    "tool,image_key", [("template", "template_image"), ("shape", "shape_image")]
+)
+def test_prepare_reference_media_uses_reference_region(
+    client, monkeypatch, tool, image_key
+):
+    """The sample is cut from the capture region, not the run region."""
+    from typing import Any, cast
+
+    import numpy as np
+
+    frame = np.zeros((100, 200, 3), dtype=np.uint8)
+    monkeypatch.setattr(
+        screenspace_server,
+        "_participant_frame_extractor",
+        lambda pid: lambda ts: frame,
+    )
+    screenspace_server._manifest["regions"]["btn"] = {
+        "x": 0.1,
+        "y": 0.2,
+        "w": 0.2,
+        "h": 0.3,
+    }
+
+    def resolve(name: str, region_data: dict[str, Any] | None = None) -> dict[str, Any]:
+        rd = region_data or {}
+        return {
+            "x": round(rd["x"] * 200),
+            "y": round(rd["y"] * 100),
+            "w": round(rd["w"] * 200),
+            "h": round(rd["h"] * 100),
+        }
+
+    params: dict[str, Any] = {"reference_timestamp": 0.0, "reference_region": "btn"}
+    out = screenspace_server._prepare_task_media(
+        tool, "P01", params, {}, {"x": 0, "y": 0, "w": 200, "h": 100}, resolve
+    )
+    assert isinstance(out, dict)
+    sample = cast(dict[str, Any], out)[image_key]
+    assert isinstance(sample, np.ndarray)
+    assert sample.shape[:2] == (30, 40)
+
+    # Unknown capture region: a clear 400, not a silent full-frame sample.
+    # (err() builds a Flask response, so give it a request context.)
+    with client.application.test_request_context():
+        bad = screenspace_server._prepare_task_media(
+            tool,
+            "P01",
+            {"reference_timestamp": 0.0, "reference_region": "gone"},
+            {},
+            {"x": 0, "y": 0, "w": 200, "h": 100},
+            resolve,
+        )
+    assert not isinstance(bad, dict)
+
+
+def test_api_preview_shape_ref_region(client, monkeypatch) -> None:
+    """GET shape preview cuts the sample from ref_region, run region optional."""
+    import cv2
+    import numpy as np
+    import video
+
+    _enable_video_task_setup(monkeypatch, "P01")
+    frame = np.zeros((240, 320, 3), dtype=np.uint8)
+    cv2.rectangle(frame, (85, 55, 90, 45), (255, 255, 255), 3)
+    monkeypatch.setattr(
+        video, "extract_frame_at_timestamp", lambda _path, _ts: frame.copy()
+    )
+
+    ref_region = "0.25,0.2083333333,0.3125,0.25"
+    r_noref = client.get("/screenspace/api/preview/P01/0.500?tool=shape")
+    r_with = client.get(
+        f"/screenspace/api/preview/P01/0.500?tool=shape&ref=0.0&ref_region={ref_region}"
+    )
+    assert r_noref.status_code == 200
+    assert r_with.status_code == 200
+    a = cv2.imdecode(np.frombuffer(r_noref.data, np.uint8), cv2.IMREAD_COLOR)
+    b = cv2.imdecode(np.frombuffer(r_with.data, np.uint8), cv2.IMREAD_COLOR)
+    assert a is not None and b is not None
+    assert b.shape[1] > a.shape[1]
+
+
+def test_create_shape_task_no_region_with_upload(client):
+    """Shape task with uploaded image skips region validation, like template."""
+    import base64
+
+    png_b64 = base64.b64encode(
+        b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01"
+        b"\x00\x00\x00\x01\x08\x02\x00\x00\x00\x90wS\xde\x00"
+        b"\x00\x00\x0cIDATx\x9cc\xf8\x0f\x00\x00\x01\x01\x00"
+        b"\x05\x18\xd8N\x00\x00\x00\x00IEND\xaeB`\x82"
+    ).decode()
+    resp = client.post(
+        "/screenspace/api/tasks",
+        json={
+            "type": "shape",
+            "participant": "P01",
+            "parameters": {"shape_image_data": png_b64},
+        },
+    )
+    data = resp.get_json()
+    assert resp.status_code == 400
+    assert "region" not in data["error"].lower()
+    assert "video" in data["error"].lower()
+
+
+@pytest.mark.parametrize(
+    "params,fragment",
+    [
+        ({"reference_timestamp": 0.0, "scale_min": -1}, "scale_min"),
+        ({"reference_timestamp": 0.0, "scale_min": 2.0, "scale_max": 1.0}, "scale_min"),
+        ({"reference_timestamp": 0.0, "scale_steps": "many"}, "scale_steps"),
+        (
+            {"reference_timestamp": 0.0, "scale_y_min": 2.0, "scale_y_max": 1.0},
+            "scale_y_min",
+        ),
+    ],
+)
+def test_create_shape_task_invalid_scale_params(client, monkeypatch, params, fragment):
+    _create_region(client, "r")
+    _enable_video_task_setup(monkeypatch, "P01")
+    resp = client.post(
+        "/screenspace/api/tasks",
+        json={
+            "type": "shape",
+            "participant": "P01",
+            "region": "r",
+            "parameters": params,
+        },
+    )
+    assert resp.status_code == 400
+    assert fragment in resp.get_json()["error"]
 
 
 def test_create_scene_task_invalid_scene_references(client, monkeypatch):

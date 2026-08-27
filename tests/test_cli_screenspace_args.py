@@ -59,6 +59,12 @@ def _ss_args(**overrides):
         "ss_min_area": None,
         "ss_threshold": None,
         "ss_reference_timestamp": None,
+        "ss_scale_min": None,
+        "ss_scale_max": None,
+        "ss_scale_steps": None,
+        "ss_scale_y_min": None,
+        "ss_scale_y_max": None,
+        "ss_scale_y_steps": None,
         "ss_scene_ref": None,
         "ss_text": None,
         "ss_fuzzy_threshold": None,
@@ -150,6 +156,18 @@ def _ss_args(**overrides):
                 "ss_scene_ref": ["menu:12.5", "game:30:0.8"],
             },
             id="scene-ref-repeatable",
+        ),
+        pytest.param(
+            "--ss-task shape P01 btn --ss-reference-timestamp 5.0"
+            " --ss-scale-min 0.5 --ss-scale-max 2.0 --ss-scale-steps 7",
+            {
+                "ss_task": ["shape", "P01", "btn"],
+                "ss_reference_timestamp": 5.0,
+                "ss_scale_min": 0.5,
+                "ss_scale_max": 2.0,
+                "ss_scale_steps": 7,
+            },
+            id="shape-scale-ladder",
         ),
     ],
 )
@@ -774,6 +792,51 @@ def test_ss_task_scene_dispatches_and_persists(monkeypatch):
     assert len(params["reference_scenes"]) == 2
     assert params["scene_references"][1]["threshold"] == 0.8
     assert params["threshold"] == 0.9
+
+
+def test_ss_task_shape_dispatches_and_persists(monkeypatch):
+    """Shape flag path: reference frame extracted, scale ladder params persisted."""
+    fake_manifest = {
+        "regions": {"btn": {"x": 0.0, "y": 0.0, "w": 0.5, "h": 0.5}},
+        "stashes": [],
+        "tasks": [],
+        "events": [],
+    }
+    saved_tasks = _install_ss_stubs(monkeypatch, fake_manifest)
+
+    args = _ss_args(
+        ss_task=["shape", "P01", "btn"],
+        ss_reference_timestamp=5.0,
+        ss_threshold=0.6,
+        ss_scale_min=0.5,
+        ss_scale_max=2.0,
+        ss_scale_steps=5,
+    )
+    cli._run_ss_task(args)
+
+    assert saved_tasks
+    persisted = saved_tasks[0]
+    assert persisted["type"] == "shape"
+    params = persisted["parameters"]
+    assert params["reference_timestamp"] == 5.0
+    assert params["threshold"] == 0.6
+    assert params["scale_min"] == 0.5
+    assert params["scale_max"] == 2.0
+    assert params["scale_steps"] == 5
+
+
+def test_ss_task_shape_requires_reference_timestamp(monkeypatch, capsys):
+    fake_manifest = {
+        "regions": {"btn": {"x": 0.0, "y": 0.0, "w": 0.5, "h": 0.5}},
+        "stashes": [],
+        "tasks": [],
+        "events": [],
+    }
+    _install_ss_stubs(monkeypatch, fake_manifest)
+    args = _ss_args(ss_task=["shape", "P01", "btn"])
+    with pytest.raises(SystemExit):
+        cli._run_ss_task(args)
+    assert "reference-timestamp" in capsys.readouterr().out.lower()
 
 
 def test_ss_task_region_resolves_active_over_stash(monkeypatch):

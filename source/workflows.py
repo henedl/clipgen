@@ -646,6 +646,17 @@ def _build_ss_scan_params(tool_name: str, params: dict[str, Any]) -> dict[str, A
             "template_scale": _num("template_scale", 1.0),
             "interval": _num("interval"),
         }
+    if tool_name == "shape":
+        return {
+            "threshold": _num("threshold"),
+            "scale_min": _num("scale_min"),
+            "scale_max": _num("scale_max"),
+            "scale_steps": int(_num("scale_steps")),
+            "scale_y_min": _num("scale_y_min"),
+            "scale_y_max": _num("scale_y_max"),
+            "scale_y_steps": int(_num("scale_y_steps")),
+            "interval": _num("interval"),
+        }
     if tool_name == "inactivity":
         return {
             "threshold": _num("threshold"),
@@ -679,9 +690,10 @@ def _attach_ss_reference(
 ) -> bool:
     """Self-extract a reference frame from ``video_path`` at ``reference_seconds``.
 
-    Similarity/scene/template need reference image data that the canvas can't
-    upload; instead we crop the node's region from a frame at ``reference_seconds``.
-    Returns False when the frame can't be read so the executor can short-circuit.
+    Similarity/scene/template/shape need reference image data that the canvas
+    can't upload; instead we crop the node's region from a frame at
+    ``reference_seconds``. Returns False when the frame can't be read so the
+    executor can short-circuit.
     """
     import screenspace
     import video as video_mod
@@ -695,6 +707,8 @@ def _attach_ss_reference(
         base_params["reference_frame"] = crop
     elif tool_name == "template":
         base_params["template_image"] = crop
+    elif tool_name == "shape":
+        base_params["shape_image"] = crop
     elif tool_name == "scene":
         base_params["reference_scenes"] = [{"name": "ref", "frame": crop}]
     return True

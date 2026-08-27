@@ -296,16 +296,17 @@
     // Result overlay: template match bounding boxes / flow motion arrows
     if (state.resultOverlay) {
       ctx.setLineDash([]);
-      if (state.resultOverlay.type === "template") {
+      if (state.resultOverlay.type === "template" || state.resultOverlay.type === "shape") {
+        var boxColor = taskTypeColor(state.resultOverlay.type);
         var matches = state.resultOverlay.data.matches || [];
         matches.forEach(function (m) {
-          ctx.strokeStyle = taskTypeColor("template");
+          ctx.strokeStyle = boxColor;
           ctx.lineWidth = 2 * s;
           ctx.strokeRect(m.x, m.y, m.w, m.h);
-          ctx.fillStyle = hexToRgba(taskTypeColor("template"), 0.15);
+          ctx.fillStyle = hexToRgba(boxColor, 0.15);
           ctx.fillRect(m.x, m.y, m.w, m.h);
           ctx.font = Math.round(11 * s) + "px " + getThemeColors().fontMono;
-          ctx.fillStyle = taskTypeColor("template");
+          ctx.fillStyle = boxColor;
           ctx.fillText((m.score * 100).toFixed(0) + "%", m.x + Math.round(3 * s), m.y - Math.round(4 * s));
         });
       } else if (state.resultOverlay.type === "flow") {
@@ -347,7 +348,7 @@
     if (state.heatmapOverlay && state.heatmapOverlay._img) {
       var hm = state.heatmapOverlay;
       ctx.globalAlpha = 0.5;
-      if (hm.type === "template" || hm.type === "attention") {
+      if (hm.type === "template" || hm.type === "shape" || hm.type === "attention") {
         // Frame-scoped heatmaps cover the whole canvas (attention's
         // region_coords are {0,0,0,0} — the region branch would draw nothing).
         ctx.drawImage(hm._img, 0, 0, canvas.width, canvas.height);

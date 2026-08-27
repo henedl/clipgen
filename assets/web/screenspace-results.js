@@ -130,8 +130,8 @@
       // Set result overlay for spatial visualization
       var ri = parseInt(row.dataset.resultIndex, 10);
       var rData = (!isNaN(ri) && state.selectedTaskResults) ? state.selectedTaskResults[ri] : null;
-      if (task && rData && task.type === "template" && rData.matches) {
-        state.resultOverlay = { type: "template", data: rData };
+      if (task && rData && (task.type === "template" || task.type === "shape") && rData.matches) {
+        state.resultOverlay = { type: task.type, data: rData };
       } else if (task && rData && task.type === "flow" && rData.flow_grid) {
         state.resultOverlay = { type: "flow", data: rData, region: taskRegionPixels(task) };
       } else {
@@ -382,7 +382,7 @@
         row.appendChild(buildConfBar(r.confidence, task.type));
         row.appendChild(el("span", "result-score", (r.confidence * 100).toFixed(0) + "%"));
       }
-    } else if (task.type === "template") {
+    } else if (task.type === "template" || task.type === "shape") {
       row.dataset.timestamp = r.timestamp;
       row.appendChild(el("span", "result-timestamp", formatTime(r.timestamp, { decimals: 1 })));
       row.appendChild(buildConfBar(r.best_score, task.type));
@@ -455,7 +455,7 @@
   // slider + histogram). Shared by the full render's filter and the streaming
   // append fast path so the two never drift.
   var CONF_TASK_TYPES = {
-    change: 1, similarity: 1, text: 1, numbers: 1, template: 1,
+    change: 1, similarity: 1, text: 1, numbers: 1, template: 1, shape: 1,
     scene: 1, flow: 1, multitool: 1, inactivity: 1, boundary: 1,
     attention: 1,
   };
@@ -472,6 +472,7 @@
     if (task.type === "text") return r.confidence;
     if (task.type === "numbers") return r.confidence;
     if (task.type === "template") return r.best_score;
+    if (task.type === "shape") return r.best_score;
     if (task.type === "flow") return Math.min(r.magnitude / 10, 1);
     if (task.type === "scene") return r.score;
     if (task.type === "multitool") return r.min_confidence;
@@ -838,8 +839,8 @@
     countEl.textContent = "(" + results.length + ")";
     container.innerHTML = "";
 
-    // Heatmap artifact display (template, flow, change, attention)
-    if (task.heatmap && (task.type === "template" || task.type === "flow" || task.type === "change" || task.type === "attention")) {
+    // Heatmap artifact display (template, shape, flow, change, attention)
+    if (task.heatmap && (task.type === "template" || task.type === "shape" || task.type === "flow" || task.type === "change" || task.type === "attention")) {
       var heatmapSection = el("div", "heatmap-result");
       var heatmapLabel = el("div", "heatmap-label");
       // Clickable title collapses the section to cut visual noise (state persists

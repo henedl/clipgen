@@ -270,6 +270,14 @@ SCREENSPACE_TEMPLATE_MATCH_THRESHOLD: float = 0.70
 SCREENSPACE_TEMPLATE_NMS_OVERLAP: float = 0.50
 SCREENSPACE_TEMPLATE_SCALE_MIN: float = 0.25
 SCREENSPACE_TEMPLATE_SCALE_MAX: float = 2.0
+SCREENSPACE_SHAPE_MATCH_THRESHOLD: float = (
+    0.55  # edge correlations peak lower than intensity correlations
+)
+SCREENSPACE_SHAPE_SCALE_MIN: float = 0.5
+SCREENSPACE_SHAPE_SCALE_MAX: float = 2.0
+SCREENSPACE_SHAPE_SCALE_STEPS: int = 7
+SCREENSPACE_EDGE_CANNY_LOW: int = 100
+SCREENSPACE_EDGE_CANNY_HIGH: int = 200
 SCREENSPACE_FLOW_MAGNITUDE_THRESHOLD: float = 2.0
 SCREENSPACE_FLOW_PYR_SCALE: float = 0.5
 SCREENSPACE_SCENE_SIMILARITY_THRESHOLD: float = 0.75
@@ -383,6 +391,9 @@ SCREENSPACE_GROUPED_TOOL_NAV: bool = (
 )
 SCREENSPACE_GENERATE_TEMPLATE_HEATMAP: bool = (
     True  # generate detection heatmaps for Template tasks
+)
+SCREENSPACE_GENERATE_SHAPE_HEATMAP: bool = (
+    True  # generate detection heatmaps for Shape tasks
 )
 SCREENSPACE_GENERATE_FLOW_HEATMAP: bool = (
     True  # generate motion heatmaps for Flow tasks
@@ -750,6 +761,7 @@ SETTINGS_DESCRIPTIONS: dict[str, str] = {
     "SCREENSPACE_SHOW_CONFIDENCE_HISTOGRAM": "Show a confidence-distribution histogram above the Results list (for tools that have confidence scores). Lets you see where detections cluster before moving the certainty cutoff. Off by default.",
     "SCREENSPACE_GROUPED_TOOL_NAV": "Group the analysis tools into category dropdowns (Difference, Detection, Classification, Attention, Utility) with a standalone Multitool chip, instead of a flat row of tool tabs. Easier to scan when picking a tool. On by default; turn off for the classic flat tab row.",
     "SCREENSPACE_GENERATE_TEMPLATE_HEATMAP": "Generate detection heatmaps (static image plus accumulation and rolling-window animations) for Template tasks. Disable to skip heatmap generation when you don't need it. Useful on long videos where it adds processing time.",
+    "SCREENSPACE_GENERATE_SHAPE_HEATMAP": "Generate detection heatmaps (static image plus accumulation and rolling-window animations) for Shape tasks. Disable to skip heatmap generation when you don't need it. Useful on long videos where it adds processing time.",
     "SCREENSPACE_GENERATE_FLOW_HEATMAP": "Generate motion heatmaps (static image plus accumulation animation) for Flow tasks. Disable to skip heatmap generation when you don't need it.",
     "SCREENSPACE_GENERATE_CHANGE_HEATMAP": "Generate change heatmaps (static image plus accumulation and rolling-window animations) for Change tasks. Disable to skip heatmap generation when you don't need it. Useful on long videos where it adds processing time.",
     "SCREENSPACE_GENERATE_ATTENTION_HEATMAP": "Generate attention heatmaps (static image plus accumulation and rolling-window animations) for Attention tasks. The rolling-window animation is the closest analog to an eye-tracking gaze replay. Disable to skip heatmap generation when you don't need it.",
@@ -1148,6 +1160,11 @@ STUDIO_SETTINGS: dict[str, dict[str, Any]] = {
         "type": "bool",
     },
     "SCREENSPACE_GENERATE_TEMPLATE_HEATMAP": {
+        "tab": "Screenspace",
+        "group": "Heatmaps",
+        "type": "bool",
+    },
+    "SCREENSPACE_GENERATE_SHAPE_HEATMAP": {
         "tab": "Screenspace",
         "group": "Heatmaps",
         "type": "bool",

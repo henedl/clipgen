@@ -1,7 +1,8 @@
 """Screenspace image-analysis primitives (pure cv2/numpy).
 
 Region cropping/denormalization/resolution, HSV color math, frame-diff, SSIM,
-perceptual hashing, template matching, optical flow, and scene fingerprinting,
+perceptual hashing, template matching, scale-swept edge (shape) matching,
+optical flow, and scene fingerprinting,
 plus the small scan-support helpers (morphology kernel cache, consecutive-match
 buffer, static-frame skip). No file or ffmpeg I/O lives here.
 """
@@ -930,19 +931,26 @@ def _match_template_prepared(
     threshold: float,
     nms_overlap: float,
     corr: np.ndarray | None = None,
+    window: tuple[float, float, float, float] | None = None,
 ) -> list[dict[str, Any]]:
     """Match a frame against an already-prepared template payload.
 
     Callers that already computed this frame's correlation map (to read its
     threshold-independent peak) pass it as *corr* — the map is the single most
     expensive op in the tool and recomputing it here doubled the cost of every
-    passing frame.
+    passing frame. *window* (see :func:`region_search_window`) restricts
+    matching to positions whose match center falls inside the rect.
     """
     result = _template_correlation_map(frame, prepared) if corr is None else corr
     if result is None:
         return []
     tmpl_gray, _gray_mask, _degenerate = prepared
     th, tw = tmpl_gray.shape[:2]
+    if window is not None:
+        masked = _mask_corr_outside_window(result, tw, th, window)
+        if masked is None:
+            return []
+        result = masked
     locs = np.where(result >= threshold)
     if len(locs[0]) == 0:
         return []
@@ -1019,6 +1027,292 @@ def match_template(
     if prepared is None:
         prepared = _prepare_template(template, mask)
     return _match_template_prepared(frame, prepared, threshold, nms_overlap, corr)
+
+
+def canny_edges(gray: np.ndarray) -> np.ndarray:
+    """Canny edge map with the shared config thresholds."""
+    return cv2.Canny(
+        gray, config.SCREENSPACE_EDGE_CANNY_LOW, config.SCREENSPACE_EDGE_CANNY_HIGH
+    )
+
+
+def _edge_blur(edges: np.ndarray) -> np.ndarray:
+    """Dilate + blur an edge map into smooth ~5px ridges.
+
+    Raw edge-map correlation dies on 1-2px misalignment; the ridge makes
+    TM_CCOEFF_NORMED degrade gracefully instead (a fixed chamfer-like
+    tolerance, deliberately not a user knob). The 5px kernel is measured:
+    3px lost a rescaled true match to stroke-thickness drift (0.41 at the
+    right rung) while letting edge-dense noise score 0.54; 5px scores the
+    true match 0.62 and saturates noise into a flat, neutralized map.
+    """
+    k = config.SCREENSPACE_BLUR_KERNEL
+    dilated = cv2.dilate(edges, _morph_kernel(5))
+    return cv2.GaussianBlur(dilated, (k, k), 0).astype(np.float32)
+
+
+def _frame_edge_map(frame: np.ndarray) -> np.ndarray:
+    """Per-frame edge ridge map that every shape-matching surface shares.
+
+    Scan, check_frame, and previews must all call this — matching against
+    anything else would show users a different model than reality. Computed
+    once per frame; the scale sweep only rescales the reference side.
+    """
+    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    return _edge_blur(canny_edges(gray))
+
+
+# Prepared shape reference: one edge ridge template per usable ladder scale.
+# Empty list = degenerate (no scale kept enough edge pixels to match on).
+_PreparedShape = list[dict[str, Any]]
+
+_MIN_SHAPE_EDGE_PIXELS = 20  # raw Canny pixels a ladder scale needs to be matchable
+
+
+def _scale_ladder(lo: float, hi: float, steps: int) -> list[float]:
+    """Geometric ladder from *lo* to *hi* with *steps* rungs."""
+    if steps < 2 or hi <= lo:
+        return [lo]
+    ratio = (hi / lo) ** (1.0 / (steps - 1))
+    return [lo * ratio**i for i in range(steps)]
+
+
+def _prepare_shape_reference(
+    reference: np.ndarray,
+    mask: np.ndarray | None = None,
+    scale_min: float = 0.0,
+    scale_max: float = 0.0,
+    scale_steps: int = 0,
+    scale_y_min: float = 0.0,
+    scale_y_max: float = 0.0,
+    scale_y_steps: int = 0,
+) -> _PreparedShape:
+    """Build the per-scan-constant edge templates across the scale ladder.
+
+    Canny is not scale-commutative, so each ladder scale resizes the grayscale
+    reference and re-runs Canny rather than resizing one edge map. The ladder
+    is geometric from *scale_min* to *scale_max*, each rung folded with the
+    global CV resolution scale like :func:`_scale_template`.
+
+    By default the sweep is uniform (height follows width per rung). Passing
+    *scale_y_min*/*scale_y_max* unlinks the axes into an independent vertical
+    ladder, crossed with the horizontal one — for content-stretched UI like
+    buttons that keep their height but vary in width. Cost multiplies
+    (x-steps × y-steps templates per frame).
+    """
+    if scale_min <= 0:
+        scale_min = config.SCREENSPACE_SHAPE_SCALE_MIN
+    if scale_max <= 0:
+        scale_max = config.SCREENSPACE_SHAPE_SCALE_MAX
+    if scale_steps <= 0:
+        scale_steps = config.SCREENSPACE_SHAPE_SCALE_STEPS
+    cv_scale = (
+        config.SCREENSPACE_CV_RESOLUTION_SCALE
+        if config.SCREENSPACE_CV_RESOLUTION_SCALE > 0
+        else 1.0
+    )
+    scales_x = _scale_ladder(scale_min, scale_max, scale_steps)
+    if scale_y_min > 0 and scale_y_max > 0:
+        scales_y = _scale_ladder(scale_y_min, scale_y_max, scale_y_steps or scale_steps)
+        pairs = [(sx, sy) for sy in scales_y for sx in scales_x]
+    else:
+        pairs = [(s, s) for s in scales_x]
+    gray = cv2.cvtColor(reference, cv2.COLOR_BGR2GRAY)
+    if mask is not None:
+        _, mask = cv2.threshold(mask, 127, 255, cv2.THRESH_BINARY)
+        # PNG decode zero-fills transparency, so Canny rings the alpha edge;
+        # eroding drops that ring (plus dilation bleed) from the reference.
+        mask = cv2.erode(mask, _morph_kernel(3), iterations=2)
+        if not np.any(mask):
+            return []
+    h, w = gray.shape[:2]
+    prepared: _PreparedShape = []
+    for sx, sy in pairs:
+        ex, ey = sx * cv_scale, sy * cv_scale
+        if ex <= 0 or ey <= 0:
+            continue
+        nw = max(8, round(w * ex))
+        nh = max(8, round(h * ey))
+        interp = cv2.INTER_AREA if ex * ey < 1.0 else cv2.INTER_CUBIC
+        gray_s = cv2.resize(gray, (nw, nh), interpolation=interp)
+        edges = canny_edges(gray_s)
+        if mask is not None:
+            mask_s = cv2.resize(mask, (nw, nh), interpolation=cv2.INTER_NEAREST)
+            edges = cv2.bitwise_and(edges, mask_s)
+        if np.count_nonzero(edges) < _MIN_SHAPE_EDGE_PIXELS:
+            continue
+        prepared.append(
+            {
+                "edges": _edge_blur(edges),
+                "w": nw,
+                "h": nh,
+                "scale": round(sx, 4),
+                "scale_y": round(sy, 4),
+            }
+        )
+    return prepared
+
+
+def nms_boxes_iou(boxes: list[dict[str, Any]], overlap: float) -> list[dict[str, Any]]:
+    """Greedy IoU NMS over variable-size boxes, highest score first.
+
+    The template NMS assumes one shared box size; shape matches mix sizes
+    across ladder scales, so this computes real IoU. A box ≥80% contained in
+    a better-scoring one is also suppressed: a nested sub-scale hit on the
+    same instance can sit under the IoU cutoff on area ratio alone.
+    """
+    if len(boxes) <= 1:
+        return list(boxes)
+    order = sorted(range(len(boxes)), key=lambda i: -boxes[i]["score"])
+    xs1 = np.array([boxes[i]["x"] for i in order], dtype=np.float64)
+    ys1 = np.array([boxes[i]["y"] for i in order], dtype=np.float64)
+    ws = np.array([boxes[i]["w"] for i in order], dtype=np.float64)
+    hs = np.array([boxes[i]["h"] for i in order], dtype=np.float64)
+    xs2, ys2, areas = xs1 + ws, ys1 + hs, ws * hs
+    kept: list[dict[str, Any]] = []
+    idx = np.arange(len(order))
+    while idx.size:
+        i = idx[0]
+        kept.append(boxes[order[i]])
+        if idx.size == 1:
+            break
+        rest = idx[1:]
+        ix = np.maximum(
+            0.0, np.minimum(xs2[i], xs2[rest]) - np.maximum(xs1[i], xs1[rest])
+        )
+        iy = np.maximum(
+            0.0, np.minimum(ys2[i], ys2[rest]) - np.maximum(ys1[i], ys1[rest])
+        )
+        inter = ix * iy
+        iou = inter / (areas[i] + areas[rest] - inter)
+        contained = inter / np.minimum(areas[i], areas[rest])
+        idx = rest[(iou <= overlap) & (contained <= 0.8)]
+    return kept
+
+
+def region_search_window(
+    region: dict[str, Any], coord_scale: float = 1.0
+) -> tuple[float, float, float, float] | None:
+    """Center-inclusion window for :func:`match_shape` from a region rect.
+
+    Unlike template, a shape run's region restricts *where matches count* —
+    "Full frame" (zero-size rect) is the explicit search-anywhere choice.
+    *coord_scale* maps region pixels into the searched frame's space (CV
+    resolution scale / fast-mode downscale). Returns None for no restriction.
+    """
+    w, h = region.get("w", 0), region.get("h", 0)
+    if w <= 0 or h <= 0:
+        return None
+    x, y = region.get("x", 0), region.get("y", 0)
+    return (
+        x * coord_scale,
+        y * coord_scale,
+        (x + w) * coord_scale,
+        (y + h) * coord_scale,
+    )
+
+
+def _mask_corr_outside_window(
+    result: np.ndarray,
+    tw: int,
+    th: int,
+    window: tuple[float, float, float, float],
+) -> np.ndarray | None:
+    """Neutralize correlation cells whose match center falls outside *window*.
+
+    A match centers at (x + tw/2, y + th/2); the center-inclusion rect
+    translates into per-scale top-left index bounds. Returns None when no
+    position of this scale can center inside the window. Shared by
+    :func:`match_shape` and the preview so both see the same restriction.
+    """
+    xa = max(0, math.floor(window[0] - tw / 2.0))
+    ya = max(0, math.floor(window[1] - th / 2.0))
+    xb = min(result.shape[1], math.ceil(window[2] - tw / 2.0) + 1)
+    yb = min(result.shape[0], math.ceil(window[3] - th / 2.0) + 1)
+    if xa >= xb or ya >= yb:
+        return None
+    if xa == 0 and ya == 0 and xb == result.shape[1] and yb == result.shape[0]:
+        # A full-frame window (e.g. the "Full frame" run target) masks nothing;
+        # skip the per-scale copy.
+        return result
+    masked = np.full_like(result, -1.0)
+    masked[ya:yb, xa:xb] = result[ya:yb, xa:xb]
+    return masked
+
+
+def match_shape(
+    frame_edges: np.ndarray,
+    prepared: _PreparedShape,
+    threshold: float = 0.0,
+    nms_overlap: float = 0.0,
+    window: tuple[float, float, float, float] | None = None,
+) -> tuple[list[dict[str, Any]], float]:
+    """Match a frame's edge ridge map against a prepared shape reference.
+
+    *frame_edges* comes from :func:`_frame_edge_map`. The reference's mask was
+    already ANDed into its edge maps, so matching runs unmasked — sidestepping
+    masked TM_CCOEFF_NORMED instability entirely.
+
+    *window* (from :func:`region_search_window`) restricts matching to
+    positions whose match *center* falls inside the rect; everything outside
+    is treated as unmatchable, so ``best_peak`` stays honest for the region
+    a run is scoped to.
+
+    Returns:
+        ``(matches, best_peak)`` — surviving ``{x, y, w, h, score, scale}``
+        boxes plus the best cross-scale correlation peak, the
+        threshold-independent scalar calibration reads even on a miss
+        (``-1.0`` when no scale was matchable).
+    """
+    if threshold <= 0.0:
+        threshold = config.SCREENSPACE_SHAPE_MATCH_THRESHOLD
+    if nms_overlap <= 0.0:
+        nms_overlap = config.SCREENSPACE_TEMPLATE_NMS_OVERLAP
+    _MAX_CANDIDATES = 5000
+    fh, fw = frame_edges.shape[:2]
+    best_peak = -1.0
+    candidates: list[dict[str, Any]] = []
+    for entry in prepared:
+        tw, th = entry["w"], entry["h"]
+        if th > fh or tw > fw:
+            continue
+        result = cv2.matchTemplate(frame_edges, entry["edges"], cv2.TM_CCOEFF_NORMED)
+        # Flat windows normalize by ~0 std; neutralize like template matching.
+        if not np.all(np.isfinite(result)):
+            result = np.where(np.isfinite(result), result, -1.0)
+        np.clip(result, -1.0, 1.0, out=result)
+        if window is not None:
+            result = _mask_corr_outside_window(result, tw, th, window)
+            if result is None:
+                continue
+        if result.size:
+            best_peak = max(best_peak, float(result.max()))
+        locs = np.where(result >= threshold)
+        if len(locs[0]) == 0:
+            continue
+        ys, xs = locs[0], locs[1]
+        scores = result[locs]
+        if scores.size > _MAX_CANDIDATES:
+            top_idx = np.argpartition(scores, -_MAX_CANDIDATES)[-_MAX_CANDIDATES:]
+            ys, xs, scores = ys[top_idx], xs[top_idx], scores[top_idx]
+        candidates.extend(
+            {
+                "x": int(x),
+                "y": int(y),
+                "w": tw,
+                "h": th,
+                "score": float(sc),
+                "scale": entry["scale"],
+                "scale_y": entry["scale_y"],
+            }
+            for y, x, sc in zip(ys, xs, scores, strict=True)
+        )
+    # Pathological frames can flood the NMS from several scales at once;
+    # cap the combined pool by score like the per-scale template cap.
+    if len(candidates) > _MAX_CANDIDATES:
+        candidates.sort(key=lambda c: -c["score"])
+        del candidates[_MAX_CANDIDATES:]
+    return nms_boxes_iou(candidates, nms_overlap), best_peak
 
 
 def flow_downscale(
@@ -1196,7 +1490,7 @@ def compute_scene_fingerprint(
 
     # Edge density
     gray = cv2.cvtColor(region_pixels, cv2.COLOR_BGR2GRAY)
-    edges = cv2.Canny(gray, 100, 200)
+    edges = canny_edges(gray)
     if mask is not None:
         masked_edges = cv2.bitwise_and(edges, mask)
         denom = float(np.count_nonzero(mask))

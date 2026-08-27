@@ -63,6 +63,7 @@
     numbers: "hashtag",
     timelapse: "forward",
     template: "viewfinder-circle",
+    shape: "star",
     flow: "arrows-right-left",
     scene: "squares-2x2",
     inactivity: "pause-circle",
@@ -93,6 +94,7 @@
     numbers: "Numbers",
     timelapse: "Timelapse",
     template: "Template",
+    shape: "Shape",
     flow: "Flow",
     scene: "Scene",
     inactivity: "Inactivity",
@@ -703,12 +705,50 @@
     } else if (task.type === "template") {
       if (params.reference_timestamp !== undefined) {
         state.referenceTimestamp = params.reference_timestamp;
+        // Re-arm the capture-region binding (name only — pixels are stripped)
+        // so a re-run keeps extracting the sample from the same region.
+        state.capturedRefPreview = params.reference_region
+          ? { region: params.reference_region, ts: params.reference_timestamp, dataUrl: null }
+          : null;
       }
       setInputValue("#paramTemplateThresh", numberOrDefault(params.threshold, 0.70));
       setInputValue("#paramTemplateInterval", numberOrDefault(params.interval, 1.0));
       if (params.template_scale) {
         setInputValue("#paramTemplateScale", Math.round(params.template_scale * 100));
       }
+    } else if (task.type === "shape") {
+      if (params.reference_timestamp !== undefined) {
+        state.referenceTimestamp = params.reference_timestamp;
+        // Re-arm the capture-region binding (name only — pixels are stripped)
+        // so a re-run keeps extracting the sample from the same region.
+        state.capturedRefPreview = params.reference_region
+          ? { region: params.reference_region, ts: params.reference_timestamp, dataUrl: null }
+          : null;
+      }
+      setInputValue("#paramShapeThresh", numberOrDefault(params.threshold, 0.55));
+      if (params.scale_min) {
+        setInputValue("#paramShapeScaleMin", Math.round(params.scale_min * 100));
+      }
+      if (params.scale_max) {
+        setInputValue("#paramShapeScaleMax", Math.round(params.scale_max * 100));
+      }
+      setInputValue("#paramShapeSteps", intOrDefault(params.scale_steps, 7));
+      if (params.scale_y_min || params.scale_y_max) {
+        var linkEl = qs("#paramShapeLinkAxes");
+        if (linkEl) {
+          linkEl.checked = false;
+          // The change handler owns the V-row visibility sync.
+          linkEl.dispatchEvent(new Event("change", { bubbles: true }));
+        }
+        if (params.scale_y_min) {
+          setInputValue("#paramShapeScaleYMin", Math.round(params.scale_y_min * 100));
+        }
+        if (params.scale_y_max) {
+          setInputValue("#paramShapeScaleYMax", Math.round(params.scale_y_max * 100));
+        }
+        setInputValue("#paramShapeStepsY", intOrDefault(params.scale_y_steps, 3));
+      }
+      setInputValue("#paramShapeInterval", numberOrDefault(params.interval, 1.0));
     } else if (task.type === "flow") {
       setInputValue("#paramFlowMag", numberOrDefault(params.magnitude_threshold, 2.0));
       setInputValue("#paramFlowInterval", numberOrDefault(params.interval, 1.0));

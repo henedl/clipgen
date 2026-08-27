@@ -1985,7 +1985,7 @@ var populateSelect = function (selectEl, values, allLabel) {
 var DETECTOR_COLORS = {};
 var _DETECTOR_TYPES = [
   "multitool", "color", "change", "similarity", "text",
-  "numbers", "timelapse", "template", "flow", "scene", "inactivity",
+  "numbers", "timelapse", "template", "shape", "flow", "scene", "inactivity",
   "boundary", "attention",
 ];
 // Values mirrored from the dark-theme `--color-task-*` block in tokens.css.
@@ -1993,9 +1993,9 @@ var _DETECTOR_TYPES = [
 var _DETECTOR_FALLBACK = {
   multitool: "#60a5fa", color: "#a78bfa", change: "#fb923c",
   similarity: "#22d3ee", text: "#34d399", numbers: "#facc15",
-  timelapse: "#f472b6", template: "#fb7185", flow: "#818cf8",
-  scene: "#2dd4bf", inactivity: "#94a3b8", boundary: "#e879f9",
-  attention: "#a3e635",
+  timelapse: "#f472b6", template: "#fb7185", shape: "#f87171",
+  flow: "#818cf8", scene: "#2dd4bf", inactivity: "#94a3b8",
+  boundary: "#e879f9", attention: "#a3e635",
 };
 
 function refreshDetectorColors() {
