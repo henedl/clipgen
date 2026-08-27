@@ -158,6 +158,12 @@
     drawingLasso: null,
     wandTolerance: 32,
     wandDragging: null,
+    // Shape-draw mode: freehand shape-reference painting for the Shape tool.
+    // The session holds an offscreen mask canvas at native frame size. On
+    // state (not satellite vars) — the hub Escape handler and the overlay
+    // painter both read it across file boundaries.
+    shapeDraw: null,
+    shapeBrushSize: 24,
     pendingRegion: null,
     draggingRegion: null,
     resizingRegion: null,
@@ -961,15 +967,18 @@
       "Threshold":        "How closely the picture must match. Lower it to allow looser matches",
     },
     shape: {
-      "Shape":            "Capture or upload the shape to search for. Only its outline is matched; the selected region scopes where",
+      "Shape":            "Capture, upload, or draw the shape to search for. Only its outline is matched; the selected region scopes where",
       "Threshold":        "How closely the outline must match. Lower it to allow looser matches",
-      "Scale min":        "Smallest size to search at, as a percent of the reference. Width-only when axes are unlinked",
-      "Scale max":        "Largest size to search at, as a percent of the reference. Width-only when axes are unlinked",
+      "Scale min":        "Smallest size to search at, as a percent of the reference",
+      "Scale max":        "Largest size to search at, as a percent of the reference",
       "Scale steps":      "How many sizes to try between min and max. More steps = finer size coverage, slower scan",
       "Link axes":        "Uncheck to search width and height independently — for buttons that stretch with their content. Every width is tried at every height, so the scan slows accordingly",
-      "V scale min":      "Smallest height to search at, as a percent of the reference",
-      "V scale max":      "Largest height to search at, as a percent of the reference",
-      "V scale steps":    "How many heights to try between min and max",
+      "Width scale min":  "Smallest width to search at, as a percent of the reference",
+      "Width scale max":  "Largest width to search at, as a percent of the reference",
+      "Width scale steps": "How many widths to try between min and max",
+      "Height scale min": "Smallest height to search at, as a percent of the reference",
+      "Height scale max": "Largest height to search at, as a percent of the reference",
+      "Height scale steps": "How many heights to try between min and max",
     },
     flow: {
       "Magnitude":        "Minimum movement strength to count. Raise it to ignore small or slow motion",
@@ -1108,6 +1117,7 @@
     state.frameLoading = false;
     state.referenceTimestamp = null;
     state.sceneReferences = [];
+    cancelShapeDraw();
     // In/out markers are per participant and persisted for the tab — swap in
     // the incoming participant's pair (nulls when they have none) rather than
     // letting the outgoing participant's markers leak across.
@@ -1664,6 +1674,8 @@
         canvas.height = img.naturalHeight;
         overlay.width = img.naturalWidth;
         overlay.height = img.naturalHeight;
+        // A resize invalidates the shape-draw mask's pixel space.
+        cancelShapeDraw();
       }
       var ctx = canvas.getContext("2d");
       ctx.drawImage(img, 0, 0);
@@ -1902,6 +1914,9 @@
   function hideRegionNameModal() { return SS.hideRegionNameModal && SS.hideRegionNameModal.apply(null, arguments); }
   function invalidateOverlayRect() { return SS.invalidateOverlayRect && SS.invalidateOverlayRect.apply(null, arguments); }
   function cancelWandDrag() { return SS.cancelWandDrag && SS.cancelWandDrag.apply(null, arguments); }
+  function toggleShapeDraw() { return SS.toggleShapeDraw && SS.toggleShapeDraw.apply(null, arguments); }
+  function cancelShapeDraw() { return SS.cancelShapeDraw && SS.cancelShapeDraw.apply(null, arguments); }
+  function openSampleModal() { return SS.openSampleModal && SS.openSampleModal.apply(null, arguments); }
 
   // ---- Region stashing ----
 
@@ -3111,10 +3126,10 @@
   }
 
   // Thumbnail + source-region label for the last capture. Shared by the
-  // Template/Shape reference row and Similarity. A task-Edit restore knows
-  // the region name but has no pixels (the server strips binaries), so the
-  // thumbnail is optional.
-  function refSnapshotInfo(labelText) {
+  // Template/Shape reference row (editable) and Similarity (view-only). A
+  // task-Edit restore knows the region name but has no pixels (the server
+  // strips binaries), so the thumbnail — and its click target — is optional.
+  function refSnapshotInfo(labelText, editable) {
     var snap = state.capturedRefPreview;
     if (!snap || snap.ts !== state.referenceTimestamp) return null;
     if (!snap.dataUrl && !snap.region) return null;
@@ -3122,20 +3137,49 @@
     if (snap.dataUrl) {
       var capThumb = document.createElement("img");
       capThumb.decoding = "async";
+      capThumb.className = "ss-sample-thumb";
       capThumb.src = snap.dataUrl;
       capThumb.alt = "Captured " + labelText.toLowerCase();
       capThumb.title = snap.region;
+      capThumb.addEventListener("click", function () {
+        openSampleModal({
+          mode: editable ? "edit" : "view",
+          title: "Captured " + labelText.toLowerCase(),
+          dataUrl: snap.dataUrl,
+          regionName: snap.region,
+          onApply: function (b64) {
+            // An edited capture becomes an upload: the server can no longer
+            // re-derive its pixels from the region + timestamp.
+            applyEditedSample((snap.region || "sample") + "-edited.png", b64);
+          },
+        });
+      });
       capInfo.appendChild(capThumb);
     }
     if (snap.region) capInfo.appendChild(el("span", "param-hint", snap.region));
     return capInfo;
   }
 
+  // Install an edited sample as the uploaded reference (Template/Shape).
+  function applyEditedSample(name, b64) {
+    state.uploadedTemplate = { name: name, data: b64 };
+    state.referenceTimestamp = null;
+    state.capturedRefPreview = null;
+    state.templateOverlayPos = null;
+    var previewImg = new Image();
+    previewImg.onload = function () { renderOverlay(); };
+    previewImg.src = "data:image/png;base64," + b64;
+    state.uploadedTemplateImg = previewImg;
+    renderWorkflowParams();
+    updateRunButton();
+    refreshModelView({ debounce: true });
+  }
+
   // Shared by Template and Shape: the capture-region / upload-PNG reference
   // row. Both tools read state.referenceTimestamp / state.uploadedTemplate;
   // the drag overlay stays template-only (templateOverlayBounds gates on the
-  // active tool).
-  function renderRefCaptureRow(container, labelText) {
+  // active tool). opts.draw adds the paint-on-frame button (Shape only).
+  function renderRefCaptureRow(container, labelText, opts) {
     var tmplRefRow = el("div", "param-row");
     tmplRefRow.appendChild(el("span", "param-label", labelText));
     var tmplRefCtrl = el("div", "param-control");
@@ -3195,6 +3239,18 @@
     tmplRefCtrl.appendChild(tmplUploadBtn);
     tmplRefCtrl.appendChild(tmplFileInput);
 
+    if (opts && opts.draw) {
+      var drawBtn = el("button", "btn btn-small ss-template-icon-btn ss-template-icon-btn--draw");
+      drawBtn.setAttribute("type", "button");
+      drawBtn.title = "Draw shape on frame";
+      drawBtn.setAttribute("aria-label", "Draw shape on frame");
+      drawBtn.appendChild(el("span", "ss-template-icon-btn__glyph"));
+      // The row re-renders wholesale; active look derives from state alone.
+      drawBtn.classList.toggle("active", !!state.shapeDraw);
+      drawBtn.addEventListener("click", toggleShapeDraw);
+      tmplRefCtrl.appendChild(drawBtn);
+    }
+
     if (state.uploadedTemplate) {
       if (!state.uploadedTemplateImg) {
         var liveImg = new Image();
@@ -3205,9 +3261,22 @@
       var uploadInfo = el("span", "param-value template-upload-info");
       var uploadThumb = document.createElement("img");
       uploadThumb.decoding = "async";
+      uploadThumb.className = "ss-sample-thumb";
       uploadThumb.src = "data:image/png;base64," + state.uploadedTemplate.data;
       uploadThumb.alt = "Uploaded " + labelText.toLowerCase();
       uploadThumb.title = state.uploadedTemplate.name;
+      uploadThumb.addEventListener("click", function () {
+        var up = state.uploadedTemplate;
+        if (!up) return;
+        openSampleModal({
+          mode: "edit",
+          title: up.name || "Uploaded " + labelText.toLowerCase(),
+          dataUrl: "data:image/png;base64," + up.data,
+          onApply: function (b64) {
+            applyEditedSample(up.name || "sample.png", b64);
+          },
+        });
+      });
       uploadInfo.appendChild(uploadThumb);
       var clearBtn = el("button", "btn btn-small", "\u00d7");
       clearBtn.addEventListener("click", function () {
@@ -3224,7 +3293,7 @@
       // Show what was captured: a crop thumbnail + the source region's name.
       // A restore from task Edit has no snapshot (server strips the binary),
       // so the ts guard degrades those to the plain time chip.
-      var capInfo = refSnapshotInfo(labelText);
+      var capInfo = refSnapshotInfo(labelText, true);
       if (capInfo) tmplRefCtrl.appendChild(capInfo);
     }
     tmplRefRow.appendChild(tmplRefCtrl);
@@ -3250,30 +3319,37 @@
   }
 
   function renderShapeParams(container) {
-    renderRefCaptureRow(container, "Shape");
+    renderRefCaptureRow(container, "Shape", { draw: true });
     addParamRow(container, "Threshold", rangeInput("paramShapeThresh", 0.30, 1.00, 0.55, 0.01), "paramShapeThreshVal");
     addParamRow(container, "Scale min", rangeInput("paramShapeScaleMin", 25, 400, 50, 5), "paramShapeScaleMinVal");
+    var rowXMin = container.lastChild;
     addParamRow(container, "Scale max", rangeInput("paramShapeScaleMax", 25, 400, 200, 5), "paramShapeScaleMaxVal");
+    var rowXMax = container.lastChild;
     addParamRow(container, "Scale steps", numberInput("paramShapeSteps", 1, 12, 7, 1));
-    // Unlinked axes: the sliders above become horizontal-only and a vertical
-    // ladder appears — for buttons that keep their height but stretch in
-    // width. The sweep crosses the ladders, so cost multiplies.
+    var rowXSteps = container.lastChild;
+    // Unlinked axes: the sliders above become width-only and a height ladder
+    // appears — for buttons that keep their height but stretch in width.
+    // The sweep crosses the ladders, so cost multiplies.
     var linkCb = document.createElement("input");
     linkCb.type = "checkbox";
     linkCb.id = "paramShapeLinkAxes";
     linkCb.checked = true;
     addParamRow(container, "Link axes", linkCb);
-    addParamRow(container, "V scale min", rangeInput("paramShapeScaleYMin", 25, 400, 90, 5), "paramShapeScaleYMinVal");
+    addParamRow(container, "Height scale min", rangeInput("paramShapeScaleYMin", 25, 400, 90, 5), "paramShapeScaleYMinVal");
     var rowYMin = container.lastChild;
-    addParamRow(container, "V scale max", rangeInput("paramShapeScaleYMax", 25, 400, 110, 5), "paramShapeScaleYMaxVal");
+    addParamRow(container, "Height scale max", rangeInput("paramShapeScaleYMax", 25, 400, 110, 5), "paramShapeScaleYMaxVal");
     var rowYMax = container.lastChild;
-    addParamRow(container, "V scale steps", numberInput("paramShapeStepsY", 1, 12, 3, 1));
+    addParamRow(container, "Height scale steps", numberInput("paramShapeStepsY", 1, 12, 3, 1));
     var rowYSteps = container.lastChild;
     function syncAxisRows() {
       var show = !linkCb.checked;
       rowYMin.style.display = show ? "" : "none";
       rowYMax.style.display = show ? "" : "none";
       rowYSteps.style.display = show ? "" : "none";
+      // Unlinked, the base ladder is width-only; say so in its labels.
+      rowXMin.firstChild.textContent = show ? "Width scale min" : "Scale min";
+      rowXMax.firstChild.textContent = show ? "Width scale max" : "Scale max";
+      rowXSteps.firstChild.textContent = show ? "Width scale steps" : "Scale steps";
     }
     linkCb.addEventListener("change", syncAxisRows);
     syncAxisRows();
@@ -3291,9 +3367,13 @@
         var scThumbWrap = el("span", "param-value template-upload-info");
         var scThumb = document.createElement("img");
         scThumb.decoding = "async";
+        scThumb.className = "ss-sample-thumb";
         scThumb.src = ref._thumb;
         scThumb.alt = "Scene sample";
         if (ref._thumbRegion) scThumb.title = ref._thumbRegion;
+        scThumb.addEventListener("click", function () {
+          openSampleModal({ mode: "view", title: ref.name || "Scene sample", dataUrl: ref._thumb });
+        });
         scThumbWrap.appendChild(scThumb);
         item.appendChild(scThumbWrap);
       }
@@ -3447,6 +3527,7 @@
   // place: task restore (which writes the task's own saved parameters next)
   // must not inherit whatever the panel happened to be showing.
   function renderWorkflowParams(opts) {
+    if (state.shapeDraw && state.activeWorkflow !== "shape") cancelShapeDraw();
     _mergeParamMap(state.paramValues, _snapshotParamValues());
     _renderWorkflowParamsBuild();
     // A just-built panel *is* the defaults, so they are read off the DOM rather
@@ -4791,6 +4872,9 @@
         // full-frame ImageData (~8 MB at 1080p, ~33 MB at 4K) and drops the
         // pending re-flood RAF.
         cancelWandDrag();
+      } else if (state.shapeDraw) {
+        // Exit shape-draw mode before touching pending/active regions.
+        cancelShapeDraw();
       } else if (state.drawingRegion || state.drawingLasso) {
         state.drawingRegion = null;
         state.drawingLasso = null;

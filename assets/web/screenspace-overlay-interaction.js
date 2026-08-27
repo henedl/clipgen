@@ -38,6 +38,8 @@
     templateOverlayBounds = SS.templateOverlayBounds,
     renderRunRegionPicker = SS.renderRunRegionPicker,
     updateRunButton = SS.updateRunButton,
+    renderWorkflowParams = SS.renderWorkflowParams,
+    getThemeColors = SS.getThemeColors,
     deactivatePipette = SS.deactivatePipette,
     refreshCalibration = SS.refreshCalibration,
     refreshModelView = SS.refreshModelView,
@@ -560,6 +562,131 @@
     // this path releases the cached full-frame ImageData (~33 MB at 4K).
     SS.cancelWandDrag = cancelWandDrag;
 
+    // ---- Shape-draw mode ----
+    // Highlighter for the Shape tool's reference: strokes accumulate in an
+    // offscreen mask canvas at native frame size, Shift-drag erases, Apply
+    // crops the mask bbox from the frame into the upload path.
+
+    // The draw button lives in the re-rendered params panel; sync by class.
+    function syncDrawButton() {
+      var btn = qs(".ss-template-icon-btn--draw");
+      if (btn) btn.classList.toggle("active", !!state.shapeDraw);
+    }
+
+    function toggleShapeDraw() {
+      if (state.shapeDraw) { cancelShapeDraw(); return; }
+      if (!state.frameImage) { showToast("Load a frame first"); return; }
+      var mask = document.createElement("canvas");
+      mask.width = overlay.width;
+      mask.height = overlay.height;
+      state.shapeDraw = {
+        canvas: mask, ctx: mask.getContext("2d"),
+        stroking: false, erasing: false, lastX: 0, lastY: 0,
+      };
+      qs("#shapeDrawWrap").classList.remove("collapsed");
+      syncDrawButton();
+      flushOverlayRender();
+      showToast("Paint over the shape — Shift-drag erases");
+    }
+
+    function cancelShapeDraw() {
+      if (!state.shapeDraw) return;
+      state.shapeDraw = null; // releases the mask canvas
+      qs("#shapeDrawWrap").classList.add("collapsed");
+      syncDrawButton();
+      flushOverlayRender();
+    }
+    // Published like cancelWandDrag: the Escape cascade, the frame loader,
+    // and participant/tool switches all abort a live session.
+    SS.toggleShapeDraw = toggleShapeDraw;
+    SS.cancelShapeDraw = cancelShapeDraw;
+
+    function beginShapeStroke(e, pos, s) {
+      var sd = state.shapeDraw;
+      sd.stroking = true;
+      sd.erasing = e.shiftKey;
+      var mctx = sd.ctx;
+      mctx.globalCompositeOperation = sd.erasing ? "destination-out" : "source-over";
+      // Opaque accent strokes; the painter applies the highlighter alpha.
+      mctx.strokeStyle = getThemeColors().accent;
+      mctx.fillStyle = mctx.strokeStyle;
+      mctx.lineCap = "round";
+      mctx.lineJoin = "round";
+      mctx.lineWidth = Math.max(1, state.shapeBrushSize * s);
+      mctx.beginPath();
+      mctx.arc(pos.x, pos.y, mctx.lineWidth / 2, 0, Math.PI * 2);
+      mctx.fill();
+      sd.lastX = pos.x;
+      sd.lastY = pos.y;
+      scheduleOverlayRender();
+    }
+
+    function extendShapeStroke(pos) {
+      var sd = state.shapeDraw;
+      var mctx = sd.ctx;
+      mctx.beginPath();
+      mctx.moveTo(sd.lastX, sd.lastY);
+      mctx.lineTo(pos.x, pos.y);
+      mctx.stroke();
+      sd.lastX = pos.x;
+      sd.lastY = pos.y;
+      scheduleOverlayRender();
+    }
+
+    function endShapeStroke() {
+      if (state.shapeDraw) state.shapeDraw.stroking = false;
+    }
+
+    // Crop the painted bbox from the frame; hand it to the upload path.
+    function commitShapeDraw() {
+      var sd = state.shapeDraw;
+      if (!sd) return;
+      var w = sd.canvas.width, h = sd.canvas.height;
+      var data = sd.ctx.getImageData(0, 0, w, h).data;
+      var minX = w, minY = h, maxX = -1, maxY = -1;
+      for (var y = 0; y < h; y++) {
+        var rowBase = y * w * 4;
+        for (var x = 0; x < w; x++) {
+          if (data[rowBase + x * 4 + 3] > 0) {
+            if (x < minX) minX = x;
+            if (x > maxX) maxX = x;
+            if (y < minY) minY = y;
+            if (y > maxY) maxY = y;
+          }
+        }
+      }
+      // The backend erodes the alpha and needs enough surviving edge pixels.
+      if (maxX - minX < 16 || maxY - minY < 16) {
+        showToast("Painted shape too small. Draw a larger area");
+        return;
+      }
+      var bw = maxX - minX + 1, bh = maxY - minY + 1;
+      var crop = document.createElement("canvas");
+      crop.width = bw;
+      crop.height = bh;
+      var cctx = crop.getContext("2d");
+      cctx.drawImage(state.frameImage, minX, minY, bw, bh, 0, 0, bw, bh);
+      cctx.globalCompositeOperation = "destination-in";
+      cctx.drawImage(sd.canvas, minX, minY, bw, bh, 0, 0, bw, bh);
+      var dataUrl = crop.toDataURL("image/png");
+      state.uploadedTemplate = { name: "drawn-shape.png", data: dataUrl.split(",")[1] };
+      state.referenceTimestamp = null;
+      state.capturedRefPreview = null;
+      state.templateOverlayPos = null;
+      var previewImg = new Image();
+      previewImg.onload = function () { renderOverlay(); };
+      previewImg.src = dataUrl;
+      state.uploadedTemplateImg = previewImg;
+      cancelShapeDraw();
+      renderWorkflowParams();
+      updateRunButton();
+      refreshModelView({ debounce: true });
+      showToast("Shape captured from drawing");
+    }
+
+    qs("#shapeDrawApplyBtn").addEventListener("click", commitShapeDraw);
+    qs("#shapeDrawCancelBtn").addEventListener("click", cancelShapeDraw);
+
     overlay.addEventListener("mousedown", function (e) {
       if (e.button !== 0) return;
       if (state.videoPlaying) pauseVideo();
@@ -601,6 +728,11 @@
       if (!displayW || !overlay.width) return;
       var s = overlay.width / displayW;
       var ctx = overlay.getContext("2d");
+      // Shape-draw mode swallows every canvas press: paint, or Shift-erase.
+      if (state.shapeDraw) {
+        beginShapeStroke(e, pos, s);
+        return;
+      }
       // Shift/alt with a target region: boolean-edit its shape instead of
       // dragging or drawing a new region (shift = add, alt = subtract,
       // shift+alt = intersect). The target is the selected saved region, or —
@@ -685,6 +817,16 @@
       var pos = canvasCoords(overlay, e, rect);
       var displayW = rect.width || overlay.width;
       var s = overlay.width / displayW;
+      if (state.shapeDraw) {
+        if (state.shapeDraw.stroking) {
+          extendShapeStroke(pos);
+        } else {
+          // Keep region affordances dead while draw mode is armed.
+          state.hoveredRegion = null;
+          overlay.style.cursor = "crosshair";
+        }
+        return;
+      }
       if (state.draggingTemplate) {
         var tImg = state.uploadedTemplateImg;
         var tw = Math.max(1, Math.round(tImg.naturalWidth * (state.templateScalePreview || 1.0)));
@@ -758,6 +900,7 @@
       // happened to be current, under the open context menu.
       if (e.button !== 0) return;
       if (state.wandDragging) { commitWandDrag(); return; }
+      if (state.shapeDraw) { endShapeStroke(); return; }
       if (state.draggingTemplate) {
         _cachedOverlayRect = null;
         state.draggingTemplate = null;
@@ -800,6 +943,8 @@
     // menu opened mid-drag.
     window.addEventListener("blur", cancelWandDrag);
     overlay.addEventListener("contextmenu", cancelWandDrag);
+    // A stroke that loses focus mid-drag just ends; the session survives.
+    window.addEventListener("blur", endShapeStroke);
 
     // Document-level listeners so drag/resize continues outside the canvas
     document.addEventListener("mousemove", function (e) {
@@ -807,6 +952,12 @@
         // No button held: the mouseup happened somewhere we never saw it.
         if (e.buttons === 0) cancelWandDrag();
         else updateWandDragFromEvent(e);
+        return;
+      }
+      if (state.shapeDraw && state.shapeDraw.stroking) {
+        if (e.buttons === 0) { endShapeStroke(); return; }
+        var sdRect = _cachedOverlayRect || overlay.getBoundingClientRect();
+        extendShapeStroke(canvasCoords(overlay, e, sdRect));
         return;
       }
       if (state.drawingLasso) {
@@ -851,6 +1002,7 @@
     document.addEventListener("mouseup", function (e) {
       if (e.button !== 0) return; // see the overlay mouseup guard above
       if (state.wandDragging) { commitWandDrag(); return; }
+      if (state.shapeDraw && state.shapeDraw.stroking) { endShapeStroke(); return; }
       if (finishDrawingLasso()) return;
       if (finishDrawingRegion(e)) return;
       if (state.draggingTemplate) {
@@ -963,6 +1115,7 @@
       // Abandon any in-progress draw from the previous tool, else mouseup
       // could still commit it while the new tool appears selected.
       if (state.wandDragging) cancelWandDrag();
+      if (state.shapeDraw) cancelShapeDraw();
       state.drawingLasso = null;
       state.drawingRegion = null;
       // Idempotent after a click (the track already moved); needed when
@@ -987,6 +1140,13 @@
     wandToleranceInput.addEventListener("input", function () {
       state.wandTolerance = parseInt(wandToleranceInput.value, 10) || 32;
       qs("#wandToleranceValue").textContent = String(state.wandTolerance);
+    });
+
+    var shapeBrushInput = qs("#shapeBrushInput");
+    shapeBrushInput.value = String(state.shapeBrushSize);
+    shapeBrushInput.addEventListener("input", function () {
+      state.shapeBrushSize = parseInt(shapeBrushInput.value, 10) || 24;
+      qs("#shapeBrushValue").textContent = String(state.shapeBrushSize);
     });
 
     // Toggle region labels

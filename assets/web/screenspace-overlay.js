@@ -172,6 +172,14 @@
       }
     }
 
+    // Shape-draw strokes: the opaque mask rendered as a translucent highlight.
+    if (state.shapeDraw) {
+      ctx.save();
+      ctx.globalAlpha = 0.35;
+      ctx.drawImage(state.shapeDraw.canvas, 0, 0);
+      ctx.restore();
+    }
+
     // Live magic-wand scrub preview: the current flood contour, stroked white
     // for a new region or in the modifier color for a shift/alt combine, with a
     // running tolerance readout. Drawn only while the press-drag is active;
