@@ -113,6 +113,60 @@ def test_region_notes_missing_name(tmp_path, monkeypatch):
     assert "__note__" not in out
 
 
+def test_region_forwards_polygon_points(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        screenspace,
+        "load_screenspace_manifest",
+        lambda: {
+            "regions": {
+                "btn": {
+                    "x": 0.1,
+                    "y": 0.1,
+                    "w": 0.2,
+                    "h": 0.2,
+                    "points": [[[0.0, 0.0], [1.0, 0.0], [0.5, 1.0]]],
+                    "shape": "polygon",
+                }
+            }
+        },
+    )
+    out = _run("region", _ctx(tmp_path), {}, {"name": "btn"})
+    coords = out["region"]["coords"]
+    assert coords["points"][0][0] == [0.0, 0.0]
+    assert coords["shape"] == "polygon"
+
+
+def test_attach_ss_reference_keeps_shaped_capture_mask(monkeypatch):
+    import numpy as np
+
+    frame = np.zeros((80, 80, 3), dtype=np.uint8)
+    monkeypatch.setattr(video, "extract_frame_at_timestamp", lambda *a, **k: frame)
+    coords = {
+        "x": 10,
+        "y": 10,
+        "w": 40,
+        "h": 40,
+        "mask_points": [[[0.0, 0.0], [1.0, 0.0], [0.5, 1.0]]],
+    }
+    params: dict[str, Any] = {}
+    assert workflows._attach_ss_reference(
+        "shape", params, {"reference_seconds": 0}, "v.mp4", coords
+    )
+    assert params["shape_mask"].shape == (40, 40)
+
+
+def test_workflow_resolve_videos_honours_filename_overrides(tmp_path, monkeypatch):
+    (tmp_path / "study_P01.mp4").write_text("pattern")
+    (tmp_path / "other.mp4").write_text("override")
+    monkeypatch.setattr(config, "INPUT_DIR", str(tmp_path), raising=False)
+    monkeypatch.setattr(
+        config, "FILENAME_OVERRIDES", {"P01": "other.mp4"}, raising=False
+    )
+    ctx = _ctx(tmp_path)
+    paths = ctx.resolve_videos("P01")
+    assert [Path(p).name for p in paths] == ["other.mp4"]
+
+
 def test_transcript_marks_resolves_categories_and_pads(tmp_path, monkeypatch):
     import transcripts
 

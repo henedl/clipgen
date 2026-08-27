@@ -1,6 +1,7 @@
 """Tests for Screenspace CLI flags and dispatch helpers."""
 
 from argparse import Namespace
+from typing import Any
 
 import pytest
 
@@ -1168,3 +1169,21 @@ def test_ss_run_task_parent_stash_disambiguates(monkeypatch):
     assert saved_tasks
     # stash_a's hud -> {10,10,10,10}, not stash_b's {20,...} nor the stale saved coords.
     assert saved_tasks[0]["region_coords"] == {"x": 10, "y": 10, "w": 10, "h": 10}
+
+
+def test_ss_rehydrate_applies_shaped_capture_mask():
+    import numpy as np
+
+    frame = np.zeros((80, 80, 3), dtype=np.uint8)
+    parameters: dict[str, Any] = {"reference_timestamp": 0.0}
+    region = {
+        "x": 10,
+        "y": 10,
+        "w": 40,
+        "h": 40,
+        "mask_points": [[[0.0, 0.0], [1.0, 0.0], [0.5, 1.0]]],
+    }
+    cli._ss_rehydrate_task_media(
+        "shape", parameters, lambda ts: frame, region, {"regions": {}}, (80, 80)
+    )
+    assert parameters["shape_mask"].shape == (40, 40)

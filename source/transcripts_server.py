@@ -2232,7 +2232,7 @@ def api_llm_start() -> FlaskResponse:
         return err("AI runtime is not installed")
     started = llm_client.start_server()
     if not started:
-        return err("AI server did not start")
+        return err(llm_client.take_last_error() or "AI server did not start")
     return ok(started=True)
 
 

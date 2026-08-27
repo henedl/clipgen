@@ -230,6 +230,16 @@ class TestExternalCaches:
         (cache / "acme_tiny_tiny-Q2_K.gguf").write_bytes(b"GGUF")
         assert llm_client._find_external_gguf("acme/tiny:Q8_0") is None
 
+    def test_q4km_does_not_match_iq4km(self, tmp_path, monkeypatch):
+        self._llama_cache(tmp_path, monkeypatch)
+        hub = self._hub(tmp_path, monkeypatch)
+        snap = hub / "models--acme--tiny" / "snapshots" / "abc123"
+        snap.mkdir(parents=True)
+        (snap / "tiny-IQ4_K_M.gguf").write_bytes(b"IQ")
+        (snap / "tiny-Q4_K_M.gguf").write_bytes(b"Q4")
+        found = llm_client._find_external_gguf("acme/tiny:Q4_K_M")
+        assert found == snap / "tiny-Q4_K_M.gguf"
+
     def test_installed_check_materializes_symlink(self, tmp_path, monkeypatch):
         cache = self._llama_cache(tmp_path, monkeypatch)
         self._hub(tmp_path, monkeypatch)
@@ -535,6 +545,17 @@ class TestGenerateStreamTruncation:
         resp.readline.side_effect = http.client.IncompleteRead(b"partial")
         mock_urlopen.return_value = resp
         assert llm_client.generate("hi") is None
+
+    @patch("llm_client.urllib.request.urlopen")
+    def test_in_stream_error_is_not_reported_as_truncation(self, mock_urlopen):
+        mock_urlopen.return_value = _make_streaming_resp(
+            [b'data: {"error": "model overloaded"}\n']
+        )
+        llm_client.take_last_error()
+        assert llm_client.generate("hi") is None
+        reason = llm_client.take_last_error()
+        assert "overloaded" in reason
+        assert "stream ended" not in reason
 
 
 class _SSEChatHandler(http.server.BaseHTTPRequestHandler):
@@ -886,6 +907,26 @@ class TestAutoStartServer:
         monkeypatch.setattr(llm_client, "_START_TIMEOUT", 0.2)
         assert llm_client.start_server() is False
 
+    @patch("llm_client.subprocess.Popen")
+    @patch("llm_client.is_available")
+    @patch("llm_client.shutil.which")
+    def test_start_server_kills_the_child_on_timeout(
+        self, mock_which, mock_available, mock_popen, monkeypatch
+    ):
+        mock_which.return_value = "/usr/local/bin/llama-server"
+        mock_available.return_value = False
+        proc = mock_popen.return_value
+        proc.poll.return_value = None
+        monkeypatch.setattr(llm_client, "_START_POLL_INTERVAL", 0.01)
+        monkeypatch.setattr(llm_client, "_START_TIMEOUT", 0.05)
+        monkeypatch.setattr(llm_client, "_server_proc", None)
+        llm_client.take_last_error()
+
+        assert llm_client.start_server() is False
+        proc.terminate.assert_called()
+        assert llm_client._server_proc is None
+        assert "timeout" in llm_client.take_last_error()
+
 
 def _tree_entry(path: str, size: int, sha: str | None = "a" * 64) -> dict:
     entry: dict = {"path": path, "size": size}
@@ -959,6 +1000,17 @@ class TestDownloadModel:
         with patch("llm_client.urllib.request.urlopen") as mock_urlopen:
             mock_urlopen.side_effect = self._mock_hf(tree)
             assert llm_client.download_model("acme/big:Q8_0") is False
+
+    def test_iq4_does_not_make_q4_look_sharded(self):
+        tree = [
+            _tree_entry("tiny-IQ4_K_M.gguf", 12),
+            _tree_entry("tiny-Q4_K_M.gguf", 12),
+        ]
+        with patch("llm_client.urllib.request.urlopen") as mock_urlopen:
+            mock_urlopen.side_effect = self._mock_hf(tree)
+            resolved = llm_client._resolve_hf_file("acme/tiny:Q4_K_M")
+        assert resolved is not None
+        assert resolved["path"] == "tiny-Q4_K_M.gguf"
 
     def test_gated_repo_reports_failure(self):
         with patch("llm_client.urllib.request.urlopen") as mock_urlopen:

@@ -1165,6 +1165,22 @@ class TestDictionaryCsv:
     def test_garbage_input_yields_nothing(self):
         assert transcripts.parse_dictionary_csv("not a csv at all") == ([], [])
 
+    def test_utf8_bom_does_not_drop_the_header(self):
+        text = "\ufefftype,from,to\ncorrection,teh,the\nterm,,Widget\n"
+        assert transcripts.parse_dictionary_csv(text) == (
+            [{"from": "teh", "to": "the"}],
+            ["Widget"],
+        )
+
+    def test_formula_cells_round_trip_as_text(self):
+        corrections = [{"from": "=SUM(1)", "to": "+cmd"}]
+        terms = ["@ref"]
+        text = transcripts.dictionary_to_csv(corrections, terms)
+        assert "'=SUM(1)" in text
+        assert "'+cmd" in text
+        assert "'@ref" in text
+        assert transcripts.parse_dictionary_csv(text) == (corrections, terms)
+
 
 # ---------------------------------------------------------------------------
 # get_corrections_keywords

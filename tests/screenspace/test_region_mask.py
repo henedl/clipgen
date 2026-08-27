@@ -6,6 +6,7 @@ import screenspace_ocr
 from screenspace_ocr import _ocr_region_readings
 from screenspace_primitives import (
     average_color_hsv,
+    attach_capture_mask,
     color_present,
     compare_scene_fingerprints,
     compute_frame_diff,
@@ -361,3 +362,19 @@ class TestRegionMasker:
         assert c is not None and c.shape == (20, 20)
         rect_masker = region_masker({"x": 0, "y": 0, "w": 10, "h": 10})
         assert rect_masker(np.zeros((40, 40, 3), dtype=np.uint8)) is None
+
+
+class TestAttachCaptureMask:
+    def test_sets_mask_for_a_shaped_region(self):
+        params = {"shape_image": np.zeros((40, 40, 3), dtype=np.uint8)}
+        region = {"mask_points": [TRIANGLE]}
+        attach_capture_mask(params, "shape_image", "shape_mask", region)
+        assert params["shape_mask"].shape == (40, 40)
+        assert set(np.unique(params["shape_mask"])) <= {0, 255}
+
+    def test_skips_rectangular_regions(self):
+        params = {"shape_image": np.zeros((40, 40, 3), dtype=np.uint8)}
+        attach_capture_mask(
+            params, "shape_image", "shape_mask", {"x": 0, "y": 0, "w": 40, "h": 40}
+        )
+        assert "shape_mask" not in params

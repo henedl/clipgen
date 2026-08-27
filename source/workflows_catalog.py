@@ -53,10 +53,12 @@ class NodeContext:
     def resolve_videos(self, participant: str) -> list[str]:
         """Return a participant's ordered source video path(s), or ``[]`` if none.
 
-        Multi-part participants (a session split across numbered files) return all
-        parts in timeline order — mirrors ``utils.discover_participant_videos``.
+        Honours ``config.FILENAME_OVERRIDES``. Multi-part participants return all
+        parts in timeline order.
         """
-        for entry in utils.discover_participant_videos():
+        import files
+
+        for entry in files.resolve_participant_videos():
             if entry.get("id") == participant and entry.get("has_video"):
                 return list(entry["video_paths"])
         return []

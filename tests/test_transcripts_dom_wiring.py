@@ -834,6 +834,7 @@ def test_the_density_band_covers_both_evidence_sources():
     )
     video = read("transcripts-video.js")
     assert "state.frictionBandBySegId" in video
+
     draw = video.index("function _drawFrictionBand(")
     draw_body = video[draw : video.index("\n  // The selected participant", draw)]
     assert "frictionMatchBySegId" not in draw_body, (
@@ -907,6 +908,21 @@ def test_llm_start_posts_to_the_transcripts_blueprint():
     """
     assert _JS.count('apiPost("api/models/llm/start"') == 1
     assert 'apiPost("/api/models/llm/start"' not in _JS
+
+
+def test_llm_start_toasts_the_server_reason():
+    start = _JS.index("function _startAiServer(")
+    body = _JS[start : _JS.index("\n  function ", start + 1)]
+    assert "e.serverMessage" in body
+
+
+def test_transcript_markers_are_scoped_to_the_study():
+    video = read("transcripts-video.js")
+    assert "function _markersScope(" in video
+    assert "_writeStoredMarkers(all)" in video
+    assert (
+        "sessionStorage.setItem(MARKERS_STORAGE_KEY, JSON.stringify(all))" not in video
+    )
 
 
 def test_a_stopped_ai_server_is_started_not_asked_about():

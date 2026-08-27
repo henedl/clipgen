@@ -3281,6 +3281,19 @@ def test_llm_delete_refused_while_generating(tr_client, tmp_path, monkeypatch):
     assert (directory / "busy.gguf").exists()
 
 
+def test_llm_start_returns_the_recorded_reason(tr_client, monkeypatch):
+    import llm_client
+
+    monkeypatch.setattr(llm_client, "is_installed", lambda: True)
+    monkeypatch.setattr(llm_client, "start_server", lambda: False)
+    monkeypatch.setattr(
+        llm_client, "take_last_error", lambda: "AI server did not start within timeout."
+    )
+    resp = tr_client.post("/transcripts/api/models/llm/start", json={})
+    assert resp.status_code == 400
+    assert "timeout" in resp.get_json()["error"]
+
+
 def test_api_models_includes_cached_and_agents(monkeypatch):
     import llm_client
     import server as server_mod

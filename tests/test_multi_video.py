@@ -1466,3 +1466,16 @@ def test_ss_cli_resolves_all_parts(monkeypatch, tmp_path):
     paths = cli._ss_resolve_videos_for_participant("P01")
     assert [_basename(p) for p in paths] == ["study_P01-1.mp4", "study_P01-2.mp4"]
     assert cli._ss_resolve_videos_for_participant("PX") == []
+
+
+def test_ss_cli_honours_filename_overrides(monkeypatch, tmp_path):
+    import cli
+
+    monkeypatch.setattr(config, "INPUT_DIR", str(tmp_path), raising=False)
+    (tmp_path / "study_P01.mp4").write_text("pattern")
+    (tmp_path / "other.mp4").write_text("override")
+    monkeypatch.setattr(
+        config, "FILENAME_OVERRIDES", {"P01": "other.mp4"}, raising=False
+    )
+    paths = cli._ss_resolve_videos_for_participant("P01")
+    assert [_basename(p) for p in paths] == ["other.mp4"]

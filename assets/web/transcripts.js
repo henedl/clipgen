@@ -2968,7 +2968,7 @@
         return null;
       })
       .catch(function (e) {
-        showToast((e && e.message) || "The AI server did not start");
+        showToast((e && (e.serverMessage || e.message)) || "The AI server did not start");
         return null;
       });
   }

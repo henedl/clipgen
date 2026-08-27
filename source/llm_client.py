@@ -212,6 +212,17 @@ def _normalize_token(text: str) -> str:
     return re.sub(r"[/_\-.]", "", text.lower())
 
 
+def _quant_in_name(name: str, quant: str) -> bool:
+    """True when *quant* is a filename token, not a substring of another."""
+    return bool(
+        re.search(
+            r"(?:^|[-_.])" + re.escape(quant) + r"(?:$|[-_.])",
+            name,
+            flags=re.IGNORECASE,
+        )
+    )
+
+
 def _ollama_models_dir() -> Path:
     """Ollama's model store: OLLAMA_MODELS, else ~/.ollama/models."""
     env = os.environ.get("OLLAMA_MODELS")
@@ -288,19 +299,18 @@ def _find_external_gguf(value: str) -> Path | None:
 
     repo, quant = _split_hf_ref(value)
     repo_token = _normalize_token(repo)
-    quant_token = _normalize_token(quant)
 
     hub_repo = _hf_hub_dir() / f"models--{repo.replace('/', '--')}" / "snapshots"
     if hub_repo.is_dir():
         for path in sorted(hub_repo.rglob("*.gguf")):
-            if quant_token in _normalize_token(path.stem) and path.is_file():
+            if _quant_in_name(path.stem, quant) and path.is_file():
                 return path
 
     cache = _llama_cache_dir()
     if cache.is_dir():
         for path in sorted(cache.glob("*.gguf")):
             name_token = _normalize_token(path.stem)
-            if repo_token in name_token and quant_token in name_token:
+            if repo_token in name_token and _quant_in_name(path.stem, quant):
                 return path
     return None
 
@@ -618,6 +628,7 @@ def start_server() -> bool:
 
     Returns True if the server is responding after startup, False otherwise.
     """
+    global _server_proc
     binary = resolve_server_bin()
     if binary is None:
         _fail("llama-server is not installed.", install_guidance_lines())
@@ -627,6 +638,9 @@ def start_server() -> bool:
         # Another thread may have already started the server while we waited.
         if is_available():
             return True
+        # A prior start that timed out can leave a live child on the port.
+        if _server_proc is not None:
+            _terminate_server()
 
         directory = models_dir()
         try:
@@ -659,7 +673,6 @@ def start_server() -> bool:
             _fail(f"Failed to start AI server: {exc}")
             return False
 
-        global _server_proc
         _server_proc = proc
 
         deadline = time.monotonic() + _START_TIMEOUT
@@ -680,8 +693,9 @@ def start_server() -> bool:
                 return False
             time.sleep(_START_POLL_INTERVAL)
 
-    _fail("AI server did not start within timeout.")
-    return False
+        _terminate_server()
+        _fail("AI server did not start within timeout.")
+        return False
 
 
 def _shutdown_response_socket(resp: Any) -> None:
@@ -753,6 +767,7 @@ def _do_generate(
     deadline = time.monotonic() + _GENERATE_DEADLINE
     deadline_exceeded = False
     saw_finish = False
+    recorded_failure = False
     resp: Any = None
     try:
         resp = urllib.request.urlopen(req, timeout=_GENERATE_TIMEOUT)
@@ -775,7 +790,7 @@ def _do_generate(
             if time.monotonic() >= deadline:
                 deadline_exceeded = True
                 _shutdown_response_socket(resp)
-                return None
+                break
             try:
                 line = resp.readline()
             except (OSError, ValueError, AttributeError, http.client.HTTPException):
@@ -784,15 +799,15 @@ def _do_generate(
                 # surface this as AttributeError on Python 3.13+ when the
                 # chunked-encoding state machine tries to advance past a
                 # closed fp.
-                return None
+                break
             if not line:
                 break
             if cancel_event is not None and cancel_event.is_set():
-                return None
+                break
             if time.monotonic() >= deadline:
                 deadline_exceeded = True
                 _shutdown_response_socket(resp)
-                return None
+                break
             payload = line.strip()
             if not payload.startswith(b"data:"):
                 continue  # skip SSE comments / blank keep-alives
@@ -808,7 +823,8 @@ def _do_generate(
             error = chunk.get("error")
             if error:
                 _fail(f"AI generate failed: {error}")
-                return None
+                recorded_failure = True
+                break
             piece, finished = _delta_piece(chunk)
             if piece:
                 parts.append(piece)
@@ -833,8 +849,11 @@ def _do_generate(
                 f"AI generate exceeded {_GENERATE_DEADLINE}s deadline "
                 f"(model: {body.get('model')}); aborting."
             )
+            recorded_failure = True
 
     if cancel_event is not None and cancel_event.is_set():
+        return None
+    if recorded_failure:
         return None
     if not saw_finish:
         # The stream ended (EOF) without a finish_reason — the server
@@ -1026,13 +1045,12 @@ def _resolve_hf_file(ref: str) -> dict[str, Any] | None:
     if not isinstance(tree, list):
         utils.warning_print(f"Unexpected model listing for {repo}.")
         return None
-    needle = quant.lower()
     matches = [
         entry
         for entry in tree
         if isinstance(entry, dict)
         and entry.get("path", "").lower().endswith(".gguf")
-        and needle in Path(entry.get("path", "")).stem.lower()
+        and _quant_in_name(Path(entry.get("path", "")).stem, quant)
     ]
     if not matches:
         utils.warning_print(f"No {quant} GGUF found in {repo}.")

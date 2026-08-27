@@ -1216,6 +1216,19 @@ def get_known_terms(manifest: dict[str, Any]) -> list[str]:
 # One flat table carries both halves so a study's vocabulary travels as a single
 # file: "correction" rows use both text columns, "term" rows only ``to``.
 DICTIONARY_CSV_COLUMNS = ("type", "from", "to")
+_CSV_FORMULA_SIGILS = frozenset("=+-@\t\r")
+
+
+def _defang_csv_text(value: str) -> str:
+    """Prefix a spreadsheet formula trigger so Excel stores it as text."""
+    return ("'" + value) if value[:1] in _CSV_FORMULA_SIGILS else value
+
+
+def _undefang_csv_text(value: str) -> str:
+    """Undo :func:`_defang_csv_text` on a re-imported cell."""
+    return (
+        value[1:] if value[:1] == "'" and value[1:2] in _CSV_FORMULA_SIGILS else value
+    )
 
 
 def dictionary_to_csv(corrections: list[dict[str, Any]], known_terms: list[str]) -> str:
@@ -1223,11 +1236,18 @@ def dictionary_to_csv(corrections: list[dict[str, Any]], known_terms: list[str])
     import data_export
 
     rows: list[dict[str, Any]] = [
-        {"type": "correction", "from": c.get("from", ""), "to": c.get("to", "")}
+        {
+            "type": "correction",
+            "from": _defang_csv_text(str(c.get("from", ""))),
+            "to": _defang_csv_text(str(c.get("to", ""))),
+        }
         for c in corrections
         if c.get("from") and c.get("to")
     ]
-    rows += [{"type": "term", "from": "", "to": term} for term in known_terms]
+    rows += [
+        {"type": "term", "from": "", "to": _defang_csv_text(term)}
+        for term in known_terms
+    ]
     if not rows:
         # to_csv derives its columns from the data, so an empty dictionary would
         # export a zero-byte file that cannot be re-imported.
@@ -1245,10 +1265,10 @@ def parse_dictionary_csv(text: str) -> tuple[list[dict[str, str]], list[str]]:
     """
     corrections: list[dict[str, str]] = []
     terms: list[str] = []
-    for row in csv.DictReader(io.StringIO(text)):
+    for row in csv.DictReader(io.StringIO(text.lstrip("\ufeff"))):
         kind = (row.get("type") or "").strip().lower()
-        frm = (row.get("from") or "").strip()
-        to = (row.get("to") or "").strip()
+        frm = _undefang_csv_text((row.get("from") or "").strip())
+        to = _undefang_csv_text((row.get("to") or "").strip())
         if kind == "correction":
             if frm and to:
                 corrections.append({"from": frm, "to": to})
