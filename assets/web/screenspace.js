@@ -2507,13 +2507,15 @@
   // all run one path. Ordered source of truth for grouping. Every category is a
   // dropdown, even single-tool ones, for a uniform look; multitool is the lone
   // standalone chip (direct-select, alwaysIcon) since it is not a detector.
+  // `icon` is an assets/icons basename standing for the group itself — it marks
+  // a resting chip and its menu title, and never repeats a member tool's icon.
   var TOOL_CATEGORIES = [
     { label: "Multitool", tools: ["multitool"], alwaysIcon: true, standalone: true },
-    { label: "Difference", tools: ["change", "similarity", "inactivity"] },
-    { label: "Detection", tools: ["template", "color", "text", "numbers"] },
-    { label: "Classification", tools: ["scene", "boundary"] },
-    { label: "Attention", tools: ["flow", "attention"] },
-    { label: "Utility", tools: ["timelapse"] },
+    { label: "Difference", tools: ["change", "similarity", "inactivity"], icon: "square-2-stack" },
+    { label: "Detection", tools: ["template", "color", "text", "numbers"], icon: "magnifying-glass" },
+    { label: "Classification", tools: ["scene", "boundary"], icon: "tag" },
+    { label: "Attention", tools: ["flow", "attention"], icon: "cursor-arrow-rays" },
+    { label: "Utility", tools: ["timelapse"], icon: "cog-6-tooth" },
   ];
 
   // Heroicon basenames per tool — mirrors the .ss-task-icon--<type> mask map in
@@ -2532,6 +2534,16 @@
 
   function _toolLabel(type) {
     return type ? type.charAt(0).toUpperCase() + type.slice(1) : "";
+  }
+
+  // Category glyph. Borrows .ss-task-icon's sizing; the mask is set inline
+  // since category icons have no .ss-task-icon--<type> class.
+  function buildCatIcon(name) {
+    if (!name) return null;
+    return iconMaskSpan(name, {
+      className: "ss-task-icon",
+      basePath: "/screenspace/icons/",
+    });
   }
 
   // Alt-hold digit hints for the category chips. While a dropdown is open the
@@ -2601,6 +2613,7 @@
       var chip = el("div", "ss-cat-chip");
       chip.setAttribute("data-cat", cat.label);
       chip.setAttribute("data-tools", cat.tools.join(","));
+      if (cat.icon) chip.setAttribute("data-cat-icon", cat.icon);
       if (cat.alwaysIcon) chip.setAttribute("data-always-icon", "");
       var trigger = el("button", "ss-cat-trigger");
       trigger.type = "button";
@@ -2619,8 +2632,11 @@
         menu.setAttribute("role", "menu");
         // Names the category; the chip shows the active tool instead when selected.
         menu.setAttribute("aria-label", cat.label + " tools");
-        var head = el("div", "ss-cat-menu-head", cat.label + " tools");
+        var head = el("div", "ss-cat-menu-head");
         head.setAttribute("role", "presentation");
+        var headIcon = buildCatIcon(cat.icon);
+        if (headIcon) head.appendChild(headIcon);
+        head.appendChild(el("span", "", cat.label + " tools"));
         menu.appendChild(head);
         cat.tools.forEach(function (type, ti) {
           var item = el("button", "ss-cat-item");
@@ -2667,8 +2683,8 @@
   // Reflect state.activeWorkflow in the category chips: the owning segment gets
   // the solid tool-color fill (via data-active-type) and shows just the active
   // tool's icon + name (the category name is dropped to keep chips compact and
-  // equally sized). Resting chips show the category name; the alwaysIcon chip
-  // (Multitool) keeps its icon even when resting.
+  // equally sized). Resting chips show the category icon + name; the alwaysIcon
+  // chip (Multitool) shows its tool icon instead.
   function syncToolCategoryNav() {
     var nav = qs("#workflowCategories");
     if (!nav) return;
@@ -2682,14 +2698,14 @@
       var text = chip.querySelector(".ss-cat-text");
       chip.classList.toggle("active", isActive);
       // Glyph: the active tool's icon when active; the (single) tool's icon on
-      // an alwaysIcon resting chip; empty otherwise.
+      // an alwaysIcon resting chip; the category's own icon otherwise.
       var glyphType = isActive ? active : (alwaysIcon ? tools[0] : null);
       if (glyph) {
         glyph.innerHTML = "";
-        if (glyphType) {
-          var icon = buildTypeIcon(glyphType);
-          if (icon) glyph.appendChild(icon);
-        }
+        var icon = glyphType
+          ? buildTypeIcon(glyphType)
+          : buildCatIcon(chip.getAttribute("data-cat-icon"));
+        if (icon) glyph.appendChild(icon);
       }
       if (isActive) {
         chip.setAttribute("data-active-type", active);

@@ -1406,10 +1406,11 @@ body[data-frontend="screenspace"] {
 
 /* Equal-width segments — a chip's size does not change with selection. Fixed
  * max width (no flex-grow) so chips appear stable and left-packed; they shrink
- * (flex-shrink) only when the row runs short of space. */
+ * (flex-shrink) only when the row runs short of space. The basis fits the
+ * longest label (Classification) beside the category icon and the chevron. */
 .ss-cat-chip {
   position: relative; /* anchor for .ss-cat-menu + z-index lift when open */
-  flex: 0 1 7rem;
+  flex: 0 1 8rem;
   min-width: 0;
 }
 .ss-cat-chip.open { z-index: var(--z-dropdown); } /* lift the menu above the action row */
@@ -1454,9 +1455,10 @@ body[data-frontend="screenspace"] {
   font-weight: 600;
 }
 
-/* The glyph holds a tool's mask-image icon (colored via background-color, so it
- * tracks --cat-ink to contrast the fill). Empty (hidden) on resting chips —
- * except the alwaysIcon chip (Multitool), which keeps its tool-colored icon. */
+/* The glyph holds a mask-image icon (colored via background-color, so it tracks
+ * --cat-ink to contrast the fill): the active tool's when selected, the
+ * category's own otherwise. The alwaysIcon chip (Multitool) keeps its
+ * tool-colored icon at rest. */
 .ss-cat-glyph {
   display: inline-flex;
   align-items: center;
@@ -1468,6 +1470,10 @@ body[data-frontend="screenspace"] {
   flex-shrink: 0;
   opacity: 1;
   background-color: var(--cat-ink, var(--color-text));
+}
+/* A resting category icon reads as a label, so it follows the dim label color. */
+.ss-cat-chip:not(.active) .ss-cat-glyph .ss-task-icon {
+  background-color: currentColor;
 }
 .ss-cat-chip[data-always-icon] .ss-cat-glyph .ss-task-icon {
   background-color: var(--color-task-multitool);
@@ -1543,12 +1549,20 @@ html[data-theme="light"] .ss-cat-chip.active[data-active-type="numbers"],
 
 /* Category title inside the menu — mirrors .cmdp-section. */
 .ss-cat-menu-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2); /* matches .ss-cat-item, so title and labels line up */
   padding: var(--space-1) var(--space-2) var(--space-2);
   color: var(--color-text-dim);
   font-size: var(--text-2xs);
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.06em;
+}
+.ss-cat-menu-head .ss-task-icon {
+  width: var(--icon-size-xs);
+  height: var(--icon-size-xs);
+  flex-shrink: 0;
 }
 
 .ss-cat-item {
