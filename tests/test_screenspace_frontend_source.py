@@ -17,6 +17,8 @@ SCREENSPACE_CSS = read("screenspace.css")
 SCREENSPACE_JS = read("screenspace.js")
 TASKS_JS = read("screenspace-tasks.js")
 MODEL_VIEW_JS = read("screenspace-model-view.js")
+INTERACTION_JS = read("screenspace-overlay-interaction.js")
+SAMPLE_EDITOR_JS = read("screenspace-sample-editor.js")
 
 
 def _shared_slider_rule() -> str:
@@ -169,3 +171,35 @@ def test_shape_model_view_has_meta_and_sends_capture_mask():
     assert "shape:" in MODEL_VIEW_JS[MODEL_VIEW_JS.index("var MODEL_VIEW_META") :]
     assert "ref_mask=" in MODEL_VIEW_JS
     assert "function _encodeMaskContours(" in MODEL_VIEW_JS
+
+
+def test_shape_axis_labels_relabel_when_unlinked():
+    """Unlinked axes relabel the base ladder Width and reveal the Height rows;
+    every label variant needs a tooltip key or the hover lookup goes silent."""
+    start = SCREENSPACE_JS.index("function syncAxisRows()")
+    body = SCREENSPACE_JS[start : SCREENSPACE_JS.index("\n    }", start)]
+    assert '"Width scale min"' in body and '"Scale min"' in body
+    tips = SCREENSPACE_JS[SCREENSPACE_JS.index("    shape: {") :]
+    tips = tips[: tips.index("\n    },")]
+    for label in ("Width scale", "Height scale"):
+        for suffix in ("min", "max", "steps"):
+            assert f'"{label} {suffix}"' in tips, f"missing tooltip {label} {suffix}"
+
+
+def test_shape_draw_mode_wiring():
+    """Escape must exit draw mode before it starts clearing regions, and the
+    draw button is opt-in — the shared capture row must not give it to Template."""
+    esc = SCREENSPACE_JS.index("} else if (state.shapeDraw) {")
+    assert esc < SCREENSPACE_JS.index(
+        "} else if (state.pendingRegion || state.activeRegion) {"
+    )
+    assert 'renderRefCaptureRow(container, "Shape", { draw: true })' in SCREENSPACE_JS
+    assert 'renderRefCaptureRow(container, "Template");' in SCREENSPACE_JS
+    assert "SS.cancelShapeDraw = cancelShapeDraw;" in INTERACTION_JS
+    assert "if (state.shapeDraw) cancelShapeDraw();" in INTERACTION_JS
+
+
+def test_sample_editor_uses_blocking_modal_and_is_es5():
+    assert "openBlockingModal(" in SAMPLE_EDITOR_JS
+    assert "closeBlockingModal(" in SAMPLE_EDITOR_JS
+    assert_es5(SAMPLE_EDITOR_JS, "screenspace-sample-editor.js")

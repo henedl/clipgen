@@ -101,6 +101,15 @@
               <span id="wandToleranceValue">32</span>
             </span>
           </span>
+          <!-- Shape-draw controls; shown while the Shape tool's draw mode is on. -->
+          <span id="shapeDrawWrap" class="wand-tolerance collapsed">
+            <span class="wand-tolerance-inner">
+              <input id="shapeBrushInput" type="range" min="4" max="96" step="1" value="24" title="Brush size">
+              <span id="shapeBrushValue">24</span>
+              <button id="shapeDrawApplyBtn" class="btn btn-small btn-primary" type="button">Use shape</button>
+              <button id="shapeDrawCancelBtn" class="btn btn-small" type="button">Cancel</button>
+            </span>
+          </span>
           <span class="region-actions-sep"></span>
           <button id="saveRegionBtn" class="btn btn-small hidden">Save Region</button>
           <button id="clearSelectionBtn" class="btn btn-small hidden">Clear</button>
@@ -381,6 +390,7 @@
   <script src="screenspace-model-view.js" defer></script>
   <script src="screenspace-overlay-interaction.js" defer></script>
   <script src="screenspace-overlay.js" defer></script>
+  <script src="screenspace-sample-editor.js" defer></script>
   <script src="screenspace-timeline.js" defer></script>
   <script src="screenspace-tasks.js" defer></script>
   <script src="screenspace-multitool-params.js" defer></script>
