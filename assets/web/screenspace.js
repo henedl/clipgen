@@ -250,7 +250,6 @@
     videoPlaying: false,
     videoMuted: false,
     videoPlaybackRate: 1,
-    modelViewOpen: false,
     overlayEnabled: false,
     overlayLayer: null,
     overlayBlinkActive: false,
@@ -259,14 +258,13 @@
     overlayImageTimestamp: null,
     overlayImageTool: null,
     overlayLayerSpec: {},
-    rightPaneTab: "queue",
+    rightPaneTab: "preview",
     resultsSwitcherOpen: false,
     amplitudeGraphEnabled: false,
     pins: [],
     maxPins: null,
     hoveredPinId: null,
     pinTrayHidden: false,
-    calibrationOpen: false,
     calibrationResult: null,
     calibrationOcrWarmed: false,
     calibrationGreen: false,
@@ -4640,6 +4638,9 @@
     return !state.wandDragging && !state.drawingLasso && !state.drawingRegion;
   }
 
+  // Non-zero while B is held; the gap on release tells a peek from a tap.
+  var _blinkStart = 0;
+
   function initKeyboard() {
     window.ClipgenHotkeys.register([
       {
@@ -4665,11 +4666,16 @@
       { id: "screenspace.stepFwdFine", when: ssVideoFocused, handler: function () { _seekBy(FRAME_STEP); } },
       { id: "screenspace.setIn", handler: function () { if (SS.setInMark) SS.setInMark(); } },
       { id: "screenspace.setOut", handler: function () { if (SS.setOutMark) SS.setOutMark(); } },
+      // Hold to peek the overlay, tap to latch it on — the same hold-or-tap
+      // shape as Composer's B. The tap goes through the checkbox so its change
+      // handler still persists the preference and repaints.
       {
         id: "screenspace.blink",
         repeat: false,
         when: function () { return _overlayEligibleForActiveTool(); },
         handler: function () {
+          if (_blinkStart) return; // blur can swallow a keyup; don't restack
+          _blinkStart = Date.now();
           state.overlayBlinkActive = true;
           var curTs = Number(state.currentTimestamp || 0).toFixed(3);
           if (!state.overlayImage || state.overlayImageTimestamp !== curTs || state.overlayImageTool !== state.activeWorkflow) {
@@ -4678,11 +4684,19 @@
           renderOverlay();
         },
         onRelease: function () {
-          if (state.overlayBlinkActive) {
-            state.overlayBlinkActive = false;
-            renderOverlay();
-          }
+          if (!_blinkStart) return;
+          var tapped = Date.now() - _blinkStart < 250;
+          _blinkStart = 0;
+          state.overlayBlinkActive = false;
+          renderOverlay();
+          var toggle = qs("#modelViewOverlayToggle");
+          if (tapped && toggle && !toggle.disabled) toggle.click();
         },
+      },
+      {
+        id: "screenspace.cycleOverlayLayer",
+        when: function () { return _overlayEligibleForActiveTool(); },
+        handler: function () { SS.cycleOverlayLayer(); },
       },
       {
         id: "global.primary",
@@ -5105,22 +5119,13 @@
           },
         },
         {
-          id: "screenspace:toggle-model-view",
-          title: "Toggle model view",
+          id: "screenspace:show-preview",
+          title: "Show preview panel",
           icon: "eye",
-          keywords: "preview preprocess collapse expand panel",
+          keywords: "model view preprocess calibration pins ocr tab",
           section: "Screenspace",
-          visible: function () { return !!qs("#modelViewToggle"); },
-          run: function () { qs("#modelViewToggle").click(); },
-        },
-        {
-          id: "screenspace:toggle-calibration",
-          title: "Toggle calibration panel",
-          icon: "adjustments-horizontal",
-          keywords: "ocr pins collapse expand panel",
-          section: "Screenspace",
-          visible: function () { return !!qs("#calibrationToggle"); },
-          run: function () { qs("#calibrationToggle").click(); },
+          visible: function () { return !!qs('.rp-tab[data-tab="preview"]'); },
+          run: function () { setRightPaneTab("preview"); },
         },
         {
           id: "screenspace:toggle-bottom",
@@ -5286,7 +5291,10 @@
           if (typeof initialTs !== "number") initialTs = undefined;
           selectParticipant(pickId, initialTs);
           state.runParticipants = [pickId];
-          if (stored.rightPaneTab === "queue" || stored.rightPaneTab === "results") {
+          // Matched against the live tab strip rather than a name list, so a
+          // new tab never falls silently back to the default.
+          if (stored.rightPaneTab
+              && qs('.rp-tab[data-tab="' + CSS.escape(stored.rightPaneTab) + '"]')) {
             setRightPaneTab(stored.rightPaneTab);
           }
           if (stored.activeWorkflow) {

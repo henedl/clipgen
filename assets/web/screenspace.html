@@ -164,7 +164,7 @@
 <div class="divider-handle" data-hotkey="screenspace.togglePanel"></div></div>
 
   <div id="bottomPanel">
-  <!-- Bottom: workflow, run row, task queue + results -->
+  <!-- Bottom: workflow, run row, preview + task queue + results -->
     <section id="workflowSection">
       <div id="workflowTabs">
         <button class="wf-tab" data-type="multitool">
@@ -241,43 +241,16 @@
       </div>
       <div id="workflowBody">
         <div id="workflowParams"></div>
-        <div id="modelViewPanel" class="model-view-panel collapsed">
-          <button id="modelViewToggle" class="model-view-toggle" type="button" aria-expanded="false">
-            <span class="model-view-icon"></span>
-            <span class="model-view-label">Model view</span>
-            <span class="model-view-hint">what the CV model sees</span>
-          </button>
-          <div id="modelViewBody" class="model-view-body hidden">
-            <div id="modelViewMeta" class="model-view-meta">Select a region to preview.</div>
-            <div id="modelViewOverlayRow" class="model-view-overlay-row">
-              <label class="model-view-overlay-toggle">
-                <input id="modelViewOverlayToggle" type="checkbox" />
-                <span>Overlay on frame</span>
-              </label>
-              <select id="modelViewOverlayLayer" class="model-view-overlay-layer hidden" aria-label="Overlay layer"></select>
-              <span class="model-view-overlay-hint">hold <kbd>B</kbd> to blink</span>
-            </div>
-            <img id="modelViewImage" alt="Preprocessed preview" />
-          </div>
-        </div>
-        <div id="calibrationPanel" class="cal-panel collapsed hidden">
-          <button id="calibrationToggle" class="cal-toggle" type="button" aria-expanded="false">
-            <span class="cal-icon"></span>
-            <span class="cal-label">Calibration</span>
-            <span class="cal-hint">score against pinned frames</span>
-          </button>
-          <div id="calibrationBody" class="cal-body hidden">
-            <div id="calibrationSummary" class="cal-summary" aria-live="polite"></div>
-            <div id="calibrationStrips" class="cal-strips"></div>
-            <div id="calibrationNote" class="cal-note hidden"></div>
-            <div id="calibrationStatus" class="cal-status hidden"></div>
-          </div>
-        </div>
       </div>
     </section>
     <div id="rightPane">
       <div id="rightPaneTabs">
-        <button class="rp-tab active" data-tab="queue" type="button">
+        <button class="rp-tab active" data-tab="preview" type="button">
+          <span class="rp-tab-icon rp-tab-icon-preview"></span>
+          <span class="rp-tab-label">Preview</span>
+        </button>
+        <span class="rp-tab-sep">/</span>
+        <button class="rp-tab" data-tab="queue" type="button">
           <span class="rp-tab-icon rp-tab-icon-queue"></span>
           <span class="rp-tab-label">Task Queue</span>
           <span class="rp-tab-count" id="taskCount">(0)</span>
@@ -289,7 +262,7 @@
           <span class="rp-tab-crumb" id="resultsTabCrumb"></span>
           <span class="rp-tab-chevron"></span>
         </button>
-        <div class="rp-tab-actions" data-for="queue">
+        <div class="rp-tab-actions hidden" data-for="queue">
           <button id="taskFilterDoneBtn" class="panel-header-btn task-filter-btn" title="Show completed" data-filter="completed"></button>
           <button id="taskFilterFailedBtn" class="panel-header-btn task-filter-btn" title="Show failed" data-filter="failed"></button>
           <button id="taskQueuePauseBtn" class="panel-header-btn" title="Pause queue"></button>
@@ -318,12 +291,47 @@
         <div id="resultsSwitcherPanel" class="rp-switcher-panel hidden"></div>
       </div>
       <div id="rightPaneBody">
-        <div id="taskQueuePanel" class="rp-tab-panel">
+        <div id="previewPanel" class="rp-tab-panel" data-tab="preview">
+          <section class="preview-section">
+            <h3 class="preview-section-header">
+              <span class="preview-section-icon preview-icon-model"></span>
+              Model view
+              <span class="preview-section-hint">what the CV model sees</span>
+            </h3>
+            <div id="modelViewBody" class="model-view-body">
+              <div id="modelViewMeta" class="model-view-meta">Select a region to preview.</div>
+              <div id="modelViewOverlayRow" class="model-view-overlay-row">
+                <label class="model-view-overlay-toggle">
+                  <input id="modelViewOverlayToggle" type="checkbox" />
+                  <span>Overlay on frame</span>
+                </label>
+                <select id="modelViewOverlayLayer" class="model-view-overlay-layer hidden" aria-label="Overlay layer"></select>
+                <span class="model-view-overlay-hint"><kbd>B</kbd> peek / toggle · <kbd>N</kbd> next layer</span>
+              </div>
+              <img id="modelViewImage" alt="Preprocessed preview" />
+            </div>
+          </section>
+          <section class="preview-section">
+            <h3 class="preview-section-header">
+              <span class="preview-section-icon preview-icon-cal"></span>
+              Calibration
+              <span class="preview-section-hint">score against pinned frames</span>
+            </h3>
+            <div id="calibrationEmpty" class="preview-empty">Pin frames above the video to score thresholds.</div>
+            <div id="calibrationBody" class="cal-body hidden">
+              <div id="calibrationSummary" class="cal-summary" aria-live="polite"></div>
+              <div id="calibrationStrips" class="cal-strips"></div>
+              <div id="calibrationNote" class="cal-note hidden"></div>
+              <div id="calibrationStatus" class="cal-status hidden"></div>
+            </div>
+          </section>
+        </div>
+        <div id="taskQueuePanel" class="rp-tab-panel hidden" data-tab="queue">
           <div id="taskList">
             <div class="panel-empty">No tasks yet. Configure a workflow and click Run.</div>
           </div>
         </div>
-        <div id="resultsPanel" class="rp-tab-panel hidden">
+        <div id="resultsPanel" class="rp-tab-panel hidden" data-tab="results">
           <div id="confHistogram" class="conf-hist hidden"></div>
           <div id="resultsList">
             <div class="panel-empty">Click a completed task to view results.</div>
