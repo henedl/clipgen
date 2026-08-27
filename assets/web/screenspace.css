@@ -1397,7 +1397,7 @@ body[data-frontend="screenspace"] {
 .ss-grouped-tools #workflowCategories { display: flex; }
 
 .ss-cat-nav {
-  gap: var(--space-1);
+  gap: var(--space-2); /* room for the between-segment hairline */
   flex-wrap: nowrap;
   align-items: stretch;
   border-bottom: 1px solid var(--color-border);
@@ -1406,13 +1406,28 @@ body[data-frontend="screenspace"] {
 
 /* Equal-width segments — a chip's size does not change with selection. Fixed
  * max width (no flex-grow) so chips appear stable and left-packed; they shrink
- * (flex-shrink) only when the row runs short of space. */
+ * (flex-shrink) only when the row runs short of space. The basis fits the
+ * longest label (Classification) beside the category icon and the chevron. */
 .ss-cat-chip {
   position: relative; /* anchor for .ss-cat-menu + z-index lift when open */
-  flex: 0 1 7rem;
+  flex: 0 1 8rem;
   min-width: 0;
 }
 .ss-cat-chip.open { z-index: var(--z-dropdown); } /* lift the menu above the action row */
+
+/* Hairline between segments, centered in the row gap. Dropped on either side of
+ * an active chip so no line touches its filled pill. */
+.ss-cat-chip + .ss-cat-chip::before {
+  content: "";
+  position: absolute;
+  left: calc(var(--space-2) / -2);
+  top: 25%;
+  bottom: 25%;
+  width: 1px;
+  background: var(--color-border);
+}
+.ss-cat-chip.active::before,
+.ss-cat-chip.active + .ss-cat-chip::before { display: none; }
 
 .ss-cat-trigger {
   display: inline-flex;
@@ -1454,9 +1469,10 @@ body[data-frontend="screenspace"] {
   font-weight: 600;
 }
 
-/* The glyph holds a tool's mask-image icon (colored via background-color, so it
- * tracks --cat-ink to contrast the fill). Empty (hidden) on resting chips —
- * except the alwaysIcon chip (Multitool), which keeps its tool-colored icon. */
+/* The glyph holds a mask-image icon (colored via background-color, so it tracks
+ * --cat-ink to contrast the fill): the active tool's when selected, the
+ * category's own otherwise. The alwaysIcon chip (Multitool) keeps its
+ * tool-colored icon at rest. */
 .ss-cat-glyph {
   display: inline-flex;
   align-items: center;
@@ -1468,6 +1484,10 @@ body[data-frontend="screenspace"] {
   flex-shrink: 0;
   opacity: 1;
   background-color: var(--cat-ink, var(--color-text));
+}
+/* A resting category icon reads as a label, so it follows the dim label color. */
+.ss-cat-chip:not(.active) .ss-cat-glyph .ss-task-icon {
+  background-color: currentColor;
 }
 .ss-cat-chip[data-always-icon] .ss-cat-glyph .ss-task-icon {
   background-color: var(--color-task-multitool);
@@ -1540,6 +1560,24 @@ html[data-theme="light"] .ss-cat-chip.active[data-active-type="numbers"],
   display: none;
 }
 .ss-cat-chip.open .ss-cat-menu { display: block; }
+
+/* Category title inside the menu — mirrors .cmdp-section. */
+.ss-cat-menu-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2); /* matches .ss-cat-item, so title and labels line up */
+  padding: var(--space-1) var(--space-2) var(--space-2);
+  color: var(--color-text-dim);
+  font-size: var(--text-2xs);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+.ss-cat-menu-head .ss-task-icon {
+  width: var(--icon-size-xs);
+  height: var(--icon-size-xs);
+  flex-shrink: 0;
+}
 
 .ss-cat-item {
   display: flex;
