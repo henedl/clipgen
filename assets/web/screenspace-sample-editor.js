@@ -128,6 +128,9 @@
       stage.appendChild(work);
 
       // Brush ghost: a ring following the cursor at the brush's display size.
+      // Lives on the whole stage — the checkerboard margin is paintable too,
+      // so edge strokes can start outside the bitmap.
+      stage.classList.add("ss-sample-modal__stage--edit");
       var ghost = el("div", "ss-sample-modal__ghost hidden");
       stage.appendChild(ghost);
       function sizeGhost() {
@@ -135,17 +138,47 @@
         ghost.style.height = _brushSize + "px";
       }
       sizeGhost();
-      work.addEventListener("mouseenter", function () {
+      stage.addEventListener("mouseenter", function () {
         ghost.classList.remove("hidden");
       });
-      work.addEventListener("mouseleave", function () {
+      stage.addEventListener("mouseleave", function () {
         ghost.classList.add("hidden");
       });
-      work.addEventListener("mousemove", function (e) {
+      stage.addEventListener("mousemove", function (e) {
         var rect = stage.getBoundingClientRect();
         ghost.style.left = e.clientX - rect.left + "px";
         ghost.style.top = e.clientY - rect.top + "px";
       });
+
+      // Stroke-level undo/redo: full-canvas snapshots, capped.
+      var history = [];
+      var redoStack = [];
+      var undoBtn, redoBtn;
+      function snapshot() {
+        return wctx.getImageData(0, 0, work.width, work.height);
+      }
+      function syncHistButtons() {
+        undoBtn.disabled = !history.length;
+        redoBtn.disabled = !redoStack.length;
+      }
+      function pushHistory() {
+        history.push(snapshot());
+        if (history.length > 20) history.shift();
+        redoStack.length = 0;
+        syncHistButtons();
+      }
+      function undo() {
+        if (!history.length) return;
+        redoStack.push(snapshot());
+        wctx.putImageData(history.pop(), 0, 0);
+        syncHistButtons();
+      }
+      function redo() {
+        if (!redoStack.length) return;
+        history.push(snapshot());
+        wctx.putImageData(redoStack.pop(), 0, 0);
+        syncHistButtons();
+      }
 
       var hint = el("div", "ss-sample-modal__hint",
         "Drag to erase — Shift-drag restores");
@@ -167,6 +200,27 @@
       });
       controls.appendChild(brush);
       controls.appendChild(brushVal);
+      undoBtn = el("button", "btn btn-small ss-sample-modal__hist");
+      undoBtn.type = "button";
+      undoBtn.title = "Undo";
+      undoBtn.setAttribute("aria-label", "Undo");
+      undoBtn.appendChild(iconMaskSpan("arrow-uturn-left", {
+        className: "ss-sample-modal__hist-icon",
+        basePath: "/screenspace/icons/",
+      }));
+      undoBtn.addEventListener("click", undo);
+      redoBtn = el("button", "btn btn-small ss-sample-modal__hist");
+      redoBtn.type = "button";
+      redoBtn.title = "Redo";
+      redoBtn.setAttribute("aria-label", "Redo");
+      redoBtn.appendChild(iconMaskSpan("arrow-uturn-right", {
+        className: "ss-sample-modal__hist-icon",
+        basePath: "/screenspace/icons/",
+      }));
+      redoBtn.addEventListener("click", redo);
+      syncHistButtons();
+      controls.appendChild(undoBtn);
+      controls.appendChild(redoBtn);
       card.appendChild(controls);
 
       var stroking = null; // {restoring, lastX, lastY}
@@ -188,9 +242,10 @@
         stroking.lastX = pos.x;
         stroking.lastY = pos.y;
       }
-      work.addEventListener("mousedown", function (e) {
-        if (e.button !== 0) return;
+      stage.addEventListener("mousedown", function (e) {
+        if (e.button !== 0 || !work.width) return;
         e.preventDefault();
+        pushHistory();
         var pos = canvasPos(e);
         stroking = { restoring: e.shiftKey, lastX: pos.x, lastY: pos.y };
         stamp(pos);
