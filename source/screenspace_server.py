@@ -95,6 +95,15 @@ from server_utils import (
 # Per-tool optional float overrides api_preview reads straight into params.
 _PREVIEW_FLOAT_ARGS: dict[str, tuple[str, ...]] = {
     "color": ("h", "s", "v"),
+    "shape": (
+        "threshold",
+        "scale_min",
+        "scale_max",
+        "scale_steps",
+        "scale_y_min",
+        "scale_y_max",
+        "scale_y_steps",
+    ),
     "attention": (
         # Channel-weight / center-bias overrides so the Model view tunes the
         # same math the scan runs (saliency_kwargs_from_params on both paths).
@@ -105,6 +114,34 @@ _PREVIEW_FLOAT_ARGS: dict[str, tuple[str, ...]] = {
         "center_bias",
     ),
 }
+
+
+def _preview_ref_rect(
+    region_coords: dict[str, Any] | None, frame_w: int, frame_h: int
+) -> dict[str, Any] | None:
+    """Pixel rect the preview cuts its template/shape sample from.
+
+    ``ref_region`` (normalized x,y,w,h in the query string) is the capture
+    region; without it the run region doubles as the sample rect — the
+    CLI/workflows single-region semantics.
+    """
+    ref_region_str = request.args.get("ref_region", "").strip()
+    if ref_region_str:
+        rr_parts = ref_region_str.split(",")
+        if len(rr_parts) == 4:
+            try:
+                rrx, rry, rrw, rrh = (float(p) for p in rr_parts)
+            except ValueError:
+                pass
+            else:
+                return {
+                    "x": round(rrx * frame_w),
+                    "y": round(rry * frame_h),
+                    "w": round(rrw * frame_w),
+                    "h": round(rrh * frame_h),
+                }
+    return region_coords
+
 
 FlaskResponse = Response | tuple[Response, int]
 
@@ -117,6 +154,7 @@ _VALID_TASK_TYPES = (
     "numbers",
     "timelapse",
     "template",
+    "shape",
     "flow",
     "scene",
     "inactivity",
@@ -1147,7 +1185,7 @@ def api_preview(participant: str, timestamp: str) -> FlaskResponse:
     vectors, pHash bit grid, etc.) tailored to the active tool.  Optional query
     params:
 
-      tool=<name>          one of the 11 screenspace tool types
+      tool=<name>          one of the screenspace tool types
       region=x,y,w,h       normalized 0–1 region coordinates (required for most tools)
       prev=<seconds>       prior timestamp for change/flow (defaults to ts-1s)
       ref=<seconds>        reference timestamp for similarity (region crop) or template
@@ -1161,9 +1199,10 @@ def api_preview(participant: str, timestamp: str) -> FlaskResponse:
                            composite. See ``screenspace_preview.OVERLAY_LAYERS``
                            for valid (tool, layer) pairs.
 
-    For **template** with an **uploaded** PNG, send ``POST`` with JSON body
-    ``{"template_image_data": "<base64>"}`` (same field as task enqueue); query
-    string still supplies ``tool``, ``region`` (optional), and ``_`` cache-bust.
+    For **template** / **shape** with an **uploaded** PNG, send ``POST`` with a
+    JSON body ``{"template_image_data": "<base64>"}`` (shape:
+    ``shape_image_data``; same fields as task enqueue); query string still
+    supplies ``tool``, ``region`` (optional), and ``_`` cache-bust.
     """
     import screenspace_preview
 
@@ -1281,11 +1320,40 @@ def api_preview(participant: str, timestamp: str) -> FlaskResponse:
                 params["template_mask"] = mask
         else:
             ref_ts_tpl = opt_number(request.args, "ref")
-            if ref_ts_tpl is not None and region_coords is not None:
+            tpl_rect = _preview_ref_rect(region_coords, frame_w, frame_h)
+            if ref_ts_tpl is not None and tpl_rect is not None and tpl_rect.get("w"):
                 ref_frame_tpl = frame_at(ref_ts_tpl)
                 if ref_frame_tpl is not None:
                     params["template_image"] = _ss_tpl.extract_region(
-                        ref_frame_tpl, region_coords
+                        ref_frame_tpl, tpl_rect
+                    )
+
+    elif tool == "shape":
+        import screenspace as _ss_shp
+
+        shape_b64: str | None = None
+        if request.method == "POST":
+            body = request.get_json(silent=True)
+            if isinstance(body, dict):
+                raw = body.get("shape_image_data")
+                if isinstance(raw, str) and raw.strip():
+                    shape_b64 = raw.strip()
+        if shape_b64:
+            try:
+                bgr, mask = _template_bgr_and_mask_from_b64(shape_b64)
+            except ValueError:
+                return err("Could not decode uploaded image")
+            params["shape_image"] = bgr
+            if mask is not None:
+                params["shape_mask"] = mask
+        else:
+            ref_ts_shp = opt_number(request.args, "ref")
+            ref_rect = _preview_ref_rect(region_coords, frame_w, frame_h)
+            if ref_ts_shp is not None and ref_rect is not None and ref_rect.get("w"):
+                ref_frame_shp = frame_at(ref_ts_shp)
+                if ref_frame_shp is not None:
+                    params["shape_image"] = _ss_shp.extract_region(
+                        ref_frame_shp, ref_rect
                     )
 
     layer = (request.args.get("layer") or "").strip()
@@ -1900,10 +1968,11 @@ def _validate_task_request(
     else:
         return err("parameters must be an object")
 
-    # Template tasks with an uploaded image scan the full frame; no region needed
-    has_uploaded_template = task_type == "template" and parameters.get(
-        "template_image_data"
-    )
+    # Template/shape tasks with an uploaded image scan the full frame; no
+    # region needed.
+    has_uploaded_template = (
+        task_type == "template" and parameters.get("template_image_data")
+    ) or (task_type == "shape" and parameters.get("shape_image_data"))
 
     # Multitool uses per-step regions; others need a global region (unless
     # template upload). Boundary always arrives with a forced full_frame
@@ -1992,6 +2061,8 @@ def _coerce_tool_spec(spec: dict[str, Any], tool_type: str, context: str = "") -
         tool_type == "similarity"
         or tool_type == "template"
         and not spec.get("template_image_data")
+        or tool_type == "shape"
+        and not spec.get("shape_image_data")
     ):
         spec["reference_timestamp"] = _coerce_float(
             spec.get("reference_timestamp"),
@@ -2010,6 +2081,8 @@ def _coerce_tool_spec(spec: dict[str, Any], tool_type: str, context: str = "") -
         _coerce_color_controls(spec, context=context)
     if tool_type == "template":
         _coerce_template_controls(spec)
+    elif tool_type == "shape":
+        _coerce_shape_controls(spec, context=context)
 
 
 def _coerce_task_params(
@@ -2072,6 +2145,36 @@ def _extract_tool_media(
             if frame is None:
                 return err(f"{context}could not read template frame")
             spec["template_image"] = screenspace.extract_region(frame, region_coords)
+            # A shaped capture region doubles as the template's alpha mask.
+            tpl_mask = screenspace.region_mask_for(
+                region_coords, *spec["template_image"].shape[:2]
+            )
+            if tpl_mask is not None:
+                spec["template_mask"] = tpl_mask
+
+    elif tool_type == "shape":
+        upload_b64 = spec.pop("shape_image_data", None)
+        if upload_b64:
+            try:
+                bgr, mask = _template_bgr_and_mask_from_b64(upload_b64)
+            except ValueError:
+                return err(f"{context}could not decode uploaded image")
+            spec["shape_image"] = bgr
+            if mask is not None:
+                spec["shape_mask"] = mask
+        else:
+            ref_ts = cast(float, spec["reference_timestamp"])
+            frame = frame_at(float(ref_ts))
+            if frame is None:
+                return err(f"{context}could not read shape reference frame")
+            spec["shape_image"] = screenspace.extract_region(frame, region_coords)
+            # A shaped capture region doubles as the reference mask: inner
+            # content (e.g. a button's label) can be lassoed out of the match.
+            crop_mask = screenspace.region_mask_for(
+                region_coords, *spec["shape_image"].shape[:2]
+            )
+            if crop_mask is not None:
+                spec["shape_mask"] = crop_mask
 
     elif tool_type == "scene":
         scene_refs = cast(list[dict[str, Any]], spec["scene_references"])
@@ -2194,7 +2297,26 @@ def _prepare_task_media(
     parameters = cast(dict[str, Any], coerced)
 
     frame_at = _participant_frame_extractor(participant)
-    extracted = _extract_task_media(task_type, parameters, frame_at, region_coords)
+    # Template/shape split the sample from the search scope: the reference is
+    # cut from the *capture* region (``reference_region``, persisted so re-runs
+    # keep extracting the same patch) while ``region_coords`` stays the run
+    # window. Without it a Full-frame run would extract the whole frame as its
+    # sample.
+    extract_coords = region_coords
+    if task_type in ("template", "shape"):
+        ref_region = str(parameters.get("reference_region") or "").strip()
+        if ref_region:
+            parameters["reference_region"] = ref_region
+            try:
+                _ref_name, ref_norm = screenspace.resolve_region_request(
+                    ref_region, None, _manifest
+                )
+            except ValueError as exc:
+                return err(f"reference_region: {exc}")
+            extract_coords = resolve_region_fn(ref_region, ref_norm)
+        else:
+            parameters.pop("reference_region", None)
+    extracted = _extract_task_media(task_type, parameters, frame_at, extract_coords)
     if isinstance(extracted, tuple):
         return extracted
     parameters = cast(dict[str, Any], extracted)
@@ -2661,6 +2783,36 @@ def _coerce_template_controls(params: dict[str, Any], *, context: str = "") -> N
         lo = config.SCREENSPACE_TEMPLATE_SCALE_MIN
         hi = config.SCREENSPACE_TEMPLATE_SCALE_MAX
         params["template_scale"] = max(lo, min(hi, scale))
+
+
+def _coerce_shape_controls(params: dict[str, Any], *, context: str = "") -> None:
+    """Validate shape-tool controls: the horizontal + optional vertical ladders."""
+    for min_key, max_key, steps_key in (
+        ("scale_min", "scale_max", "scale_steps"),
+        ("scale_y_min", "scale_y_max", "scale_y_steps"),
+    ):
+        for key in (min_key, max_key):
+            if params.get(key) is None:
+                params.pop(key, None)
+                continue
+            val = _coerce_float(params[key], key, context=context)
+            if val is None or val <= 0:
+                raise ValueError(f"{context}{key} must be a positive number")
+            params[key] = max(0.1, min(4.0, val))
+        if (
+            min_key in params
+            and max_key in params
+            and params[min_key] > params[max_key]
+        ):
+            raise ValueError(f"{context}{min_key} must not exceed {max_key}")
+        if params.get(steps_key) is None:
+            params.pop(steps_key, None)
+            continue
+        try:
+            steps = int(params[steps_key])
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"{context}{steps_key} must be an integer") from exc
+        params[steps_key] = max(1, min(12, steps))
 
 
 def _coerce_ocr_controls(params: dict[str, Any], *, context: str = "") -> None:

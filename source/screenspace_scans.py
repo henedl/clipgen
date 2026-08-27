@@ -2,8 +2,8 @@
 
 Each scan sweeps a video via the frame-extraction drivers and applies one
 analysis primitive (color, change, similarity, text, numbers, timelapse,
-template, flow, scene, inactivity, boundary, attention). Scans never call
-each other.
+template, shape, flow, scene, inactivity, boundary, attention). Scans never
+call each other.
 """
 
 import subprocess
@@ -23,10 +23,14 @@ from screenspace_primitives import (
     _frame_is_static,
     _is_static_skip,
     blur_gray,
+    _frame_edge_map,
     _match_template_prepared,
     _merge_timestamp_spans,
+    _prepare_shape_reference,
     _prepare_template,
     _scale_template,
+    match_shape,
+    region_search_window,
     color_matches,
     color_present,
     compare_scene_fingerprints,
@@ -702,7 +706,8 @@ def scan_template(
     *template_scale* resizes the uploaded template before matching
     (e.g. ``0.5`` for a template captured at 2x the in-video scale).  An
     optional *template_mask* restricts matching to non-transparent regions
-    of an uploaded PNG.
+    of an uploaded PNG. A real *region* rect scopes the search to matches
+    centered inside it — pick Full frame to search anywhere.
 
     Returns list of ``{timestamp, matches, best_score, match_count}`` dicts.
     """
@@ -783,8 +788,11 @@ def scan_template(
                     work_frame, (nw, nh), interpolation=cv2.INTER_AREA
                 )
                 scale_back = 2
+        # The run region scopes the search: only matches centered inside it
+        # count (Full frame = zero-size rect = anywhere).
+        window = region_search_window(region, _cv_scale / scale_back)
         matches = _match_template_prepared(
-            work_frame, _prepared, threshold, _nms_overlap
+            work_frame, _prepared, threshold, _nms_overlap, window=window
         )
         if matches:
             # Undo fast-scan downscale, then undo cv_scale, so reported
@@ -796,11 +804,11 @@ def scan_template(
                     m["y"] = round(m["y"] * inv)
                     m["w"] = round(m["w"] * inv)
                     m["h"] = round(m["h"] * inv)
-            # Shaped region: the match runs full-frame (rects don't restrict
-            # template search either), but detections centered outside the polygon
-            # are dropped. Runs before the static-frame carry caches last_rd, so
-            # carried rows are already filtered. This is the *region's* mask —
-            # distinct from template_mask, the template's own alpha channel.
+            # Shaped region: the polygon refines the rect window — detections
+            # centered outside it are dropped. Runs before the static-frame
+            # carry caches last_rd, so carried rows are already filtered. This
+            # is the *region's* mask — distinct from template_mask, the
+            # template's own alpha channel.
             matches = filter_matches_by_region_mask(matches, region)
         if matches:
             best = max(m["score"] for m in matches)
@@ -837,6 +845,179 @@ def scan_template(
         duration=vid_duration,
         fast_opts=fast_opts,
         profile_kind="template",
+    )
+
+    if on_progress:
+        on_progress(1.0)
+    return results
+
+
+def scan_shape(
+    video_path: str,
+    region: dict[str, int],
+    shape_image: np.ndarray,
+    threshold: float = 0.0,
+    interval_seconds: float = 0.0,
+    *,
+    shape_mask: np.ndarray | None = None,
+    scale_min: float = 0.0,
+    scale_max: float = 0.0,
+    scale_steps: int = 0,
+    scale_y_min: float = 0.0,
+    scale_y_max: float = 0.0,
+    scale_y_steps: int = 0,
+    start_seconds: float = 0.0,
+    end_seconds: float | None = None,
+    on_progress: Callable[[float], None] | None = None,
+    cancel_flag: Callable[[], bool] | None = None,
+    on_result: Callable[[dict[str, Any]], None] | None = None,
+    fast_opts: dict[str, Any] | None = None,
+) -> list[dict[str, Any]]:
+    """Scan video for frames containing the reference shape's outline.
+
+    Edge-based matching swept across a geometric scale ladder
+    (*scale_min*..*scale_max*, *scale_steps* rungs): color/theme changes and
+    size drift survive where template matching misses. An optional
+    *shape_mask* restricts the reference to non-transparent PNG regions.
+    *scale_y_min*/*scale_y_max* unlink the axes into an independent vertical
+    ladder (see :func:`_prepare_shape_reference`). A real *region* rect scopes
+    the search to matches centered inside it — pick Full frame to search
+    anywhere (template's always-full-frame semantics).
+
+    Returns list of ``{timestamp, matches, best_score, match_count}`` dicts.
+    """
+    if threshold <= 0:
+        threshold = config.SCREENSPACE_SHAPE_MATCH_THRESHOLD
+    if interval_seconds <= 0:
+        interval_seconds = config.SCREENSPACE_DEFAULT_INTERVAL
+
+    window = _resolve_scan_window(video_path, start_seconds, end_seconds)
+    if window is None:
+        return []
+    vid_fps, vid_duration, end_seconds, total_range = window
+
+    results: list[dict[str, Any]] = []
+
+    _shape_downscale = bool(fast_opts and fast_opts.get("template_downscale"))
+
+    # Hoist the constant reference prep (per-scale Canny + ridge blur) out of
+    # the per-frame callback. A degenerate reference (no scale kept enough
+    # edge pixels) matches nothing, so bail before opening the ffmpeg pipe.
+    _prepared = _prepare_shape_reference(
+        shape_image,
+        shape_mask,
+        scale_min,
+        scale_max,
+        scale_steps,
+        scale_y_min,
+        scale_y_max,
+        scale_y_steps,
+    )
+    if not _prepared:
+        if on_progress:
+            on_progress(1.0)
+        return results
+
+    _nms_overlap = config.SCREENSPACE_TEMPLATE_NMS_OVERLAP
+    # ffmpeg already scaled the frame by cv_scale, so match boxes need both that
+    # and the fast-scan internal 2x downscale undone to land in original pixels.
+    _cv_scale = (
+        config.SCREENSPACE_CV_RESOLUTION_SCALE
+        if config.SCREENSPACE_CV_RESOLUTION_SCALE > 0
+        else 1.0
+    )
+
+    # Static-frame carry, mirroring scan_template: re-emit the last row
+    # (re-stamped) on a near-duplicate frame instead of re-running the sweep.
+    prev_skip_gray: list[np.ndarray | None] = [None]
+    last_rd: list[dict[str, Any] | None] = [None]
+
+    def _cb(ts: float, frame: np.ndarray) -> bool | None:
+        if cancel_flag and cancel_flag():
+            return False
+        curr_gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        if _frame_is_static(prev_skip_gray[0], curr_gray):
+            if last_rd[0] is not None:
+                carried = dict(last_rd[0])
+                carried["timestamp"] = ts
+                results.append(carried)
+                if on_result:
+                    on_result(
+                        {
+                            "timestamp": ts,
+                            "best_score": carried["best_score"],
+                            "match_count": carried["match_count"],
+                        }
+                    )
+            if on_progress and total_range > 0:
+                on_progress((ts - start_seconds) / total_range)
+            return None
+        prev_skip_gray[0] = curr_gray
+        work_frame = frame
+        scale_back = 1
+        if _shape_downscale:
+            fh, fw = work_frame.shape[:2]
+            nw, nh = fw // 2, fh // 2
+            if nw > 0 and nh > 0:
+                work_frame = cv2.resize(
+                    work_frame, (nw, nh), interpolation=cv2.INTER_AREA
+                )
+                scale_back = 2
+        # Unlike template, the run region scopes the search: only matches
+        # centered inside it count (Full frame = zero-size rect = anywhere).
+        window = region_search_window(region, _cv_scale / scale_back)
+        matches, _peak = match_shape(
+            _frame_edge_map(work_frame), _prepared, threshold, _nms_overlap, window
+        )
+        if matches:
+            # Undo fast-scan downscale, then undo cv_scale, so reported
+            # coords are in the original (un-scaled) frame coordinate space.
+            inv = scale_back / _cv_scale
+            if abs(inv - 1.0) > 1e-6:
+                for m in matches:
+                    m["x"] = round(m["x"] * inv)
+                    m["y"] = round(m["y"] * inv)
+                    m["w"] = round(m["w"] * inv)
+                    m["h"] = round(m["h"] * inv)
+            # Shaped region: the sweep runs full-frame, but detections centered
+            # outside the polygon are dropped — before the carry caches last_rd,
+            # so carried rows are already filtered.
+            matches = filter_matches_by_region_mask(matches, region)
+        if matches:
+            best = max(m["score"] for m in matches)
+            rd = {
+                "timestamp": ts,
+                "matches": matches,
+                "best_score": round(best, 4),
+                "match_count": len(matches),
+            }
+            results.append(rd)
+            last_rd[0] = rd
+            if on_result:
+                on_result(
+                    {
+                        "timestamp": ts,
+                        "best_score": rd["best_score"],
+                        "match_count": rd["match_count"],
+                    }
+                )
+        else:
+            # No match this frame — a subsequent static frame has nothing to carry.
+            last_rd[0] = None
+        if on_progress and total_range > 0:
+            on_progress((ts - start_seconds) / total_range)
+        return None
+
+    scan_video_full_frames(
+        video_path,
+        interval_seconds,
+        _cb,
+        start_seconds=start_seconds,
+        end_seconds=end_seconds,
+        fps=vid_fps,
+        duration=vid_duration,
+        fast_opts=fast_opts,
+        profile_kind="shape",
     )
 
     if on_progress:

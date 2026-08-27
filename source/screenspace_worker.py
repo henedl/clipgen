@@ -629,6 +629,7 @@ class ScreenspaceWorker:
         """
         heatmap_enabled = {
             "template": config.SCREENSPACE_GENERATE_TEMPLATE_HEATMAP,
+            "shape": config.SCREENSPACE_GENERATE_SHAPE_HEATMAP,
             "flow": config.SCREENSPACE_GENERATE_FLOW_HEATMAP,
             "change": config.SCREENSPACE_GENERATE_CHANGE_HEATMAP,
             "attention": config.SCREENSPACE_GENERATE_ATTENTION_HEATMAP,
@@ -645,7 +646,9 @@ class ScreenspaceWorker:
         # and hand the layers to all three (see build_grid_layers).
         with profiling.span("heatmap.grid_layers"):
             layers = build_grid_layers(results, task_type, grid_layer_count(results))
-        if task_type == "template":
+        if task_type in ("template", "shape"):
+            # Shape rows share template's {matches, best_score} contract, so the
+            # box-accumulation heatmap applies unchanged.
             props = video.probe_video_properties(video_paths[0])
             fw = props.get("width", 1920) if props else 1920
             fh = props.get("height", 1080) if props else 1080
@@ -656,7 +659,7 @@ class ScreenspaceWorker:
                 attachments["heatmap"] = hp
             attachments.update(
                 self._write_heatmap_gifs(
-                    task_id, results, fw, fh, "template", rolling=True
+                    task_id, results, fw, fh, task_type, rolling=True
                 )
             )
         elif task_type == "attention":

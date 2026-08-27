@@ -22,6 +22,9 @@ import numpy as np
 import config
 import utils
 from screenspace_primitives import (
+    _frame_edge_map,
+    _mask_corr_outside_window,
+    _prepare_shape_reference,
     _prepare_template,
     _scale_template,
     _template_correlation_map,
@@ -36,8 +39,10 @@ from screenspace_primitives import (
     extract_region,
     filter_matches_by_region_mask,
     mask_points_key,
+    match_shape,
     match_template,
     region_mask_for,
+    region_search_window,
     regions_are_similar,
     saliency_kwargs_from_params,
 )
@@ -56,6 +61,7 @@ from screenspace_scans import (
     scan_inactivity,
     scan_numbers,
     scan_scene,
+    scan_shape,
     scan_similarity,
     scan_template,
     scan_text,
@@ -74,7 +80,7 @@ def _extract_confidence(tool_type: str, result: dict[str, Any]) -> float:
         return result.get("confidence", 0.0)
     elif tool_type == "numbers":
         return result.get("confidence", 1.0)
-    elif tool_type == "template":
+    elif tool_type == "template" or tool_type == "shape":
         return result.get("best_score", 0.0)
     elif tool_type == "flow":
         return min(result.get("magnitude", 0.0) / 10.0, 1.0)
@@ -287,12 +293,14 @@ def check_frame_for_tool(
 
     Degenerate regions (width or height ≤ 0, e.g. a 1-px user draw rounded
     to zero pixels on a small preview) are treated as a non-match here so
-    downstream cv2 ops never see empty arrays.  Template is exempt: it matches
-    against the full frame and ignores ``region``, so an uploaded template step
-    with no region (zero-size region_coords) is valid — mirrors
+    downstream cv2 ops never see empty arrays.  Template and shape are exempt:
+    they match against the full frame and ignore ``region``, so an uploaded
+    reference with no region (zero-size region_coords) is valid — mirrors
     :func:`score_frame_for_tool`.
     """
-    if tool_type != "template" and (region.get("w", 0) <= 0 or region.get("h", 0) <= 0):
+    if tool_type not in ("template", "shape") and (
+        region.get("w", 0) <= 0 or region.get("h", 0) <= 0
+    ):
         return False, None
     tool = TOOLS.get(tool_type)
     if tool is None:
@@ -340,10 +348,13 @@ def score_frame_for_tool(
     pin so fuzzy/confidence changes re-score without re-running OCR; when absent
     the tool runs OCR live through its ``check_frame``.
     """
-    # Template matches full-frame and ignores ``region``, so a zero-size region
-    # (an uploaded template scanning the whole frame with no region_ref) is valid
-    # for it alone. Every other tool crops, where an empty crop breaks cv2.
-    if tool_type != "template" and (region.get("w", 0) <= 0 or region.get("h", 0) <= 0):
+    # Template and shape match full-frame and ignore ``region``, so a zero-size
+    # region (an uploaded reference scanning the whole frame with no region_ref)
+    # is valid for them alone. Every other tool crops, where an empty crop
+    # breaks cv2.
+    if tool_type not in ("template", "shape") and (
+        region.get("w", 0) <= 0 or region.get("h", 0) <= 0
+    ):
         return {"status": "not_evaluable"}
     tool = TOOLS.get(tool_type)
     if tool is None or not tool.score_key:
@@ -697,8 +708,9 @@ class TemplateTool(AnalysisTool):
     def check_frame(
         self, frame, prev_frame, region, params, cache=None, prev_cache=None
     ):
-        # Template matches the full frame (ignores region); nothing region-scoped
-        # to memoize, and it already caches its scaled template on ``params``.
+        # Template searches the whole frame but the run region scopes which
+        # matches count; nothing region-scoped to memoize, and it already
+        # caches its scaled template on ``params``.
         template_img = params.get("template_image")
         if template_img is None:
             return False, None
@@ -726,6 +738,14 @@ class TemplateTool(AnalysisTool):
         corr = _template_correlation_map(frame, prepared)
         if corr is None:
             return False, None
+        # The run region scopes both the search and the peak (Full frame /
+        # zero-size = anywhere), so calibration scores the targeted spot.
+        window = region_search_window(region)
+        if window is not None:
+            tpl_h, tpl_w = prepared[0].shape[:2]
+            corr = _mask_corr_outside_window(corr, tpl_w, tpl_h, window)
+            if corr is None:
+                return False, {"best_score": -1.0, "match_count": 0}
         peak = float(corr.max())
         if peak < threshold:
             return False, {"best_score": round(peak, 4), "match_count": 0}
@@ -737,10 +757,9 @@ class TemplateTool(AnalysisTool):
             prepared=prepared,
             corr=corr,
         )
-        # Shaped region: the match still runs full-frame (template ignores the
-        # rect for rect regions too), but the polygon acts as a detection
+        # Shaped region: the polygon refines the rect window as a detection
         # filter — passing requires at least one surviving match. best_score
-        # stays the frame peak (the threshold-independent calibration scalar).
+        # stays the window-local peak (the calibration scalar).
         matches = filter_matches_by_region_mask(matches, region)
         if region.get("mask_points") and not matches:
             return False, {"best_score": round(peak, 4), "match_count": 0}
@@ -785,6 +804,105 @@ class TemplateTool(AnalysisTool):
             interval_seconds=params.get("interval", 0),
             template_mask=tmpl_mask,
             template_scale=float(params.get("template_scale", 1.0)),
+            start_seconds=params.get("start_seconds", 0.0),
+            end_seconds=params.get("end_seconds"),
+            on_progress=on_progress,
+            cancel_flag=cancel_flag,
+            on_result=on_result,
+            fast_opts=fast_opts,
+        )
+
+
+class ShapeTool(AnalysisTool):
+    name = "shape"
+    fast_scan_extra_opts: ClassVar[dict[str, Any]] = {"template_downscale": True}
+    score_key = "best_score"
+
+    def check_frame(
+        self, frame, prev_frame, region, params, cache=None, prev_cache=None
+    ):
+        # Shape matches the full frame (ignores region); the per-scale edge
+        # reference prep is task-constant, so cache it on ``params``.
+        shape_img = params.get("shape_image")
+        if shape_img is None:
+            return False, None
+        threshold = params.get("threshold", config.SCREENSPACE_SHAPE_MATCH_THRESHOLD)
+        prepared = params.get("_prepared_shape")
+        if prepared is None:
+            prepared = _prepare_shape_reference(
+                shape_img,
+                params.get("shape_mask"),
+                float(params.get("scale_min", 0.0)),
+                float(params.get("scale_max", 0.0)),
+                int(params.get("scale_steps", 0)),
+                float(params.get("scale_y_min", 0.0)),
+                float(params.get("scale_y_max", 0.0)),
+                int(params.get("scale_y_steps", 0)),
+            )
+            params["_prepared_shape"] = prepared
+        if not prepared:
+            # Degenerate reference: no scale kept enough edge pixels.
+            return False, None
+        # match_shape returns the cross-scale peak alongside the matches — the
+        # threshold-independent scalar, available even on a miss. A real
+        # region rect scopes both the search and the peak to matches centered
+        # inside it (Full frame / zero-size = anywhere), so calibration scores
+        # the spot the run is aimed at, not a lookalike elsewhere.
+        window = region_search_window(region)
+        matches, peak = match_shape(
+            _frame_edge_map(frame), prepared, threshold, window=window
+        )
+        if not matches:
+            return False, {"best_score": round(peak, 4), "match_count": 0}
+        # Shaped region: the polygon refines the window as a detection filter.
+        matches = filter_matches_by_region_mask(matches, region)
+        if region.get("mask_points") and not matches:
+            return False, {"best_score": round(peak, 4), "match_count": 0}
+        return True, {"best_score": round(peak, 4), "match_count": len(matches)}
+
+    def scan(
+        self,
+        video_path,
+        region,
+        params,
+        *,
+        task_id,
+        scan_mode,
+        on_progress,
+        cancel_flag,
+        on_result,
+        fast_opts,
+    ):
+        shape_img = params.get("shape_image")
+        if shape_img is None:
+            raise ValueError("Shape scan requires a shape_image parameter")
+        shape_mask = params.get("shape_mask")
+        # Fast scan: halve reference + mask like TemplateTool (frames get the
+        # matching 2x downscale via the ``template_downscale`` fast_opts flag).
+        if scan_mode == "fast":
+            sh, sw = shape_img.shape[:2]
+            nsw, nsh = sw // 2, sh // 2
+            if nsw > 0 and nsh > 0:
+                shape_img = cv2.resize(
+                    shape_img, (nsw, nsh), interpolation=cv2.INTER_AREA
+                )
+                if shape_mask is not None:
+                    shape_mask = cv2.resize(
+                        shape_mask, (nsw, nsh), interpolation=cv2.INTER_AREA
+                    )
+        return scan_shape(
+            video_path,
+            region,
+            shape_image=shape_img,
+            threshold=params.get("threshold", 0),
+            interval_seconds=params.get("interval", 0),
+            shape_mask=shape_mask,
+            scale_min=float(params.get("scale_min", 0.0)),
+            scale_max=float(params.get("scale_max", 0.0)),
+            scale_steps=int(params.get("scale_steps", 0)),
+            scale_y_min=float(params.get("scale_y_min", 0.0)),
+            scale_y_max=float(params.get("scale_y_max", 0.0)),
+            scale_y_steps=int(params.get("scale_y_steps", 0)),
             start_seconds=params.get("start_seconds", 0.0),
             end_seconds=params.get("end_seconds"),
             on_progress=on_progress,
@@ -1075,6 +1193,7 @@ TOOLS: dict[str, AnalysisTool] = {
         TextTool(),
         NumbersTool(),
         TemplateTool(),
+        ShapeTool(),
         FlowTool(),
         SceneTool(),
         InactivityTool(),

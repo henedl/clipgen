@@ -62,6 +62,7 @@
     similarity: { sliderId: "paramSimThresh", invert: false, drawLine: true, compare: "ge" },
     text: { sliderId: "paramTextFuzzy", invert: false, drawLine: true, compare: "ge" },
     template: { sliderId: "paramTemplateThresh", invert: false, drawLine: true, compare: "ge" },
+    shape: { sliderId: "paramShapeThresh", invert: false, drawLine: true, compare: "ge" },
     flow: { sliderId: "paramFlowMag", invert: false, drawLine: true, compare: "ge" },
     numbers: { sliderId: "paramNumOcrConf", invert: false, drawLine: true, compare: "ge" },
     inactivity: { sliderId: "paramInactThresh", invert: true, drawLine: true, compare: "le" },
@@ -635,7 +636,7 @@
       body.region = (params.steps && params.steps[0]) ? (params.steps[0].region || "") : "";
     } else {
       var norm = _previewRegionRef();
-      if (!norm && !(tool === "template" && state.uploadedTemplate)) {
+      if (!norm && !((tool === "template" || tool === "shape") && state.uploadedTemplate)) {
         return { skip: "Select a region to calibrate." };
       }
       body.region = norm ? norm.name : "";

@@ -53,7 +53,9 @@ def build_preview(
     if tool == "timelapse":
         return _preview_timelapse(frame, region)
     if tool == "template":
-        return _preview_template(frame, params)
+        return _preview_template(frame, region, params)
+    if tool == "shape":
+        return _preview_shape(frame, region, params)
     if tool == "flow":
         return _preview_flow(frame, prev_frame, region, params)
     if tool == "scene":
@@ -102,6 +104,10 @@ OVERLAY_LAYERS: dict[str, list[tuple[str, str, str]]] = {
     "text": [("gray", "OCR input (gray)", "region")],
     "numbers": [("gray", "OCR input (gray)", "region")],
     "template": [("match_heatmap", "Match heatmap", "frame")],
+    "shape": [
+        ("edges", "Edge ridges", "frame"),
+        ("match_heatmap", "Match heatmap", "frame"),
+    ],
     "flow": [("flow_vectors", "Flow vectors", "region")],
     "scene": [("edges", "Canny edges", "region")],
     "attention": [("saliency_map", "Saliency map", "frame")],
@@ -177,7 +183,7 @@ def build_overlay_layer(
 
     if tool == "scene" and layer == "edges":
         gray = cv2.cvtColor(pixels, cv2.COLOR_BGR2GRAY)
-        edges = cv2.Canny(gray, 100, 200)
+        edges = screenspace_primitives.canny_edges(gray)
         # Dilate proportionally so 1-px Canny lines survive the browser scaling
         # this region-native overlay down; capped so high-res regions don't get
         # chunky lines that obscure the frame underneath.
@@ -191,7 +197,14 @@ def build_overlay_layer(
         return _overlay_flow(pixels, prev_frame, region, params)
 
     if tool == "template" and layer == "match_heatmap":
-        return _overlay_template_heatmap(frame, params)
+        return _overlay_template_heatmap(frame, region, params)
+
+    if tool == "shape" and layer == "edges":
+        edges = screenspace_primitives._frame_edge_map(frame)
+        return _gray_to_bgr(np.clip(edges, 0, 255).astype(np.uint8))
+
+    if tool == "shape" and layer == "match_heatmap":
+        return _overlay_shape_heatmap(frame, region, params)
 
     if tool == "attention" and layer == "saliency_map":
         return _overlay_attention_saliency(frame, prev_frame, params)
@@ -394,7 +407,7 @@ def _overlay_flow(
 
 
 def _overlay_template_heatmap(
-    frame: "np.ndarray", params: dict[str, Any]
+    frame: "np.ndarray", region: dict[str, Any] | None, params: dict[str, Any]
 ) -> "np.ndarray | None":
     template = params.get("template_image")
     if not (isinstance(template, np.ndarray) and template.size > 0):
@@ -403,13 +416,21 @@ def _overlay_template_heatmap(
     if not (isinstance(mask, np.ndarray) and mask.size > 0):
         mask = None
     # Reuse the scan's template-prep + correlation helpers so the preview matches
-    # what a real scan computes: mask binarized (not blurred), and the same
-    # degeneracy/oversize checks.
+    # what a real scan computes: mask binarized (not blurred), the same
+    # degeneracy/oversize checks, and the same run-region window.
     prepared = screenspace_primitives._prepare_template(template, mask)
     result = screenspace_primitives._template_correlation_map(frame, prepared)
     if result is None:
         return None
     tmpl_gray = prepared[0]
+    window = screenspace_primitives.region_search_window(region or {})
+    if window is not None:
+        th_t, tw_t = tmpl_gray.shape[:2]
+        result = screenspace_primitives._mask_corr_outside_window(
+            result, tw_t, th_t, window
+        )
+        if result is None:
+            return None
     norm = np.empty_like(result)
     cv2.normalize(result, norm, 0, 255, cv2.NORM_MINMAX)
     heat = cv2.applyColorMap(norm.astype(np.uint8), cv2.COLORMAP_JET)
@@ -424,6 +445,85 @@ def _overlay_template_heatmap(
     th, tw = tmpl_gray.shape[:2]
     top = th // 2
     left = tw // 2
+    bottom = fh - hh - top
+    right = fw - hw - left
+    return cv2.copyMakeBorder(
+        heat, top, bottom, left, right, borderType=cv2.BORDER_REPLICATE
+    )
+
+
+def _shape_prepared(params: dict[str, Any]) -> "list[dict[str, Any]] | None":
+    """Prepared shape reference from preview params, or None without one."""
+    shape_img = params.get("shape_image")
+    if not (isinstance(shape_img, np.ndarray) and shape_img.size > 0):
+        return None
+    mask = params.get("shape_mask")
+    if not (isinstance(mask, np.ndarray) and mask.size > 0):
+        mask = None
+    return screenspace_primitives._prepare_shape_reference(
+        shape_img,
+        mask,
+        float(params.get("scale_min", 0) or 0),
+        float(params.get("scale_max", 0) or 0),
+        int(params.get("scale_steps", 0) or 0),
+        float(params.get("scale_y_min", 0) or 0),
+        float(params.get("scale_y_max", 0) or 0),
+        int(params.get("scale_y_steps", 0) or 0),
+    )
+
+
+def _shape_best_corr(
+    frame_edges: "np.ndarray",
+    prepared: "list[dict[str, Any]]",
+    window: "tuple[float, float, float, float] | None" = None,
+) -> "tuple[float, np.ndarray, dict[str, Any]] | None":
+    """Best cross-scale correlation map — the same matchTemplate call and
+    region-window masking the scan runs (see match_shape), so the preview
+    reflects exactly what a scan sees."""
+    best: tuple[float, np.ndarray, dict[str, Any]] | None = None
+    fh, fw = frame_edges.shape[:2]
+    for entry in prepared:
+        if entry["h"] > fh or entry["w"] > fw:
+            continue
+        result = cv2.matchTemplate(frame_edges, entry["edges"], cv2.TM_CCOEFF_NORMED)
+        if not np.all(np.isfinite(result)):
+            result = np.where(np.isfinite(result), result, -1.0)
+        if window is not None:
+            result = screenspace_primitives._mask_corr_outside_window(
+                result, entry["w"], entry["h"], window
+            )
+            if result is None:
+                continue
+        peak = float(result.max()) if result.size else -1.0
+        if best is None or peak > best[0]:
+            best = (peak, result, entry)
+    return best
+
+
+def _overlay_shape_heatmap(
+    frame: "np.ndarray", region: dict[str, Any] | None, params: dict[str, Any]
+) -> "np.ndarray | None":
+    prepared = _shape_prepared(params)
+    if not prepared:
+        return None
+    window = screenspace_primitives.region_search_window(region or {})
+    best = _shape_best_corr(
+        screenspace_primitives._frame_edge_map(frame), prepared, window
+    )
+    if best is None:
+        return None
+    _peak, result, entry = best
+    norm = np.empty_like(result)
+    cv2.normalize(result, norm, 0, 255, cv2.NORM_MINMAX)
+    heat = cv2.applyColorMap(norm.astype(np.uint8), cv2.COLORMAP_JET)
+    # Center the response like the template overlay: offset by half the
+    # reference size, replicate edges to cover the whole frame.
+    fh, fw = frame.shape[:2]
+    hh, hw = heat.shape[:2]
+    if (hh, hw) == (fh, fw):
+        return heat
+    top = entry["h"] // 2
+    left = entry["w"] // 2
     bottom = fh - hh - top
     right = fw - hw - left
     return cv2.copyMakeBorder(
@@ -780,6 +880,7 @@ def _preview_timelapse(
 
 def _preview_template(
     frame: "np.ndarray",
+    region: dict[str, Any] | None,
     params: dict[str, Any],
 ) -> "np.ndarray":
     k = config.SCREENSPACE_BLUR_KERNEL
@@ -794,14 +895,21 @@ def _preview_template(
         panels.append(_label_panel(_fit_width(tmpl_gray, 120), "template"))
 
         # Match heatmap. Reuse the real scan's prepared-template pipeline
-        # (binarized mask, degenerate-template guard, finite neutralization) so
-        # the preview reflects exactly what a scan computes — a blurred mask here
-        # would inflate TM_CCOEFF_NORMED and show a different model than reality.
+        # (binarized mask, degenerate-template guard, finite neutralization,
+        # run-region window) so the preview reflects exactly what a scan
+        # computes — a blurred mask here would inflate TM_CCOEFF_NORMED and
+        # show a different model than reality.
         mask = params.get("template_mask")
         if not (isinstance(mask, np.ndarray) and mask.size > 0):
             mask = None
         prepared = screenspace_primitives._prepare_template(template, mask)
         result = screenspace_primitives._template_correlation_map(frame, prepared)
+        window = screenspace_primitives.region_search_window(region or {})
+        if result is not None and window is not None:
+            th_t, tw_t = prepared[0].shape[:2]
+            result = screenspace_primitives._mask_corr_outside_window(
+                result, tw_t, th_t, window
+            )
         if result is not None:
             norm = np.empty_like(result)
             cv2.normalize(result, norm, 0, 255, cv2.NORM_MINMAX)
@@ -809,6 +917,50 @@ def _preview_template(
             panels.append(_label_panel(_fit_width(heat, 240), "match heatmap"))
     else:
         panels.append(_label_panel(_placeholder("no template", 120, 80), "template"))
+    return _hstack_panels(panels)
+
+
+def _preview_shape(
+    frame: "np.ndarray",
+    region: dict[str, Any] | None,
+    params: dict[str, Any],
+) -> "np.ndarray":
+    # Panels are built only from _frame_edge_map / _prepare_shape_reference /
+    # the scan's matchTemplate call (+ its region window), so the preview
+    # matches the real model.
+    frame_edges = screenspace_primitives._frame_edge_map(frame)
+    edges_u8 = np.clip(frame_edges, 0, 255).astype(np.uint8)
+    panels = [_label_panel(_fit_width(edges_u8, 240), "frame edges")]
+
+    prepared = _shape_prepared(params)
+    if prepared is None:
+        panels.append(_label_panel(_placeholder("no reference", 120, 80), "reference"))
+        return _hstack_panels(panels)
+    if not prepared:
+        panels.append(
+            _label_panel(_placeholder("no usable edges", 140, 80), "reference")
+        )
+        return _hstack_panels(panels)
+    window = screenspace_primitives.region_search_window(region or {})
+    best = _shape_best_corr(frame_edges, prepared, window)
+    if best is None:
+        panels.append(
+            _label_panel(
+                _placeholder("reference larger than frame", 180, 80), "reference"
+            )
+        )
+        return _hstack_panels(panels)
+    _peak, result, entry = best
+    ref_u8 = np.clip(entry["edges"], 0, 255).astype(np.uint8)
+    # ASCII only: cv2.putText renders non-ASCII glyphs (a multiply sign) as ??.
+    scale_label = f"reference x{entry['scale']:.2f}"
+    if entry.get("scale_y") not in (None, entry["scale"]):
+        scale_label = f"reference x{entry['scale']:.2f}/{entry['scale_y']:.2f}"
+    panels.append(_label_panel(_fit_width(ref_u8, 120), scale_label))
+    norm = np.empty_like(result)
+    cv2.normalize(result, norm, 0, 255, cv2.NORM_MINMAX)
+    heat = cv2.applyColorMap(norm.astype(np.uint8), cv2.COLORMAP_JET)
+    panels.append(_label_panel(_fit_width(heat, 240), "match heatmap"))
     return _hstack_panels(panels)
 
 
@@ -905,7 +1057,7 @@ def _preview_scene(
     # downscale the binary edge map for display so the small panel reflects
     # the same edges that drive scene scoring.
     gray = cv2.cvtColor(pixels, cv2.COLOR_BGR2GRAY)
-    edges = cv2.Canny(gray, 100, 200)
+    edges = screenspace_primitives.canny_edges(gray)
     # Shaped region: mirror compute_scene_fingerprint's masked edge density
     # and histogram — only polygon pixels drive scene scoring.
     region_mask = (

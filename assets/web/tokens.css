@@ -233,6 +233,7 @@
   --color-task-numbers:    #facc15;
   --color-task-timelapse:  #f472b6;
   --color-task-template:   #fb7185;
+  --color-task-shape:      #f87171;
   --color-task-flow:       #818cf8;
   --color-task-scene:      #2dd4bf;
   --color-task-inactivity: #94a3b8;
@@ -404,6 +405,7 @@ html[data-theme="light"],
   --color-task-numbers:    #eab308;
   --color-task-timelapse:  #ec4899;
   --color-task-template:   #f43f5e;
+  --color-task-shape:      #dc2626;
   --color-task-flow:       #6366f1;
   --color-task-scene:      #14b8a6;
   --color-task-inactivity: #64748b;

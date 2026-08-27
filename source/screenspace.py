@@ -1,6 +1,6 @@
 """Screenspace analysis engine for clipgen.
 
-Thirteen analysis tools (passed as 'type' when creating a task):
+Fourteen analysis tools (passed as 'type' when creating a task):
   multitool   – chain multiple tools; each subsequent step only checks frames that passed previous steps
   color       – frames where a region's average HSV color matches a target within tolerance
   change      – frames where pixel diff ratio exceeds SCREENSPACE_CHANGE_RATIO_THRESHOLD
@@ -8,7 +8,8 @@ Thirteen analysis tools (passed as 'type' when creating a task):
   text        – OCR fuzzy search for a query string (SCREENSPACE_OCR_FUZZY_THRESHOLD); requires RapidOCR
   numbers     – OCR numeric comparison with a relational condition (eq/gt/lt/gte/lte/range)
   timelapse   – sped-up video of a region over a time range
-  template    – find a reference image/template anywhere in the full frame via cv2.matchTemplate
+  template    – find a reference image/template in the run region via cv2.matchTemplate
+  shape       – find a reference shape's outline in the run region via scale-swept edge matching (color/size tolerant)
   flow        – detect motion in a region via dense optical flow (cv2.calcOpticalFlowFarneback)
   scene       – classify frames by similarity to user-captured reference scenes
   inactivity  – detect spans of near-duplicate frames via perceptual hashing (loading screens, frozen states)
@@ -39,11 +40,14 @@ from screenspace_primitives import (
     ScanCallback,
     PHash,
     _ConsecutiveBuffer,
+    _frame_edge_map,
     _merge_timestamp_spans,
     _morph_kernel,
+    _prepare_shape_reference,
     _prepare_template,
     _template_correlation_map,
     average_color_hsv,
+    canny_edges,
     blur_gray,
     color_matches,
     color_present,
@@ -64,14 +68,17 @@ from screenspace_primitives import (
     filter_matches_by_region_mask,
     flow_downscale,
     mask_points_key,
+    match_shape,
     match_template,
     mean_gray_diff,
+    nms_boxes_iou,
     point_in_mask_points,
     region_mask_for,
     region_masker,
     regions_are_similar,
     resolve_region_request,
     saliency_grid_from_map,
+    region_search_window,
     sparse_grid_cells,
     saliency_kwargs_from_params,
     saliency_peak,
@@ -109,6 +116,7 @@ from screenspace_scans import (
     scan_inactivity,
     scan_numbers,
     scan_scene,
+    scan_shape,
     scan_similarity,
     scan_template,
     scan_text,
@@ -139,6 +147,7 @@ from screenspace_tools import (
     MultitoolTool,
     NumbersTool,
     SceneTool,
+    ShapeTool,
     SimilarityTool,
     TemplateTool,
     TextTool,

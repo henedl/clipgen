@@ -846,8 +846,8 @@ NODE_TYPES: dict[str, NodeType] = {
 
 
 # Per-detector Screenspace nodes. Each entry's params are lifted from the matching
-# ``screenspace_tools`` class (the knobs its ``scan`` reads). The three
-# reference-based detectors (template/similarity/scene) self-extract their
+# ``screenspace_tools`` class (the knobs its ``scan`` reads). The four
+# reference-based detectors (template/shape/similarity/scene) self-extract their
 # reference from the node's region at ``reference_seconds`` so the canvas needs no
 # upload UI. ``_build_ss_scan_params`` (below) assembles these flat params into the
 # nested ``scan_params`` each scan expects.
@@ -858,6 +858,7 @@ _SS_DETECTOR_LABELS: dict[str, str] = {
     "similarity": "Detect Similarity",
     "numbers": "Detect Numbers",
     "template": "Detect Template",
+    "shape": "Detect Shape",
     "flow": "Detect Motion",
     "scene": "Detect Scene",
     "inactivity": "Detect Inactivity",
@@ -872,6 +873,7 @@ _SS_DETECTOR_DESCRIPTIONS: dict[str, str] = {
     "similarity": "Detect frames matching a reference image sampled from the region.",
     "numbers": "Read numbers in the region via OCR and compare them to a target.",
     "template": "Detect a reference template (sampled from the region) appearing in the frame.",
+    "shape": "Detect a reference shape's outline (sampled from the region) via scale-swept edge matching.",
     "flow": "Detect motion in the region via optical flow.",
     "scene": "Detect scene changes against a reference fingerprint sampled from the region.",
     "inactivity": "Detect stretches of inactivity (no change) in the region.",
@@ -1089,6 +1091,72 @@ _SS_DETECTOR_SPECS: dict[str, list[ParamSpec]] = {
         },
         _INTERVAL_PARAM,
     ],
+    "shape": [
+        {
+            "name": "reference_seconds",
+            "type": "number",
+            "default": 0.0,
+            "min": 0,
+            "label": "Reference time (s)",
+        },
+        {
+            "name": "threshold",
+            "type": "number",
+            "default": config.SCREENSPACE_SHAPE_MATCH_THRESHOLD,
+            "min": 0,
+            "max": 1,
+            "label": "Match threshold",
+        },
+        {
+            "name": "scale_min",
+            "type": "number",
+            "default": config.SCREENSPACE_SHAPE_SCALE_MIN,
+            "min": 0.1,
+            "max": 4,
+            "label": "Scale min",
+        },
+        {
+            "name": "scale_max",
+            "type": "number",
+            "default": config.SCREENSPACE_SHAPE_SCALE_MAX,
+            "min": 0.1,
+            "max": 4,
+            "label": "Scale max",
+        },
+        {
+            "name": "scale_steps",
+            "type": "number",
+            "default": config.SCREENSPACE_SHAPE_SCALE_STEPS,
+            "min": 1,
+            "max": 12,
+            "label": "Scale steps",
+        },
+        {
+            "name": "scale_y_min",
+            "type": "number",
+            "default": 0,
+            "min": 0,
+            "max": 4,
+            "label": "V scale min (0=linked)",
+        },
+        {
+            "name": "scale_y_max",
+            "type": "number",
+            "default": 0,
+            "min": 0,
+            "max": 4,
+            "label": "V scale max (0=linked)",
+        },
+        {
+            "name": "scale_y_steps",
+            "type": "number",
+            "default": 0,
+            "min": 0,
+            "max": 12,
+            "label": "V scale steps",
+        },
+        _INTERVAL_PARAM,
+    ],
     "flow": [
         {
             "name": "magnitude_threshold",
@@ -1186,7 +1254,7 @@ _SS_DETECTOR_SPECS: dict[str, list[ParamSpec]] = {
 }
 
 # Detectors whose scan needs a reference frame self-extracted from the node region.
-_SS_REFERENCE_DETECTORS = frozenset({"similarity", "template", "scene"})
+_SS_REFERENCE_DETECTORS = frozenset({"similarity", "template", "shape", "scene"})
 
 # Detectors usable as a Multitool chain step: the per-frame (``check_frame``)
 # detectors that need no uploaded reference. Single source of truth — served to

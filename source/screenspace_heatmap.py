@@ -238,7 +238,7 @@ def _accumulate_heatmap_result(
     through it (see :func:`generate_rolling_heatmap_gif`).
     """
     acc_h, acc_w = accumulator.shape[:2]
-    if heatmap_type == "template":
+    if heatmap_type in ("template", "shape"):
         for m in result.get("matches", []):
             x, y, w, h = int(m["x"]), int(m["y"]), int(m["w"]), int(m["h"])
             y2 = min(y + h, acc_h)

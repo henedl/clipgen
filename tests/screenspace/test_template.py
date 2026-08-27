@@ -175,6 +175,50 @@ class TestScanTemplateControls:
             screenspace_frames, "_probe_video_meta", lambda p: (30.0, 1.0)
         )
 
+    def test_region_scopes_scan(self, monkeypatch):
+        """The run region scopes matches; a rect away from the icon finds none."""
+        frame = _make_icon_frame(400, 200, [(100, 50, 40)])
+        template = _make_icon(40)
+        self._patch_single_frame(monkeypatch, frame)
+
+        over = screenspace.scan_template(
+            "/fake.mp4",
+            {"x": 90, "y": 40, "w": 60, "h": 60},
+            template,
+            threshold=0.70,
+        )
+        assert len(over) == 1
+
+        self._patch_single_frame(monkeypatch, frame)
+        away = screenspace.scan_template(
+            "/fake.mp4",
+            {"x": 300, "y": 100, "w": 60, "h": 60},
+            template,
+            threshold=0.70,
+        )
+        assert away == []
+
+    def test_check_frame_region_scopes_peak(self):
+        """best_score is window-local, so calibration scores the targeted spot."""
+        frame = _make_icon_frame(400, 200, [(100, 50, 40)])
+        template = _make_icon(40)
+        tool = screenspace.TOOLS["template"]
+        passed, _detail = tool.check_frame(
+            frame,
+            None,
+            {"x": 90, "y": 40, "w": 60, "h": 60},
+            {"template_image": template, "threshold": 0.70},
+        )
+        assert passed is True
+        away, away_detail = tool.check_frame(
+            frame,
+            None,
+            {"x": 300, "y": 100, "w": 60, "h": 60},
+            {"template_image": template, "threshold": 0.70},
+        )
+        assert away is False
+        assert away_detail is not None and away_detail["best_score"] < 0.70
+
     def test_scale_fixes_size_mismatch(self, monkeypatch):
         """A 40px template should miss a 20px in-frame icon at scale 1.0
         but hit at scale 0.5."""

@@ -255,16 +255,13 @@
   // on in the run-region picker (the dropdown), falling back to the highlighted
   // chip. Multitool/boundary hide the picker (see renderWorkflowParams), so
   // their stale runRegions are ignored and they keep using the active region.
-  // The template tool needs a real captured region — full frame can't be a
-  // template — so full frame is skipped there in favor of the last named/stash
-  // region selected (otherwise full frame toggled on last would block the
-  // template preview/calibration even with a named region still selected).
+  // Template/shape samples are pinned to their capture region separately, so
+  // a full-frame run target is legitimate everywhere and never skipped.
   function _previewRegionRef() {
-    var skipFullFrame = state.activeWorkflow === "template";
     if (state.activeWorkflow !== "multitool" && state.activeWorkflow !== "boundary") {
       for (var i = state.runRegions.length - 1; i >= 0; i--) {
         var ref = normalizeRegionRef(state.runRegions[i]);
-        if (!ref || (skipFullFrame && ref.source === "full_frame")) continue;
+        if (!ref) continue;
         return ref;
       }
     }
@@ -411,6 +408,24 @@
     } else if (tool === "numbers") {
       var np = qs("#paramNumOcrPreprocess");
       if (np && np.checked) out.ocr_preprocess = "1";
+    } else if (tool === "shape") {
+      var st = qs("#paramShapeThresh");
+      if (st) out.threshold = st.value;
+      var smin = qs("#paramShapeScaleMin");
+      if (smin) out.scale_min = (parseFloat(smin.value) || 0) / 100;
+      var smax = qs("#paramShapeScaleMax");
+      if (smax) out.scale_max = (parseFloat(smax.value) || 0) / 100;
+      var sst = qs("#paramShapeSteps");
+      if (sst) out.scale_steps = sst.value;
+      var slink = qs("#paramShapeLinkAxes");
+      if (slink && !slink.checked) {
+        var symin = qs("#paramShapeScaleYMin");
+        if (symin) out.scale_y_min = (parseFloat(symin.value) || 0) / 100;
+        var symax = qs("#paramShapeScaleYMax");
+        if (symax) out.scale_y_max = (parseFloat(symax.value) || 0) / 100;
+        var systeps = qs("#paramShapeStepsY");
+        if (systeps) out.scale_y_steps = systeps.value;
+      }
     } else if (tool === "attention") {
       var attnIds = {
         weight_spectral: "paramAttnWSpectral",
@@ -446,17 +461,22 @@
     var regionStr = _normalizedRegionString();
     var hasRegion = _hasActiveOrPendingRegion();
 
-    if (tool === "template") {
+    if (tool === "template" || tool === "shape") {
+      var snapRegion = state.capturedRefPreview
+        && state.capturedRefPreview.ts === state.referenceTimestamp
+        && state.capturedRefPreview.region;
       if (state.uploadedTemplate && state.uploadedTemplate.data) {
-        // POST with template_image_data — region optional
+        // POST with the upload — region optional
       } else if (state.referenceTimestamp != null) {
-        if (!hasRegion) {
-          meta.textContent = "Select or draw a region to preview the captured template.";
+        // Shape's sample rides its capture region, so the run target being
+        // Full frame no longer blocks the preview.
+        if (!hasRegion && !snapRegion) {
+          meta.textContent = "Select or draw a region to preview the captured reference.";
           img.removeAttribute("src");
           return;
         }
       } else {
-        meta.textContent = "Capture a template region or upload a PNG to preview.";
+        meta.textContent = "Capture a reference region or upload a PNG to preview.";
         img.removeAttribute("src");
         return;
       }
@@ -481,11 +501,18 @@
       qsParts.push("ref=" + Number(state.referenceTimestamp).toFixed(3));
     }
     if (
-      tool === "template" &&
+      (tool === "template" || tool === "shape") &&
       state.referenceTimestamp != null &&
       !(state.uploadedTemplate && state.uploadedTemplate.data)
     ) {
       qsParts.push("ref=" + Number(state.referenceTimestamp).toFixed(3));
+      if (snapRegion) {
+        var capRect = (state.previewRegions || state.regions)[snapRegion];
+        if (capRect) {
+          qsParts.push("ref_region=" + [capRect.x, capRect.y, capRect.w, capRect.h]
+            .map(function (v) { return Number(v).toFixed(6); }).join(","));
+        }
+      }
     }
     Object.keys(params).forEach(function (k) {
       qsParts.push(encodeURIComponent(k) + "=" + encodeURIComponent(params[k]));
@@ -562,7 +589,7 @@
         oi.src = ou;
       }
       if (useTemplatePost) {
-        apiPostBlob(layerUrl, { template_image_data: state.uploadedTemplate.data })
+        apiPostBlob(layerUrl, uploadPostBody())
           .then(fetchAsImage)
           .catch(function () { /* leave previous overlay image */ });
       } else {
@@ -572,9 +599,16 @@
       }
     }
 
-    var useTemplatePost = tool === "template" && state.uploadedTemplate && state.uploadedTemplate.data;
+    var useTemplatePost = (tool === "template" || tool === "shape")
+      && state.uploadedTemplate && state.uploadedTemplate.data;
+    // Shape uploads ride their own field so the server routes them correctly.
+    function uploadPostBody() {
+      var body = {};
+      body[tool === "shape" ? "shape_image_data" : "template_image_data"] = state.uploadedTemplate.data;
+      return body;
+    }
     if (useTemplatePost) {
-      apiPostBlob(url, { template_image_data: state.uploadedTemplate.data })
+      apiPostBlob(url, uploadPostBody())
         .then(function (blob) {
           if (gen !== _modelViewGen) return;
           applyPreviewOkFromBlob(blob);
