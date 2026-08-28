@@ -1154,6 +1154,9 @@ body[data-frontend="screenspace"] {
   top: 0;
   left: 0;
   width: 100%;
+  /* Height comes from the wrapper, not the height attribute: that attribute is
+   * the device-pixel backing store, so on a 2x display it would double. */
+  height: 100%;
   pointer-events: none;
 }
 
