@@ -11,7 +11,8 @@
  * file, so they are called late-bound as SS.findTask(...) / SS.focusedTaskId(...)
  * rather than destructured. formatTime/formatDuration/clamp/hexToRgba/el/qs and
  * the drawTimelineRuler/niceTimeInterval/drawAmplitudeBands canvas helpers are
- * ambient utils.js globals (scope chain).
+ * ambient utils.js globals (scope chain); sizeCanvasToDisplay comes from
+ * screenspace-utils.js the same way.
  *
  * The hub keeps same-named delegators (initTimeline/renderTimeline/renderPlayhead)
  * for the entry points its own code calls; the tasks and results satellites
@@ -33,9 +34,11 @@
     iconSpan = SS.iconSpan,
     invalidateOverlayRect = SS.invalidateOverlayRect;
 
-  var TIMELINE_CANVAS_HEIGHT = 64;
   var _timelineHitRects = [];
   var _cachedTimelineRect = null;
+  // CSS-pixel size of the timeline canvas, refreshed by sizeTimelineCanvas.
+  // Every draw runs in these units; the backing store is dpr times larger.
+  var _timelineCss = { w: 0, h: 0, dpr: 1 };
 
   // Status ticks no longer carry result lists; results live in the per-task
   // cache (state.taskResults), filled by _syncTaskResults in the tasks satellite.
@@ -63,11 +66,19 @@
     }
     var canvas = qs("#timelineCanvas");
     sizeTimelineCanvas();
-    window.addEventListener("resize", function () {
+    // The observer catches every layout shift the window never hears about (the
+    // info panel collapsing, the right-pane tab restoring). The window listener
+    // stays for what it cannot see: a dpr change, and the overlay's stale rect.
+    var onWindowResize = function () {
       invalidateOverlayRect();
-      _cachedTimelineRect = null;
       sizeTimelineCanvas();
-    });
+    };
+    if (typeof ResizeObserver === "function") {
+      var obs = new ResizeObserver(function () { sizeTimelineCanvas(); });
+      obs.observe(qs("#timelineCanvasWrapper"));
+      window.addEventListener("pagehide", function () { obs.disconnect(); });
+    }
+    window.addEventListener("resize", onWindowResize);
     window.addEventListener("scroll", function () {
       invalidateOverlayRect();
       _cachedTimelineRect = null;
@@ -218,15 +229,17 @@
     state.timelineOffset = clamp(state.timelineOffset, 0, Math.max(0, dur - visLen));
   }
 
+  // Backing store = CSS box x dpr. Both canvases are width:100%, so a stale
+  // measurement stretches the ruler text horizontally until the next resize --
+  // and the layout keeps moving after DOMContentLoaded (the info panel
+  // collapses, the stored right-pane tab restores). Hence the ResizeObserver.
   function sizeTimelineCanvas() {
     var canvas = qs("#timelineCanvas");
     _cachedTimelineRect = null;
-    var rect = canvas.getBoundingClientRect();
-    canvas.width = Math.floor(rect.width);
-    canvas.height = TIMELINE_CANVAS_HEIGHT;
-    var ph = qs("#playheadCanvas");
-    ph.width = canvas.width;
-    ph.height = canvas.height;
+    var size = sizeCanvasToDisplay(canvas);
+    if (!size.w) return; // page hidden — measure again when it comes back
+    sizeCanvasToDisplay(qs("#playheadCanvas"));
+    _timelineCss = { w: size.w / size.dpr, h: size.h / size.dpr, dpr: size.dpr };
     renderTimeline();
     renderPlayhead();
   }
@@ -330,8 +343,10 @@
   function renderTimelineImpl() {
     var canvas = qs("#timelineCanvas");
     var ctx = canvas.getContext("2d");
-    var w = canvas.width;
-    var h = canvas.height;
+    // Draw in CSS pixels: hit rects and boundary-flag offsets are DOM units.
+    ctx.setTransform(_timelineCss.dpr, 0, 0, _timelineCss.dpr, 0, 0);
+    var w = _timelineCss.w;
+    var h = _timelineCss.h;
     var dur = state.videoInfo ? state.videoInfo.duration : 0;
 
     var tc = getThemeColors();
@@ -611,10 +626,11 @@
 
   function renderPlayhead() {
     var canvas = qs("#playheadCanvas");
-    if (!canvas.width || !canvas.height) return;
+    if (!_timelineCss.w || !_timelineCss.h) return;
     var ctx = canvas.getContext("2d");
-    var w = canvas.width;
-    var h = canvas.height;
+    ctx.setTransform(_timelineCss.dpr, 0, 0, _timelineCss.dpr, 0, 0);
+    var w = _timelineCss.w;
+    var h = _timelineCss.h;
     var dur = state.videoInfo ? state.videoInfo.duration : 0;
     ctx.clearRect(0, 0, w, h);
     if (dur <= 0) return;
