@@ -8,6 +8,24 @@ Notable changes per release. One level-2 heading per version — `## <version> �
 
 `<Tool>` is one of `Core`, `Studio`, `Screenspace`, `Transcripts`, `Workflows`, `Composer`, `Overview`. Write for someone using clipgen, not building it: name the thing by what it is called in the interface, say what changed for them, and leave the internals in the commit. Add a second sentence only when the first leaves an obvious "so what". Lines render as **plain text** in the Start overlay's Recent updates tab — no backticks or markdown inside them, or it shows up literally.
 
+## v0.16.13 — 2026-08-28
+**Screenspace:** Feat: Model view and Calibration now live in a Preview tab on the right, open by default so you can see what the tool is matching without hunting in the sidebar.
+**Screenspace:** Feat: Shape has a paint-brush draw mode on the video canvas, separate Width and Height scale labels when axes are unlinked, and an eraser editor on sample thumbnails.
+**Screenspace:** Feat: Hold or tap B to peek the results overlay, tap to latch it on, and N cycles which overlay layer is shown.
+**Screenspace:** Fix: The timeline ruler and playhead stay sharp when the side panel collapses or you switch tabs.
+
+## v0.16.12 — 2026-08-27
+**Screenspace:** Feat: The Shape tool finds icons, logos, and buttons that changed color, theme, or size, where Template pixel matching misses them.
+**Screenspace:** Feat: Tool categories in the grouped nav show their name and icon instead of bare tool names in a dropdown.
+**Screenspace:** Feat: Template, Shape, Similarity, and Scene reference rows show a crop thumbnail and source region name.
+**Screenspace:** Feat: Dense Template matches scan much faster instead of freezing the page.
+**Transcripts:** Feat: The Friction tab stops re-scoring the whole transcript on every poll while an AI summary is running.
+**Core:** Feat: Saving project state skips unchanged sections, so large manifests no longer stall every auto-save.
+**Transcripts:** Fix: Dictionary CSV import handles Excel formula prefixes and a UTF-8 byte-order mark.
+**Transcripts:** Fix: In and out markers stay with the study where you set them.
+**Core:** Fix: Custom source video filename patterns apply in the CLI and Workflows, not only in the web UI.
+**Screenspace:** Fix: Lasso masks on Shape and Template samples are kept through preview, re-run, and Workflows.
+
 ## v0.16.11 — 2026-08-24
 **Transcripts:** Fix: A failed AI run now names what went wrong instead of saying it produced no result.
 **Transcripts:** Fix: Summary citations point at the sentence they belong to again, and a summary that ends in a paragraph no longer folds it into the bullet list.
