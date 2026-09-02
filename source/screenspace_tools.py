@@ -30,6 +30,7 @@ from screenspace_primitives import (
     _scale_template,
     _template_corr_window,
     _template_correlation_map,
+    _template_is_evaluable,
     blur_gray,
     color_matches,
     color_present,
@@ -709,8 +710,12 @@ class TemplateTool(AnalysisTool):
         # Peak correlation scores even a miss; the run region (zero-size = anywhere) scopes it.
         window = region_search_window(region)
         origin = (0, 0)
+        # A template that cannot be correlated at all is unevaluable, whichever path runs.
+        if not _template_is_evaluable(frame, prepared):
+            return False, None
         if window is not None and prepared[1] is None:
             packed = _template_corr_window(frame, prepared, window)
+            # None here means the window admits no match position: a scored miss.
             if packed is None:
                 return False, {"best_score": -1.0, "match_count": 0}
             corr, x_offset, y_offset = packed
