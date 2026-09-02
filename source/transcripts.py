@@ -706,7 +706,7 @@ def transcribe_video(
 
     props = video_mod.probe_video_properties(video_path)
     tracks: list[dict[str, Any]] = (props or {}).get("audio_tracks") or []
-    if props is not None and not props.get("audio_codec") and not tracks:
+    if props is not None and not tracks:
         utils.warning_print(
             f"No audio stream in {Path(video_path).name} — skipping transcription."
         )
@@ -1727,7 +1727,7 @@ class TranscriptWorker:
         # Probe the first part for the audio guard; the timeline gives the progress denominator.
         props = video_mod.probe_video_properties(video_paths[0])
         tracks: list[dict[str, Any]] = (props or {}).get("audio_tracks") or []
-        if props is not None and not props.get("audio_codec") and not tracks:
+        if props is not None and not tracks:
             with self._lock:
                 task["status"] = TASK_STATUS_FAILED
                 task["error"] = (

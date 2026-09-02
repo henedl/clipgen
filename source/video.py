@@ -1745,14 +1745,20 @@ def timeline_or_none(paths: list[str]) -> list[tuple[str, int, int]] | None:
     return build_source_timeline(paths) if len(paths) >= 2 else None
 
 
+def first_audio_track(props: dict[str, Any] | None) -> dict[str, Any] | None:
+    """First audio stream of a probe result, or None when the file has no audio."""
+    tracks = (props or {}).get("audio_tracks") or []
+    return tracks[0] if tracks else None
+
+
 def probe_video_properties(filepath: str) -> dict[str, Any] | None:
     """Probe video file for stream properties (resolution, codecs, timing).
 
     Returns:
         Dict with 'width' (int), 'height' (int), 'video_codec' (str),
-        'audio_codec' (str or None if no audio stream),
         'audio_tracks' (list of per-audio-stream dicts: index/codec/channels/
-        title/language/handler/label), 'audio_track_count' (int),
+        sample_rate/channel_layout/title/language/handler/label),
+        'audio_track_count' (int),
         'fps' (float, 0.0 if unknown), 'duration' (float seconds, 0.0 if unknown),
         'nb_frames' (int, 0 if unknown),
         or None if probe fails.
@@ -1762,16 +1768,14 @@ def probe_video_properties(filepath: str) -> dict[str, Any] | None:
             "width": 1920,
             "height": 1080,
             "video_codec": "h264",
-            "audio_codec": "aac",
             "pix_fmt": "yuv420p",
-            "audio_sample_rate": 48000,
-            "audio_channels": 2,
-            "audio_channel_layout": "stereo",
             "audio_tracks": [
                 {
                     "index": 0,
                     "codec": "aac",
                     "channels": 2,
+                    "sample_rate": 48000,
+                    "channel_layout": "stereo",
                     "title": "",
                     "language": "",
                     "handler": "",
@@ -1849,11 +1853,7 @@ def _probe_video_properties_uncached(
     streams = data.get("streams", [])
     width = height = 0
     video_codec: str | None = None
-    audio_codec: str | None = None
     pix_fmt: str | None = None
-    audio_sample_rate = 0
-    audio_channels = 0
-    audio_channel_layout: str | None = None
     audio_tracks: list[dict[str, Any]] = []
     fps = 0.0
     nb_frames = 0
@@ -1901,26 +1901,23 @@ def _probe_video_properties_uncached(
             label = (
                 title or meaningful_handler or lang_label or f"Track {track_index + 1}"
             )
+            try:
+                track_sample_rate = int(stream.get("sample_rate") or 0)
+            except (ValueError, TypeError):
+                track_sample_rate = 0
             audio_tracks.append(
                 {
                     "index": track_index,
                     "codec": stream.get("codec_name"),
                     "channels": track_channels,
+                    "sample_rate": track_sample_rate,
+                    "channel_layout": stream.get("channel_layout"),
                     "title": title,
                     "language": language,
                     "handler": handler,
                     "label": label,
                 }
             )
-            # First audio stream also fills the flat top-level fields callers read.
-            if audio_codec is None:
-                audio_codec = stream.get("codec_name")
-                try:
-                    audio_sample_rate = int(stream.get("sample_rate") or 0)
-                except (ValueError, TypeError):
-                    audio_sample_rate = 0
-                audio_channels = track_channels
-                audio_channel_layout = stream.get("channel_layout")
 
     if not video_codec or width <= 0 or height <= 0:
         return None
@@ -1947,11 +1944,7 @@ def _probe_video_properties_uncached(
         "width": width,
         "height": height,
         "video_codec": video_codec,
-        "audio_codec": audio_codec,
         "pix_fmt": pix_fmt,
-        "audio_sample_rate": audio_sample_rate,
-        "audio_channels": audio_channels,
-        "audio_channel_layout": audio_channel_layout,
         "audio_tracks": audio_tracks,
         "audio_track_count": len(audio_tracks),
         "fps": fps,
@@ -2658,7 +2651,7 @@ def normalize_audio_inplace(
             str(tmp),
             indices,
             muxer,
-            int(before.get("audio_sample_rate") or 0) or 48000,
+            int((first_audio_track(before) or {}).get("sample_rate") or 0) or 48000,
         )
         if config.DEBUGGING:
             config.debug_ic(command)
@@ -3069,7 +3062,7 @@ def _detect_clip_mismatches(
 
     resolutions = Counter((p["width"], p["height"]) for p in probed)
     video_codecs = Counter(p["video_codec"] for p in probed)
-    has_audio = [p["audio_codec"] is not None for p in probed]
+    has_audio = [first_audio_track(p) is not None for p in probed]
 
     has_resolution_mismatch = len(resolutions) > 1
     has_audio_presence_mismatch = len(set(has_audio)) > 1
@@ -3120,9 +3113,7 @@ def _build_filter_complex_concat(
         (filter_complex_string, has_any_audio)
     """
     filter_parts: list[str] = []
-    has_any_audio = any(
-        p is not None and p.get("audio_codec") is not None for p in props_list
-    )
+    has_any_audio = any(first_audio_track(p) is not None for p in props_list)
 
     for i, props in enumerate(props_list):
         filter_parts.append(
@@ -3132,7 +3123,7 @@ def _build_filter_complex_concat(
             f"setsar=1[v{i}]"
         )
         if has_any_audio:
-            if props is not None and props.get("audio_codec") is not None:
+            if first_audio_track(props) is not None:
                 filter_parts.append(f"[{i}:a]aresample=44100[a{i}]")
             else:
                 # Reuse the duration _detect_clip_mismatches already probed; re-probe

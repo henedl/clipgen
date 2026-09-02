@@ -15,7 +15,15 @@ _MATCHING_PROPS = {
     "width": 1920,
     "height": 1080,
     "video_codec": "h264",
-    "audio_codec": "aac",
+    "audio_tracks": [
+        {
+            "index": 0,
+            "codec": "aac",
+            "channels": 2,
+            "sample_rate": 48000,
+            "channel_layout": "stereo",
+        }
+    ],
 }
 
 
@@ -359,16 +367,14 @@ def test_probe_video_properties_parses_output(monkeypatch, tmp_path):
         "width": 1920,
         "height": 1080,
         "video_codec": "h264",
-        "audio_codec": "aac",
         "pix_fmt": "yuv420p",
-        "audio_sample_rate": 48000,
-        "audio_channels": 2,
-        "audio_channel_layout": "stereo",
         "audio_tracks": [
             {
                 "index": 0,
                 "codec": "aac",
                 "channels": 2,
+                "sample_rate": 48000,
+                "channel_layout": "stereo",
                 "title": "",
                 "language": "",
                 "handler": "",
@@ -452,9 +458,8 @@ def test_probe_video_properties_multiple_audio_tracks(monkeypatch, tmp_path):
     labels = [t["label"] for t in result["audio_tracks"]]
     assert labels == ["Microphone", "ENG", "Track 3"]
     assert [t["index"] for t in result["audio_tracks"]] == [0, 1, 2]
-    # Flat top-level fields describe the first audio stream only.
-    assert result["audio_codec"] == "aac"
-    assert result["audio_channels"] == 2
+    assert result["audio_tracks"][0]["codec"] == "aac"
+    assert result["audio_tracks"][0]["channels"] == 2
 
 
 def test_probe_video_properties_no_audio(monkeypatch, tmp_path):
@@ -477,13 +482,8 @@ def test_probe_video_properties_no_audio(monkeypatch, tmp_path):
 
     result = video.probe_video_properties(str(clip))
     assert result is not None
-    assert result["audio_codec"] is None
     assert result["video_codec"] == "hevc"
     assert result["width"] == 1280
-    # No audio stream → audio params are absent/zero.
-    assert result["audio_sample_rate"] == 0
-    assert result["audio_channels"] == 0
-    assert result["audio_channel_layout"] is None
     assert result["audio_tracks"] == []
     assert result["audio_track_count"] == 0
 
@@ -811,13 +811,29 @@ def test_concatenate_clips_resolution_mismatch_uses_filter_complex(monkeypatch):
             "width": 1920,
             "height": 1080,
             "video_codec": "h264",
-            "audio_codec": "aac",
+            "audio_tracks": [
+                {
+                    "index": 0,
+                    "codec": "aac",
+                    "channels": 2,
+                    "sample_rate": 48000,
+                    "channel_layout": "stereo",
+                }
+            ],
         },
         "b.mp4": {
             "width": 1280,
             "height": 720,
             "video_codec": "h264",
-            "audio_codec": "aac",
+            "audio_tracks": [
+                {
+                    "index": 0,
+                    "codec": "aac",
+                    "channels": 2,
+                    "sample_rate": 48000,
+                    "channel_layout": "stereo",
+                }
+            ],
         },
     }
     monkeypatch.setattr(video, "probe_video_properties", lambda p: props_by_path.get(p))
@@ -853,13 +869,29 @@ def test_concatenate_clips_warns_on_mismatch(monkeypatch):
             "width": 1920,
             "height": 1080,
             "video_codec": "h264",
-            "audio_codec": "aac",
+            "audio_tracks": [
+                {
+                    "index": 0,
+                    "codec": "aac",
+                    "channels": 2,
+                    "sample_rate": 48000,
+                    "channel_layout": "stereo",
+                }
+            ],
         },
         "b.mp4": {
             "width": 1280,
             "height": 720,
             "video_codec": "hevc",
-            "audio_codec": "aac",
+            "audio_tracks": [
+                {
+                    "index": 0,
+                    "codec": "aac",
+                    "channels": 2,
+                    "sample_rate": 48000,
+                    "channel_layout": "stereo",
+                }
+            ],
         },
     }
     monkeypatch.setattr(video, "probe_video_properties", lambda p: props_by_path.get(p))
@@ -899,13 +931,21 @@ def test_concatenate_clips_mixed_audio_presence(monkeypatch):
             "width": 1920,
             "height": 1080,
             "video_codec": "h264",
-            "audio_codec": "aac",
+            "audio_tracks": [
+                {
+                    "index": 0,
+                    "codec": "aac",
+                    "channels": 2,
+                    "sample_rate": 48000,
+                    "channel_layout": "stereo",
+                }
+            ],
         },
         "b.mp4": {
             "width": 1920,
             "height": 1080,
             "video_codec": "h264",
-            "audio_codec": None,
+            "audio_tracks": [],
         },
     }
     monkeypatch.setattr(video, "probe_video_properties", lambda p: props_by_path.get(p))
@@ -936,7 +976,7 @@ def test_concatenate_clips_all_no_audio(monkeypatch):
         "width": 1280,
         "height": 720,
         "video_codec": "h264",
-        "audio_codec": None,
+        "audio_tracks": [],
     }
     monkeypatch.setattr(
         video, "probe_video_properties", lambda _p: dict(no_audio_props)
@@ -953,13 +993,13 @@ def test_concatenate_clips_all_no_audio(monkeypatch):
                 "width": 1920,
                 "height": 1080,
                 "video_codec": "h264",
-                "audio_codec": None,
+                "audio_tracks": [],
             }
         return {
             "width": 1280,
             "height": 720,
             "video_codec": "h264",
-            "audio_codec": None,
+            "audio_tracks": [],
         }
 
     monkeypatch.setattr(video, "probe_video_properties", props_alternating)
@@ -1040,7 +1080,7 @@ def test_get_file_duration_returns_rounded_probe_duration(monkeypatch, tmp_path)
             "width": 1920,
             "height": 1080,
             "video_codec": "h264",
-            "audio_codec": None,
+            "audio_tracks": [],
             "fps": 30.0,
             "duration": 99.4,
             "nb_frames": 0,

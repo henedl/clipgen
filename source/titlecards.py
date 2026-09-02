@@ -51,16 +51,16 @@ def _x264_video_args() -> list[str]:
     ]
 
 
-def _resolve_channel_layout(probed: dict) -> str | None:
-    """Resolve a silent-audio channel layout matching the probed body audio.
+def _resolve_channel_layout(track: dict) -> str | None:
+    """Resolve a silent-audio channel layout matching the body's first audio track.
 
     Prefers the probed channel_layout; falls back to mono/stereo derived from the
     channel count. Returns None when the layout can't be resolved (unsupported).
     """
-    layout = probed.get("audio_channel_layout")
+    layout = track.get("channel_layout")
     if isinstance(layout, str) and layout.strip():
         return layout.strip()
-    channels = probed.get("audio_channels") or 0
+    channels = track.get("channels") or 0
     if channels == 1:
         return "mono"
     if channels == 2:
@@ -86,12 +86,13 @@ def _body_is_copy_safe(probed: dict | None) -> bool:
     fps = probed.get("fps") or 0.0
     if not (isinstance(fps, (int, float)) and fps > 0):
         return False
-    if probed.get("audio_codec"):
-        if probed.get("audio_codec") != "aac":
+    track = video.first_audio_track(probed)
+    if track is not None:
+        if track.get("codec") != "aac":
             return False
-        if not (probed.get("audio_sample_rate") or 0) > 0:
+        if not (track.get("sample_rate") or 0) > 0:
             return False
-        if _resolve_channel_layout(probed) is None:
+        if _resolve_channel_layout(track) is None:
             return False
     return True
 
@@ -610,7 +611,8 @@ def wrap_clip_with_cards(
         )
         return (True, False)
 
-    has_clip_audio = bool(probed and probed.get("audio_codec"))
+    clip_track = video.first_audio_track(probed)
+    has_clip_audio = clip_track is not None
     clip_duration = (
         float(probed["duration"]) if probed and probed.get("duration") else 0.0
     )
@@ -624,11 +626,11 @@ def wrap_clip_with_cards(
     audio_match: dict | None = None
     if copy_safe and probed:
         match_fps = float(probed["fps"])
-        if has_clip_audio:
+        if clip_track is not None:
             audio_match = {
-                "sample_rate": probed["audio_sample_rate"],
-                "channel_layout": _resolve_channel_layout(probed),
-                "channels": probed.get("audio_channels") or 0,
+                "sample_rate": clip_track["sample_rate"],
+                "channel_layout": _resolve_channel_layout(clip_track),
+                "channels": clip_track.get("channels") or 0,
             }
 
     titlecard_temps: list[str] = []
