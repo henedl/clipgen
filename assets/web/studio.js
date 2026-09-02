@@ -3248,7 +3248,7 @@
         id: "studio.selectTab",
         handler: function (e, combo) {
           // 1…4 → Nth preview tab; hidden tabs no-op. .click() reuses tab persistence.
-          var n = parseInt(combo.replace("Shift+", ""), 10);
+          var n = parseInt(combo, 10);
           if (isNaN(n)) return;
           var tab = qsa(".preview-tab")[n - 1];
           if (tab && !tab.classList.contains("hidden")) tab.click();
