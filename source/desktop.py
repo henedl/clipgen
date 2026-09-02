@@ -378,6 +378,8 @@ def launch_desktop(
         # required too.
         window.events.before_show += lambda: desktop_chrome.apply(window)
         window.events.shown += lambda: desktop_chrome.on_shown(window)
+        # pywebview's pre-run-loop activation can lose the launch race; re-claim key.
+        window.events.shown += lambda: desktop_chrome.ensure_key(window)
         window.events.loaded += lambda: desktop_chrome.reassert(window)
         window.events.shown += lambda: _on_shown(window)
         # Runs after first_show installs the Tier 1 menu; callAfter lands it once

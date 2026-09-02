@@ -87,6 +87,8 @@ def test_teardown_is_idempotent():
     assert desktop_chrome._frame_tokens == []
     assert desktop_chrome._laying_out is False
     assert desktop_chrome._last_inventory is None
+    assert desktop_chrome._key_timer is None
+    assert desktop_chrome._last_focus is None
 
 
 def test_the_container_is_resolved_without_the_traffic_lights():
@@ -367,3 +369,143 @@ def test_topnav_css_insets_the_left_column_not_the_bar():
     assert 'html[data-desktop-chrome="macos"] .topnav {' not in TOPNAV_CSS
     # Dragging must not sweep a text selection across the bar's labels.
     assert ".pywebview-drag-region" in TOPNAV_CSS
+
+
+# ---- Launch focus ----
+
+
+class FakeNative:
+    def __init__(self, key=False, visible=True, miniaturized=False):
+        self.key = key
+        self.visible = visible
+        self.miniaturized = miniaturized
+        self.calls = []
+
+    def isKeyWindow(self):
+        return self.key
+
+    def isMainWindow(self):
+        return self.key
+
+    def isVisible(self):
+        return self.visible
+
+    def isMiniaturized(self):
+        return self.miniaturized
+
+    def makeKeyAndOrderFront_(self, sender):
+        self.calls.append("makeKeyAndOrderFront_")
+
+
+class FakeAppKit:
+    NSApplicationActivateIgnoringOtherApps = 1 << 1
+
+    def __init__(self, key_window=None):
+        self.calls = []
+        appkit = self
+
+        class App:
+            def keyWindow(self):
+                return key_window
+
+            def isActive(self):
+                return True
+
+        class NSApplication:
+            @staticmethod
+            def sharedApplication():
+                return App()
+
+        class NSRunningApplication:
+            @staticmethod
+            def currentApplication():
+                return appkit
+
+        self.NSApplication = NSApplication
+        self.NSRunningApplication = NSRunningApplication
+
+    def activateWithOptions_(self, options):
+        self.calls.append(("activateWithOptions_", options))
+
+
+@pytest.fixture
+def no_key_timer(monkeypatch):
+    """Record armed timers instead of starting threads."""
+    armed = []
+
+    class Timer:
+        def __init__(self, delay, fn):
+            armed.append((delay, fn))
+            self.daemon = False
+
+        def start(self):
+            pass
+
+        def cancel(self):
+            pass
+
+    monkeypatch.setattr(desktop_chrome.threading, "Timer", Timer)
+    monkeypatch.setattr(desktop_chrome, "_key_timer", None)
+    return armed
+
+
+def test_ensure_key_is_a_no_op_off_macos(monkeypatch):
+    monkeypatch.setattr(desktop_chrome.sys, "platform", "linux")
+    monkeypatch.setattr(desktop_chrome, "_appkit", lambda: pytest.fail("touched"))
+    desktop_chrome.ensure_key(object())
+
+
+def test_claim_key_stops_once_the_window_is_key(no_key_timer):
+    appkit, native = FakeAppKit(), FakeNative(key=True)
+    desktop_chrome._claim_key(appkit, native, 5)
+    assert appkit.calls == [] and native.calls == []
+    assert no_key_timer == []
+
+
+def test_claim_key_activates_and_orders_front_when_not_key(no_key_timer):
+    """pywebview's pre-run-loop activate can be dropped on macOS 14+; re-claim."""
+    appkit, native = FakeAppKit(), FakeNative(key=False)
+    desktop_chrome._claim_key(appkit, native, 5)
+    assert appkit.calls == [
+        ("activateWithOptions_", FakeAppKit.NSApplicationActivateIgnoringOtherApps)
+    ]
+    assert native.calls == ["makeKeyAndOrderFront_"]
+    assert len(no_key_timer) == 1
+    assert no_key_timer[0][0] == desktop_chrome._KEY_DELAY_S
+    # The chain is bounded: the last link arms nothing.
+    desktop_chrome._claim_key(appkit, FakeNative(key=False), 1)
+    assert len(no_key_timer) == 1
+
+
+def test_claim_key_leaves_a_minimized_window_alone(no_key_timer):
+    appkit, native = FakeAppKit(), FakeNative(key=False, miniaturized=True)
+    desktop_chrome._claim_key(appkit, native, 5)
+    assert appkit.calls == [] and native.calls == [] and no_key_timer == []
+
+
+def test_app_activation_re_keys_a_window_the_app_forgot():
+    """The manual app switch that used to fix it, done on every activation."""
+    native = FakeNative(key=False)
+    assert desktop_chrome._rekey_if_forgotten(FakeAppKit(), native) is True
+    assert native.calls == ["makeKeyAndOrderFront_"]
+    keyed = FakeNative(key=True)
+    assert (
+        desktop_chrome._rekey_if_forgotten(FakeAppKit(key_window=keyed), keyed) is False
+    )
+    assert keyed.calls == []
+    hidden = FakeNative(key=False, visible=False)
+    assert desktop_chrome._rekey_if_forgotten(FakeAppKit(), hidden) is False
+    assert hidden.calls == []
+
+
+def test_app_activation_is_observed():
+    scope = SOURCE[SOURCE.index("def _observe(") :]
+    scope = scope[: scope.index("\ndef ")]
+    assert "NSApplicationDidBecomeActiveNotification" in scope
+    assert "_rekey_if_forgotten(" in scope
+
+
+def test_shown_wires_ensure_key():
+    assert "desktop_chrome.ensure_key(window)" in DESKTOP_SOURCE
+    line = next(l for l in DESKTOP_SOURCE.splitlines() if "ensure_key(window)" in l)
+    assert "events.shown" in line

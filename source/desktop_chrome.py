@@ -35,6 +35,16 @@ contract does land here: that same surface reports double-clicks back through th
 JS bridge, and ``titlebar_double_click`` performs whatever the user has configured
 in System Settings → Desktop & Dock.
 
+Launch focus lands here too. pywebview's ``first_show`` calls
+``makeKeyAndOrderFront_`` and ``activateIgnoringOtherApps_`` *before* ``NSApp.run()``
+has finished launching, and on macOS 14+ activation is cooperative, so that early
+request sometimes loses to LaunchServices' own launch activation: the window is
+ordered front but never becomes key — grey lights, clicks ignored until an app
+switch resyncs it. ``ensure_key`` re-claims key status from the ``shown`` hook via
+``callAfter``, which only runs once the run loop is live, in a bounded burst; the
+``NSApplicationDidBecomeActiveNotification`` observer re-keys the window whenever
+the app activates with no key window, which is what the manual app switch did.
+
 Every entry point is a no-op off macOS and degrades to the standard title bar on
 any AppKit surprise — losing the styling must never cost the user their window.
 """
@@ -73,6 +83,12 @@ _settle_timer: Any = None
 # mid-transition read.
 _DEFAULT_PITCH = 20.0
 _pitch = _DEFAULT_PITCH
+# Launch key-claim burst; ensure_key explains the pre-run-loop activation race.
+_KEY_DELAY_S = 0.2
+_KEY_ATTEMPTS = 5
+_key_timer: Any = None
+# Last verbose focus line, deduped like the titlebar inventory.
+_last_focus: str | None = None
 
 
 def is_supported() -> bool:
@@ -133,8 +149,8 @@ def apply(window: Any) -> bool:
 
 def teardown() -> None:
     """Unregister the notification observers. Safe to call more than once."""
-    global _fullscreen, _laying_out, _settle_timer, _pitch
-    global _reassert_count, _reassert_started, _last_inventory
+    global _fullscreen, _laying_out, _settle_timer, _pitch, _key_timer
+    global _reassert_count, _reassert_started, _last_inventory, _last_focus
     # Reset before the early-out: apply() lays out before _observe registers anything.
     _fullscreen = False
     _frame_observed.clear()
@@ -143,10 +159,14 @@ def teardown() -> None:
     _reassert_count = 0
     _reassert_started = 0.0
     _last_inventory = None
+    _last_focus = None
     _pitch = _DEFAULT_PITCH
     if _settle_timer is not None:
         _settle_timer.cancel()
         _settle_timer = None
+    if _key_timer is not None:
+        _key_timer.cancel()
+        _key_timer = None
     if not _observers:
         return
     try:
@@ -182,6 +202,27 @@ def on_shown(window: Any) -> None:
         app_helper.callAfter(lambda: _apply_titlebar_layout(AppKit, native))
     except Exception as exc:
         utils.warning_print(f"Could not place the window buttons: {exc}")
+
+
+def ensure_key(window: Any) -> None:
+    """Make *window* key once the run loop is live.
+
+    pywebview asks for key status and app activation before ``NSApp.run()``; on
+    macOS 14+ that request is cooperative and sometimes lost, leaving the window
+    front but not key (grey lights, no clicks). ``callAfter`` from the ``shown``
+    hook is the first moment after ``finishLaunching``, so the claim made here is
+    the first one macOS treats as post-launch. Bounded: a launched app gets about
+    a second of nudging, then the window stays wherever the user put it.
+    """
+    native = getattr(window, "native", None)
+    if not is_supported() or native is None:
+        return
+    try:
+        AppKit = _appkit()
+        app_helper: Any = importlib.import_module("PyObjCTools.AppHelper")
+        app_helper.callAfter(lambda: _claim_key(AppKit, native, _KEY_ATTEMPTS))
+    except Exception as exc:
+        utils.warning_print(f"Could not focus the window: {exc}")
 
 
 def reassert(window: Any) -> None:
@@ -659,6 +700,78 @@ def _settle(AppKit: Any, native: Any, attempts: int) -> None:
         container.displayIfNeeded()
 
 
+def _claim_key(AppKit: Any, native: Any, attempts: int) -> None:
+    """One link of the launch key-claim chain: activate and order front, or stop.
+
+    ``activateWithOptions_`` is the call pywebview itself uses for its dialogs,
+    so it is known to work on the bundled pyobjc. Stops as soon as the window
+    reads key, or when the user has minimized it.
+    """
+    global _key_timer
+    try:
+        if native.isKeyWindow() or native.isMiniaturized():
+            _log_focus_state(AppKit, native, "claim")
+            return
+        AppKit.NSRunningApplication.currentApplication().activateWithOptions_(
+            AppKit.NSApplicationActivateIgnoringOtherApps
+        )
+        native.makeKeyAndOrderFront_(None)
+        _log_focus_state(AppKit, native, "claim")
+    except Exception as exc:
+        utils.verbose_print(f"Could not claim key window status: {exc}")
+        return
+    if attempts <= 1:
+        return
+
+    def fire() -> None:
+        try:
+            # Imported by name (see _appkit). callAfter hops off the timer thread.
+            app_helper: Any = importlib.import_module("PyObjCTools.AppHelper")
+            app_helper.callAfter(lambda: _claim_key(AppKit, native, attempts - 1))
+        except Exception as exc:
+            utils.verbose_print(f"Could not re-check the window focus: {exc}")
+
+    _key_timer = threading.Timer(_KEY_DELAY_S, fire)
+    _key_timer.daemon = True
+    _key_timer.start()
+
+
+def _rekey_if_forgotten(AppKit: Any, native: Any) -> bool:
+    """Key *native* when the app activated with no key window. Returns whether it did.
+
+    The desync this fixes: the app is active (its menu bar is up) but no window
+    is key, so clicks go nowhere. A manual app switch used to repair it by
+    accident; this does it on every activation.
+    """
+    app = AppKit.NSApplication.sharedApplication()
+    if app.keyWindow() is not None:
+        return False
+    if not native.isVisible() or native.isMiniaturized():
+        return False
+    native.makeKeyAndOrderFront_(None)
+    return True
+
+
+def _log_focus_state(AppKit: Any, native: Any, phase: str) -> None:
+    """Print the app/window focus state at ``-v``, once per change."""
+    global _last_focus
+    if getattr(config, "VERBOSITY", config.STANDARD) < config.VERBOSE:
+        return
+    try:
+        app = AppKit.NSApplication.sharedApplication()
+        line = (
+            f"focus {phase} app_active={bool(app.isActive())}"
+            f" key={bool(native.isKeyWindow())} main={bool(native.isMainWindow())}"
+            f" visible={bool(native.isVisible())}"
+            f" keyWindow={app.keyWindow() is not None}"
+        )
+    except Exception:
+        return
+    if line != _last_focus:
+        _last_focus = line
+        utils.verbose_print(line)
+
+
 def _bind_frame_observer(AppKit: Any, native: Any, handler: Any) -> None:
     """Bind (or re-bind) the frame observers, following the views' identity.
 
@@ -719,6 +832,7 @@ def _observe(AppKit: Any, window: Any, native: Any) -> None:
         _schedule_settle(AppKit, native, _SETTLE_ATTEMPTS)
 
     def on_become_key(_note: Any) -> None:
+        _log_focus_state(AppKit, native, "become_key")
         _rearm_reassert_budget()
         _bind_frame_observer(AppKit, native, on_frame_change)
         _apply_titlebar_layout(AppKit, native)
@@ -752,6 +866,22 @@ def _observe(AppKit: Any, window: Any, native: Any) -> None:
                 getattr(AppKit, name), native, None, handler
             )
         )
+
+    def on_app_active(_note: Any) -> None:
+        try:
+            _rekey_if_forgotten(AppKit, native)
+        except Exception as exc:
+            utils.verbose_print(f"Could not re-key the window: {exc}")
+        _log_focus_state(AppKit, native, "app_active")
+
+    _observers.append(
+        center.addObserverForName_object_queue_usingBlock_(
+            AppKit.NSApplicationDidBecomeActiveNotification,
+            AppKit.NSApplication.sharedApplication(),
+            None,
+            on_app_active,
+        )
+    )
     _bind_frame_observer(AppKit, native, on_frame_change)
 
 
