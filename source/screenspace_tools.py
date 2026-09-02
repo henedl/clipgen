@@ -24,9 +24,11 @@ import utils
 from screenspace_primitives import (
     _frame_edge_map,
     _mask_corr_outside_window,
+    _match_template_prepared,
     _prepare_shape_reference,
     _prepare_template,
     _scale_template,
+    _template_corr_window,
     _template_correlation_map,
     blur_gray,
     color_matches,
@@ -40,7 +42,6 @@ from screenspace_primitives import (
     filter_matches_by_region_mask,
     mask_points_key,
     match_shape,
-    match_template,
     region_mask_for,
     region_search_window,
     regions_are_similar,
@@ -704,14 +705,21 @@ class TemplateTool(AnalysisTool):
                 _prepare_template(scaled_img, scaled_mask),
             )
             params["_prepared_template"] = cached
-        scaled_img, scaled_mask, prepared = cached
-        # Peak correlation is threshold-independent and available on a miss, unlike match_template.
-        corr = _template_correlation_map(frame, prepared)
-        if corr is None:
-            return False, None
-        # The run region scopes search and peak (zero-size = anywhere), so calibration scores the target.
+        _scaled_img, _scaled_mask, prepared = cached
+        # Peak correlation scores even a miss; the run region (zero-size = anywhere) scopes it.
         window = region_search_window(region)
-        if window is not None:
+        origin = (0, 0)
+        if window is not None and prepared[1] is None:
+            packed = _template_corr_window(frame, prepared, window)
+            if packed is None:
+                return False, {"best_score": -1.0, "match_count": 0}
+            corr, x_offset, y_offset = packed
+            origin = (x_offset, y_offset)
+        else:
+            corr = _template_correlation_map(frame, prepared)
+            if corr is None:
+                return False, None
+        if window is not None and prepared[1] is not None:
             tpl_h, tpl_w = prepared[0].shape[:2]
             corr = _mask_corr_outside_window(corr, tpl_w, tpl_h, window)
             if corr is None:
@@ -719,13 +727,13 @@ class TemplateTool(AnalysisTool):
         peak = float(corr.max())
         if peak < threshold:
             return False, {"best_score": round(peak, 4), "match_count": 0}
-        matches = match_template(
+        matches = _match_template_prepared(
             frame,
-            scaled_img,
-            threshold=threshold,
-            mask=scaled_mask,
-            prepared=prepared,
-            corr=corr,
+            prepared,
+            threshold,
+            config.SCREENSPACE_TEMPLATE_NMS_OVERLAP,
+            corr,
+            origin=origin,
         )
         # Region polygon filters detections; passing needs a surviving match. best_score stays the window peak.
         matches = filter_matches_by_region_mask(matches, region)

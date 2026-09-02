@@ -224,7 +224,6 @@ _TEST_BASELINE: dict[str, int] = {
     "tests/screenspace/test_scan_pipeline.py": 6,
     "tests/screenspace/test_shape.py": 4,
     "tests/screenspace/test_static_gating.py": 3,
-    "tests/screenspace/test_template.py": 3,
     "tests/screenspace/test_text_numbers.py": 14,
     "tests/screenspace/test_worker.py": 7,
     "tests/test_boot_dispatcher.py": 1,

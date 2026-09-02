@@ -15,6 +15,11 @@ import server
 import utils
 
 
+@pytest.fixture(autouse=True)
+def _fast_server_poll(monkeypatch):
+    monkeypatch.setattr(server, "_SERVER_POLL_INTERVAL", 0.01)
+
+
 def _boot_state(**overrides: Any) -> dict[str, Any]:
     state: dict[str, Any] = {
         "ready": False,

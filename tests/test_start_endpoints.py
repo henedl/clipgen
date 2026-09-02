@@ -1182,6 +1182,7 @@ def test_combined_server_forces_non_interactive(monkeypatch):
     monkeypatch.setattr(utils, "preload_vision_libs_quietly", lambda **kwargs: None)
     monkeypatch.setattr(utils, "sweep_stale_temp_artifacts", lambda: None)
     monkeypatch.setattr(server, "build_combined_app", lambda **kwargs: _fake_app)
+    monkeypatch.setattr(server, "_SERVER_POLL_INTERVAL", 0.01)
 
     live = server.serve_combined_app(port=0, block_until_ready=True)
     try:

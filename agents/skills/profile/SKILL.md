@@ -220,6 +220,15 @@ uv run python tests/perf/scan_bench.py --save /tmp/base.json     # baseline
 uv run python tests/perf/scan_bench.py --compare /tmp/base.json  # Δcallback %
 ```
 
+Template and Shape use a seeded top-left 20%-frame region. This keeps their
+reference non-degenerate while measuring bounded correlation instead of a
+full-frame reference. Shape is part of the default non-OCR sweep. Drill into
+its scale correlations with the same workload:
+
+```bash
+uv run python tests/perf/scan_bench.py --tools shape --deep --runs 2
+```
+
 `--tools color,text` narrows the sweep (`text` is off by default: OCR is 10×
 slower and pins ~0.8 GB RSS per pooled engine — 3.3 GB at the default auto
 pool of 4); `--runs 2` keeps the fastest run per tool. For a
