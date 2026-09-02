@@ -1,4 +1,5 @@
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -118,16 +119,31 @@ def _sandbox_user_config(tmp_path_factory):
 
 @pytest.fixture(autouse=True)
 def _clear_user_config():
-    """Keep persisted test preferences from reaching later module fixtures."""
+    """Empty the sandboxed config dir around every test.
+
+    ``_sandbox_user_config`` is session-scoped for speed, so nothing else throws
+    this state away between tests. Everything written under ``config_dir()``
+    would otherwise outlive its test and reach the next one: ``start.json``,
+    ``studio_settings.json``, ``model_failures.json``, the ``models`` dir, the
+    webview profile, ``credentials.json``. Clearing the whole directory rather
+    than a named allowlist covers each new state file the day it is added.
+    """
     import start_settings
 
-    root = start_settings.config_dir()
-    paths = (root / "start.json", root / "studio_settings.json")
-    for path in paths:
-        path.unlink(missing_ok=True)
+    def _empty() -> None:
+        root = start_settings.config_dir()
+        if not root.is_dir():
+            return
+        for entry in root.iterdir():
+            # Symlinked dirs: unlink the link, never walk into its target.
+            if entry.is_dir() and not entry.is_symlink():
+                shutil.rmtree(entry, ignore_errors=True)
+            else:
+                entry.unlink(missing_ok=True)
+
+    _empty()
     yield
-    for path in paths:
-        path.unlink(missing_ok=True)
+    _empty()
 
 
 @pytest.fixture(autouse=True)
