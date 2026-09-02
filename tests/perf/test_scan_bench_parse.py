@@ -5,6 +5,9 @@ the parser is the part that silently rots if the `profile |` line shape
 changes, so it is pinned here against a verbatim report snippet.
 """
 
+import json
+from types import SimpleNamespace
+
 import scan_bench
 
 REPORT = """\
@@ -55,3 +58,31 @@ def test_summarize_handles_missing_labels():
     assert row["callback_s"] == 0.0
     assert row["frames"] == 0
     assert row["callback_avg_ms"] == 0.0
+
+
+def test_shape_is_in_default_sweep():
+    assert "shape" in scan_bench.DEFAULT_TOOLS
+    assert scan_bench.TOOL_FLAGS["shape"] == [
+        "--ss-reference-timestamp",
+        "1",
+        "--ss-threshold",
+        "0.55",
+    ]
+
+
+def test_shape_run_seeds_region(tmp_path, monkeypatch):
+    captured = {}
+    report = REPORT.replace("color", "shape")
+
+    def fake_run(cmd, **kwargs):
+        captured["cmd"] = cmd
+        return SimpleNamespace(stdout=report, stderr="")
+
+    monkeypatch.setattr(scan_bench.subprocess, "run", fake_run)
+    parsed = scan_bench.run_tool("shape", tmp_path / "in", tmp_path / "out", 0.1)
+    manifest_path = tmp_path / "out" / "bench-shape" / "clipgen.json"
+    manifest = json.loads(manifest_path.read_text())
+
+    assert parsed["scan.callback.shape"]["seconds"] == 3.688
+    assert captured["cmd"][3:7] == ["--ss-task", "shape", "P01", "bench"]
+    assert manifest["screenspace"]["regions"]["bench"] == scan_bench.BENCH_REGION

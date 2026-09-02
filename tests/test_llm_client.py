@@ -628,7 +628,9 @@ def _stub_chat_server():
     srv = socketserver.ThreadingTCPServer(("127.0.0.1", 0), _SSEChatHandler)
     srv.daemon_threads = True
     port = srv.server_address[1]
-    thread = threading.Thread(target=srv.serve_forever, daemon=True)
+    thread = threading.Thread(
+        target=lambda: srv.serve_forever(poll_interval=0.01), daemon=True
+    )
     thread.start()
     try:
         yield f"http://127.0.0.1:{port}"

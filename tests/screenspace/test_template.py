@@ -1,5 +1,6 @@
 """Tests for template matching primitives and heatmap."""
 
+import cv2
 import numpy as np
 
 import config
@@ -71,16 +72,13 @@ class TestCorrelationMapReuse:
     def test_tool_check_frame_computes_the_map_once(self, monkeypatch):
         frame, template = self._frame_and_template()
         calls = []
-        real = screenspace_primitives._template_correlation_map
+        real = screenspace_primitives._match_corr_window
 
-        def counting(frame_arg, prepared):
+        def counting(source, template_arg, window):
             calls.append(1)
-            return real(frame_arg, prepared)
+            return real(source, template_arg, window)
 
-        monkeypatch.setattr(
-            screenspace_primitives, "_template_correlation_map", counting
-        )
-        monkeypatch.setattr(screenspace_tools, "_template_correlation_map", counting)
+        monkeypatch.setattr(screenspace_primitives, "_match_corr_window", counting)
         params = {"template_image": template, "threshold": 0.9}
         matched, details = screenspace_tools.TemplateTool().check_frame(
             frame, None, {"x": 0, "y": 0, "w": 200, "h": 100}, params
@@ -132,8 +130,8 @@ class TestNmsEquivalence:
         template = rng.randint(0, 255, (8, 10, 3), dtype=np.uint8)
         prepared = screenspace_primitives._prepare_template(template, None)
         th, tw = prepared[0].shape[:2]
-        # Quantized map: thousands of candidates, heavy score ties, one inf.
-        corr = (rng.randint(0, 8, (60, 90)) / 8.0).astype(np.float32)
+        # Quantized map: hundreds of candidates, heavy score ties, one inf.
+        corr = (rng.randint(0, 8, (16, 24)) / 8.0).astype(np.float32)
         corr[0, 0] = np.inf
         frame = np.zeros((10, 10, 3), dtype=np.uint8)  # unused when corr is given
         for nms_overlap in (0.0, 0.3, 0.9):
@@ -142,6 +140,107 @@ class TestNmsEquivalence:
             )
             want = self._reference_nms(corr, tw, th, 0.25, nms_overlap)
             assert got == want
+
+
+class TestCorrelationRoi:
+    def test_unmasked_matches_full_map(self, monkeypatch):
+        monkeypatch.setattr(config, "SCREENSPACE_BLUR_KERNEL", 1)
+        rng = np.random.RandomState(81)
+        gray = rng.randint(0, 5, (180, 320), dtype=np.uint8).astype(np.float32)
+        frame = np.repeat(gray[:, :, None], 3, axis=2)
+        template = frame[20:52, 10:54].copy()
+        frame[130:162, 260:304] = template
+        prepared = screenspace_primitives._prepare_template(template, None)
+        full = screenspace_primitives._template_correlation_map(frame, prepared)
+        assert full is not None
+
+        windows = (
+            (0.0, 0.0, 64.0, 60.0),
+            (80.0, 45.0, 180.0, 120.0),
+            (250.0, 125.0, 320.0, 180.0),
+        )
+        for window in windows:
+            masked = screenspace_primitives._mask_corr_outside_window(
+                full, 44, 32, window
+            )
+            assert masked is not None
+            want = screenspace_primitives._match_template_prepared(
+                frame, prepared, 0.9, 0.3, corr=masked
+            )
+            got = screenspace_primitives._match_template_prepared(
+                frame, prepared, 0.9, 0.3, window=window
+            )
+            assert got == want
+
+    def test_uint8_drift_is_bounded(self):
+        rng = np.random.RandomState(85)
+        frame = rng.randint(0, 255, (180, 320, 3), dtype=np.uint8)
+        template = frame[20:52, 10:54].copy()
+        prepared = screenspace_primitives._prepare_template(template, None)
+        full = screenspace_primitives._template_correlation_map(frame, prepared)
+        assert full is not None
+        window = (0.0, 0.0, 64.0, 60.0)
+        masked = screenspace_primitives._mask_corr_outside_window(full, 44, 32, window)
+        assert masked is not None
+        want = screenspace_primitives._match_template_prepared(
+            frame, prepared, 0.1, 0.3, corr=masked
+        )
+        got = screenspace_primitives._match_template_prepared(
+            frame, prepared, 0.1, 0.3, window=window
+        )
+        assert [(row["x"], row["y"], row["w"], row["h"]) for row in got] == [
+            (row["x"], row["y"], row["w"], row["h"]) for row in want
+        ]
+        assert (
+            max(
+                abs(got_row["score"] - want_row["score"])
+                for got_row, want_row in zip(got, want, strict=True)
+            )
+            < 5e-5
+        )
+
+    def test_roi_values_track_full_map(self):
+        # Crop width picks the SIMD path, so ROI scores land ulp-close to the
+        # full map rather than bit-identical. The peak still agrees.
+        rng = np.random.RandomState(82)
+        source = rng.randint(0, 5, (39, 61), dtype=np.uint8).astype(np.float32)
+        template = source[7:16, 13:27].copy()
+        full = cv2.matchTemplate(source, template, cv2.TM_CCOEFF_NORMED)
+        window = (0.0, 8.0, 31.0, 28.0)
+        packed = screenspace_primitives._match_corr_window(source, template, window)
+        assert packed is not None
+        corr, x_offset, y_offset = packed
+        want = full[
+            y_offset : y_offset + corr.shape[0],
+            x_offset : x_offset + corr.shape[1],
+        ]
+        assert corr.shape == want.shape
+        assert float(np.abs(corr - want).max()) < 1e-5
+        assert int(corr.argmax()) == int(want.argmax())
+
+    def test_masked_keeps_full_map(self, monkeypatch):
+        rng = np.random.RandomState(83)
+        frame = rng.randint(0, 255, (64, 96, 3), dtype=np.uint8)
+        template = frame[20:36, 33:55].copy()
+        mask = np.full((16, 22), 255, dtype=np.uint8)
+        prepared = screenspace_primitives._prepare_template(template, mask)
+        window = (25.0, 15.0, 68.0, 48.0)
+        full = screenspace_primitives._template_correlation_map(frame, prepared)
+        assert full is not None
+        masked = screenspace_primitives._mask_corr_outside_window(full, 22, 16, window)
+        assert masked is not None
+        want = screenspace_primitives._match_template_prepared(
+            frame, prepared, 0.1, 0.3, corr=masked
+        )
+
+        def fail(*_args):
+            raise AssertionError("masked correlation used ROI")
+
+        monkeypatch.setattr(screenspace_primitives, "_match_corr_window", fail)
+        got = screenspace_primitives._match_template_prepared(
+            frame, prepared, 0.1, 0.3, window=window
+        )
+        assert got == want
 
 
 class TestPrepareTemplateMask:

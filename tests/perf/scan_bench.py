@@ -19,7 +19,9 @@ The fixture video is built on demand (ffmpeg testsrc: constant motion, so
 phash-skip never hides the callback). Each tool writes to its own wiped
 output dir so a cached manifest can never absorb the scan. `--runs N` keeps
 the fastest run per tool (minimum callback seconds), the standard treatment
-for scheduler noise. `text` is excluded from the default sweep: OCR is an
+for scheduler noise. Template and Shape use a fixed top-left 20% region for
+a non-degenerate reference and bounded search workload. `text` is excluded
+from the default sweep: OCR is an
 order of magnitude slower than every other tool and pins ~0.8 GB of RSS per
 pooled OCR engine (measured 3.3 GB at the default auto pool of 4).
 
@@ -50,10 +52,21 @@ TOOL_FLAGS: dict[str, list[str]] = {
     "scene": ["--ss-scene-ref", "menu:1"],
     "flow": ["--ss-threshold", "2"],
     "template": ["--ss-reference-timestamp", "1", "--ss-threshold", "0.7"],
+    "shape": ["--ss-reference-timestamp", "1", "--ss-threshold", "0.55"],
     "attention": [],
     "text": ["--ss-text", "00:00:01"],
 }
 DEFAULT_TOOLS = [t for t in TOOL_FLAGS if t != "text"]
+
+BENCH_REGION = {
+    "x": 0.0,
+    "y": 0.0,
+    "w": 0.2,
+    "h": 0.2,
+    "source_width": 1280,
+    "source_height": 720,
+}
+REGION_TOOLS = {"template", "shape"}
 
 _PROFILE_RE = re.compile(r"^profile \| (\S+)\s+([\d.]+)s\s+n=(\d+)", re.MULTILINE)
 _RSS_RE = re.compile(r"^profile \| peak_rss\s+([\d.]+)MB", re.MULTILINE)
@@ -153,6 +166,19 @@ def run_tool(
     out_dir = out_root / f"bench-{tool}"
     if out_dir.exists():
         shutil.rmtree(out_dir)
+    region_args: list[str] = []
+    if tool in REGION_TOOLS:
+        out_dir.mkdir(parents=True)
+        manifest = {
+            "screenspace": {
+                "regions": {"bench": BENCH_REGION},
+                "tasks": [],
+                "events": [],
+                "stashes": [],
+            }
+        }
+        (out_dir / "clipgen.json").write_text(json.dumps(manifest))
+        region_args = ["bench"]
     cmd = [
         "uv",
         "run",
@@ -160,6 +186,7 @@ def run_tool(
         "--ss-task",
         tool,
         "P01",
+        *region_args,
         *TOOL_FLAGS[tool],
         "--ss-interval",
         str(interval),
