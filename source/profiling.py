@@ -37,7 +37,7 @@ from typing import Any
 import config
 
 _LOCK = threading.Lock()
-# label -> [total_seconds, count, max_seconds, bytes]. Cap is a safety net, not LRU.
+# label -> [total_seconds, count, max_seconds, bytes, first_seconds]. Cap is a safety net.
 _TOTALS: dict[str, list[float]] = {}
 _MAX_LABELS = 1024
 _REPORT_REGISTERED = False
@@ -144,6 +144,12 @@ def add(
     Percentiles are deliberately not offered: p95 needs retained samples, i.e.
     unbounded per-label memory, which this accumulator exists to refuse. Max is
     the only tail statistic that is O(1).
+
+    The first single-occurrence contribution is also kept as ``first``: the
+    cold hit. A route whose first call pays a lazy import or a cache fill
+    reads as a modest ``avg`` and a large ``max`` — indistinguishable from an
+    occasional slow request — unless the report can say the slow one was the
+    first. Batched flushes (``n > 1``) carry no per-item first and leave it 0.
     """
     if not config.PROFILING:
         return
@@ -154,7 +160,8 @@ def add(
         if entry is None:
             if len(_TOTALS) >= _MAX_LABELS:
                 return
-            _TOTALS[label] = [seconds, float(n), peak or 0.0, float(nbytes)]
+            first = seconds if n == 1 else 0.0
+            _TOTALS[label] = [seconds, float(n), peak or 0.0, float(nbytes), first]
         else:
             entry[0] += seconds
             entry[1] += n
@@ -302,21 +309,22 @@ def stream_span(
 
 
 def snapshot() -> dict[str, dict[str, float]]:
-    """Return ``{label: {seconds, count, max, bytes}}`` sorted by seconds desc.
+    """Return ``{label: {seconds, count, max, bytes, first}}`` sorted by seconds desc.
 
     ``max`` is 0.0 for labels fed only by batched flushes that supplied no
     ``peak=`` — see :func:`add`. ``bytes`` is 0 for labels that never passed
-    ``nbytes=``. Sorting stays on seconds so neither reorders the report.
+    ``nbytes=``; ``first`` (the cold hit) is 0.0 for batched labels. Sorting
+    stays on seconds so none of them reorders the report.
     """
     with _LOCK:
         items = [
-            (label, entry[0], int(entry[1]), entry[2], int(entry[3]))
+            (label, entry[0], int(entry[1]), entry[2], int(entry[3]), entry[4])
             for label, entry in _TOTALS.items()
         ]
     items.sort(key=lambda item: (-item[1], item[0]))
     return {
-        label: {"seconds": secs, "count": n, "max": mx, "bytes": nb}
-        for label, secs, n, mx, nb in items
+        label: {"seconds": secs, "count": n, "max": mx, "bytes": nb, "first": first}
+        for label, secs, n, mx, nb, first in items
     }
 
 
@@ -403,6 +411,10 @@ def report() -> None:
         nb = int(entry.get("bytes", 0))
         if nb:
             line += f"  bytes={format_bytes(nb)}"
+        first = entry.get("first", 0.0)
+        # Name the cold hit only when it doubles the warm average; sub-5ms is noise.
+        if n > 1 and first >= 0.005 and first >= 2 * (secs - first) / (n - 1):
+            line += f"  first={first * 1000:.1f}ms"
         print(line)  # bare print: Rich would wrap piped output (see module docstring)
     # Gate on output, not config.PROFILING: report() stays silent when nothing was recorded.
     if snap:

@@ -270,20 +270,36 @@ def build_grid_layers(
     back (0.82×). Building the buckets once up front leaves only numpy folds and
     PIL's encoder in the threads, which does parallelize (measured 1.45×).
 
+    Within a bucket the same "last wins" rule means only a center's final draw
+    can show, so each center is drawn once, in the order of its last occurrence,
+    with its last magnitude — the same pixels as a frame-by-frame replay
+    (``test_bucket_layers_match_sequential_draws_exactly``) from one circle per
+    center instead of one per frame: 490k → 12k ``cv2.circle`` calls on that
+    same 962-frame scan, 0.47 s → 0.05 s.
+
     Returns ``None`` for non-grid types (template accumulates additively and
     frame-native; see :func:`generate_rolling_heatmap_gif`).
     """
     if heatmap_type not in _GRID_KEYS:
         return None
+    key = _GRID_KEYS[heatmap_type]
+    scale = _GRID_ACC_SIZE - 1
+    radius = max(1, _GRID_ACC_SIZE // 16)
     layers: GridLayers = []
     for bucket in range(max(1, num_frames)):
         vals = np.zeros((_GRID_ACC_SIZE, _GRID_ACC_SIZE), dtype=np.float32)
         mask = np.zeros((_GRID_ACC_SIZE, _GRID_ACC_SIZE), dtype=np.uint8)
         start_idx, end_idx = _frame_bucket_bounds(bucket, len(results), num_frames)
+        # Draws set pixels: keep each center's last draw, in last-seen order.
+        last: dict[tuple[int, int], float] = {}
         for r_idx in range(start_idx, end_idx):
-            _accumulate_heatmap_result(
-                vals, results[r_idx], heatmap_type, mask_out=mask
-            )
+            for cell in results[r_idx].get(key, []):
+                center = (int(cell["x"] * scale), int(cell["y"] * scale))
+                last.pop(center, None)
+                last[center] = float(cell["mag"])
+        for center, mag in last.items():
+            cv2.circle(vals, center, radius, mag, -1)
+            cv2.circle(mask, center, radius, 1, -1)
         layers.append((vals, mask.astype(bool)))
     return layers
 
@@ -345,6 +361,53 @@ def _frame_bucket_bounds(
     return (frame_idx * total) // num_frames, ((frame_idx + 1) * total) // num_frames
 
 
+def _delta_frames(
+    frames: list["Image.Image"], frame_duration_ms: int
+) -> tuple[list["Image.Image"], list[int]]:
+    """Frame-difference the animation in numpy: PIL's ``optimize`` without its cost.
+
+    PIL's default GIF ``optimize`` rewrites every frame after the first as a
+    delta — unchanged pixels become a palette index the frame does not use,
+    flagged transparent — and folds identical frames into the previous one's
+    duration. It builds that delta through ``get_flattened_data()``/
+    ``putdata()``, a Python tuple of every pixel per frame: 8-10 ms of a
+    1280×720 frame's ~15 ms encode. Doing the same comparison as one ``!=``
+    on the index arrays, then saving with ``optimize=False``, decodes to the
+    same pixels (frames and durations alike, pinned by ``TestDeltaFrames``) at
+    about the same file size — a few percent either way — and cuts the encode
+    to a third (measured 388 ms → 130 ms for 24 frames at 1280×720).
+
+    Returns ``(frames, durations)``: the frames to write — the first verbatim,
+    the rest pre-filled with their own spare index in ``info["transparency"]``
+    (PIL reads it per frame), or verbatim when the frame's changed pixels use
+    every index — and one duration per kept frame with collapsed repeats
+    folded in.
+    """
+    from PIL import Image
+
+    arrays = [np.asarray(frame) for frame in frames]
+    kept = [frames[0]]
+    durations = [frame_duration_ms]
+    prev = arrays[0]
+    for frame, arr in zip(frames[1:], arrays[1:]):
+        changed = arr != prev
+        if not changed.any():
+            durations[-1] += frame_duration_ms
+            continue
+        spare = np.flatnonzero(np.bincount(arr[changed], minlength=256) == 0)
+        if spare.size:
+            index = int(spare[-1])
+            delta = Image.fromarray(np.where(changed, arr, np.uint8(index)))
+            delta.putpalette(_jet_palette())
+            delta.info["transparency"] = index
+            kept.append(delta)
+        else:
+            kept.append(frame)
+        durations.append(frame_duration_ms)
+        prev = arr
+    return kept, durations
+
+
 def _save_animation(
     frames: list["Image.Image"],
     output_path: str,
@@ -358,22 +421,24 @@ def _save_animation(
     same GIF later.
 
     ``frames`` is re-read from the written file rather than taken from ``len()``:
-    PIL collapses a run of identical frames into one, which happens whenever
-    consecutive buckets add no new heat (``cv2.circle`` sets rather than
-    accumulates, so repeat detections at one spot render identically). Trusting
-    the input count would tell the frontend to scrub to cells the sheet doesn't
-    have.
+    a run of identical frames collapses into one (see :func:`_delta_frames`),
+    which happens whenever consecutive buckets add no new heat (``cv2.circle``
+    sets rather than accumulates, so repeat detections at one spot render
+    identically). Trusting the input count would tell the frontend to scrub to
+    cells the sheet doesn't have.
     """
     from PIL import Image
 
-    frames[0].save(
+    kept, durations = _delta_frames(frames, frame_duration_ms)
+    kept[0].save(
         output_path,
         save_all=True,
-        append_images=frames[1:],
-        duration=frame_duration_ms,
+        append_images=kept[1:],
+        duration=durations,
         loop=0,
+        optimize=False,
     )
-    written = len(frames)
+    written = len(kept)
     try:
         with Image.open(output_path) as anim:
             written = int(getattr(anim, "n_frames", written))

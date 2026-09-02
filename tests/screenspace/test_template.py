@@ -783,3 +783,127 @@ class TestHeatmapConfigConstants:
         assert config.SCREENSPACE_HEATMAP_ROLLING_WINDOW >= 1
         assert isinstance(config.SCREENSPACE_CHANGE_HEATMAP_GRID, int)
         assert config.SCREENSPACE_CHANGE_HEATMAP_GRID >= 2
+
+
+class TestGridLayerDedup:
+    def test_bucket_layers_match_sequential_draws_exactly(self):
+        """build_grid_layers draws each center once per bucket; pixels must not move.
+
+        Grid draws set pixels (last wins), so only a center's last draw in a
+        bucket can survive. Heavy overlap, repeated centers across frames and
+        zero mags all have to reproduce the frame-by-frame replay exactly.
+        """
+        rng = np.random.default_rng(11)
+        lattice = [round((i + 0.5) / 12, 3) for i in range(12)]
+        results = []
+        for i in range(90):
+            cells = [
+                {
+                    "x": lattice[int(rng.integers(0, 12))],
+                    "y": lattice[int(rng.integers(0, 12))],
+                    "mag": 0.0 if i % 9 == 0 else float(rng.random()),
+                }
+                for _ in range(int(rng.integers(1, 40)))
+            ]
+            results.append({"timestamp": float(i), "flow_grid": cells})
+        num_frames, acc = 24, screenspace_heatmap._GRID_ACC_SIZE
+
+        layers = screenspace_heatmap.build_grid_layers(results, "flow", num_frames)
+        assert layers is not None and len(layers) == num_frames
+        for b, (vals, mask) in enumerate(layers):
+            ref_vals = np.zeros((acc, acc), dtype=np.float32)
+            ref_mask = np.zeros((acc, acc), dtype=np.uint8)
+            start, end = screenspace_heatmap._frame_bucket_bounds(
+                b, len(results), num_frames
+            )
+            for r in range(start, end):
+                screenspace_heatmap._accumulate_heatmap_result(
+                    ref_vals, results[r], "flow", mask_out=ref_mask
+                )
+            assert np.array_equal(vals, ref_vals), f"bucket {b} values drifted"
+            assert np.array_equal(mask, ref_mask.astype(bool)), f"bucket {b} mask"
+
+
+class TestDeltaFrames:
+    """_save_animation frame-differences in numpy; PIL's optimize is the oracle."""
+
+    def _frames(self, seed, size=(160, 90), duplicates=True):
+        rng = np.random.default_rng(seed)
+        acc = np.zeros((256, 256), dtype=np.float32)
+        frames = []
+        for i in range(10):
+            if not (duplicates and i in (3, 4, 7)):
+                for _ in range(6):
+                    cx, cy = (int(v) for v in rng.integers(0, 256, size=2))
+                    cv2.circle(acc, (cx, cy), 20, float(rng.random()), -1)
+            frames.append(
+                screenspace_heatmap._heatmap_frame_image(
+                    acc, float(acc.max()), "attention", *size
+                )
+            )
+        return frames
+
+    @staticmethod
+    def _decode(path):
+        from PIL import Image, ImageSequence
+
+        out = []
+        with Image.open(path) as anim:
+            for frame in ImageSequence.Iterator(anim):
+                out.append(
+                    (
+                        int(frame.info.get("duration", 0)),
+                        np.asarray(frame.convert("RGB")),
+                    )
+                )
+        return out
+
+    def _assert_matches_pil(self, tmp_path, frames):
+        ours = str(tmp_path / "ours.gif")
+        oracle = str(tmp_path / "pil.gif")
+        info = screenspace_heatmap._save_animation(frames, ours, 120)
+        frames[0].save(
+            oracle, save_all=True, append_images=frames[1:], duration=120, loop=0
+        )
+        a, b = self._decode(ours), self._decode(oracle)
+        assert info["frames"] == len(a) == len(b)
+        for (da, fa), (db, fb) in zip(a, b):
+            assert da == db
+            assert np.array_equal(fa, fb)
+        return a
+
+    def test_decodes_like_pil_optimize_with_collapsed_repeats(self, tmp_path):
+        decoded = self._assert_matches_pil(tmp_path, self._frames(1))
+        assert len(decoded) == 7  # three repeats folded into their predecessors
+        assert decoded[2][0] == 360  # 3 x 120 ms
+
+    def test_decodes_like_pil_without_repeats(self, tmp_path):
+        decoded = self._assert_matches_pil(tmp_path, self._frames(2, duplicates=False))
+        assert len(decoded) == 10
+
+    def test_falls_back_when_every_index_is_used(self, tmp_path):
+        """Changed pixels spanning the palette leave no spare: frames go verbatim."""
+        from PIL import Image
+
+        ramp = np.tile(np.arange(256, dtype=np.uint8), (4, 1))
+        frames = []
+        for shift in (0, 1, 1, 5):
+            frame = Image.fromarray(np.roll(ramp, shift, axis=1))
+            frame.putpalette(screenspace_heatmap._jet_palette())
+            frames.append(frame)
+        kept, durations = screenspace_heatmap._delta_frames(frames, 120)
+        assert [id(f) for f in kept] == [id(frames[0]), id(frames[1]), id(frames[3])]
+        assert all("transparency" not in f.info for f in kept)
+        assert durations == [120, 240, 120]
+        self._assert_matches_pil(tmp_path, frames)
+
+    def test_file_size_stays_near_pil_optimize(self, tmp_path):
+        """optimize=False alone grows files ~30%; the numpy delta must not."""
+        frames = self._frames(3, size=(640, 360), duplicates=False)
+        ours = tmp_path / "ours.gif"
+        oracle = tmp_path / "pil.gif"
+        screenspace_heatmap._save_animation(frames, str(ours), 120)
+        frames[0].save(
+            str(oracle), save_all=True, append_images=frames[1:], duration=120, loop=0
+        )
+        assert ours.stat().st_size <= oracle.stat().st_size * 1.05

@@ -86,7 +86,7 @@ launch, read `/api/profile` from the running app — the frozen bootloader
 ignores `PYTHONUNBUFFERED`, so grepping a killed process's stdout loses the
 buffered `startup |` lines.
 
-Three report tokens are easy to misread:
+Four report tokens are easy to misread:
 
 - **`bytes=`** is a payload sum, present only on labels that carry one:
   `route <rule>` (the `Content-Length` of every non-streamed response),
@@ -98,6 +98,13 @@ Three report tokens are easy to misread:
   batched flushes, because a batch's `seconds` is a sum with no per-item max. A
   flusher that tracked its own maximum passes `add(..., peak=)` to populate it —
   `scan.callback.<tool>` and `transcribe.decode` do.
+- **`first=`** is the cold hit: the label's first single-occurrence
+  contribution, printed only when it is at least 5 ms *and* double the average
+  of the calls after it. A route whose first call pays a lazy import or a
+  cache fill (`/api/models` imports `huggingface_hub`: measured 80-120 ms
+  cold, 1.5 ms warm) otherwise reads as a modest `avg` with a large `max`,
+  indistinguishable from an occasional slow request. Absent on batched labels,
+  which have no per-item first. `/api/profile` exposes it as `first`.
 - **`peak_rss`** is process-global, monotonic and POSIX-only (omitted on Windows;
   no psutil dependency). `?reset=1` does not and cannot clear it. `RUSAGE_SELF`
   excludes ffmpeg subprocesses — for clipgen the memory that hurts (Whisper
@@ -282,6 +289,22 @@ layout yields a silently small grid, not an error.
 Each `--perf` run prints `perf | ` lines (CDP layout/script/heap metrics,
 navigation/resource timing, the clipgenPerf measures) plus one `perf-json:`
 line for parsing; the server's `profile | ` route report follows at exit.
+The `perf | api <path> start= dur= bytes=` lines are the **boot waterfall**:
+every API fetch in start order. Read them for the shape, not the totals — a
+fetch whose `start=` equals another's `start=` + `dur=` is a serial chain
+(one round trip the page waits out before issuing the next), and a `dur=`
+far above the route's `avg=` in the exit report is a cold hit (see `first=`
+above). The static files are deliberately left out; `resources.count` and
+`resources.transferSize` cover them, and `--soak` covers what happens after.
+
+**`--input` needs a sheet that matches it.** Participants come from the
+sheet's columns first, then disk. With the 6-row UI fixture workbook still
+loaded, its `P01` column resolves to the *fixture's* study name and wins over
+`bench_P01.mp4` on disk (`has_video: false`), so Screenspace and Composer
+never reach their ready selector and `--perf` reports a page that showed no
+media. Pass a sheet whose study name matches the videos (`--sheet` with the
+clip_bench workbook, or a gridbench workbook renamed to the study), or read
+the Transcripts and Overview numbers, which do not need a video.
 `--trace /tmp/page.trace.json` writes a Chrome trace for Perfetto — the
 "open DevTools" of last resort. The headless shell's paint metrics are only
 indicative; add `--full-chromium` when paint fidelity matters.
@@ -348,7 +371,11 @@ CLIPGEN_UI_CHECK=1 uv run --extra ui python tests/ui/shot.py transcripts \
   that is all `reencode` is the concat-demuxer missing its copy-safe gate.
 - `heatmap.gif` / `heatmap.rolling` is post-scan work, not `scan.callback`. A
   drop in callback with an unchanged heatmap total means the CV win did not
-  touch GIF encode. `heatmap.gifs` is the pair wall (same ratio as
+  touch GIF encode. The encode itself frame-differences in numpy
+  (`_delta_frames`) before handing PIL palette frames with `optimize=False`;
+  if `--profile-deep heatmap` ever shows `putdata` / `get_flattened_data`
+  again, PIL's own per-frame delta (a Python tuple of every pixel) is back —
+  it was 8-10 ms of a 1280×720 frame's ~15 ms. `heatmap.gifs` is the pair wall (same ratio as
   `pipeline.clip ÷ pipeline.pool_wall`): near 2.0 means the cumulative and
   rolling encodes overlapped; near 1.0 means they ran back-to-back.
 - `heatmap.grid_layers` is the per-cell circle drawing for a grid tool
