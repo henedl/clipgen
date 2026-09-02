@@ -91,6 +91,5 @@ def load_entries(limit: int = 20) -> list[dict[str, Any]]:
         utils.warning_print(f"Could not read CHANGELOG.md at {path}: {exc}")
         return []
 
-    # A release heading with no parsable change lines would render as an empty
-    # card, which reads as a rendering bug rather than an empty release.
+    # A heading with no change lines would render as an empty card.
     return [e for e in parse_entries(text) if e["changes"]][:limit]

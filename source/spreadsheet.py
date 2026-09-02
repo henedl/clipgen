@@ -213,9 +213,7 @@ def build_sheet_context(sheet: Any) -> SheetContext | None:
 
     study_name = sheet_data[0][0]
     if study_name == "":
-        # A second API round-trip, taken only when A1 is blank — so the
-        # "exactly one API call" claim above holds for the common case but not
-        # this one. Counted rather than hidden.
+        # Second API round-trip, only when A1 is blank; counted rather than hidden.
         with profiling.span("sheets.spreadsheet_title"):
             study_name = sheet.spreadsheet.title
     utils.standard_print(f"\nBeginning work on {study_name}.")
@@ -383,8 +381,7 @@ def parse_reel_input(input_string: str) -> ReelInput:
         result["categories"].append(match.group(1).strip())
         rest = rest[: match.start()] + " " + rest[match.end() :]
 
-    # Split remaining by comma; each part is one token. Token type is inferred in fixed order below.
-    # Order of checks per token (do not reorder): batch, keyword, chronologic, range, line, cell, participant
+    # Comma-split tokens; check order is fixed: batch, keyword, chronologic, range, line, cell, participant.
     parts = [p.strip() for p in rest.split(",") if p.strip()]
     seen_lines = set()
     seen_ranges = set()
@@ -583,13 +580,10 @@ def _make_clip_record(
     - category: Category label from the same row (category column).
     'times' is added later when timestamps are resolved to [start, end] ranges.
     """
-    # Lazy import: keeps gspread (and its heavy google.auth/cryptography chain)
-    # off the CLI startup path; only spreadsheet parsing needs the Cell type.
+    # Lazy import keeps gspread's heavy auth chain off CLI startup.
     import gspread
 
-    # Excel cells may yield numbers, datetimes, or None; gspread always returns
-    # strings. Coerce here so downstream timestamp parsing (which calls .lower())
-    # never sees a non-string.
+    # Excel cells may be numbers, datetimes, or None; downstream parsing expects strings.
     cell_value_str = "" if cell_value is None else str(cell_value)
     # gspread Cell uses 1-based coordinates; convert from 0-based list indices
     cell = gspread.cell.Cell(row_idx + 1, col_idx + 1, cell_value_str)
@@ -609,8 +603,7 @@ def _make_clip_record(
             str(ctx.sheet_data[participant_row][col_idx] or "")
         )
     timestamp_baseline = ""
-    # Kept nested (not collapsed) to match the severity_cell guard below: row
-    # presence and row/col bounds are separate checks in this layer.
+    # Nested on purpose, matching the severity_cell guard below.
     if ctx.baseline_row_idx is not None:  # noqa: SIM102
         if 0 <= ctx.baseline_row_idx < len(ctx.sheet_data) and col_idx < len(
             ctx.sheet_data[ctx.baseline_row_idx]
@@ -636,10 +629,7 @@ def _make_clip_record(
     }
     if timestamp_baseline:
         result["timestamp_baseline"] = timestamp_baseline
-    # Same precedence as participant_filename_overrides: the user's Start-overlay
-    # override wins over the sheet's Filename row. Listing a participant against
-    # one file while cutting their clips from another is the "wrong output, no
-    # error" class, so both paths have to agree.
+    # Start-overlay override beats the sheet's Filename row, same as participant_filename_overrides.
     filename_override = config.FILENAME_OVERRIDES.get(participant, "")
     if (
         not filename_override
@@ -737,12 +727,7 @@ def get_line_timestamps(ctx: SheetContext, line_index: int) -> list[ClipRecord]:
     return clips
 
 
-# ---- Sheet-wide collectors ----
-#
-# Discovery helpers that scan the whole sheet to enumerate the unique values of
-# a single dimension (categories, severities, annotation IDs). Used by
-# interactive prompts to populate selection menus before any clip records are
-# generated; not called from the generate_* functions below.
+# ---- Sheet-wide collectors: unique values per dimension for interactive menus ----
 
 
 def collect_categories(ctx: SheetContext) -> list[str]:
@@ -1122,8 +1107,7 @@ def generate_range_timestamps(
     """
     clips = []
     for i in range(start_line - 1, end_line):
-        # Skip the Filename override row like every other generator; its cells
-        # hold per-column source-video names, not timestamps.
+        # Skip the Filename override row; its cells are not timestamps.
         if ctx.filename_row_idx is not None and i == ctx.filename_row_idx:
             continue
         utils.debug_print(f"Batching on line {i}")
@@ -1268,9 +1252,7 @@ def sort_clips_by_severity(clips: list[ClipRecord]) -> None:
 
 # ---- Highlights reel scoring ----
 
-# Largest friction magnitude in the severity scale (critical = -4 → 4), used to
-# normalize highlight severity scores into 0-1. Derived from config so the scale
-# can't drift from the canonical severity labels.
+# Largest severity magnitude (critical = -4 → 4); normalizes highlight scores into 0-1.
 _MAX_SEVERITY_MAGNITUDE = -min(config.SEVERITY_LABEL_TO_NUMERIC.values())
 
 
@@ -1461,11 +1443,6 @@ def generate_reel_timestamps(
         )
     elif selectors.get("severity"):
         sort_clips_by_severity(deduped)
-    # Default: preserve insertion order from the selector generators above.
-    # For the studio reel button, cells arrive in panel/drag order so the
-    # composed reel matches the on-screen card order. Selector-based CLI
-    # inputs (batch/categories/lines/keyword) naturally walk the sheet
-    # row-major, so they keep producing row-major reels without an explicit
-    # sort here.
+    # Default keeps insertion order: Studio reels follow panel order, CLI selectors walk row-major.
 
     return deduped

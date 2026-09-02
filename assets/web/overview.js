@@ -37,9 +37,7 @@
     trIntakeClusters: [],
     composerCuts: [],         // ../composer/api/manifest cuts (each carries participant)
     activeTab: "metadata",
-    // Bumped after every completed loadAll(). The tabs' staleness snapshots
-    // compare against this — data can only "change" via an actual refetch,
-    // never via length-heuristic false positives.
+    // Bumped after every completed loadAll(); tab staleness snapshots compare against it.
     dataVersion: 0,
   };
   OV.state = state;
@@ -74,9 +72,7 @@
     },
   };
 
-  // Cross-referencing: overlapping data from the other sources for a given
-  // participant + time range (same contract as Studio's copy — consumed by
-  // the moved Convergence detail rows).
+  // Overlapping data from other sources for a participant + time range (Convergence detail rows).
   function findOverlappingData(participant, start, end) {
     var result = { transcriptSnippets: [], screenspaceEvents: [], sheetObservations: [] };
 
@@ -160,8 +156,7 @@
       })
       .catch(function () { state.trIntakeMarks = []; });
 
-    // Composer cuts are one flat array (each cut carries its own participant),
-    // so a single fetch covers every participant's 4th Convergence lane.
+    // Cuts are one flat array carrying participants, so one fetch covers every lane.
     var composerP = apiGet("../composer/api/manifest")
       .then(function (data) {
         state.composerCuts = (data && data.manifest && data.manifest.cuts) || [];
@@ -190,9 +185,7 @@
   OV.refreshData = refreshData;
   OV.buildClusters = buildClusters;
 
-  // Staleness paint. A tab knows whether its view was built against an older
-  // dataVersion; the hub owns the single Refresh button, so the tabs report and
-  // this paints. Replaces the per-tab accent button / banner each used to carry.
+  // Staleness paint: tabs report a stale dataVersion, the hub's single Refresh button shows it.
   function setRefreshStale(stale) {
     var btn = qs("#ovRefresh");
     if (!btn) return;
@@ -237,8 +230,7 @@
   }
 
   function restoreStoredTab() {
-    // /overview/#tab=metadata style deep links (command palette) win over the
-    // stored tab; the hash stays in the URL so reloads keep the choice.
+    // #tab=KEY deep links (command palette) beat the stored tab; the hash persists across reloads.
     var stored = clipgenHashTab() || getStoredUIState("overview").activeTab;
     if (!stored || stored === state.activeTab) return;
     var tabs = qsa(".preview-tab");
@@ -261,9 +253,7 @@
     if (fn) fn();
   }
 
-  // Shared by the settings modal and the command palette's cross-ref command.
-  // Convergence detail rows hold the page's only cross-reference badges;
-  // syncTab would close the open zone detail without rebuilding those rows.
+  // Settings modal + palette hook. syncTab would close the open zone detail without rebuilding badges.
   function rerenderCrossRefs() {
     if (OV.convergenceRenderCrossRefs) OV.convergenceRenderCrossRefs();
   }
@@ -282,8 +272,7 @@
 
     TAB_KEYS.forEach(function (tab) { tabHook(tab, "Deactivate"); });
 
-    // Drop any paint the outgoing tab asserted; the incoming one re-asserts it
-    // from its own activate path.
+    // Drop the outgoing tab's paint; the incoming one re-asserts from activate.
     setRefreshStale(false);
 
     var activePanel = panels[state.activeTab];
@@ -302,8 +291,7 @@
 
   OV.syncTab = syncTab;
 
-  // Command palette (command-palette.js): Overview registers no TopNav quick
-  // actions, so this adds the tab switchers and the data refresh.
+  // Overview has no TopNav quick actions, so the palette gets tab switchers and refresh here.
   function initCommandPalette() {
     if (!window.ClipgenCommandPalette) return;
     window.ClipgenCommandPalette.setParticipants(function () {
@@ -342,8 +330,7 @@
         icon: "arrow-uturn-left",
         keywords: "alignment convergence clear restore per-participant",
         section: "Overview",
-        // The button (own confirm dialog) exists + is unhidden only on the
-        // Convergence tab once per-participant offsets have been set.
+        // The button only exists unhidden on Convergence once offsets are set.
         visible: function () {
           var b = qs("#cvResetOffsetsBtn");
           return !!b && !b.classList.contains("hidden");
@@ -356,12 +343,9 @@
   // ---- Boot ----
 
   document.addEventListener("DOMContentLoaded", function () {
-    // Resolve mask-image for every static [data-icon] element (the subheader
-    // Refresh button); createBtn does this itself for JS-built primitives.
+    // Static [data-icon] elements need mask resolution; createBtn handles JS-built ones.
     applyIconMasksIn(document);
-    // TopNav renders #themeToggle / #settingsBtn synchronously before this
-    // hub loads; wire them here as the other surfaces do (utils.js owns the
-    // theme logic, settings-modal.js the shared modal).
+    // TopNav renders these buttons before this hub loads; wire them like the other surfaces.
     if (typeof initThemeToggle === "function") {
       initThemeToggle();
     }

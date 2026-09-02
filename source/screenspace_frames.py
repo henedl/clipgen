@@ -19,9 +19,7 @@ import utils
 import video
 from screenspace_primitives import PHash, ScanCallback, compute_phash
 
-# Codecs where keyframe-only decode (`-skip_frame nokey`) pays off: long-GOP
-# inter-coded formats. Intra-only formats (every frame is a keyframe) gain
-# nothing, so they are left on the full-decode path.
+# Long-GOP codecs where keyframe-only decode pays off; intra-only formats gain nothing.
 _NONKEY_SKIP_CODECS = frozenset({"h264", "hevc"})
 
 
@@ -55,8 +53,7 @@ def scan_video_frames(
     analysis into one ``scan.callback`` bucket. Decode/filter stay shared.
     """
     full_frame = region is None
-    # Reject zero-dimension regions early: ffmpeg's crop would emit empty frames,
-    # crashing cv2.cvtColor/GaussianBlur downstream with a shape mismatch.
+    # Zero-size regions make ffmpeg emit empty frames that crash cv2 downstream.
     if region is not None and (region.get("w", 0) <= 0 or region.get("h", 0) <= 0):
         utils.warning_print(
             f"Skipping scan: region has zero width or height ({region})"
@@ -79,8 +76,7 @@ def scan_video_frames(
         cv_scale=cv_scale,
         profile_kind=profile_kind,
     ):
-        # Raise, don't warn: a scan that examined zero frames must not return an
-        # empty result list, which reads as "the detector found nothing".
+        # Raise: zero frames examined must not read as "detector found nothing".
         raise RuntimeError(
             f"Could not extract frames from {Path(video_path).name} — "
             "check that ffmpeg is installed and the file is readable."
@@ -148,10 +144,8 @@ def _ffmpeg_pipe_frames(
     if not shutil.which("ffmpeg"):
         return
 
-    # `select`, not `fps`: fps=1/N rewrites each kept frame's PTS to the output
-    # slot, so the preview seeking to that PTS lands on a different source frame
-    # (the long-running click-vs-preview drift). `select` preserves the original
-    # PTS, which showinfo reports verbatim. Needs `-fps_mode vfr` below.
+    # `select` keeps source PTS; `fps` rewrites it and drifts preview seeks.
+    # Needs `-fps_mode vfr`.
     filters = [
         f"select='isnan(prev_selected_t)+gte(t-prev_selected_t,{interval_seconds})'"
     ]
@@ -165,8 +159,7 @@ def _ffmpeg_pipe_frames(
     if out_w <= 0 or out_h <= 0:
         return
 
-    # Global CV resolution scale: after the region crop, before any max_dim cap.
-    # Skipped at 1.0 so default-config runs emit byte-identical argv.
+    # Global CV scale after crop, before max_dim; skipped at 1.0 for identical argv.
     if cv_scale > 0 and abs(cv_scale - 1.0) > 1e-6:
         scaled_w = max(2, round(out_w * cv_scale))
         scaled_h = max(2, round(out_h * cv_scale))
@@ -184,18 +177,15 @@ def _ffmpeg_pipe_frames(
         out_h += out_h % 2
         filters.append(f"scale={out_w}:{out_h}")
 
-    # showinfo last so its `pts_time:` lines map 1-to-1 onto the rawvideo frames
-    # on stdout, tagging each yielded frame with its real source PTS rather than
-    # a synthetic frame_idx*interval.
+    # showinfo last so its `pts_time:` lines map 1-to-1 onto stdout frames.
     filters.append("showinfo")
 
     cmd: list[str] = ["ffmpeg"]
     if start_seconds > 0:
         cmd += ["-ss", str(start_seconds)]
     if skip_non_keyframes:
-        # Must precede -i: the decoder drops non-keyframe packets before decode.
-        # The first frame can land up to one GOP past start_seconds — benign,
-        # since showinfo still reports its real PTS.
+        # Must precede -i. First frame may land a GOP late; showinfo still
+        # reports real PTS.
         cmd += ["-skip_frame", "nokey"]
     cmd += ["-i", video_path]
     if end_seconds > start_seconds:
@@ -203,16 +193,14 @@ def _ffmpeg_pipe_frames(
     cmd += [
         "-vf",
         ",".join(filters),
-        # `select` keeps source PTS, so without `vfr` ffmpeg pads back up to the
-        # source rate by duplicating each kept frame (~30x at 30 fps).
+        # Without `vfr` ffmpeg duplicates each kept frame back to the source rate.
         "-fps_mode",
         "vfr",
         "-pix_fmt",
         "bgr24",
         "-f",
         "rawvideo",
-        # showinfo emits at `info`; at `error` its lines never reach stderr and
-        # there is no PTS data to read.
+        # showinfo only emits at `info` level.
         "-loglevel",
         "info",
         "pipe:1",
@@ -226,8 +214,8 @@ def _ffmpeg_pipe_frames(
     assert proc.stdout is not None  # guaranteed by stdout=PIPE
     assert proc.stderr is not None  # guaranteed by stderr=PIPE
 
-    # Daemon thread drains stderr so its OS buffer never blocks ffmpeg, forwarding
-    # each `pts_time:` as a float (seconds since the seek point).
+    # Drain stderr so its buffer never blocks ffmpeg; forward each `pts_time:`
+    # as seconds.
     stop_drain = threading.Event()
 
     def _drain_stderr() -> None:
@@ -242,9 +230,8 @@ def _ffmpeg_pipe_frames(
                 value = float(m.group(1))
             except ValueError:
                 continue
-            # Bounded put: once the consumer breaks early the queue fills, and an
-            # unbounded put() would wedge this thread. Time out and re-check
-            # stop_drain so it exits at teardown instead of leaking.
+            # Bounded put: an early-exiting consumer fills the queue; re-check
+            # stop_drain to avoid wedging.
             while not stop_drain.is_set():
                 try:
                     pts_q.put(value, timeout=0.2)
@@ -260,14 +247,14 @@ def _ffmpeg_pipe_frames(
             raw = proc.stdout.read(frame_size)
             if len(raw) < frame_size:
                 break
-            # Read-only view on the ffmpeg pipe bytes; callers treat frames as
-            # read-only and must .copy() if they retain past the next yield.
+            # Read-only view of pipe bytes; callers must .copy() to retain past
+            # the next yield.
             frame = np.frombuffer(raw, dtype=np.uint8).reshape((out_h, out_w, 3))
             try:
                 relative_pts = pts_q.get(timeout=5.0)
             except queue.Empty:
-                # Stderr stalled or showinfo missing — bail out rather than
-                # yield a frame with a misaligned synthetic timestamp.
+                # Stderr stalled or showinfo missing; bail rather than yield a
+                # misaligned timestamp.
                 break
             actual_ts = start_seconds + relative_pts
             if end_seconds > 0 and actual_ts > end_seconds:
@@ -326,13 +313,11 @@ def _scan_via_ffmpeg_pipe(
     _prev_phash: list[PHash | None] = [None]
 
     pipe_region = None if full_frame else region
-    # Push max_dim downscaling into ffmpeg only when phash_skip is off; hashing
-    # needs the un-downscaled frame, so that path downscales in Python instead.
+    # Hashing needs the un-downscaled frame, so phash_skip downscales in Python.
     pipe_max_dim = _max_dim if (not _phash_skip and _max_dim > 0) else 0
 
-    # Keyframe-only decode, gated on fast_opts (precise/boundary scans stay on
-    # full decode), a codec allowlist, the master switch, and a probe of the
-    # *worst-case* keyframe gap. Probe uncertainty (None) means full decode.
+    # Keyframe-only decode: gated on fast_opts, codec allowlist, master switch,
+    # worst-case keyframe gap probe.
     skip_non_keyframes = False
     select_interval = interval_seconds
     if (
@@ -346,15 +331,11 @@ def _scan_via_ffmpeg_pipe(
             and max_gap <= interval_seconds * config.SCREENSPACE_KEYFRAME_SKIP_MARGIN
         ):
             skip_non_keyframes = True
-            # `select` snaps each sample up to the next keyframe, overshooting the
-            # grid when the GOP doesn't divide the interval (2s GOP, 3s interval →
-            # 0,4,8 not 0,3,6). Shrinking by the worst-case gap keeps consecutive
-            # samples < interval apart, so coverage is never coarser than asked —
-            # at a bounded oversample that phash-skip largely absorbs.
+            # `select` snaps to the next keyframe; shrink by the worst-case gap
+            # to keep coverage.
             select_interval = max(0.0, interval_seconds - max_gap)
 
-    # Profiling accumulates into locals and flushes once after the loop, so the
-    # off-path per-frame cost is a single boolean check (see profiling.py).
+    # Profiling accumulates in locals and flushes after the loop (see profiling.py).
     _prof = config.PROFILING
     _cb_label = f"scan.callback.{profile_kind}" if profile_kind else "scan.callback"
     _deep = profiling.deep_profiler(_cb_label) if _prof else None
@@ -403,11 +384,8 @@ def _scan_via_ffmpeg_pipe(
                 _t_cb = time.perf_counter()
                 _filter_s += _t_cb - _t_dec
             if _deep is not None and profiling.deep_enable(_deep):
-                # finally, not straight-line: a raising callback lands in this
-                # loop's `except Exception` (warn + return False), and a live
-                # server reuses the worker thread — without the disable it
-                # would keep cProfile attached to everything that thread runs
-                # next. The common no-deep path stays branch-free.
+                # finally: a raising callback must not leave cProfile attached to
+                # the reused worker thread.
                 try:
                     result = callback(ts, frame)
                 finally:

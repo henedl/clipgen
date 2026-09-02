@@ -32,9 +32,7 @@ def _colorize_accumulator(accumulator: np.ndarray, max_val: float) -> np.ndarray
     return cv2.applyColorMap(_normalize_blur(accumulator, max_val), cv2.COLORMAP_JET)
 
 
-# 256-entry JET palette as RGB bytes for PIL "P"-mode GIF frames, built once
-# from the same cv2 colormap the PNG path applies (index i is exactly
-# applyColorMap's color for gray value i).
+# JET palette as RGB bytes for "P"-mode GIF frames; index i = applyColorMap(i).
 _JET_PALETTE: bytes | None = None
 
 
@@ -69,20 +67,17 @@ def _write_png(output_path: str, image: np.ndarray) -> bool:
     return True
 
 
-# Heatmap types that accumulate sparse normalized {x, y, mag} grid cells at a
-# fixed 256×256 resolution (template accumulates match boxes frame-native).
+# Types accumulating sparse {x, y, mag} cells at 256×256; template stays frame-native.
 _GRID_KEYS: dict[str, str] = {
     "flow": "flow_grid",
     "change": "change_grid",
     "attention": "saliency_grid",
 }
 
-# Accumulator edge for grid types. Fixed (not frame-native), which is what makes
-# holding one layer per GIF bucket cheap enough to share — see build_grid_layers.
+# Fixed accumulator edge; keeps per-bucket layers cheap to share (build_grid_layers).
 _GRID_ACC_SIZE = 256
 
-# Temporal buckets per animated GIF. Public because a caller prebuilding layers
-# must bucket them exactly as the generators do, or they are rejected as stale.
+# Buckets per GIF. Public: prebuilt layers must bucket identically or read as stale.
 GIF_FRAMES = 24
 
 # One GIF bucket's drawn values plus the mask of pixels it drew.
@@ -418,10 +413,8 @@ def build_gif_sprite_bytes(gif_path: str, cols: int) -> bytes | None:
         with Image.open(gif_path) as anim:
             frames = [f.convert("RGB") for f in ImageSequence.Iterator(anim)]
     except Exception as exc:
-        # Deliberately broad: decoding a truncated or half-written GIF (a scan
-        # killed mid-save) leaks whatever PIL's frame walk hits — IndexError and
-        # struct.error as readily as OSError — and all of them mean the same
-        # thing here: no sprite, fall back to plain playback rather than 500.
+        # Broad on purpose: a half-written GIF raises IndexError or struct.error
+        # too; fall back, don't 500.
         utils.warning_print(f"Could not read heatmap GIF {gif_path}: {exc}")
         return None
     if not frames:
@@ -479,8 +472,7 @@ def generate_heatmap_gif(
     ):
         layers = None
 
-    # Pass 1: find the shared ceiling. Accumulation is monotonic, so the final
-    # state already carries the global max — no per-frame snapshots needed.
+    # Pass 1: accumulation is monotonic, so the final state holds the global max.
     if layers is not None:
         global_max = float(_fold_grid_layers(layers, num_frames - 1).max())
     else:
@@ -491,10 +483,8 @@ def generate_heatmap_gif(
     if global_max == 0:
         return None
 
-    # Pass 2: replay bucket-by-bucket, colorizing inline against that max. Only
-    # one float32 accumulator stays resident, so peak memory is ~one frame rather
-    # than all `num_frames` snapshots (~190MB → ~8MB at 1080p).
-    # `_heatmap_frame_image` reads without mutating, so accumulation continues.
+    # Pass 2: replay per bucket, colorizing inline; one accumulator resident
+    # (~8MB, not ~190MB).
     accumulator = np.zeros((acc_h, acc_w), dtype=np.float32)
     frames: list[Image.Image] = []
     for frame_idx in range(num_frames):
@@ -546,18 +536,8 @@ def generate_rolling_heatmap_gif(
         acc_h = acc_w = _GRID_ACC_SIZE
 
     if heatmap_type in _GRID_KEYS:
-        # Grid draws *set* pixels (cv2.circle, last draw wins), so a window is
-        # reproducible from per-bucket layers: overwrite each bucket's drawn
-        # pixels in bucket order — bit-identical to replaying the results (the
-        # mask records drawn geometry, values carry each bucket's own overlap
-        # resolution). Building every bucket once instead of rebuilding each
-        # window from raw results twice (max pass + colorize pass) cuts the
-        # Python-level circle draws ~12x: 596 → 145 ms of accumulate on a
-        # 600-result attention scan. Layers are 256×256, so all 24 together
-        # are ~3 MB — nothing like the full-res frames the two-pass shape
-        # exists to avoid holding. The caller can hand the same layers to the
-        # cumulative GIF and the PNG (build_grid_layers), dropping the build
-        # here too.
+        # Grid draws set pixels (last wins), so folding bucket layers in order
+        # matches replay bit-for-bit.
         if layers is None or len(layers) != num_frames:
             layers = build_grid_layers(results, heatmap_type, num_frames) or []
         bucket_layers = layers
@@ -570,10 +550,8 @@ def generate_rolling_heatmap_gif(
             return acc
 
     else:
-        # Template accumulates additively (`+=`), where bucket-layer sums would
-        # reorder float additions and drift off the replayed result — and its
-        # accumulator is frame-native, so 24 resident layers would be the
-        # memory problem the rebuild shape avoids. Keep rebuilding from results.
+        # Template accumulates additively and frame-native: layer sums would
+        # drift and cost memory. Rebuild from results.
         def _accumulate_window(frame_idx: int) -> np.ndarray:
             acc = np.zeros((acc_h, acc_w), dtype=np.float32)
             win_start = max(0, frame_idx - window_frames + 1)
@@ -585,17 +563,15 @@ def generate_rolling_heatmap_gif(
                     _accumulate_heatmap_result(acc, results[r_idx], heatmap_type)
             return acc
 
-    # Pass 1: build each window once to find the shared ceiling, discarding each
-    # array immediately so only one window is ever resident.
+    # Pass 1: build each window once for the shared ceiling; one window resident.
     global_max = 0.0
     for i in range(num_frames):
         global_max = max(global_max, float(_accumulate_window(i).max()))
     if global_max == 0:
         return None
 
-    # Pass 2: rebuild each window and colorize inline against that shared max —
-    # peak memory is ~one window instead of all `num_frames` at once. Windows are
-    # independent, so rebuilding them is cheap relative to holding them all.
+    # Pass 2: rebuild each window and colorize against the shared max; one
+    # window resident.
     frames: list[Image.Image] = []
     for idx in range(num_frames):
         frames.append(

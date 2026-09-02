@@ -80,9 +80,7 @@ _manifest_lock = threading.Lock()
 # Shortest allowed cut pair. Anything under this is a misclick, not a clip.
 MIN_CUT_SECONDS = 0.2
 
-# Composer's read-only marker lanes are the *other* streams, never itself.
-# "composer" is a Convergence swim-lane source (Overview), so strip it here to keep
-# the Sheet/Screenspace/Transcript lanes unchanged.
+# Marker lanes are the other streams; "composer" is a Convergence source, so drop it.
 _MARKER_SOURCES: tuple[str, ...] = tuple(
     src for src in config.CONVERGENCE_SOURCES if src != "composer"
 )
@@ -94,8 +92,7 @@ composer_bp = Blueprint("composer", __name__)
 utils.register_static_routes(
     composer_bp,
     "composer.html",
-    # Per request, not a snapshot — POST /api/dirs moves config.INPUT_DIR
-    # mid-session and never re-inits this blueprint. See transcripts_bp.
+    # Per request: POST /api/dirs moves config.INPUT_DIR mid-session. See transcripts_bp.
     media_dir_getter=lambda: str(utils.get_effective_input_dir()),
     media_error="Input directory not configured",
     icons=True,
@@ -183,17 +180,12 @@ def api_participants() -> Any:
         for p in files.resolve_participant_videos(_sheet_context)
         if p.get("has_video")
     ]
-    # Every entry below probes its parts for durations and its first part for
-    # resolution/fps. Serialized that is one ffprobe subprocess after another and
-    # the page cannot render until the last one returns — measured 1.06 s for a
-    # 24-participant study on local SSD, all of it ffprobe. Probe the whole set up
-    # front so the loop reads the caches instead.
+    # Prewarm so the loop reads cached probes; serialized ffprobe measured 1.06 s
+    # for 24 participants.
     video.prewarm_probes(vp for p in resolved for vp in p["video_paths"])
     for p in resolved:
         parts = _participant_parts(p["video_paths"])
-        # Resolution + fps for the subheader readout, probed from the first part —
-        # stitched parts share one source setup. probe_video_properties returns None
-        # on unprobeable files and only ever reports width/height > 0.
+        # Subheader readout, probed from the first part; stitched parts share one setup.
         props = (
             video.probe_video_properties(str(p["video_paths"][0]))
             if p["video_paths"]
@@ -205,9 +197,8 @@ def api_participants() -> Any:
                 "has_video": True,
                 "in_sheet": p.get("in_sheet", False),
                 "browser_seekable": p.get("browser_seekable"),
-                # Fallback parts (unprobeable durations) still carry offset: the
-                # client computes global time as currentTime + part.offset on
-                # every timeupdate, and an absent field turns the playhead NaN.
+                # Fallback parts keep offset: the client adds part.offset on every
+                # timeupdate.
                 "parts": parts
                 or [{"name": Path(vp).name, "offset": 0} for vp in p["video_paths"]],
                 "total_duration": (
@@ -220,8 +211,7 @@ def api_participants() -> Any:
                 "audio_track_count": props.get("audio_track_count") if props else 0,
             }
         )
-    # ``has_sheet`` gates the off-sheet badge: with no sheet every entry is
-    # ``in_sheet: False``, and marking them all would be noise.
+    # has_sheet gates the off-sheet badge; with no sheet every entry is off-sheet.
     return ok(
         participants=participants,
         has_sheet=_sheet_context is not None,
@@ -280,10 +270,8 @@ def api_cut_create() -> Any:
 @composer_bp.route("/api/cuts/<cut_id>", methods=["PATCH"])
 def api_cut_update(cut_id: str) -> Any:
     data = request.get_json(silent=True) or {}
-    # Read the current values under the lock, then clamp OUTSIDE it —
-    # _clamp_span walks the input dir and may ffprobe on a cold cache, and
-    # holding _manifest_lock across that blocks every other composer route
-    # (api_cut_create clamps before locking for the same reason).
+    # Clamp outside the lock: _clamp_span may ffprobe on a cold cache (see
+    # api_cut_create).
     with _manifest_lock:
         cut = find_by_id(_manifest.get("cuts", []), cut_id)
         if cut is None:
@@ -448,8 +436,8 @@ def _sanitize_annotation_geometry(
                 "text": text,
             }
         if ann_type == "shape":
-            # x/y = normalized center, w/h = normalized size, rotation in
-            # degrees clockwise around the center (matches ctx.rotate).
+            # x/y normalized center, w/h normalized size, rotation degrees clockwise
+            # (matches ctx.rotate).
             kind = str(geometry.get("shape") or "")
             if kind not in ANNOTATION_SHAPES:
                 return None
@@ -578,11 +566,8 @@ def api_annotation_delete(ann_id: str) -> Any:
 
 # ---- Annotation rendering (PIL; no ffmpeg drawtext) ----
 
-# Common system font locations, probed in order. load_default() is the
-# fixed-size last resort (visibly cruder, but never fails). KNOWN DIVERGENCE:
-# the browser preview draws annotation text in the UI font (Inter, a .woff2
-# PIL cannot load), so exported text is metrically close but not identical to
-# the preview — see the matching note in composer-annotate.js.
+# Probed in order; load_default() never fails. Text metrics differ from the Inter
+# preview (see composer-annotate.js).
 _ANNOTATION_FONT_PATHS = (
     "/System/Library/Fonts/Helvetica.ttc",
     "/Library/Fonts/Arial.ttf",
@@ -764,10 +749,8 @@ def _render_annotation_overlay(
             )
             stroke_style = str(style.get("strokeStyle") or "solid")
             if geometry.get("shape") == "rect":
-                # Rotate the corners with the same transform the browser's
-                # ctx.rotate applies (y-down: positive = clockwise), so the
-                # burn-in matches the preview exactly. Closing through the
-                # second corner again keeps the start joint filled.
+                # Match the browser's ctx.rotate (y-down, positive = clockwise).
+                # Repeating a corner fills the start joint.
                 rad = math.radians(rotation)
                 cos_r, sin_r = math.cos(rad), math.sin(rad)
                 corners = [
@@ -791,9 +774,8 @@ def _render_annotation_overlay(
                         draw, corners + [corners[0]], color, stroke, stroke_style
                     )
             elif stroke_style != "solid":
-                # Dashed/dotted ellipse: sample the (rotated) perimeter as a
-                # polygon and dash-walk it — PIL can't dash an ellipse outline,
-                # and this also handles rotation without the composite trick.
+                # PIL cannot dash an ellipse: sample the rotated perimeter as a polygon
+                # and dash-walk it.
                 a, b = sw / 2, sh / 2
                 perim = math.pi * (
                     3 * (a + b) - math.sqrt(max(0.0, (3 * a + b) * (a + 3 * b)))
@@ -814,10 +796,8 @@ def _render_annotation_overlay(
                 if abs(rotation) < 0.01:
                     draw.ellipse(box, outline=color, width=stroke)
                 else:
-                    # PIL can't stroke a rotated ellipse directly: draw it
-                    # axis-aligned on a temp layer and rotate that around the
-                    # center (Image.rotate's positive angle is counter-
-                    # clockwise, hence the negation for clockwise rotation).
+                    # PIL cannot stroke a rotated ellipse; rotate a temp layer instead.
+                    # PIL's angle is counter-clockwise.
                     layer = Image.new("RGBA", (width, height), (0, 0, 0, 0))
                     ImageDraw.Draw(layer).ellipse(box, outline=color, width=stroke)
                     layer = layer.rotate(
@@ -852,11 +832,8 @@ def _render_annotation_overlay(
 
 # ---- Exports (annotated screenshot / burned video / GIF) ----
 
-# One export at a time is plenty for a single-user tool; the cancel event
-# terminates the in-flight ffmpeg via run_ffmpeg_process's cancel_flag.
-# _export_busy enforces the single-export assumption the shared event relies
-# on: without it, a second export's clear() would un-cancel the first, and one
-# cancel POST would abort both in-flight encodes.
+# One export at a time. _export_busy keeps a second export's clear() from
+# un-cancelling the first.
 _export_cancel = threading.Event()
 _export_busy = threading.Lock()
 
@@ -886,9 +863,8 @@ def _part_for_time(parts: list[dict[str, Any]], t: float) -> dict[str, Any]:
 
 # ---- Scrubber media (sprite sheets / audio snippets) ----
 
-# Backs the marker/cut thumbnail strips + hover audio scrub on the timeline.
-# Same LRU + single-flight pattern as Studio's /api/sprite and /api/clip-audio,
-# but resolved against Composer's part model and with no spreadsheet dependency.
+# Timeline thumbnail strips and hover audio; same LRU + single-flight as Studio's
+# /api/sprite.
 _sprite_cache = MediaCache(128)
 _audio_cache = MediaCache(32)
 
@@ -924,8 +900,7 @@ def api_sprite(participant: str) -> Any:
     return clip_media_response(
         cache=_sprite_cache,
         resolve=lambda start, dur: _resolve_scrub_source(participant, start, dur),
-        # seek_frames: per-frame fast seeks keep the cost O(frames), not
-        # O(span) — timeline tiles can cover minutes of source video.
+        # seek_frames keeps the cost O(frames), not O(span); tiles can cover minutes.
         produce=lambda path, local_start, dur: video.extract_sprite_sheet_bytes(
             path, local_start, dur, cols, rows, seek_frames=True
         ),
@@ -1074,8 +1049,7 @@ def _build_overlay_command(
         cmd += ["-t", f"{duration:.3f}", out_path]
     else:
         cmd += ["-map", "0:a?"]
-        # veryfast: spans are short and re-encoded once; quality over speed
-        # tuning is not worth a config knob here.
+        # veryfast: spans are short and encoded once; not worth a config knob.
         cmd += video.video_encoder_args(encoder, crf=20, preset="veryfast")
         cmd += [
             "-pix_fmt",
@@ -1204,10 +1178,7 @@ def _run_overlay_export(data: dict[str, Any], *, gif: bool) -> Any:
     if not annotations:
         return err("No annotations in this span — use Generate for plain clips.")
     windows = _annotation_windows(annotations, start, end)
-    # An annotation can overlap the span by less than the 0.01 s a window needs
-    # to survive, which clears the "no annotations" check above and still leaves
-    # nothing to burn. Without this the filter graph would come out empty and
-    # ffmpeg would fail on a `[0:v]` label the graph never defines.
+    # A sub-0.01 s overlap yields no window; an empty filter graph fails on [0:v].
     if not windows:
         return err(
             "No annotation is visible for long enough in this span — widen the "
@@ -1224,18 +1195,15 @@ def _run_overlay_export(data: dict[str, Any], *, gif: bool) -> Any:
     out_dir = str(utils.get_effective_output_dir())
     _export_cancel.clear()
 
-    # Resolve the source the overlay pass decodes. A within-part span decodes the
-    # owning part directly with a local seek; a span that straddles a part boundary
-    # is first stitched into a temp clip (t=0 == span start) via the same cut chain
-    # Studio's intake uses, so the overlay filter sees one continuous input.
+    # Within-part spans seek the part directly; straddling spans are stitched first
+    # (t=0 = span start).
     video_paths = [p["path"] for p in parts]
     timeline = video.timeline_or_none(video_paths)
     pieces = None
     if timeline is not None:
         pieces = utils.map_global_range_to_segments(timeline, start, end)
-        # map_global_range_to_segments signals an out-of-range start (or an
-        # empty range) with None, never [] — for a multi-part participant that
-        # means "span outside the recording", not "take the single-part path".
+        # None means out-of-range or empty, never []; for multi-part that is
+        # "outside the recording".
         if not pieces:
             return err("The span is outside the recording", 400)
 
@@ -1324,9 +1292,8 @@ def _run_overlay_export(data: dict[str, Any], *, gif: bool) -> Any:
             cancel_flag=_export_cancel.is_set,
         )
     except Exception:
-        # A failed mkstemp / overlay.save would otherwise leave the placeholder
-        # get_unique_filename reserved above sitting on disk; the two explicit
-        # ffmpeg failure paths below release it themselves.
+        # Release the get_unique_filename placeholder; the ffmpeg failure paths below
+        # release it themselves.
         files.release_reservation(out_path)
         raise
     finally:

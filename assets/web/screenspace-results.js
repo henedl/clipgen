@@ -28,8 +28,7 @@
     taskTypeColor = SS.taskTypeColor,
     updateResultsCrumb = SS.updateResultsCrumb;
 
-  // Confidence bar: 4 px tall, hue-tinted fill, opacity ramps from 0.4 (low)
-  // to 1.0 (full) so high-confidence rows feel saturated while low ones recede.
+  // Confidence bar; opacity ramps 0.4 to 1.0 with confidence.
   function buildConfBar(value, type) {
     var v = Math.max(0, Math.min(1, Number(value) || 0));
     var bar = el("div", "result-bar");
@@ -41,13 +40,7 @@
     return bar;
   }
 
-  // Confidence-distribution histogram for the Results panel. Buckets every
-  // event's confidence (0–1, uniform across tools) into 10 fixed bins and draws
-  // bottom-aligned bars scaled to the tallest bin, tinted with the tool color
-  // and using the same opacity ramp as buildConfBar. An absolutely-positioned
-  // marker shows the current certainty cutoff. Rebuilt wholesale on each
-  // renderResults() call, so it tracks the slider and stays color-consistent
-  // with the result rows at render time.
+  // 10-bin confidence histogram with a cutoff marker; rebuilt on every renderResults() call.
   function renderConfidenceHistogram(events, taskType) {
     var host = qs("#confHistogram");
     if (!host) return;
@@ -101,8 +94,7 @@
         var evId = btn.dataset.eventId;
         var isExcluded = btn.dataset.excluded === "true";
         var endpoint = isExcluded ? "api/events/" + evId + "/include" : "api/events/" + evId + "/exclude";
-        // Optimistic flip, reverted on failure so the row never lies about the
-        // server's actual exclude state.
+        // Optimistic flip, reverted on failure.
         var setExcluded = function (val) {
           var evts = state.taskEvents[state.selectedTaskId] || [];
           for (var i = 0; i < evts.length; i++) {
@@ -259,20 +251,13 @@
         });
       }
 
-      // renderResults() draws from state.selectedTaskResults, which is populated
-      // eagerly (live while running, and on completion). The events list, however,
-      // is only fetched into state.taskEvents by loadAndShowResults — so when the
-      // results panel is showing a streamed/just-completed task, the slider filters
-      // the visible rows yet taskEvents is still empty. Fetch on demand so the cut
-      // works without first navigating away from and back to the results page.
+      // loadAndShowResults alone fills taskEvents; a streamed task may have none yet, so fetch here.
       var loaded = state.taskEvents[state.selectedTaskId];
       if (loaded && loaded.length) {
         applyExclusion(loaded);
         return;
       }
-      // Capture the task id at request time and bail if the user has switched away
-      // before the fetch resolves — otherwise the callback would write this task's
-      // events into (and bulk-exclude against) whatever task is selected later.
+      // Bail if the user switched tasks before the fetch resolved.
       var fetchTaskId = state.selectedTaskId;
       apiGet("api/events?task_id=" + fetchTaskId).then(function (evData) {
         if (state.selectedTaskId !== fetchTaskId) return;
@@ -300,18 +285,14 @@
     state.certaintyCutoff = 0;
     var slider = qs("#certaintyCutoff");
     if (slider) slider.value = "0";
-    // Surface a loading state immediately so the panel reads "Loading…" rather
-    // than the idle "Click a task…" while the two fetches are in flight.
+    // Show "Loading…" immediately while the two fetches run.
     state.resultsLoading = true;
     renderResults();
     apiGet("api/tasks/" + taskId + "/results")
       .then(function (data) {
         if (resultsRequestVersion !== state.resultsRequestVersion || state.selectedTaskId !== selectedTaskId) return null;
         state.selectedTaskResults = data.results;
-        // Seed the shared per-task cache so the timeline draws these results and
-        // _syncTaskResults appends further tails from here rather than re-fetching.
-        // Redraw now: when the cache was empty (fresh completed task) nothing else
-        // fires renderTimeline, so the markers would otherwise never paint.
+        // Seed the shared cache for the timeline and _syncTaskResults; redraw now, nothing else will.
         if (Array.isArray(data.results)) {
           state.taskResults[selectedTaskId] = data.results;
           renderTimeline();
@@ -325,14 +306,12 @@
         state.resultsLoading = false;
         renderResults();
         renderTaskList();
-        // Repaint the timeline now that excluded events are known, so excluded
-        // markers get their dashed/faded styling.
+        // Repaint so excluded markers get their dashed/faded styling.
         renderTimeline();
         updateResultsCrumb();
       })
       .catch(function () {
-        // Only the current request clears the flag; a superseded load leaves the
-        // newer one's spinner intact.
+        // Only the current request clears the flag; superseded loads leave the spinner.
         if (resultsRequestVersion === state.resultsRequestVersion && state.selectedTaskId === selectedTaskId) {
           state.resultsLoading = false;
           renderResults();
@@ -341,10 +320,7 @@
       });
   }
 
-  // Build a single result row element. Extracted from renderResults so the row
-  // list can be rendered in lazy chunks (see RESULTS_RENDER_ALL / renderChunk):
-  // the per-result event matching + certainty/excluded filtering stays in the
-  // data pass, this just turns one (already-matched, already-kept) result into DOM.
+  // One result row as DOM; matching and filtering happen in the caller's data pass.
   function buildResultRow(r, rIdx, matchedEvent, isExcluded, task) {
     var row = el("div", "result-row" + (isExcluded ? " excluded" : ""));
     row.dataset.resultIndex = rIdx;
@@ -407,8 +383,7 @@
       // Scene label (Scene A/B/… — recurrence-aware for scene/hybrid metrics).
       if (r.scene_label) row.appendChild(el("span", "result-scene", r.scene_label));
     } else if (task.type === "attention") {
-      // Attention rows are confirmed focus shifts; Δ is the normalized
-      // distance the predicted attention peak jumped.
+      // Confirmed focus shifts; Δ is the normalized jump of the attention peak.
       row.dataset.timestamp = r.timestamp;
       row.appendChild(el("span", "result-timestamp", formatTime(r.timestamp, { decimals: 1 })));
       row.appendChild(buildConfBar(r._confidence !== undefined ? r._confidence : 0, task.type));
@@ -451,9 +426,7 @@
     return row;
   }
 
-  // Task types whose detections carry a confidence score (drive the certainty
-  // slider + histogram). Shared by the full render's filter and the streaming
-  // append fast path so the two never drift.
+  // Types with confidence scores; shared by the full render and the append fast path.
   var CONF_TASK_TYPES = {
     change: 1, similarity: 1, text: 1, numbers: 1, template: 1, shape: 1,
     scene: 1, flow: 1, multitool: 1, inactivity: 1, boundary: 1,
@@ -464,8 +437,7 @@
     return !!(task && CONF_TASK_TYPES[task.type]);
   }
 
-  // Confidence value for a result under its task's detector (null when the
-  // detector has none). Only meaningful when taskHasConfidence(task).
+  // Per-detector confidence; null when the detector has none.
   function resultConfidence(r, task) {
     if (task.type === "change") return r.magnitude;
     if (task.type === "similarity") return r.score;
@@ -482,9 +454,7 @@
     return null;
   }
 
-  // Signature of what renderResults last painted, so a streaming push that only
-  // grew the tail can append the new rows instead of a full rebuild (see the
-  // fast path in renderResults). null after any non-array/early-return render.
+  // Last painted signature so a streaming push can append; null after early returns.
   var _lastResultsSig = null;
 
   function resultsSignature(results, task) {
@@ -499,27 +469,21 @@
     };
   }
 
-  // Swap a heatmap thumb for a placeholder when its image 404s. The filenames
-  // come from the manifest, so a moved/cleared output directory (or a write that
-  // silently failed) used to surface as a browser broken-image glyph with nothing
-  // in the console to say which URL died.
+  // Placeholder for a 404'd heatmap image; the warn names the dead URL.
   function markHeatmapMissing(media, url) {
     if (typeof console !== "undefined" && console.warn) {
       console.warn("clipgen: heatmap image failed to load: " + url);
     }
     media.innerHTML = "";
     media.style.backgroundImage = "";
-    // Drop the sprite's aspect ratio too, or a missing animation leaves a
-    // tall empty box next to a compact one.
+    // Clear the sprite aspect ratio too, or the box stays tall and empty.
     media.style.aspectRatio = "";
     media.classList.remove("heatmap-thumb-animated", "paused");
     media.classList.add("heatmap-thumb-missing");
     media.appendChild(el("span", "heatmap-thumb-missing-text", "Image unavailable"));
   }
 
-  // Plain <img> filling the media box: the static PNG, the GIF while playing, and
-  // the fallback for an animation with no usable sprite. Only here does a load
-  // error mean the thumb has nothing left to show.
+  // Plain <img>: static PNG, playing GIF, or sprite-less fallback. Load errors here are final.
   function fillHeatmapImage(media, view) {
     var img = document.createElement("img");
     img.decoding = "async";
@@ -532,11 +496,7 @@
     return img;
   }
 
-  // Build one thumb's media box. The static PNG is a plain <img>; an animated
-  // view rests paused on a sprite sheet (hover scrubs through the frames) and
-  // only fetches the GIF when the user presses play. A view with no sprite
-  // geometry — a scan from before sprites existed — degrades to the plain
-  // looping GIF with no scrub and no toggle.
+  // Animated views rest on a sprite sheet; play loads the GIF. Sprite-less views just loop.
   function buildHeatmapMedia(view) {
     var media = el("div", "heatmap-thumb-media");
     var sprite = view.sprite;
@@ -546,8 +506,7 @@
     }
 
     media.classList.add("heatmap-thumb-animated");
-    // The sprite/GIF swap changes which child defines the box, so pin the
-    // aspect ratio from the sprite geometry instead and let both fill it.
+    // Pin the aspect ratio from sprite geometry so the sprite/GIF swap can't resize the box.
     media.style.aspectRatio = sprite.w + " / " + sprite.h;
     var glyph = el("span", "heatmap-thumb-glyph");
     var progress = el("div", "heatmap-scrub-progress");
@@ -561,8 +520,7 @@
 
     function showPaused() {
       if (detach) return;
-      // The sprite already failed once (probed below, or on an earlier pause) —
-      // going back to it would just paint an empty box.
+      // A broken sprite would paint an empty box; fall back instead.
       if (spriteBroken) {
         fallBackToPlainGif();
         return;
@@ -600,9 +558,7 @@
       media.appendChild(glyph);
     }
 
-    // Degrade to plain GIF playback, losing only the scrub. Used when the sprite
-    // sheet can't be built (a corrupt or half-written GIF): the animation itself
-    // may still render perfectly, so this must never blank the thumb.
+    // Plain GIF without scrub; a broken sprite must never blank a thumb whose GIF works.
     function fallBackToPlainGif() {
       if (detach) {
         detach();
@@ -615,8 +571,7 @@
       fillHeatmapImage(media, view);
     }
 
-    // Scoped to the task, not just the view: a re-render of the same task keeps
-    // whatever the user pressed, but selecting a different task starts paused again.
+    // Keyed by task too: same-task re-renders keep the play state; a new task starts paused.
     var playKey = state.selectedTaskId + "|" + view.key;
     function onToggle() {
       var playing = !state.heatmapPlaying[playKey];
@@ -626,17 +581,14 @@
     }
     media.addEventListener("click", onToggle);
 
-    // A background-image that fails has no error event, so probe it separately.
-    // The probe is async: by the time it resolves the user may already have hit
-    // play, so only fall back if we are still showing the sprite.
+    // A failing background-image fires no error event, so probe it separately.
     var probe = new Image();
     probe.addEventListener("error", function () {
       if (typeof console !== "undefined" && console.warn) {
         console.warn("clipgen: heatmap sprite failed to load: " + spriteUrl);
       }
       spriteBroken = true;
-      // The user may already have hit play while this was in flight; the GIF is
-      // fine, so leave it alone and let the next pause take the fallback.
+      // The GIF may already be playing; leave it and let the next pause fall back.
       if (media.classList.contains("paused")) fallBackToPlainGif();
     });
     probe.src = spriteUrl;
@@ -646,11 +598,7 @@
     return media;
   }
 
-  // Render all rows inline below this many; above it, rows stream in chunks via
-  // an IntersectionObserver so a 500+ result task doesn't build thousands of DOM
-  // nodes (and reflow) in one synchronous pass. Variable row heights (wrapping
-  // text / multitool badges) rule out fixed-height windowing, so we grow the
-  // list incrementally instead.
+  // Above this, rows stream in IntersectionObserver chunks; variable row heights rule out windowing.
   var RESULTS_RENDER_ALL = 150;
   var RESULTS_CHUNK = 120;
 
@@ -661,9 +609,7 @@
   function renderResultsImpl() {
     var container = qs("#resultsList");
     var prevResultsScrollTop = container.scrollTop;
-    // Tear down any lazy-load observer from a previous render — its sentinel is
-    // about to be wiped with container.innerHTML, and a stale observer would
-    // keep a detached node alive.
+    // Disconnect the old lazy observer; its sentinel is about to be wiped.
     if (state.resultsLazyObserver) {
       state.resultsLazyObserver.disconnect();
       state.resultsLazyObserver = null;
@@ -673,13 +619,7 @@
     var results = state.selectedTaskResults;
     var task = state.selectedTaskId ? findTask(state.selectedTaskId) : null;
 
-    // Streaming-append fast path: while the task runs, each push only grows
-    // state.selectedTaskResults at the tail (events aren't fetched until
-    // completion, so there is nothing to reconcile). Appending the new rows beats
-    // wiping and rebuilding the list plus its IntersectionObserver every ~500ms,
-    // which is O(n) per push and O(n²) over a scan. Any change to the task,
-    // filters, events or heatmap breaks the signature and falls through to the
-    // full render.
+    // Fast path: a running task only grows the tail; append instead of rebuilding every push.
     if (!state.resultsLoading && task && task.status === "running" && Array.isArray(results)) {
       var sig = resultsSignature(results, task);
       var prev = _lastResultsSig;
@@ -711,9 +651,7 @@
         return;
       }
     }
-    // Falling through to a full render — clear the signature so the early-return
-    // branches below (loading/timelapse/non-array) leave it null; the successful
-    // array render re-stamps it.
+    // Full render: clear so early returns leave it null; the array render re-stamps it.
     _lastResultsSig = null;
 
     // Manage fast scan label — between panel-header and resultsList
@@ -724,8 +662,7 @@
       container.parentNode.insertBefore(fastLabel, container);
     }
 
-    // While a results fetch is in flight, show a loading state even if stale
-    // results from the previous task are still in state.selectedTaskResults.
+    // Loading wins over stale results left from the previous task.
     if (state.resultsLoading || !results || !task) {
       var emptyMsg = state.resultsLoading ? "Loading results…" : "Click a task to view results.";
       var emptyCls = "panel-empty" + (state.resultsLoading ? " cg-shimmer" : "");
@@ -784,8 +721,7 @@
     if (certWrap) certWrap.classList.toggle("hidden", !hasConf);
     if (exclBtn) exclBtn.classList.toggle("hidden", !hasConf);
 
-    // Confidence histogram — shown exactly when the cutoff slider is (same
-    // hasConf gate), and only when there are events to bucket.
+    // Histogram follows the slider's hasConf gate and needs events to bucket.
     var histHost = qs("#confHistogram");
     var histEvents = state.taskEvents[state.selectedTaskId] || [];
     var showHist = state.showConfidenceHistogram && !!hasConf && histEvents.length > 0;
@@ -843,8 +779,7 @@
     if (task.heatmap && (task.type === "template" || task.type === "shape" || task.type === "flow" || task.type === "change" || task.type === "attention")) {
       var heatmapSection = el("div", "heatmap-result");
       var heatmapLabel = el("div", "heatmap-label");
-      // Clickable title collapses the section to cut visual noise (state persists
-      // across results re-renders via state.heatmapCollapsed).
+      // Collapsible title; state.heatmapCollapsed persists across re-renders.
       var collapseToggle = el("button", "heatmap-collapse-toggle");
       collapseToggle.appendChild(el("span", "heatmap-collapse-chevron"));
       collapseToggle.appendChild(document.createTextNode("Detection Heatmap"));
@@ -910,8 +845,7 @@
         });
       }
 
-      // The rebuild below orphans every previously attached thumb, so drop the
-      // dead entries before wiring the new ones.
+      // The rebuild orphans attached thumbs; drop dead entries first.
       if (window.clipgenCardScrubber) window.clipgenCardScrubber.detachStale();
 
       var heatmapStrip = el("div", "heatmap-strip");
@@ -929,9 +863,7 @@
       container.appendChild(heatmapSection);
     }
 
-    // Data pass: pair each result to its event (sequential per-timestamp
-    // consumption), apply certainty + excluded filtering, and collect the kept
-    // rows. Cheap (no DOM) so it stays a single pass over every result.
+    // Data pass (no DOM): match events per timestamp, apply filters, collect kept rows.
     var visibleRows = [];
     results.forEach(function (r, rIdx) {
       // Find matching event for this result
@@ -958,8 +890,7 @@
       visibleRows.push({ r: r, rIdx: rIdx, matchedEvent: matchedEvent, isExcluded: isExcluded });
     });
 
-    // Render pass: append rows a chunk at a time. renderChunk returns true while
-    // more rows remain, so callers can keep pulling.
+    // Render pass; renderChunk returns true while rows remain.
     var rendered = 0;
     function renderChunk() {
       return clipgenPerf.span("screenspace.renderChunk", function () {
@@ -975,22 +906,17 @@
       });
     }
 
-    // Stamp what this render covers so a subsequent streaming push can append the
-    // tail instead of rebuilding (see the fast path at the top of renderResults).
+    // Stamp this render so a streaming push can append the tail (fast path above).
     _lastResultsSig = resultsSignature(results, task);
 
-    // Small lists (and any running task) render in full with no observer \u2014 the
-    // observer's sentinel/closure can't coexist with the fast path's tail appends,
-    // and a live scan grows the DOM a few rows per push rather than all at once.
+    // Small lists and running tasks render fully; the observer's sentinel can't coexist with tail appends.
     if (visibleRows.length <= RESULTS_RENDER_ALL || task.status === "running") {
       while (renderChunk()) { /* render everything */ }
       container.scrollTop = prevResultsScrollTop;
       return;
     }
 
-    // Large list: render the first chunk, then enough more to cover the prior
-    // scroll position (so re-renders during live streaming don't jump to the
-    // top), then lazy-load the rest as the user scrolls toward the bottom.
+    // Large list: first chunk, then enough to cover the prior scroll position, then lazy-load.
     renderChunk();
     var coverTarget = prevResultsScrollTop + container.clientHeight;
     while (rendered < visibleRows.length && container.scrollHeight < coverTarget) renderChunk();
@@ -1015,10 +941,8 @@
     }
   }
 
-  // ---- Satellite interface (published back to window.ClipgenScreenspace) ----
-  // The hub keeps same-named thin delegators for the entry points it calls
-  // itself (initResultsPanel from init, renderResults on histogram-toggle); the
-  // tasks satellite reaches renderResults / loadAndShowResults via these handles.
+  // ---- Satellite interface (window.ClipgenScreenspace) ----
+  // Consumed by hub delegators and the tasks satellite.
   SS.initResultsPanel = initResultsPanel;
   SS.loadAndShowResults = loadAndShowResults;
   SS.renderResults = renderResults;

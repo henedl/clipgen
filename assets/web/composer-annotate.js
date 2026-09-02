@@ -35,13 +35,10 @@
     "#f05a3c", "#f0b429", "#3ecf8e", "#38bdf8", "#a78bfa", "#f8fafc",
   ];
 
-  // Stroke width presets (fraction of frame width; 0.004 == the config default).
-  // The menu labels each as Math.round(v * 1000) — a stable weight number.
+  // Stroke width presets, fraction of frame width; menu labels are Math.round(v * 1000).
   var STROKE_WIDTHS = [0.002, 0.004, 0.006, 0.010, 0.016];
   var STROKE_STYLES = ["solid", "dashed", "dotted"];
-  // Text size presets (fraction of frame height; 0.035 == the config default),
-  // labelled the same way. style.fontSize was always honored by the renderer
-  // and the server — this is the first control that sets it.
+  // Text size presets, fraction of frame height; labelled like stroke widths.
   var FONT_SIZES = [0.022, 0.028, 0.035, 0.045, 0.060];
 
   var _hitBoxes = [];  // screen-space bboxes from the last render (topmost last)
@@ -60,8 +57,7 @@
 
   // ---- Content-box math (object-fit: contain letterboxing) ----
 
-  // Position + size the overlay canvas exactly over the video's displayed
-  // content area, so canvas pixels map linearly onto normalized frame coords.
+  // Fit the canvas over the video's displayed content box; pixels map to frame coords.
   function syncCanvasToVideo() {
     var video = qs("#coVideo");
     var frame = qs("#coVideoFrame");
@@ -97,16 +93,7 @@
 
   // ---- Rendering ----
 
-  // Span edges round-trip through the server's round(…, 3): a span started
-  // at the un-rounded playhead can come back up to 0.5 ms LATER than it, so a
-  // strict comparison made a just-created annotation vanish on mouse-up about
-  // half the time. The tolerance also absorbs the <video> settling a frame
-  // shy of a requested seek when a span was snapped to a cut edge.
-  // KNOWN DIVERGENCE: the server's screenshot window is strict
-  // (span.start < t and span.end > t, composer_server._annotations_in_span),
-  // so within these ±5 ms the preview can draw an annotation the exported
-  // frame omits. Accepted — the eps exists for preview stability, and
-  // widening the server window would burn annotations at t == span.end.
+  // Absorbs the server's round(…, 3) on span edges. Its export window stays strict.
   var SPAN_EPS = 0.005;
 
   function spanContainsPlayhead(a) {
@@ -118,9 +105,7 @@
     return CO.participantAnnotations().filter(spanContainsPlayhead);
   }
 
-  // Rotated-frame math for shape annotations, shared by rendering, handles,
-  // and hit tests. All outputs in canvas px; rotation is degrees clockwise
-  // (the canvas y-down ctx.rotate convention — the server mirrors it).
+  // Rotated-frame math for shapes, in canvas px; rotation is degrees clockwise (server mirrors).
   function shapeFrame(ann, w, h) {
     var g = ann.geometry;
     var rad = ((g.rotation || 0) * Math.PI) / 180;
@@ -141,9 +126,7 @@
     };
   }
 
-  // Configure ctx dash + line cap for a stroke style, scaling the pattern to
-  // the stroke width so it holds at any resolution (mirrors the server's PIL
-  // dash segmentation). Solid clears the dash and leaves the cap untouched.
+  // Dash pattern scales with stroke width, mirroring the server's PIL dash segmentation.
   function applyDashForStyle(ctx, strokeStyle, strokePx) {
     if (strokeStyle === "dashed") {
       ctx.setLineDash([strokePx * 2.5, strokePx * 2]);
@@ -219,11 +202,7 @@
         y2: Math.max.apply(null, ys) + stroke,
       };
     }
-    // text — mirrors the server's PIL render: dark backing box + colored text.
-    // KNOWN DIVERGENCE: this draws in the UI font (Inter); the burn renders
-    // whatever system font _ANNOTATION_FONT_PATHS finds (Helvetica/Arial/
-    // DejaVu — PIL cannot load the bundled .woff2). Advance widths differ, so
-    // the backing-box width in the export won't match this preview exactly.
+    // KNOWN DIVERGENCE: the burn uses a system font (_ANNOTATION_FONT_PATHS), so backing-box widths differ.
     var text = ann.geometry.text || "";
     if (!text) return null;
     var size = Math.max(8,
@@ -252,13 +231,10 @@
     var w = canvas.width;
     var h = canvas.height;
     ctx.clearRect(0, 0, w, h);
-    // The hub re-renders after every selection change, which is the other
-    // input to the chip gate (see syncPaletteChips).
+    // The hub re-renders on selection change, the chip gate's other input.
     syncPaletteChips();
     _hitBoxes = [];
-    // Hidden layer: nothing drawn, nothing hit-testable (select/erase find
-    // nothing), but an in-flight stroke preview still renders below so the
-    // draw tool keeps working.
+    // Hidden layer draws and hit-tests nothing; the in-flight stroke preview still renders.
     var soleShape = CO.singleSelectedAnnotation();
     if (!state.annHidden) visibleAnnotations().forEach(function (ann) {
       var selected = CO.isAnnotationSelected(ann.id);
@@ -312,8 +288,7 @@
       }
       ctx.setLineDash([]);
     }
-    // Box-select marquee: dashed rect + a faint highlight on the shapes it
-    // currently covers (a live preview of what mouse-up will select).
+    // Marquee: dashed rect plus a faint highlight on the shapes it covers.
     if (_marquee) {
       var mx1 = Math.min(_marquee.x0, _marquee.x1) * w;
       var my1 = Math.min(_marquee.y0, _marquee.y1) * h;
@@ -392,8 +367,7 @@
     return null;
   }
 
-  // Apply a handle drag to the shape's geometry (mutates in place; the orig
-  // snapshot backs the undoable commit on pointer-up).
+  // Handle drag mutates geometry in place; orig backs the undo commit on pointer-up.
   function updateShapeEdit(pos, e) {
     var canvas = canvasEl();
     var w = canvas.width;
@@ -411,8 +385,7 @@
       g.rotation = ((deg % 360) + 360) % 360;
       return;
     }
-    // Corner resize in the shape's local (rotated) frame; the corner opposite
-    // the grabbed one stays fixed.
+    // Corner resize in the shape's rotated frame; the opposite corner stays fixed.
     var rad = ((orig.rotation || 0) * Math.PI) / 180;
     var cos = Math.cos(rad);
     var sin = Math.sin(rad);
@@ -423,8 +396,7 @@
     var signs = [[-1, -1], [1, -1], [1, 1], [-1, 1]][_shapeEdit.corner];
     var fx = -signs[0] * (orig.w * w) / 2;
     var fy = -signs[1] * (orig.h * h) / 2;
-    // Shift locks the original visual aspect ratio: snap the moving corner so
-    // the opposite (fixed) corner stays put and w/h keep their pixel ratio.
+    // Shift locks the original pixel aspect ratio around the fixed corner.
     if (e.shiftKey && orig.h > 0 && orig.w > 0) {
       var aspect = (orig.w * w) / (orig.h * h);
       var side = Math.max(Math.abs(lx - fx), Math.abs(ly - fy) * aspect);
@@ -441,9 +413,7 @@
     g.h = Math.min(newH / h, 1);
   }
 
-  // Delete whatever sits under the eraser, once per annotation per gesture
-  // (the hit boxes rebuild async after each delete; the dedupe map keeps a
-  // slow response from double-deleting → 404 toasts).
+  // Erase once per annotation per gesture; hit boxes rebuild async, so dedupe avoids 404s.
   function eraseAt(pos) {
     var ann = hitTestAnnotation(pos.x, pos.y);
     if (!ann || _erasing[ann.id]) return;
@@ -467,9 +437,7 @@
   // ---- Tools ----
 
   function defaultSpan() {
-    // Creation-only: an annotation placed while the playhead sits inside a cut
-    // adopts that cut's span (the selected cut wins over an earlier overlap),
-    // so it travels with the clip. Span edits afterwards are free-form.
+    // New annotations inside a cut adopt its span (selected cut wins); later edits are free-form.
     var cuts = (CO.participantCuts ? CO.participantCuts() : []).filter(function (c) {
       return c.start <= state.playhead && state.playhead <= c.end;
     });
@@ -485,9 +453,7 @@
       return { start: cut.start, end: cut.end };
     }
     var span = CLIPGEN_CONFIG.composerAnnotationSpanSeconds;
-    // Back the start off by a few frames: the <video> can settle a frame
-    // before a requested seek and the server rounds span edges, so opening
-    // the span exactly at the playhead risks it starting just out of view.
+    // Start 0.1s early: seeks settle a frame short and the server rounds edges.
     var start = Math.max(0, state.playhead - 0.1);
     var end = Math.min(
       state.duration || start + span, start + span);
@@ -518,12 +484,7 @@
     syncPaletteChips();
   }
 
-  // Enable each style chip only where it can act. Stroke chips are dead with
-  // the text tool and a text-only selection; the text-size chip is dead
-  // everywhere else. BOTH inputs move the gate, so this runs from
-  // setAnnotateTool AND renderAnnotations (which the hub re-runs after every
-  // selection change) — watching only the tool leaves the chip stuck after a
-  // click-select. The cached signature keeps the render path cheap.
+  // Chip gate depends on tool AND selection, so both setAnnotateTool and renderAnnotations call this.
   var _chipGate = "";
 
   function syncPaletteChips() {
@@ -532,8 +493,7 @@
     var hasStroke = selected.some(function (a) {
       return a.type === "shape" || a.type === "freehand";
     });
-    // With nothing selected the chips set the defaults for what the active
-    // tool is about to draw, so gate on the tool instead.
+    // Nothing selected: chips set defaults for the active tool, so gate on it.
     var textLive = selected.length ? hasText : state.annTool === "text";
     var strokeLive = selected.length ? hasStroke : state.annTool !== "text";
     var signature = (textLive ? "1" : "0") + (strokeLive ? "1" : "0");
@@ -552,17 +512,14 @@
   function showTextInput(pos) {
     var input = qs("#coAnnotateText");
     var canvas = canvasEl();
-    // The text tool's pointerdown preventDefault()s (see below), so clicking a
-    // new spot never blurs an open input — commit any typed text instead of
-    // silently discarding it with the reposition below.
+    // The text tool's pointerdown preventDefaults, so no blur commits; flush typed text here.
     flushTextInput();
     _pendingText = pos;
     input.style.left = (canvas.offsetLeft + pos.x * canvas.width) + "px";
     input.style.top = (canvas.offsetTop + pos.y * canvas.height) + "px";
     input.value = "";
     input.classList.remove("hidden");
-    // Focus on the next frame — belt-and-braces with the caller's
-    // preventDefault against the default mousedown focus steal.
+    // Focus next frame, past the default mousedown focus steal.
     requestAnimationFrame(function () { input.focus(); });
   }
 
@@ -597,22 +554,17 @@
 
   // ---- Style chip controls (stroke width / stroke style / text size) ----
 
-  // Scale a frame-fraction stroke width to a small on-chip pixel weight (1..5)
-  // for the trigger + menu sample lines.
+  // Frame-fraction stroke width to an on-chip pixel weight (1..5).
   function strokeDisplayPx(frac) {
     return Math.max(1, Math.min(5, Math.round((frac * 1000) / 3)));
   }
 
-  // Same idea for text size: a frame-fraction font size becomes a legible
-  // on-chip "Aa" (8..20 px) that still ranks the presets visually.
+  // Frame-fraction font size to a legible on-chip "Aa" (8..20 px).
   function fontDisplayPx(frac) {
     return Math.max(8, Math.min(20, Math.round(frac * 300)));
   }
 
-  // Apply a style patch to the current selection as one undo step. Stroke
-  // width/style only touch shapes + freehand and fontSize only text; color
-  // applies to every type. Annotations already carrying the patched value are
-  // skipped (no no-op undo).
+  // Patch the selection as one undo step; skips types the patch can't touch and no-ops.
   function applyStyleToSelection(patch) {
     var strokeOnly =
       patch.strokeWidth !== undefined || patch.strokeStyle !== undefined;
@@ -633,12 +585,7 @@
     if (edits.length) CO.commitAnnotationFieldGroup("style", edits);
   }
 
-  // Minimal popover menu (no generic primitive exists) shared by the palette's
-  // three style chips: one row per option, each item painting its own sample
-  // (a rule for stroke, an "Aa" for text size) via item.render(cell). Opens to
-  // the RIGHT of its chip — the rail is docked at the left edge, so a menu
-  // dropped below would run off the bottom on a short stage. Click-outside /
-  // Escape closes; only one open at once.
+  // Popover menu for the style chips; opens rightward since the rail is left-docked.
   var _paletteMenuCleanup = null;
 
   function closePaletteMenu() {
@@ -669,9 +616,7 @@
     });
     document.body.appendChild(menu);
     var r = anchor.getBoundingClientRect();
-    // Measure after mounting, then keep the menu inside the viewport: flip to
-    // the chip's left if it would overflow the right edge, and lift it if a
-    // tall preset list would run past the bottom.
+    // Measure after mounting; flip left or lift to stay inside the viewport.
     var box = menu.getBoundingClientRect();
     var left = r.right + 4;
     if (left + box.width > window.innerWidth - 4) {
@@ -689,15 +634,11 @@
     function onKey(ev) {
       if (ev.key === "Escape") { ev.stopPropagation(); closePaletteMenu(); }
     }
-    // The menu is fixed-positioned from the anchor's rect at open time; a
-    // palette-rail scroll or window resize would leave it floating detached
-    // from its chip (the shared tooltip singleton closes on the same events).
+    // The menu is fixed from the open-time rect; scroll or resize would detach it.
     function onReposition() {
       closePaletteMenu();
     }
-    // Defer the outside-click listener so the opening click doesn't close it.
-    // Track the timer so a close before it fires (fast reopen / immediate
-    // Escape) can cancel it — otherwise the listener orphans on document.
+    // Defer so the opening click doesn't close it; cleanup cancels the timer.
     var openTimer = setTimeout(function () {
       document.addEventListener("pointerdown", onDocDown, true);
     }, 0);
@@ -722,10 +663,7 @@
     var canvas = canvasEl();
     var video = qs("#coVideo");
 
-    // ---- Two-color swatch pair ----
-    // Primary over secondary, a swap arrow and a reset-to-defaults chip in the
-    // free corners. Only the primary is the live annotation color; picking into
-    // the secondary slot parks a color for X to swap in later.
+    // ---- Two-color swatch pair; color model in the file header ----
     var pairHost = qs("#coSwatchPair");
 
     var primaryBtn = el("button", "co-swatch-slot co-swatch-primary");
@@ -756,9 +694,7 @@
       paintSwatches();
     }
 
-    // Swap runs the incoming color through applyAnnColor, so with a selection
-    // live the swap recolors it as one undo step — that is the whole point of
-    // keeping two slots.
+    // Swap goes through applyAnnColor, so a live selection recolors as one undo step.
     function swapAnnotationColors() {
       var parked = state.annColorSecondary;
       state.annColorSecondary = state.annColor;
@@ -812,9 +748,7 @@
     paintSwatches();
     CO.swapAnnotationColors = swapAnnotationColors;
 
-    // Stroke width / style / text size chips. Like the color control, each sets
-    // the default for new annotations and retro-applies to the current
-    // selection (applyStyleToSelection skips the types a patch can't touch).
+    // Style chips set defaults for new annotations and retro-apply to the selection.
     function updateChipPreviews() {
       var wp = qs(".co-stroke-width-preview");
       if (wp) {
@@ -899,10 +833,7 @@
     updateChipPreviews();
     syncPaletteChips();
 
-    // The hub seeds state.ann* and this toolbar paints before the
-    // api/participants config fetch lands, so both run on the JS defaults.
-    // The hub calls this after clipgenApplyConfig to re-seed from the real
-    // server config and repaint everything that shows a default.
+    // The palette paints before the config fetch lands; the hub calls this after clipgenApplyConfig.
     CO.syncAnnotationDefaults = function () {
       state.annColor = CLIPGEN_CONFIG.composerAnnotationColor;
       state.annColorSecondary = CLIPGEN_CONFIG.composerAnnotationColorSecondary;
@@ -956,9 +887,7 @@
         _drawing = { points: [[pos.x, pos.y]] };
         canvas.setPointerCapture(e.pointerId);
       } else if (state.annTool === "text") {
-        // preventDefault: the browser's default mousedown action would move
-        // focus off the just-focused input, blur-committing it empty before
-        // the user can type.
+        // Default mousedown would steal focus from the input and blur-commit it empty.
         e.preventDefault();
         showTextInput(pos);
       } else if (state.annTool === "erase") {
@@ -984,8 +913,7 @@
             // Toggle this annotation in/out of the selection; no drag.
             CO.toggleAnnotationSelection(ann.id);
           } else {
-            // Plain click keeps an existing multi-selection (so the whole group
-            // can be dragged); otherwise it selects just this one.
+            // Plain click keeps a multi-selection so the group drags; otherwise select this one.
             if (!CO.isAnnotationSelected(ann.id)) CO.selectAnnotation(ann.id);
             _dragging = {
               anns: CO.selectedAnnotations().map(function (a) {
@@ -1007,10 +935,7 @@
       }
     });
 
-    // Coalesce pointermove work to one update per frame: pointer events can
-    // arrive at 120–240 Hz and every branch below ends in a canvas render
-    // (the hub's timeupdate handler is the same pattern). A move that lands
-    // after pointerup no-ops — endGesture nulls every gesture flag.
+    // One update per frame: pointer events arrive at 120–240 Hz and each branch renders.
     var _moveRaf = 0;
     var _lastMove = null;
     canvas.addEventListener("pointermove", function (e) {
@@ -1026,8 +951,7 @@
       var pos = eventToNormalized(e);
       if (!pos) return;
       if (_shaping) {
-        // Shift retains proportions: equalize the pixel extents so a rect draws
-        // square and an ellipse draws circular (canvas box matches frame aspect).
+        // Shift equalizes pixel extents: square rect, circular ellipse.
         if (e.shiftKey) {
           var canvas2 = canvasEl();
           var dxPx = (pos.x - _shaping.x0) * canvas2.width;
@@ -1068,9 +992,7 @@
             geometry.x = clamp(orig.x + dx, 0, 1);
             geometry.y = clamp(orig.y + dy, 0, 1);
           } else {
-            // Clamp the DELTA against the stroke's bounding box, not each
-            // point — per-point clamping flattens edge-side points onto the
-            // border and permanently deforms the stroke.
+            // Clamp the delta by the bounding box; per-point clamping would deform the stroke.
             var minX = 1, minY = 1, maxX = 0, maxY = 0;
             orig.points.forEach(function (p) {
               if (p[0] < minX) minX = p[0];
@@ -1109,16 +1031,14 @@
           return hb.ann.id;
         });
         if (m.additive) {
-          // Union with the existing selection in ONE selection write — a
-          // per-id toggle re-renders the full timeline for every hit.
+          // One selection write; a per-id toggle re-renders the timeline per hit.
           var union = state.selectedAnnotationIds.slice();
           hitIds.forEach(function (id) {
             if (union.indexOf(id) === -1) union.push(id);
           });
           CO.setAnnotationSelection(union);
         } else {
-          // A near-zero drag is a click on empty space (selection already
-          // cleared on pointerdown); a real drag replaces the selection.
+          // A near-zero drag is an empty-space click (already cleared); a real drag replaces.
           CO.setAnnotationSelection(hitIds);
         }
         renderAnnotations();
@@ -1177,8 +1097,7 @@
             return { ann: entry.ann, before: entry.orig };
           }));
         } else if (d.anns.length > 1) {
-          // A plain click (no drag) on a member of a multi-selection collapses
-          // the selection to just that annotation.
+          // A plain click on a multi-selection member collapses the selection to it.
           CO.selectAnnotation(d.clickedId);
         }
       }

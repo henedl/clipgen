@@ -42,9 +42,7 @@ import utils
 
 RECENTS_CAP = 12
 
-# Guards load -> mutate -> save in every helper below. Deliberately not inside
-# load_start_settings/save_start_settings: locking the halves separately would
-# still let two cycles interleave, which is the actual race.
+# Held across load -> mutate -> save; locking the halves separately still interleaves.
 _write_lock = threading.Lock()
 
 
@@ -129,21 +127,14 @@ def _defaults() -> dict[str, Any]:
         "recent_outputs": [],
         "last_spreadsheet": None,
         "recent_spreadsheets": [],
-        # Full session records: (name, input, output, spreadsheet|None,
-        # last_opened). Powers the Start overlay's "Recently opened" rail and
-        # lets a click restore the name plus all three picker values at once.
+        # (name, input, output, spreadsheet|None, last_opened); the "Recently opened" rail restores all at once.
         "recent_projects": [],
         # Desktop window rect: {"x", "y", "width", "height"} or None for
         # "use the defaults". See desktop.py.
         "window": None,
-        # Deliberately independent of persist_enabled: that toggle is about the
-        # project history the Start overlay collects ("Remember my choices"),
-        # and a window rect is not one of those choices. Someone who does not
-        # want their recent paths kept can still want their window back.
+        # Independent of persist_enabled: a window rect is not project history.
         "remember_window": True,
-        # Per-source source-video filename overrides, set from the Start
-        # overlay's preview rows: {"<type>|<id_or_path>|<worksheet>": {pid: name}}.
-        # Also independent of persist_enabled — see set_filename_override.
+        # {"<type>|<id_or_path>|<worksheet>": {pid: name}}; independent of persist_enabled (see set_filename_override).
         "filename_overrides": {},
     }
 
@@ -156,8 +147,7 @@ def load_start_settings() -> dict[str, Any]:
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
-        # Not silent: this file also carries filename_overrides, which change
-        # which source video a participant's clips are cut from.
+        # Warn: filename_overrides here decide which source video gets cut.
         utils.warning_print(f"Could not read start settings ({exc}); using defaults.")
         return _defaults()
     if not isinstance(data, dict):
@@ -177,8 +167,7 @@ def _prepend_dedup(items: list[Any], new_item: Any, key: Any = None) -> list[Any
     if key is None:
         deduped = [x for x in items if x != new_item]
     else:
-        # Keyed entries are dicts and every key fn calls .get(); drop anything
-        # else so a malformed list off disk can't crash the boot-build thread.
+        # Drop non-dict entries so a malformed file cannot crash the boot-build thread.
         new_key = key(new_item)
         deduped = [x for x in items if isinstance(x, dict) and key(x) != new_key]
     return [new_item] + deduped[: RECENTS_CAP - 1]

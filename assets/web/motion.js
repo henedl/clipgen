@@ -37,16 +37,13 @@
     Element.prototype &&
     typeof Element.prototype.animate === "function";
 
-  // One cached MediaQueryList — read `.matches` per call (cheap); never create a
-  // new MQL per animation. This is the repo's first JS-side reduced-motion check,
-  // complementing the CSS `@media (prefers-reduced-motion: reduce)` blocks.
+  // One cached MediaQueryList; read `.matches` per call, never create one per animation.
   var REDUCED =
     typeof global.matchMedia === "function"
       ? global.matchMedia("(prefers-reduced-motion: reduce)")
       : { matches: false };
 
-  // ---- Tweakable parameters (developer knobs) ----------------------------------
-  // Durations are ms. All angles are degrees, distances px. Keep defaults short.
+  // ---- Tweakable parameters: durations ms, angles deg, distances px ----
   var PARAMS = {
     // Stash exit: little jump up, joyous wiggle at the top, then slide down + dissolve.
     stash: {
@@ -75,60 +72,43 @@
       risePx: 6,
       scaleFrom: 0.96,
     },
-    // Overlay/modal "pop" (enter + exit) — mirrors the studio.css cg-overlay-pop
-    // keyframe (translateY + scale + opacity). Meant for reused surfaces that toggle
-    // display rather than being removed, so callers pair animateIn on show with a
-    // guarded animateOut on hide (the newer entry animation cleanly supersedes a
-    // stale forwards-filled exit; see showToast).
+    // Overlay pop (enter + exit), mirrors studio.css cg-overlay-pop; pair animateIn/animateOut, see showToast.
     pop: {
       duration: 150, // == tokens.css --duration-fast
       easing: "cubic-bezier(0.2, 0.7, 0.3, 1)",
       risePx: 8,
       scaleFrom: 0.98,
     },
-    // Plain opacity fade (enter + exit) — the simplest kind, and what every other
-    // kind collapses to under reduced motion / no WAAPI.
+    // Plain opacity fade; every kind collapses to this under reduced motion / no WAAPI.
     fade: {
       duration: 150,
       easing: "ease",
     },
-    // Stagger for *All variants: item i waits min(i*step, maxTotal) ms. The clamp
-    // keeps "clear dozens of cards" finishing within ~maxTotal + duration.
+    // *All stagger: item i waits min(i*step, maxTotal) ms; clamp bounds long lists.
     stagger: { step: 18, maxTotal: 180 },
     // Collapsed animation used under prefers-reduced-motion / no WAAPI.
     reduced: { duration: 80 },
     // Extra headroom for the belt-and-suspenders finish fallback timer.
     slackMs: 120,
-    // Size awareness (used by kinds with sizeAware:true). `reference` is the object
-    // diagonal (px) that maps to full intensity (≈ a region pill); larger objects
-    // get a smaller scale (down to minScale) and, via durationGain, a slightly
-    // longer, weightier animation so the motion never feels sudden.
+    // Size awareness: `reference` diagonal px = full intensity; larger objects scale down, run longer.
     size: { reference: 100, minScale: 0.4, maxScale: 1.1, durationGain: 0.4 },
   };
 
-  // ---- Keyframe builders (read PARAMS[kind]) -----------------------------------
-  // Each keyframe carries its own `easing`, which governs the segment that STARTS
-  // at that keyframe (the last keyframe's easing is ignored). Offsets are strictly
-  // increasing in [0, 1].
+  // ---- Keyframe builders: each `easing` governs the segment it starts; offsets ascend in [0,1].
 
   function buildStashKeyframes(p, scale) {
     scale = scale || 1;
-    // jumpPx/hopPx are SIGNED (+ up, − down): a negative jumpPx crouches down to
-    // spring-load, and a positive hopPx then springs up out of it.
+    // jumpPx/hopPx are signed: + up, − down; negative jumpPx crouches to spring-load.
     var up = -p.jumpPx * scale; // initial move (negative Y = up)
     var wig = Math.abs(p.wiggleDeg) * scale;
     var cycles = Math.max(0, p.wiggleCycles | 0); // 0 = no wiggle at all
     var hop = -p.hopPx * scale; // apex of the post-chime hop
-    // Anticipation before the hop: a small wind-up opposite to the hop's travel —
-    // for a spring-load this loads the crouch a touch deeper before the release.
+    // Anticipation: a small wind-up opposite the hop before release.
     var windup = Math.abs(up) * 0.3;
     var dip = (up + (hop < up ? 1 : -1) * windup).toFixed(2);
     var down = Math.abs(p.slideDownPx) * scale;
 
-    // Timeline as fractions of the total duration: a short rise, then the chime,
-    // then the hop + drop reflow into whatever time the chime leaves. `wiggleSpan`
-    // is how much of the animation the chime occupies — shrink it (or add cycles)
-    // to speed the wiggle up, grow it to slow it down.
+    // Offsets are duration fractions: rise, chime (`wiggleSpan` of total), then hop + drop.
     var rise = 0.16;
     var minTail = 0.06; // always reserve a little time for the hop + drop
     var wSpan = clamp(p.wiggleSpan != null ? p.wiggleSpan : 0.26, 0, 1 - rise - minTail);
@@ -145,9 +125,7 @@
       { offset: rise, transform: "translateY(" + up + "px) rotate(0deg)", opacity: 1, easing: "ease-in-out" },
     ];
 
-    // Damped "bell" ring: smooth, quickly-shrinking swings around the top. With
-    // cycles === 0 (or wSpan === 0) the loop is skipped and the object simply holds
-    // at the top — no wiggle — before hopping.
+    // Damped swings around the top; cycles === 0 or wSpan === 0 skips the wiggle.
     var n = wSpan > 0.001 ? cycles * 2 : 0;
     for (var i = 1; i <= n; i++) {
       var t = i / (n + 1);
@@ -162,8 +140,7 @@
       });
     }
 
-    // Settle upright, then a little playful hop — a small dip (anticipation), then
-    // a quick spring up to a touch higher than before...
+    // Settle upright, dip (anticipation), then spring up past the rest height...
     frames.push({ offset: +settleOff.toFixed(4), transform: "translateY(" + up + "px) rotate(0deg)", opacity: 1, easing: "ease-in-out" });
     frames.push({ offset: +dipOff.toFixed(4), transform: "translateY(" + dip + "px) rotate(0deg)", opacity: 1, easing: "cubic-bezier(0.2, 0.7, 0.35, 1)" });
     frames.push({ offset: +hopOff.toFixed(4), transform: "translateY(" + hop + "px) rotate(0deg)", opacity: 1, easing: "cubic-bezier(0.4, 0, 1, 1)" });
@@ -192,15 +169,12 @@
     ];
   }
 
-  // Opacity-only fade. Entry 0→1, exit 1→0. Shared by the `fade` kind and the
-  // reduced-motion fallback (reducedFade).
+  // Opacity-only fade; shared by the `fade` kind and reducedFade.
   function buildFadeKeyframes(isEntry) {
     return isEntry ? [{ opacity: 0 }, { opacity: 1 }] : [{ opacity: 1 }, { opacity: 0 }];
   }
 
-  // Overlay "pop": a small translateY + scale paired with a fade. Entry rises from
-  // (risePx, scaleFrom, 0) to (0, 1, 1); exit is the reverse — settles down, shrinks,
-  // fades. Mirrors studio.css cg-overlay-pop (translateY starts BELOW, +risePx).
+  // Overlay pop: translateY + scale + fade; exit reverses. Mirrors studio.css cg-overlay-pop (starts below).
   function buildPopKeyframes(p, isEntry) {
     var rise = Math.abs(p.risePx);
     var s = p.scaleFrom;
@@ -209,11 +183,7 @@
     return isEntry ? [hidden, shown] : [shown, hidden];
   }
 
-  // ---- Size awareness ----------------------------------------------------------
-  // The same tilt/travel looks far stronger on a big element than a small one.
-  // measureSizeScale() returns a factor (≈1 for a pill-sized object, smaller for
-  // larger ones) that size-aware kinds multiply into their rotation/translation so
-  // pills stay lively while cards stay calm — from a single animation definition.
+  // ---- Size awareness: measureSizeScale() gives ≈1 for pills, less for cards; size-aware kinds multiply in.
   function clamp(v, lo, hi) {
     return v < lo ? lo : v > hi ? hi : v;
   }
@@ -225,16 +195,7 @@
     return clamp(PARAMS.size.reference / diag, PARAMS.size.minScale, PARAMS.size.maxScale);
   }
 
-  // ---- Core runner -------------------------------------------------------------
-  // Drives one element through one keyframe set, resolving exactly once when the
-  // animation finishes. Robust against WAAPI quirks:
-  //   - `.finished` can reject with AbortError if the animation is cancelled, so we
-  //     funnel both fulfil and reject into the same `done`;
-  //   - some engines have historically not settled `.finished` for detached nodes,
-  //     so a `setTimeout` fallback guarantees `done` fires; a `settled` flag makes
-  //     it idempotent.
-  // `lockPointer` disables pointer events for the animation's lifetime (exits only —
-  // prevents a mid-flight re-click on the element being removed).
+  // ---- Core runner. Resolves once; `.finished` may reject or never settle, hence the timer.
   function runOne(el, keyframes, timing, lockPointer) {
     return new Promise(function (resolve) {
       if (!el || !HAS_WAAPI) {
@@ -285,15 +246,12 @@
     );
   }
 
-  // Exit animation. `kind` ∈ {"stash","delete","pop","fade"}. opts.delay offsets the
-  // start. fill:"forwards" holds the end state (invisible) so there's no flash before
-  // the caller re-renders the list away (or, for reused surfaces, hides + re-shows).
+  // Exit. fill:"forwards" holds the invisible end state until the caller re-renders or hides.
   function animateOut(el, kind, opts) {
     opts = opts || {};
     if (REDUCED.matches || !HAS_WAAPI) return reducedFade(el, false, true);
     var p = PARAMS[kind] || PARAMS.delete;
-    // Size-aware kinds calm down on larger objects: scale the motion by the
-    // element's measured size and lengthen it slightly (weightier, less sudden).
+    // Size-aware kinds: smaller motion and slightly longer duration on larger elements.
     var scale = 1;
     var dur = p.duration;
     if (p.sizeAware) {
@@ -308,8 +266,7 @@
     return runOne(el, kf, { duration: dur, delay: opts.delay || 0, easing: p.easing || "ease", fill: "forwards" }, true);
   }
 
-  // Staggered exit for a whole list (clear-all / stash-all). Always resolves once
-  // the LAST (max-delay) element settles. Under reduced motion the stagger is 0.
+  // Staggered exit for a whole list; resolves when the last element settles.
   function animateOutAll(els, kind, opts) {
     opts = opts || {};
     var arr = Array.prototype.slice.call(els || []);
@@ -318,8 +275,7 @@
     var step = opts.staggerStep != null ? opts.staggerStep : PARAMS.stagger.step;
     var maxT = opts.staggerMaxTotal != null ? opts.staggerMaxTotal : PARAMS.stagger.maxTotal;
     var p = PARAMS[kind] || PARAMS.delete;
-    // Read pass first: measure every element's size up front, so we never interleave
-    // getBoundingClientRect (layout read) with .animate() (write) across the batch.
+    // Read pass first: measure all sizes before any .animate() to avoid layout thrash.
     var scales = arr.map(function (el) {
       return !reduced && p.sizeAware ? measureSizeScale(el) : 1;
     });
@@ -332,19 +288,10 @@
     );
   }
 
-  // Entry animation (e.g. a stash card landing). fill:"both" keeps the element at
-  // the start (invisible) from the moment the animation is created — including the
-  // brief window before it's connected to the DOM — so there's no first-frame flash.
+  // Entry. fill:"both" hides the element from creation, even before it is connected.
   function animateIn(el, kind, opts) {
     opts = opts || {};
-    // Flush pending layout before starting. When the caller reveals `el` in the SAME
-    // tick (display:none → shown — e.g. un-hiding a toast or an overlay card), the
-    // browser hasn't laid it out yet, so starting the animation now makes it skip its
-    // opening frames: the element snaps straight to the end instead of easing in.
-    // Reading offsetWidth forces the layout so the entry paints from its first
-    // keyframe. Harmless otherwise (a just-appended card measures what it already is;
-    // a not-yet-connected element reads 0 and relies on the fill:"both" backwards
-    // fill below, exactly as before).
+    // Force layout first: an element shown this same tick would otherwise skip its opening frames.
     if (el) void el.offsetWidth;
     if (REDUCED.matches || !HAS_WAAPI) return reducedFade(el, true, false);
     var p = PARAMS[kind] || PARAMS.stashLand;
@@ -355,21 +302,13 @@
     return runOne(el, kf, { duration: p.duration, delay: opts.delay || 0, easing: p.easing || "ease", fill: "both" }, false);
   }
 
-  // FUTURE SEAM — "the card flies to the stash object".
-  // Planned implementation (not built yet): clone `el` into a single fixed-position
-  // `#cg-motion-layer` overlay appended lazily to <body>; read `el` and `targetEl`
-  // bounding rects in ONE pass (never interleave getBoundingClientRect with
-  // .animate() — that thrashes layout), animate the clone's transform to the delta
-  // + shrink, fade the source, resolve on settle. For now it degrades to the stash
-  // exit so callers can adopt the API today.
+  // FUTURE SEAM: ghost fly-to-target (clone into a fixed layer). Degrades to the stash exit today.
   function flyTo(el, targetEl, opts) {
     opts = opts || {};
     return animateOut(el, opts.fallbackKind || "stash", opts);
   }
 
-  // Single JS-side source for the reduced-motion question. Callers that pair a
-  // WAAPI animation with a CSS transition (utils.js popModalOut waiting on the
-  // modal veil) need it too, and should not re-query matchMedia themselves.
+  // Shared reduced-motion answer; callers (utils.js popModalOut) must not re-query matchMedia.
   function isReduced() {
     return !!REDUCED.matches || !HAS_WAAPI;
   }

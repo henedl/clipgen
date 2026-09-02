@@ -105,8 +105,7 @@ _PREVIEW_FLOAT_ARGS: dict[str, tuple[str, ...]] = {
         "scale_y_steps",
     ),
     "attention": (
-        # Channel-weight / center-bias overrides so the Model view tunes the
-        # same math the scan runs (saliency_kwargs_from_params on both paths).
+        # Saliency overrides so the Model view tunes the scan's math (saliency_kwargs_from_params).
         "weight_spectral",
         "weight_contrast",
         "weight_motion",
@@ -228,16 +227,12 @@ def _template_bgr_and_mask_from_b64(upload_b64: str) -> tuple[Any, Any]:
 _manifest: dict[str, Any] = {}
 _worker: "screenspace.ScreenspaceWorker | None" = None
 _participants: list[dict[str, Any]] = []
-# What _participants was built from: {"sheet_context", "dir", "mtime"}, or None
-# before _init_screenspace_state has run (the same "not configured yet" state
-# _worker = None expresses). While None, _refresh_participants() is a no-op, so a
-# directly-assigned _participants survives.
+# Source of _participants, or None before _init_screenspace_state; while None,
+# _refresh_participants() is a no-op.
 _participant_source: dict[str, Any] | None = None
 _participants_lock = threading.Lock()
-# Source timeline for multi-video participants (one continuous recording across
-# several files), keyed by participant id as (parts_mtimes, timeline) so a
-# re-encoded part invalidates the offsets. Single-video is never cached — mapping
-# is a no-op.
+# Multi-video timelines keyed by participant as (parts_mtimes, timeline); a re-encoded
+# part invalidates. Single-video never cached.
 _participant_timeline_cache: dict[
     str, tuple[tuple[int, ...], list[tuple[str, int, int]] | None]
 ] = {}
@@ -245,16 +240,13 @@ _participant_timeline_lock = threading.Lock()
 # Values are (mtime_ns, info) so a stale file is re-probed automatically.
 _video_metadata_cache: dict[str, tuple[int, dict[str, Any]]] = {}
 _video_metadata_cache_lock = threading.Lock()
-# Bounded LRU: entries are JPEG bytes (tens of KB), so a few hundred is plenty.
-# The key includes ``mtime_ns``, so a re-encoded source is a distinct entry rather
-# than stale bytes.
+# Bounded LRU of JPEG bytes; the key's ``mtime_ns`` makes a re-encoded source a new entry.
 _FRAME_CACHE_MAX = 256
 _frame_cache: "OrderedDict[tuple[str, int, float, int], bytes]" = OrderedDict()
 _frame_cache_lock = threading.Lock()
 
-# Decoded-frame cache for the synchronous CV helpers: calibration and preview
-# re-run on every parameter nudge, so BGR frames memoize separately from the JPEG
-# cache above. Keyed with ``mtime_ns``, so re-encodes invalidate naturally.
+# BGR frames for calibration/preview, which re-run on every parameter nudge.
+# ``mtime_ns`` in the key.
 _DECODED_FRAME_CACHE_MAX = max(8, 2 * config.SCREENSPACE_MAX_PINS)
 _decoded_frame_cache: "OrderedDict[tuple[str, int, float], Any]" = OrderedDict()
 _decoded_frame_cache_lock = threading.Lock()
@@ -262,21 +254,18 @@ _PIN_OCR_CACHE_MAX = 64
 _pin_ocr_cache: "OrderedDict[tuple[Any, ...], list[Any]]" = OrderedDict()
 _pin_ocr_cache_lock = threading.Lock()
 
-# Heatmap hover-scrub sprite sheets, re-tiled from the GIFs on demand and never
-# written to the output dir — sprites are a derived view everywhere in clipgen.
-# A handful of small PNGs at most; keyed with ``mtime_ns`` so a regenerated GIF
-# invalidates naturally.
+# Sprite sheets re-tiled from heatmap GIFs on demand, never written to disk; keyed
+# with ``mtime_ns``.
 _heatmap_sprite_cache = MediaCache(32)
 
 # ---- SSE (Server-Sent Events) client registry ----
 
-# Broadcast channel (all task-stream clients registered under the None key);
-# ``_sse_clients`` is the channel's live registry list. See make_sse_channel.
+# Broadcast channel; all task-stream clients register under None. See make_sse_channel.
 _sse_notify, _sse_stream, _sse_clients = make_sse_channel()
 _manifest_lock = threading.Lock()
 
-# Bumped under _manifest_lock on every _manifest["events"] mutation. The poll
-# routes echo it, so an unchanged tick short-circuits the deep-copy + sanitize.
+# Bumped under _manifest_lock on every events mutation; poll routes short-circuit on
+# an unchanged tick.
 _events_version = 0
 
 
@@ -317,11 +306,8 @@ screenspace_bp = Blueprint("screenspace", __name__)
 utils.register_static_routes(
     screenspace_bp,
     "screenspace.html",
-    # Resolved per request, never snapshotted: POST /api/dirs moves
-    # config.OUTPUT_DIR mid-session without re-running _init_screenspace_state (the
-    # Start overlay's "no spreadsheet" path closes without a reload), and a snapshot
-    # then served heatmaps/timelapses from the old directory — every artifact URL a
-    # dead link until something re-inited the blueprint.
+    # Resolved per request: POST /api/dirs moves OUTPUT_DIR without re-init, and a
+    # snapshot served dead links.
     media_dir_getter=lambda: str(utils.get_effective_output_dir()),
     media_error="Output directory not configured",
     icons=True,
@@ -339,9 +325,8 @@ remux_server.register_remux_routes(
 _NOTES_MAX_BYTES = 64 * 1024
 
 
-# The refresh/find pair over this module's _participants globals; the factory
-# reads them as module attributes so _init_screenspace_state and tests that
-# monkeypatch them keep working. See server_utils.make_participant_cache.
+# Reads _participants globals as module attributes so _init_screenspace_state and
+# monkeypatching tests work. See server_utils.make_participant_cache.
 _refresh_participants, _find_participant_record = make_participant_cache(
     sys.modules[__name__],
     input_dir_getter=utils.get_effective_input_dir,
@@ -367,9 +352,8 @@ def api_participants() -> FlaskResponse:
         entry = dict(p)
         if p.get("has_video"):
             entry["version"] = _participant_video_version(p["id"])
-            # Multi-video: expose the timeline so the frontend can switch <video>
-            # source per part and seek the local offset. Omitted for a single video
-            # (no probe), leaving the frontend on its one-file path.
+            # Multi-video only: the frontend switches <video> source per part. Single-video
+            # omits it (no probe).
             timeline = _participant_timeline(p["id"])
             if timeline is not None:
                 entry["timeline"] = [
@@ -381,10 +365,8 @@ def api_participants() -> FlaskResponse:
                     for path, dur, cum in timeline
                 ]
         payload.append(entry)
-    # Bootstrap channel for shared frontend config (hotkey overrides etc.);
-    # this page has no sheet-data fetch, so the config rides along here.
-    # ``has_sheet`` gates the off-sheet badge: with no sheet every entry is
-    # ``in_sheet: False``, and marking them all would be noise.
+    # Config rides along here (no sheet fetch on this page). ``has_sheet`` gates the
+    # off-sheet badge.
     return ok(
         participants=payload,
         has_sheet=bool(_participant_source and _participant_source["sheet_context"]),
@@ -482,8 +464,7 @@ def api_participant_issues(pid: str) -> FlaskResponse:
             }
         )
 
-    # Ascending severity score puts the most-negative (Critical = -4) first, with
-    # positives and unranked rows at the end. Tie-break by row order for stability.
+    # Ascending score: Critical (-4) first, positives and unranked last; row order breaks ties.
     candidates.sort(
         key=lambda c: (utils.severity_sort_key(c["severity"]), c["_row_idx"])
     )
@@ -510,13 +491,7 @@ def api_participant_marks(pid: str) -> FlaskResponse:
 
 
 # ---- Calibration pins ----
-#
-# A pin is a tool- and region-agnostic marker that "this frame matters", carrying
-# only a timestamp and a polarity (``positive`` = the condition is true here,
-# ``negative`` = it must not fire here). Stored per participant under the manifest
-# ``pins`` key, driving synchronous detector calibration. Frames are never stored
-# — they're fetched through the frame API, so a re-encode invalidates via
-# ``mtime_ns``.
+# Timestamp + polarity markers under manifest ``pins``; frames fetched, never stored.
 
 _PIN_POLARITIES = ("positive", "negative")
 _PIN_LABEL_MAX_CHARS = 120
@@ -892,8 +867,8 @@ def api_calibrate() -> FlaskResponse:
                 entry["status"] = "not_evaluable"
                 results.append(entry)
                 continue
-            # Companion frame for temporal tools; ts < interval ⇒ no companion
-            # (the score path then reports not_evaluable for that step/tool).
+            # Companion frame for temporal tools; ts < interval leaves none and the score
+            # reports not_evaluable.
             prev_frame = None
             if needs_prev and ts >= interval:
                 mapped_prev = _map_participant_time(participant, ts - interval)
@@ -1080,8 +1055,7 @@ def _participant_video_duration(participant_id: str) -> float | None:
     video_path, mtime_ns = resolved
     with _video_metadata_cache_lock:
         cached = _video_metadata_cache.get(participant_id)
-    # Use the unrounded duration: the cached ``duration`` is rounded for display
-    # and would mis-flag pins within ~0.5s of the true end.
+    # Unrounded duration; the display-rounded ``duration`` mis-flags pins within ~0.5s of the end.
     if cached is not None and cached[0] == mtime_ns:
         return cached[1].get("duration_seconds") or None
     props = video.probe_video_properties(video_path)
@@ -1107,8 +1081,7 @@ def api_video_frame(participant: str, timestamp: str) -> FlaskResponse:
     except (ValueError, TypeError):
         return err("Invalid timestamp")
 
-    # Map the global timestamp into the owning sub-video (multi-video) so the
-    # frontend can keep requesting frames by global time; single-video unchanged.
+    # Map the global time into the owning sub-video; single-video is unchanged.
     mapped = _map_participant_time(participant, ts)
     if mapped is None:
         return err_no_video(participant)
@@ -1262,16 +1235,14 @@ def api_preview(participant: str, timestamp: str) -> FlaskResponse:
                 "w": round(rw * frame_w),
                 "h": round(rh * frame_h),
             }
-            # Optional shaped-region contours: "u1,v1;u2,v2;..." bbox-relative
-            # fractions, multiple contours joined with "|". Malformed values
-            # are ignored (preview falls back to the plain rect) rather than
-            # failing the whole preview.
+            # Optional contours "u1,v1;u2,v2|..." as bbox-relative fractions; malformed
+            # values fall back to the plain rect.
             mask_points = _parse_mask_points(request.args.get("mask", "").strip())
             if mask_points:
                 region_coords["mask_points"] = mask_points
 
-    # Prev frame for tools that consume a temporal pair. Attention's motion
-    # channel compares at its own (shorter) sampling interval by default.
+    # Prev frame for temporal-pair tools; attention's motion channel defaults to its own
+    # shorter interval.
     prev_frame = None
     if tool in ("change", "flow", "attention"):
         default_gap = (
@@ -1444,8 +1415,8 @@ def api_video_info(participant: str) -> FlaskResponse:
     The frontend appends ``?v=<version>`` to frame and stream URLs so HTTP,
     backend, and blob caches all invalidate together when the file changes.
     """
-    # Multi-video participant: report the total timeline duration + the per-part
-    # breakdown so the frontend can switch the <video> source per part.
+    # Multi-video: total timeline duration plus per-part breakdown so the frontend
+    # switches <video> per part.
     timeline = _participant_timeline(participant)
     if timeline is not None:
         props = video.probe_video_properties(timeline[0][0]) or {}
@@ -1492,8 +1463,7 @@ def api_video_info(participant: str) -> FlaskResponse:
     info: dict[str, Any] = {
         "participant": participant,
         "duration": duration,
-        # Unrounded duration retained for precise comparisons (e.g. pin
-        # staleness); the rounded ``duration`` above stays the display value.
+        # Unrounded, for precise comparisons like pin staleness; ``duration`` above is for display.
         "duration_seconds": duration_seconds,
         "fps": vid_fps,
         "width": width if width > 0 else None,
@@ -1524,9 +1494,7 @@ def api_video_stream(participant: str) -> FlaskResponse:
     paths = _participant_video_paths(participant)
     if not paths:
         return err_no_video(participant)
-    # Multi-video participants: ?part=N selects the sub-video; the frontend swaps
-    # the <video> source per part as it scrubs the global timeline. Defaults to
-    # part 0 (and is the only file for single-video participants).
+    # ?part=N selects the sub-video for multi-video participants; defaults to part 0.
     part = request.args.get("part", type=int)
     video_path = (
         paths[part] if part is not None and 0 <= part < len(paths) else paths[0]
@@ -1597,8 +1565,7 @@ def _normalize_region(
     return region
 
 
-# "combo" marks shapes produced by boolean region edits (shift-add /
-# alt-subtract / merge) rather than a single drawing tool.
+# "combo" = shapes from boolean region edits (shift-add / alt-subtract / merge).
 _REGION_SHAPES = ("lasso", "wand", "combo")
 _REGION_MAX_POINTS = 400  # total vertices across all contours
 _REGION_MAX_CONTOURS = 32
@@ -1947,11 +1914,7 @@ def api_tasks_get(task_id: str) -> FlaskResponse:
 
 
 # ---- Task creation helpers ----
-#
-# Private helpers for api_tasks_create below: validation, parameter coercion,
-# media extraction, and multitool step preparation. Placed between the read-side
-# task routes above and the create/mutate routes below so the create endpoint's
-# dependencies are immediately visible when reading top-down.
+# api_tasks_create's private helpers, placed just above it to read top-down.
 
 
 def _validate_task_request(
@@ -1989,9 +1952,8 @@ def _validate_task_request(
         task_type == "template" and parameters.get("template_image_data")
     ) or (task_type == "shape" and parameters.get("shape_image_data"))
 
-    # Multitool uses per-step regions; others need a global region (unless
-    # template upload). Boundary always arrives with a forced full_frame
-    # region_ref (set in api_tasks_create), so it satisfies this check.
+    # Multitool uses per-step regions; others need a region unless template upload.
+    # Boundary arrives full_frame.
     has_region_request = bool(region_name) or region_ref is not None
     if (
         not has_region_request
@@ -2035,8 +1997,8 @@ def _validate_task_request(
         for i, step in enumerate(mt_steps_early):
             step_region = (step.get("region") or "").strip()
             step_region_ref = step.get("region_ref")
-            # A template step with an uploaded image scans the full frame and
-            # needs no region (mirrors the top-level has_uploaded_template path).
+            # An uploaded-image template step scans the full frame; no region needed
+            # (mirrors has_uploaded_template).
             step_uploaded_template = step.get("type") == "template" and step.get(
                 "template_image_data"
             )
@@ -2305,11 +2267,8 @@ def _prepare_task_media(
     parameters = cast(dict[str, Any], coerced)
 
     frame_at = _participant_frame_extractor(participant)
-    # Template/shape split the sample from the search scope: the reference is
-    # cut from the *capture* region (``reference_region``, persisted so re-runs
-    # keep extracting the same patch) while ``region_coords`` stays the run
-    # window. Without it a Full-frame run would extract the whole frame as its
-    # sample.
+    # Template/shape cut the sample from ``reference_region`` (persisted for re-runs) while
+    # ``region_coords`` stays the run window.
     extract_coords = region_coords
     if task_type in ("template", "shape"):
         ref_region = str(parameters.get("reference_region") or "").strip()
@@ -2350,12 +2309,8 @@ def api_tasks_create() -> FlaskResponse:
     if not data:
         return err("JSON body required")
 
-    # Boundary and Attention are full-frame only by contract: ignore any
-    # caller-supplied region so events and manifest metadata are never labeled
-    # with a region the scan didn't use (both scanners always analyze the whole
-    # frame). Forcing it here — before validation and before task["region_ref"]
-    # is recorded — keeps the stored region_name/coords and region_ref
-    # consistently full-frame.
+    # Boundary/Attention are full-frame by contract; force it before validation so stored
+    # region fields agree.
     if (data.get("type") or "").strip() in ("boundary", "attention"):
         data["region"] = ""
         data["region_ref"] = {"source": "full_frame"}
@@ -2364,8 +2319,7 @@ def api_tasks_create() -> FlaskResponse:
     if isinstance(validated, Response) or (
         isinstance(validated, tuple) and len(validated) == 2
     ):
-        # cast() needed for older ty (<=0.0.33) which doesn't narrow `len == 2`;
-        # newer ty flags this as redundant but only as a non-failing warning.
+        # cast() for older ty (<=0.0.33), which doesn't narrow `len == 2`; newer ty only warns.
         return cast(FlaskResponse, validated)
     assert isinstance(validated, tuple) and len(validated) == 6  # success tuple
     (
@@ -2385,8 +2339,7 @@ def api_tasks_create() -> FlaskResponse:
         return err_no_video(participant, 400)
     video_path = video_paths[0]
 
-    # Default per-task source label; the per-part scan tags each event with the
-    # specific sub-video it came from for multi-video participants.
+    # Default source label; per-part scans tag each event with its own sub-video.
     source_video = Path(video_paths[0]).name
 
     # Region coords come from the first part's resolution (parts share it).
@@ -2419,9 +2372,7 @@ def api_tasks_create() -> FlaskResponse:
         return prepared  # Flask error response
     parameters = cast(dict[str, Any], prepared)
 
-    # Snapshot the global CV resolution scale into the task so the manifest
-    # records what scale produced each result (useful when re-running with
-    # a different scale to compare outputs).
+    # Record the CV scale on the task so the manifest shows what produced each result.
     parameters.setdefault("cv_resolution_scale", config.SCREENSPACE_CV_RESOLUTION_SCALE)
 
     task = screenspace.create_task(
@@ -2663,9 +2614,8 @@ def api_export_events() -> FlaskResponse:
         )
         return response
     if fmt == "json":
-        # Same {exported_at, version, records} envelope the bundle export writes,
-        # so a saved screenspace_events.json is self-describing rather than an
-        # API response that happened to be written to disk.
+        # Same {exported_at, version, records} envelope as the bundle export, so the saved
+        # file is self-describing.
         body = data_export.to_json(utils.sanitize_floats(records))
         response = Response(body, mimetype="application/json")
         response.headers["Content-Disposition"] = (
@@ -2827,9 +2777,8 @@ def _coerce_ocr_controls(params: dict[str, Any], *, context: str = "") -> None:
     """Validate optional OCR controls shared by Text and Numbers tools."""
     langs = params.get("languages")
     if langs is not None:
-        # Closed set: each code maps onto a bundled recognition model
-        # (screenspace_ocr._OCR_LANG_TO_MODEL). Unvalidated strings used to
-        # reach the engine and die mid-scan; refuse at task creation instead.
+        # Closed set (screenspace_ocr._OCR_LANG_TO_MODEL): unknown codes used to die mid-scan;
+        # refuse at creation.
         valid = tuple(screenspace._OCR_LANG_TO_MODEL)
         if (
             not isinstance(langs, list)
@@ -2839,8 +2788,7 @@ def _coerce_ocr_controls(params: dict[str, Any], *, context: str = "") -> None:
             raise ValueError(
                 f"{context}languages must be a non-empty list drawn from {valid}"
             )
-        # Known codes can still need two rec models (ja+ko). Refuse here so
-        # the task never queues and fails mid-scan.
+        # Known codes can still need two rec models (ja+ko); refuse before queueing.
         try:
             screenspace._resolve_ocr_model([str(lang) for lang in langs])
         except ValueError as exc:
@@ -2919,8 +2867,7 @@ def _validate_scene_references(
     validated_refs = []
     for i, ref_raw in enumerate(scene_refs):
         if not isinstance(ref_raw, dict):
-            # ValueError, not TypeError: this validator's contract is that any bad
-            # payload raises ValueError, which the calling route turns into a 400.
+            # ValueError by contract: the calling route turns it into a 400.
             raise ValueError(f"{context}scene_references[{i}] must be an object")  # noqa: TRY004
         ref_data = cast(dict[str, Any], ref_raw)
         name = str(ref_data.get("name", "")).strip()
@@ -3013,12 +2960,7 @@ def _init_screenspace_state(sheet_context: Any = None) -> None:
 
     global _manifest, _worker, _participant_source
 
-    # Retire the previous session's worker before touching any state: its
-    # callbacks resolve the module globals at call time, so left alive it
-    # would persist the old study's task results into the *new* study's
-    # manifest. Detach the callbacks and cancel first so the thread can only
-    # finish inertly; the short join keeps a swap request from blocking on an
-    # in-flight scan.
+    # Old worker callbacks resolve globals late and would pollute the new manifest; retire it first.
     if _worker is not None:
         _worker.on_task_complete = None
         _worker.on_progress_update = None
@@ -3039,8 +2981,7 @@ def _init_screenspace_state(sheet_context: Any = None) -> None:
     _worker.restore_tasks(_manifest.get("tasks", []))
     _worker.start()
 
-    # Reclaim a stale empty manifest left by a prior abandoned session: the
-    # guarded save removes the file when empty, idempotent rewrite otherwise.
+    # Reclaims a stale empty manifest from an abandoned session; the guarded save deletes when empty.
     _persist_manifest()
 
 
@@ -3065,12 +3006,8 @@ def _do_persist(*, drain_events: bool = True) -> None:
     )
 
 
-# Manifest-write debounce: rapid UI mutations (enqueue / cancel / reorder /
-# pause / resume) coalesce into one disk write after a short quiet period.
-# atexit fires the pending flush on normal exit / SIGINT / SIGTERM, but not
-# on SIGKILL or hard power-loss — accepted because screenspace manifest is
-# recreatable analysis state. The lambda looks up _do_persist at call time so
-# tests monkeypatching it are seen.
+# Debounced manifest writes; atexit flushes on exit, not SIGKILL (recreatable state).
+# Lambda keeps _do_persist monkeypatchable.
 (_schedule_persist, _flush_pending_persist, _cancel_pending_persist_timer) = (
     make_debounced_persist(lambda: _do_persist(drain_events=False), _manifest_lock)
 )

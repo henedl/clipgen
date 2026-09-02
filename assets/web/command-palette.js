@@ -65,9 +65,7 @@
     overview: "chart-bar",
   };
 
-  // Cross-page tab deep links, consumed as /PAGE/#tab=KEY by clipgenHashTab()
-  // on the receiving page (Studio + Overview route it through their stored
-  // active-tab restore; Transcripts clicks the panel-tab button).
+  // /PAGE/#tab=KEY deep links, read by clipgenHashTab() on the receiving page.
   var NAV_TABS = {
     studio: [
       { key: "intake", label: "Screenspace Intake" },
@@ -117,10 +115,7 @@
     providers.push({ id: sourceId, fn: fn });
   }
 
-  // setParticipants(fn) — each hub hands the palette its participant-id list
-  // (a function returning an array of id strings, read on every open). Feeds
-  // the built-in cross-page "Open Pxx in <Page>" commands so participant
-  // jumps exist on every page, not just the ones that hold participants.
+  // Hubs hand over a participant-id getter (read per open) feeding cross-page "Open Pxx" commands.
   function setParticipants(fn) {
     participantSource = typeof fn === "function" ? fn : null;
   }
@@ -161,9 +156,7 @@
     return out;
   }
 
-  // Cross-page participant jumps ("Open P07 in Transcripts"). Same-page jumps
-  // ("Jump to P07 in <Page>") stay page-registered — they select in place
-  // instead of navigating.
+  // Cross-page jumps ("Open P07 in Transcripts"); same-page jumps stay page-registered and select in place.
   function participantNavCommands() {
     if (!participantSource) return [];
     var pids = [];
@@ -269,9 +262,7 @@
 
   function collectCommands() {
     var out = [];
-    // Participant nav runs last so its "Participants" section lands directly
-    // after the page's own participant jumps (the page provider lists them
-    // last) — the browse view then shows one contiguous Participants group.
+    // Participant nav runs last so its section follows the page's own participant jumps contiguously.
     var sources = [
       { id: "nav", fn: navCommands },
       { id: "global", fn: globalCommands },
@@ -559,8 +550,7 @@
   }
 
   function onListMousemove(e) {
-    // mousemove, not mouseover: hover must not steal the selection while the
-    // list scrolls under a keyboard-driven cursor.
+    // mousemove, not mouseover: hover must not steal selection while keyboard scrolling moves the list.
     var btn = e.target.closest ? e.target.closest(".cmdp-item") : null;
     if (!btn || btn.disabled) return;
     var idx = parseInt(btn.getAttribute("data-idx"), 10);
@@ -578,8 +568,7 @@
     if (!cmd._enabled) return;
     pushRecent(cmd.id);
     close();
-    // Run after close so restore-focus can't clobber commands that set focus
-    // themselves (e.g. "Focus transcript search").
+    // Run after close so restore-focus cannot clobber commands that set focus themselves.
     setTimeout(function () {
       try { cmd.run(); } catch (e) { console.error("Command palette action error:", e); }
     }, 0);
@@ -589,10 +578,7 @@
 
   function open() {
     if (isOpen) return;
-    // openBlockingModal is a singleton; never steal an existing trap. Two
-    // checks because the overlays split: the settings modal sets
-    // body.modal-open but doesn't use openBlockingModal, while Studio's
-    // gallery/status/confirm and Transcripts' install dialog do the reverse.
+    // Never steal an existing trap. Settings sets body.modal-open only; Studio/Transcripts dialogs use openBlockingModal only.
     if (document.body.classList.contains("modal-open")) return;
     if (isBlockingModalOpen()) return;
     if (!els) buildDom();
@@ -628,12 +614,7 @@
 
   // ---- Summon chord ----
   //
-  // Lives in the shared hotkey registry (catalog id "global.palette", default
-  // Mod+Shift+P / Mod+K, rebindable). allowInInput keeps the Spotlight behavior:
-  // the chord is deliberate, so it fires even while typing. The dispatcher
-  // suppresses all combos while a blocking modal is open — the palette included —
-  // so toggling *closed* falls to the palette input's own keydown handler
-  // (isToggleChord), as the hotkeys cheatsheet does with its toggle.
+  // Hotkey "global.palette", allowInInput. Modals mute the dispatcher, so isToggleChord closes.
 
   function isToggleChord(e) {
     if (!window.ClipgenHotkeys) return false;

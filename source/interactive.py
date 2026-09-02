@@ -432,8 +432,7 @@ def browse_spreadsheet(sheet: Any, *, process_fn=None) -> None:
         process_fn: Optional callback (clips_list, output_format) -> (outputs_generated, artifacts).
     """
 
-    # Build the context once on entry; reuse it for both display and any
-    # generate action below so we never re-fetch the sheet per generate.
+    # Build the context once; display and generate share it.
     ctx = (
         utils.run_with_spinner(
             "Loading spreadsheet...", lambda: spreadsheet.build_sheet_context(sheet)
@@ -451,8 +450,7 @@ def browse_spreadsheet(sheet: Any, *, process_fn=None) -> None:
     header_row = ctx.header_row
     num_participants = ctx.num_participants
 
-    # Browse state: all row indices are 0-based (into sheet_data).
-    # Data starts immediately below the Observation header row.
+    # Row indices are 0-based into sheet_data; data starts below the Observation header.
     first_data_row = observation_cell.row
     last_data_row = len(sheet_data) - 1
     total_data_rows = last_data_row - first_data_row + 1

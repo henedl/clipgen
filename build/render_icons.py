@@ -71,8 +71,7 @@ def write_icns(out: Path) -> None:
     """Build a .icns via macOS iconutil, falling back to PIL multi-frame PNG."""
     iconutil = shutil.which("iconutil")
     if iconutil is None:
-        # Fallback: just write the largest PNG with .icns extension is not valid.
-        # Skip rather than ship a broken file.
+        # No iconutil: skip rather than ship an invalid .icns.
         print("iconutil not found; skipping .icns generation (macOS only)")
         return
 

@@ -44,15 +44,12 @@
   var _mediaVersion = 0;  // bumped on participant switch; stale loads no-op
   var _renderQueued = false;
 
-  // Span-aware keys: committing a trim or cut edit changes start/end, which
-  // naturally invalidates that bar's sprite and audio without bookkeeping.
+  // Span-keyed: editing a trim or cut invalidates its sprite and audio for free.
   function mediaKey(keyStem, start, end) {
     return keyStem + "|" + start.toFixed(2) + "|" + end.toFixed(2);
   }
 
-  // The server samples a span from the part that owns its START, clamped to
-  // that part's tail (_resolve_scrub_source) — mirror the clamp here so the
-  // client never maps frames or audio onto footage the server didn't render.
+  // Mirror the server's clamp to the owning part's tail (_resolve_scrub_source).
   function partTailFor(start, fallbackEnd) {
     var parts = state.parts || [];
     for (var i = 0; i < parts.length; i++) {
@@ -73,8 +70,7 @@
   // ---- Sprite cache + lazy fetch ----
 
   function armFetchTimer() {
-    // Re-arming on every miss keeps fetches quiet during pan/zoom churn:
-    // they only fire once renders have settled for FETCH_DEBOUNCE_MS.
+    // Re-arm on every miss so fetches wait until pan/zoom settles.
     if (_fetchTimer) clearTimeout(_fetchTimer);
     _fetchTimer = setTimeout(flushFetches, FETCH_DEBOUNCE_MS);
   }
@@ -157,18 +153,14 @@
     if (Object.keys(_wanted).length) armFetchTimer();
   }
 
-  // Smallest ladder step (power of two × MIN_SLOT_SECONDS) covering slotDur.
-  // Snapping keeps tile keys stable across pans; only a zoom that crosses a
-  // doubling boundary produces new keys (and thus new fetches).
+  // Smallest power-of-two ladder step covering slotDur; keeps tile keys stable across pans.
   function quantizedSlotSeconds(slotDur) {
     var d = MIN_SLOT_SECONDS;
     while (d < slotDur && d < MAX_SLOT_SECONDS) d *= 2;
     return d;
   }
 
-  // Draw one cached tile's slots into the bar. Each slot cover-crops its
-  // frame (center crop to the slot's aspect) so frames are never stretched
-  // or squashed regardless of ladder rounding.
+  // Draw one tile's slots, center-cropping each frame to the slot's aspect.
   function drawTile(ctx, img, entrySpan, barGeom) {
     var cols = CLIPGEN_CONFIG.cardScrubberSpriteCols;
     var rows = CLIPGEN_CONFIG.cardScrubberSpriteRows;
@@ -204,10 +196,7 @@
     return true;
   }
 
-  // Called from renderTimeline for every visible marker/cut bar. Cache hits
-  // draw immediately; missing tiles enqueue a lazy fetch and leave the flat
-  // bar showing. Must stay allocation-light: it runs per bar on every
-  // pan/zoom frame.
+  // Runs per bar on every pan/zoom frame: stay allocation-light. Misses enqueue a fetch.
   function drawMarkerThumbs(ctx, keyStem, start, end, x, y, w, h, tintColor) {
     if (w < MIN_THUMB_WIDTH || end <= start || !state.participant) return false;
     var frameCount =
@@ -216,8 +205,7 @@
     var D = quantizedSlotSeconds((h * SLOT_ASPECT) / pxPerSec);
     var tileSpan = frameCount * D;
 
-    // Clip to the canvas viewport: offscreen stretches of a long bar are
-    // neither drawn nor fetched.
+    // Clip to the viewport: offscreen stretches are neither drawn nor fetched.
     var visX1 = Math.max(x, 0);
     var visX2 = Math.min(x + w, ctx.canvas.width);
     if (visX2 <= visX1) return false;
@@ -236,10 +224,7 @@
     ctx.beginPath();
     ctx.rect(x, y, w, h);
     ctx.clip();
-    // Cap each tile at the owning part's tail: the server truncates the
-    // sprite's content there, so an uncapped tile span would spread the
-    // truncated frames across the full tile and drift every frame after the
-    // part boundary. The stretch past the boundary stays a flat bar.
+    // Cap tiles at the part's tail or the server's truncated frames drift past it.
     var spanCap = partTailFor(start, end);
     for (var n = n0; n <= n1; n++) {
       var tileStart = start + n * tileSpan;
@@ -248,8 +233,7 @@
       var key = barKey + n;
       var entry = _sprites[key];
       if (!entry) {
-        // Don't enqueue mid-drag: every drag frame renders a different span
-        // and would leave a trail of junk keys to fetch after the commit.
+        // Never enqueue mid-drag: every drag frame would queue a junk key.
         if (!state.dragging) {
           _wanted[key] = { start: tileStart, end: tileEnd };
           armFetchTimer();
@@ -278,15 +262,12 @@
     var cs = window.clipgenCardScrubber;
     if (!cs || end <= start || !state.participant) return;
     if (end - start > CLIPGEN_CONFIG.composerScrubMaxAudioSeconds) {
-      // The server caps the WAV at this length; scrubbing a longer span would
-      // misalign hover fraction ↔ audio time, so skip it entirely.
+      // The server caps the WAV here; a longer span misaligns hover and audio.
       scrubHoverEnd();
       return;
     }
     if (partTailFor(start, end) < end - 0.05) {
-      // Boundary-straddling span: the server samples only the owning part's
-      // tail, so audio past the boundary doesn't exist — and a full-width
-      // waveform would claim it does. Thumbnails clamp instead (drawTile).
+      // Audio past a part boundary doesn't exist; a full waveform would claim it does.
       scrubHoverEnd();
       return;
     }
@@ -345,9 +326,7 @@
       _fetchTimer = 0;
     }
     scrubHoverEnd();
-    // The decoded-audio + waveform caches live in card-scrubber and are keyed
-    // by span, not participant — purge them or the old video's audio survives
-    // the switch until LRU pressure evicts it.
+    // card-scrubber caches audio by span, not participant; purge or old audio survives.
     if (window.clipgenCardScrubber) window.clipgenCardScrubber.purgeAudio();
     if (_waveHost) _waveHost.innerHTML = ""; // drop the size-cached canvas
   }
@@ -364,11 +343,8 @@
   }
 
   function initMarkerScrub() {
-    // change (not click on the label) — a label click already flips the
-    // checkbox natively; the handler aligns state and re-syncs it. Hotkeys
-    // still route through label.click(), which forwards to the checkbox.
-    // blur() because a focused checkbox is a hotkeys.js typing target and
-    // would swallow every shortcut until focus moved elsewhere.
+    // change, not label click: hotkeys route through label.click(). blur(): a
+    // focused checkbox swallows hotkeys.
     var thumbs = qs("#coThumbsToggle input");
     if (thumbs) {
       thumbs.addEventListener("change", function () {

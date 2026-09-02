@@ -31,10 +31,8 @@
 
   function loadMarkers(pid) {
     var version = ++_loadVersion;
-    // Overview, not Studio: the convergence-offsets route is deliberately on the
-    // overview blueprint (see agents/ARCHITECTURE.md) so its own satellites can
-    // reach it page-relative. Pointing at ../studio/ 404s, and because the catch
-    // below degrades to {} every lane silently rendered at offset 0.
+    // Overview owns the offsets route (agents/ARCHITECTURE.md); ../studio/ 404s
+    // and every lane renders at 0.
     apiGet("../overview/api/convergence/offsets")
       .catch(function () { return {}; })
       .then(function (offData) {
@@ -47,8 +45,7 @@
 
   function commitLane(pid, version, source, markers) {
     if (version !== _loadVersion || pid !== state.participant) return;
-    // Overlay persisted trims: the marker shows its trimmed span, keeping the
-    // source span on origStart/origEnd for the tooltip and reset.
+    // Apply persisted trims; origStart/origEnd keep the source span for tooltip and reset.
     markers.forEach(function (m) {
       var trim = state.trims[m.key];
       if (!trim) return;
@@ -64,8 +61,7 @@
     if (CO.renderSidebar) CO.renderSidebar();
   }
 
-  // Sheet: one marker per timestamp pair in the participant's column, converted
-  // through the baseline (wall-clock sheets) exactly like Studio/Convergence.
+  // Sheet: one marker per timestamp pair, baseline-converted like Studio/Convergence.
   function loadSheetMarkers(pid, version, offsets) {
     var off = offsetFor(offsets, pid, "sheet");
     Promise.all([
@@ -79,12 +75,8 @@
         return;
       }
       var baselineOffset = baselines[pid] || 0;
-      // NOTE: `off` (the Convergence sheet-lane offset) is applied here but
-      // NOT by Studio's own sheet grid — with a non-zero offset the same
-      // observation queues at different spans from there vs. from a Composer
-      // trim card. Deliberate: these lanes must line up with the video the
-      // way the Convergence Browser does, and any trim saved here bakes the
-      // offset in (trims are video-global seconds).
+      // Applies the Convergence sheet offset, unlike Studio's grid; saved trims
+      // bake it in deliberately.
       var markers = [];
       sheet.rows.forEach(function (row) {
         var cell = row.cells && row.cells[pid];
@@ -108,12 +100,8 @@
     });
   }
 
-  // Merge gap for Screenspace events, mirroring Studio's intake default
-  // (#intakeClusterThreshold). Clustering — via the shared
-  // ClipgenIntakeCluster — turns bursts of point events into one grabbable
-  // block (point clusters are padded ±5 s by the shared helper), so lane
-  // spans are wide enough to trim; raw single-frame events were impossible
-  // to grab by the edge.
+  // Merge gap mirroring Studio's #intakeClusterThreshold; clustering makes point
+  // events grabbable by the edge.
   var SS_CLUSTER_SECONDS = 10;
 
   function loadScreenspaceMarkers(pid, version, offsets) {
@@ -131,14 +119,8 @@
           var n = cl.events.length;
           var type = cl.event_type || cl.detector || "";
           return {
-            // Keyed on the cluster's earliest event so trims survive reloads
-            // while the event set is stable (clusterIntakeEvents sorts by
-            // time). KNOWN TRADEOFF: a re-scan or un-exclude that adds an
-            // earlier event to the burst changes events[0] and orphans the
-            // trim — it stays in the manifest (and as a card in Studio's
-            // Composer Intake) but no longer applies here. There is no stable
-            // cluster identity to key on instead; deleting the orphan via
-            // Studio's card is the recovery path.
+            // Keyed on the earliest event; a re-scan that adds an earlier one
+            // orphans the trim.
             key: "screenspace:" + cl.events[0].id,
             source: "screenspace",
             start: cl.start + off,
@@ -156,8 +138,7 @@
       });
   }
 
-  // Transcript: marked segments become labeled markers; unmarked segments are
-  // skipped (a full transcript would carpet the lane edge-to-edge).
+  // Transcript: only marked segments; a full transcript would carpet the lane.
   function loadTranscriptMarkers(pid, version, offsets) {
     var off = offsetFor(offsets, pid, "transcript");
     apiGet("../transcripts/api/transcript/" + encodeURIComponent(pid))
@@ -169,9 +150,8 @@
           if (!marks.length) return;
           marks.forEach(function (mark) {
             markers.push({
-              // The pid:seg fallback is defensive only — every mark the
-              // transcripts server writes has an id, and Studio's intake
-              // badge lookup (trimBadgeKey) only matches id-based keys.
+              // Defensive fallback only: server marks always carry an id, and
+              // trimBadgeKey matches only ids.
               key: "transcript-mark:" + (mark.id || pid + ":" + seg.id),
               source: "transcript",
               start: seg.start + off,
@@ -230,10 +210,8 @@
   }
 
   function initMarkerToggles() {
-    // change (not click on the label) — a label click already flips the
-    // checkbox natively; toggleSource then aligns state and re-syncs it.
-    // blur() because a focused checkbox is a hotkeys.js typing target and
-    // would swallow every shortcut until focus moved elsewhere.
+    // change, not click: label clicks already flip the box. blur(): a focused
+    // checkbox swallows hotkeys.
     SOURCES.forEach(function (src) {
       var box = qs('.co-lane-check[data-source="' + src + '"] input');
       if (box) {

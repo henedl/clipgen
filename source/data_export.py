@@ -423,8 +423,7 @@ def write_export_bundle() -> list[Path]:
     base = Path(utils.get_effective_output_dir())
     written: list[Path] = []
     summaries: list[str] = []
-    # Several surfaces share a section (transcripts + friction_*), so parse
-    # each section at most once per export. ``None`` records an absent one.
+    # Sections are shared across surfaces; parse each once. None records an absent one.
     manifest_cache: dict[str, dict[str, Any] | None] = {}
 
     def _load_manifest(section: str) -> dict[str, Any] | None:

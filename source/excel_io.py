@@ -40,8 +40,7 @@ def _cell_to_str(v: Any) -> str:
         m, s = divmod(rem, 60)
         return f"{h:02d}:{m:02d}:{s:02d}"
     if isinstance(v, float) and v.is_integer():
-        # openpyxl often stores whole numbers as floats; gspread returns the
-        # displayed value ("5"), not the repr ("5.0").
+        # openpyxl stores whole numbers as floats; gspread shows "5", not "5.0".
         return str(int(v))
     return str(v)
 
@@ -175,9 +174,7 @@ def open_excel_workbook(
         zipfile.BadZipFile,
         InvalidFileException,
     ) as e:
-        # openpyxl raises BadZipFile for a corrupt/non-zip file and
-        # InvalidFileException for an unsupported suffix; neither subclasses
-        # OSError, so they must be caught explicitly to fail gracefully.
+        # BadZipFile and InvalidFileException do not subclass OSError.
         utils.error_print(f"Could not open Excel file {path}: {e}")
         return None
 

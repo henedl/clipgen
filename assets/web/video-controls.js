@@ -21,14 +21,7 @@
 (function () {
   "use strict";
 
-  // HTMLMediaElement.play() returns a promise that REJECTS whenever playback is
-  // interrupted before it starts — a pause() landing in the same tick, a new
-  // load(), a seek that swaps the source, or autoplay policy. Every one of those
-  // is normal here: seeking a clip and immediately pausing is a click away on
-  // Transcripts and Composer. Left unhandled the rejection surfaces as an
-  // uncaught page error ("The play() request was interrupted by a call to
-  // pause()"), which is noise in the console and a hard failure in /ui-check.
-  // Not every browser returns a promise, hence the duck-typing.
+  // play() rejects when interrupted (pause, load, seek, autoplay policy); unhandled, that fails /ui-check.
   function safePlay(videoEl, onRejected) {
     if (!videoEl) return;
     var p = videoEl.play();
@@ -49,26 +42,7 @@
     videoEl.webkitPreservesPitch = false;
   }
 
-  // ---- Audio-level popover (glass hover panel + Web Audio master gain) ----
-  //
-  // HTML5 <video>.volume caps at 1.0, so ">100% boost" needs the element routed
-  // through a Web Audio GainNode (createMediaElementSource -> gain -> destination)
-  // running 0..2.0. That graph is built lazily on the first real gesture on the
-  // slider, never on hover: autoplay policy only resumes an AudioContext inside a
-  // user-activation handler, and connecting a suspended context to an
-  // already-playing element would cut its sound.
-  //
-  // MULTITRACK: a browser plays only the container's default audio track, so
-  // per-track volume needs each track as its own media source. Given a
-  // single-file participant with >1 track and a page-supplied trackAudioUrl, the
-  // <video> is muted (visual only) and N hidden <audio> elements play instead —
-  // one per extracted track, each through its own GainNode into a shared master,
-  // kept time-aligned with the video (play/pause/seek/rate + drift correction).
-  // Any audio-element error bails back to the video's own track so there is always
-  // sound; multi-part participants keep the single master slider.
-  //
-  // The page drives mode via ctrl.setMuted() and ctrl.refresh() (once the current
-  // participant's track list is known). Volume is in-memory and resets on reload.
+  // ---- Audio-level popover. GainNode allows >100%; multitrack mixes N hidden <audio> under a muted <video>.
 
   var AUDIO_CTX = null; // one AudioContext shared by every attached player
 
@@ -84,8 +58,7 @@
     return AUDIO_CTX;
   }
 
-  // Audio<->video drift is corrected by trimming playbackRate (smooth, no seek),
-  // never by reassigning currentTime mid-playback (that re-seeks and pops).
+  // Drift correction trims playbackRate; reassigning currentTime mid-playback pops.
   var SYNC_DEADBAND = 0.05; // s of slip tolerated before nudging
   var SYNC_GAIN = 0.5;      // proportional correction gain
   var SYNC_MAX = 0.06;      // cap the rate trim at ±6% (inaudible tempo shift)
@@ -96,9 +69,7 @@
     var video = opts.video;
     var button = opts.button;
     if (!video || !button) return null;
-    // Idempotent: a page may re-run its player init. createMediaElementSource
-    // throws if called twice on one element, so reuse the existing controller
-    // and just refresh its getters.
+    // Idempotent: createMediaElementSource throws on a second call, so reuse the controller.
     if (video.__cgAudioPanel) {
       if (opts.getTracks) video.__cgAudioPanel.getTracks = opts.getTracks;
       if (opts.trackAudioUrl) video.__cgAudioPanel.trackAudioUrl = opts.trackAudioUrl;
@@ -116,10 +87,7 @@
     var mixRunning = false;    // per-track <audio> elements confirmed playing
     var lastSig = null;        // track-set signature so refresh() is idempotent
     var retryHandler = null;   // one-shot gesture listener re-arming a blocked mix
-    // Bumped by teardownMulti (which every mode switch goes through). A
-    // discarded track element can still deliver a queued "error" after the next
-    // participant's mix is built, and that must not tear the new mix down —
-    // each track's error handler captures the generation it was created in.
+    // Bumped by teardownMulti; a discarded track's late "error" must not tear down the next mix.
     var mixGeneration = 0;
 
     // ---- Single-track path: lazy video -> gain -> destination (commit 1) ----
@@ -168,9 +136,7 @@
       var ctx = audioContext();
       if (!ctx || ctx.state !== "suspended" || !ctx.resume) return;
       var p = ctx.resume();
-      // resume() is async and can settle after the elements' play() promises.
-      // onMixStarted bails while the context is still suspended, so re-run it
-      // here once the graph is genuinely audible.
+      // resume() may settle after play(); re-run onMixStarted once the context is audible.
       if (p && p.then) {
         p.then(function () {
           if (multiActive && !mixRunning && !video.paused) onMixStarted();
@@ -197,11 +163,7 @@
     }
 
     function bailToSingle(gen) {
-      // Something went wrong loading a track — never leave the user with a muted
-      // video and no sound. Drop the mix and play the video's own default track.
-      // Ignore a track that already belongs to a torn-down mix: its error can
-      // land after the *next* participant's mix is up, and tearing that one down
-      // would silently cost them per-track mixing until another switch.
+      // Track failed to load: fall back to the video's own audio. Stale generations are ignored.
       if (gen !== mixGeneration) return;
       teardownMulti();
       lastSig = "single";
@@ -214,8 +176,7 @@
       teardownMulti();
       var ctx = audioContext();
       if (!ctx) { enterSingle(); return; }
-      // NB: don't mute the <video> yet — the tail decides based on play state so
-      // an already-playing switch stays audible until the mix is confirmed.
+      // Don't mute the <video> yet; the tail below decides by play state.
       try {
         masterGain = ctx.createGain();
         masterGain.gain.value = muted ? 0 : 1;
@@ -253,14 +214,10 @@
       multiActive = true;
       mixRunning = false;
       if (video.paused) {
-        // Paused: silent anyway. The next user-initiated play() runs playTracks
-        // within that gesture, so the elements start reliably; mute now so the
-        // baked track never leaks when play resumes.
+        // Paused: mute now so the baked track never leaks when play resumes.
         video.muted = true;
       } else {
-        // Already playing (audio-info resolved after play): keep the video's own
-        // track audible and only mute once the mix is confirmed running, so a
-        // gesture-less play() rejection can't leave playback silent.
+        // Playing: stay audible until the mix is confirmed; a rejected play() must not mean silence.
         playTracks();
       }
     }
@@ -278,12 +235,7 @@
       }
     }
 
-    // ---- Video <-> audio-element sync (attached once; no-op unless multi) ----
-    // Separate media elements can't be sample-locked to the video, so align
-    // currentTime only on discontinuities (play / seek) and otherwise converge
-    // residual drift by trimming playbackRate. Reassigning currentTime during
-    // playback re-seeks the element and pops the audio, so it's reserved for a
-    // rare large slip.
+    // ---- Video <-> audio sync: align currentTime on play/seek only, trim playbackRate for drift ----
     function forEachTrack(fn) {
       for (var i = 0; i < trackNodes.length; i++) fn(trackNodes[i].el, i);
     }
@@ -292,10 +244,7 @@
         try { el.currentTime = video.currentTime; } catch (e) {}
       });
     }
-    // Start (or restart) every track element, aligned to the video. play() can
-    // reject when called outside a user gesture (mid-playback mode switch); in
-    // that case we keep the video's own track audible and retry on the next
-    // gesture, so playback is never left silent.
+    // Start every track aligned to the video; a gesture-less play() rejection arms a retry.
     function playTracks() {
       resumeCtx();
       var rate = video.playbackRate || 1;
@@ -309,11 +258,7 @@
     }
     function onMixStarted() {
       if (!multiActive) return;
-      // Element playback and AudioContext.resume() are gated independently, so
-      // the tracks can "play" into a still-suspended context — routing the mix
-      // nowhere. Muting the <video> at that point leaves *total* silence with
-      // no retry armed, recoverable only by a manual pause→play. Treat it like
-      // a blocked start instead; resumeCtx re-runs this once the graph is live.
+      // Tracks can play into a suspended context (silence). Treat as blocked; resumeCtx re-runs this.
       var ctx = audioContext();
       if (!ctx || ctx.state !== "running") { armRetry(); return; }
       disarmRetry();
@@ -321,15 +266,12 @@
       applyMute(); // now silence the <video> — the mix has taken over its audio
     }
     function onPlayBlocked() {
-      // Autoplay policy blocked a gesture-less start. Leave the video audible and
-      // finish the switch on the user's next interaction anywhere on the page.
+      // Autoplay policy blocked the start; finish the switch on the next gesture.
       if (multiActive) armRetry();
     }
     function armRetry() {
       if (retryHandler) return;
-      // A pointerdown anywhere re-attempts the mix within that user activation.
-      // Keyboard users are covered too: any pause→play cycle re-runs playTracks
-      // from the video's own "play" gesture (so no document keydown needed).
+      // Any pointerdown retries within that activation; keyboard pause→play re-runs playTracks via "play".
       retryHandler = function () {
         disarmRetry();
         if (multiActive && !video.paused) playTracks();
@@ -342,8 +284,7 @@
       retryHandler = null;
     }
     function resyncTick() {
-      // Only correct once the mix is confirmed running — before that the start /
-      // retry path owns playback and the video's own track is intentionally live.
+      // Correct only once the mix runs; before that the video's track is live on purpose.
       if (!multiActive || !mixRunning || video.paused || video.seeking) return;
       var rate = video.playbackRate || 1;
       forEachTrack(function (el) {
@@ -382,10 +323,7 @@
       if (multiActive) forEachTrack(function (el) { el.playbackRate = video.playbackRate; });
     });
     video.addEventListener("timeupdate", resyncTick);
-    // Defend the invariant: once the mix is running the video must never regain
-    // audio (page code re-applies video.muted on load), else its baked track
-    // doubles. Before the mix starts the video stays audible on purpose, so this
-    // is gated on mixRunning.
+    // Page code re-applies video.muted on load; once the mix runs the video must stay muted.
     video.addEventListener("volumechange", function () {
       if (multiActive && mixRunning && !video.muted) video.muted = true;
     });
@@ -410,8 +348,7 @@
     }
     ctrl.setMuted = function (m) { muted = !!m; applyMute(); };
 
-    // Reconfigure single vs multi for the current participant. Idempotent via a
-    // track-set signature so repeat calls (poll-driven track fetches) are cheap.
+    // Reconfigure single vs multi; a track-set signature makes repeat calls cheap.
     ctrl.refresh = function () {
       var tracks = safeTracks();
       var url0 = tracks.length > 1 ? safeTrackUrl(tracks[0].index) : null;
@@ -443,8 +380,7 @@
     }
     function close() { if (popover) popover.style.display = "none"; }
 
-    // Build one label + slider + %-readout row. onGesture runs first (inside the
-    // input's user activation) so it can arm/resume the audio graph.
+    // One label + slider + readout row; onGesture runs inside the input's user activation.
     function makeRow(labelText, percent, onGesture, onValue) {
       var row = document.createElement("div");
       row.className = "audio-popover-row";

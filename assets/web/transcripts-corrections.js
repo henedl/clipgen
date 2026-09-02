@@ -29,8 +29,7 @@
     qs("#correctionsBtn").addEventListener("click", function () {
       var modal = qs("#correctionsModal");
       modal.classList.remove("hidden");
-      // Escape and backdrop click both dismiss (blocking-modal lifecycle also
-      // keeps page hotkeys suppressed while the modal is up).
+      // Escape and backdrop click both dismiss; page hotkeys stay suppressed meanwhile.
       openBlockingModal(modal, {
         onEscape: closeCorrectionsModal,
         onBackdropClick: closeCorrectionsModal,
@@ -166,9 +165,8 @@
       return;
     }
 
-    // The term rides in data-index, not data-value: escapeHtml does not encode
-    // quotes, so a term like 27" would close the attribute early and Remove
-    // would send a truncated value.
+    // data-index, not data-value: escapeHtml leaves quotes, so 27" would
+    // truncate the attribute.
     var html = "";
     state.knownTerms.forEach(function (term, i) {
       html += '<span class="term-chip">' + escapeHtml(term);
@@ -191,8 +189,7 @@
     var term = input.value.trim();
     if (!term) return;
 
-    // No loadTranscript() here, unlike corrections — a term changes nothing
-    // about the transcript on screen, only the next transcription run.
+    // No loadTranscript(): terms affect only the next transcription run.
     apiPost("api/known-terms", { term: term }).then(function (data) {
       if (!data.ok) return;
       input.value = "";
@@ -216,8 +213,7 @@
 
   // ---- Import / export ----
 
-  // Reloads both lists and the open transcript after entries arrive. Imported
-  // corrections rewrite displayed text, so the transcript has to be refetched.
+  // Imported corrections rewrite displayed text, so refetch the transcript too.
   function afterImport(data, what) {
     var parts = [];
     if (data.corrections) parts.push(clipgenPluralUnit(data.corrections, "correction", "corrections"));
@@ -243,8 +239,7 @@
       showToast("Could not read that file");
     };
     reader.onload = function () {
-      // _apiJson rejects on non-2xx with the server's own message on
-      // .serverMessage, so "No corrections or terms found" reaches the toast.
+      // _apiJson puts the server's message on .serverMessage for the toast.
       apiPost("api/dictionary/import", { csv: String(reader.result) }).then(function (data) {
         afterImport(data, "that file");
       }).catch(function (e) {

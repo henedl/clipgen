@@ -21,8 +21,7 @@
   var _overlay = null;
   var _brushSize = 24; // display px, persists across opens
 
-  // Rasterize a shaped region's bbox-relative contours as the sample's alpha,
-  // mirroring the server's attach_capture_mask. Rect regions keep full alpha.
+  // Shaped regions: rasterize contours as alpha, mirroring the server's attach_capture_mask.
   function applyRegionAlpha(ctx, regionName, w, h) {
     var regs = state.previewRegions || state.regions;
     var r = regionName && regs && regs[regionName];
@@ -127,9 +126,7 @@
       srcImg.src = spec.dataUrl;
       stage.appendChild(work);
 
-      // Brush ghost: a ring following the cursor at the brush's display size.
-      // Lives on the whole stage — the checkerboard margin is paintable too,
-      // so edge strokes can start outside the bitmap.
+      // Brush ghost ring on the whole stage: the checkerboard margin is paintable too.
       stage.classList.add("ss-sample-modal__stage--edit");
       var ghost = el("div", "ss-sample-modal__ghost hidden");
       stage.appendChild(ghost);
@@ -250,10 +247,8 @@
         stroking = { restoring: e.shiftKey, lastX: pos.x, lastY: pos.y };
         stamp(pos);
       });
-      // Document-level so a stroke survives leaving the canvas — with a big
-      // brush on a small sample, painting the edge puts the cursor outside.
-      // Out-of-bounds stamps clip harmlessly; edge-crossing segments still
-      // paint the border pixels.
+      // Document-level so strokes survive leaving the canvas; out-of-bounds stamps
+      // clip harmlessly.
       function strokeMove(e) {
         if (!stroking) return;
         if (e.buttons === 0) { stroking = null; return; }

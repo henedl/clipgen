@@ -51,8 +51,7 @@
     btn.type = "button";
     btn.className = "filter-chip";
     var hue = resolveHue(opts.label, opts.hue);
-    // `opts.color` (CSS color string) overrides the oklch(hue) path so
-    // detector chips can pin to the canonical `--color-task-*` tokens.
+    // `opts.color` overrides the oklch(hue) path; detector chips pin to `--color-task-*` tokens.
     var dotColor = opts.color || fmtHue(hue);
 
     if (opts.dot !== false) {
@@ -76,9 +75,7 @@
 
     if (opts.active) {
       btn.classList.add("is-active");
-      // Active state still uses oklch for the bg/border tints since they need
-      // explicit alpha; the dot pulls from `dotColor` so the canonical token
-      // shows on detector chips when `opts.color` is supplied.
+      // Active bg/border stay oklch (they need alpha); the dot takes `dotColor`.
       btn.style.setProperty("--cg-chip-fg", dotColor);
       btn.style.setProperty("--cg-chip-bg", fmtHue(hue, 0.7, 0.16, 0.12));
       btn.style.setProperty("--cg-chip-border", fmtHue(hue, 0.7, 0.16, 0.45));
@@ -107,11 +104,7 @@
     return btn;
   }
 
-  // ---- DensityTimeline ----
-  //
-  // events: [{ t: 0..1, count, hue?, label? }, ...]
-  // marker: 0..1 (optional), tickCount: number of tick labels (default 6),
-  // durationSec: number — used to format tick labels as M:SS / H:MM:SS.
+  // ---- DensityTimeline: events [{ t: 0..1, count, hue?, label? }], marker 0..1, tickCount (6), durationSec.
 
   function fmtTick(sec) {
     var s = Math.max(0, Math.floor(sec));
@@ -162,12 +155,7 @@
         bar.className = "density-timeline-bar";
         var hue = resolveHue(e.label, e.hue);
         var alpha = Math.min(1, 0.35 + 0.6 * ((e.count || 1) / max));
-        // Span from start to end so bar width reflects clip length; `min-width`
-        // in CSS keeps short spans visible and clickable. Zero-span events (e.g.
-        // unpadded transcript bookmarks) have no positive width, so center the
-        // min-width marker on the timestamp like createSwimLane — but via a left
-        // offset (half the 4px min-width) rather than translateX, so the
-        // class-based hover scaleY transform is left intact.
+        // Zero-span events center the 4px min-width marker with a left offset, not translateX (hover scaleY).
         var widthPct = typeof e.tEnd === "number" && e.tEnd > e.t ? (e.tEnd - e.t) * 100 : 0;
         if (widthPct > 0) {
           bar.style.left = e.t * 100 + "%";
@@ -175,8 +163,7 @@
         } else {
           bar.style.left = "calc(" + e.t * 100 + "% - 2px)";
         }
-        // `e.color` (CSS color string) overrides the oklch(hue) path so
-        // detector bars can pin to the canonical `--color-task-*` tokens.
+        // `e.color` overrides the oklch(hue) path; detector bars pin to `--color-task-*` tokens.
         bar.style.background = e.color
           ? "color-mix(in oklch, " + e.color + " " + Math.round(alpha * 100) + "%, transparent)"
           : fmtHue(hue, 0.7, 0.16, alpha);
@@ -192,8 +179,7 @@
       }
     }
 
-    // Same shape as createSwimLane: three listeners on the track, not three
-    // per bar. mouseenter doesn't bubble, so hover uses mouseover/out.
+    // Three listeners on the track, not per bar; mouseenter doesn't bubble, so mouseover/out.
     function bindDelegates() {
       if (typeof opts.onBarMouseEnter === "function" || typeof opts.onBarMouseLeave === "function") {
         track.addEventListener("mouseover", function (ev) {
@@ -274,17 +260,7 @@
     return wrap;
   }
 
-  // ---- SwimLane ----
-  //
-  // participants: array of participant IDs (strings) shown as lane labels.
-  // events: [{ p, t, tEnd?, source?, label, intensity? }, ...] — `p` matches a
-  //   participant id; `t` and `tEnd` are normalized 0..1 times; if `tEnd` is
-  //   omitted, the marker renders at minimum width. `source` selects a sub-lane
-  //   when `sources` length > 1; `label` resolves to a hue via categoryHue().
-  // sources: ordered list of source ids (default ['sheet']). Each participant
-  //   gets one sub-row per source.
-  // clusters: [{ t0, t1, hue, n }, ...] — cluster bands that span the whole timeline.
-  // durationSec: numeric duration; tick labels are interpolated to mm:ss / h:mm:ss.
+  // ---- SwimLane: opts.participants, events [{p, t, tEnd?, source?, label, intensity?}], sources, clusters, durationSec.
 
   function fmtSwimTick(sec) {
     var s = Math.max(0, Math.floor(sec));
@@ -429,8 +405,7 @@
     function renderEvents() {
       var existing = lanes.querySelectorAll(".cg-swim-event");
       for (var i = 0; i < existing.length; i++) existing[i].remove();
-      // Sparse, indexed by events[] so getEventsForParticipant / setHovered
-      // address by event idx rather than packed render order.
+      // Sparse, indexed by events[] so getEventsForParticipant / setHovered address by event idx.
       state.eventEls = new Array(state.events.length);
       var subH = effectiveSubRowH();
       var sCount = state.sources.length;
@@ -452,8 +427,7 @@
         var top = rowTop + (subH - markerH) / 2;
         var leftPct = Math.max(0, Math.min(1, e.t)) * 100;
         var widthPct = 0;
-        // Navigational events (boundaries) always render as a thin point tick —
-        // orientation scaffolding, not a span — even if the cluster carries one.
+        // Navigational events (boundaries) always render as a point tick, never a span.
         if (!e.navigational && typeof e.tEnd === "number" && e.tEnd > e.t) {
           widthPct = Math.min(1, e.tEnd - e.t) * 100;
         }
@@ -483,9 +457,7 @@
       lanes.appendChild(frag);
     }
 
-    // Hover/click on thousands of markers via three listeners on the wrap, not
-    // three per marker. mouseenter doesn't bubble, so hover uses mouseover/out
-    // with a relatedTarget guard. Bound once — renderEvents only replaces nodes.
+    // Three listeners on the wrap, not per marker; mouseover/out with a relatedTarget guard. Bound once.
     function bindDelegates() {
       if (typeof opts.onEventHover === "function") {
         lanes.addEventListener("mouseover", function (ev) {
@@ -667,10 +639,7 @@
     return card;
   }
 
-  // ---- CoverageMatrix ----
-  //
-  // rows: [{ p, sheet, screenspace, transcript }]; counts ≥ 0.
-  // Hues: sheet=280, screenspace=220, transcript=145 (from the prototype).
+  // ---- CoverageMatrix: rows [{ p, sheet, screenspace, transcript }]; hues sheet=280, screenspace=220, transcript=145.
 
   function _covCellBg(n, hue, max) {
     if (!n) return "transparent";
@@ -806,10 +775,7 @@
     return btn;
   }
 
-  // Render a .cg-btn as a left-to-right progress bar. Pairs with the
-  // .cg-btn-progress rule + --progress var in primitives.css. Accepts an
-  // element or an element id; pass a fraction in [0, 1] to set the fill,
-  // or null/-1 to clear it.
+  // Render a .cg-btn as a progress bar (.cg-btn-progress + --progress in primitives.css); null/-1 clears.
   function setButtonProgress(btn, fraction) {
     if (typeof btn === "string") btn = document.getElementById(btn);
     if (!btn) return;

@@ -16,9 +16,7 @@ from typing import Any
 import cv2
 
 try:
-    # cv2.data.haarcascades is a submodule attribute, so ty needs the explicit
-    # import. Absent on cv2 builds without the bundled cascade data — the face
-    # channel feature-detects it and degrades to a zeros map.
+    # ty needs the explicit submodule import. Missing cascade data degrades the face channel to zeros.
     import cv2.data
 except ImportError:  # pragma: no cover - depends on the installed cv2 build
     pass
@@ -66,10 +64,7 @@ class _ConsecutiveBuffer:
         self._timestamps.append(ts)
         if len(self._events) >= self.size:
             median_ts = statistics.median(self._timestamps)
-            # Pair the median timestamp with the nearest frame's payload: the exact
-            # middle for odd-length runs, and for even lengths (median interpolated
-            # between two frames) the nearer real frame rather than an arbitrary
-            # upper-middle one.
+            # Stamp the median timestamp on the nearest frame's payload (even runs interpolate the median).
             nearest = min(
                 range(len(self._timestamps)),
                 key=lambda i: abs(self._timestamps[i] - median_ts),
@@ -344,10 +339,7 @@ def denormalize_region(
         "w": round(region["w"] * target_w),
         "h": round(region["h"] * target_h),
     }
-    # Contour vertices are bbox-relative (0-1 of the region's own rect), so they
-    # survive denormalization verbatim. Copying here threads the mask into every
-    # region_coords consumer (task snapshots, multitool steps, workflows,
-    # calibration) with no further plumbing.
+    # Contour points are bbox-relative, so they pass through denormalization unchanged into every region_coords consumer.
     points = region.get("points")
     if points:
         out["mask_points"] = points
@@ -399,8 +391,7 @@ def resolve_region_request(
         raise ValueError(f"Region '{region_name}' not found")
 
     if not isinstance(region_ref, dict):
-        # ValueError, not TypeError: this resolver's contract is "ValueError means
-        # bad request", and every caller catches it to render a hint or a 400.
+        # ValueError, not TypeError: callers catch ValueError to render a hint or a 400.
         raise ValueError("region_ref must be an object")  # noqa: TRY004
 
     source = str(region_ref.get("source", "")).strip()
@@ -468,14 +459,9 @@ def average_color_hsv(
         Dict with keys ``h`` (0-180), ``s`` (0-255), ``v`` (0-255).
     """
     if region_pixels.size == 0:
-        # A region cropped fully off-frame: a mean over the empty crop would
-        # yield NaN (same guard as color_present).
+        # Off-frame crop: a mean over zero pixels is NaN (same guard as color_present).
         return {"h": 0.0, "s": 0.0, "v": 0.0}
-    # Full-resolution convert + cv2.mean is the exact per-pixel HSV mean this
-    # function documents. It replaced a ≤64 INTER_AREA downsample + np.mean:
-    # the resize averaged in *BGR* space before converting, which desaturates
-    # textured regions (mean-of-converted ≠ convert-of-mean), and its generic
-    # resize path cost ~3.6 ms per 720p frame vs ~0.5 ms for this pair.
+    # Convert at full resolution: a BGR downsample before converting desaturates textured regions.
     hsv = cv2.cvtColor(region_pixels, cv2.COLOR_BGR2HSV)
     if mask is not None and np.any(mask):
         mean = cv2.mean(hsv, mask=mask)
@@ -582,10 +568,7 @@ def color_present(
     if region_pixels.size == 0:
         return False, 0.0
     hsv = cv2.cvtColor(region_pixels, cv2.COLOR_BGR2HSV)
-    # Integer band tests on the uint8 HSV rather than three full-size float32
-    # casts and comparisons: identical mask (see _hsv_match_bands), ~12x faster,
-    # and no ~25 MB of per-frame temporaries at 1080p — this path deliberately
-    # runs at full resolution, so it is the hottest per-pixel routine here.
+    # uint8 band tests, not float32 casts: identical mask (see _hsv_match_bands), ~12x faster at full resolution.
     bands = _hsv_match_bands(
         float(target_color["h"]),
         float(target_color["s"]),
@@ -601,9 +584,7 @@ def color_present(
     match = (
         hits.astype(bool) if hits is not None else np.zeros(hsv.shape[:2], dtype=bool)
     )
-    # Shaped regions: only pixels inside the polygon count, in both the match
-    # numerator and the coverage denominator. A mask emptied by extreme downscale
-    # falls back to the full rect, as average_color_hsv does.
+    # Polygon pixels only, in numerator and denominator; an emptied mask falls back to the rect.
     if mask is not None and not np.any(mask):
         mask = None
     denom = match.size
@@ -841,9 +822,7 @@ def compute_phash(region_pixels: np.ndarray, gray: np.ndarray | None = None) -> 
     return PHash(diff)
 
 
-# Prepared template payload shared across frames in a scan: grayscale blurred
-# template, grayscale blurred mask (or None), and a "degenerate" flag set when
-# the template has near-zero variance (TM_CCOEFF_NORMED is undefined there).
+# (blurred gray template, binarized mask or None, degenerate flag); see _prepare_template.
 _PreparedTemplate = tuple[np.ndarray, "np.ndarray | None", bool]
 
 
@@ -893,17 +872,12 @@ def _prepare_template(
     """
     k = config.SCREENSPACE_BLUR_KERNEL
     tmpl_gray = cv2.cvtColor(cv2.GaussianBlur(template, (k, k), 0), cv2.COLOR_BGR2GRAY)
-    # Binarize the alpha mask (>= 128 -> 255) rather than blurring it: soft masks
-    # let semi-transparent edge pixels contribute partially to cv2.matchTemplate,
-    # inflating TM_CCOEFF_NORMED for mostly-transparent PNG icons.
+    # Binarize, don't blur: soft edges inflate TM_CCOEFF_NORMED for mostly-transparent PNG icons.
     if mask is not None:
         _, gray_mask = cv2.threshold(mask, 127, 255, cv2.THRESH_BINARY)
     else:
         gray_mask = None
-    # Degenerate if the pixels that actually contribute to matching have no
-    # variance: TM_CCOEFF_NORMED normalizes by the masked template std, so at ~0
-    # (a mostly-transparent PNG with a flat opaque patch, especially scaled down)
-    # the denominator underflows and every position scores ~1.0.
+    # Degenerate when contributing pixels have ~0 std: TM_CCOEFF_NORMED then scores ~1.0 everywhere.
     if gray_mask is not None:
         masked = tmpl_gray[gray_mask > 0]
         contributing_std = float(masked.std()) if masked.size else 0.0
@@ -970,9 +944,7 @@ def _match_template_prepared(
     if len(locs[0]) == 0:
         return []
 
-    # Pathological matchTemplate output (low-variance masked templates at certain
-    # scales) can yield tens of thousands of above-threshold candidates, and the
-    # O(n^2) NMS below would freeze the worker. Cap by raw score.
+    # Low-variance templates can yield thousands of candidates; cap by score or O(n^2) NMS freezes.
     _MAX_CANDIDATES = 5000
     scores = result[locs]
     if len(locs[0]) > _MAX_CANDIDATES:
@@ -982,8 +954,7 @@ def _match_template_prepared(
     else:
         ys, xs = locs[0], locs[1]
 
-    # Vectorized greedy NMS. All boxes share the template's size, so IoU
-    # reduces to inter = max(0, tw-|dx|) * max(0, th-|dy|) over int arrays.
+    # Vectorized greedy NMS; same-size boxes make inter = max(0, tw-|dx|) * max(0, th-|dy|).
     finite = np.isfinite(scores)
     if not finite.all():
         ys, xs, scores = ys[finite], xs[finite], scores[finite]
@@ -1077,8 +1048,7 @@ def _frame_edge_map(frame: np.ndarray) -> np.ndarray:
     return _edge_blur(canny_edges(gray))
 
 
-# Prepared shape reference: one edge ridge template per usable ladder scale.
-# Empty list = degenerate (no scale kept enough edge pixels to match on).
+# One edge-ridge template per usable ladder scale; empty means degenerate (too few edge pixels).
 _PreparedShape = list[dict[str, Any]]
 
 _MIN_SHAPE_EDGE_PIXELS = 20  # raw Canny pixels a ladder scale needs to be matchable
@@ -1135,8 +1105,7 @@ def _prepare_shape_reference(
     gray = cv2.cvtColor(reference, cv2.COLOR_BGR2GRAY)
     if mask is not None:
         _, mask = cv2.threshold(mask, 127, 255, cv2.THRESH_BINARY)
-        # PNG decode zero-fills transparency, so Canny rings the alpha edge;
-        # eroding drops that ring (plus dilation bleed) from the reference.
+        # Transparency decodes as zeros, so Canny rings the alpha edge; erode it away.
         mask = cv2.erode(mask, _morph_kernel(3), iterations=2)
         if not np.any(mask):
             return []
@@ -1322,8 +1291,7 @@ def match_shape(
             }
             for y, x, sc in zip(ys, xs, scores, strict=True)
         )
-    # Pathological frames can flood the NMS from several scales at once;
-    # cap the combined pool by score like the per-scale template cap.
+    # Several scales can flood NMS at once; cap the pool like the per-scale template cap.
     if len(candidates) > _MAX_CANDIDATES:
         candidates.sort(key=lambda c: -c["score"])
         del candidates[_MAX_CANDIDATES:]
@@ -1378,9 +1346,7 @@ def compute_optical_flow(
     if pyr_scale <= 0.0:
         pyr_scale = config.SCREENSPACE_FLOW_PYR_SCALE
 
-    # Resize to max 256px for speed. Per-frame callers (scan_flow) pre-downscale
-    # via flow_downscale and carry the previous frame's result forward, in which
-    # case the inputs arrive <=256px and these are no-ops.
+    # Cap at 256px; scan_flow pre-downscales and carries prev forward, so these are then no-ops.
     prev_gray, _ = flow_downscale(prev_gray)
     curr_gray, mask = flow_downscale(curr_gray, mask)
     if mask is not None and not np.any(mask):
@@ -1393,18 +1359,14 @@ def compute_optical_flow(
     dx, dy = flow[..., 0], flow[..., 1]
     inside = mask > 0 if mask is not None else None
 
-    # Angles (cv2.phase) are deferred to the grid branch below. Both halves
-    # track cartToPolar within last-ulp float32 drift (bound pinned in
-    # test_flow.py), far under the rounding of every emitted value.
+    # Angles wait for the grid branch. Both paths track cartToPolar within last-ulp drift (test_flow.py).
     mag = cv2.magnitude(dx, dy)
 
     mean_mag = (
         float(np.mean(mag[inside])) if inside is not None else float(np.mean(mag))
     )
 
-    # Dominant angle via the Cartesian identity: the magnitude-weighted
-    # circular mean atan2(sum(mag*sin(a)), sum(mag*cos(a))) simplifies to
-    # atan2(sum(dy), sum(dx)) because mag*sin(a) = dy and mag*cos(a) = dx.
+    # Weighted circular mean reduces to atan2(sum(dy), sum(dx)) since mag*sin(a) = dy, mag*cos(a) = dx.
     if mean_mag > 0:
         if inside is not None:
             sin_sum = float(np.sum(dy[inside]))
@@ -1491,8 +1453,7 @@ def compute_scene_fingerprint(
 
     bins = config.SCREENSPACE_SCENE_HISTOGRAM_BINS
     hsv = cv2.cvtColor(region_pixels, cv2.COLOR_BGR2HSV)
-    # 3D histogram, pre-flattened to 1D float32 so compare_scene_fingerprints
-    # can pass it directly to cv2.compareHist without a per-comparison copy.
+    # Pre-flattened 1D float32 so compare_scene_fingerprints passes it to cv2.compareHist without copying.
     hist = cv2.calcHist(
         [hsv],
         [0, 1, 2],
@@ -1546,8 +1507,7 @@ def compare_scene_fingerprints(
 
     Returns similarity score 0.0–1.0.
     """
-    # Histogram correlation: range [-1, 1] → [0, 1].
-    # Histograms are pre-flattened to 1D float32 by compute_scene_fingerprint.
+    # Histogram correlation mapped [-1, 1] → [0, 1]; histograms arrive pre-flattened 1D float32.
     hist_corr = cv2.compareHist(
         fp_a["histogram"],
         fp_b["histogram"],
@@ -1566,9 +1526,7 @@ def compare_scene_fingerprints(
     dist = float(np.linalg.norm(stats_a - stats_b))
     color_sim = 1.0 - (dist / max_dist) if max_dist > 0 else 1.0
 
-    # Weighted average. cv2.compareHist can return NaN on degenerate
-    # (e.g. all-zero) histograms; clamp would not catch it because
-    # NaN comparisons return False.
+    # Weighted average. compareHist can return NaN on all-zero histograms; clamp misses NaN.
     score = 0.6 * hist_sim + 0.2 * edge_sim + 0.2 * color_sim
     if not math.isfinite(score):
         return 0.0
@@ -1612,10 +1570,7 @@ def _merge_timestamp_spans(
 
 
 # ── Attention (computational saliency) ───────────────────────────────
-# Classic bottom-up composite (no learned model, no contrib modules):
-# spectral residual + Lab center-surround contrast + frame-diff motion
-# [+ optional Haar faces], multiplied by a center-weighted prior. The
-# per-frame map feeds the same grid/heatmap pipeline as flow/change.
+# Bottom-up: spectral residual, contrast, motion, optional Haar faces, center prior.
 
 
 @functools.cache
@@ -1665,8 +1620,7 @@ def compute_spectral_residual(gray: np.ndarray) -> np.ndarray:
         unit = np.divide(scale, mag, out=np.zeros_like(scale), where=mag > 0)
         out_real = real * unit
         out_imag = imag * unit
-        # A zero coefficient (uniform frame) has no direction; the numpy branch
-        # reads angle(0) as 0, i.e. a unit vector of 1+0j. Match that.
+        # A zero coefficient has no direction; match numpy's angle(0) = 0, unit vector 1+0j.
         flat = mag <= 0
         np.copyto(out_real, scale, where=flat)
         np.copyto(out_imag, np.float32(0.0), where=flat)
@@ -1735,9 +1689,7 @@ def compute_motion_saliency(
     return cv2.GaussianBlur(diff, (9, 9), 2.5)
 
 
-# Lazy Haar-cascade singleton. Typed Any because the legacy CascadeClassifier
-# API only exists on OpenCV 4.x wheels — opencv-python-headless 5.x removed it,
-# so it must never be named in annotations or called unguarded.
+# Lazy Haar-cascade singleton, typed Any: opencv 5.x wheels drop CascadeClassifier; never annotate or call unguarded.
 _face_cascade: Any | None = None
 
 
@@ -1832,9 +1784,7 @@ def compute_saliency_map(
     if include_face is None:
         include_face = config.SCREENSPACE_ATTENTION_FACE_CHANNEL
     if include_face and not face_detection_available():
-        # No CascadeClassifier in this cv2 build (opencv 5.x wheels): keep the
-        # face weight out of the denominator so the map isn't dimmed by a
-        # channel that can only ever contribute zeros.
+        # No CascadeClassifier: drop the face weight from the denominator so zeros don't dim the map.
         include_face = False
 
     curr_gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
@@ -1891,8 +1841,7 @@ def saliency_kwargs_from_params(params: dict[str, Any]) -> dict[str, Any]:
     return kwargs
 
 
-# grid_n -> rounded cell-center coordinates. Bounded by the handful of grid
-# sizes in use (config default plus explicit task params).
+# grid_n -> cell-center coordinates; bounded by the few grid sizes in use.
 _grid_center_cache: dict[int, list[float]] = {}
 
 

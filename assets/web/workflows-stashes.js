@@ -35,9 +35,7 @@
     });
   }
 
-  // Surface the built-in recipes on the empty-canvas placeholder so a fresh
-  // blueprint has a one-click starting point (they otherwise hide in the sidebar).
-  // The slot lives inside #wfCanvasEmpty, so it shows/hides with the empty state.
+  // Built-in recipes as one-click chips inside #wfCanvasEmpty (hidden with the empty state).
   function renderEmptyRecipes() {
     var host = qs("#wfEmptyRecipes");
     if (!host) return;
@@ -86,9 +84,7 @@
     if (stash.builtin) item.classList.add("wf-stash-builtin");
     item.dataset.stashId = stash.id;
     item.draggable = true;
-    // Use the [data-tooltip] singleton, not native title — title doesn't render
-    // on draggable=true rows (same reason as the palette rows in workflows.js),
-    // so this affordance hint never appeared.
+    // data-tooltip, not title: native title doesn't render on draggable rows.
     item.setAttribute(
       "data-tooltip",
       stash.builtin
@@ -137,8 +133,7 @@
       e.dataTransfer.effectAllowed = "copy";
     });
 
-    // Click-to-add (drops at viewport center). The rename/delete buttons
-    // stopPropagation, so this only fires for a bare item click.
+    // Click-to-add at viewport center; the icon buttons stopPropagation.
     item.addEventListener("click", function () {
       if (!state.ready) return;
       instantiateStash(stash.id, null);
@@ -147,8 +142,7 @@
     return item;
   }
 
-  // A bare icon button (mask-image glyph set by the CSS class) that swallows the
-  // click so the parent item's click-to-add doesn't also fire.
+  // Icon button (glyph via CSS mask) that swallows the click so click-to-add doesn't fire.
   function iconButton(cls, title, onClick) {
     var btn = el("button", cls);
     btn.type = "button";
@@ -190,8 +184,6 @@
         return JSON.parse(JSON.stringify(e));
       });
 
-    // Nodes/edges are captured above, before the dialog opens (the blocking
-    // modal keeps the selection from changing underneath it anyway).
     WF.openPromptDialog({
       title: "Name this stash",
       initial: "Stash",
@@ -217,11 +209,7 @@
     });
   }
 
-  // Stamp a sub-graph (deep-cloned nodes + induced edges) onto the canvas with
-  // fresh ids, anchored at dropWorld (drag) or a cascaded viewport center (null).
-  // Shared by stash instantiation and clipboard paste (workflows-canvas.js).
-  // Deep-clones each node so any non-core fields (e.g. a `disabled` flag) survive.
-  // Returns the new node ids.
+  // Stamp deep-cloned nodes and edges with fresh ids; shared with clipboard paste. Returns new ids.
   function instantiateSubgraph(nodes, edges, dropWorld) {
     if (!nodes || !nodes.length) return [];
 
@@ -231,8 +219,7 @@
       idMap[n.id] = "n_" + WF.randomId();
     });
 
-    // Anchor the sub-graph's top-left node to the drop point (or the cascaded
-    // viewport center) so it never stacks exactly on existing nodes.
+    // Anchor the top-left node at the drop point or cascaded center so nothing stacks.
     var minX = Infinity;
     var minY = Infinity;
     nodes.forEach(function (n) {
@@ -281,11 +268,7 @@
     return newIds;
   }
 
-  // Stamp a stash's sub-graph onto the canvas with fresh ids. dropWorld is the
-  // world-coord drop point (drag) or null (click-to-add → viewport center).
-  // Recipes stamp with deliberately-empty required params (participant, word,
-  // selector …); rather than leaving the user to hunt the red cards, select and
-  // pan to the first one that needs filling in.
+  // Recipes ship with empty required params; focus the first card that needs one.
   function instantiateStash(stashId, dropWorld) {
     var stash = findStash(stashId);
     if (!stash || !stash.nodes || !stash.nodes.length) return;
@@ -338,8 +321,7 @@
 
   // ---- Toolbar gate + init --------------------------------------------------
 
-  // "Stash selection" is only meaningful with a non-empty selection on a ready
-  // canvas. Called from renderAllNodes (after every selection change) + init.
+  // Enabled only with a selection on a ready canvas; renderAllNodes and init call this.
   function syncStashButton() {
     var btn = qs("#wfSaveStash");
     if (!btn) return;

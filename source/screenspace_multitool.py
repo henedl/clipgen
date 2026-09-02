@@ -82,9 +82,8 @@ def scan_multitool(
         scan_end = vid_duration
     total_range = scan_end - scan_start
 
-    # Validate here too: a misconfigured offset would otherwise yield an empty
-    # result with no explanation, and direct callers (MultitoolTool.scan, the
-    # Workflows ss_scan node) bypass the server route's _coerce_offset check.
+    # Direct callers (MultitoolTool.scan, Workflows ss_scan) bypass the route's
+    # _coerce_offset check.
     for i in range(1, len(steps)):
         off = steps[i].get("offset")
         if not isinstance(off, dict):
@@ -107,9 +106,8 @@ def scan_multitool(
     tool_types = [s["type"] for s in steps]
     step_regions = [s.get("region_coords", region) for s in steps]
     prev_frame: list[np.ndarray | None] = [None]
-    # Per-frame memo shared across a frame's steps and rolled forward, so temporal
-    # tools (change/flow/inactivity) reuse the previous frame's crop/gray/phash.
-    # See check_frame_for_tool's cache/prev_cache.
+    # Per-frame memo rolled forward so temporal tools reuse the previous frame;
+    # see check_frame_for_tool.
     prev_cache: list[dict[Any, Any] | None] = [None]
     results: list[dict[str, Any]] = []
 
@@ -118,10 +116,7 @@ def scan_multitool(
 
     if _multitool_has_offset(steps):
         # ---- Offset path: two-phase collect-then-join --------------------
-        # Phase 1: one decode pass evaluating EVERY step on EVERY frame (no
-        # short-circuit), recording pass/fail + detail per sampled timestamp.
-        # ``prev_frame`` is maintained as in the fast path so temporal tools
-        # still see the prior frame.
+        # Phase 1: evaluate every step on every frame.
         ts_list: list[float] = []
         passed_cols: list[list[bool]] = [[] for _ in steps]
         detail_cols: list[list[dict[str, Any] | None]] = [[] for _ in steps]
@@ -146,8 +141,7 @@ def scan_multitool(
             prev_frame[0] = frame
             prev_cache[0] = cache
             if on_progress and total_range > 0:
-                # Reserve the last 10% for the join, so the bar doesn't sit at
-                # 100% while it runs.
+                # Reserve the last 10% for the join.
                 on_progress(0.9 * (ts - scan_start) / total_range)
             return None
 
@@ -163,11 +157,8 @@ def scan_multitool(
             profile_kind="multitool",
         )
 
-        # A user cancel/pause stops the decode early; skip the join+emit and let
-        # the worker settle the status. (``detect_first`` does not trip _cancel
-        # here — it only fires on the first on_result.) The join needs every frame
-        # from ``scan_start``, so offset tasks cannot resume incrementally;
-        # ``ScreenspaceWorker.resume`` restarts them from scratch.
+        # Cancel/pause skips the join; the worker settles status. Offset tasks
+        # restart from scratch on resume.
         if _cancel():
             return []
 

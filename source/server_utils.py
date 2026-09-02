@@ -390,8 +390,7 @@ def make_participant_cache(
         if source["dir"] == input_dir and source["mtime"] == mtime:
             return
         with module._participants_lock:
-            # A racing request may have rebuilt, or a sheet swap may have
-            # replaced the source entirely, while we waited on the lock.
+            # A racing request or sheet swap may have replaced the source meanwhile.
             if module._participant_source is not source:
                 return
             if source["dir"] == input_dir and source["mtime"] == mtime:
@@ -478,10 +477,7 @@ def make_sse_channel(
                         pass
 
     def stream(payload: Callable[[], str], key: Any = None) -> Response:
-        # Count only, never a duration: an EventSource's lifetime measures how
-        # long a tab stayed open, and it auto-reconnects, so a "duration" would
-        # shrink the more broken the stream is. The open count is the number
-        # that actually diagnoses a flapping client.
+        # Count only: EventSource auto-reconnects, so a duration would shrink as the stream breaks.
         if config.PROFILING:
             profiling.count(_profiled_rule("sse.open"))
         client_q: queue.Queue[str] = queue.Queue(maxsize=maxsize)

@@ -335,20 +335,13 @@ def find_citations(
     )
 
     if not response:
-        # The model call itself failed (server down, model missing, aborted
-        # mid-request). Returning a full list of empty refs here would persist a
-        # success-shaped result the UI cannot tell apart from "no sources
-        # exist", so report the failure and let the caller retry.
+        # Model call failed; empty refs would look like success. Caller retries.
         utils.warning_print("Citations: no response from the model")
         return None
 
     stripped = _strip_think(response)
     if not _CITATION_LINE_RE.search(stripped):
-        # A non-empty response with zero lines in the expected "N: ts" shape
-        # (markdown bolding, "1." numbering, prose) is a parse failure, not
-        # "no sources exist" — committing a full list of empty refs would look
-        # identical to the latter in the UI. A response that *does* match the
-        # format but answers NONE everywhere still commits below.
+        # Zero "N: ts" lines is a parse failure, not "no sources"; NONE still commits.
         utils.warning_print("Citations: response did not match the expected format")
         return None
     parsed = _parse_citation_response(stripped, segments)
@@ -356,8 +349,7 @@ def find_citations(
     citations: list[dict[str, Any]] = []
     for i, sentence in enumerate(sentences):
         refs = sorted(parsed.get(i, []), key=lambda r: r["start"])
-        # The model may cite two timestamps that resolve to one segment;
-        # duplicates would eat the per-claim ref budget.
+        # Two cited timestamps may resolve to one segment; dedupe to protect the ref budget.
         seen_segments: set[int] = set()
         deduped: list[dict[str, Any]] = []
         for ref in refs:
@@ -379,9 +371,7 @@ def _run_citations(
     cancel_event: threading.Event | None,
     on_token: Callable[[str], None] | None = None,
 ) -> list[dict[str, Any]] | None:
-    # on_token is accepted for uniform dispatch but ignored: citations are
-    # parsed line-by-line from the *complete* response, so streaming raw tokens
-    # to the UI would be meaningless.
+    # on_token is ignored: citations parse from the complete response only.
     summary = entry.get("summary") or ""
     segments = entry.get("segments") or []
     return find_citations(summary, segments, cancel_event=cancel_event)
@@ -457,10 +447,7 @@ def _extract_json_array(text: str) -> list[Any]:
     def _is_object_array(data: Any) -> bool:
         return isinstance(data, list) and all(isinstance(x, dict) for x in data)
 
-    # Only a *non-empty* object array wins the scan — `[]` matches trivially,
-    # so an empty array anywhere before the payload ('{"moments": [], ...}')
-    # would otherwise end the search with zero results. A genuine empty array
-    # is remembered and returned only after nothing better turns up.
+    # Only a non-empty object array wins; `[]` is the fallback when nothing better appears.
     saw_empty_array = False
 
     fence = re.search(r"```(?:json)?\s*(\[.*?\])\s*```", cleaned, re.DOTALL)
@@ -488,9 +475,7 @@ def _extract_json_array(text: str) -> list[Any]:
         start = cleaned.find("[", start + 1)
 
     if saw_empty_array:
-        # The model explicitly answered with an empty array — that IS the
-        # result; salvaging stray objects from surrounding prose would
-        # fabricate entries the model never returned.
+        # The model answered with an empty array; salvaging prose objects would fabricate entries.
         return []
     return list(_extract_json_objects(cleaned))
 
@@ -503,10 +488,7 @@ def _format_friction_candidates(
     Context segments are merged into a single ordered, de-duplicated block so
     adjacent candidates don't repeat lines.
     """
-    # Mirror friction.score_segments' id scheme exactly: it synthesizes
-    # str(index) for id-less segments (the Workflows path, where segments are
-    # never manifest-saved and so never get ids), and a lookup keyed on the
-    # raw id would drop every candidate there.
+    # Match friction.score_segments' id scheme: str(index) for id-less segments (Workflows path).
     id_to_idx = {(seg.get("id") or str(i)): i for i, seg in enumerate(segments)}
     include: set[int] = set()
     for cand in candidates:
@@ -606,9 +588,7 @@ def find_friction_moments(
 
     block = _format_friction_candidates(segments, candidates)
     if not block:
-        # Candidates exist but none rendered (ids drifted after an edit, or
-        # every context segment is empty) — no model call was made, so this is
-        # "didn't run", not "ran and found nothing".
+        # Candidates rendered nothing, so no model call was made: "didn't run", not "found nothing".
         utils.warning_print("Friction: no candidate segments could be rendered")
         return None
 
@@ -633,9 +613,7 @@ def find_friction_moments(
         )
         return None
 
-    # Keep only moments that cite at least one real segment, trimming any
-    # hallucinated IDs. An unsourced moment can't be seeked to or quoted, so it
-    # must never reach the manifest.
+    # Drop hallucinated segment ids; an unsourced moment cannot be seeked to or quoted.
     valid_ids = {(seg.get("id") or str(i)) for i, seg in enumerate(segments)}
     moments: list[dict[str, Any]] = []
     for moment in _parse_friction_response(response):
@@ -693,9 +671,7 @@ def _run_friction(
     if cancel_event is not None and cancel_event.is_set():
         return None
 
-    # moments is None only when the LLM call itself failed; persist the
-    # programmatic scores anyway (heatmap/stats/marks still work) but record that
-    # moment detection did not succeed so the UI can say so instead of pretending.
+    # None means the LLM call failed; keep programmatic scores, record the failure.
     llm_ok = moments is not None
 
     return {
@@ -718,12 +694,7 @@ _MAX_REPORT_OBSERVATIONS_CHARS = 4000
 _MAX_REPORT_MARKS_CHARS = 6000
 _REPORT_EMPTY_SECTION = "(none recorded)"
 
-# The report agent needs data that lives outside the transcript entry: sheet
-# observation rows (studio-blueprint process state in server.py) and resolved
-# transcript marks (transcripts_server manifest state). Both reach this module
-# by injection because importing either owner from here would be an import
-# cycle (transcripts_server imports this module). Either getter may be None (CLI runs, tests); the report then
-# degrades to the sources that exist.
+# Injected by configure(): importing server.py or transcripts_server here would cycle.
 _observation_rows_getter: Any = None
 _participant_marks_getter: Any = None
 
@@ -755,9 +726,7 @@ def report_source_lines(participant: str) -> tuple[list[str], list[str]]:
     sheet-less launch) both lists come back empty and a report simply covers
     the summary alone. Shared by ``_run_report`` and the Workflows report node.
     """
-    # Guard each getter so the documented "degrade to the sources that exist"
-    # holds for a *raising* source too — the sheet getter reaches Google's API
-    # and a network hiccup must cost that section, not the whole report.
+    # A raising getter (network hiccup) costs its section, not the whole report.
     obs_rows: list[dict[str, Any]] = []
     if _observation_rows_getter:
         try:
@@ -934,8 +903,7 @@ def _run_report(
 # Registry
 # ---------------------------------------------------------------------------
 
-# Order matters: dependents must appear after their dependencies so the
-# orchestrator can iterate this list to produce a valid run order.
+# Dependents come after their dependencies; the orchestrator iterates in list order.
 AGENTS: list[Agent] = [
     Agent(
         key="summary",

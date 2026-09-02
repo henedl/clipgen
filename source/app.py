@@ -33,8 +33,7 @@ import video
 import viewer
 from utils import ClipRecord
 
-# Re-exported from pipeline.py so `app.process_clips` keeps resolving: cli.py
-# and tests/test_cli_args.py reach these through this module's namespace.
+# Re-exported so cli.py and tests/test_cli_args.py can reach app.process_clips.
 from pipeline import (
     is_excel_worksheet as _is_excel_worksheet,
     process_clips,
@@ -108,9 +107,7 @@ FORMAT_MODE_ALIASES = {
     }
 }
 
-# Dispatch table for standard interactive modes: mode -> (prompt_fn, generate_fn).
-# prompt_fn(ctx) returns a result or None/False to cancel.
-# generate_fn(ctx, result) returns a list of clip records.
+# mode -> (prompt_fn, generate_fn); prompt_fn returns None/False to cancel.
 _STANDARD_MODES = {
     "batch": (
         lambda ctx: interactive.prompt_batch_confirm(ctx),
@@ -163,9 +160,7 @@ def _open_worksheet(
     import gspread
 
     try:
-        # open_by_url / open are network round-trips that bypass
-        # google_api._call_with_api_retry, so they are counted here. This is the
-        # single site for the by-URL, by-index and by-name callers.
+        # open_by_url / open bypass google_api._call_with_api_retry, so count them here.
         with profiling.span("sheets.open"):
             ss = open_callable()
         return google_api.get_worksheet(ss, preferred_name=worksheet_name)
@@ -328,9 +323,7 @@ def _handle_spreadsheet_command(
         return None
     # Handle 'last' command
     if input_name.startswith(config.COMMAND_OPEN_LAST):
-        # doc_list is already the get_all_spreadsheets() result (newest first,
-        # same source the 'new' command reads); reuse it rather than paying
-        # another rate-limited Google Sheets round-trip for data in hand.
+        # doc_list is already newest-first from get_all_spreadsheets(); skip another rate-limited call.
         latest_spreadsheet_name = doc_list[0]
         return open_spreadsheet_by_name(
             gspread_client, doc_list, latest_spreadsheet_name, use_spinner=True
@@ -642,8 +635,7 @@ def _run_reel_mode_interactive(
         utils.info_print("No input. Skipping reel.")
         return ([], False, None)
 
-    # Reused by generate_list below when the chronologic prompt builds it; stays
-    # None for every other reel path (generate_list then fetches once itself).
+    # Set only by the chronologic prompt; generate_list fetches its own otherwise.
     reel_ctx: spreadsheet.SheetContext | None = None
     parsed_reel = spreadsheet.parse_reel_input(reel_input)
     if parsed_reel.get("highlights") and (

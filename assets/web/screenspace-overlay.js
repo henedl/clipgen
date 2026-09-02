@@ -19,8 +19,7 @@
 
   var SS = window.ClipgenScreenspace;
   var state = SS.state;
-  // Hub helpers (published synchronously during the hub's load, before this
-  // file runs). hexToRgba / qs are ambient utils.js globals.
+  // Hub helpers, published before this file loads. hexToRgba / qs are utils.js globals.
   var regionToPixels = SS.regionToPixels,
     regionColorForIndex = SS.regionColorForIndex,
     computeLabelRect = SS.computeLabelRect,
@@ -29,9 +28,7 @@
     taskTypeColor = SS.taskTypeColor,
     _overlayEligibleForActiveTool = SS._overlayEligibleForActiveTool;
 
-  // Build the canvas path for a shaped region's contours (one closed subpath
-  // per contour): points are bbox-relative (0-1 of the region's own rect),
-  // r is the pixel bbox. Contours are disjoint, so plain nonzero fill works.
+  // Canvas path for shaped-region contours: points are bbox-relative (0–1), r is the pixel bbox.
   function traceRegionPolygonPath(ctx, contours, r) {
     ctx.beginPath();
     contours.forEach(function (points) {
@@ -44,9 +41,7 @@
     });
   }
 
-  // In-progress draw stroke: white for a plain new-region draw, green/red/
-  // amber while a shift-add / alt-subtract / shift+alt-intersect edit of the
-  // active region is being drawn (Photoshop selection-modifier semantics).
+  // Draw stroke: white for a new region; green/red/amber for shift-add / alt-subtract / shift+alt-intersect.
   var COMBINE_STROKES = { add: "#34d399", subtract: "#f87171", intersect: "#fbbf24" };
 
   function drawStrokeColor(combine) {
@@ -59,8 +54,7 @@
     var ctx = canvas.getContext("2d");
     ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-    // Scale factor: canvas pixels per display pixel, so chrome looks
-    // the same physical size regardless of the underlying video resolution.
+    // Canvas pixels per display pixel, so chrome keeps one physical size at any video resolution.
     var displayW = canvas.getBoundingClientRect().width || canvas.width;
     var s = canvas.width / displayW;
 
@@ -80,8 +74,7 @@
         ctx.setLineDash(isActive ? [] : [6 * s, 3 * s]);
         var shaped = region.points && region.points.length > 0;
         if (shaped) {
-          // Shaped region: stroke/fill the polygon (points are bbox-relative);
-          // label bar and resize handle keep rendering at the bbox below.
+          // Shaped region: polygon here; label bar and resize handle still use the bbox below.
           traceRegionPolygonPath(ctx, region.points, r);
           ctx.stroke();
           if (isActive) {
@@ -180,10 +173,7 @@
       ctx.restore();
     }
 
-    // Live magic-wand scrub preview: the current flood contour, stroked white
-    // for a new region or in the modifier color for a shift/alt combine, with a
-    // running tolerance readout. Drawn only while the press-drag is active;
-    // release swaps it for a pending region or a boolean edit.
+    // Live magic-wand preview: current flood contour + tolerance readout, only while the press-drag lasts.
     if (state.wandDragging) {
       var wd = state.wandDragging;
       var wcol = drawStrokeColor(wd.combine);
@@ -203,15 +193,8 @@
         ctx.fill();
       }
 
-      // Drag chrome, painted on top of the contour and *not* gated on it: the
-      // flood can find nothing contiguous, and without this the whole drag
-      // would have zero visual response. The anchor marks where the press
-      // landed, the horizontal track shows how far the tolerance scrub has
-      // travelled, and the readout rides the head next to the pointer.
-      // headOffsetPx is the scrub distance in CSS pixels; mapping it here with
-      // the live `s` keeps the head under the cursor even when a panel toggle
-      // or window resize changes the canvas-to-display ratio mid-drag.
-      var headX = wd.seedX + wd.headOffsetPx * s;
+      // Drag chrome, never gated on the contour: an empty flood still needs visible feedback.
+      var headX = wd.seedX + wd.headOffsetPx * s; // CSS px × live s keeps the head under the cursor mid-resize
       var dragged = Math.abs(headX - wd.seedX) >= 2 * s;
       if (dragged) {
         ctx.strokeStyle = hexToRgba(wcol, 0.55);
@@ -233,9 +216,7 @@
       }
       ctx.font = Math.round(11 * s) + "px " + getThemeColors().fontMono;
       ctx.fillStyle = "rgba(255,255,255,0.9)";
-      // Ride the head, but flip to its left when scrubbing leftward (otherwise
-      // the readout sits on top of the track and anchor dot) and clamp to the
-      // canvas so a seed near an edge doesn't push it out of frame.
+      // Readout rides the head, flips left when scrubbing leftward, and clamps inside the canvas.
       var wlabel = "tol " + wd.tolerance;
       var wpad = Math.round(6 * s);
       var wlw = ctx.measureText(wlabel).width;
@@ -277,12 +258,7 @@
       ctx.fillText(p.w + "\u00d7" + p.h + " px", p.x + Math.round(4 * s), p.y + p.h + Math.round(14 * s));
     }
 
-    // Template preview: overlay the uploaded PNG at its effective in-video
-    // size (native PNG pixels * template_scale) so the user can see how
-    // large it will match. Canvas is sized in native video pixels, so the
-    // display-to-video ratio is applied automatically when the browser
-    // scales the canvas to fit the viewport. The overlay is draggable so
-    // the user can position it against specific elements in the frame.
+    // Template preview at effective in-video size (PNG pixels × template_scale); draggable for positioning.
     var tBounds = templateOverlayBounds();
     if (tBounds) {
       var tImg = state.uploadedTemplateImg;
@@ -357,8 +333,7 @@
       var hm = state.heatmapOverlay;
       ctx.globalAlpha = 0.5;
       if (hm.type === "template" || hm.type === "shape" || hm.type === "attention") {
-        // Frame-scoped heatmaps cover the whole canvas (attention's
-        // region_coords are {0,0,0,0} — the region branch would draw nothing).
+        // Frame-scoped heatmaps fill the canvas; attention's region_coords are {0,0,0,0}.
         ctx.drawImage(hm._img, 0, 0, canvas.width, canvas.height);
       } else if (hm.type === "flow" || hm.type === "change") {
         var rPx = hm.region_coords;

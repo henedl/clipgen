@@ -25,8 +25,7 @@ import video
 import viewer
 from utils import ClipRecord
 
-# Active progress bar reference, set during clip pipeline so nested functions
-# (e.g. fuzzy match prompts) can pause/resume the live display.
+# Live progress bar; nested prompts (fuzzy match) pause and resume it.
 _active_progress = None
 _active_secondary_task = None
 
@@ -107,12 +106,11 @@ def _resolve_clip_workers() -> int:
     return workers
 
 
-# Large .mp4 files in the input dir, keyed by path + mtime_ns (one glob/stat pass per run).
+# Large input .mp4s per dir, stamped with mtime_ns: one glob/stat pass per run.
 _fuzzy_input_videos_cache: dict[str, tuple[int | None, list[tuple[int, Path]]]] = {}
 
-# Serializes the missing-video branch of _check_source_video: reel preparation
-# runs per-clip in worker threads, so the shared missing_videos / fuzzy_matches
-# structures and any fuzzy-match prompt must not be touched concurrently.
+# Reel prep runs per-clip in threads; missing_videos, fuzzy_matches, and the
+# prompt need serializing.
 _fuzzy_match_lock = threading.Lock()
 
 
@@ -523,8 +521,8 @@ def _process_single_clip_segments(
     """
     generated = 0
     output_paths: list[tuple[str, int]] = []
-    # Cards are per-segment; a single soft failure makes the whole clip uncarded
-    # as far as the manifest is concerned, so regeneration retries it.
+    # One soft card failure marks the whole clip uncarded, so regeneration retries
+    # it.
     all_cards_applied = True
     extension_map = {
         "clip": config.FILEFORMAT,
@@ -545,16 +543,12 @@ def _process_single_clip_segments(
         titlecards_enabled, titlecard_duration_seconds
     )
 
-    # Multi-video participants carry a duration timeline; global timestamps are
-    # mapped into the owning sub-video at cut time. Absent = single-video fast
-    # path (unchanged behavior, no probing).
+    # Multi-video participants map global timestamps into a sub-video at cut time;
+    # absent means single-video.
     timeline = clip.get("source_timeline")
 
-    # Padding / max-duration (Workflows artifact nodes); the default path is a
-    # no-op and never probes. The EOF limit is only needed when *extending* the
-    # end — trimming or capping can never push the end out. run_ffmpeg now
-    # clamps an over-running span itself, so this is about keeping the padded
-    # end *honest* in the artifact record rather than about salvaging the cut.
+    # Workflows padding: probe EOF only when extending the end, so the recorded
+    # span stays accurate.
     padding_active = pad_pre != 0.0 or pad_post != 0.0 or max_duration > 0.0
     span_limit: float | None = None
     if pad_post > 0.0:
@@ -632,9 +626,8 @@ def _process_single_clip_segments(
                     cancel_flag=cancel_flag,
                 )
             if ok and cards_enabled:
-                # Wrap at the clip's own resolution: for multi-video participants
-                # a clip may come from a later part whose resolution differs from
-                # the first source, so trusting the clip avoids a concat mismatch.
+                # Wrap at the clip's own resolution: a later part may differ from
+                # the first source.
                 ok, cards_applied = titlecards.wrap_clip_with_cards(
                     clip,
                     out_name,
@@ -642,12 +635,11 @@ def _process_single_clip_segments(
                     titlecards_enabled=cards_enabled,
                     titlecard_duration_seconds=card_duration,
                 )
-                # A soft wrap failure keeps a usable, unwrapped clip — record it,
-                # but not as carded, so the generate-cache retries it later.
+                # A soft wrap failure leaves a usable clip; record it uncarded so
+                # the cache retries.
                 if ok and not cards_applied:
                     all_cards_applied = False
-            # Enforce the size cap on the finished clip (after any wrap re-encode),
-            # not on intermediate reel parts (enforce_size=False).
+            # Cap size after any wrap re-encode; reel parts pass enforce_size=False.
             if ok and enforce_size:
                 video.enforce_filesize_limit(out_name, cancel_flag=cancel_flag)
         else:  # output_format == 'screen' or 'gif' — keys off the start time only
@@ -670,9 +662,8 @@ def _process_single_clip_segments(
                     cancel_flag=cancel_flag,
                 )
             else:  # output_format == 'gif'
-                # pad_pre already shifted cut_ts above and pad_post is moot for a
-                # fixed-length gif. max_duration caps the length, floored at 1s so
-                # a fractional cap never yields a 0s gif.
+                # pad_pre already shifted cut_ts; pad_post is moot. max_duration
+                # caps, floored at 1s.
                 gif_duration = config.DEFAULT_GIF_DURATION_SECONDS
                 if remaining is not None:
                     gif_duration = min(gif_duration, remaining)
@@ -722,12 +713,8 @@ def _parallel_map_ordered(
     (e.g. to advance a progress bar). Returns the future->index map so callers
     that need post-cancel draining (see ``_run_clip_pipeline``) can use it.
     """
-    # pipeline.clip (summed item time) over pipeline.pool_wall (elapsed) is
-    # effective parallelism — the number CLIP_PARALLEL_WORKERS is tuned against.
-    # ffmpeg.run times each encode but knows nothing about overlap, so it cannot
-    # tell a saturated pool from a serialized one. Both labels are shared by
-    # every clip pool (here, _regenerate_reel, and Studio's three) because the
-    # knob is global; the ratio is meaningful in aggregate.
+    # pipeline.clip / pipeline.pool_wall is effective parallelism, what
+    # CLIP_PARALLEL_WORKERS is tuned against; shared by every pool.
     worker_fn = profiling.timed("pipeline.clip")(worker_fn)
     with (
         profiling.span("pipeline.pool_wall"),
@@ -903,8 +890,7 @@ def _run_clip_pipeline(
 
     if missing_videos:
         utils.standard_print(f"* Missing source video files: {len(missing_videos)}")
-    # Drop slots from cancelled futures so callers get completed results only —
-    # the sequential path produces the same shape via early-break + append.
+    # Drop cancelled futures' slots; the sequential path yields the same shape.
     results = [r for r in results if r is not None]
     return (results, missing_videos)
 
@@ -1007,8 +993,7 @@ def _transcribe_segments(
             known_terms = transcripts.get_known_terms(manifest) or None
             timeline = clip.get("source_timeline")
             if timeline:
-                # Multi-video participant: transcribe all parts as one global
-                # timeline so segment times match the clip artifacts.
+                # Multi-video: one global timeline so segment times match the clips.
                 transcript_cache[base_video] = transcripts.transcribe_timeline(
                     timeline,
                     context_keywords=context_keywords,
@@ -1290,9 +1275,8 @@ def process_clips(
         if generated_count < len(clip["times"]):
             outputs_skipped += len(clip["times"]) - generated_count
         if segment_details:
-            # Record what actually landed on disk, not what was asked for: a clip
-            # whose wrap soft-failed is usable but uncarded, and claiming otherwise
-            # makes the Phase-1 generate cache skip it forever.
+            # Record what landed: a soft-failed wrap claimed carded makes the
+            # generate cache skip it forever.
             carded = cards_enabled and cards_applied
             title_img, end_img = _resolve_titlecard_images(carded)
             clip_artifacts = viewer.build_artifact_records_for_clip(
@@ -1410,10 +1394,8 @@ def _build_reel_transcript(
     cards_enabled, titlecard_duration = _resolve_titlecard_options(
         titlecards_enabled, titlecard_duration_seconds
     )
-    # Each wrapped clip is titlecard + clip body + endcard (wrap_clip_with_cards),
-    # so the per-component span the next component starts after is
-    # titlecard + clip + endcard. The endcard is skipped only when ENDCARD_IMAGE
-    # is the "none" sentinel; mirror that decision via resolve_card_background.
+    # Each component spans titlecard + clip + endcard; resolve_card_background
+    # decides whether the endcard exists.
     endcard_duration = 0
     if not cards_enabled:
         titlecard_duration = 0
@@ -1500,10 +1482,8 @@ def process_reel(
             max_duration=max_duration,
         )
     finally:
-        # Endcard temp files are cached per-process across every wrap call;
-        # purge them so per-request cards don't leak between reel builds. The
-        # CLI, interactive, and Studio /api/reel paths all route through here,
-        # mirroring the cleanup process_clips and /api/reel-direct already do.
+        # Endcard temp files are cached per-process; purge so cards don't leak
+        # between reel builds.
         titlecards.clear_endcard_cache()
 
 
@@ -1557,8 +1537,7 @@ def _process_reel(
         parts are missing their cards.
         """
         clip, base_video = _prepare_and_check_clip(clip, missing_videos, fuzzy_matches)
-        # `times` is populated by prepare_clip, so the expected segment count is
-        # only knowable after the call above.
+        # prepare_clip fills `times`, so the segment count is known only now.
         expected = len(clip.get("times") or [])
         label = (
             " ".join(
@@ -1574,8 +1553,7 @@ def _process_reel(
             or "(unnamed clip)"
         )
         if base_video is None:
-            # A row with no timestamps is not a failure — nothing was requested of
-            # it. A missing source video when timestamps *were* requested is.
+            # No timestamps is not a failure; a missing video with timestamps is.
             if not expected:
                 return ([], [], [], True)
             return ([], [], [f"{label} — source video not found"], False)
@@ -1634,9 +1612,8 @@ def _process_reel(
     components: list[dict[str, Any]] = []
     clip_paths = []
     reel_failures: list[str] = []
-    # One part whose wrap soft-failed makes the whole reel not-carded: the
-    # concatenated output really is missing that card, so recording it as carded
-    # would make the generate cache skip the rebuild (see process_clips).
+    # One soft-failed part wrap makes the reel uncarded, or the generate cache
+    # skips the rebuild.
     all_parts_carded = True
     for segment_paths, clip_components, clip_failures, clip_carded in all_results:
         for entry in segment_paths:
@@ -1646,10 +1623,8 @@ def _process_reel(
         if not clip_carded:
             all_parts_carded = False
 
-    # A reel is a single deliverable: concatenating only the clips that happened to
-    # succeed produces a silently short video that looks complete, and its reel id
-    # is hashed from the truncated component list, so the cache would then serve
-    # that truncated reel even after the problem is fixed. Abort instead.
+    # Abort: a partial reel looks complete and its truncated-list id would stay
+    # cached.
     if reel_failures:
         for path in clip_paths:
             try:
@@ -1694,9 +1669,7 @@ def _process_reel(
         files.release_reservation(output_file)
         return (0, [])
 
-    # Throttle concat progress events to ~5 Hz; ffmpeg's default -progress
-    # cadence (1/sec) is already low, but the throttle keeps things bounded
-    # if ffmpeg emits faster on short clips.
+    # Throttle concat progress to ~5 Hz in case ffmpeg emits faster on short clips.
     last_emit_ts: list[float] = [0.0]
 
     def _on_concat_progress(fraction: float) -> None:
@@ -1746,17 +1719,15 @@ def _process_reel(
             )
 
     if not ok:
-        # Concatenation failed; the output is empty or partial and useless —
-        # drop it whether we or the caller reserved the name.
+        # Output is empty or partial; drop it whoever reserved the name.
         files.release_reservation(output_file)
         return (0, [])
 
     cards_enabled, card_duration = _resolve_titlecard_options(
         titlecards_enabled, titlecard_duration_seconds
     )
-    # Persist the cards that actually landed on the parts, not the ones asked
-    # for: a reel whose part wraps soft-failed is genuinely missing those cards,
-    # and claiming otherwise makes the generate cache skip rebuilding it.
+    # Persist the cards that landed, not those requested, or the generate cache
+    # skips the rebuild.
     reel_carded = cards_enabled and all_parts_carded
     reel_id = compute_reel_id(components)
     title_img, end_img = _resolve_titlecard_images(reel_carded)
@@ -1874,9 +1845,8 @@ def regenerate_from_manifest(
 
     def _regen_reel(reel: dict[str, Any]) -> bool:
         local_missing: set[str] = set()
-        # When the reel batch itself runs concurrently (parallel_reels), cut each
-        # reel's components sequentially to avoid nested CPU oversubscription;
-        # otherwise let a lone/large reel parallelize its own segment cuts.
+        # Parallel reel batches cut components sequentially to avoid nested CPU
+        # oversubscription.
         ok = _regenerate_reel(reel, local_missing, parallel=not parallel_reels)
         if local_missing:
             with missing_lock:
@@ -2068,10 +2038,8 @@ def _regenerate_reel(
     if not components:
         return False
 
-    # Pre-flight: flatten segments into an ordered task list and validate every
-    # source up front (cheap stat calls, single-threaded) before spending any
-    # ffmpeg time. A missing source aborts the whole reel without reserving or
-    # cutting anything.
+    # Pre-flight: stat every source before any ffmpeg time; a missing one aborts
+    # the reel.
     tasks: list[dict[str, Any]] = []
     for comp in components:
         for segment in comp.get("parts") or [comp]:
@@ -2088,9 +2056,8 @@ def _regenerate_reel(
                 {
                     "idx": len(tasks),
                     "source_path": source_path,
-                    # Match _local_timestamp's rounding + force_hours so a
-                    # regenerated segment reproduces the original cut instead
-                    # of truncating up to ~1s off it.
+                    # Match _local_timestamp's rounding and force_hours so
+                    # regeneration reproduces the original cut.
                     "start_ts": utils.seconds_to_timestamp(
                         round(local_start), force_hours=True
                     ),

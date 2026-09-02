@@ -46,15 +46,13 @@ from typing import NamedTuple
 
 _ROOT = Path(__file__).resolve().parents[1]
 
-# The product modules live in `source/`, not the repo root — same insert as
-# tests/conftest.py. Only `changelog` is imported, and only for its parser.
+# `source/` holds the modules; same sys.path insert as tests/conftest.py.
 sys.path.insert(0, str(_ROOT / "source"))
 
 import changelog
 
 
-# CHANGELOG.md's own preamble order. Fixed rather than frequency-sorted, so two
-# releases' Highlights sections are comparable line for line.
+# CHANGELOG.md's preamble order, fixed so releases' Highlights compare line for line.
 TOOL_ORDER = (
     "Core",
     "Studio",
@@ -72,13 +70,11 @@ SECTIONS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("Performance", ("perf",)),
 )
 
-# Real work, but nobody opens a release page to read it. Counted in a footnote
-# rather than dropped in silence, so the omission is visible.
+# Counted in a footnote so the omission stays visible.
 OMITTED_TYPES = ("refactor", "build", "docs", "test", "ci", "chore", "style")
 OMITTED_LABEL = "refactors, packaging, docs, tests, CI"
 
-# A subject that is not a conventional commit at all lands here instead of being
-# thrown away — dropping it would be a silent loss with no rule behind it.
+# Non-conventional subjects land here rather than vanishing.
 OTHER_SECTION = "Other Changes"
 
 _SUBJECT_RE = re.compile(
@@ -159,8 +155,7 @@ def select_highlights(
         return []
     lo = parse_version(prev_tag) if prev_tag else None
     if prev_tag and lo is None:
-        # An explicit --prev-tag of a SHA is legitimate; it just cannot bound the
-        # changelog, so fall back to the no-previous-tag cap.
+        # A SHA --prev-tag is valid but cannot bound the changelog; cap instead.
         _warn(f"previous tag {prev_tag} is not a version; capping Highlights instead")
 
     selected: list[dict] = []
@@ -196,8 +191,7 @@ def render_highlights(entries: list[dict]) -> str:
             kinds = by_tool.setdefault(change["tool"], {"Feat": [], "Fix": []})
             kinds.setdefault(change["kind"] or "Feat", []).append(change["text"])
 
-    # A tool the CHANGELOG grows later must not vanish just because it is missing
-    # from TOOL_ORDER.
+    # Tools missing from TOOL_ORDER still appear.
     ordered = [t for t in TOOL_ORDER if t in by_tool]
     ordered += sorted(t for t in by_tool if t not in TOOL_ORDER)
 
@@ -234,8 +228,7 @@ def parse_commit(record: str) -> Commit:
     subject, _, body = rest.partition(_GIT_SEP)
     subject = subject.strip()
 
-    # Strip the PR suffix *before* matching, so `(#746)` can never survive into the
-    # description and get printed a second time alongside the parsed number.
+    # Strip the PR suffix first so `(#746)` never leaks into the description.
     pr = ""
     pr_match = _PR_RE.search(subject)
     if pr_match is not None:
@@ -260,8 +253,7 @@ def group_commits(commits: list[Commit]) -> tuple[dict[str, list[Commit]], int]:
     grouped: dict[str, list[Commit]] = {}
     omitted = 0
     for commit in commits:
-        # A breaking change is never routine, whatever its type — it is listed
-        # above, so counting it as omitted here would contradict that.
+        # Breaking changes are listed above, never counted as omitted.
         if commit.type in OMITTED_TYPES and not commit.breaking:
             omitted += 1
             continue
@@ -337,8 +329,7 @@ def render_body(
 
     commits_url = f"https://github.com/{repo}/commits/{tag}"
     if initial_release:
-        # The first tag has no range to diff against — its history reaches the very
-        # first commit, which is a thousand subjects nobody will read.
+        # The first tag's range reaches the first commit; too long to list.
         blocks.append(
             "## What's Changed\n\n"
             "_First tagged release. The full commit history is linked below._\n"
@@ -429,8 +420,7 @@ def main() -> int:
     repo = args.repo or _default_repo()
     path = args.changelog or (_ROOT / "CHANGELOG.md")
 
-    # No earlier tag means the range reaches the first commit ever, so the first
-    # release takes the short shape without the workflow having to know that.
+    # No earlier tag: the first release takes the short shape.
     initial = args.initial_release or not prev
 
     text = path.read_text(encoding="utf-8") if path.is_file() else ""

@@ -35,9 +35,7 @@ FILMSTRIP_ENABLED: bool = False  # use --filmstrip / --no-filmstrip to override 
 TITLECARD_DURATION_SECONDS: int = (
     2  # duration in seconds; falls back to color fill when no source frame available
 )
-# Selected card backgrounds (Studio picker). Empty = bundled default asset; the
-# sentinels below select a solid-color fill or (endcard only) no card; any other
-# value is an uploaded filename under <output>/TITLECARD_IMAGES_DIRNAME.
+# Empty = bundled default; sentinels below = solid fill or no card; else uploaded filename.
 TITLECARD_IMAGE: str = ""
 ENDCARD_IMAGE: str = ""
 CARD_IMAGE_COLOR: str = "__color__"  # solid color fill, no background image
@@ -83,8 +81,7 @@ def debug_ic(*args: Any, **kwargs: Any) -> Any:
 
 
 # ── Directories ──────────────────────────────────────────────────────
-# Empty means the current working directory for both input (source videos) and
-# output (generated artifacts).
+# Empty means the current working directory.
 INPUT_DIR: str = ""
 OUTPUT_DIR: str = ""
 
@@ -93,12 +90,8 @@ ID_HEADER: str = "ID"
 OBSERVATION_HEADER: str = "Observation"
 CATEGORY_HEADER: str = "Category"
 FILENAME_HEADER: str = "Filename"
-# Runtime state, not a user setting: the open source's per-participant filename
-# overrides ({participant: "clip.mp4"} or "a.mp4 + b.mp4"), seeded from
-# start.json when a spreadsheet/mind map is opened and empty when the session
-# has no identity to key them on. They win over the sheet's Filename row; this
-# is the seam that lets spreadsheet.py see them without knowing which file the
-# active SheetContext came from.
+# Runtime state, not a setting: per-participant filename overrides seeded from start.json;
+# beat the Filename row.
 FILENAME_OVERRIDES: dict[str, str] = {}
 SEVERITY_HEADER: str = (
     "Severity"  # optional column; when present adds severity metadata to clips
@@ -156,59 +149,33 @@ MANIFEST_ENABLED: bool = (
 SERVER_PORT: int = (
     8089  # port for the combined Studio/Screenspace/Transcripts Flask server
 )
-# Desktop-window chrome (see desktop_chrome.py). The native title bar is hidden and
-# the traffic lights float inside the topnav, so AppKit and CSS must agree on the
-# same two numbers — hence these flow to the frontend as CSS custom properties via
-# utils.render_index_html() rather than being written twice.
+# Desktop chrome (desktop_chrome.py): AppKit and CSS share these via render_index_html() custom properties.
 DESKTOP_CHROME_BAR_HEIGHT: int = 48  # titlebar band height; drives --topnav-height
-# Left gutter the three buttons need: inset from the window edge by the same
-# margin centering leaves above them ((bar - 16) / 2 = 16), pitched 20px apart, so
-# the row ends at 16 + 40 + 14 = 70. The rest is breathing room before the brand.
+# Traffic lights span 16 + 40 + 14 = 70px; remainder is gap before brand.
 DESKTOP_TRAFFIC_LIGHT_INSET: int = 87
-# Unlike the manifest above, this one lives in the per-user config dir
-# beside start.json — preferences, not project data.
+# Lives in the per-user config dir beside start.json: preferences, not project data.
 STUDIO_SETTINGS_FILENAME: str = "studio_settings.json"
-# Prefix for clipgen's own scratch temp-files in the output dir, so
-# sweep_stale_temp_artifacts() can reclaim orphans left by a hard kill without
-# ever touching user files.
+# Prefix for scratch temp files so sweep_stale_temp_artifacts() reclaims orphans without touching user files.
 TEMP_ARTIFACT_PREFIX: str = "clipgen_tmp_"
-# Poll interval for the daemon that auto-runs an armed blueprint when a new
-# participant video lands in the input dir. The partial-copy stability window is
-# 2x this (a file must stat identically across two polls). Server-only.
+# New-video trigger poll interval; a file must stat identically across two polls. Server-only.
 WORKFLOWS_WATCH_POLL_SECONDS: float = 5.0
-# Concurrent participants per Workflows whole-study batch; 1 = sequential. Higher
-# values pool the child runs, multiplying peak ffmpeg/Whisper/OCR/LLM load —
-# and heavy graphs serialize on those shared resources anyway, so they rarely
-# benefit past 2. Clamped to [1, 4]. Server-only.
+# Parallel participants per whole-study batch; clamped to [1, 4]. Rarely helps past 2. Server-only.
 WORKFLOWS_BATCH_WORKERS: int = 1
-# Composer annotation defaults. Geometry is normalized to the video frame (stroke
-# width to frame width, font size to frame height) so the browser preview and the
-# PIL/ffmpeg burn-in agree at any resolution. Mirrored to JS via
-# get_frontend_config() (never hardcode).
+# Composer annotation defaults, frame-normalized so preview and PIL burn-in agree. Mirrored to JS.
 COMPOSER_ANNOTATION_COLOR: str = "#f05a3c"
-# The palette's second color slot. Only ever the *inactive* half of the
-# primary/secondary pair the user swaps between (X) — never written onto an
-# annotation record, so the style schema stays four keys.
+# Inactive half of the primary/secondary swap (X); never written onto an annotation record.
 COMPOSER_ANNOTATION_COLOR_SECONDARY: str = "#f8fafc"
 COMPOSER_ANNOTATION_STROKE_WIDTH: float = 0.004  # fraction of frame width
 COMPOSER_ANNOTATION_STROKE_STYLE: str = "solid"  # solid | dashed | dotted
 COMPOSER_ANNOTATION_FONT_SIZE: float = 0.035  # fraction of frame height
 COMPOSER_ANNOTATION_SPAN_SECONDS: float = 10.0  # default visibility span
-# Double-click the Composer timeline to set the pending in point, then again to
-# commit the out point. Mirrored to JS via get_frontend_config() (never hardcode).
+# Timeline double-click sets the in point, then the out point. Mirrored to JS.
 COMPOSER_DOUBLE_CLICK_CUTS: bool = True
-# Warn on pages that play source video when a recording is a fragmented MP4 the
-# browser cannot seek (OBS "fragmented recording"), and offer the one-click remux
-# that fixes it. Mirrored to JS via get_frontend_config() (never hardcode).
+# Warn about fragmented MP4s the browser cannot seek and offer the remux. Mirrored to JS.
 MEDIA_CONTAINER_WARNING: bool = True
-# Cap on the WAV extracted for Composer's marker/cut audio scrub — markers can
-# span minutes, unlike Studio clips. Mirrored to JS via get_frontend_config()
-# (never hardcode), so the client skips longer spans and hover fraction ↔ audio
-# buffer stay aligned.
+# Cap on Composer's scrub WAV; the client skips longer spans. Mirrored to JS.
 COMPOSER_SCRUB_MAX_AUDIO_SECONDS: float = 180.0
-# Data-source lanes shown, in order, per participant in the Convergence Browser.
-# Mirrored to JS via get_frontend_config() (never hardcode) so the swim-lane layout
-# and per-lane offset keys stay in sync.
+# Convergence Browser lanes, in order; mirrored to JS so lane layout and offset keys agree.
 CONVERGENCE_SOURCES: tuple[str, ...] = (
     "sheet",
     "screenspace",
@@ -220,10 +187,7 @@ GOOGLE_API_MAX_RETRIES: int = 3  # Retries for transient Google API errors (429,
 
 STUDIO_THUMBNAIL_WIDTH: int = 200
 
-# Card scrubber: hover a queue card to scrub frames (sprite sheet) + hear audio
-# with a waveform overlay. Opt-in. The sprite grid dims go to JS via
-# get_frontend_config() (never hardcode) — the scrubber derives frameCount and the
-# per-frame interval from them.
+# Opt-in hover-to-scrub on queue cards; JS derives frameCount and interval from the grid dims.
 STUDIO_CARD_SCRUBBER: bool = False
 STUDIO_SCRUBBER_SPRITE_COLS: int = 5
 STUDIO_SCRUBBER_SPRITE_ROWS: int = 5
@@ -232,10 +196,8 @@ STUDIO_SCRUBBER_SPRITE_ROWS: int = 5
 # Mirrored to JS via get_frontend_config() (never hardcode).
 CROSS_REFERENCES_ENABLED: bool = True
 
-# Metadata tab: count Screenspace as time-adjacent clusters rather than raw
-# events, so a dense 10k-event scan reads as a handful of blocks instead of
-# overshadowing the sheet/transcript streams. Boot-embedded into /api/sheet, not
-# mirrored via get_frontend_config.
+# Metadata tab counts Screenspace clusters, not raw events. Boot-embedded into
+# /api/sheet, not get_frontend_config.
 STUDIO_METADATA_CLUSTER_SCREENSPACE: bool = True
 
 # ── Screenspace ──────────────────────────────────────────────────────
@@ -252,18 +214,18 @@ SCREENSPACE_MORPH_KERNEL: int = 3  # image preprocessing tuning for change detec
 SCREENSPACE_OCR_FUZZY_THRESHOLD: float = (
     0.75  # min fuzzy match score for Text/Numbers tool matches
 )
-SCREENSPACE_OCR_MIN_CONFIDENCE: float = 0.6  # min OCR per-detection confidence for Text/Numbers; gates noisy OCR. Calibrated on easyocr; pending re-check against RapidOCR's score distribution
+SCREENSPACE_OCR_MIN_CONFIDENCE: float = 0.6  # min OCR confidence for Text/Numbers; calibrated on easyocr, unchecked against RapidOCR
 SCREENSPACE_OCR_MIN_HEIGHT: int = (
     60  # target px height for upscaling small ROIs in opt-in OCR preprocessing
 )
-SCREENSPACE_OCR_POOL_SIZE: int = 0  # max concurrent RapidOCR engines per recognition model (0 = auto = SCREENSPACE_PARALLEL_WORKERS). Each engine holds its own ONNX sessions, so raising this multiplies OCR RAM
+SCREENSPACE_OCR_POOL_SIZE: int = 0  # RapidOCR engines per rec model (0 = SCREENSPACE_PARALLEL_WORKERS); each holds ONNX sessions, so RAM scales
 SCREENSPACE_MASK_FALLBACK_TOOLS: tuple[str, ...] = (
     "similarity",
     "inactivity",
     "boundary",
     "timelapse",
     "attention",
-)  # tools that analyze a shaped region's bounding rect instead of its polygon (SSIM/phash are global, boundary and attention are full-frame by design, timelapse is a pure ffmpeg crop)
+)  # tools that use a shaped region's bounding rect, not its polygon
 SCREENSPACE_PHASH_THRESHOLD: int = 15
 SCREENSPACE_STATIC_FRAME_SKIP_THRESHOLD: float = 2.0  # mean-abs-diff cutoff for skipping near-identical frames (Similarity/Text/Numbers/Scene scans)
 SCREENSPACE_TEMPLATE_MATCH_THRESHOLD: float = 0.70
@@ -301,9 +263,9 @@ SCREENSPACE_CHANGE_HEATMAP_MIN_FRAC: float = (
 )
 SCREENSPACE_FAST_SCAN_INTERVAL_MULTIPLIER: float = 3.0
 SCREENSPACE_FAST_SCAN_PHASH_THRESHOLD: int = 12  # tighter than general 15
-SCREENSPACE_FAST_SCAN_SKIP_NONKEY: bool = True  # fast-scan: decode only keyframes (H.264/HEVC) for GOP-sized decode savings; auto-disabled per-video when the probed worst-case keyframe gap is too long, and the sample grid is tightened by that gap so coverage is never coarser than the interval
+SCREENSPACE_FAST_SCAN_SKIP_NONKEY: bool = True  # fast-scan decodes keyframes only; auto-off per video when the probed keyframe gap is too long
 SCREENSPACE_KEYFRAME_PROBE_SECONDS: float = 20.0  # window (seconds from start) the keyframe-gap probe inspects to find the worst-case (max) GOP length
-SCREENSPACE_KEYFRAME_SKIP_MARGIN: float = 1.0  # enable keyframe-only decode only when the max keyframe gap <= sampling_interval * this margin (lower = only very dense keyframes qualify)
+SCREENSPACE_KEYFRAME_SKIP_MARGIN: float = 1.0  # keyframe-only decode needs max gap <= interval * this; lower = denser keyframes required
 SCREENSPACE_PARALLEL_WORKERS: int = (
     2  # max concurrent analysis tasks in ScreenspaceWorker
 )
@@ -328,9 +290,8 @@ SCREENSPACE_BOUNDARY_HASH_DIM: int = (
 SCREENSPACE_BOUNDARY_CONFIDENCE_EPSILON: float = (
     0.05  # confidence floor for a boundary that just crosses threshold
 )
-# Scene-aware period segmentation. "phash" is the consecutive-frame spike
-# detector, "scene" measures a content fingerprint against the current period's
-# reference (robust to motion), "hybrid" fires only when both agree.
+# phash: consecutive-frame spike; scene: fingerprint vs period reference (motion-robust);
+# hybrid: both must agree.
 SCREENSPACE_BOUNDARY_METRIC: str = "hybrid"
 SCREENSPACE_BOUNDARY_SCENE_THRESHOLD: float = 0.25  # fingerprint distance (1 − similarity) to call a scene shift; mirrors scene's 0.75 sim
 SCREENSPACE_BOUNDARY_CONFIRM_WINDOW: int = 2  # samples a scene shift must persist before it counts (suppresses one-frame blips)
@@ -342,9 +303,8 @@ SCREENSPACE_BOUNDARY_SHORT_PERIOD_SECONDS: float = (
 )
 SCREENSPACE_BOUNDARY_RELATIVE_PRUNE_ENABLED: bool = True  # post-run: drop boundaries far below the session-median strength (threshold-portability mitigation)
 SCREENSPACE_BOUNDARY_RELATIVE_PRUNE_FACTOR: float = 0.5  # prune boundaries with entry distance below this fraction of the session median
-# Attention tool: classic bottom-up saliency composite (spectral residual +
-# Lab contrast + frame-diff motion [+ optional Haar faces], center-biased,
-# EMA-smoothed). Full-frame only; predicts where visual attention goes.
+# Saliency composite (spectral residual, Lab contrast, motion, optional Haar faces),
+# center-biased, EMA-smoothed. Full-frame only.
 SCREENSPACE_ATTENTION_INTERVAL: float = (
     0.5  # default frame sampling interval for attention; also the heatmap's dwell unit
 )
@@ -446,20 +406,12 @@ SECONDS_PER_MINUTE: int = 60
 
 # ── FFmpeg ────────────────────────────────────────────────────────────
 FFMPEG_LOGLEVEL: str = "16"  # ffmpeg -loglevel value (16 = error)
-# H.264 encoder for the re-encode paths (reel concat, clip re-encode, timelapse,
-# Composer burn). "auto" uses Apple's VideoToolbox hardware encoder when ffmpeg
-# lists it and it hasn't failed this session, else libx264. compress_to_size is
-# deliberately excluded — see its docstring.
-# See video.resolve_video_encoder / video.video_encoder_args.
+# "auto" = VideoToolbox when listed and unfailed this session, else libx264.
+# See video.resolve_video_encoder.
 FFMPEG_VIDEO_ENCODER: str = "auto"  # "auto" | "libx264" | "h264_videotoolbox"
 FFMPEG_SCREENSHOT_QUALITY: str = "2"  # -q:v value for screenshots (1=best, 31=worst)
-# x264 settings for title/endcard generation and the card-wrap re-encode. The
-# wrap stream-copies a copy-safe clip body (titlecards._body_is_copy_safe) and
-# re-encodes only the ~2s cards, so the preset dominates titlecard time only on
-# the fallback re-encode path (non-h264/exotic bodies, or a failed copy concat);
-# "veryfast" is several times quicker than libx264's "medium" default at
-# negligible quality cost for short research clips. Raise quality with a lower
-# CRF, or trade quality for speed with "superfast"/"ultrafast".
+# x264 settings for the ~2s cards; copy-safe bodies stream-copy
+# (titlecards._body_is_copy_safe). Lower CRF raises quality.
 TITLECARD_ENCODE_PRESET: str = "veryfast"
 TITLECARD_ENCODE_CRF: int = 20
 SCREENSHOT_FORMAT: str = ".png"  # ".png" | ".jpg" | ".webp"
@@ -472,13 +424,8 @@ COMPRESSION_SIZE_FACTOR: float = 0.95  # Target 95% of max to leave headroom
 MIN_VIDEO_BITRATE_KBPS: int = 100
 
 # ── Source Video ──────────────────────────────────────────────────────
-# Filename syntax for source session videos in the input directory (stem only —
-# the extension always comes from FILEFORMAT, and numbered multi-part files
-# append ``-N`` after the stem: mystudy_P01-1.mp4, mystudy_P01-2.mp4). Both
-# directions derive from this one template: forward construction via
-# utils.format_source_video_stem() and reverse parsing/discovery via
-# utils.compile_source_video_regex(). ``{participant}`` is required;
-# ``{study}`` is optional (drop it when files are named plain P01.mp4).
+# Stem template; see utils.format_source_video_stem() and utils.compile_source_video_regex().
+# {study} is optional.
 SOURCE_FILENAME_PATTERN: str = "{study}_{participant}"
 
 # ── Transcription ────────────────────────────────────────────────────
@@ -486,10 +433,8 @@ TRANSCRIBE_ENABLED: bool = False  # use --transcribe CLI flag to enable per run
 TRANSCRIBE_MODEL: str = "base"  # tiny, base, small, medium, large-v3
 TRANSCRIBE_LANGUAGE: str | None = None  # None = auto-detect
 TRANSCRIBE_COMPUTE_TYPE: str = "int8"  # int8 (fastest), float16, float32
-# Compute device for the Whisper model: "auto", "cpu", or "cuda". See
-# transcripts._resolve_transcribe_device() for why "auto" means CPU in a frozen
-# build — the desktop bundle ships no CUDA runtime, so letting CTranslate2
-# auto-select a GPU only produces a "cublas64_12.dll is not found" crash.
+# Device: auto, cpu, cuda. Frozen builds ship no CUDA, so auto means CPU
+# (transcripts._resolve_transcribe_device).
 TRANSCRIBE_DEVICE: str = "auto"
 TRANSCRIBE_FORMAT: str = "md"  # md, srt, vtt
 TRANSCRIBE_INITIAL_PROMPT: str = "This is a recorded user experience research session."  # biases Whisper toward UX research terminology
@@ -499,9 +444,7 @@ TRANSCRIBE_BEAM_SIZE: int = (
 # CTranslate2 CPU threads for the Whisper model; 0 = auto (os.cpu_count()).
 TRANSCRIBE_CPU_THREADS: int = 0
 TRANSCRIBE_VAD_FILTER: bool = True  # Silero VAD: transcribe speech spans only
-# VAD tuning (only applied when TRANSCRIBE_VAD_FILTER is on). Defaults are chosen
-# recall-safe: a lower-than-Silero-default threshold plus boundary padding so quiet
-# speech and word onsets/offsets aren't clipped.
+# VAD tuning, applied only when TRANSCRIBE_VAD_FILTER is on; recall-safe defaults keep quiet speech.
 TRANSCRIBE_VAD_THRESHOLD: float = 0.2  # Silero speech-probability cutoff (lower = more permissive; 0.3 missed quiet speech in testing)
 TRANSCRIBE_VAD_SPEECH_PAD_MS: int = (
     400  # padding added to each speech span so word edges aren't clipped
@@ -512,23 +455,18 @@ TRANSCRIBE_NO_SPEECH_THRESHOLD: float = (
 )
 TRANSCRIBE_LOG_PROB_THRESHOLD: float = -1.0  # drop low-confidence segments
 TRANSCRIBE_COMPRESSION_RATIO_THRESHOLD: float = 2.4  # drop repetitive / looped text
-# Seconds of surrounding silence for hallucination skip logic; 0 = off (requires word_timestamps when > 0)
+# Surrounding silence for hallucination skip; 0 = off, > 0 requires word_timestamps
 TRANSCRIBE_HALLUCINATION_SILENCE_THRESHOLD: float = 0.0
-# Per-word timing via faster-whisper's DTW alignment. Tightens segment bounds to
-# the first/last word (Whisper's own segment bounds include the VAD pad) and
-# enables the word-level playback highlight; costs extra decode time.
+# DTW per-word timing: tightens segment bounds to first/last word and powers word highlight; slower.
 TRANSCRIBE_WORD_TIMESTAMPS: bool = True
-# Snap segment edges to measured speech energy in the already-decoded audio,
-# trimming Whisper's silence overshoot. One vectorized envelope pass per file.
+# Snap segment edges to speech energy, trimming Whisper's silence overshoot. One envelope pass per file.
 TRANSCRIBE_EDGE_SNAP: bool = True
 TRANSCRIBE_CONDITION_ON_PREVIOUS_TEXT: bool = (
     True  # False reduces chained hallucinations
 )
-# When to pre-load faster-whisper in the Transcripts web UI: off, queue_open (open Queue panel), page_load (after participants load).
+# Pre-load faster-whisper in Transcripts UI: off | queue_open | page_load.
 TRANSCRIBE_PREWARM: str = "queue_open"
-# Mark categories shown in the Transcripts mark popover. Each value is {label, color}.
-# "friction" is a single bucket for all friction-detection marks; the specific
-# friction type lives in each mark's label (e.g. "Friction · frustration").
+# Mark popover categories, {label, color}. "friction" is one bucket; type lives in each label.
 MARK_CATEGORIES: dict[str, dict[str, str]] = {
     "pain_point": {"label": "Pain Point", "color": "#dc2626"},
     "delight": {"label": "Delight", "color": "#16a34a"},
@@ -540,11 +478,8 @@ MARK_CATEGORIES: dict[str, dict[str, str]] = {
 }
 
 # ── Hotkeys ─────────────────────────────────────────────────────────
-# User overrides for web-frontend keyboard shortcuts, keyed by action id
-# (the catalog of ids and default combos lives in assets/web/hotkeys.js).
-# Values are space-separated combo strings ("Mod+Shift+Z Mod+Y"); an empty
-# string disables the shortcut. Edited via Settings → Hotkeys; the server
-# only persists and structurally validates this dict, never interprets it.
+# Per-action overrides (ids in assets/web/hotkeys.js); space-separated combos, empty disables.
+# Server only validates.
 HOTKEY_OVERRIDES: dict[str, str] = {}
 
 # ── Local AI (llama.cpp) ────────────────────────────────────────────
@@ -558,8 +493,7 @@ LLM_FRICTION_ENABLED: bool = (
     False  # auto-detect friction moments after the summary completes
 )
 LLM_SUMMARY_MODEL: str = (
-    # Hugging Face ref (user/repo:QUANT) or the stem of a GGUF already in the
-    # models dir; llm_client.model_name() maps either onto the router id.
+    # HF ref (user/repo:QUANT) or a local GGUF stem; see llm_client.model_name().
     "unsloth/Qwen3.5-9B-GGUF:Q4_K_M"  # model for summaries, citations, and friction
 )
 LLM_FRICTION_MODEL: str = (
@@ -573,10 +507,7 @@ LLM_BASE_URL: str = "http://127.0.0.1:8790"  # llama-server router address
 LLM_UNLOAD_DELAY_SECONDS: float = 15.0  # after Stop, evict the model from memory if no new run starts within this delay
 
 # ── Thinking-agent prompts ───────────────────────────────────────────
-# Editable via Settings → Summaries → "Agent prompts". thinking_agents.py reads
-# these at call time, so an edit takes effect on the next agent run. The user
-# prompts are .format()-ed with the placeholders noted below; the *_SYSTEM
-# prompts are sent verbatim (never formatted), so braces in them are literal.
+# thinking_agents.py reads these per run. User prompts .format(); *_SYSTEM sent verbatim.
 LLM_SUMMARY_PROMPT: str = """\
 Summarize this user research session transcript. Write a concise paragraph \
 (2-4 sentences) describing what happened in the session. Then list the key \
@@ -664,9 +595,7 @@ Keep the whole report under 300 words. If a section has no supporting data, \
 write "No data." under it instead of inventing content."""
 
 # ── Friction detection ───────────────────────────────────────────────
-# Ordered category keys → display labels. Single source of truth, mirrored to
-# the frontend via utils.get_frontend_config(). The programmatic scorer in
-# friction.py keys its patterns/weights by the same keys (enforced by tests).
+# Keys → labels, mirrored to JS; friction.py patterns share the keys.
 FRICTION_CATEGORIES: dict[str, str] = {
     "hesitation": "Hesitation",
     "confusion": "Confusion",
@@ -888,8 +817,7 @@ STUDIO_SETTINGS: dict[str, dict[str, Any]] = {
         "type": "card_picker",
         "kind": "end",
     },
-    # Persisted + sent to the frontend, but not rendered as their own rows —
-    # the card_picker widget edits them via its inline color box.
+    # Persisted and sent to the frontend; edited inline by card_picker, not as rows.
     "TITLECARD_COLOR": {
         "tab": "Video & Clips",
         "group": "Titlecards",

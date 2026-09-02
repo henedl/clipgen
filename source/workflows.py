@@ -45,8 +45,7 @@ from typing import Any, cast
 import config
 import utils
 
-# Catalog names the executors + wiring below use directly (also part of the
-# ``workflows.NAME`` facade surface, like everything imported here).
+# Catalog names used below; every import here is also facade surface.
 from workflows_catalog import (
     NODE_TYPES,
     NodeContext,
@@ -113,8 +112,8 @@ def load_workflows_manifest() -> dict[str, Any]:
     # Backfill any missing top-level keys so callers can index unconditionally.
     base = empty_workflows_manifest()
     base.update({k: v for k, v in data.items() if k in base})
-    # An unknown trigger type reads as disarmed: the watcher only fires known
-    # types, so keeping it enabled would render an armed toolbar that never fires.
+    # Unknown trigger types disarm: the watcher never fires them, so don't show
+    # them armed.
     for blueprint in base.get("blueprints", []):
         if not isinstance(blueprint, dict):
             continue
@@ -162,14 +161,10 @@ def save_workflows_manifest(
 
 
 # ---------------------------------------------------------------------------
-# Executors — thin adapters over existing pure functions
+# Executors
 # ---------------------------------------------------------------------------
 #
-# Uniform shape: ``execute(ctx, inputs, params) -> {port: value}``, keyed by
-# OUTPUT-port name. Backend modules import lazily inside each executor (mirroring
-# ``cli._run_ss_clips``) to avoid import cost and cycles — Workflows sits at the
-# top of the dependency DAG. Per-wire value shapes are documented in
-# ``plans/archive/WORKFLOWS-PLAN.md``.
+# Lazy imports inside each executor keep Workflows atop the import DAG.
 
 
 # ---- Sources ----
@@ -178,10 +173,8 @@ def save_workflows_manifest(
 def _exec_video_source(
     ctx: NodeContext, inputs: dict[str, Any], params: dict[str, Any]
 ) -> dict[str, Any]:
-    # The canvas stores a multi-selection as a list (or the "__all__" sentinel),
-    # which the run panel routes to the batch endpoint where bind_participant
-    # rewrites it to a scalar. A direct run must not stringify the list into a
-    # participant id that resolves zero videos and "completes" empty.
+    # A list (multi-selection or "__all__") is batch input (bind_participant);
+    # never stringify it.
     raw = params.get("participant", "")
     if isinstance(raw, list):
         if len(raw) > 1:
@@ -238,8 +231,7 @@ def _exec_region(
                 coords["shape"] = entry["shape"]
     result: dict[str, Any] = {"region": {"name": name, "coords": coords}}
     if name and coords is None:
-        # A named-but-missing region degrades to the full frame downstream
-        # (_resolve_region_coords); say so instead of silently scanning it all.
+        # Downstream falls back to the full frame (_resolve_region_coords); say so.
         result["__note__"] = f'Region "{name}" not found — scanning the full frame'
     return result
 
@@ -277,11 +269,8 @@ def _exec_transcribe(
     language = str(params.get("language", "") or "").strip()
     lang = None if language in ("", "auto") else language
     model_name = str(params.get("model", "") or "").strip() or None
-    # No audio-track param on purpose: omitting audio_index gets speech-track
-    # auto-detection, whereas a pinned index looks portable and isn't — "track 1"
-    # is the mic for P01 and system audio for P07, whose recorder ordered the
-    # streams differently. Any future control here should be a name hint
-    # ("audio_track_contains"), not an index.
+    # No audio_index param: stream order differs per recorder. Prefer a name hint
+    # if ever needed.
 
     # Study vocabulary and correction keywords, same as every other entry point.
     manifest = transcripts.load_transcripts_manifest()
@@ -325,8 +314,7 @@ def _exec_transcribe(
         )
 
     if result is None:
-        # Decode/model failure used to become a successful empty transcript, so
-        # Find-word and summaries ran on silence with no error on the node.
+        # A None result is a decode/model failure, not an empty transcript.
         raise RuntimeError("Could not transcribe the wired video")
     transcript_val = dict(result)
     transcript_val["source"] = src
@@ -429,8 +417,7 @@ def _exec_transcript_export(
     if fmt not in ("md", "srt", "vtt"):
         fmt = "md"
 
-    # Prefer the full transcript (carries language/model); a bare segments wire
-    # still exports, just with empty metadata.
+    # Prefer the full transcript; a bare segments wire exports with empty metadata.
     if transcript_in.get("segments"):
         base: dict[str, Any] = transcript_in
     elif seg_in.get("segments"):
@@ -465,8 +452,8 @@ def _exec_transcript_export(
             "artifacts": {"artifacts": [], "study": study, "count": 0},
             "__note__": "Transcript couldn't be written",
         }
-    # "export" (not "transcript") — the viewer routes it to the Attachments
-    # pane's document card; "transcript" is a timeline card type there.
+    # "export" routes to the viewer's Attachments pane; "transcript" is a timeline
+    # card type.
     rec = _attachment_artifact("export", output_path, src, f"Transcript ({fmt})")
     return {"artifacts": {"artifacts": [rec], "study": study, "count": 1}}
 
@@ -557,9 +544,7 @@ def _exec_report(
         return {"report": "", "__note__": "No summary wired"}
     if not llm_client.ensure_server():
         return {"report": "", "__note__": "AI server would not start. Report skipped"}
-    # Sheet observations + transcript marks come through the same configured
-    # seam the Overview Reports tab uses; unwired (no sheet / CLI) both are
-    # empty and the report covers the summary alone.
+    # Same injection seam as the Overview Reports tab; unwired, both lists are empty.
     observation_lines, mark_lines = thinking_agents.report_source_lines(participant)
     text = thinking_agents.build_report(
         summary,
@@ -744,8 +729,8 @@ def _run_ss_detector(
             "__note__": note,
         }
 
-    # Unwired region scans the whole frame; zero-size coords would make the scan
-    # a silent no-op (see _resolve_region_coords).
+    # _resolve_region_coords supplies the full frame when unwired; zero-size coords
+    # would silently no-op.
     region_name, region_coords = _resolve_region_coords(
         inputs.get("region") or {}, paths[0]
     )
@@ -773,9 +758,8 @@ def _run_ss_detector(
     windows = list((inputs.get("timeRange") or {}).get("ranges") or [])
     raw_results: list[dict[str, Any]] = []
     scan_targets = windows or [None]
-    # Each underlying scan reports progress on its own 0->1 scale (multi-video
-    # scans even force on_progress(1.0) at the end), so map each window into a
-    # span-weighted slice to keep job-level progress monotonic.
+    # Each scan reports its own 0->1 progress; span-weighted slices keep the job
+    # monotonic.
     spans = [
         max(0.0, float(w[1]) - float(w[0])) if w is not None else 1.0
         for w in scan_targets
@@ -816,8 +800,7 @@ def _run_ss_detector(
         done_span += win_span
 
     events = screenspace_manifest.generate_events_from_results(task, raw_results)
-    # raw_results rides along for the heatmap node (template/flow/change); every
-    # other consumer reads only ``events`` and ignores it.
+    # raw_results feeds the heatmap node only; other consumers read ``events``.
     return {"events": {"events": events, "source": src, "raw_results": raw_results}}
 
 
@@ -888,8 +871,7 @@ def _exec_multitool(
         inputs.get("region") or {}, paths[0]
     )
 
-    # Reshape each flat step into the {type, region_coords, logic, …} shape
-    # scan_multitool expects, reusing the per-detector param builder.
+    # Reshape flat steps into what scan_multitool expects.
     steps: list[dict[str, Any]] = []
     for idx, raw in enumerate(raw_steps):
         step_type = str(raw.get("type", "") or "")
@@ -949,8 +931,8 @@ def _exec_highlights(
     budget = int(params.get("budget", config.HIGHLIGHTS_REEL_DURATION_SECONDS) or 0)
     if budget <= 0:
         budget = config.HIGHLIGHTS_REEL_DURATION_SECONDS
-    # Uniqueness is scored against artifacts already in the output dir (mirrors the
-    # ``-H`` CLI path: spreadsheet.generate_reel_timestamps -> score_and_truncate_clips).
+    # Uniqueness scores against existing output-dir artifacts, mirroring the ``-H``
+    # CLI path.
     existing_filenames = set(files.discover_clips())
     selected = spreadsheet.score_and_truncate_clips(records, existing_filenames, budget)
     return {"clips": {"records": selected, "study": study}}
@@ -1070,8 +1052,7 @@ def _exec_interval_captures(
             return {**empty, "__note__": "Couldn't read the video duration"}
         ranges = [(0.0, float(duration))]
 
-    # Expand each window into per-interval sample points (a point for a
-    # screenshot, a [t, t+gif_dur] window for a GIF).
+    # Expand windows into sample points; GIFs get a [t, t+gif_dur] span.
     sample_ranges: list[tuple[float, float]] = []
     for start, end in ranges:
         t = start
@@ -1138,8 +1119,7 @@ def _exec_timelapse(
             "__note__": "No video wired",
         }
 
-    # _resolve_region_coords already falls back to the full frame when no region
-    # is wired; a still-zero size means the probe failed (unreadable video).
+    # Full-frame fallback already applied; a zero size means the video probe failed.
     _name, region_coords = _resolve_region_coords(inputs.get("region") or {}, paths[0])
     if region_coords["w"] <= 0 or region_coords["h"] <= 0:
         return {
@@ -1197,9 +1177,8 @@ def _exec_heatmap(
             "__note__": note,
         }
     if style not in ("template", "flow", "change", "attention"):
-        # "auto": infer from the detector data actually present. Keying on the
-        # per-frame payload (match boxes / grids) rather than the producing
-        # node's type keeps the inference correct through merges and edits.
+        # "auto" infers from the per-frame payload, not the producing node type, so
+        # merges stay correct.
         style = _infer_heatmap_style(results)
         if not style:
             return {
@@ -1257,8 +1236,8 @@ def _exec_heatmap(
                 num_frames=num_frames,
                 window_frames=int(float(params.get("window", 6) or 6)),
             )
-        # No sprite sheet here: this node's output is a standalone artifact for
-        # the manifest/viewer, not a Screenspace results thumbnail to scrub.
+        # No sprite sheet: this is a viewer artifact, not a Screenspace results
+        # thumbnail.
         result = anim["path"] if anim else None
         failure_note = "Not enough detector results for an animated heatmap"
     if not result:
@@ -1328,8 +1307,8 @@ def _exec_build_reel(
             "manifest": {"path": None, "records": []},
             "__note__": "No clips to build a reel from",
         }
-    # Honor the node's reel name: reserve a unique output path (process_reel
-    # treats a supplied output_file as a reservation and releases it on failure).
+    # process_reel treats a supplied output_file as a reservation and releases it
+    # on failure.
     name = utils.sanitize_filename(str(params.get("name", "") or "").strip()) or "reel"
     output_file = files.get_unique_filename(f"{name}{config.FILEFORMAT}")
     pad_pre, pad_post, max_duration = _artifact_padding_params(params)
@@ -1400,8 +1379,8 @@ def _exec_post_process(
         if not segments:
             return _done(src, [], "Embedding subtitles needs a wired transcript")
         if len(paths) > 1:
-            # The transcript's timing spans the stitched timeline; muxing it
-            # into any single part would be wrong (same rule as the app).
+            # Transcript timing spans the stitched timeline; no single part can
+            # carry it.
             return _done(
                 src,
                 [],
@@ -1445,8 +1424,8 @@ def _exec_post_process(
         return _done(new_src, [rec])
 
     if op == "normalize_audio":
-        # Per-part in-place rewrite, sharing the .orig slot (and its
-        # already-rewritten skip) with remux — mirrors the Transcripts page.
+        # In-place per part, sharing the .orig slot and already-rewritten skip
+        # with remux.
         import transcripts_server
 
         failures: list[str] = []
@@ -1505,9 +1484,8 @@ def _exec_post_process(
         note = "Already browser-seekable" if already and not done else None
         return _done(src, [], note)
 
-    # compress — write a size-capped copy per part into the output dir. The
-    # sources are never touched (the app only ever recompresses generated
-    # artifacts, so an in-place source rewrite here would have no precedent).
+    # compress: size-capped copy per part into the output dir; sources are never
+    # touched.
     target_mb = max(1.0, float(params.get("target_mb", 100) or 100))
     records: list[dict[str, Any]] = []
     out_paths: list[str] = []
@@ -1590,10 +1568,8 @@ def _exec_data_export(
                 "Segments export",
             )
         )
-    # The opt-in tables read the app manifests on disk (not wired ports):
-    # calibration pins from Screenspace, friction moments + scored segments
-    # from the Transcripts thinking agents. Empty tables are skipped silently —
-    # the toggles say "include if present", not "must exist".
+    # Opt-in tables read the on-disk manifests, not wires; empty tables skip
+    # silently.
     if params.get("include_pins"):
         import screenspace
 
@@ -1658,8 +1634,7 @@ def _exec_data_export(
             try:
                 Path(output_path).write_text(payload, encoding="utf-8")
             except OSError:
-                # All-or-nothing: remove files this node already wrote, so a
-                # half-bundle never orphans behind an artifact-less result.
+                # All-or-nothing: a failed write removes the files already written.
                 files.release_reservation(output_path)
                 for prior in written:
                     files.release_reservation(prior)
@@ -1684,11 +1659,8 @@ def _exec_timeline_viewer(
     artifacts_in = inputs.get("artifacts") or {}
     incoming = list(artifacts_in.get("artifacts") or [])
     study = str(artifacts_in.get("study", "") or "")
-    # build_reel emits reel records (``components``, no start/end) onto the same
-    # ``artifacts`` wire as clip/screen/gif artifacts, but the viewer renders the
-    # two from separate slots — timeline vs Attachments pane. Split them here, or
-    # reels land in the timeline slot, get filtered for lacking start/end, and the
-    # viewer comes up empty.
+    # Reel records (``components``, no start/end) share the artifacts wire; the
+    # viewer needs them split.
     reels = [
         a for a in incoming if isinstance(a, dict) and a.get("components") is not None
     ]
@@ -1848,31 +1820,17 @@ def _exec_gate_collection(
     return {"pass": _apply_gate(value, params)}
 
 
-# ---- Collection-algebra control nodes (filter / merge / limit / dedup) ----
+# ---- Collection-algebra nodes ----
 #
-# These thin / combine / branch / cap / dedup the collections already flowing
-# through the graph (events, clipRecords, segments). The collections *are* the
-# iteration, hence no per-item ``foreach``, which would force runtime DAG
-# expansion and break the static ``topo_order`` model. All pure single-pass
-# nodes; per-type families (mirroring the ss_* split) keep every port exact-typed,
-# so neither adapters nor the frontend's ``canConnect`` need changes.
+# No per-item ``foreach``: runtime DAG expansion would break static ``topo_order``.
 
-# One ``{field, op, value}`` clause reuses the gate's comparison table; ``contains``
-# is the one string-only addition (kept out of ``_GATE_OPS``, which must stay
-# numeric for the gate). ``none`` is the limit node's "keep input order" sentinel.
+# ``contains`` stays out of ``_GATE_OPS``, which must remain numeric. ``none``
+# means keep input order.
 _COLLECTION_OPS: list[str] = list(_GATE_OPS.keys()) + ["contains"]
 _SORT_NONE = "none"
 
-# kind -> envelope metadata. ``port`` is the wire type; ``key`` is the inner list
-# key in the envelope; ``preserve`` are the envelope keys carried through unchanged
-# (source lineage / study / raw_results); ``fields`` drive the predicate enum and
-# ``sort_fields`` the limit sort enum (numeric-only, so the sort key stays
-# comparable). ``recount`` (artifacts) rewrites the envelope's ``count`` to the
-# kept length. dedup is span-based, registered for events + clips + timeRanges.
-#
-# Both the pre-clip side (``clipRecords``, ``timeRange``) and the post-clip side
-# (``artifacts`` from make_clips/timelapse/heatmap/build_reel) get families, so a
-# stream can be thinned/capped/combined before *or* after it becomes artifacts.
+# kind -> envelope metadata; ``preserve`` keys pass through unchanged, ``recount``
+# rewrites ``count``.
 _COLLECTION_KINDS: dict[str, dict[str, Any]] = {
     "events": {
         "port": "events",
@@ -1884,10 +1842,8 @@ _COLLECTION_KINDS: dict[str, dict[str, Any]] = {
     },
     "clips": {
         "port": "clipRecords",
-        # Labelled "Clip Selections" (not "Clips") so the family reads as operating
-        # on pre-render clip specs from sheet_selection/highlights — not the
-        # rendered ``artifacts`` Make Clips emits (which has its own artifacts
-        # family). The node ids stay ``*_clips`` so saved blueprints are unaffected.
+        # Labelled "Clip Selections" to distinguish pre-render specs from artifacts;
+        # ids stay ``*_clips`` for saved blueprints.
         "key": "records",
         "label": "Clip Selections",
         "preserve": ("study",),
@@ -2201,8 +2157,7 @@ def _dedup_clips(records: list[dict[str, Any]], gap: float) -> list[dict[str, An
             last_span = (last_span[0], max(last_span[1], span[1]))
             continue
         out.append(rec)
-        # Keep an untimed record but never let its None span clobber the tracker —
-        # otherwise the next overlap check short-circuits and later duplicates leak.
+        # An untimed record must not reset last_span, or later duplicates leak.
         if span is not None:
             last_span = span
     return out
@@ -2250,9 +2205,8 @@ def _make_dedup_executor(
     return _exec
 
 
-# The predicate/sort fields that compare as text in _collection_field; every
-# other field coerces to float. Serialized per field-enum as numericChoices so
-# the editor and validation know which values must be numbers.
+# Fields that compare as text in _collection_field; all others coerce to float
+# (numericChoices).
 _TEXT_FIELDS = frozenset(
     {"category", "severity", "desc", "text", "type", "participant"}
 )
@@ -2262,8 +2216,7 @@ def _predicate_params(kind: str) -> list[ParamSpec]:
     """The shared ``{field, op, value}`` clause for filter / partition nodes."""
     meta = _COLLECTION_KINDS[kind]
     numeric = [f for f in meta["fields"] if f not in _TEXT_FIELDS]
-    # An ordering default on a text field (segments' first field is ``text``)
-    # would drop every item; default those kinds to ``contains`` instead.
+    # A ``>=`` default on a text field (segments: ``text``) would drop every item.
     default_op = ">=" if meta["fields"][0] not in _TEXT_FIELDS else "contains"
     second_clause: dict[str, Any] = {"param": "combine", "not": "off"}
     return [
@@ -2290,8 +2243,8 @@ def _predicate_params(kind: str) -> list[ParamSpec]:
             "required": True,
             "numericFor": "field",
         },
-        # Optional second clause. "off" keeps the node single-clause; value2 is
-        # deliberately not required so validation stays quiet in that case.
+        # Optional second clause; value2 is not required so validation stays quiet
+        # when "off".
         {
             "name": "combine",
             "type": "enum",
@@ -2356,8 +2309,8 @@ def _limit_params(kind: str) -> list[ParamSpec]:
     ]
 
 
-# Wire each declarative NodeType to its executor. ``serialize_catalog`` strips
-# ``execute`` again for the JSON catalog endpoint, so this stays server-internal.
+# Executor per NodeType; ``serialize_catalog`` strips ``execute`` from the JSON
+# catalog.
 _EXECUTORS: dict[
     str, Callable[[NodeContext, dict[str, Any], dict[str, Any]], dict[str, Any]]
 ] = {
@@ -2388,16 +2341,13 @@ _EXECUTORS: dict[
     "gate_collection": _exec_gate_collection,
 }
 
-# The ten per-detector Screenspace nodes share one body via the factory above;
-# the unified ``detect`` node dispatches into the same body by ``detector`` param.
+# Per-detector nodes and the unified ``detect`` node share one body.
 for _ss_tool in _SS_DETECTOR_SPECS:
     _EXECUTORS[f"ss_{_ss_tool}"] = _make_ss_executor(_ss_tool)
 _EXECUTORS["detect"] = _exec_detect
 
-# Collection-algebra control nodes — per-type families, all factory-generated.
-# Registered here (NODE_TYPES + _EXECUTORS together) so the attach loop below
-# wires their ``execute`` like any other node. Category "Collection" groups them
-# apart from the gates in the palette.
+# Per-type collection families keep every port exact-typed; registered before
+# the attach loop below.
 for _kind, _meta in _COLLECTION_KINDS.items():
     _T = _meta["port"]
     _name = _meta["label"]

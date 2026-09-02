@@ -37,9 +37,7 @@ from collections.abc import Callable
 import config
 import utils
 
-# Mirrors SURFACES in assets/web/topnav.js (label, href), same order — the Go
-# menu is the topnav in native clothing. tests/test_desktop_menu.py asserts the
-# two stay in sync.
+# Mirrors SURFACES in topnav.js, same order; tests/test_desktop_menu.py checks.
 _SURFACES: tuple[tuple[str, str], ...] = (
     ("Studio", "/studio/"),
     ("Screenspace", "/screenspace/"),
@@ -51,8 +49,7 @@ _SURFACES: tuple[tuple[str, str], ...] = (
 
 _HELP_URL = "https://github.com/henedl/clipgen#readme"
 
-# Every snippet guards the global it calls: the boot page (and any half-loaded
-# page) has none of them, and a menu click there must do nothing, silently.
+# Each snippet guards its global: the boot page has none, and a click must no-op.
 _JS_OPEN_SETTINGS = "if (window.openSettingsModal) window.openSettingsModal({});"
 _JS_NEW_SESSION = (
     "if (window.ClipgenStartOverlay && window.ClipgenStartOverlay.open)"
@@ -66,19 +63,15 @@ _JS_CHEATSHEET = (
     "if (window.ClipgenHotkeys && window.ClipgenHotkeys.toggleCheatsheet)"
     " window.ClipgenHotkeys.toggleCheatsheet();"
 )
-# No ⌘K key equivalent on the menu item: the in-page hotkey registry already
-# owns Mod+K, and a native equivalent would race it into an open-then-close.
+# No ⌘K equivalent here: the in-page registry owns Mod+K and would race it.
 _JS_COMMAND_PALETTE = (
     "if (window.ClipgenCommandPalette && window.ClipgenCommandPalette.toggle)"
     " window.ClipgenCommandPalette.toggle();"
 )
-# The same path the command palette takes: clicking #themeToggle flips the
-# theme *and* syncs the native window appearance via pywebview.api.
+# Same path as the command palette: #themeToggle also syncs the native appearance.
 _JS_TOGGLE_THEME = 'var t = document.getElementById("themeToggle"); if (t) t.click();'
 
-# Menu-item title → ⌘-key, applied by the Tier 2 pass (the public API cannot
-# set key equivalents). Titles must match the built tree exactly; a test walks
-# the tree so a renamed label cannot silently orphan its shortcut.
+# Title → ⌘-key for the Tier 2 pass (public API cannot). A test catches orphans.
 _KEY_EQUIVALENTS: dict[str, str] = {
     "Settings…": ",",
     "New Session…": "n",
@@ -126,8 +119,7 @@ def build_menus(get_window: Callable[[], Any]) -> list:
     a window: the list is built before ``webview.start``, when the module
     global is still None, and every action re-reads it at click time.
     """
-    # Deferred so this module stays importable where pywebview isn't installed
-    # (the menu classes are pure containers; importing webview.menu is cheap).
+    # Deferred so the module imports without pywebview installed.
     from webview.menu import Menu, MenuAction, MenuSeparator
 
     def js_action(title: str, script: str) -> Any:
@@ -138,8 +130,7 @@ def build_menus(get_window: Callable[[], Any]) -> list:
     file_items = [
         js_action("New Session…", _JS_NEW_SESSION),
         MenuSeparator(),
-        # config.INPUT_DIR/OUTPUT_DIR are read at click time — both are empty
-        # at menu-build time and filled in once the user opens a workspace.
+        # Read at click time: both dirs are empty until the user opens a workspace.
         MenuAction("Open Input Folder", lambda: _open_folder(config.INPUT_DIR)),
         MenuAction("Open Output Folder", lambda: _open_folder(config.OUTPUT_DIR)),
         MenuSeparator(),
@@ -277,8 +268,8 @@ def _extend_view_menu(AppKit: Any, main: Any, get_window: Callable[[], Any]) -> 
         return
     view = view_item.submenu()
     view.addItem_(AppKit.NSMenuItem.separatorItem())
-    # Nil target: the responder chain hands reload: to the WKWebView itself, so
-    # this item needs no Python callback and macOS manages its enabled state.
+    # Nil target: the responder chain routes reload: to the WKWebView, enabled
+    # state included.
     reload_item = AppKit.NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
         "Reload Page", "reload:", "r"
     )

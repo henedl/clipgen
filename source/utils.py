@@ -23,25 +23,15 @@ import config
 import profiling
 
 
-# ---- Non-interactive mode flag ----
-# Set to True from cli.py when --no-input is passed. Targeted guards in
-# clipgen.py / excel_io.py / pipeline.py / video.py / utils.suggest_close_match
-# read this flag to fail fast (or skip) instead of blocking on stdin.
+# Set by cli.py for --no-input; guards fail fast instead of blocking on stdin.
 NO_INPUT_MODE: bool = False
 
-# ---- Windowed-launch flag ----
-# Set to True from cli.py when the run will open a desktop window instead of a
-# console. Read by fatal_startup_error: a Finder/Explorer launch has no attached
-# terminal, so anything printed before the window exists is invisible.
+# Set by cli.py for windowed launches; read by fatal_startup_error (no terminal
+# to print to).
 GUI_LAUNCH: bool = False
 
-# ---- Desktop window-chrome flag ----
-# Set by desktop.launch_desktop before the server starts, cleared when the window
-# closes. Holds the chrome style the native window uses ("macos"), or None for a
-# browser launch. render_index_html() turns it into an html[data-desktop-chrome]
-# attribute so the topnav can inset itself for the traffic lights; it has to be a
-# server-side flag rather than a `window.pywebview` check because pywebview injects
-# its bridge asynchronously, long after the bar has laid out.
+# Window chrome style ("macos") or None, set by desktop.launch_desktop; pywebview's
+# bridge arrives too late.
 DESKTOP_CHROME: str | None = None
 
 
@@ -120,9 +110,8 @@ class ClipRecord(TypedDict, total=False):
     cell_annotations: list[str]
     segment_annotations: dict[str, list[int]]
     selected_segment_indexes: list[int]
-    # Set by the pipeline only when a participant resolves to 2+ source videos
-    # (one continuous timeline). Each entry is (path, duration, cumulative_start).
-    # Absent for the single-video fast path. See video.build_source_timeline.
+    # (path, duration, cumulative_start) per part; only set for multi-video
+    # participants. See video.build_source_timeline.
     source_timeline: list[tuple[str, int, int]]
 
 
@@ -525,9 +514,8 @@ def get_effective_output_dir() -> Path:
     return Path.cwd()
 
 
-# Package managers install here, and macOS does not put any of them on a GUI
-# process's PATH. A Finder-launched .app gets only /usr/bin:/bin:/usr/sbin:/sbin,
-# so shutil.which("ffmpeg") misses a perfectly good Homebrew install.
+# A Finder-launched .app gets only /usr/bin:/bin:/usr/sbin:/sbin, so Homebrew
+# ffmpeg is invisible.
 _GUI_PATH_DIRS = (
     "/opt/homebrew/bin",  # Homebrew on Apple Silicon
     "/usr/local/bin",  # Homebrew on Intel, and most manual installs
@@ -665,9 +653,7 @@ def _show_native_alert(title: str, message: str) -> None:
             # 0x10 = MB_ICONERROR
             ctypes.windll.user32.MessageBoxW(None, message, title, 0x10)
     except (OSError, subprocess.SubprocessError, AttributeError):
-        # osascript missing/failing, or no user32 to call. A failed dialog must
-        # never mask the error it was trying to report, so this is swallowed —
-        # but only for the failures the two branches above can actually raise.
+        # A failed dialog must never mask the error it reports.
         pass
 
 
@@ -751,9 +737,8 @@ def require_optional(module_name: str, feature_label: str) -> None:
         ) from None
 
 
-# Unified output-dir manifest: one file, one top-level key per tool section.
-# Cache holds per-section JSON text keyed on the file's (mtime_ns, size) stamp,
-# so a load parses only its section and a save re-encodes only its section.
+# One manifest file, one key per tool section; per-section JSON text cached by
+# (mtime_ns, size).
 _MANIFEST_LOCK = threading.Lock()
 _manifest_cache: dict[str, Any] = {
     "path": None,
@@ -809,10 +794,8 @@ def _sections_locked() -> dict[str, str]:
     return _manifest_cache["sections"]
 
 
-# Re-indented section texts, keyed by the section text itself. Unchanged
-# sections keep their cached string across writes, so this turns the per-save
-# full-text re-indent of every *other* section (a multi-MB transcripts section
-# on each mark edit) into a dict hit. Pruned to live sections on every write.
+# Re-indented section text keyed by the text; unchanged multi-MB sections skip
+# re-indenting. Pruned on write.
 _manifest_indent_cache: dict[str, str] = {}
 
 
@@ -840,8 +823,8 @@ def _write_sections_locked(sections: dict[str, str]) -> Path | None:
         _manifest_cache["broken"] = False
         _manifest_indent_cache.clear()
         return None
-    # Section texts are already indent=2; nesting them one level deeper is a
-    # plain re-indent because json.dumps escapes newlines inside strings.
+    # Sections are already indent=2; json.dumps escapes newlines, so nesting is a
+    # plain re-indent.
     body = ",\n".join(
         f"  {json.dumps(key)}: {_indented_section(text)}"
         for key, text in sorted(sections.items())
@@ -1532,8 +1515,8 @@ def build_artifact_record(
         "type": artifact_type,
         "file": Path(out_path).name,
         "thumbnail": "",
-        # Only video clips may be stitched across a recording boundary; a single
-        # screenshot/GIF frame maps by its start position and is never split.
+        # Only video clips may span a recording boundary; screenshots and GIFs map
+        # by start.
         **_clip_metadata_fields(
             clip, base_video, start_str, end_str, allow_split=(artifact_type == "clip")
         ),
@@ -1558,9 +1541,8 @@ def build_reel_component(
 
 # ---- Timestamp parsing pipeline ----
 #
-# Reading order: token splitting/cleaning → add_duration → _parse_single_timestamp_token
-# → higher-level parsers (has_non_ignored_timestamp_content, parse_cell_annotations,
-# parse_timestamps).
+# Reading order: token splitting → add_duration → _parse_single_timestamp_token
+# → parse_timestamps.
 
 
 def _split_timestamp_tokens(cell_value: str) -> list[str]:
@@ -1645,11 +1627,8 @@ def _parse_single_timestamp_token(token: str) -> tuple[str, str] | None:
     """
     if token == "":
         return None
-    # Dash range: "start-end". Require a digit before the dash so we don't
-    # treat a leading dash (e.g. "-5") or non-time dash as a range, and require
-    # both halves to be real timestamps so half-garbage ranges ("1:23-abc",
-    # "5-10", "1:23-1:45-2:00") are reported as skipped here instead of
-    # failing deep in ffmpeg with the clip silently dropped.
+    # Ranges need a digit before the dash and two valid halves; reject garbage
+    # before ffmpeg.
     if "-" in token:
         dash_pos = token.find("-")
         if dash_pos > 0 and token[dash_pos - 1].isdigit():
@@ -1661,8 +1640,8 @@ def _parse_single_timestamp_token(token: str) -> tuple[str, str] | None:
             ):
                 return (start_time, end_time)
         return None
-    # Single timestamp with colon: use as start and add default duration for end.
-    # Require a digit before the first colon so we only match time-like strings.
+    # Single time: start plus default duration. A digit before the colon keeps it
+    # time-like.
     if ":" in token:
         colon_pos = token.find(":")
         if colon_pos > 0 and token[colon_pos - 1].isdigit():
@@ -1747,9 +1726,8 @@ def timestamp_to_seconds(ts_str: str) -> float | None:
     if len(parts) == 3:
         hours, minutes, seconds = nums
     else:
-        # MM:SS — minutes may exceed 59 (e.g. "75:00" for a long session
-        # written without an hours component), matching how the range form
-        # "75:00-80:00" already flows through to ffmpeg.
+        # MM:SS: minutes may exceed 59 ("75:00"), as ranges like "75:00-80:00"
+        # already do.
         hours = 0
         minutes, seconds = nums
 
@@ -1780,7 +1758,6 @@ def parse_timestamps(
     parsed_timestamps = []
     skipped_timestamps = []
     ignored_tokens = get_ignored_timestamp_tokens()
-    # Unify delimiters (+, ;, ,) to spaces so split() yields one token per time or range
     raw_times = _split_timestamp_tokens(cell_value)
     if config.DEBUGGING:
         config.debug_ic(raw_times)
@@ -1839,8 +1816,7 @@ def _clock_to_seconds(ts: str) -> int | None:
     if not value:
         return None
 
-    # Choose format based on number of components to avoid treating "22:00"
-    # as 22 minutes instead of 22 hours.
+    # Component count picks the format: "22:00" is 22 hours, not 22 minutes.
     parts = value.split(":")
     if len(parts) == 3:
         try:
@@ -1887,14 +1863,7 @@ def seconds_to_timestamp(total_seconds: float, *, force_hours: bool = False) -> 
     return f"{minutes:d}:{seconds:02d}"
 
 
-# ---- Multi-video timeline mapping ----
-#
-# When a participant's session spans several source videos (see
-# video.build_source_timeline), spreadsheet timestamps are GLOBAL — relative to
-# the concatenated recording. These pure helpers map a global second into the
-# owning sub-video and the local offset within it. The ``timeline`` argument is
-# the list of ``(path, duration, cumulative_start)`` tuples returned by
-# build_source_timeline.
+# ---- Multi-video timeline mapping: global sheet seconds → (part, local offset) ----
 
 
 def _timeline_total_seconds(timeline: list[tuple[str, int, int]]) -> int:
@@ -1994,10 +1963,7 @@ def convert_clock_pairs_to_relative(
         )
         return []
 
-    # Overnight recordings: segments after midnight will be < baseline_seconds.
-    # If the resulting wraparound offset is within a reasonable recording
-    # window (<= 12 hours), treat it as a day rollover; otherwise reject as
-    # a typo / pre-baseline entry.
+    # Overnight: a wraparound offset within 12 hours is a day rollover, else a typo.
     seconds_per_day = 24 * config.SECONDS_PER_HOUR
     wrap_window = 12 * config.SECONDS_PER_HOUR
 
@@ -2293,18 +2259,16 @@ def set_program_settings() -> bool:
         error_print(f"Invalid value '{new_raw}' for type {current_type.__name__}")
         return False
 
-    # Prompt-typed settings are .format()-ed at agent runtime; an unvalidated
-    # edit here (unlike the Settings-modal PUT, which validates) would only
-    # surface as a KeyError inside the next agent run.
+    # Prompts are .format()-ed at agent runtime; validate here or the KeyError
+    # surfaces mid-run.
     meta = config.STUDIO_SETTINGS.get(setting_name) or {}
     if meta.get("type") == "prompt":
         prompt_err = validate_prompt(str(converted), meta.get("placeholders") or [])
         if prompt_err is not None:
             error_print(f"Invalid prompt: {prompt_err}")
             return False
-    # Same story for the source-filename template: it is .format()-ed and
-    # regex-compiled at discovery time, so an unvalidated edit would only
-    # surface as a broken participant list.
+    # Same for the filename template: unvalidated, it surfaces as a broken
+    # participant list.
     if setting_name == "SOURCE_FILENAME_PATTERN":
         converted = str(converted).strip()
         pattern_err = validate_source_filename_pattern(converted)
@@ -2342,9 +2306,8 @@ def validate_prompt(text: str, placeholders: list[str]) -> str | None:
         return "missing required placeholder(s): " + ", ".join(
             "{" + p + "}" for p in sorted(missing)
         )
-    # Ground truth: the prompt must .format() cleanly with exactly these keys.
-    # Catches unknown placeholders ({foo}), stray positional {}, and nested
-    # format-spec references the parse() scan above does not surface.
+    # Ground truth: .format() catches stray positional {} and nested format-spec
+    # references parse() misses.
     try:
         text.format(**{p: "" for p in placeholders})
     except (KeyError, IndexError, ValueError) as exc:
@@ -2370,9 +2333,7 @@ def format_filesize(size_bytes: float, precision: int = 2) -> str:
     """
     suffixes = ["B", "KB", "MB", "GB", "TB"]
     suffix_index = 0
-    # Keep dividing by 1024 until size is under 1024 or we reach TB (index 4).
-    # Use >= so an exact power of 1024 promotes to the next unit (1024 bytes ->
-    # 1.00KB, not 1024.00B).
+    # >= promotes an exact power of 1024 (1024 bytes -> 1.00KB, not 1024.00B).
     while size_bytes >= 1024 and suffix_index < 4:
         suffix_index += 1
         size_bytes = size_bytes / 1024
@@ -2388,17 +2349,8 @@ def get_current_time() -> str:
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
 
-# ISO 639-1 (two-letter) -> ISO 639-2/T (three-letter), covering every language
-# faster-whisper can report (its _LANGUAGE_CODES set). Media containers store
-# only the three-letter form, so this is the hop between what Whisper detects
-# and what a subtitle/audio track can be tagged with.
-#
-# Whisper's own set already includes two three-letter codes ("haw", "yue"),
-# which need no entry — normalize_track_language passes any 3-letter code
-# through. Deliberately the /T (terminological) variant: for the ~20 languages
-# where ISO 639-2 has two codes, /T is what Matroska specifies and what current
-# players expect ("deu" not "ger", "fra" not "fre"). ffmpeg stores whichever it
-# is given verbatim, so the choice is ours to get right.
+# ISO 639-1 -> 639-2/T for every Whisper language. /T deliberately: players want
+# "deu", not "ger".
 ISO639_1_TO_2 = {
     "af": "afr", "am": "amh", "ar": "ara", "as": "asm", "az": "aze",
     "ba": "bak", "be": "bel", "bg": "bul", "bn": "ben", "bo": "bod",
@@ -2440,9 +2392,8 @@ def normalize_track_language(code: str | None) -> str:
     text = (code or "").strip().lower()
     if not text:
         return "und"
-    # Accept BCP 47 forms too ("en-US", "zh_Hans"): only the primary subtag is
-    # meaningful to a container. TRANSCRIBE_LANGUAGE is user-editable, so this
-    # is a plausible thing to be handed.
+    # BCP 47 forms ("en-US", "zh_Hans") too: only the primary subtag matters to a
+    # container.
     primary = text.replace("_", "-").split("-")[0]
     if len(primary) == 3 and primary.isalpha():
         return primary
@@ -2597,15 +2548,8 @@ def participant_id_from_source_name(name: str) -> str | None:
     return parsed[1] if parsed else None
 
 
-# One participant-video scan per input-dir state, keyed dir -> (mtime_ns,
-# pattern, fileformat, result). The directory mtime advances on add/remove/
-# rename, invalidating on real change (incl. the P6 watch-dir drop); the
-# pattern + fileformat are part of the cached state because a settings PUT
-# changes them without touching the directory. Result is directory-only
-# (study_name is unused), so it is shared across all callers regardless of the
-# study_name they pass, and keying on the dir string (not a single slot) means
-# a runtime input-dir switch selects a different entry rather than needing
-# explicit invalidation.
+# Keyed dir -> (mtime_ns, pattern, fileformat, result); settings PUTs change
+# pattern/fileformat without touching the dir.
 _discover_videos_cache: dict[
     str, tuple[int | None, str, str, list[dict[str, Any]]]
 ] = {}
@@ -2694,17 +2638,12 @@ def discover_participant_videos(study_name: str = "") -> list[dict[str, Any]]:
 
 # ---- Flask blueprint helpers ----
 
-# Live index pages embed this marker where the shared favicon + Google-fonts
-# block belongs; render_index_html() expands it from assets/web/_head.html so
-# the block lives in one place. Exported viewers don't use it (self-contained).
+# render_index_html() expands this from assets/web/_head.html; exported viewers
+# are self-contained and skip it.
 _HEAD_MARKER = "<!-- CLIPGEN_HEAD_HERE -->"
 
-# Rendered-index cache: str(index path) -> (index_mtime_ns, head_mtime_ns|None,
-# desktop_chrome, rendered). The `/` route re-renders on every GET; the assets never
-# change while the server runs, so memoize by mtime (a live dev edit still bumps mtime
-# and refreshes). head_mtime is None for pages without the marker (they never read
-# _head.html). DESKTOP_CHROME is part of the key because it varies per launch, not per
-# file, so an mtime-only key would serve a browser render into a desktop window.
+# Keyed str(index path) -> (index_mtime_ns, head_mtime_ns|None, desktop_chrome,
+# rendered); chrome varies per launch, not per file.
 _index_html_cache: dict[str, tuple[int | None, int | None, str | None, str]] = {}
 _index_html_lock = threading.Lock()
 
@@ -2837,12 +2776,7 @@ def register_static_routes(
             return send_from_directory(d, filename)
 
 
-# ---- Native folder picker ------------------------------------------------
-#
-# clipgen is a local tool, so when the Start overlay's Browse button is
-# clicked we can open the host OS's native folder dialog and pipe the path
-# back to the browser. The server-side approach below shells out to platform
-# tooling so we don't need extra GUI dependencies.
+# ---- Native folder picker: shells out to OS tooling, no GUI dependency ----
 
 
 def open_native_folder_picker(initial_dir: str = "") -> str | None:
@@ -2892,8 +2826,7 @@ def open_native_folder_picker(initial_dir: str = "") -> str | None:
         path = result.stdout.strip().rstrip("/")
         return path or None
 
-    # Tkinter fallback for Linux/Windows when available. uv-managed Pythons
-    # often skip Tk, so this is best-effort — callers should accept None.
+    # Tkinter fallback; uv-managed Pythons often lack Tk, so None is expected.
     try:
         import tkinter
         from tkinter import filedialog

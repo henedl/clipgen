@@ -65,14 +65,9 @@ class NodeContext:
 
 
 # ---------------------------------------------------------------------------
-# Node catalog (declarative single source of truth)
+# Node catalog: modelled on ``thinking_agents.AGENTS``; adding a node needs no
+# frontend edits
 # ---------------------------------------------------------------------------
-#
-# Modelled on ``thinking_agents.AGENTS``: a data-driven registry the frontend
-# renders generically, each node carrying the typed ports the DAG needs (wire
-# vocabulary in plans/archive/WORKFLOWS-PLAN.md). Adding a node is "append a
-# NodeType + an executor", zero frontend edits; ``serialize_catalog`` strips
-# ``execute`` for the JSON endpoint.
 
 
 class Port(TypedDict):
@@ -93,25 +88,21 @@ class ParamSpec(TypedDict):
     choices: NotRequired[list[Any]]
     min: NotRequired[float]
     max: NotRequired[float]
-    # An empty value here is a guaranteed no-op/failure, so the pre-run
-    # validation panel surfaces it as an error and disables Run.
+    # Empty means a guaranteed no-op; the validation panel errors and disables Run.
     required: NotRequired[bool]
-    # Conditional visibility: {"param": <sibling name>, "equals": v} or
-    # {"param": <sibling name>, "not": v}. The editor hides the row when the
-    # condition fails; the executor still defaults the value server-side.
+    # {"param": <sibling>, "equals": v} or {"param": <sibling>, "not": v}; hides
+    # the row, executor still defaults.
     showIf: NotRequired[dict[str, Any]]
-    # On an enum whose choices name collection fields: the subset that compares
-    # numerically. Drives the paired value editor's input mode and lets the
-    # validation panel reject a non-numeric value that the backend float()
-    # coerce would silently drop every item on.
+    # Field-enum choices that compare numerically; the paired value editor and
+    # validation constrain to numbers.
     numericChoices: NotRequired[list[str]]
-    # On a string param: the sibling enum whose numericChoices decide whether
-    # this input should constrain to numbers (filter/partition values).
+    # Sibling enum whose numericChoices decide whether this string input
+    # constrains to numbers.
     numericFor: NotRequired[str]
     # Static completion suggestions (rendered as a datalist; input stays free).
     suggestions: NotRequired[list[str]]
-    # Named dynamic completion source the frontend resolves itself (currently
-    # "llm-models" → GET ../api/models). Input stays free text.
+    # Dynamic completion source the frontend resolves ("llm-models" → GET
+    # ../api/models); input stays free.
     datalist: NotRequired[str]
 
 
@@ -128,17 +119,16 @@ class NodeType(TypedDict):
     params: list[ParamSpec]
     requires: list[str]  # subset of {"sheet", "videoDir"}
     execute: NotRequired[Callable[..., dict[str, Any]]]
-    # Hidden from the palette but kept in the catalog (e.g. the per-detector
-    # ss_<tool> nodes, which the unified Detect node + Multitool read for specs).
+    # Hidden from the palette, kept in the catalog (the per-detector ss_<tool>
+    # nodes).
     hidden: NotRequired[bool]
-    # Whether a ss_<tool> detector can be a Multitool chain step (the frontend
-    # derives its step-type list from this flag — see _MULTITOOL_STEP_TOOLS).
+    # Detector usable as a Multitool step; the frontend's step list derives from
+    # this (see _MULTITOOL_STEP_TOOLS).
     multitoolStep: NotRequired[bool]
 
 
-# Shared by the thinking nodes: a free-text override of the model
-# name (blank → the configured default). A ``string`` rather than ``enum`` because
-# the downloaded models are environment-specific and not known server-side.
+# Thinking nodes' model override; a string, not an enum, since installed models
+# vary per machine.
 _LLM_MODEL_PARAM: ParamSpec = {
     "name": "model",
     "type": "string",
@@ -148,8 +138,7 @@ _LLM_MODEL_PARAM: ParamSpec = {
 }
 
 
-# Curated node set (plans/archive/WORKFLOWS-PLAN.md). Keyed by id so the frontend
-# can both iterate (palette) and look up a placed node's type.
+# Keyed by id so the frontend can iterate the palette and look up placed nodes.
 NODE_TYPES: dict[str, NodeType] = {
     # ---- Sources ----
     "video_source": {
@@ -249,8 +238,7 @@ NODE_TYPES: dict[str, NodeType] = {
                 "type": "string",
                 "default": "auto",
                 "label": "Language",
-                # Whisper takes ISO 639-1 codes; free text stays allowed for the
-                # long tail, these just cover the common cases.
+                # ISO 639-1 codes for the common cases; free text covers the rest.
                 "suggestions": [
                     "auto",
                     "en",
@@ -402,8 +390,8 @@ NODE_TYPES: dict[str, NodeType] = {
         "category": "Thinking",
         "inputs": [
             {"name": "summary", "type": "summary"},
-            # Carries the participant id, which scopes the observations/marks
-            # the report cites; without it the report covers the summary only.
+            # Supplies the participant id that scopes cited observations/marks;
+            # without it, summary only.
             {"name": "video", "type": "video", "optional": True},
         ],
         "outputs": [{"name": "report", "type": "report"}],
@@ -411,9 +399,8 @@ NODE_TYPES: dict[str, NodeType] = {
         "requires": [],
     },
     # ---- Screenspace ----
-    # The per-detector nodes (ss_text … ss_boundary) are appended below the
-    # literal from ``_SS_DETECTOR_SPECS``, so each tool's real params reach the
-    # scan rather than the empty ``parameters={}`` a single ss_scan would pass.
+    # Per-detector ss_<tool> nodes are appended after this literal from
+    # ``_SS_DETECTOR_SPECS``.
     "multitool": {
         "id": "multitool",
         "label": "Multitool",
@@ -574,8 +561,8 @@ NODE_TYPES: dict[str, NodeType] = {
                 "label": "Titlecard duration (s)",
                 "showIf": {"param": "titlecards", "equals": True},
             },
-            # Pad fields omit "min" so the number input accepts negatives
-            # (negative = trim inward); max_duration keeps min 0 (0 = no cap).
+            # Pads omit "min" so negatives (trim inward) are accepted; max_duration
+            # 0 = no cap.
             {
                 "name": "pad_start",
                 "type": "number",
@@ -650,8 +637,8 @@ NODE_TYPES: dict[str, NodeType] = {
                 "default": False,
                 "label": "Chronological order",
             },
-            # Pad fields omit "min" so the number input accepts negatives
-            # (negative = trim inward); max_duration keeps min 0 (0 = no cap).
+            # Pads omit "min" so negatives (trim inward) are accepted; max_duration
+            # 0 = no cap.
             {
                 "name": "pad_start",
                 "type": "number",
@@ -682,9 +669,8 @@ NODE_TYPES: dict[str, NodeType] = {
             {"name": "transcript", "type": "transcript", "optional": True},
         ],
         "outputs": [
-            # Pass-through descriptor (pointed at the new file for the copy
-            # operations) so post-processing can chain ahead of transcription
-            # or clip cutting; artifacts carries the produced copies.
+            # Pass-through video (repointed at copies) lets post-processing chain
+            # ahead of transcription or cutting.
             {"name": "video", "type": "video"},
             {"name": "artifacts", "type": "artifacts"},
         ],
@@ -738,10 +724,8 @@ NODE_TYPES: dict[str, NodeType] = {
                 "choices": ["both", "json", "csv"],
                 "label": "Format",
             },
-            # These tables come from the Screenspace / Transcripts manifests on
-            # disk (calibration pins, friction moments + scored segments), not
-            # from wired ports — opt-in so the node's default output stays
-            # driven by what's wired.
+            # These tables read the on-disk Screenspace/Transcripts manifests, not
+            # wires; opt-in so defaults follow wiring.
             {
                 "name": "include_pins",
                 "type": "bool",
@@ -784,9 +768,8 @@ NODE_TYPES: dict[str, NodeType] = {
         "requires": [],
     },
     # ---- Control ----
-    # (No standalone "measure" node: Threshold Gate fuses measure+gate for
-    # collections, and the scalar Gate below covers the video→scalar adapter
-    # path — a measured value had no other consumer.)
+    # No standalone measure node: gates fuse measure+compare; nothing else
+    # consumes a measurement.
     "gate": {
         "id": "gate",
         "label": "Gate",
@@ -794,11 +777,8 @@ NODE_TYPES: dict[str, NodeType] = {
         "domain": "control",
         "category": "Control",
         "inputs": [{"name": "value", "type": "scalar"}],
-        # ``pass`` is a CONTROL output: it carries no data, it gates. The runner
-        # skips a node when an upstream gate completed with ``pass`` False, and
-        # excludes control edges from a node's data inputs. The universal
-        # ``__gate__`` input port the frontend renders is also ``control``-typed,
-        # so a gate can wire into any node (exact-match) as a control dependency.
+        # ``pass`` carries no data; it wires into any node's universal ``__gate__``
+        # control input.
         "outputs": [{"name": "pass", "type": "control"}],
         "params": [
             {
@@ -847,12 +827,8 @@ NODE_TYPES: dict[str, NodeType] = {
 }
 
 
-# Per-detector Screenspace nodes. Each entry's params are lifted from the matching
-# ``screenspace_tools`` class (the knobs its ``scan`` reads). The four
-# reference-based detectors (template/shape/similarity/scene) self-extract their
-# reference from the node's region at ``reference_seconds`` so the canvas needs no
-# upload UI. ``_build_ss_scan_params`` (below) assembles these flat params into the
-# nested ``scan_params`` each scan expects.
+# Per-detector params, lifted from each ``screenspace_tools`` class; reference
+# detectors self-extract at ``reference_seconds``.
 _SS_DETECTOR_LABELS: dict[str, str] = {
     "text": "Detect Text",
     "color": "Detect Color",
@@ -1258,12 +1234,8 @@ _SS_DETECTOR_SPECS: dict[str, list[ParamSpec]] = {
 # Detectors whose scan needs a reference frame self-extracted from the node region.
 _SS_REFERENCE_DETECTORS = frozenset({"similarity", "template", "shape", "scene"})
 
-# Detectors usable as a Multitool chain step: the per-frame (``check_frame``)
-# detectors that need no uploaded reference. Single source of truth — served to
-# the frontend via each node's ``multitoolStep`` flag so the step editor derives
-# the list instead of hardcoding it (the "no duplicated JS constants" rule).
-# ``tests/test_workflows_executors`` cross-checks this against the actual tool
-# classes (override ``check_frame`` AND not reference-based) so it can't drift.
+# Per-frame detectors needing no reference; tests/test_workflows_executors
+# cross-checks against the tool classes.
 _MULTITOOL_STEP_TOOLS = frozenset(
     {"color", "change", "flow", "text", "numbers", "inactivity"}
 )
@@ -1283,19 +1255,14 @@ for _ss_tool, _ss_param_spec in _SS_DETECTOR_SPECS.items():
         "outputs": [{"name": "events", "type": "events"}],
         "params": list(_ss_param_spec),
         "requires": ["videoDir"],
-        # Hidden from the palette: the unified "detect" node below is the
-        # palette-facing entry. These stay in the catalog as the per-detector
-        # spec source (Detect editor + Multitool steps) and keep old blueprints
-        # and built-in recipes that reference ss_<tool> directly runnable.
+        # The unified ``detect`` node fronts the palette; these remain the spec
+        # source and stay runnable.
         "hidden": True,
-        # Whether this detector can be a Multitool step (the frontend derives the
-        # step-type list from this flag — see _MULTITOOL_STEP_TOOLS).
         "multitoolStep": _ss_tool in _MULTITOOL_STEP_TOOLS,
     }
 
-# Unified palette-facing detector: one node whose ``detector`` dropdown swaps the
-# per-detector param set (the frontend reads it from the hidden ss_<tool> nodes
-# above). Dispatches to the same _run_ss_detector body the ss_<tool> nodes use.
+# Palette-facing detector; its ``detector`` dropdown swaps in the hidden ss_<tool>
+# param sets.
 NODE_TYPES["detect"] = {
     "id": "detect",
     "label": "Detect",
@@ -1351,16 +1318,9 @@ def serialize_adapters() -> list[list[str]]:
 
 
 # ---------------------------------------------------------------------------
-# Built-in recipes — read-only stashes served alongside user stashes
+# Built-in recipes: read-only stashes prepended by ``GET /api/stashes``, never
+# persisted
 # ---------------------------------------------------------------------------
-#
-# These are the headline graphs shipped as ready-to-stamp sub-graphs. They are
-# *code, not data*: ``GET /api/stashes`` prepends them to the user's persisted
-# stashes, so they are never seeded into the manifest (no migration/dedup). The
-# ``builtin`` flag makes them read-only — the stash CRUD routes reject renaming
-# or deleting them. Node/edge shapes mirror the on-canvas blueprint shapes
-# (``{id, type, params, position}`` / ``{id, from, fromPort, to, toPort}``) with
-# stash-local ids; the frontend remaps to fresh ``n_``/``e_`` ids on instantiate.
 
 BUILTIN_STASHES: list[dict[str, Any]] = [
     {
@@ -1639,8 +1599,7 @@ BUILTIN_STASHES: list[dict[str, Any]] = [
 
 
 # ---------------------------------------------------------------------------
-# Source descriptors — embedded in every domain value so the pure adapters
-# (below) and the executors (in workflows.py) can reach a value's source
+# Source descriptors: embedded in every domain value; keeps the adapters pure
 # ---------------------------------------------------------------------------
 
 _DEFAULT_EVENT_CLUSTER_GAP = 5.0  # seconds; matches the CLI --cluster-gap default
@@ -1692,12 +1651,9 @@ def _clip_source_filename(source: dict[str, Any]) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Typed-port adapters — pure value -> value, applied by the runner
+# Typed-port adapters: pure value -> value coercions the runner applies across
+# port types
 # ---------------------------------------------------------------------------
-#
-# An adapter coerces an output value whose port type differs from the consuming
-# input's type. They are pure (no ctx/params), so each value self-carries its
-# source descriptor (see the executors in ``workflows.py``).
 
 
 def _adapt_transcript_to_segments(value: dict[str, Any]) -> dict[str, Any]:
@@ -1821,10 +1777,8 @@ ADAPTERS: dict[tuple[str, str], Callable[[Any], Any]] = {
     ("video", "scalar"): _adapt_video_to_scalar,
 }
 
-# Plain-language description of what each adapter does, served alongside the
-# table (see ``serialize_adapters``) so a coerced (dashed) wire's tooltip can
-# explain the transformation — not just that one happened. One per ADAPTERS key
-# (guarded by ``tests/test_workflows_api``); a missing one degrades to no suffix.
+# Tooltip text per ADAPTERS key (see serialize_adapters); tests/test_workflows_api
+# checks coverage.
 _ADAPTER_DESCRIPTIONS: dict[tuple[str, str], str] = {
     ("transcript", "segments"): "use the transcript's segments",
     ("segments", "timeRange"): "use each segment's time span",

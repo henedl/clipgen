@@ -30,11 +30,9 @@
 
   var MOVE_THRESHOLD = 4; // px before a port mousedown counts as a drag, not a click
 
-  // nodeId|port|dir -> {x,y} dot-centre offset within its card (zoom-1 px).
-  // Invalidated by clearPortCache() whenever the port DOM is rebuilt.
+  // nodeId|port|dir -> dot-centre offset within its card (zoom-1 px); clearPortCache() resets.
   var _portOffsets = {};
-  // The in-flight connection (drag or click-armed), or null. Shape:
-  // { src, temp(<path>), moved(bool), mode("drag"|"armed"), raf, lastX, lastY }.
+  // In-flight connection or null: { src, temp, moved, mode("drag"|"armed"), raf, lastX, lastY }.
   var _connect = null;
   var _hoverEdge = null; // edge id currently hovered (drives the × button)
   var _hideTimer = 0; // grace timer so the pointer can reach the × button
@@ -79,21 +77,11 @@
       if (!dot) return null;
       var card = dot.closest(".wf-node");
       if (!card) return null;
-      // Measure relative to the card and divide out its ACTUAL rendered scale to
-      // get an exact zoom-1 layout offset. Cached, so this layout read happens
-      // once per renderAllNodes rather than per drag frame.
-      //
-      // Use the *measured* scale (transformed rect width vs offsetWidth), NOT
-      // state.viewport.zoom: renderAllNodes measures synchronously while
-      // applyViewport writes the #wfWorld transform a frame later, so loading a
-      // blueprint saved at zoom != 1 measures a card still at identity scale.
-      // That cached offsets wrong by offset*(zoom-1) and rendered the wires
-      // detached until something forced a re-measure.
+      // Divide by the card's measured scale, not state.viewport.zoom: applyViewport writes the transform a frame late.
       var dotRect = dot.getBoundingClientRect();
       var cardRect = card.getBoundingClientRect();
       var ow = card.offsetWidth;
-      // Degenerate layout (card not yet sized/hidden): skip without poisoning the
-      // cache, so the next render re-measures once layout exists.
+      // Unsized card: skip without caching so the next render re-measures.
       if (!ow || !cardRect.width) return null;
       var scale = cardRect.width / ow;
       off = _portOffsets[key] = {
@@ -104,13 +92,7 @@
     return { x: (node.position.x || 0) + off.x, y: (node.position.y || 0) + off.y };
   }
 
-  // Horizontal S-curve from an output (exits right) to an input (enters left),
-  // on React Flow's curvature model. A forward edge puts both control points at
-  // the horizontal midpoint for a clean S; a backward edge gets a small
-  // sqrt-bounded bow rather than a wide loop slung under the cards. A linear
-  // `max(40, |dx|*0.4)` does the opposite — the 40px floor crosses the control
-  // points on near-vertical forward edges (a kink) and the linear term balloons
-  // backward edges.
+  // React Flow curvature: forward edges bend at the midpoint, backward edges get a sqrt-bounded bow.
   var WIRE_CURVATURE = 0.25;
 
   function ctrlOffset(distance) {
@@ -144,9 +126,7 @@
 
   // ---- Rendering ----
 
-  // A port's wire type from the catalog (mirrors backend _port_type). Used to
-  // tag adapter-bridged wires; the connect gestures read data-port-type off the
-  // DOM dots directly, so this only serves renderWires.
+  // Catalog wire type of a port (mirrors backend _port_type); only renderWires needs it.
   function portTypeOf(nodeId, port, dir) {
     var node = WF.findNode(nodeId);
     var nt = node && state.catalogById[node.type];
@@ -204,8 +184,7 @@
       frag.appendChild(group);
     });
     svg.appendChild(frag);
-    // A connection is in flight — re-attach its temp wire (the clear above
-    // dropped it). renderWires isn't normally called mid-connect, but be safe.
+    // Re-attach an in-flight temp wire the clear above dropped.
     if (_connect && _connect.temp) svg.appendChild(_connect.temp);
     refreshWireDelete();
   }
@@ -213,9 +192,7 @@
   // ---- Type validation ----
 
   function canConnect(outType, inType) {
-    // Exact type match, OR a registered adapter the runner coerces across
-    // (events → clipRecords, segments → timeRange, …), served via /api/catalog.
-    // Single-hop only — mirrors the runner's one-adapter _gather_inputs.
+    // Exact match or one registered adapter (single hop, like the runner's _gather_inputs).
     if (outType === inType) return true;
     return !!(state.adapters && state.adapters.has(outType + ">" + inType));
   }
@@ -236,8 +213,7 @@
     });
   }
 
-  // Glow the cards + palette items that can accept this connection; dim the rest
-  // (the source card stays neutral). Cleared by clearConnectHighlight().
+  // Glow compatible cards and palette items, dim the rest; source card stays neutral.
   function applyConnectHighlight(source) {
     var cards = qsa(".wf-node");
     for (var i = 0; i < cards.length; i++) {
@@ -328,8 +304,7 @@
     _connect = null;
   }
 
-  // Resolve at a screen point: connect to the card there (snapping to its nearest
-  // compatible port), or — if it's empty space / the source node — just cancel.
+  // Connect to the card under the pointer (nearest compatible port) or cancel.
   function finishConnect(clientX, clientY) {
     if (!_connect) return;
     var src = _connect.src;
@@ -342,8 +317,7 @@
     }
   }
 
-  // Move to click-armed mode: the wire trails the cursor until the next mousedown
-  // (handled in capture so it pre-empts pan / node-drag / palette handlers).
+  // Click-armed: the wire trails the cursor; capture listeners pre-empt pan and drag handlers.
   function armConnect() {
     if (!_connect) return;
     _connect.mode = "armed";
@@ -450,8 +424,7 @@
       showToast("Can't connect " + out.type + " → " + inp.type);
       return;
     }
-    // An input holds at most one wire — connecting to an occupied input replaces
-    // it (this also drops an exact duplicate of the same source).
+    // An input holds one wire; a new connection replaces the old (or a duplicate).
     var edges = (state.edges || []).filter(function (edge) {
       return !(edge.to === inp.nodeId && edge.toPort === inp.port);
     });
@@ -563,9 +536,7 @@
   WF.clearPortCache = clearPortCache;
   WF.startWireDrag = startWireDrag;
   WF.isConnecting = isConnecting;
-  // Tear down an in-flight connection (temp wire, highlight, armed document
-  // listeners). The hub calls this on blueprint switch / re-layout so an armed
-  // wire can't outlive its source node. Safe to call when nothing is connecting.
+  // Hub-called on blueprint switch; an armed wire must not outlive its source node.
   WF.cancelConnect = endConnect;
   WF.selectEdge = selectEdge;
   WF.removeEdge = removeEdge;

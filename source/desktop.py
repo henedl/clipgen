@@ -36,18 +36,14 @@ import start_settings
 import utils
 
 
-# Matches --bg in the dark theme (assets/web/tokens.css), so the window does not
-# flash white before the first paint.
+# The dark theme's --bg (tokens.css), so the window never flashes white.
 _WINDOW_BACKGROUND = "#0a0a0b"
 _WINDOW_SIZE = (1440, 900)
 _WINDOW_MIN_SIZE = (960, 600)
-# A restored window must expose at least this much of itself on some screen.
-# Roughly the topnav's drag strip: enough to grab and pull back into view.
+# How much of a restored window must land on some screen: roughly the drag strip.
 _MIN_VISIBLE = (200, 48)
 
-# Rewrites target="_blank" clicks into a call back into Python. A webview has no
-# back button, so letting one navigate the app window to GitHub would strand the
-# user with no way home.
+# Routes target="_blank" clicks to Python: a webview has no back button.
 _EXTERNAL_LINK_SHIM = """
 document.addEventListener('click', function (e) {
   var a = e.target && e.target.closest && e.target.closest('a[target="_blank"]');
@@ -125,20 +121,7 @@ def titlebar_double_click() -> None:
 
 
 # --- Window geometry --------------------------------------------------------
-#
-# The last rect is persisted to start.json and restored on the next launch.
-# Two things shape the implementation:
-#
-# - pywebview's moved/resized events carry the new values directly, each firing
-#   on its own thread, per frame, for a whole drag — so the handlers only stash a
-#   tuple and the disk write is debounced. Reading window.x/.width instead would
-#   round-trip to the GUI thread on every one of those events.
-# - x/y are reported and applied *relative to the window's current screen*
-#   (cocoa.py's move() offsets from self.screen.origin, windowDidMove_ flips
-#   against window.screen()), so a window dragged to a secondary display comes
-#   back at the same offset on the primary one. _window_kwargs guarantees it is at
-#   least visible; matching the exact display is not worth the per-backend screen
-#   bookkeeping.
+# Handlers stash a tuple, debounced to disk. x/y are screen-relative.
 
 # Latched by _sample_reset_modifier: the user held Shift while the app started.
 _reset_requested = False
@@ -154,10 +137,8 @@ def _shift_held() -> bool:
     """
     try:
         if sys.platform == "darwin":
-            # Imported by name and typed Any for the two reasons in
-            # desktop_chrome._appkit: pyobjc is absent on the Linux typecheck CI,
-            # where a literal import is an unresolved-import error, and its stubs
-            # omit half the framework (NSEvent included).
+            # Imported by name, typed Any: see desktop_chrome._appkit (Linux CI,
+            # incomplete stubs).
             appkit: Any = importlib.import_module("AppKit")
             flags = appkit.NSEvent.modifierFlags()
             return bool(flags & appkit.NSEventModifierFlagShift)
@@ -191,9 +172,7 @@ def _persist_geometry() -> None:
         start_settings.record_window_geometry(*rect)
 
 
-# The lambda defers the _persist_geometry lookup to call time, per
-# make_debounced_persist's contract, so tests can monkeypatch it. The cancel
-# handle it returns has no caller here: every write path wants flush.
+# The lambda resolves _persist_geometry at call time so tests can monkeypatch it.
 _schedule_geometry_persist, _flush_geometry, _ = server_utils.make_debounced_persist(
     lambda: _persist_geometry(),
     threading.Lock(),
@@ -292,10 +271,8 @@ def _restore_geometry() -> dict[str, int]:
         start_settings.clear_window_geometry()
         return {"width": _WINDOW_SIZE[0], "height": _WINDOW_SIZE[1]}
     try:
-        # A lazy proxy resolving the display list on access, which works before
-        # webview.start(). It also initialises the GUI toolkit, so a headless box
-        # raises here — swallow that and let create_window report the real problem,
-        # which launch() turns into the browser fallback.
+        # webview.screens initialises the GUI toolkit; a headless box raises. Let
+        # create_window report it.
         screens = list(webview.screens)
     except (RuntimeError, OSError, AttributeError, webview.WebViewException):
         screens = []
@@ -349,9 +326,7 @@ def launch_desktop(
 
     _sample_reset_modifier()
 
-    # Only clicks landing *directly* on a .pywebview-drag-region element drag the
-    # window; without this a mousedown anywhere inside the topnav (a tab, the
-    # settings button) would bubble up to the bar and drag it too.
+    # Otherwise a mousedown anywhere in the topnav (tabs, buttons) bubbles up and drags.
     webview.settings["DRAG_REGION_DIRECT_TARGET_ONLY"] = True
 
     live = server.serve_combined_app(
@@ -364,15 +339,12 @@ def launch_desktop(
     profiling.mark("startup.server_bound")
     utils.info_print(f"clipgen running at {live.origin}")
 
-    # Second sample: the server bind above returns fast (the heavy build runs
-    # in the background behind the boot page), but sample again for safety.
+    # Second sample; see _sample_reset_modifier.
     _sample_reset_modifier()
 
     try:
-        # render_index_html() bakes this into every page it serves. Set inside the
-        # try so the finally always clears it — a browser fallback launch must not
-        # inherit a chrome flag. Nothing has requested a page yet: the server is up,
-        # but the first GET only happens when the window loads.
+        # render_index_html bakes this into pages; set inside try so a browser
+        # fallback never inherits it.
         utils.DESKTOP_CHROME = desktop_chrome.chrome_style()
         geometry = _restore_geometry()
         # The cocoa/AppKit toolkit init (webview.screens inside
@@ -383,14 +355,13 @@ def launch_desktop(
             live.url,
             width=geometry["width"],
             height=geometry["height"],
-            # None on both means "no saved position we trust" — pywebview then
-            # centers the window, which is the pre-persistence behaviour.
+            # None on both: no trusted saved position, so pywebview centers the window.
             x=geometry.get("x"),
             y=geometry.get("y"),
             min_size=_WINDOW_MIN_SIZE,
             background_color=_WINDOW_BACKGROUND,
-            # pywebview disables both by default. Transcripts is unusable without
-            # text selection, and zoom matters for frame-level video work.
+            # Both off by default; Transcripts needs selection, frame-level video
+            # work needs zoom.
             text_select=True,
             zoomable=True,
         )
@@ -403,25 +374,21 @@ def launch_desktop(
         window.events.loaded += lambda: window.run_js(_EXTERNAL_LINK_SHIM)
         # First shown-hook: the closest observable proxy for first paint.
         window.events.shown += lambda: profiling.mark("startup.window_shown")
-        # before_show is a locking event, so this runs inline on AppKit's thread
-        # after the backend finishes its own titlebar styling. The shown hook is
-        # not optional: ordering the window front re-lays out the titlebar and
-        # undoes the button placement.
+        # Ordering the window front re-lays out the titlebar, so the shown hook is
+        # required too.
         window.events.before_show += lambda: desktop_chrome.apply(window)
         window.events.shown += lambda: desktop_chrome.on_shown(window)
         window.events.loaded += lambda: desktop_chrome.reassert(window)
         window.events.shown += lambda: _on_shown(window)
-        # After the chrome hooks: by shown-time first_show has already installed
-        # the Tier 1 menu bar, and the polish pass queues itself onto the run
-        # loop via callAfter, so it lands exactly once, after setMainMenu_.
+        # Runs after first_show installs the Tier 1 menu; callAfter lands it once
+        # after setMainMenu_.
         window.events.shown += lambda: desktop_menu.enhance_menu_bar(lambda: _window)
         window.events.moved += _on_moved
         window.events.resized += _on_resized
         window.events.closing += _on_closing
 
-        # Defensive: a menu-construction failure must degrade to the default
-        # bar, not throw — launch() demotes any launch_desktop exception to a
-        # plain browser launch, which would cost the user the whole window.
+        # A menu failure degrades to the default bar; launch() would otherwise drop
+        # the window.
         try:
             menus = desktop_menu.menus(lambda: _window)
         except Exception as exc:
@@ -433,16 +400,13 @@ def launch_desktop(
         webview.start(
             menu=menus,
             debug=config.DEBUGGING,
-            # pywebview defaults private_mode=True, discarding localStorage and
-            # sessionStorage between runs — but the frontends keep real user state
-            # there (settings toggles, viewer prefs, the Studio generate queue), so
-            # persistence must be opted into explicitly.
+            # pywebview defaults to private_mode=True; the frontends keep real state
+            # in localStorage.
             private_mode=False,
             storage_path=str(start_settings.config_dir() / "webview"),
         )
     finally:
-        # closing already flushed on a normal quit; this covers the paths that
-        # never fire it (a create_window/start failure, a forced teardown).
+        # closing flushes on a normal quit; this covers failures and forced teardown.
         _flush_geometry()
         globals()["_window"] = None
         globals()["_geometry"] = None
@@ -483,9 +447,8 @@ def launch(
     except KeyboardInterrupt:
         pass
     except Exception as exc:
-        # A headless box, a missing WebView2 runtime, or a GUI toolkit that
-        # refuses to initialise. The work is still reachable over loopback, so
-        # degrade to the browser rather than dying.
+        # Headless box, missing WebView2, or GUI init failure: serve over loopback
+        # instead.
         utils.error_print(f"Could not open the desktop window: {exc}")
         utils.warning_print("Falling back to the default browser.")
         server.start_combined_server(

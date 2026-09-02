@@ -252,15 +252,8 @@ PINS: dict[str, list[dict]] = {
     ],
 }
 
-# RapidOCR PP-OCR recognition models (Apache-2.0), vendored so the frozen
-# bundle never downloads at runtime. Detection/orientation models ship inside
-# the rapidocr wheel; only the non-default recognition models are fetched here.
-# ONNX rec models embed their character dict in the model metadata, so one
-# .onnx per script family is the whole artifact. URLs and SHA256 come from the
-# pinned rapidocr wheel's default_models.yaml (onnxruntime section) —
-# re-derive both on any rapidocr version bump. Target names match
-# screenspace_ocr._vendored_rec_model. Japan has no PP-OCRv5 ONNX model
-# upstream, hence v4 there.
+# Vendored RapidOCR recognition models; re-derive pins per agents/skills/bump-pins/SKILL.md.
+# Target names match screenspace_ocr._vendored_rec_model.
 OCR_MODEL_PINS: list[dict] = [
     {
         "url": "https://www.modelscope.cn/models/RapidAI/RapidOCR/resolve/v3.9.2/onnx/PP-OCRv5/rec/latin_PP-OCRv5_rec_mobile.onnx",
@@ -410,8 +403,7 @@ def fetch_ocr_models() -> None:
         return
     vendor_ocr.mkdir(parents=True, exist_ok=True)
     for pin in stale:
-        # download_archive streams + hashes plain files just as well as zips,
-        # and deletes on mismatch, so a failure leaves nothing half-written.
+        # download_archive hashes plain files too and deletes on mismatch.
         download_archive(pin["url"], pin["sha256"], vendor_ocr / pin["target"])
     print(f"fetch_binaries: done — {vendor_ocr} is ready.")
 
@@ -648,8 +640,7 @@ def fetch_vendor() -> None:
     else:
         vendor_bin.mkdir(parents=True, exist_ok=True)
         for archive in archives:
-            # Temp file next to the targets so the rename-free write stays on
-            # one filesystem, and a hash failure leaves nothing half-extracted.
+            # Temp file beside the targets keeps the write on one filesystem.
             suffix = (
                 ".tar.gz" if archive["url"].endswith((".tar.gz", ".tgz")) else ".zip"
             )

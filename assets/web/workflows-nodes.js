@@ -12,26 +12,19 @@
   var WF = window.ClipgenWorkflows;
   var state = WF.state;
 
-  // The one participant menu currently portaled onto <body>, as {menu, close}.
-  // Anything that invalidates its anchor — a card rebuild, a canvas pan/zoom,
-  // leaving the page — closes it through closeParticipantMenu() below, which
-  // also un-portals it and drops bindMenuToggle's document-level listeners.
+  // The participant menu portaled onto <body>, as {menu, close}; closeParticipantMenu() un-portals it.
   var _openParticipantMenu = null;
 
   function closeParticipantMenu() {
     if (_openParticipantMenu) _openParticipantMenu.close();
   }
 
-  // One column of port rows (inputs left, outputs right — the outputs column is
-  // CSS-flipped so its dot sits on the card edge). Ports already wired per
-  // `state.edges` get `.wf-port-connected`, which fills the dot rather than
-  // leaving it a hollow ring.
+  // One port column; outputs are CSS-flipped. Wired ports get `.wf-port-connected` (filled dot).
   function buildPortColumn(node, ports, isOutput) {
     var col = el("div", "wf-port-col " + (isOutput ? "outputs" : "inputs"));
     var edges = state.edges || [];
     (ports || []).forEach(function (port) {
-      // The universal control input (`__gate__`) reads as a muted "gate" anchor,
-      // not a literal port name — a Gate's `pass` output wires here to gate the node.
+      // The `__gate__` control input reads as a muted "gate" anchor, not a port name.
       var isControl = port.type === "control";
       var connected = edges.some(function (e) {
         return isOutput
@@ -49,8 +42,7 @@
       dot.setAttribute("data-port", port.name);
       dot.setAttribute("data-port-type", port.type);
       dot.setAttribute("data-port-dir", isOutput ? "out" : "in");
-      // Hovering a port reveals its data type — clarifies adapter-coerced wires
-      // (e.g. a `timeRange` output into a `clips`/clipRecords input).
+      // Hover reveals the data type, clarifying adapter-coerced wires.
       dot.title = isControl ? "gate" : port.type;
       // Assistive tech: the dot is an interactive connection point.
       dot.setAttribute("role", "button");
@@ -69,10 +61,7 @@
     return col;
   }
 
-  // Multitool step types: the per-frame (check_frame) detectors needing no
-  // uploaded reference, derived from the catalog's `multitoolStep` flag — the
-  // backend's _MULTITOOL_STEP_TOOLS is the single source, no hardcoded JS list.
-  // Each step reuses its ss_<type> catalog params.
+  // Step types come from the catalog's `multitoolStep` flag; _MULTITOOL_STEP_TOOLS is the source.
   function multitoolStepTypes() {
     var out = [];
     (state.catalog || []).forEach(function (n) {
@@ -88,8 +77,7 @@
     return (nt && nt.params) || [];
   }
 
-  // Detector keys for the unified Detect node, derived from the (hidden) ss_<tool>
-  // catalog nodes — no duplicated list in JS.
+  // Detector keys derive from the hidden ss_<tool> catalog nodes; no JS list.
   function detectTypes() {
     var out = [];
     (state.catalog || []).forEach(function (n) {
@@ -98,9 +86,7 @@
     return out;
   }
 
-  // The unified Detect node: a detector dropdown plus that detector's ss_<tool>
-  // param set, swapped in place on change. The Multitool step editor generalised
-  // to a single node-level step.
+  // Detect node: a detector dropdown plus that detector's ss_<tool> params, swapped in place.
   function buildDetectEditor(node) {
     if (!node.params) node.params = {};
     var types = detectTypes();
@@ -126,8 +112,7 @@
       body.innerHTML = "";
       var specs = stepParamSpecs(node.params.detector);
       specs.forEach(function (ps) {
-        // Seed the spec default so number fields show a value; anything seeded
-        // must also be saved, or the values exist only until the next reload.
+        // Seed spec defaults so number fields show a value; seeded values must be saved.
         if (node.params[ps.name] === undefined) {
           node.params[ps.name] = ps.default;
           seeded = true;
@@ -152,10 +137,7 @@
     return wrap;
   }
 
-  // Completion sources for free-text params. Static `suggestions` ride on the
-  // catalog spec; the "llm-models" source is fetched once from the combined
-  // app's /api/models (page-relative ../api/models) and fills in when it lands.
-  // Datalists are appended to <body> and shared by name across all cards.
+  // Datalists for free-text params, appended to <body> and shared by name; "llm-models" fetches ../api/models once.
   var _llmModelsRequested = false;
   function suggestionListId(spec) {
     if (Array.isArray(spec.suggestions) && spec.suggestions.length) {
@@ -201,10 +183,7 @@
     return null;
   }
 
-  // One ParamSpec editor (number / enum / bool / participant / region / string /
-  // step-list), writing back to `store` (default node.params) on change and
-  // autosaving. Scalar editors do NOT re-render on edit, so focus/caret survive
-  // typing — the mousedown router leaves param controls alone for the same reason.
+  // One ParamSpec editor writing to `store` and autosaving. Scalar editors never re-render, so focus survives.
   function buildParamControl(node, spec, store) {
     if (spec.type === "step-list") return buildStepList(node, spec);
     store = store || node.params;
@@ -235,8 +214,7 @@
         store[spec.name] = input.value;
         WF.scheduleSave();
       });
-      // An unset value means "server default"; select it rather than letting
-      // the browser display option[0] while the run uses something else.
+      // Unset means "server default"; select it so the display matches the run.
       if (value == null && spec.default != null) input.value = spec.default;
     } else if (spec.type === "bool") {
       input = el("input", "wf-param-input");
@@ -252,11 +230,7 @@
       spec.type === "region" &&
       ((state.context && state.context.regions) || []).length
     ) {
-      // Saved Screenspace regions exist — offer them as a picker so a typo
-      // can't silently full-frame the scan. A stored name that no longer
-      // exists stays selectable, flagged "(missing)", so a saved blueprint
-      // round-trips; with no saved regions the generic text branch below
-      // applies (the server matches by name either way).
+      // Saved regions become a picker so typos can't full-frame the scan; missing names stay selectable.
       input = el("select", "wf-param-input");
       var regions = state.context.regions;
       var names = [""].concat(regions);
@@ -293,9 +267,7 @@
     return input;
   }
 
-  // One param row: label + reset-to-default chip + control. The chip shows only
-  // when the stored value differs from the spec default; resetting rebuilds the
-  // control in place so the widget logic stays in buildParamControl.
+  // Param row: label, reset chip (shown when value differs from default), control.
   function buildParamRow(node, spec, store) {
     store = store || node.params;
     var row = el("div", "wf-param");
@@ -352,11 +324,7 @@
     };
   }
 
-  // Build every row for `specs` into `container` and keep the conditional bits
-  // live: showIf visibility, numeric-aware free-text values (filter/partition
-  // `value` follows the picked field's numericChoices), and the reset chips.
-  // One delegated listener pair per container — scalar editors still never
-  // re-render, so focus/caret survive typing.
+  // Build rows for `specs` and keep showIf, numeric-aware values, and reset chips live.
   function buildParamsInto(container, node, specs, store) {
     var entries = specs.map(function (spec) {
       var entry = buildParamRow(node, spec, store);
@@ -407,23 +375,14 @@
     sync();
   }
 
-  // Multi-select participant picker: a summary button opening a checkbox popover.
-  // Writes a normalized value back to store[spec.name]:
-  //   • a single id string  → single run (server's scalar path),
-  //   • the ALL sentinel     → batch over every participant,
-  //   • an array of ≥2 ids   → batch over that subset,
-  //   • an empty array       → nothing selected (flagged by validation).
-  // Normalizing a single pick to a string, never a 1-element array, keeps the
-  // server's single-run path untouched. Like the scalar editors it doesn't
-  // re-render the card on change, so focus and the open popover survive.
+  // Participant picker. A single pick persists as a string, never a 1-element array.
   function buildParticipantSelect(spec, store) {
     var ALL = WF.ALL_PARTICIPANTS;
     var participants = (state.context && state.context.participants) || [];
     var current = store ? store[spec.name] : spec.default;
     var isAll = current === ALL;
 
-    // Discovered ids, plus any stored id not currently discovered (launched
-    // without it) so a saved selection round-trips.
+    // Discovered ids plus any stored id not discovered, so saved selections round-trip.
     var ids = participants.slice();
     var initSel = {};
     if (Array.isArray(current)) {
@@ -476,8 +435,7 @@
       WF.scheduleSave();
     }
 
-    // "All participants" shortcut — only offered when there are participants to
-    // fan out over (matches the old select's gating).
+    // "All participants" is offered only when there is something to fan out over.
     if (participants.length) {
       var allRow = el("label", "wf-participant-opt wf-participant-all");
       allCb = el("input");
@@ -505,8 +463,7 @@
       row.appendChild(el("span", null, id));
       menu.appendChild(row);
       cb.addEventListener("change", function () {
-        // Every box checked collapses to the ALL sentinel; otherwise it's an
-        // explicit subset (or a single id, normalized in persist()).
+        // All boxes checked collapses to ALL; otherwise an explicit subset (normalized in persist()).
         isAll =
           ids.length > 0 &&
           ids.every(function (x) {
@@ -517,12 +474,7 @@
       });
     });
 
-    // The menu is portaled onto <body> while open. It cannot stay in the card:
-    // .wf-canvas clips with overflow:hidden and #wfWorld's transform is both a
-    // stacking context and a containing block, so neither z-index nor
-    // position:fixed can lift it out — and in-place it would also inherit the
-    // canvas zoom scale. Same reason (and same shape) as the Transcripts pill
-    // popover in transcripts-pills.js.
+    // Portaled onto <body>: the canvas clips it and #wfWorld's transform defeats position:fixed. See transcripts-pills.js.
     if (WF.bindMenuToggle) {
       // `toggle` is assigned before any click can fire, so onOpen can close over it.
       var toggle = WF.bindMenuToggle(btn, menu, {
@@ -533,10 +485,7 @@
           _openParticipantMenu = { menu: menu, close: toggle.close };
         },
         onClose: function () {
-          // Back into the card so it dies with it on the next rebuild. If the
-          // card is already gone (renderAllNodes, or one of the in-place
-          // container rebuilds in this file), drop the menu instead of
-          // stranding it on <body>.
+          // Back into the card, or drop it when the card is already gone.
           if (wrap.isConnected) wrap.appendChild(menu);
           else if (menu.parentNode) menu.parentNode.removeChild(menu);
           if (_openParticipantMenu && _openParticipantMenu.menu === menu) {
@@ -549,10 +498,7 @@
     return wrap;
   }
 
-  // Compound editor for the multitool `steps` param: an ordered list of
-  // {type, logic, …per-type fields}. Structural changes (add/remove/reorder/type)
-  // re-render the list container only; scalar edits write through
-  // buildParamControl(step) with no re-render, preserving focus.
+  // Multitool `steps` editor. Structural changes re-render the list; scalar edits don't, preserving focus.
   function buildStepList(node, spec) {
     if (!Array.isArray(node.params[spec.name])) node.params[spec.name] = [];
     var steps = node.params[spec.name];
@@ -652,9 +598,7 @@
     return wrap;
   }
 
-  // Sticky-note pseudo-node: a canvas annotation, not an executable card. It
-  // keeps the .wf-node class + data-node-id so drag/marquee/delete/copy/minimap
-  // all work untouched; the runner filters type "note" out server-side.
+  // Sticky note: keeps .wf-node + data-node-id so canvas gestures work; runner drops type "note".
   function renderNoteCard(node) {
     var pos = node.position || { x: 0, y: 0 };
     var card = el("div", "wf-node wf-note");
@@ -665,8 +609,7 @@
     if (state.selection && state.selection.indexOf(node.id) >= 0) {
       card.classList.add("selected");
     }
-    // Slim header as the labeled grab surface (the textarea itself is exempt
-    // from canvas drag via the param-control rule in onCanvasMouseDown).
+    // Header is the grab surface; the textarea is exempt from canvas drag.
     card.appendChild(el("div", "wf-note-header", "Note"));
     var ta = document.createElement("textarea");
     ta.className = "wf-note-text";
@@ -681,8 +624,7 @@
     return card;
   }
 
-  // Swap a card's title text for an inline rename input. Commit on blur/Enter;
-  // Escape restores the previous name; an empty name clears the rename.
+  // Inline rename: commit on blur/Enter, Escape restores, empty clears the rename.
   function startRenameNode(node, titleText) {
     var type = state.catalogById[node.type] || {};
     var input = el("input", "wf-node-rename");
@@ -730,9 +672,7 @@
     card.setAttribute("data-node-id", node.id);
     card.setAttribute("data-node-type", node.type);
     card.setAttribute("data-domain", type.domain || "");
-    // Busy nodes get extra width so their controls stay readable: the Detect
-    // node's swappable param set, a compound step-list param (Multitool), or any
-    // node carrying more than three params (e.g. Make Clips with titlecard knobs).
+    // Extra width for Detect, step-list params, or more than three params.
     if (
       node.type === "detect" ||
       (type.params || []).length > 3 ||
@@ -749,10 +689,7 @@
     }
     // Muted nodes are dimmed; the runner skips them and their downstream subtree.
     if (node.disabled) card.classList.add("wf-node-muted");
-    // Validation cue (shares WF.nodeIssues with the Issues panel): greyed when
-    // the launch context can't satisfy `requires`; otherwise a dashed `.invalid`
-    // border for any remaining error (unwired required input / empty required
-    // param). Warnings surface only as a tooltip, never a blocking cue.
+    // Greyed when context is unmet, dashed `.invalid` on errors; warnings are tooltip-only.
     if (WF.nodeContextMet && !WF.nodeContextMet(type)) {
       card.classList.add("disabled");
       card.title = "Requires " + ((type.requires || []).join(", ") || "context");
@@ -768,18 +705,14 @@
       }
     }
 
-    // Colour-coded title bar (domain background via CSS data-domain): the label
-    // plus a `?` help glyph whose tooltip carries the catalog description. Uses
-    // the [data-tooltip] singleton (styled/in-viewport), not native title.
+    // Title bar: label plus a `?` help glyph using the [data-tooltip] singleton, not title.
     var titleBar = el("div", "wf-node-title");
     var titleText = el(
       "span",
       "wf-node-title-text",
       node.name || type.label || node.type,
     );
-    // Double-click renames the node (blank restores the catalog label) — the
-    // custom name is what disambiguates duplicate types on the canvas and in
-    // the run panel's rows. A renamed card keeps its type reachable via tooltip.
+    // Double-click renames; the custom name disambiguates duplicate types. Tooltip keeps the type reachable.
     if (node.name) titleText.setAttribute("data-tooltip", type.label || node.type);
     titleText.addEventListener("dblclick", function (e) {
       e.stopPropagation();
@@ -830,8 +763,7 @@
     return card;
   }
 
-  // Rebuild every card from state.nodes (one DocumentFragment append) and toggle
-  // the canvas empty-state. Called on load, drop, delete, and selection change.
+  // Rebuild every card from state.nodes and toggle the canvas empty-state.
   function renderAllNodes() {
     return clipgenPerf.span("workflows.renderAllNodes", renderAllNodesImpl);
   }
@@ -839,12 +771,9 @@
   function renderAllNodesImpl() {
     var world = qs("#wfWorld");
     if (!world) return;
-    // Its anchor card is about to be discarded, and the menu itself lives on
-    // <body> — close it here or it lingers there with live listeners.
+    // The anchor card is going away; close the <body>-portaled menu first.
     closeParticipantMenu();
-    // Clear the cards but keep the nested wire <svg> (it lives in #wfWorld so it
-    // shares the cards' stacking context — see workflows.html). renderWires()
-    // below repopulates its paths.
+    // Keep the wire <svg> (shares the cards' stacking context); renderWires() refills it.
     var wires = world.querySelector("#wfWires");
     world.innerHTML = "";
     if (wires) world.appendChild(wires);
@@ -861,17 +790,13 @@
     if (WF.clearPortCache) WF.clearPortCache();
     if (WF.renderWires) WF.renderWires();
 
-    // Selection may have changed (drop, marquee, delete) → re-gate the
-    // selection-dependent toolbar buttons ("Stash selection", "Run to here").
-    // One guarded site keeps them in sync without touching every gesture that
-    // mutates state.selection.
+    // Selection may have changed; re-gate the selection-dependent toolbar buttons here.
     if (WF.syncStashButton) WF.syncStashButton();
     if (WF.syncRunButton) WF.syncRunButton();
     // Card rebuild dropped the last-run badges — re-apply (runs satellite).
     if (WF.applyLastRunBadges) WF.applyLastRunBadges();
 
-    // Node set changed (add/delete/blueprint-load) → refresh the minimap. Pan/
-    // zoom and drag are covered by their own hooks in the canvas satellite.
+    // Node set changed; refresh the minimap. Pan/zoom/drag have their own hooks.
     if (WF.renderMinimap) WF.renderMinimap();
   }
 

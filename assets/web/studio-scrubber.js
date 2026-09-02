@@ -24,10 +24,7 @@
       "?start=" + start + "&end=" + end;
   }
 
-  // Background sprite-sheet warming so the first hover is instant (audio is
-  // cheap and loads on demand; the sprite is the slow part — many ffmpeg frame
-  // samples + tile). Throttled to a couple of passes at a time, and only fed
-  // cards whose thumbnail loaded, so large intake lists don't flood the server.
+  // Warm sprite sheets (the slow ffmpeg part) in the background, throttled.
   var _spritePrefetchQueue = [];
   var _spritePrefetchActive = 0;
   var SPRITE_PREFETCH_CONCURRENCY = 2;
@@ -51,9 +48,7 @@
     }
   }
 
-  // Preload the sprite sheet and paint it as the thumb background; the
-  // .card-scrub-ready CSS rule reveals it under the resting <img> on hover.
-  // Idempotent — guards against duplicate in-flight or completed loads.
+  // Paint the sprite as thumb background; .card-scrub-ready reveals it on hover.
   function loadCardSprite(thumb, done) {
     if (thumb.dataset.scrubSpriteLoaded || thumb.dataset.scrubSpriteLoading) {
       if (done) done();
@@ -78,11 +73,7 @@
     img.src = spriteUrl;
   }
 
-  // Wire one queue-card thumbnail for hover scrubbing, but only once its source
-  // frame is confirmed to exist. An invalid/out-of-range sheet timestamp still
-  // renders a card, yet its thumbnail 404s (→ queue-card-error, the <img> is
-  // removed); gating on the thumbnail's successful load keeps us from wiring it
-  // and firing sprite/audio requests that would only 404 too.
+  // Wire only after the thumbnail loads; a 404 thumb means sprite/audio would 404 too.
   function wireCardScrubber(thumb, cols, rows, frameCount) {
     var participant = thumb.dataset.participant;
     var start = thumb.dataset.start;
@@ -109,14 +100,12 @@
         audioFile: audioUrl, // cache key
         audioBaseUrl: "",
       });
-      // Hover loads immediately (jumps the prefetch queue); also warm in the
-      // background so a hover that lands before the queue reaches it is instant.
+      // Hover jumps the prefetch queue; the queue still warms it.
       thumb.addEventListener("mouseenter", function () { loadCardSprite(thumb); });
       enqueueSpritePrefetch(thumb);
     }
 
-    // Activate when the thumbnail has a real frame. A thumbnail that errors is
-    // removed from the DOM, so its `load` never fires and the card stays unwired.
+    // An erroring thumbnail is removed, so `load` never fires and nothing wires.
     if (img.complete && img.naturalWidth > 0) {
       activate();
     } else {
@@ -139,8 +128,7 @@
     }
   }
 
-  // Hub resets the prefetch backlog when the scrubber toggle flips (settings
-  // apply) before re-rendering, so a stale queue can't re-warm shed cards.
+  // Hub calls this when the scrubber toggle flips, before re-rendering.
   function resetScrubberPrefetch() {
     _spritePrefetchQueue = [];
   }

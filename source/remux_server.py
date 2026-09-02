@@ -89,8 +89,7 @@ def _run_remux(pid: str, paths: list[str], token: dict[str, Any]) -> None:
     messages: list[str] = []
 
     def _publish(**fields: Any) -> None:
-        # Only ever touch the job this thread started. A stop-then-restart would
-        # otherwise let a dead run's final write clobber its successor's slot.
+        # Only touch this thread's job; a dead run must not clobber its successor.
         with _jobs_lock:
             if _jobs.get(pid) is not token:
                 return
@@ -137,8 +136,7 @@ def register_remux_routes(bp: Any, sheet_context_getter: Any) -> None:
             "message": "",
         }
         with _jobs_lock:
-            # Check-and-set under one lock: two clicks must not start two
-            # ffmpeg runs against the same file.
+            # Check-and-set under one lock: two clicks, one ffmpeg run.
             existing = _jobs.get(pid)
             if existing is not None and existing["state"] == "running":
                 return err(f"A remux of {pid} is already running.", 409)
@@ -185,8 +183,7 @@ def _apply_to_parts(sheet_context_getter: Any, pid: str, action: Any):
             failures.append(f"{Path(path).name}: {message}")
     if failures and not applied:
         raise ApiError(" ".join(failures))
-    # A partial result is reported as one: silently claiming success while some
-    # parts kept their original would leave the user with a half-reverted set.
+    # Report partial results as such; a silent half-reverted set misleads the user.
     with _jobs_lock:
         _jobs.pop(pid, None)
     return ok(applied=applied, warnings=failures)
