@@ -25,9 +25,10 @@ computed styles, count rendered nodes, dump ``state``, call
 profiling for the in-process Flask app (so ``CLIPGEN_CONFIG.profiling`` reaches
 the page and ``window.__clipgenPerf`` populates), captures CDP
 ``Performance.getMetrics`` plus navigation/resource timing, and prints one
-grep-able ``perf | `` line per fact plus a single ``perf-json:`` line for
-machine parsing; the server's own ``profile | `` report (route timings) prints
-at process exit. ``--trace`` writes a Chrome trace-event JSON (open in
+grep-able ``perf | `` line per fact — including one ``perf | api <path>`` line
+per API fetch in start order, the boot waterfall — plus a single
+``perf-json:`` line for machine parsing; the server's own ``profile | ``
+report (route timings) prints at process exit. ``--trace`` writes a Chrome trace-event JSON (open in
 Perfetto, or parse it) covering navigation through capture. ``--full-chromium``
 prefers the full Chromium build over the headless shell, whose paint metrics
 are only indicative.
@@ -183,9 +184,23 @@ var slowest = resources
   .map(function (e) {
     return { name: e.name.split("/").slice(-2).join("/"), durationMs: e.duration };
   });
+// The boot waterfall: every API fetch in start order, so a serial chain or a
+// slow cold route shows as a line instead of hiding inside resources.count.
+var api = resources
+  .filter(function (e) { return e.name.indexOf("/api/") >= 0; })
+  .sort(function (a, b) { return a.startTime - b.startTime; })
+  .map(function (e) {
+    var path = e.name.replace(/^[a-z]+:[/][/][^/]+/, "");
+    return {
+      path: path,
+      startMs: e.startTime,
+      durationMs: e.duration,
+      transferSize: e.transferSize || 0,
+    };
+  });
 return {
   navigation: nav.length ? nav[0] : null,
-  resources: { count: resources.length, transferSize: totalTransfer, slowest: slowest },
+  resources: { count: resources.length, transferSize: totalTransfer, slowest: slowest, api: api },
   clipgenPerf: window.clipgenPerf ? window.clipgenPerf.snapshot() : null,
 };
 """
@@ -226,6 +241,11 @@ def _print_perf(data: dict[str, Any]) -> None:
     if res:
         print(f"perf | resources.count {res.get('count', 0)}")
         print(f"perf | resources.transferSize {res.get('transferSize', 0)}")
+    for entry in res.get("api") or []:
+        print(
+            f"perf | api {entry['path']} start={entry['startMs']:.0f}ms "
+            f"dur={entry['durationMs']:.1f}ms bytes={entry['transferSize']}"
+        )
     cg = page_data.get("clipgenPerf") or {}
     for label, m in sorted((cg.get("measures") or {}).items()):
         print(f"perf | {label} {m['totalMs']:.1f}ms n={m['n']} max={m['maxMs']:.1f}ms")

@@ -48,9 +48,21 @@ def test_add_and_count_accumulate_when_on(monkeypatch):
     profiling.add("work", 0.25)
     profiling.count("hits", 3)
     snap = profiling.snapshot()
-    # The n=2 batch contributes no peak (a sum has no per-item max); the n=1 add does.
-    assert snap["work"] == {"seconds": 0.75, "count": 3, "max": 0.25, "bytes": 0}
-    assert snap["hits"] == {"seconds": 0.0, "count": 3, "max": 0.0, "bytes": 0}
+    # The n=2 batch contributes no peak or first (a sum has neither); the n=1 add does.
+    assert snap["work"] == {
+        "seconds": 0.75,
+        "count": 3,
+        "max": 0.25,
+        "bytes": 0,
+        "first": 0.0,
+    }
+    assert snap["hits"] == {
+        "seconds": 0.0,
+        "count": 3,
+        "max": 0.0,
+        "bytes": 0,
+        "first": 0.0,
+    }
 
 
 def test_span_times_the_block(monkeypatch):
@@ -347,6 +359,7 @@ def test_api_profile_snapshot_and_reset(client, monkeypatch):
         "count": 10,
         "max": 0.0,
         "bytes": 0,
+        "first": 0.0,
     }
     # The route hook records the response size beside its wall time (it runs
     # after the snapshot above was taken, so read the live totals).
@@ -460,6 +473,36 @@ def test_bytes_accumulate_and_report(monkeypatch, capsys):
     y_line = next(line for line in out.splitlines() if "route /y" in line)
     assert "bytes=2.1KB" in x_line
     assert "bytes=" not in y_line  # zero bytes stays silent, like max
+
+
+def test_first_records_the_cold_hit(monkeypatch):
+    monkeypatch.setattr(config, "PROFILING", True)
+    profiling.add("route /api/models", 0.08)
+    profiling.add("route /api/models", 0.002)
+    profiling.add("route /api/models", 0.001)
+    assert profiling.snapshot()["route /api/models"]["first"] == 0.08
+
+
+def test_report_shows_first_only_when_it_dominates(monkeypatch, capsys):
+    monkeypatch.setattr(config, "PROFILING", True)
+    profiling.add("cold", 0.08)
+    profiling.add("cold", 0.002)
+    profiling.add("steady", 0.010)
+    profiling.add("steady", 0.011)
+    profiling.add("single", 0.5)
+    profiling.add("tiny", 0.002)
+    profiling.add("tiny", 0.0001)
+    profiling.report()
+    lines = {
+        line.split()[2]: line
+        for line in capsys.readouterr().out.splitlines()
+        if line.startswith("profile | ")
+    }
+    # 40x the warm call gets named; steady and one-off labels stay as they were.
+    assert "first=80.0ms" in lines["cold"]
+    assert "first=" not in lines["steady"]
+    assert "first=" not in lines["single"]
+    assert "first=" not in lines["tiny"]  # 20x, but 2 ms is scheduler noise
 
 
 def test_format_bytes_units():
