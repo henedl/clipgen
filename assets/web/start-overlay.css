@@ -109,10 +109,11 @@
  * passing behind it. The blur keeps the separation even mid-scroll. */
 .start-overlay .panel-close {
   position: absolute;
-  top: 18px;
+  /* Centers on the tab labels and stays above the strip's hairline. */
+  top: 17px;
   right: 18px;
-  width: 32px;
-  height: 32px;
+  width: 28px;
+  height: 28px;
   border-radius: 8px;
   border: 1px solid var(--border);
   background: var(--bg-input);
@@ -628,26 +629,6 @@
 .start-overlay .start-tab.is-active {
   color: var(--fg);
   border-bottom-color: var(--accent);
-}
-
-.start-overlay .start-tab__badge {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  min-width: 17px;
-  height: 17px;
-  padding: 0 5px;
-  border-radius: 999px;
-  background: var(--color-selected);
-  color: #9ec0ff;
-  font-size: 10px;
-  font-weight: 600;
-  letter-spacing: 0;
-  text-transform: none;
-}
-
-.start-overlay .start-tab__badge[hidden] {
-  display: none;
 }
 
 /* ---- Right column: tab panels --------------------------------------- */
@@ -1824,6 +1805,18 @@
   letter-spacing: 0;
 }
 
+.start-overlay .changelog__version--current {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+.start-overlay .changelog__current {
+  font-size: var(--text-2xs);
+  color: var(--accent);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
 .start-overlay .changelog__change {
   display: flex;
   align-items: baseline;
@@ -2175,12 +2168,6 @@ html[data-theme="light"] .start-overlay {
   --so-art-tick:       rgba(20, 21, 26, 0.20);
   --so-art-line:       rgba(20, 21, 26, 0.10);
   --so-art-line-fill:  rgba(20, 21, 26, 0.28);
-}
-
-/* The count is pale-blue-on-dark by default, which washes out on the light
- * selected-row tint. */
-html[data-theme="light"] .start-overlay .start-tab__badge {
-  color: var(--accent);
 }
 
 /* Diagonal shimmer sweep is white-on-dark; give it a faint blue tint so it

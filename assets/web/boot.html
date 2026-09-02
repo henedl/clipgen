@@ -93,10 +93,16 @@
   @media (prefers-reduced-motion: reduce) {
     .boot-mark__line { animation: none; stroke-dashoffset: 0; }
   }
+  /* The counter hangs off the message's right edge so the message stays
+     centered and the block never grows when it appears. */
+  .boot-status {
+    position: relative;
+    display: inline-block;
+    min-height: 18px;
+  }
   .boot-msg {
     font-size: 13px;
     color: rgba(255, 255, 255, 0.62);
-    min-height: 18px;
   }
   html[data-theme="light"] .boot-msg { color: rgba(20, 21, 26, 0.68); }
   /* Local copy of tokens.css .cg-shimmer; this page loads no
@@ -143,7 +149,12 @@
     }
   }
   .boot-elapsed {
-    margin-top: 6px;
+    position: absolute;
+    left: 100%;
+    top: 50%;
+    transform: translateY(-50%);
+    margin-left: 8px;
+    white-space: nowrap;
     font-size: 11px;
     font-variant-numeric: tabular-nums;
     color: rgba(255, 255, 255, 0.28);
@@ -183,8 +194,10 @@
       <path class="boot-mark__line boot-mark__line--3" d="M 18 62 L 38 62 L 38 82"/>
     </svg>
   </div>
-  <div class="boot-msg cg-shimmer" id="bootMsg">Starting clipgen&#8230;</div>
-  <div class="boot-elapsed" id="bootElapsed"></div>
+  <div class="boot-status">
+    <div class="boot-msg cg-shimmer" id="bootMsg">Starting clipgen&#8230;</div>
+    <div class="boot-elapsed" id="bootElapsed"></div>
+  </div>
   <div class="boot-err" id="bootErr"></div>
 </div>
 <script>

@@ -394,14 +394,14 @@
 }
 
 .hotkey-editor .settings-group-label {
-  margin-top: var(--space-3);
+  margin-top: var(--space-2);
 }
 
+/* The editor's gap already separates rows; no extra padding. */
 .hotkey-row {
   display: flex;
   align-items: center;
   gap: var(--space-3);
-  padding: var(--space-1) 0;
 }
 
 .hotkey-row-changed .hotkey-label {
@@ -428,9 +428,14 @@
   opacity: 0.6;
 }
 
+/* A flex row so the enlarged .hk-glyph tokens and the letters share one
+ * vertical centre (WebKit baseline-aligns them otherwise) with a gap between. */
 .hotkey-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.15em;
   font-family: var(--font-mono);
-  font-size: var(--text-2xs);
+  font-size: var(--text-xs);
   color: var(--fg);
   background: var(--bg-input);
   border: 1px solid var(--border);
@@ -441,8 +446,16 @@
   white-space: nowrap;
 }
 
+/* The symbol ink sits low in its em box; lift it to the letters' centre. */
+.hotkey-chip .hk-glyph {
+  font-size: 1.3em;
+  vertical-align: 0;
+  position: relative;
+  top: -0.08em;
+}
+
 .hotkey-chip-disabled {
-  font-size: var(--text-2xs);
+  font-size: var(--text-xs);
   font-style: italic;
   color: var(--fg-faint);
   border: 1px dashed var(--border);

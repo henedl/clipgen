@@ -751,8 +751,11 @@
       .replace(/_/g, " ").toLowerCase()
       .replace(/\b\w/g, function (c) { return c.toUpperCase(); })
       .replace(/Mb$/i, "(MB)").replace(/Seconds$/i, "(s)")
-      // Title-casing turns the FFMPEG_* prefix into "Ffmpeg"; restore the brand.
-      .replace(/^Ffmpeg\b/, "FFmpeg");
+      // Title-casing lowercases acronyms ("Ffmpeg", "Llm"); restore them.
+      .replace(/^Ffmpeg\b/, "FFmpeg")
+      .replace(/\bLlm\b/g, "LLM")
+      .replace(/\bGif\b/g, "GIF")
+      .replace(/\bUrl\b/g, "URL");
     labelDiv.appendChild(el("div", "settings-label-name", friendlyName));
     labelDiv.appendChild(el("div", "settings-label-desc", s.description));
 
@@ -1072,7 +1075,7 @@
       chips.appendChild(offChip);
     } else {
       for (var ci = 0; ci < combos.length; ci++) {
-        chips.appendChild(el("kbd", "hotkey-chip", window.ClipgenHotkeys.formatCombo(combos[ci])));
+        chips.appendChild(window.ClipgenHotkeys.fillKeycap(el("kbd", "hotkey-chip"), combos[ci]));
       }
     }
     if (action.rebindable !== false) {

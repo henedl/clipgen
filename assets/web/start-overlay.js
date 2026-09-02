@@ -72,6 +72,7 @@
     activeTab: "google",    // 'google' | 'excel' | 'mindnode' | 'none'
     startTab: "open",       // right column: 'open' | 'about' | 'updates'
     changelogLoaded: false,
+    changelogEntries: [],
     // The notice file never changes at runtime, so the fetch is latched. The
     // rows still live in state because renderAttribution() re-runs on every
     // About activation alongside renderAbout().
@@ -284,7 +285,6 @@
       about: root.querySelector('[data-start-panel="about"]'),
       updates: root.querySelector('[data-start-panel="updates"]'),
     };
-    els.updatesBadge = root.querySelector('[data-role="updates-badge"]');
     els.changelogList = root.querySelector('[data-role="changelog-list"]');
     els.aboutGrid = root.querySelector('[data-role="about-grid"]');
     els.attributionList = root.querySelector('[data-role="attribution-list"]');
@@ -1197,6 +1197,8 @@
       // setStartTab("about") renders from statusData; if About is already
       // visible when this lands, the panel would otherwise stay on v0.0.0.
       if (state.startTab === "about") renderAbout();
+      // The installed-version highlight reads statusData too.
+      if (state.changelogLoaded) renderChangelog(state.changelogEntries);
       return s;
     }).catch(function (err) {
       // Same contract as loadGoogleSheets: log and keep refresh()'s boot
@@ -1995,19 +1997,11 @@
   function loadChangelog() {
     return apiGet("/api/changelog").then(function (r) {
       state.changelogLoaded = true;
-      var entries = (r && r.entries) || [];
-      renderChangelog(entries);
-      if (entries.length > 0 && els.updatesBadge) {
-        // Count changes, not releases: a release holding four of them should
-        // not read as "1 update".
-        var changes = entries.reduce(function (n, e) {
-          return n + ((e.changes && e.changes.length) || 0);
-        }, 0);
-        els.updatesBadge.textContent = String(changes);
-        setHidden(els.updatesBadge, false);
-      }
+      state.changelogEntries = (r && r.entries) || [];
+      renderChangelog(state.changelogEntries);
     }).catch(function () {
       state.changelogLoaded = true;
+      state.changelogEntries = [];
       renderChangelog([]);
     });
   }
@@ -2020,10 +2014,18 @@
       els.changelogList.appendChild(empty);
       return;
     }
+    var installed = String((state.statusData || {}).version || "").replace(/^v/, "");
     entries.forEach(function (entry) {
       var item = el("li", "changelog__entry");
       var head = el("div", "changelog__head");
-      head.appendChild(el("span", "changelog__version", entry.version));
+      var version = el("span", "changelog__version", entry.version);
+      var isCurrent = !!installed && String(entry.version || "").replace(/^v/, "") === installed;
+      if (isCurrent) {
+        item.classList.add("changelog__entry--current");
+        version.classList.add("changelog__version--current");
+      }
+      head.appendChild(version);
+      if (isCurrent) head.appendChild(el("span", "changelog__current", "installed"));
       head.appendChild(el("span", "changelog__when", entry.date || ""));
       item.appendChild(head);
       (entry.changes || []).forEach(function (change) {
@@ -2433,12 +2435,11 @@
     // Concurrent, not serial: each loader renders its own panel on resolve
     // and swallows its own errors, and the Google listing is a Drive network
     // call (with exponential backoff on 429) that must not keep the local
-    // Excel/MindNode/changelog panels queued behind it. Only
-    // applyCurrentSessionPrefill waits for everything — it reads status +
-    // all three source lists. loadChangelog reads CHANGELOG.md off disk, so
-    // it is cheap enough to do up front — and the Recent updates count badge
-    // only exists if we do. loadGoogleSheets is wrapped with no argument so
-    // it never mistakes anything for its `force` flag.
+    // Excel/MindNode panels queued behind it. Only applyCurrentSessionPrefill
+    // waits for everything — it reads status + all three source lists. The
+    // changelog loads lazily when its tab opens (setStartTab).
+    // loadGoogleSheets is wrapped with no argument so it never mistakes
+    // anything for its `force` flag.
     Promise.all([
       loadStatus(true),
       loadDirs(),
@@ -2446,7 +2447,6 @@
       loadGoogleSheets(),
       loadExcelFiles(),
       loadMindnodeFiles(),
-      loadChangelog(),
     ])
       .then(applyCurrentSessionPrefill)
       .catch(function (err) {
