@@ -357,8 +357,7 @@
 
   // Render a combo into a key-cap element as DOM nodes, wrapping the small
   // symbol glyphs in .hk-glyph so they read at a legible size beside letters.
-  // Used by the cheatsheet key-caps and the Alt-hold hint chips (the plain
-  // string formatCombo stays for the settings rebinder and elsewhere).
+  // Used by the cheatsheet, the Alt-hold hint chips, and the settings rebinder.
   function fillKeycap(node, combo) {
     var out = comboTokens(combo);
     var sep = IS_MAC ? "" : "+";
@@ -920,6 +919,7 @@
     applyOverrides: applyOverrides,
     normalizeEvent: normalizeEvent,
     formatCombo: formatCombo,
+    fillKeycap: fillKeycap,
     comboConflicts: comboConflicts,
     toggleCheatsheet: toggleCheatsheet,
     closeCheatsheet: closeCheatsheet,

@@ -159,3 +159,10 @@ def test_suggested_models_join_the_select():
     assert "if (sm.installed) continue;" in select
     # An installed catalog model is offered under its HF ref, not its stem.
     assert "refByStem[m.name] || m.name" in select
+
+
+def test_setting_labels_restore_acronyms():
+    """Title-casing LLM_* keys yields "Llm"; the label fix-up restores LLM."""
+    row = _JS[_JS.index("function _buildRow") : _JS.index("function _buildRow") + 1500]
+    for acronym in ("LLM", "GIF", "URL"):
+        assert f'"{acronym}")' in row, acronym

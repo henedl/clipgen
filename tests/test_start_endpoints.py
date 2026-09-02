@@ -1352,6 +1352,55 @@ def test_settings_reveal_reports_failure(client, monkeypatch, tmp_path):
     assert "folder" in body["error"]
 
 
+# ---------- /studio/api/reveal-artifact -----------------------------------
+
+
+def test_reveal_artifact_shows_the_file(client, monkeypatch):
+    """A log row's basename resolves against the output dir and is revealed."""
+    out_dir = Path(config.OUTPUT_DIR)
+    clip = out_dir / "study_P01_clip.mp4"
+    clip.write_bytes(b"stub")
+    shown: list[Path] = []
+    monkeypatch.setattr(
+        server.utils, "reveal_in_file_manager", lambda p: shown.append(p) or True
+    )
+
+    body = client.post(
+        "/studio/api/reveal-artifact", json={"file": clip.name}
+    ).get_json()
+    assert body["ok"] is True
+    assert shown == [clip.resolve()]
+    assert body["path"] == str(clip.resolve())
+
+
+def test_reveal_artifact_stays_inside_the_output_dir(client, monkeypatch, tmp_path):
+    """A path that escapes the output dir is refused before any OS call."""
+    outside = tmp_path / "secret.txt"
+    outside.write_text("x", encoding="utf-8")
+    monkeypatch.setattr(server.utils, "reveal_in_file_manager", lambda p: True)
+
+    for name in ("../secret.txt", str(outside)):
+        resp = client.post("/studio/api/reveal-artifact", json={"file": name})
+        assert resp.status_code == 403, name
+        assert resp.get_json()["error"] == "Invalid file path"
+
+
+def test_reveal_artifact_reports_a_missing_file(client, monkeypatch):
+    """A row whose file was deleted is a 404, not a blank file-browser call."""
+    monkeypatch.setattr(server.utils, "reveal_in_file_manager", lambda p: True)
+
+    resp = client.post("/studio/api/reveal-artifact", json={"file": "gone.mp4"})
+    assert resp.status_code == 404
+    assert client.post("/studio/api/reveal-artifact", json={}).get_json()["ok"] is False
+
+
+@pytest.mark.parametrize("gui_launch", [True, False])
+def test_status_reports_the_desktop_flag(client, monkeypatch, gui_launch):
+    """Studio gates its Artifact Log reveal buttons on this one status field."""
+    monkeypatch.setattr(server.utils, "GUI_LAUNCH", gui_launch)
+    assert client.get("/api/status").get_json()["desktop"] is gui_launch
+
+
 # ---------- /api/models/llm ------------------------------------------------
 
 

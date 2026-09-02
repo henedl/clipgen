@@ -43,6 +43,7 @@
 
   var state = {
     sheetData: null,
+    desktop: false, // native window: Artifact Log rows get "Show on disk"
     artifactQueue: [],
     reelQueue: [],
     generatedArtifacts: [],
@@ -4433,6 +4434,21 @@
     });
   }
 
+  // Desktop only: a native window has no other way to reach the file.
+  function buildRevealButton(file) {
+    var btn = el("button", "log-entry-reveal");
+    btn.type = "button";
+    btn.title = "Show on disk";
+    btn.setAttribute("aria-label", "Show on disk");
+    btn.innerHTML = iconHTML("folder-open");
+    btn.addEventListener("click", function () {
+      apiPost("api/reveal-artifact", { file: file }).catch(function (e) {
+        showToast((e && e.message) || "Could not open the folder");
+      });
+    });
+    return btn;
+  }
+
   function renderLog() {
     var container = qs("#logContent");
     var countEl = qs("#logCount");
@@ -4480,6 +4496,7 @@
       if (meta.length > 0) {
         row.appendChild(el("span", "log-entry-meta", meta.join(" \u00B7 ")));
       }
+      if (state.desktop && a.file) row.appendChild(buildRevealButton(a.file));
 
       frag.appendChild(row);
     }
@@ -4605,6 +4622,8 @@
     // Shared memoized fetch (utils.js): one /api/status per page load.
     clipgenStatus()
       .then(function (data) {
+        state.desktop = !!data.desktop;
+        if (state.desktop) renderLog();
         if (data.screenspace) {
           var intakeTab = qs('.preview-tab[data-tab="intake"]');
           if (intakeTab) intakeTab.classList.remove("hidden");
@@ -4784,13 +4803,13 @@
         },
         {
           icon: "film",
-          label: "Open Timeline",
+          label: "Build Timeline",
           action: onBuildTimelineViewer,
           title: "Cut every clip in the sheet, then build and open a full timeline viewer HTML in the output folder",
         },
         {
           icon: "photo",
-          label: "Open Gallery",
+          label: "Build Gallery",
           action: openGalleryDialog,
           title: "Build a gallery viewer of screenshots or GIFs sampled from one participant's source video",
         },

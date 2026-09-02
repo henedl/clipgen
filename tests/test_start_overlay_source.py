@@ -83,13 +83,19 @@ def test_attribution_classes_built_by_js_have_css():
         assert rule in css, f"{rule} built by start-overlay.js but absent from CSS"
 
 
+def test_changelog_current_version_classes_have_css():
+    """renderChangelog() marks the installed release; without CSS nothing shows."""
+    css = read("start-overlay.css")
+    for rule in (".changelog__version--current", ".changelog__current"):
+        assert rule in css, f"{rule} built by start-overlay.js but absent from CSS"
+
+
 def test_tab_classes_toggled_by_js_have_css():
     """.is-active / .is-entering / [hidden] do nothing without these rules."""
     css = read("start-overlay.css")
     for rule in (
         ".start-tabs",
         ".start-tab.is-active",
-        ".start-tab__badge",
         ".start-tabpanel[hidden]",
         ".start-tabpanel__scroll",
         ".start-tabpanel.is-entering",

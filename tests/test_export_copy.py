@@ -42,7 +42,7 @@ def test_studio_quick_actions_all_have_tooltips():
     end = src.index("exportQuickAction()", start)
     block = src[start:end]
     # Three items, each carrying a title (the palette uses it as the subtitle).
-    for label in ('"Build Viewer"', '"Open Timeline"', '"Open Gallery"'):
+    for label in ('"Build Viewer"', '"Build Timeline"', '"Build Gallery"'):
         assert label in block
     assert block.count("title:") == 3
 

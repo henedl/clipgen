@@ -2246,6 +2246,30 @@ def api_open_viewer() -> FlaskResponse:
     return ok()
 
 
+@studio_bp.route("/api/reveal-artifact", methods=["POST"])
+def api_reveal_artifact() -> FlaskResponse:
+    """Show an output-dir artifact in the OS file browser.
+
+    The Artifact Log's rows carry a basename only; it is resolved against the
+    output dir here and must stay inside it. Offered by the desktop app only:
+    a browser tab has its own address bar.
+    """
+    data = request.get_json(silent=True) or {}
+    name = data.get("file", "")
+    if not name:
+        return err("No file specified")
+
+    p = utils.resolve_output_path(name).resolve()
+    output_dir = Path(utils.get_effective_output_dir()).resolve()
+    if not p.is_relative_to(output_dir):
+        return err("Invalid file path", 403)
+    if not p.is_file():
+        return err("File not found", 404)
+    if not utils.reveal_in_file_manager(p):
+        return err("Could not open the folder")
+    return ok(path=str(p))
+
+
 @studio_bp.route("/api/manifest", methods=["GET", "POST"])
 def api_manifest() -> FlaskResponse:
     if request.method == "GET":
@@ -3771,6 +3795,8 @@ def build_combined_app(
                 "output_dir": str(utils.get_effective_output_dir()),
                 "videos_in_input": len(utils.discover_participant_videos()),
                 "version": utils.get_version(),
+                # Native window: pages may offer "show on disk" actions.
+                "desktop": utils.GUI_LAUNCH,
                 "author": "Henrik Edlund",
                 "license": "MIT",
                 "repo_url": config.REPO_URL,
