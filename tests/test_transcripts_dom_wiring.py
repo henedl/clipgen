@@ -128,8 +128,8 @@ def test_segment_rebuild_keeps_the_reader_in_place():
     """The rebuild wipes #segmentList, but scroll lives on #trMain — restoring
     the wrong element is a silent no-op, and restoring without marking the write
     as programmatic pauses playhead auto-follow for three seconds."""
-    start = _JS.index("function renderSegments(")
-    body = _JS[start : _JS.index("\n  // Which participant", start)]
+    start = _JS.index("function renderSegmentsImpl(")
+    body = _JS[start : _JS.index("\n  }\n", start)]
     assert 'qs("#trMain")' in body, "scroll lives on #trMain, not #segmentList"
     assert "_renderedSegmentsPid" in body, (
         "restore must be gated on the participant being unchanged"
@@ -152,8 +152,8 @@ def test_friction_decorations_are_the_only_friction_writer_on_the_segment_list()
     toggles classes on the result. If the string ALSO emitted friction markup the
     two paths would drift, and a threshold drag (which only runs the decoration
     pass) would disagree with the next full rebuild."""
-    start = _JS.index("function renderSegments(")
-    body = _JS[start : _JS.index("\n  // Which participant", start)]
+    start = _JS.index("function renderSegmentsImpl(")
+    body = _JS[start : _JS.index("\n  }\n", start)]
     assert "segment-friction" not in body and "seg-friction-alpha" not in body, (
         "friction markup must not be emitted by renderSegments' HTML string; "
         "applyFrictionDecorations owns every friction class and inline var"
@@ -825,7 +825,7 @@ def test_the_density_band_covers_both_evidence_sources():
     around. The union is derived once, in the same producer as everything else,
     so the canvas can never disagree with the pane about what is flagged."""
     start = _JS.index("function _recomputeFrictionMatches(")
-    body = _JS[start : _JS.index("\n  // The single entry point", start)]
+    body = _JS[start : _JS.index("\n  }\n", start)]
     assert "state.frictionBandBySegId = band;" in body, (
         "the union belongs in the one derived-state producer"
     )
@@ -836,7 +836,7 @@ def test_the_density_band_covers_both_evidence_sources():
     assert "state.frictionBandBySegId" in video
 
     draw = video.index("function _drawFrictionBand(")
-    draw_body = video[draw : video.index("\n  // The selected participant", draw)]
+    draw_body = video[draw : video.index("\n  }\n", draw)]
     assert "frictionMatchBySegId" not in draw_body, (
         "the band must draw from the union, not the keyword-only map"
     )

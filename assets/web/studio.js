@@ -23,20 +23,14 @@
 
   var QUEUE_STORAGE_KEY = "clipgen-studio-queues";
 
-  // Pure intake clustering lives in intake-cluster.js (loaded first) so the
-  // Overview page can share it without reaching into Studio.
+  // Clustering lives in intake-cluster.js so Overview can share it.
   var clusterIntakeEvents = window.ClipgenIntakeCluster.clusterIntakeEvents;
   var clusterTranscriptMarks = window.ClipgenIntakeCluster.clusterTranscriptMarks;
 
-  // Hub namespace for the feature satellites (studio-{intake,generate,trim,
-  // scrubber}.js). The hub publishes `state` + the helpers a satellite needs
-  // onto this at load (tail); satellites publish their entry points back,
-  // reached via same-named guarded delegators throughout the hub.
+  // Satellite namespace: hub publishes state at the tail, satellites publish entry points back.
   var STUDIO = (window.ClipgenStudio = window.ClipgenStudio || {});
 
-  // Build a mask-image icon span as an HTML string. Sizing comes from a
-  // parent rule (e.g. .cg-btn-icon) or from extraClass. See
-  // .cg-icon family in studio.css.
+  // Mask-image icon span; sizing comes from the parent rule or extraClass (studio.css .cg-icon).
   function iconHTML(name, extraClass) {
     return '<span class="cg-icon cg-icon--' + name + (extraClass ? " " + extraClass : "") + '"></span>';
   }
@@ -95,8 +89,7 @@
     coIntakeFilterText: "",
     coIntakeHoveredIdx: -1,
     _coIntakeFp: null,
-    // MindNode intake. mnIntakeItems holds one entry per timestamp pair;
-    // mnIntakeSkipped holds the notes with no timestamp, shown disabled.
+    // MindNode intake: one item per timestamp pair; skipped holds timestamp-less notes.
     mnIntakeItems: [],
     mnIntakeSkipped: [],
     mnIntakeFilterParticipants: [],
@@ -162,13 +155,7 @@
     return -1;
   }
 
-  // Intake (Screenspace event / Transcript mark) identity. A cluster's span
-  // (start/end) drifts during normal use — the 10s poll merges newly-detected
-  // events into an existing cluster, and the user can change the cluster
-  // threshold — so span can't anchor a queued item's identity. Match on the
-  // underlying event/mark ids instead: those are globally unique and stable, and
-  // an overlap test (share ≥1 id) survives boundary drift. When ids are missing
-  // on either side, fall back to exact span equality.
+  // Cluster spans drift (poll merges, threshold edits); match on shared ids, else exact span.
   function intakeIds(item) {
     if (!item) return [];
     var raw =
@@ -206,19 +193,14 @@
     return -1;
   }
 
-  // Remove every queue entry the item overlaps — a drifted cluster can subsume
-  // two entries that were separate when added (mirrors removeAllCellEntries).
+  // Remove every overlapping entry: a drifted cluster can subsume several (mirrors removeAllCellEntries).
   function removeIntakeFromQueue(queue, item) {
     for (var i = queue.length - 1; i >= 0; i--) {
       if (intakeItemsOverlap(queue[i], item)) queue.splice(i, 1);
     }
   }
 
-  // Idempotent add (used by "Add all" and drag-drop) vs. toggle (used by single
-  // card click) — same split as addToQueue vs. toggleArtifactCell for cells.
-  // Batch form renders once; calling add-all as N× intakeAddItem rebuilt the
-  // whole queue on every push (400 cards → ~1s longtask, tens of thousands of
-  // detached listeners).
+  // Idempotent batch add renders once; per-item adds rebuilt the queue every push.
   function intakeAddItems(queue, items, renderFn) {
     var locked = queue === state.artifactQueue ? isArtifactQueueLocked() : isReelQueueLocked();
     if (locked) return;
@@ -309,14 +291,11 @@
     return parseClipSegmentsForCell(raw, baselineSeconds, DEFAULT_DUR);
   }
 
-  // Cross-referencing: find overlapping data from other sources for a given
-  // participant + time range. Used by both Screenspace and Transcript intake
-  // card renderers to surface context from sibling data sources.
+  // Overlapping data from sibling sources for one participant + time range.
   function findOverlappingData(participant, start, end) {
     var result = { transcriptSnippets: [], screenspaceEvents: [], sheetObservations: [] };
 
-    // Transcript marks/clusters — keep a small projection because `text` has
-    // fallback logic (text || label) that consumers expect already resolved.
+    // Projection: consumers expect `text` already resolved (text || label).
     for (var i = 0; i < state.trIntakeClusters.length; i++) {
       var tc = state.trIntakeClusters[i];
       if (tc.participant === participant && tc.start < end && tc.end > start) {
@@ -324,8 +303,7 @@
       }
     }
 
-    // Screenspace event clusters — pass through the original object; consumers
-    // only read detector / event_type and the extra fields are harmless.
+    // Pass the cluster through; consumers read only detector / event_type.
     for (var j = 0; j < state.intakeClusters.length; j++) {
       var sc = state.intakeClusters[j];
       if (sc.participant === participant && sc.start < end && sc.end > start) {
@@ -353,9 +331,7 @@
     return result;
   }
 
-  // Cached once — `--radius` lives on :root in tokens.css and isn't expected to
-  // change at runtime. Avoids a getComputedStyle call inside setCardDragImage,
-  // which is on the dragstart hot path.
+  // Cached: --radius is static on :root, and setCardDragImage is on the dragstart hot path.
   var _cardDragImageRadius = null;
   function getCardDragImageRadius() {
     if (_cardDragImageRadius !== null) return _cardDragImageRadius;
@@ -372,10 +348,7 @@
     clone.style.left = "-9999px";
     clone.style.width = rect.width + "px";
     clone.style.zIndex = "-1";
-    // Some Chromium versions render the drag-image bitmap without honoring the
-    // class-driven border-radius / overflow clip, leaving square corners on
-    // an otherwise rounded card. Pin them inline on the clone so the snapshot
-    // captures the rounding.
+    // Some Chromium builds ignore class-driven rounding in the drag bitmap; pin it inline.
     clone.style.borderRadius = getCardDragImageRadius();
     clone.style.overflow = "hidden";
     document.body.appendChild(clone);
@@ -385,37 +358,14 @@
     });
   }
 
-  // Blank 1×1 element handed to setDragImage() to suppress the browser's own
-  // drag preview when we want a custom DOM-based ghost (see bindDragFromGrid).
-  //
-  // Two constraints, both WebKit-specific and both load-bearing:
-  //   - It must be an *element*, not an `Image`. This used to be a 1×1
-  //     transparent GIF built as `new Image()` inside the dragstart handler.
-  //     Image loading is asynchronous even for a data URI, so the <img> had no
-  //     decoded bitmap yet at setDragImage() time; Chromium shrugs and drags
-  //     anyway, WebKit produces a null drag image and never starts the drag
-  //     session at all. That cost the *first* cell drag of every page load in
-  //     Safari and the desktop app — dragstart fired, dragend followed
-  //     immediately, no dragover, so no ghost and no drop. Elements are
-  //     rasterized synchronously (as setCardDragImage above already relies on).
-  //   - It must stay in the document with a real rendered box. `display: none`
-  //     / `visibility: hidden` leave no renderer to snapshot, which lands back
-  //     on the same null drag image; .drag-image-blank hides it offscreen-left.
-  //
-  // Created once at bind time rather than lazily on first drag, so there is no
-  // first-use path left to get wrong. 1×1 and pointer-events: none, so it needs
-  // no teardown.
+  // Must be a rendered element: WebKit aborts the drag on an `Image` or hidden box.
   function createBlankDragImage() {
     var blank = el("div", "drag-image-blank");
     document.body.appendChild(blank);
     return blank;
   }
 
-  // Single capture-phase gate: while a drag is in flight, `body.dragging` is
-  // set so CSS can suspend expensive effects (backdrop-filter on the floating
-  // nav, drop-target transitions, hover paint, etc.). Centralized here instead
-  // of patched into every dragstart handler — see studio.css / topnav.css /
-  // tokens.css for the matching rules.
+  // body.dragging lets CSS suspend expensive effects during drags (studio.css, topnav.css, tokens.css).
   function bindDragGate() {
     function clear() { document.body.classList.remove("dragging"); }
     document.addEventListener("dragstart", function () {
@@ -475,10 +425,7 @@
   }
 
   // ---- Sheet preview sorting ----
-  //
-  // One column at a time, cycling Ascending -> Descending -> Off (source order).
-  // Empty/unrecognized values always sink to the bottom regardless of direction;
-  // ties fall back to source row order so sorting is stable.
+  // Cycles asc/desc/off; empties sink, ties keep source order.
   function compareByColumn(a, b, column, participants, asc) {
     if (column === "row") {
       var dr = a.rowNum - b.rowNum;
@@ -535,9 +482,7 @@
     renderGrid();
   }
 
-  // Small cycling sort button for a sortable column header. Recreated on every
-  // renderGrid, so the click listener is attached fresh each time (matching the
-  // fnSelect/fnClear pattern).
+  // Rebuilt on every renderGrid, so the listener attaches fresh (like fnSelect/fnClear).
   function buildSortButton(column) {
     var active = state.sortColumn === column;
     var iconName = !active
@@ -571,9 +516,7 @@
   }
 
   function clearAllFilters() {
-    // Reset the source maps that back the category/keyword checkboxes too, not
-    // just the derived filter arrays — otherwise the sidebar rows would keep
-    // painting as active while the grid shows everything (state desync).
+    // Reset the checkbox source maps too, or sidebar rows stay active after clearing.
     state.sidebarCategories = {};
     state.sidebarKeywords = {};
     state.filters.categories = [];
@@ -586,10 +529,7 @@
   // ---- Sheet sidebar ----
 
   var SIDEBAR_VIEW_KEY = "clipgen-studio-sidebar-open";
-  // VIEWS section: each entry overrides state.filters.severities. "all" clears
-  // the selection; "highlights"/"positive" derive their allowlists from
-  // CLIPGEN_CONFIG.severity by rank (negatives <= -2; positives >= 1) so a
-  // relabeled severity in config can't silently desync these views.
+  // VIEWS derive severity allowlists from CLIPGEN_CONFIG rank (<= -2, >= 1), not labels.
   var _severityLabelsWhere = function (predicate) {
     return CLIPGEN_CONFIG.severity
       .filter(function (s) { return predicate(s.rank); })
@@ -614,11 +554,7 @@
       var stored = localStorage.getItem(SIDEBAR_VIEW_KEY);
       if (stored !== null) state.sidebarOpen = (stored !== "false");
     } catch (_) {}
-    // Apply to DOM here so the very first paint already shows the persisted
-    // state. Otherwise the HTML default `data-open="true"` paints first and
-    // the later renderSidebar() flip animates the open→collapsed transition,
-    // which reads as a Sheet-tab slide when navigating in from elsewhere.
-    // The transition is gated on `.tx-ready`, added after first paint below.
+    // Set data-open before first paint, or the collapse animates on entry (.tx-ready gates it).
     var sidebar = document.getElementById("studioSidebar");
     if (!sidebar) return;
     sidebar.setAttribute("data-open", state.sidebarOpen ? "true" : "false");
@@ -629,9 +565,7 @@
     });
   }
 
-  // Run synchronously at script load (studio.js is non-defer at end of body,
-  // so the sidebar element already exists). DOMContentLoaded would be too
-  // late — first paint can happen before it fires.
+  // Runs at script load: DOMContentLoaded can land after first paint.
   readPersistedSidebarOpen();
 
   function persistSidebarOpen() {
@@ -658,11 +592,7 @@
     });
   }
 
-  // Persist the sidebar's filter selections (not just the open/collapsed state,
-  // which rides SIDEBAR_VIEW_KEY) so they survive a reload. Stored as one
-  // "filters" field on the shared per-page UI store. The raw category/keyword/
-  // participant maps round-trip; filters.categories/keywords are re-derived on
-  // restore via applySidebar* so they stay consistent.
+  // Raw maps round-trip; filters.categories/keywords re-derive on restore via applySidebar*.
   function persistSidebarFilters() {
     setStoredUIStateField("studio", "filters", {
       severities: state.filters.severities,
@@ -751,9 +681,7 @@
       return true;
     }
 
-    // VIEWS — vertical-list rows with counts. Active is derived from the
-    // current state.filters.severities so picking severity pills below
-    // re-highlights the matching view.
+    // VIEWS rows; active derives from state.filters.severities so pills re-highlight views.
     var viewsBody = sidebar.querySelector('[data-target="views"]');
     if (viewsBody) {
       viewsBody.innerHTML = "";
@@ -802,8 +730,7 @@
       }
     }
 
-    // SEVERITY — multi-select pills. "Any severity" clears the selection;
-    // each pill below toggles its severity in/out of state.filters.severities.
+    // SEVERITY pills: "Any severity" clears; each pill toggles its label.
     var sevBody = sidebar.querySelector('[data-target="severity"]');
     if (sevBody) {
       sevBody.innerHTML = "";
@@ -846,9 +773,7 @@
       }
     }
 
-    // KEYWORDS — multi-select pills for cell-level annotation tokens
-    // (e.g. "!key" → "Key"). Filter is row-level (any cell in the row carries
-    // the annotation) but cell-level emphasis is applied during grid render.
+    // KEYWORDS: filter is row-level; cell-level emphasis happens in grid render.
     var kwBody = sidebar.querySelector('[data-target="keywords"]');
     if (kwBody) {
       kwBody.innerHTML = "";
@@ -1015,8 +940,7 @@
       tabs[i].addEventListener("click", function () {
         var target = this.dataset.tab;
         if (target === state.activePreviewTab) return;
-        // The queues/stashes are shared across tabs, so a cursor parked in one
-        // of those list regions would leave a stale outline behind — drop it.
+        // Queues/stashes span tabs; a parked cursor would leave a stale outline.
         if (_kbRegion) kbClearCursor();
         state.activePreviewTab = target;
         setStoredUIStateField("studio", "activeTab", target);
@@ -1100,8 +1024,7 @@
         });
       });
     }
-    // The keyboard cursor is per-surface: drop stale paint when the cursor's
-    // surface is no longer the active tab.
+    // Cursor is per-surface; repaint drops paint on the inactive tab.
     kbPaintCursor();
   }
 
@@ -1167,27 +1090,19 @@
           clipgenApplyConfig(data.config);
           updateArtifactFormatLabels();
           state.sheetData = data;
-          // A mind-map-only session has a study and participants even with no
-          // sheet; without this the subheader stays blank. Guarded on `study`
-          // so a genuinely empty session keeps its blank subheader rather than
-          // reading "Unknown study — 0 participants".
+          // Mind-map-only sessions have a study; guard keeps empty sessions' subheader blank.
           if (data.study) renderHeader();
           return;
         }
         state.sheetData = data;
         clipgenApplyConfig(data.config);
         updateArtifactFormatLabels();
-        // Restore persisted sidebar filter selections before the first render so
-        // the grid and sidebar paint already-filtered (activeFunction first so
-        // the fn range stays enabled).
+        // Restore filters before first render (activeFunction first keeps the range enabled).
         restoreSidebarFilters();
         renderHeader();
         renderSidebar();
         renderGrid();
-        // Load per-participant baselines so the grid color-codes durations
-        // and segment metadata in the video-relative frame (matches Python
-        // prepare_clip behavior) instead of raw clock-time spans. Re-render
-        // once they arrive so cell intensities reflect baselined durations.
+        // Baselines put durations in the video-relative frame (matches prepare_clip); re-render on arrival.
         apiGet("api/sheet/baseline")
           .then(function (bdata) {
             state.convergenceBaselines = (bdata.ok && bdata.baselines) ? bdata.baselines : {};
@@ -1246,10 +1161,7 @@
       });
   }
 
-  // The subheader Refresh acts on whatever the user is looking at. The Sheet
-  // tab re-reads the spreadsheet (a rate-limited Google round-trip, so it stays
-  // a Sheet-tab action); each intake tab wakes its own poller, which refetches
-  // now and snaps the cadence back off its idle backoff.
+  // Refresh acts on the visible tab: Sheet re-reads the spreadsheet, intakes wake their poller.
   function refreshActiveTab() {
     var btn = qs("#studioRefresh");
     if (!btn || btn.disabled) return;
@@ -1277,12 +1189,7 @@
     });
   }
 
-  // On page load, reconcile the persisted manifest against the live sheet:
-  // for each manifest artifact, find its (participant, row) in sheetData,
-  // mark that cell green, and re-enqueue any artifact whose cell still has
-  // a valid timestamp but isn't already queued. The `seen` dedup guards
-  // against multiple artifacts mapping to the same cell (e.g. two clips
-  // generated from the same timestamp).
+  // Reconcile manifest against the sheet: mark cells green, re-enqueue valid ones; `seen` dedupes cells.
   function loadManifestState() {
     apiGet("api/manifest")
       .then(function (data) {
@@ -1324,9 +1231,7 @@
           for (var ei = 0; ei < entries.length; ei++) state.artifactQueue.push(entries[ei]);
         }
 
-        // Dedupe by id (and fall back to file) so calling loadManifestState
-        // again after a background-completed build (re-attach from the
-        // job-status poll) doesn't double-list the same artifact or reel.
+        // Dedupe by id (fallback file) so a job-status reattach doesn't double-list.
         var seenArtifact = {};
         for (var ai = 0; ai < state.generatedArtifacts.length; ai++) {
           var prev = state.generatedArtifacts[ai];
@@ -1363,11 +1268,7 @@
       .catch(function () {});
   }
 
-  // Poll /api/job-status so Studio re-attaches to a background build that
-  // started before the user navigated away (to /screenspace/ etc.). Without
-  // this the streaming fetch is gone after navigation, the progress bar is
-  // dark, and the Cancel button is hidden — leaving the user no way to stop
-  // a long-running build short of killing the server.
+  // Re-attach to a background build after navigating away; otherwise Cancel is unreachable.
   function applyJobStatus(status) {
     if (!status) return;
     var reel = status.reel || {};
@@ -1383,15 +1284,12 @@
       var clipFraction = totalClips > 0 ? Math.min(clipsDone / totalClips, 1) : 0;
       // Same 0.7/0.3 weighting as the live stream handler in onBuildReel().
       setButtonProgress("buildReelBtn", clipFraction * 0.7 + concatFraction * 0.3);
-      // Seed from the server's start time so a reattach shows accurate elapsed;
-      // idempotent start() leaves a live build's own clock untouched.
+      // Seed from the server start time; idempotent start() leaves a live clock alone.
       _reelEtaTracker.start(reel.started_at ? reel.started_at * 1000 : undefined);
       _studioEtaTicker.ensure();
       _paintReelElapsed();
     } else if (state._jobStatusReelWasInProgress) {
-      // Transition busy → idle while we were polling: a build finished in
-      // the background. Clear UI and reload the manifest so any new reel
-      // shows up in the gallery without a full page refresh.
+      // Busy → idle while polling: a background build finished. Reload the manifest.
       setReelGenerating(false);
       qs("#cancelReelBtn").classList.add("hidden");
       setButtonProgress("buildReelBtn", null);
@@ -1401,11 +1299,7 @@
     }
     state._jobStatusReelWasInProgress = !!reel.in_progress;
 
-    // ---- Generate side: sheet (/api/generate) and intake (/api/generate-intake)
-    // run concurrently from one Generate click and share the same button,
-    // progress readout, and elapsed clock. Combine their counts into a single
-    // state machine so the two streams don't clobber each other's progress or
-    // fire the idle reset while the other is still running.
+    // ---- Generate side: sheet and intake streams share one button, so combine their counts.
     var intake = status.intake || {};
     var genActive = !!gen.in_progress || !!intake.in_progress;
     if (genActive) {
@@ -1416,16 +1310,13 @@
       if (combinedTotal > 0) {
         setButtonProgress("generateBtn", Math.min(combinedDone / combinedTotal, 1));
       }
-      // Seed elapsed from the earliest of the two start times; idempotent
-      // start() leaves a live build's own clock untouched.
+      // Seed elapsed from the earlier start; idempotent start() leaves a live clock alone.
       var genStartedAt =
         gen.started_at && intake.started_at
           ? Math.min(gen.started_at, intake.started_at)
           : gen.started_at || intake.started_at;
       _generateEtaTracker.start(genStartedAt ? genStartedAt * 1000 : undefined);
-      // Both sides count artifacts now (the sheet job in timestamp segments,
-      // the intake job one per span), so the two totals sum cleanly and an
-      // intake-only run keeps its readout instead of falling back to elapsed.
+      // Both sides count artifacts, so the totals sum and intake-only runs keep a readout.
       updateGenerateProgress(combinedDone, combinedTotal);
       _studioEtaTicker.ensure();
     } else if (state._jobStatusGenerateWasInProgress) {
@@ -1444,8 +1335,7 @@
       .then(function (data) {
         if (!data || !data.ok) return;
         applyJobStatus(data);
-        // Keep polling while either job is in flight. Stop otherwise so the
-        // page doesn't hammer the server when nothing is happening.
+        // Poll only while a job is in flight.
         var stillBusy =
           (data.reel && data.reel.in_progress) ||
           (data.generate && data.generate.in_progress) ||
@@ -1480,8 +1370,7 @@
 
   function renderHeader() {
     var d = state.sheetData;
-    // With no sheet the cohort comes from the mind map, which is carried on its
-    // own key — `participants` means *sheet columns* to every other consumer.
+    // Without a sheet the cohort is the mind map's; `participants` means sheet columns.
     var people = (d.participants && d.participants.length)
       ? d.participants
       : (d.mindnodeParticipants || []);
@@ -1539,9 +1428,7 @@
     colFn.style.width = "3.25rem"; // fits the fn select + clear + optional sort button
     colgroup.appendChild(colFn);
     var colObs = document.createElement("col");
-    // Explicit width keeps the table size predictable under table-layout: fixed
-    // — `auto` collapses to 0 when other cols already exceed the table width.
-    // The td inside has overflow:hidden + ellipsis to clamp the long observation.
+    // Explicit width: under table-layout fixed, `auto` collapses to 0 when others overflow.
     colObs.style.width = "18rem";
     colgroup.appendChild(colObs);
     var colCat = document.createElement("col");
@@ -1569,8 +1456,7 @@
     var fnTh = el("th", "col-function");
     var fnWrap = el("div", "fn-header-wrap");
     var fnSelect = document.createElement("select");
-    // cg-select-nocaret: .col-function is 3.5rem and holds this select plus
-    // .fn-clear, so the shared caret gutter would crowd out the glyph.
+    // No caret: .col-function is 3.5rem and also holds .fn-clear.
     fnSelect.className = "fn-select cg-select-nocaret";
     fnSelect.title = "Row function";
     var defaultOpt = document.createElement("option");
@@ -1663,8 +1549,7 @@
     while (i < filteredRows.length) {
       var row = filteredRows[i];
       if (isRowEmpty(row, visibleParticipants)) {
-        // While sorted the spreadsheet's empty-row grouping is meaningless, so
-        // drop empty rows entirely instead of emitting "N empty rows" spacers.
+        // Sorted views drop empty rows; the spreadsheet grouping is meaningless there.
         if (state.sortColumn) {
           i++;
           continue;
@@ -1695,23 +1580,13 @@
     kbPaintCursor();
   }
 
-  // ---- Keyboard cursor (arrows / j / k over cells and intake cards) ----
-  //
-  // One logical cursor per surface: the sheet grid when the Sheet tab is active,
-  // otherwise the active intake tab's card row. Enter mirrors click (toggle in the
-  // artifact work area), Shift+Enter mirrors shift-click (toggle in the reel). The
-  // cursor is logical state — re-renders repaint it via kbPaintCursor() rather
-  // than holding a live element reference.
+  // ---- Keyboard cursor ----
+  // One logical cursor per surface; re-renders repaint it via kbPaintCursor().
 
   var _kbCursor = null; // {surface: "sheet", participant, row} | {surface: <intake tab | list surface>, idx}
   var _kbRegion = null; // explicit list-surface override set by the jump hotkeys (kbJumpTo)
 
-  // Index-addressed list surfaces the cursor can jump into: the filter sidebar,
-  // the artifact/reel queues, and the two stash lists. Each names its item
-  // selector, how to reveal its container (ensure), what Enter does to the
-  // focused item (activate), and the Alt-hold verb. The sheet grid and intake
-  // card rows stay special-cased in the primitives below (stable participant/row
-  // addressing and satellite-owned cards respectively).
+  // Index-addressed list surfaces the cursor can jump into; sheet and intake cards stay special-cased.
   function kbActivateClick(el) { if (el) { el.click(); return true; } return false; }
   function kbActivateRemove(el) {
     var btn = el && el.querySelector(".queue-card-remove");
@@ -1738,9 +1613,7 @@
     return _kbRegion || state.activePreviewTab || "sheet";
   }
 
-  // Briefly double-pulse an empty queue's ghost card, acknowledging the focus
-  // hotkey while signaling there's nothing to select. Remove-then-reflow so a
-  // repeat keypress replays the animation.
+  // Double-pulse an empty queue's ghost; remove-then-reflow lets a repeat replay it.
   function pulseGhost(sel) {
     var ghost = qs(sel);
     if (!ghost) return;
@@ -1749,9 +1622,7 @@
     ghost.classList.add("queue-card-ghost-pulse");
   }
 
-  // Jump the cursor to the first item of a named list surface (the focus
-  // hotkeys). Reveals the container first, and no-ops (declines the key) when
-  // the surface is off-tab or empty.
+  // Jump to a list surface's first item; declines the key when off-tab or empty.
   function kbJumpTo(region) {
     var cfg = KB_LIST_SURFACES[region];
     if (!cfg) return false;
@@ -1761,8 +1632,7 @@
       if (cfg.ghostSel) pulseGhost(cfg.ghostSel);
       return false;
     }
-    // Taking over with the painted cursor: drop any lingering native DOM focus
-    // (e.g. a tabbed-to top-nav button) so only one focus indicator shows.
+    // Drop stray native focus so only one focus indicator shows.
     if (window.ClipgenHotkeys && window.ClipgenHotkeys.blurStrayFocus) {
       window.ClipgenHotkeys.blurStrayFocus();
     }
@@ -1798,11 +1668,7 @@
     }
   }
 
-  // Alt-hold context hints (via ClipgenHotkeys.registerActionHints): what
-  // Enter / Shift+Enter would do to the selected cell right now. Sheet cells
-  // know their queue membership (findInQueue), so the verb flips between
-  // Send and Remove; intake cards keep the generic Send labels (membership
-  // lives in the satellite).
+  // Alt-hold hints: sheet cells flip Send/Remove by queue membership; intake cards stay generic.
   function kbActionHintEntries() {
     if (_kbCursor && KB_LIST_SURFACES[_kbCursor.surface]) {
       // Single Enter chip labeled with the list surface's primary action.
@@ -1832,9 +1698,7 @@
     return true;
   }
 
-  // Linear step: row-major across sheet cells (wraps to the next row
-  // naturally), index step across intake cards. Returns false (declines the
-  // event) when the surface has nothing to select.
+  // Row-major step across cells, index step across cards; false when nothing to select.
   function kbStep(delta) {
     var surface = kbSurface();
     if (surface === "sheet") {
@@ -1873,10 +1737,7 @@
     return true;
   }
 
-  // Vertical step on the sheet: the nearest valid cell in a lower/higher row,
-  // preferring the same participant column (i.e. that participant's next
-  // timestamp), falling back to the first valid cell of the adjacent row.
-  // Intake cards are a single row, so vertical falls back to a linear step.
+  // Vertical: nearest valid cell in an adjacent row, same participant preferred; cards step linearly.
   function kbStepVertical(dir) {
     var surface = kbSurface();
     if (surface !== "sheet") return kbStep(dir);
@@ -1929,10 +1790,7 @@
       return true;
     }
     if (KB_LIST_SURFACES[surface]) {
-      // No artifact/reel distinction on these lists — Enter and Shift+Enter
-      // both fire the surface's primary action on the focused item. Repaint
-      // afterward: the action may rebuild the list (filter toggle) or shrink it
-      // (queue remove), and this keeps the outline on the item now at that index.
+      // Lists have one primary action; repaint because it may rebuild or shrink the list.
       var acted = KB_LIST_SURFACES[surface].activate(kbCursorEl(), reel);
       if (acted) kbPaintCursor();
       return acted;
@@ -1940,9 +1798,7 @@
     return !!(STUDIO.intakeToggleAt && STUDIO.intakeToggleAt(surface, _kbCursor.idx, reel));
   }
 
-  // Backspace / Delete remove the focused card when the cursor sits on a queue
-  // surface. Returns false elsewhere so Backspace keeps its default (browser
-  // back); on a queue surface it always consumes the key.
+  // Backspace/Delete remove the focused queue card; false elsewhere keeps browser-back.
   function kbRemoveCard() {
     var surface = kbSurface();
     if (surface !== "artifact-queue" && surface !== "reel-queue") return false;
@@ -1955,12 +1811,8 @@
     return true;
   }
 
-  // ---- Panel divider (resizable split between sheet preview and bottom panel) ----
-  //
-  // Layout model: #sheetPreview is `flex: 1 1 auto` and #bottomPanel has an
-  // explicit pixel `height` set from state.bottomH. The drag updates that
-  // pixel height directly; the upper pane absorbs the remainder via flex.
-  // state.bottomH is clamped to [BOTTOM_STRIP_MIN, BOTTOM_STRIP_MAX].
+  // ---- Panel divider ----
+  // #bottomPanel gets a pixel height from state.bottomH; #sheetPreview flexes.
   var BOTTOM_STRIP_MIN = 60;
   var BOTTOM_STRIP_MAX = 560;
   var BOTTOM_STRIP_DEFAULT = 380;
@@ -2015,10 +1867,7 @@
         state.bottomH = h;
         applyBottomHeight();
       },
-      // #bottomPanel carries a `transition: height` for the collapse animation,
-      // and the drag writes that same property every frame — without suppressing
-      // it the panel eases ~250 ms behind the cursor and keeps sliding after
-      // mouseup. Mirrors Screenspace's body.panel-dragging handling.
+      // Suppress the height transition during drag, or the panel lags the cursor (see Screenspace).
       onDragStart: function () {
         document.body.classList.add("panel-dragging");
       },
@@ -2053,9 +1902,7 @@
 
     if (state.bottomCollapsed) {
       // --- Restore ---
-      // Animate `height` between concrete pixel endpoints (0 → bottomH); the box
-      // is never `auto` mid-flight, so the reveal tracks linearly. Mirrors the
-      // Screenspace panel.
+      // Animate between pixel endpoints; never `auto` mid-flight.
       state.bottomCollapsed = false;
       document.body.classList.add("bottom-animating");
       document.body.classList.remove("bottom-collapsed");
@@ -2070,9 +1917,7 @@
       });
     } else {
       // --- Collapse ---
-      // Pin the current pixel height, then animate `height` to 0. Keeping the box
-      // height definite the whole way (never clearing to `auto`) is what avoids
-      // the mid-animation hitch.
+      // Pin the pixel height, then animate to 0; `auto` would hitch.
       state.bottomCollapsed = true;
       var currentH = bottom.offsetHeight;
       document.body.classList.add("bottom-animating");
@@ -2163,9 +2008,7 @@
         var chip = document.createElement("span");
         chip.className = "ts-chip cg-mono";
         chip.textContent = cellData.value;
-        // Native tooltip fallback for chips clipped by the fixed column width.
-        // Inert when the text isn't truncated; cheaper than per-cell scrollWidth
-        // reads in the render loop. Complements the richer hover-expand float.
+        // Native tooltip for clipped chips; cheaper than scrollWidth reads in the render loop.
         chip.title = cellData.value;
         td.appendChild(chip);
         if (cellData.valid) {
@@ -2578,8 +2421,7 @@
 
     function showFloat(td) {
       if (!state.cellExpandHover) return;
-      // Anchor the float to the chip's box (not the td) so the float reads as
-      // the same chip widening rather than a tooltip popping in.
+      // Anchor to the chip, not the td, so it reads as the chip widening.
       var chip = td.querySelector(".ts-chip");
       if (!chip) return;
       if (chip.scrollWidth <= chip.clientWidth + 1) return;
@@ -2624,40 +2466,15 @@
 
   // ---- Drag from grid ----
 
-  // Defensive click-vs-drag threshold layered on top of the browser's own
-  // dragstart heuristic. The native ghost is suppressed at dragstart and we
-  // wait until the cursor has moved this many pixels before mounting our
-  // cascade preview, so a small click-with-jitter never flashes a ghost.
+  // Click-vs-drag threshold: the ghost mounts only after this much movement.
   var _CELL_DRAG_THRESHOLD_PX = 6;
   var _CELL_GHOST_OFFSET_X = 14;
   var _CELL_GHOST_OFFSET_Y = 10;
 
-  // How long dragover may go quiet before we call the drag released.
-  //
-  // Neither engine dispatches mouseup during a drag session, and WebKit posts
-  // dragend ~560ms after the button comes up (measured twice in Safari: 557ms
-  // and 561ms — a snap-back animation the page never sees). dragend was
-  // therefore the first thing telling us an abandoned drag had ended, so the
-  // ghost sat frozen at the cursor for that whole half-second before it even
-  // began to fade.
-  //
-  // dragover is the way out: it free-runs while the drag is live and stops
-  // dead at release. Measured over one Safari drag with a deliberate 2s
-  // hold-still: 475 events, median gap 1ms, worst gap 52ms. This threshold is
-  // ~2.3x that worst gap. Overshooting it is cheap — the ghost just fades
-  // early and the next dragover rebuilds it (ensureGhostBuilt keeps
-  // pendingDrag alive for exactly that reason).
+  // dragover silence that counts as release. Measured worst Safari gap 52ms; WebKit's dragend lags ~560ms.
   var _CELL_RELEASE_WATCHDOG_MS = 120;
 
-  // Build the shared .queue-card-thumb (img + duration overlay), append it to
-  // `card`, and return it so callers can layer their own badges on top.
-  //   observe    lazy IntersectionObserver via ssObserveThumb, else eager img.src
-  //              with the standard error fallback
-  //   nativeLazy eager-only img.loading="lazy"; pass false for the drag ghost, an
-  //              off-DOM image that must load now
-  //   editItem   makes the duration overlay a trim trigger for that queue item,
-  //              with renderFn re-rendering its queue after edits. Omit for
-  //              read-only thumbs (drag ghost, intakes).
+  // Shared .queue-card-thumb. observe: lazy via ssObserveThumb; nativeLazy false for off-DOM ghosts; editItem enables trim.
   function buildQueueCardThumb(card, opts) {
     var thumb = el("div", "queue-card-thumb");
     // Window coordinates for the optional hover card scrubber (sprite + audio).
@@ -2712,11 +2529,7 @@
     return badge;
   }
 
-  // Build a fixed-position overlay holding one queue-style card per parsed
-  // segment, matching the look of cards in the Artifact/Reel queues. Cards
-  // stack down-right via the --i custom property (see studio.css). The
-  // .queue-card-thumb's surface-alt background acts as a skeleton state
-  // until the eagerly-loaded thumbnail resolves.
+  // Fixed overlay of one queue-style card per segment; cards cascade via --i (studio.css).
   function buildCellDragGhost(info, segments) {
     var ghost = el("div", "cell-drag-ghost");
     var n = segments.length;
@@ -2726,8 +2539,7 @@
       card.style.setProperty("--i", i);
       if (info.severity) card.setAttribute("data-severity", info.severity);
 
-      // Eager (non-lazy) load: the ghost is an off-DOM drag image that must
-      // resolve immediately, so it can't defer behind loading="lazy".
+      // Off-DOM drag image: must load now, so no loading="lazy".
       buildQueueCardThumb(card, {
         participant: info.participant,
         start: seg.start,
@@ -2810,9 +2622,7 @@
       var info = pendingDrag.info;
       var segments = expandCellToSegments(info);
       ghost = buildCellDragGhost(info, segments);
-      // pendingDrag deliberately outlives the mount: it is what lets a
-      // release-watchdog misfire re-mount on the next dragover. The `ghost`
-      // check above is what keeps this from rebuilding every frame.
+      // pendingDrag outlives the mount so a watchdog misfire re-mounts on the next dragover.
       positionGhost();
       // Flip on the .in class one frame later so the entrance transition runs.
       requestAnimationFrame(function () {
@@ -2824,8 +2634,7 @@
       if (!pendingDrag && !ghost) return;
       cursorX = ev.clientX;
       cursorY = ev.clientY;
-      // Every dragover pushes the release deadline back; the drag is over as
-      // soon as they stop arriving.
+      // Each dragover pushes the release deadline back.
       clearTimeout(releaseTimer);
       releaseTimer = setTimeout(hideGhost, _CELL_RELEASE_WATCHDOG_MS);
       ensureGhostBuilt();
@@ -2836,9 +2645,7 @@
       });
     }
 
-    // Fade the overlay out and drop the node. Leaves pendingDrag alone, so a
-    // watchdog misfire mid-drag self-heals on the next dragover instead of
-    // killing the ghost for the rest of the drag.
+    // Fade out and drop the node; pendingDrag stays so a misfire self-heals.
     function hideGhost() {
       if (rafPending) {
         cancelAnimationFrame(rafPending);
@@ -2863,15 +2670,7 @@
     }
 
     document.addEventListener("dragover", onDragOver, true);
-    // drop lands ~1ms after release, so a completed drag needs nothing else.
-    // An abandoned one is covered by the dragover watchdog long before dragend
-    // shows up; dragend stays as the authoritative end-of-drag reset.
-    //
-    // There used to be a `mouseup` listener here, on the theory that it fires
-    // immediately on release and so beats the delayed dragend. It does not:
-    // neither Chromium nor WebKit dispatches mouse events during a drag
-    // session, and instrumented real drags on both recorded no mouseup at all.
-    // It was inert for as long as it existed. Don't add it back.
+    // dragend is the authoritative reset. No mouseup listener: neither engine fires it mid-drag.
     document.addEventListener("dragend", cleanup, true);
     document.addEventListener("drop", cleanup, true);
     window.addEventListener("blur", cleanup);
@@ -2940,8 +2739,7 @@
     target.addEventListener("dragover", function (ev) {
       ev.preventDefault();
       ev.dataTransfer.dropEffect = "copy";
-      // dragover fires ~60Hz; skip the no-op write when the class is already
-      // applied so we don't churn the attribute / invalidate style.
+      // dragover fires ~60Hz; skip the no-op class write.
       if (!target.classList.contains("drag-over")) target.classList.add("drag-over");
     });
     target.addEventListener("dragleave", function (ev) {
@@ -3000,8 +2798,7 @@
           segTotal: reelItem.segTotal,
           source: "reel",
         };
-        // Preserve intake identity for reel items that originated from an
-        // intake cluster, so a drop back into the queue keeps its linkage.
+        // Keep intake identity so a drop back into the queue keeps its linkage.
         if (reelItem.event_type) data.event_type = reelItem.event_type;
         if (reelItem.event_ids) data.event_ids = reelItem.event_ids;
         if (reelItem.mark_ids) data.mark_ids = reelItem.mark_ids;
@@ -3036,11 +2833,8 @@
     });
   }
 
-  // ---- Duration-badge trim pop-over — studio-trim.js --------------------
-  // The trim pop-over cluster (duration badge → drag/±30s/type-to-edit in-out
-  // points) plus buildCellOverrides() live in studio-trim.js. The hub reaches
-  // them via these same-named guarded delegators; the satellite reaches the
-  // hub's saveQueues/isIntakeSource through the STUDIO namespace (published below).
+  // ---- Trim pop-over — studio-trim.js ----
+  // Guarded delegators; the satellite reaches saveQueues/isIntakeSource via STUDIO.
   function appendDurationBadge() {
     return STUDIO.appendDurationBadge && STUDIO.appendDurationBadge.apply(null, arguments);
   }
@@ -3077,13 +2871,9 @@
     countNounPlural: "clips",
   };
 
-  // Composer-trim key for a queue item, or null. Sheet items key on
-  // row/participant/segment (matching composer-markers.js's sheet marker
-  // keys — segIdx follows the same parseClipSegmentsForCell pair order);
-  // intake items key on their event/mark ids.
+  // Composer-trim key or null; sheet keys match composer-markers.js (row:participant:segIdx), intakes key on ids.
   function queueItemTrimKey(item) {
-    // Gate on the carded-key set (not raw trims) so the badge only appears
-    // when the deep-link has a Composer Intake card to land on.
+    // Gate on carded keys so the deep-link has a card to land on.
     var cardKeys = state.coTrimCardKeys || {};
     if (!isIntakeSource(item.source) && item.row) {
       var key = "sheet:" + item.row + ":" + item.participant + ":" + (item.segIdx || 0);
@@ -3128,9 +2918,7 @@
     });
     if (isIntake) thumb.appendChild(buildSourceBadge(item.source));
 
-    // Asterisk badge: this item's underlying timestamp has a Composer trim —
-    // the user may want to swap this card for the trimmed version. Click jumps
-    // to the Composer Intake tab and highlights it.
+    // Trim badge: the timestamp has a Composer trim; click jumps to its Intake card.
     var trimKey = queueItemTrimKey(item);
     if (trimKey) {
       var trimBadge = el("button", "intake-trim-badge");
@@ -3174,10 +2962,7 @@
     });
   }
 
-  // Badge tooltip. The number is card count, but a card is one timestamp
-  // segment, so a handful of cells can stand behind many more cards — spell the
-  // relationship out rather than letting the badge look like it disagrees with
-  // the "N / M artifacts" readout beside it.
+  // A card is one segment; spell out cells vs cards so the counts agree.
   function queueCountTooltip(q, noun, nounPlural) {
     var cellsSeen = {};
     var cellCount = 0;
@@ -3240,8 +3025,7 @@
     renderQueue(REEL_QUEUE);
   }
 
-  // One listener set per queue list, not per card. Must run once at boot —
-  // never from renderQueue (CODE-REVIEW.md listener-cleanup rule).
+  // One listener set per list, bound once at boot, never from renderQueue (CODE-REVIEW.md).
   function bindQueueList(cfg) {
     var list = qs(cfg.listSel);
     if (!list) return;
@@ -3293,8 +3077,7 @@
       var item = state[cfg.queueKey][idx];
       if (!item) return;
       var commit = function () {
-        // Resolve by identity, not the captured idx: while the exit animation
-        // plays, an earlier card's removal can re-render and shift indices.
+        // Resolve by identity: an earlier removal can shift indices during the exit animation.
         var q = state[cfg.queueKey];
         var ix = q.indexOf(item);
         if (ix < 0) return;
@@ -3319,10 +3102,8 @@
     list.addEventListener("mouseleave", clearGridHighlights);
   }
 
-  // ---- Stashes (carved into studio-stash.js) ----
-  // Same-named guarded delegators; implementations live in studio-stash.js,
-  // published onto window.ClipgenStudio. The stash drop-target callbacks reach
-  // the satellite late-bound (STUDIO.stashDropReel / .stashDropArtifacts).
+  // ---- Stashes — studio-stash.js ----
+  // Guarded delegators; drop targets reach STUDIO.stashDropReel/.stashDropArtifacts late-bound.
   function loadStashes() { return STUDIO.loadStashes && STUDIO.loadStashes.apply(null, arguments); }
   function loadArtifactStashes() { return STUDIO.loadArtifactStashes && STUDIO.loadArtifactStashes.apply(null, arguments); }
   function stashCurrentReel() { return STUDIO.stashCurrentReel && STUDIO.stashCurrentReel.apply(null, arguments); }
@@ -3332,8 +3113,7 @@
 
   // ---- Buttons ----
 
-  // Empty the artifact / reel queue (also used by the Clear hotkeys). Cards
-  // animate out before the state commit so the queue drains visually.
+  // Empty the queue (also the Clear hotkeys); cards animate out before the commit.
   function clearArtifacts() {
     if (isArtifactQueueLocked()) return;
     var cards = qsa("#artifactsList .queue-card");
@@ -3391,8 +3171,7 @@
     qs("#buildHighlightsBtn").addEventListener("click", onBuildHighlights);
     bindGalleryDialog();
 
-    // Page hotkeys (shared hotkeys.js registry). Gated on the corresponding
-    // toolbar button being enabled so the queue-lock logic stays in one place.
+    // Hotkeys gate on the toolbar button so queue-lock logic stays in one place.
     function hotkeyBtnEnabled(sel) {
       var b = qs(sel);
       return !!(b && !b.disabled);
@@ -3468,12 +3247,7 @@
       {
         id: "studio.selectTab",
         handler: function (e, combo) {
-          // 1…4 → the Nth preview tab by fixed position (Sheet, Screenspace
-          // Intake, Transcript Intake, Composer Intake). No-op if that tab is
-          // still hidden (its data source hasn't appeared). Fixed positions keep
-          // the Alt-hint chip (data-hotkey-combo) in sync with the action.
-          // Routing through .click() reuses initPreviewTabs' switch + persistence.
-          // (replace("Shift+", "") is now a no-op — kept harmless for clarity.)
+          // 1…4 → Nth preview tab; hidden tabs no-op. .click() reuses tab persistence.
           var n = parseInt(combo.replace("Shift+", ""), 10);
           if (isNaN(n)) return;
           var tab = qsa(".preview-tab")[n - 1];
@@ -3482,8 +3256,7 @@
       },
     ]);
 
-    // Alt-hold hints for the keyboard cursor: labeled chips for the send
-    // actions, stacked to the right of the selected cell/card.
+    // Alt-hold hint chips for the send actions, beside the selected cell/card.
     window.ClipgenHotkeys.registerActionHints(function () {
       var cur = kbCursorEl();
       if (!cur) return null;
@@ -3625,18 +3398,11 @@
 
   // ---- API calls ----
 
-  // ---- API: artifact generation — studio-generate.js ----
-  // The streaming api/generate + api/generate-intake flow (onGenerate /
-  // onCancelGenerate / buildGenerateCardIndex) lives in studio-generate.js; the
-  // hub keeps onGenerate/onCancelGenerate delegators (below, for the button
-  // wiring) and publishes the card painters / ETA trackers it shares with the
-  // reel/build path (both stream through utils.js's apiPostNDJSON).
+  // ---- Artifact generation — studio-generate.js ----
+  // Delegators below; shared painters/trackers publish at the tail.
 
-  // ---- Elapsed-time tracking for long Studio jobs ----
-  // Reels (parallel/bursty clip generation), artifact generation, and viewer
-  // builds (no progress signal) all show elapsed only — no ETA. A single 1s ticker
-  // keeps the clocks live; trackers use idempotent start() so a job-status reattach
-  // never resets a live job's elapsed.
+  // ---- Elapsed-time tracking ----
+  // Elapsed only, no ETA; idempotent start() survives a job-status reattach.
   var _reelEtaTracker = createEtaTracker();
   var _generateEtaTracker = createEtaTracker();
   var _buildEtaTracker = createEtaTracker();
@@ -3672,20 +3438,17 @@
     var el = qs("#generateProgress");
     if (!el) return;
     var hasCount = _genLastTotal > 0;
-    // A run with no countable work falls back to an elapsed-only readout while
-    // generating. Hide entirely once idle.
+    // No countable work: elapsed-only while generating, hidden once idle.
     if (!state.artifactGenerating && !hasCount) {
       el.classList.add("hidden");
       el.textContent = "";
       return;
     }
     el.classList.remove("hidden");
-    // Shimmer only while the run is live: the counter lingers after a job ends
-    // so the user can read the final tally, and a resting tally shouldn't move.
+    // Shimmer only while live; the final tally lingers and should not move.
     el.classList.toggle("cg-shimmer", state.artifactGenerating);
     var parts = [];
-    // Artifacts, not cells: this has to agree with the panel's card count badge
-    // sitting right next to it (a multi-timestamp cell is several artifacts).
+    // Artifacts, not cells, to agree with the card-count badge beside it.
     if (hasCount) {
       parts.push(
         _genLastDone + " / " + clipgenPluralUnit(_genLastTotal, "artifact", "artifacts")
@@ -3698,8 +3461,7 @@
   }
 
   function _tickStudioEta() {
-    // The ticker's isActive guard (isAnyStudioJobRunning) self-stops it, so this
-    // only runs while a job is live.
+    // The ticker's isActive guard stops it once no job is live.
     _paintReelElapsed();
     _paintGenerateProgress();
     _paintBuildElapsed();
@@ -3776,11 +3538,7 @@
       setCardQueued(reelCards[i]);
     }
 
-    // Progress aggregator. Reel work has two phases: per-clip generation
-    // (weighted 0.7 — most of the wall time) followed by concatenation (0.3,
-    // the re-encode pass when resolutions/codecs differ). Weights are an
-    // estimate; the bar stays monotonic because clip progress reaches 1.0
-    // before concat starts.
+    // Two phases: clips 0.7, concat 0.3; clips finish first, so the bar stays monotonic.
     var totalClips = 0;
     var clipsDone = 0;
     var concatFraction = 0;
@@ -3840,9 +3598,7 @@
         concatFraction = typeof data.progress === "number" ? data.progress : 0;
         updateProgress();
       } else if (data.phase === "done") {
-        // Fill the concat segment to 100% — the stream-copy concat path emits
-        // no progress events, so without this the bar would be cleared by
-        // finish() while still showing ~70%. Final {"ok": ...} line follows.
+        // Stream-copy concat emits no progress; fill to 100% before the final line.
         concatFraction = 1;
         updateProgress();
       } else if (data.ok !== undefined || data.error !== undefined) {
@@ -3858,9 +3614,7 @@
     apiPostNDJSON(endpoint, reelBody, { onLine: handleLine })
       .then(finish)
       .catch(function (err) {
-        // Any 4xx/5xx (including 409 "reel already in progress") is a JSON
-        // error body, not an NDJSON stream — apiPostNDJSON delivers it as
-        // err.bodyText; parse it back into the payload shape finish() reads.
+        // 4xx/5xx (e.g. 409 in-progress) arrive as JSON in err.bodyText; parse into the payload.
         if (err && err.status >= 400) {
           try {
             finalPayload = JSON.parse(err.bodyText);
@@ -4017,9 +3771,7 @@
 
   var _highlightsBtnOrigHTML = "";
 
-  // Collapse the highlights duration drawer without running the job (Escape,
-  // mirroring the confirm-button flow in onBuildHighlights). Returns whether
-  // there was an open drawer to cancel.
+  // Close the highlights drawer without running (Escape); returns whether one was open.
   function cancelHighlightsDrawer() {
     var drawer = qs("#highlightsDurationDrawer");
     if (!drawer || !drawer.classList.contains("open")) return false;
@@ -4211,13 +3963,8 @@
     // Escape is handled by the modal focus trap opened in openGalleryDialog.
   }
 
-  // ---- Modal focus trap (shared by the blocking overlays) ----
-  //
-  // Thin delegators onto utils.js's openBlockingModal, since Studio's overlays all
-  // want the full lifecycle (Tab trap, Escape close, focus restore to the
-  // trigger); role=dialog + aria-modal live statically in the HTML. Studio never
-  // stacks these, so the helper's single active modal suffices, and release() is
-  // idempotent so any dismiss path can call closeModalTrap safely.
+  // ---- Modal focus trap ----
+  // openBlockingModal delegators; Studio never stacks modals, release() is idempotent.
   function openModalTrap(overlayEl, onEscape) {
     return openBlockingModal(overlayEl, {
       onEscape: onEscape,
@@ -4284,12 +4031,8 @@
     });
   }
 
-  // ---- Build status (non-blocking corner card for viewer builds) ----
-  //
-  // Unlike #statusOverlay, this never blocks the page. showBuildStatus drives
-  // the in-progress state (spinner + optional Cancel); showBuildResult flips
-  // the same card to the success/error state (Open + Dismiss). The cleanup ref
-  // mirrors _confirmCleanup so repeated builds don't stack Cancel listeners.
+  // ---- Build status corner card ----
+  // Cleanup ref stops repeated builds stacking Cancel listeners.
 
   var _buildStatusFile = "";
   var _buildStatusCancelCleanup = null;
@@ -4353,8 +4096,7 @@
     if (_buildStatusCancelCleanup) _buildStatusCancelCleanup();
     _buildEtaTracker.reset();
     var buildEl = qs("#buildStatus");
-    // The elapsed clock is blanked with the hide, not before it, so it doesn't
-    // vanish out from under a card that is still on screen fading.
+    // Blank the clock with the hide, not before, so it doesn't vanish mid-fade.
     popModalOut(buildEl, qs(".build-status-card"), function () {
       qs("#buildElapsed").textContent = "";
       buildEl.classList.add("hidden");
@@ -4375,9 +4117,7 @@
     var yesBtn = qs("#confirmYes");
     var noBtn = qs("#confirmNo");
 
-    // Everything logical unwinds synchronously, so handleYes' onYes() — which
-    // usually opens another overlay — sequences against a released trap and an
-    // unbound Yes/No pair. Only the visual hide trails the fade.
+    // Unwind synchronously so onYes() can open another overlay; only the hide trails.
     function cleanup() {
       closeModalTrap(confirmEl);
       yesBtn.removeEventListener("click", handleYes);
@@ -4411,8 +4151,7 @@
 
   // ---- Artifact log ----
 
-  // Same open/close path as the dialogs above — the log's veil is no longer
-  // hand-rolled here, it is the shared .cg-modal-veil that popModalIn/Out ramps.
+  // Same path as the dialogs; the veil is the shared .cg-modal-veil.
   function openLog() {
     var overlay = qs("#logOverlay");
     popModalIn(overlay, qs(".log-panel"));
@@ -4423,10 +4162,7 @@
 
   function closeLog() {
     var overlay = qs("#logOverlay");
-    // Unlike the dialogs, the trap and the topnav gate are released with the
-    // visual hide rather than immediately: this is a panel, and focus escaping
-    // to the trigger while the veil is still up reads as the modal already being
-    // gone. popModalOut's generation guard is what makes deferring them safe.
+    // Release the trap with the hide, not before; popModalOut's generation guard makes it safe.
     popModalOut(overlay, qs(".log-panel"), function () {
       closeModalTrap(overlay);
       overlay.classList.add("hidden");
@@ -4473,9 +4209,7 @@
       var a = items[k];
       var row = el("div", "log-entry");
 
-      // Reels persisted to the manifest have no "type" field \u2014 detect them by
-      // their components array or "id":"reel:..." shape. Viewers are tagged
-      // by the push sites in this file.
+      // Manifest reels carry no "type": detect via components or "reel:" id.
       var badgeType;
       if (a.type === "viewer") badgeType = "viewer";
       else if (a.components || (a.id || "").indexOf("reel:") === 0) badgeType = "reel";
@@ -4516,11 +4250,7 @@
     return null;
   }
 
-  // Rewrite the #artifactFormat option labels so the "(.ext)" suffix reflects
-  // the current output-format settings (FILEFORMAT/SCREENSHOT_FORMAT/GIF_FORMAT).
-  // Prefers state.settingsData (fresh after a save) and falls back to
-  // CLIPGEN_CONFIG (initial load, before the settings modal has been opened).
-  // The option `value`s (clip/screen/gif) are stable and untouched.
+  // Option "(.ext)" labels follow the output-format settings; settingsData first, CLIPGEN_CONFIG fallback.
   function _formatExt(name, fallback) {
     var s = _findSetting(name);
     return s && s.value ? s.value : fallback;
@@ -4584,9 +4314,7 @@
     if (applyCrossRefSetting(null, state.settingsData)) rerenderCrossRefs();
   }
 
-  // Shared by the settings modal and the command palette's cross-ref command.
-  // A flip while a card is hovered (palette, no mouse move) leaves the tooltip
-  // painted; rebuilding the cards alone does not take it down.
+  // Also used by the palette; a hovered tooltip survives the rebuild, so hide it.
   function rerenderCrossRefs() {
     var tooltip = qs("#trIntakeTooltip");
     if (tooltip) tooltip.classList.add("hidden");
@@ -4636,8 +4364,7 @@
           var coIntakeTab = qs('.preview-tab[data-tab="composer-intake"]');
           if (coIntakeTab) coIntakeTab.classList.remove("hidden");
         }
-        // Unlike the other three surfaces (always mounted), this tab only
-        // means anything once a mind map has actually been opened.
+        // This tab only exists once a mind map has been opened.
         if (data.mindnode_loaded) {
           var mnIntakeTab = qs('.preview-tab[data-tab="mindnode-intake"]');
           if (mnIntakeTab) mnIntakeTab.classList.remove("hidden");
@@ -4654,11 +4381,7 @@
   var _SS_THUMB_MAX = 3;
   var _ssThumbCache = {}; // url -> objectURL | "error"
 
-  // Cache keys are unique per participant+timestamp, so the same-key revoke in
-  // the fetch handler below almost never fires. Without this teardown every
-  // source frame lazily loaded during a session stays pinned for the document's
-  // lifetime — and Studio is the longest-lived, most thumbnail-heavy page.
-  // Mirrors viewer.js's _thumbCache/_filmstripCache handler.
+  // Revoke on pagehide or every lazily loaded thumb stays pinned (mirrors viewer.js).
   window.addEventListener("pagehide", function () {
     Object.keys(_ssThumbCache).forEach(function (key) {
       var url = _ssThumbCache[key];
@@ -4675,8 +4398,7 @@
     return "../screenspace/api/video/frame/" + encodeURIComponent(participant) + "/" + timestamp + "?w=200";
   }
 
-  // All cards (artifact / reel bottom-strip and Studio Intake) share the
-  // `.queue-card-thumb` element for lazy source-frame loading.
+  // Every card shares .queue-card-thumb for lazy source-frame loading.
   var SS_THUMB_SELECTOR = ".queue-card-thumb";
 
   function ssProcessQueue() {
@@ -4698,8 +4420,7 @@
           .catch(function () {
             _ssThumbCache[entry.url] = "error";
             if (!entry.img.parentNode) return;
-            // Entries may carry a custom error handler (e.g. the stash-folder
-            // icon just drops the img); otherwise fall back to the queue-card UI.
+            // Custom onError (e.g. stash-folder icon) beats the queue-card fallback.
             if (entry.onError) { entry.onError(entry); return; }
             entry.img.remove();
             entry.thumbEl.appendChild(el("span", "", "\u2715"));
@@ -4727,10 +4448,7 @@
     ssProcessQueue();
   }
 
-  // Enqueue a thumbnail with a custom error handler, for surfaces where the
-  // default .queue-card error UI (✕ badge + error class) doesn't apply — e.g.
-  // the stacked stash-folder icon, which just removes the failed img. Shares
-  // the same throttle (_SS_THUMB_MAX) and object-URL cache as ssEnqueueThumb.
+  // Enqueue with a custom error handler; shares ssEnqueueThumb's throttle and cache.
   function ssEnqueueThumbCustom(img, participant, timestamp, onError) {
     var url = ssThumbUrl(participant, timestamp);
     var cached = _ssThumbCache[url];
@@ -4770,9 +4488,8 @@
     _ssThumbQueue = [];
   }
 
-  // ---- Intake satellite delegators (studio-intake.js) ----
-  // Same-named guarded wrappers so bare hub call sites stay unchanged; the real
-  // implementations live in studio-intake.js, published onto window.ClipgenStudio.
+  // ---- Intake delegators — studio-intake.js ----
+  // Guarded wrappers; bare hub call sites stay unchanged.
   function initIntake() { return STUDIO.initIntake && STUDIO.initIntake.apply(null, arguments); }
   function pollScreenspaceIntake() { return STUDIO.pollScreenspaceIntake && STUDIO.pollScreenspaceIntake.apply(null, arguments); }
   function pollTranscriptIntake() { return STUDIO.pollTranscriptIntake && STUDIO.pollTranscriptIntake.apply(null, arguments); }
@@ -4787,9 +4504,7 @@
   function renderIntake() { return STUDIO.renderIntake && STUDIO.renderIntake.apply(null, arguments); }
   function _syncMarkCategoriesFromSettings() { return STUDIO._syncMarkCategoriesFromSettings && STUDIO._syncMarkCategoriesFromSettings.apply(null, arguments); }
 
-  // buildXrefBadges / xrefBadgeIcon / XREF_ICON_BASE moved to utils.js \u2014 the
-  // Overview page (Convergence, Map drill-down) renders the same badge stacks.
-  // Bare references below resolve to the utils.js globals.
+  // buildXrefBadges / xrefBadgeIcon / XREF_ICON_BASE live in utils.js (shared with Overview).
 
   function initTopNavActions() {
     if (!window.ClipgenTopNav) return;
@@ -4823,8 +4538,7 @@
     });
   }
 
-  // Command palette (command-palette.js): additions beyond the auto-ingested
-  // quick actions — Generate, preview-tab switchers, the Artifact Log.
+  // Command palette additions beyond the auto-ingested quick actions.
   function initCommandPalette() {
     if (!window.ClipgenCommandPalette) return;
     window.ClipgenCommandPalette.setParticipants(function () {
@@ -4847,9 +4561,7 @@
         run: function () { tabEl().click(); },
       };
     }
-    // Sidebar VIEWS (All / Highlights / Positive) drive state.filters.severities;
-    // replicate the sidebar row's mutate → persist → re-render sequence so the
-    // palette command has the exact same effect as clicking the row.
+    // Mirror the sidebar row's mutate → persist → re-render sequence.
     function applyFilterChange() {
       persistSidebarFilters();
       renderSidebar();
@@ -4930,13 +4642,9 @@
   }
 
   document.addEventListener("DOMContentLoaded", function () {
-    // Apply mask-image to every static [data-icon] element (mirrors what
-    // createBtn does for primitives — needed for the bottom-strip toolbar
-    // buttons that are written as static HTML).
+    // Mask static [data-icon] elements (the bottom-strip toolbar is static HTML).
     applyIconMasksIn(document);
-    // /studio/#tab=intake style deep links (command palette): seed the stored
-    // active tab so restoreStoredPreviewTab applies it — including its retry
-    // once a hidden intake tab is revealed by the pollers.
+    // #tab= deep links seed the stored tab so restoreStoredPreviewTab (and its retry) applies it.
     var hashTab = clipgenHashTab();
     if (hashTab) setStoredUIStateField("studio", "activeTab", hashTab);
     setActiveTabAttr(state.activePreviewTab);
@@ -4963,12 +4671,7 @@
     initTopNavActions();
     initCommandPalette();
     initIntake();
-    // Live counter polls — two combined per-domain endpoints, each carrying its
-    // status dot + curation payload, keep the start-overlay pills and sub-tab
-    // badges fresh regardless of which sub-tab is visible. createPoller handles
-    // visibility-pause and (via maxIntervalMs) idle backoff: 5s while work is
-    // active/changing, easing to 30s when everything is quiet. Handles live on
-    // `state` so on-demand user actions can wake() them back to the fast cadence.
+    // Pollers back off 5s → 30s when quiet; handles live on state for wake().
     state.ssIntakePoller = createPoller(pollScreenspaceIntake, 5000, { maxIntervalMs: 30000, label: "studio.ssIntake" });
     state.trIntakePoller = createPoller(pollTranscriptIntake, 5000, { maxIntervalMs: 30000, label: "studio.trIntake" });
     state.coIntakePoller = createPoller(pollComposerIntake, 5000, { maxIntervalMs: 30000, label: "studio.coIntake" });
@@ -4977,10 +4680,7 @@
     state.trIntakePoller.start();
     state.coIntakePoller.start();
     state.mnIntakePoller.start();
-    // One-shot job-status fetch on page load picks up any reel/generate
-    // build that's still running in the background after the user navigated
-    // away to a sibling frontend and back. The poll's own success handler
-    // starts the recurring timer if a job is still in flight.
+    // One-shot job-status fetch re-attaches to a background build; it self-schedules if busy.
     pollJobStatus();
     document.addEventListener("visibilitychange", function () {
       if (document.hidden) {
@@ -5000,9 +4700,7 @@
     });
   });
 
-  // Hub → studio-intake.js: state + the hub helpers the intake satellite calls.
-  // (Pure utils.js globals reach the satellite via the scope chain; only
-  // hub-local functions need publishing here.)
+  // Hub → studio-intake.js. utils.js globals reach it via scope; only hub-locals need publishing.
   STUDIO.state = state;
   STUDIO.buildQueueCardThumb = buildQueueCardThumb;
   STUDIO.buildXrefBadges = buildXrefBadges;
@@ -5024,9 +4722,7 @@
   STUDIO.ssClearPending = ssClearPending;
   STUDIO.kbPaintCursor = kbPaintCursor;
 
-  // Hub → studio-generate.js: the card painters (shared with the reel/build
-  // path), the artifact-status/result helpers, and the shared elapsed-time
-  // trackers the Generate flow drives.
+  // Hub → studio-generate.js: card painters, status/result helpers, elapsed trackers.
   STUDIO.setArtifactGenerating = setArtifactGenerating;
   STUDIO.showResult = showResult;
   STUDIO.revealStatusOverlay = revealStatusOverlay;

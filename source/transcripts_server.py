@@ -92,38 +92,27 @@ FlaskResponse = Response | tuple[Response, int]
 _manifest: dict[str, Any] = {}
 _worker: transcripts.TranscriptWorker | None = None
 _participants: list[dict[str, Any]] = []
-# What _participants was built from: {"sheet_context", "dir", "mtime"}, or None
-# before _init_transcripts_state has run (the same "not configured yet" state
-# _worker = None expresses). While None, _refresh_participants() is a no-op, so a
-# directly-assigned _participants survives.
+# Source of _participants; None until _init_transcripts_state runs, which
+# makes _refresh_participants() a no-op.
 _participant_source: dict[str, Any] | None = None
 _participants_lock = threading.Lock()
 _manifest_lock = threading.Lock()
-# Task ids already merged into the in-memory manifest. Merging is idempotent per
-# task, so a later persist can't re-apply frozen segments over in-memory edits;
-# re-transcription mints a fresh id, so its segments still merge (and win) once.
+# Merged once per task id, so a persist never re-applies frozen segments over edits.
 _merged_task_ids: set[str] = set()
-# Participants merged but whose completion side effects (clearing stale agent
-# fields + starting the agent chain) haven't run. The merge is reachable from
-# _on_task_complete *or* a debounced _do_persist — whichever wins _manifest_lock
-# does it — so the reaction drains this queue rather than keying off the caller.
-# Guarded by _manifest_lock.
+# Merged participants whose completion side effects haven't run; _on_task_complete
+# drains it. Guarded by _manifest_lock.
 _pending_chain_pids: list[str] = []
 _transcript_model_warming = False
 _transcript_model_warming_lock = threading.Lock()
-# Thinking-agent orchestrator: owns per-agent in-flight, cancel-event and thread
-# state. Routes call its methods; nothing else reaches into its internals.
+# Thinking-agent orchestrator; routes call its methods, nothing reaches into its internals.
 _orchestrator: "AgentOrchestrator"
 
-# After a Stop, a delayed unload evicts the model if no follow-up run
-# starts soon (model name → Timer). A new run for the same model cancels the
-# pending unload, so rapid stop→run cycles don't churn.
+# Delayed post-Stop unload per model name; a new run for it cancels the timer.
 _pending_model_unloads: dict[str, threading.Timer] = {}
 _pending_model_unloads_lock = threading.Lock()
 
-# In-flight GGUF downloads by model value: {status, completed, total, done,
-# succeeded, error}. The UI polls /api/models/llm/download-status after kicking
-# off the download, so a model only ever lands on explicit user confirmation.
+# In-flight GGUF downloads by model value; the UI polls
+# /api/models/llm/download-status.
 _llm_download_status: dict[str, dict[str, Any]] = {}
 _llm_download_lock = threading.Lock()
 
@@ -175,8 +164,8 @@ def _agent_model(agent_key: str) -> str | None:
 
 
 def _step_state_transcription(entry: dict[str, Any]) -> str:
-    # Only the persisted result is known here; live running/queued/failed for
-    # Whisper is merged in on the frontend from /api/transcribe/status.
+    # Persisted state only; the frontend merges live Whisper status from
+    # /api/transcribe/status.
     return "done" if entry.get("segments") else "idle"
 
 
@@ -214,9 +203,7 @@ def _invalidate_dependents(entry: dict[str, Any], agent: thinking_agents.Agent) 
     ``_manifest_lock``.
     """
     for dep in thinking_agents.AGENTS:
-        # depends_on holds agent *keys* (the convention every reader now
-        # shares); the four built-ins have key == manifest_field, which is
-        # what let a field-based check here pass by accident.
+        # depends_on holds agent keys, not manifest fields.
         if agent["key"] not in dep["depends_on"]:
             continue
         if dep.get("on_upstream_change") == "stale":
@@ -240,17 +227,8 @@ transcripts_bp = Blueprint("transcripts", __name__)
 utils.register_static_routes(
     transcripts_bp,
     "transcripts.html",
-    # Resolved per request, never snapshotted at init: POST /api/dirs moves
-    # config.INPUT_DIR mid-session without re-running _init_transcripts_state, and
-    # _refresh_participants already follows. A snapshot left the page listing
-    # participants from the new directory while /media/<file> served the old one,
-    # so every video 404'd. Same reasoning as studio_bp's.
-    #
-    # This hit *every* desktop launch, not just folder-switchers: at startup no
-    # input dir is configured, so get_effective_input_dir() falls back to
-    # Path.cwd() — which cli.main() has chdir'd to the app's folder. Snapshotting
-    # that (e.g. the Desktop) gave a real directory holding no videos, which is
-    # why it read as 404 rather than "not configured".
+    # Resolved per request: POST /api/dirs moves config.INPUT_DIR mid-session, and
+    # a snapshot 404'd every video.
     media_dir_getter=lambda: str(utils.get_effective_input_dir()),
     media_error="Input directory not configured",
     icons=True,
@@ -265,9 +243,8 @@ remux_server.register_remux_routes(
 # ---- Participants ----
 
 
-# The refresh/find pair over this module's _participants globals; the factory
-# reads them as module attributes so _init_transcripts_state and tests that
-# monkeypatch them keep working. See server_utils.make_participant_cache.
+# Reads this module's _participants globals as attributes, so monkeypatching
+# tests keep working. See server_utils.make_participant_cache.
 _refresh_participants, _find_participant_record = make_participant_cache(
     sys.modules[__name__],
     input_dir_getter=utils.get_effective_input_dir,
@@ -315,38 +292,31 @@ def api_participants() -> FlaskResponse:
                 info["language"] = entry.get("language", "")
                 info["model"] = entry.get("model", "")
                 info["transcribed_at"] = entry.get("transcribed_at", "")
-                # What the last run actually transcribed; the picker shows it back
-                # so an auto-detect deviation is explainable afterwards.
+                # What the last run transcribed; the picker shows it back.
                 info["audio_index"] = entry.get("audio_index", 0)
                 info["audio_track_label"] = entry.get("audio_track_label", "")
                 info["has_summary"] = bool(entry.get("summary"))
             result.append(info)
 
-    # Why each agent's last run stored nothing. The pills poll is the one
-    # surface watching every participant, so it is where a failure reaches the
-    # user however the run was triggered. Outside the lock: the orchestrator
-    # guards its own state with the same (non-reentrant) _manifest_lock.
+    # Last-run agent failures; the pills poll watches every participant. Outside
+    # the lock: errors_for takes _manifest_lock.
     for info in result:
         info["agent_errors"] = _orchestrator.errors_for(info["id"])
 
-    # Per-file stat()s and the (ffprobe-backed on a cache miss) multi-part
-    # timeline probe run after the lock is released — this I/O previously
-    # blocked every other route for the duration of the probes.
+    # stat() and ffprobe I/O runs outside the lock; it used to block every route.
     for info in result:
         if not info["has_video"]:
             continue
         video_paths = info["video_paths"]
-        # Combine every part's mtime so the frontend cache-bust (?v=) on any
-        # part URL invalidates when a non-first part is replaced too.
+        # Sum every part's mtime so replacing a non-first part busts the ?v= cache.
         try:
             info["video_version"] = sum(
                 Path(vp).stat().st_mtime_ns for vp in video_paths
             )
         except OSError:
             info["video_version"] = None
-        # Multi-video: expose the timeline so the frontend can switch <video>
-        # source per part and seek the local offset. Omitted for a single video
-        # (no probe), leaving the frontend on its one-file path.
+        # Multi-part timeline lets the frontend switch <video> per part; omitted
+        # for one video.
         if len(video_paths) >= 2:
             timeline = video.timeline_or_none(video_paths)
             if timeline is not None:
@@ -383,11 +353,8 @@ def api_participants() -> FlaskResponse:
                 break
         info["has_stale_artifacts"] = has_stale
 
-    # ``has_sheet`` gates the off-sheet badge: with no sheet every entry is
-    # ``in_sheet: False``, and marking them all would be noise.
-    # Bootstrap channel for shared frontend config (hotkey overrides etc.),
-    # mirroring screenspace/workflows: the page's only other config path is the
-    # cross-frontend /studio/api/sheet poll, which is status-gated and late.
+    # has_sheet gates the off-sheet badge; config bootstraps shared frontend
+    # config (hotkey overrides).
     return ok(
         participants=result,
         has_sheet=bool(_participant_source and _participant_source["sheet_context"]),
@@ -401,12 +368,8 @@ def api_participants() -> FlaskResponse:
 
 # ---- Corrected-segments cache ----
 #
-# apply_corrections() is pure given (segments, corrections) but ran on every read
-# — api_transcript per request, api_search across *all* participants per query.
-# Corrections change rarely and segments are static post-transcription, so memoize
-# per participant behind a version counter bumped on any corrections/segments
-# change. Its own lock covers both the lock-holding caller (api_search) and the
-# lock-free one; lock order is always _manifest_lock -> _corrected_cache_lock.
+# Memoizes apply_corrections() per participant; lock order is _manifest_lock ->
+# _corrected_cache_lock.
 _corrected_cache: dict[str, tuple[int, list[Any]]] = {}
 _friction_cache: dict[str, tuple[int, dict[str, Any]]] = {}
 _corrected_cache_lock = threading.Lock()
@@ -486,8 +449,8 @@ def api_transcript(participant: str) -> FlaskResponse:
         entry = _manifest.get("source_transcripts", {}).get(participant)
         if not entry or not entry.get("segments"):
             return err("No transcript for participant", 404)
-        # Snapshot under the lock so a concurrent edit/transcribe/mark can't
-        # mutate segments, corrections, or marks mid-iteration (mirrors api_vtt).
+        # Snapshot under the lock; concurrent edits must not mutate mid-iteration
+        # (mirrors api_vtt).
         raw_segments = list(entry["segments"])
         corrections = list(_manifest.get("corrections", []))
         marks_snapshot = list(_manifest.get("marks", []))
@@ -662,17 +625,12 @@ def api_audio_track(participant: str, idx: int) -> FlaskResponse:
     return response
 
 
-# One embed run at a time, so the shared cancel event always belongs to exactly
-# one stream: a second tab's Stop must not abort a run it cannot see. Claimed
-# atomically under _embed_lock (check-and-set, never check-then-act).
+# Single embed slot, claimed check-and-set under _embed_lock; the cancel event
+# belongs to exactly one run.
 _embed_cancel_event = threading.Event()
 _embed_lock = threading.Lock()
 _embed_busy = False
-# Identifies the run currently holding the slot. The release is attempted twice
-# per run (the generator's finally, and the response's call_on_close for the
-# case where the generator is never started at all), and a bare release would
-# let the second of those clear a *successor* run's claim. Releasing by token
-# makes both attempts idempotent and scoped to their own run.
+# Run token: the release runs twice per run and must not clear a successor's claim.
 _embed_owner: str | None = None
 
 
@@ -735,8 +693,8 @@ def _embed_subtitle_for_participant(
             "error": "Source video not found",
         }
     if len(video_paths) > 1:
-        # The global transcript spans several source files; muxing it back into a
-        # single file would require concatenating the parts first. Not supported.
+        # A multi-part transcript spans several files; muxing would need
+        # concatenation first.
         return {
             "participant": participant,
             "ok": False,
@@ -773,9 +731,8 @@ def _embed_subtitle_for_participant(
 
     tmp_path = ""
     try:
-        # delete=False + the explicit unlink below: ffmpeg reopens the sidecar by
-        # path once we've closed it, which Windows won't allow while the
-        # NamedTemporaryFile handle is still open.
+        # delete=False: Windows won't let ffmpeg reopen the sidecar while our
+        # handle is open.
         with tempfile.NamedTemporaryFile(
             mode="w", suffix=".srt", delete=False, encoding="utf-8"
         ) as tmp:
@@ -796,11 +753,8 @@ def _embed_subtitle_for_participant(
                 pass
 
     if not ok:
-        # get_unique_filename reserves by *creating* an empty placeholder, so
-        # aborting without releasing leaves a 0-byte file that looks like a
-        # finished export — one per participant on a whole-study run whose
-        # container ffmpeg cannot mux — and pushes the next run's names onto
-        # -1/-2 suffixes.
+        # get_unique_filename reserves by creating an empty placeholder; release
+        # it or a 0-byte fake export remains.
         files.release_reservation(output_path)
         return {
             "participant": participant,
@@ -854,17 +808,15 @@ def api_embed_subtitles() -> FlaskResponse:
                     {
                         "total": len(participants),
                         "output_dir": str(output_dir),
-                        # The client echoes this in /cancel so a late cancel
-                        # POST for this run can never stop a successor run.
+                        # Echoed in /cancel so a late cancel cannot stop a
+                        # successor run.
                         "token": embed_token,
                     }
                 )
                 + "\n"
             )
-            # Sequential on purpose: every mux is a whole-file stream copy, so
-            # running them concurrently only contends for the same disk. That
-            # also fixes the cancellation granularity — ffmpeg cannot be
-            # interrupted mid-copy, so Stop takes effect between participants.
+            # Sequential: muxes contend for one disk; ffmpeg cannot be interrupted,
+            # so Stop lands between participants.
             for idx, pid in enumerate(participants):
                 if cancel_flag():
                     break
@@ -875,14 +827,10 @@ def api_embed_subtitles() -> FlaskResponse:
                 yield json.dumps(outcome) + "\n"
             if cancel_flag():
                 yield json.dumps({"cancelled": True}) + "\n"
-            # Terminal sentinel. A generator that dies mid-run just truncates
-            # the body, and a truncated NDJSON stream is indistinguishable from
-            # a complete one to the reader — the client would report the
-            # partial count as a success. Its absence is the failure signal.
+            # Terminal sentinel; a truncated NDJSON stream otherwise reads as complete.
             yield json.dumps({"done": True}) + "\n"
         finally:
-            # Also runs when the client disconnects mid-stream, so a closed tab
-            # cannot wedge the slot for the rest of the session.
+            # Also runs on client disconnect, so a closed tab cannot wedge the slot.
             _release_embed_slot(embed_token)
 
     response = Response(
@@ -890,11 +838,8 @@ def api_embed_subtitles() -> FlaskResponse:
         mimetype="application/x-ndjson",
         headers={"X-Accel-Buffering": "no"},
     )
-    # The generator's finally covers a stream that was started and then dropped.
-    # It does *not* cover one that was never started: closing an unstarted
-    # generator just marks it closed, running no body at all. call_on_close
-    # fires whenever the response is torn down either way, and the token makes
-    # the double release harmless.
+    # An unstarted generator never runs its finally; the token makes this double
+    # release harmless.
     response.call_on_close(lambda: _release_embed_slot(embed_token))
     return response
 
@@ -915,14 +860,12 @@ def api_embed_subtitles_cancel() -> FlaskResponse:
     return ok()
 
 
-# One normalize run at a time — same single-slot shape as the embed run above
-# (and deliberately a *separate* slot: an embed reads sources, a normalize
-# rewrites them, and neither should be blocked by the other's queue position).
+# Single normalize slot, separate from the embed slot: one reads sources, the
+# other rewrites them.
 _normalize_cancel_event = threading.Event()
 _normalize_lock = threading.Lock()
 _normalize_busy = False
-# Token-scoped release, same rationale as _embed_owner: the release is attempted
-# twice per run and must never clear a successor run's claim.
+# Token-scoped release, same rationale as _embed_owner.
 _normalize_owner: str | None = None
 
 
@@ -966,8 +909,7 @@ def _resolve_normalize_indices(
     count = int(props.get("audio_track_count") or 0)
     if count <= 1:
         return [0]
-    # isinstance rather than equality so ty narrows tracks to list[int] below;
-    # the route already validated any string here is "all" or "auto".
+    # isinstance so ty narrows tracks to list[int]; the route validated the strings.
     if isinstance(tracks, str):
         if tracks == "all":
             return list(range(count))
@@ -1017,8 +959,8 @@ def _normalize_audio_for_participant(
             failures.append(f"{Path(path).name}: cancelled")
             break
         if video.original_backup_path(path).exists():
-            # The slot is shared with remux, so this cannot prove the audio is
-            # normalized — the same accepted ambiguity as _already_remuxed.
+            # Shared with remux, so this cannot prove normalization; same
+            # ambiguity as _already_remuxed.
             already += 1
             continue
         props = video.probe_video_properties(path)
@@ -1110,8 +1052,8 @@ def api_normalize_audio() -> FlaskResponse:
                 json.dumps({"total": len(participants), "token": normalize_token})
                 + "\n"
             )
-            # Sequential on purpose: each rewrite reads and rewrites a whole
-            # source file, so concurrency only contends for the same disk.
+            # Sequential: each rewrite streams a whole file, so concurrency only
+            # contends for the disk.
             for idx, pid in enumerate(participants):
                 if cancel_flag():
                     break
@@ -1123,8 +1065,7 @@ def api_normalize_audio() -> FlaskResponse:
             # Terminal sentinel; its absence is the client's truncation signal.
             yield json.dumps({"done": True}) + "\n"
         finally:
-            # Also runs when the client disconnects mid-stream, so a closed tab
-            # cannot wedge the slot for the rest of the session.
+            # Also runs on client disconnect, so a closed tab cannot wedge the slot.
             _release_normalize_slot(normalize_token)
 
     response = Response(
@@ -1132,8 +1073,7 @@ def api_normalize_audio() -> FlaskResponse:
         mimetype="application/x-ndjson",
         headers={"X-Accel-Buffering": "no"},
     )
-    # Covers a generator that is torn down before it ever starts; the token
-    # makes the double release harmless (see the embed route).
+    # Covers a generator torn down before it starts (see the embed route).
     response.call_on_close(lambda: _release_normalize_slot(normalize_token))
     return response
 
@@ -1152,12 +1092,9 @@ def api_normalize_audio_cancel() -> FlaskResponse:
     return ok()
 
 
-# ---- AI thinking agents (summary / citations / friction) ----
+# ---- AI thinking agents ----
 #
-# Three generic routes cover every agent in thinking_agents.AGENTS, keyed by
-# <agent_key>, so appending an Agent needs no new endpoints here. Summary keeps
-# two extra routes below that are genuinely unique to it (the SSE token stream
-# and the user-edit PUT).
+# Generic routes keyed by <agent_key> cover every thinking_agents.AGENTS entry.
 
 
 def _deterministic_friction(
@@ -1186,8 +1123,7 @@ def _deterministic_friction(
     """
     if agent_key != "friction" or not raw_segments:
         return None
-    # Memoized like _corrected_segments: the agent poll refetches this every
-    # 3s for the whole LLM run, re-scoring thousands of segments for nothing.
+    # Memoized: the agent poll refetches this every 3s for the whole run.
     with _corrected_cache_lock:
         if version is None:
             version = _corrections_version
@@ -1254,11 +1190,8 @@ def api_agent_get(agent_key: str, participant: str) -> FlaskResponse:
             "started_at": _orchestrator.started_at(participant, agent_key),
             "partial": _orchestrator.partial_text(participant, agent_key),
         }
-        # Regenerate pops the stored field before the run, so without this the
-        # scores vanish for the whole run even though nothing about them depends
-        # on the LLM. Any client refetch mid-run (tab refocus, participant
-        # re-select, page reload) would otherwise blank the histogram, chips,
-        # transcript tinting and timeline band until the agent finished.
+        # Regenerate pops the stored field first; without this the scores vanish
+        # for the whole run.
         deterministic = _deterministic_friction(
             agent_key,
             participant,
@@ -1269,9 +1202,7 @@ def api_agent_get(agent_key: str, participant: str) -> FlaskResponse:
         if deterministic is not None:
             resp["friction"] = deterministic
         return jsonify(resp)
-    # Nothing stored and nothing running: if the last run failed, say why. The
-    # reason was previously a terminal warning only, so the page just showed an
-    # empty panel and the user had no idea an unloadable model was the cause.
+    # Nothing stored, nothing running: report why the last run failed.
     error = _orchestrator.error_for(participant, agent_key)
     deterministic = _deterministic_friction(
         agent_key,
@@ -1308,11 +1239,8 @@ def api_agent_regenerate(agent_key: str, participant: str) -> FlaskResponse:
         return jsonify({"ok": False}), 404
     if _orchestrator.is_generating(participant, agent_key):
         return ok(generating=True)
-    # Abort in-flight dependents *before* clearing their fields: a citations
-    # run computed from the summary being discarded would otherwise commit
-    # after the clear, sit on the entry looking current, and block the fresh
-    # chain from ever re-running it. (stop acquires _manifest_lock, so it
-    # cannot live inside the block below.)
+    # Stop dependents before clearing fields, or a stale run commits later; stop
+    # takes _manifest_lock.
     for dep in thinking_agents.AGENTS:
         if agent_key in dep["depends_on"]:
             _orchestrator.stop(dep["key"], participant)
@@ -1352,11 +1280,8 @@ def api_agent_stop(agent_key: str, participant: str) -> FlaskResponse:
 # ---- Summary-only routes (SSE token stream + user edit) ----
 
 
-# Server-side cadence for the summary token stream. The agent runs in the
-# orchestrator's daemon thread and appends tokens to the shared partial buffer;
-# this SSE generator samples that buffer in-process and pushes deltas to the
-# browser, so the client sees near-real-time word-by-word text over one
-# connection instead of hammering the GET poll.
+# Summary token stream cadence: the SSE generator samples the orchestrator's
+# partial buffer and pushes deltas.
 _SUMMARY_STREAM_TICK = 0.1  # seconds between buffer samples
 _SUMMARY_STREAM_START_GRACE = 2.0  # seconds to wait for the run to claim its slot
 
@@ -1382,9 +1307,8 @@ def api_summary_stream(participant: str) -> FlaskResponse:
                 sent = len(text)
                 yield f"data: {json.dumps({'partial': text})}\n\n"
             if not generating:
-                # Guard the open race: the client opens the stream right after
-                # regenerate claims the slot, but tolerate a brief window where
-                # is_generating hasn't flipped true yet before declaring done.
+                # Open race: regenerate may not have flipped is_generating yet;
+                # wait briefly before done.
                 if sent == 0 and time.monotonic() < deadline:
                     time.sleep(_SUMMARY_STREAM_TICK)
                     continue
@@ -1393,10 +1317,8 @@ def api_summary_stream(participant: str) -> FlaskResponse:
             time.sleep(_SUMMARY_STREAM_TICK)
 
     return Response(
-        # Timed, unlike the persistent channels in make_sse_channel: this stream
-        # is bounded — it returns on `done` when the run finishes — so its wall
-        # time is the client-observed generation time, not how long a tab stayed
-        # open.
+        # Timed, unlike make_sse_channel: this stream ends on `done`, so wall time
+        # is generation time.
         profiled_stream(stream_with_context(_events())),
         mimetype="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
@@ -1417,9 +1339,7 @@ def api_summary_save(participant: str) -> FlaskResponse:
         if not entry:
             return err("Participant not found", 404)
         entry["summary"] = summary_raw.strip()
-        # An edited summary feeds every downstream agent: clear citations and
-        # the report, flag friction stale — same invalidation as the summary
-        # regenerate route.
+        # An edited summary invalidates dependents exactly like the regenerate route.
         _invalidate_dependents(entry, summary_agent)
     _schedule_persist()
     return ok()
@@ -1452,9 +1372,8 @@ def api_corrections_add() -> FlaskResponse:
     with _manifest_lock:
         corrections = _manifest.setdefault("corrections", [])
 
-        # Check for an existing correction whose `to` chains into this `from`.
-        # e.g. existing "teh"→"the" + new "the"→"they" → update to "teh"→"they".
-        # If the update would make from == to, delete the correction instead.
+        # Chain into an existing correction: "teh"→"the" + "the"→"they" becomes
+        # "teh"→"they"; from == to deletes it.
         chained = None
         for c in corrections:
             if c.get("to", "").lower() == from_text.lower():
@@ -1479,8 +1398,7 @@ def api_corrections_add() -> FlaskResponse:
             corrections.append(correction)
 
         _bump_corrections_version()  # add/update/remove invalidates corrected cache
-    # Schedule the debounced write OUTSIDE _manifest_lock, like the other edit
-    # routes, so we never nest _manifest_lock -> the debounce timer lock.
+    # Schedule outside _manifest_lock so it never nests with the debounce timer lock.
     _schedule_persist()
     if removed_id is not None:
         return ok(correction=None, removed=removed_id)
@@ -1509,10 +1427,7 @@ def api_corrections_delete(correction_id: str) -> FlaskResponse:
 
 # ---- Known terms ----
 #
-# The study glossary: product names, features, jargon. Forwarded to Whisper as
-# hotwords on the next transcription so it spells them right the first time,
-# where a correction only rewrites a mistake after the fact. Terms never touch
-# stored text, so none of these routes bump the corrected-segments version.
+# Study glossary, forwarded to Whisper as hotwords; never touches stored text.
 
 
 @transcripts_bp.route("/api/known-terms")
@@ -1536,8 +1451,7 @@ def api_known_terms_add() -> FlaskResponse:
 
     with _manifest_lock:
         terms = _manifest.setdefault("known_terms", [])
-        # A duplicate is not an error — the user typed a term that is already
-        # covered, so the input should just clear.
+        # A duplicate is not an error; the input should just clear.
         duplicate = any(t.lower() == term.lower() for t in terms)
         if not duplicate:
             terms.append(term)
@@ -1563,12 +1477,9 @@ def api_known_terms_delete(term: str) -> FlaskResponse:
     return ok()
 
 
-# ---- Dictionary import / export ----
+# ---- Dictionary import/export ----
 #
-# Corrections and known terms travel together as one `type,from,to` CSV, plus a
-# global copy in the config dir so a house style-guide can seed a new study.
-# Import always merges: a study's own entries are never dropped by loading
-# someone else's file, and re-importing the same file is a no-op.
+# One `type,from,to` CSV plus a global config-dir copy; import always merges.
 
 _GLOBAL_DICTIONARY_FILE = "dictionary.json"
 
@@ -1727,19 +1638,14 @@ def _resolve_mark(
         }
     pid, idx_str = parts
 
-    # Try the persisted transcript first, resolving by the segment's stable id
-    # — never by the numeric suffix. Ids are assigned once at save and never
-    # rewritten, so a mark keeps pointing at the same segment even when later
-    # segments are added or edited; indexing by position would silently
-    # re-point every mark after any change to the list.
+    # Resolve by stable segment id, never by position, so marks survive list edits.
     src = _manifest.get("source_transcripts", {})
     entry = src.get(pid, {})
     segments = entry.get("segments", [])
     idx = next((i for i, s in enumerate(segments) if s.get("id") == seg_id), None)
     if idx is not None:
         corrections = _manifest.get("corrections", [])
-        # Correct the whole participant list once (memoized by corrections
-        # version) instead of recompiling the regex set per mark.
+        # Correct the whole list once (memoized) instead of per mark.
         corrected = _corrected_segments(pid, segments, corrections)
         seg = corrected[idx]
         return {
@@ -1751,9 +1657,7 @@ def _resolve_mark(
             "text": seg["text"],
         }
 
-    # Fall back to partial segments from a running transcription task. Partials
-    # carry no id fields (ids are minted at manifest save), so the streaming
-    # frontend derives "{pid}:{index}" positionally and the suffix is an index.
+    # Running-task partials carry no ids, so their suffix is a positional index.
     if partial_lookup:
         partial_segs = partial_lookup.get(pid, [])
         try:
@@ -1984,10 +1888,8 @@ def api_search() -> FlaskResponse:
     results: list[dict[str, Any]] = []
     counts: dict[str, int] = {}
 
-    # Snapshot every participant's segment list (and the corrections) under
-    # the lock, then run the regex correction pass and build the payload
-    # against the snapshots — on a cache miss that pass covers every
-    # participant's entire transcript and must not stall every other route.
+    # Snapshot under the lock; a cache-miss correction pass must not stall other
+    # routes.
     with _manifest_lock:
         src = _manifest.get("source_transcripts", {})
         corrections = list(_manifest.get("corrections", []))
@@ -2059,9 +1961,6 @@ def api_transcribe_warmup() -> FlaskResponse:
     if transcripts.is_transcription_model_loaded():
         return ok(already_loaded=True)
 
-    # Never download a model silently during prewarm. When the configured model
-    # isn't cached yet, skip and report it so the frontend can confirm the
-    # download with the user; a re-post with {"force": true} then proceeds.
     data = request.get_json(silent=True) or {}
     force = bool(data.get("force"))
     model = config.TRANSCRIBE_MODEL
@@ -2103,9 +2002,7 @@ def api_transcribe_model_status() -> FlaskResponse:
         warming = _transcript_model_warming
     return ok(
         loaded=transcripts.is_transcription_model_loaded(),
-        # OR in on-demand loads (a transcription task constructing the model)
-        # so a healthy load never reads as "not loaded, not warming" — the
-        # frontend renders that as "failed to load".
+        # OR in on-demand loads, or a healthy load reads as "failed to load".
         warming=warming or transcripts.is_transcription_model_loading(),
         model=config.TRANSCRIBE_MODEL,
         prewarm=_transcribe_prewarm_setting(),
@@ -2251,8 +2148,7 @@ def api_transcribe() -> FlaskResponse:
     if not participant_ids:
         return err("No participants specified")
 
-    # Build a lookup of available participants (refresh first so a video dropped
-    # into the input dir since page load can be enqueued rather than 404'd).
+    # Refresh first so a video dropped in since page load can be enqueued.
     _refresh_participants()
     available = {p["id"]: p for p in _participants}
     enqueued = []
@@ -2260,8 +2156,8 @@ def api_transcribe() -> FlaskResponse:
     with _manifest_lock:
         src = _manifest.get("source_transcripts", {})
 
-        # Resolve the participants that would actually be enqueued, with the
-        # effective Whisper model for each (per-participant override → default).
+        # Resolve eligible participants and their effective Whisper model
+        # (override → default).
         eligible: list[dict[str, Any]] = []
         for pid in participant_ids:
             p = available.get(pid)
@@ -2275,8 +2171,7 @@ def api_transcribe() -> FlaskResponse:
             o = overrides.get(pid) or {}
             model_override = o.get("model") or None
             language_override = o.get("language") or None
-            # Explicitly, not `or None`: track 0 is a valid selection and would
-            # be swallowed as "no override" by a falsy test.
+            # Not `or None`: track 0 is a valid selection.
             raw_index = o.get("audio_index")
             audio_override: int | None = None
             if raw_index is not None and str(raw_index).strip() != "":
@@ -2286,11 +2181,8 @@ def api_transcribe() -> FlaskResponse:
                     return err(f"Invalid audio_index for {pid}")
                 if audio_override < 0:
                     return err(f"Invalid audio_index for {pid}")
-            # No upper bound here — that needs an ffprobe per participant, and
-            # the worker already fails the task with the real track count.
-            # In/out marker window. Same explicit non-falsy handling: 0.0 is a
-            # valid start. The worker clamps to the real duration; here we only
-            # reject shapes that are wrong at any duration.
+            # Track upper bound and window clamping are the worker's job; 0.0 is
+            # a valid start.
             window: dict[str, float | None] = {
                 "start_seconds": None,
                 "end_seconds": None,
@@ -2325,9 +2217,8 @@ def api_transcribe() -> FlaskResponse:
                 }
             )
 
-        # Authoritative download gate: never let a worker silently pull an
-        # uncached faster-whisper model. The browser confirmation is advisory;
-        # this enforces it for direct API calls and the /api/models fallback.
+        # Authoritative download gate for direct API calls; the browser
+        # confirmation is advisory.
         if not allow_download:
             uncached: list[str] = []
             for e in eligible:
@@ -2362,11 +2253,8 @@ def api_transcribe() -> FlaskResponse:
             )
             if _worker:
                 _worker.enqueue(task)
-            # Same shape as /api/transcribe/status's entries (minus the running-
-            # only partial_count), so the client can adopt these into its task
-            # list immediately instead of waiting a poll interval to learn the
-            # participant is queued. created_at in particular is what its
-            # newest-task-per-participant reducer sorts on.
+            # Same shape as /api/transcribe/status entries, so the client adopts
+            # them immediately.
             enqueued.append(
                 {
                     "id": task["id"],
@@ -2390,9 +2278,8 @@ def api_transcribe_status() -> FlaskResponse:
     """Poll transcription task status."""
     tasks = []
     if _worker:
-        # include_partials=False keeps the 3 s poll from deep-copying every
-        # running task's growing segment tail; clients pull new segments via
-        # /api/transcribe/<task_id>/segments?since=N using partial_count.
+        # include_partials=False keeps the poll cheap; clients pull segments via
+        # /api/transcribe/<task_id>/segments?since=N.
         for t in _worker.get_all_tasks(include_partials=False):
             task_info = {
                 "id": t["id"],
@@ -2402,9 +2289,8 @@ def api_transcribe_status() -> FlaskResponse:
                 "error": t.get("error"),
                 "created_at": t.get("created_at"),
                 "completed_at": t.get("completed_at"),
-                # Marker window (None = unbounded side) — the frontend clips
-                # the transcribe progress band to the *task's* window rather
-                # than live marker state, which the user can change mid-run.
+                # Marker window (None = unbounded); the frontend clips the
+                # progress band to it.
                 "start_seconds": t.get("start_seconds"),
                 "end_seconds": t.get("end_seconds"),
             }
@@ -2481,9 +2367,8 @@ def _merge_completed_results_locked() -> list[str]:
     if not _worker:
         return []
     merged_pids: list[str] = []
-    # include_partials=False: the merge only needs status/result, and the full
-    # copy would deep-copy the in-flight task's growing partial_segments tail
-    # on every debounced persist — all while holding _manifest_lock.
+    # include_partials=False: the merge needs only status/result, and this runs
+    # under _manifest_lock.
     for task in _worker.get_all_tasks(include_partials=False):
         if (
             task["status"] == transcripts.TASK_STATUS_COMPLETED
@@ -2494,12 +2379,8 @@ def _merge_completed_results_locked() -> list[str]:
             src = _manifest.setdefault("source_transcripts", {})
             existing = src.get(pid, {})
             if existing.get("segments"):
-                # A re-transcription replaces the segment list wholesale, and
-                # the fresh save will mint the same "{pid}:{index}" ids again —
-                # so marks made against the old transcript would re-point at
-                # whatever now sits under the same id. Drop them, keeping only
-                # marks created after this run started (streaming-era marks on
-                # the new transcript).
+                # A re-transcription re-mints the same "{pid}:{index}" ids; drop
+                # marks older than this run.
                 task_started = task.get("created_at") or ""
                 _manifest["marks"] = [
                     m
@@ -2511,13 +2392,11 @@ def _merge_completed_results_locked() -> list[str]:
             src[pid] = existing
             _merged_task_ids.add(task["id"])
             merged_pids.append(pid)
-    # Queue the completion side effects for _on_task_complete no matter which
-    # caller performed the merge (a debounced _do_persist can win the race).
+    # Queue completion side effects whichever caller merged (a debounced
+    # _do_persist can win).
     _pending_chain_pids.extend(merged_pids)
     if merged_pids:
-        # Each task merges exactly once, so a non-empty merged_pids means a
-        # participant's segments were just (re)placed — invalidate the
-        # corrected-segments cache so reads recompute against the new text.
+        # Segments were just replaced; invalidate the corrected-segments cache.
         _bump_corrections_version()
     return merged_pids
 
@@ -2533,15 +2412,8 @@ def _do_persist() -> None:
     )
 
 
-# Manifest-write debounce: rapid UI edits (adding marks/corrections, segment and
-# summary edits) coalesce into one disk write after a short quiet period instead
-# of blocking each request on a full save_transcripts_manifest() of every
-# participant's segments. In-session reads are unaffected — they read the
-# in-memory _manifest under _manifest_lock, never disk. atexit fires the pending
-# flush on normal exit / SIGINT / SIGTERM, but not on SIGKILL or hard power-loss
-# — accepted because the transcripts manifest is recreatable (re-transcribe) and
-# a sub-2s window of edits is cheap to redo. The lambda looks up _do_persist at
-# call time so tests monkeypatching it are seen.
+# Debounced manifest write; SIGKILL loses the pending flush (accepted). The
+# lambda lets tests monkeypatch _do_persist.
 (_schedule_persist, _flush_pending_persist, _cancel_pending_persist_timer) = (
     make_debounced_persist(lambda: _do_persist(), _manifest_lock)
 )
@@ -2561,22 +2433,14 @@ def _on_task_complete() -> None:
     the window where a task reads as completed but no agent reads as running.
     """
     with _manifest_lock:
-        # Merge first so next_eligible() sees the freshly completed segments.
-        # A debounced _do_persist may already have merged this task; either
-        # way the freshly merged participants (first transcription and
-        # re-transcription alike — a new task id) sit in _pending_chain_pids,
-        # so drain that instead of trusting this call's own merge return.
+        # Merge first so next_eligible() sees the new segments; drain
+        # _pending_chain_pids, not this call's return.
         _merge_completed_results_locked()
         merged_pids = list(dict.fromkeys(_pending_chain_pids))
         _pending_chain_pids.clear()
 
-    # Abort any agent runs still in flight for the merged participants: they
-    # were computed from the *old* transcript, and left alive they'd commit
-    # after the clear below — an old-transcript summary would then read as
-    # current and the chain would advance from it. Stop first, clear second:
-    # a run that commits before its stop lands is wiped by the clear, and one
-    # stopped here can no longer commit (the cancel event gates the write).
-    # (stop acquires _manifest_lock, so it cannot live inside either block.)
+    # Stop old-transcript runs before clearing, or they commit after the clear;
+    # stop takes _manifest_lock.
     for pid in merged_pids:
         for agent in thinking_agents.AGENTS:
             _orchestrator.stop(agent["key"], pid)
@@ -2587,14 +2451,12 @@ def _on_task_complete() -> None:
             entry = src.get(pid)
             if not entry:
                 continue
-            # A fresh transcript invalidates any prior AI outputs; clear every
-            # agent's field so the chain regenerates them against the new
-            # segments instead of leaving stale results from the old transcript.
+            # A fresh transcript invalidates every agent's prior output.
             for agent in thinking_agents.AGENTS:
                 entry.pop(agent["manifest_field"], None)
 
-    # run_chain -> next_eligible/run_agent re-acquire _manifest_lock, so this
-    # must run OUTSIDE the block above (the lock is non-reentrant).
+    # run_chain re-acquires the non-reentrant _manifest_lock, so it runs outside
+    # the block.
     for pid in merged_pids:
         _orchestrator.run_chain(pid)
 
@@ -2650,28 +2512,21 @@ class AgentOrchestrator:
         self._cancel_events: dict[str, dict[str, threading.Event]] = {
             a["key"]: {} for a in thinking_agents.AGENTS
         }
-        # Wall-clock epoch (seconds) stamped when each run claims its in-flight
-        # slot, so a UI reattach after page navigation can show accurate elapsed
-        # time instead of restarting from zero. Maintained in lockstep with
-        # _in_flight / _cancel_events (claimed, released, and ownership-guarded
-        # at the same points).
+        # Claim time (epoch seconds) so a UI reattach shows true elapsed time;
+        # tracks _in_flight.
         self._started_at: dict[str, dict[str, float]] = {
             a["key"]: {} for a in thinking_agents.AGENTS
         }
         self._threads: dict[str, set[threading.Thread]] = {
             a["key"]: set() for a in thinking_agents.AGENTS
         }
-        # Accumulated streamed tokens per in-flight run, so the poll endpoint can
-        # surface partial text (only the summary agent fills this — structured
-        # agents don't stream). Guarded by its own lock, kept off _manifest_lock
-        # so per-token appends never contend with manifest reads / poll handlers.
+        # Streamed tokens per run (only summary streams); its own lock keeps
+        # per-token appends off _manifest_lock.
         self._partial: dict[str, dict[str, list[str]]] = {
             a["key"]: {} for a in thinking_agents.AGENTS
         }
         self._partial_lock = threading.Lock()
-        # Why the last run for this participant stored nothing. Set when a run
-        # ends empty, popped by the status route — the failure is otherwise
-        # only a terminal warning, and the page just shows an empty panel.
+        # Why the last run stored nothing; set on empty runs, read by status routes.
         self._errors: dict[str, dict[str, str]] = {
             a["key"]: {} for a in thinking_agents.AGENTS
         }
@@ -2834,9 +2689,8 @@ class AgentOrchestrator:
         chain_skip = set(skip or ())
 
         cancel_event = threading.Event()
-        # Atomically check-and-claim the in-flight slot so two near-simultaneous
-        # chain triggers (e.g. user click + auto-chain from a completed
-        # dependency) can't both spawn a thread for the same participant.
+        # Check-and-claim atomically so two near-simultaneous triggers cannot
+        # both spawn a thread.
         with self._lock:
             if participant in self._in_flight[agent_key]:
                 return
@@ -2847,8 +2701,8 @@ class AgentOrchestrator:
         with self._partial_lock:
             self._partial[agent_key][participant] = []
 
-        # If a Stop just scheduled an unload for this model, cancel it — the
-        # next request would only force a reload.
+        # Cancel a Stop-scheduled unload for this model; the run would only force
+        # a reload.
         model = _agent_model(agent_key)
         if model:
             _cancel_pending_unload(model)
@@ -2859,21 +2713,13 @@ class AgentOrchestrator:
                     entry = _manifest.get("source_transcripts", {}).get(participant)
                     if not entry or not entry.get("segments"):
                         return
-                    # Snapshot the entry so the agent does not hold the lock
-                    # during the (potentially slow) model call.
+                    # Snapshot so the slow model call runs without the lock.
                     snapshot = dict(entry)
-                    # Manifest entries do not carry their own id; the report
-                    # agent's injected getters need it. The snapshot is never
-                    # written back (only entry[manifest_field] is committed),
-                    # so this key cannot leak into the manifest.
+                    # The report agent's getters need the id; the snapshot is
+                    # never written back.
                     snapshot["participant"] = participant
-                    # Agents read what the reader reads. Corrections are a
-                    # read-time transform, so the stored segments stay raw
-                    # (that is what lets them re-apply after a re-transcribe)
-                    # and nothing on this path had ever applied them — every
-                    # summary quoted text the UI had already fixed. self._lock
-                    # *is* _manifest_lock, so this is the documented lock order
-                    # and the version may be omitted.
+                    # Agents read corrected text like the UI. self._lock is
+                    # _manifest_lock, so no version is needed.
                     snapshot["segments"] = _corrected_segments_with_ids(
                         participant,
                         list(entry["segments"]),
@@ -2887,17 +2733,14 @@ class AgentOrchestrator:
                             buf.append(tok)
 
                 result = agent["run"](snapshot, cancel_event, _sink)
-                # Defense in depth: if the model finished in the same tick as a
-                # Stop click, drop the result and skip the chain advance.
+                # Defense in depth: a Stop in the same tick drops the result.
                 if cancel_event.is_set():
                     return
                 committed = False
                 if result is not None:
                     with self._lock:
-                        # Re-check the cancel event inside the lock so a Stop
-                        # that arrives between the snapshot read above and this
-                        # commit cannot race past us and leave a stale result
-                        # behind.
+                        # Re-check inside the lock so a Stop between snapshot and
+                        # commit wins.
                         if cancel_event.is_set():
                             return
                         entry = _manifest.get("source_transcripts", {}).get(participant)
@@ -2906,22 +2749,12 @@ class AgentOrchestrator:
                             committed = True
                 if committed:
                     _persist_manifest()
-                    # Chain into the next eligible agent (e.g. summary →
-                    # citations). The auto-advance is always force=False: a manual
-                    # trigger forces only the one agent the user asked for (it ran
-                    # above with its own *force*); downstream agents should still
-                    # respect their enabled config. Otherwise a single-agent
-                    # regenerate (e.g. Citations) would cross-trigger a disabled
-                    # sibling (e.g. Friction), since they share depends_on=["summary"].
+                    # Auto-advance is always force=False, so a regenerate never
+                    # cross-triggers a disabled sibling.
                     self.run_chain(participant, force=False, skip=chain_skip)
                 else:
-                    # The run finished but stored nothing (the model call failed,
-                    # or its inputs were empty). Its field stays empty so it is
-                    # still eligible on the next chain entry — but this chain must
-                    # advance *past* it, or a sibling that does not depend on it
-                    # (friction needs only the summary) would never start. Skip
-                    # this agent for that lookup: without it next_eligible picks
-                    # the same empty field straight back and the chain spins.
+                    # Stored nothing; skip this agent so the chain advances instead
+                    # of spinning on it.
                     self._record_error(
                         agent_key,
                         participant,
@@ -2936,23 +2769,16 @@ class AgentOrchestrator:
                     f"{agent_key} generation failed for {participant}: {exc}"
                 )
                 self._record_error(agent_key, participant, str(exc))
-                # A raising agent stores nothing either, so the chain has to move
-                # on for the same reason as the else-branch above. Skip it after a
-                # cancel, though: Stop is not a failure to route around, and the
-                # early returns above deliberately leave the chain where it is.
+                # A raising agent stores nothing either, so advance the chain; not
+                # after a Stop.
                 if not cancel_event.is_set():
                     self.run_chain(
                         participant, force=False, skip=chain_skip | {agent_key}
                     )
             finally:
                 with self._lock:
-                    # Only clean up if the slot is still ours. A
-                    # Stop-then-Regenerate cycle can claim the slot for a
-                    # successor run between when stop() sets our cancel_event
-                    # and when we reach this finally — in which case
-                    # _cancel_events[...][participant] now holds the
-                    # successor's event, and clobbering would orphan it
-                    # (uncancellable, invisible to is_generating).
+                    # Clean up only if the slot is still ours; Stop-then-Regenerate
+                    # may have installed a successor.
                     slot = self._cancel_events.get(agent_key, {}).get(participant)
                     if slot is cancel_event:
                         self._in_flight[agent_key].discard(participant)
@@ -3005,12 +2831,8 @@ def _init_transcripts_state(sheet_context: Any = None) -> None:
     """
     global _manifest, _worker, _participant_source
 
-    # Retire the previous session's background work before touching any state:
-    # a lingering worker thread or agent run resolves the module globals at
-    # call time, so left alive it would merge the old study's segments and
-    # agent results into the *new* study's manifest. Detach the callback and
-    # cancel first so the thread can only finish inertly; the short join keeps
-    # a swap request from blocking on an in-flight Whisper segment.
+    # Retire the old session's background work first, or it merges into the new
+    # study's manifest.
     if _worker is not None:
         _worker.on_task_complete = None
         _worker.cancel_all()
@@ -3020,10 +2842,8 @@ def _init_transcripts_state(sheet_context: Any = None) -> None:
     _manifest = transcripts.load_transcripts_manifest()
     _merged_task_ids.clear()
     _pending_chain_pids.clear()
-    # The corrected-segments memo is keyed on (participant, version), not on the
-    # segments it was computed from. Participant ids repeat across studies, so a
-    # swap that left the version alone served the *old* study's corrected text
-    # for the new study's P01 — zipped against the new raw segments.
+    # The memo is keyed on (participant, version), and participant ids repeat
+    # across studies.
     _bump_corrections_version()
 
     # mtime None forces the first _refresh_participants() call to build.
@@ -3034,6 +2854,6 @@ def _init_transcripts_state(sheet_context: Any = None) -> None:
     _worker.on_task_complete = _on_task_complete
     _worker.start()
 
-    # Reclaim a stale empty manifest left by a prior abandoned session: the
-    # guarded save removes the file when empty, idempotent rewrite otherwise.
+    # Reclaim a stale empty manifest from a prior session; the guarded save
+    # removes it.
     _persist_manifest()

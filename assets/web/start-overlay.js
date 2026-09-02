@@ -27,16 +27,13 @@
   var DISMISSED_KEY = "clipgen.startOverlayDismissed";
   var CASCADE_BASE_MS = 220;
   var CASCADE_STEP_MS = 80;
-  // Google-auth poll lifecycle: the server's /api/spreadsheets/google/auth
-  // launches an OAuth flow in a daemon thread; we poll /api/spreadsheets/google
-  // until it reports `authenticated`, an `auth_error`, or we exceed the budget.
+  // Google OAuth runs server-side; poll /api/spreadsheets/google until authenticated, auth_error, or timeout.
   var GOOGLE_POLL_TIMEOUT_MS = 90 * 1000;
   var GOOGLE_POLL_INTERVAL_MS = 1500;
   var GOOGLE_POLL_RETRY_MS = 2500;
   // Wait for typing to settle before fetching worksheets for a pasted URL/name.
   var WORKSHEET_PASTE_DEBOUNCE_MS = 600;
-  // Recents shown in the rail before the fold-out; the rest overlay the brand
-  // block on demand. The server keeps start_settings.RECENTS_CAP of them.
+  // Rail shows this many recents; the fold-out holds the rest (server caps at RECENTS_CAP).
   var RAIL_RECENTS_VISIBLE = 3;
 
   function sessionDismissed() {
@@ -73,16 +70,11 @@
     startTab: "open",       // right column: 'open' | 'about' | 'updates'
     changelogLoaded: false,
     changelogEntries: [],
-    // The notice file never changes at runtime, so the fetch is latched. The
-    // rows still live in state because renderAttribution() re-runs on every
-    // About activation alongside renderAbout().
+    // Fetched once; kept in state because renderAttribution() re-runs on every About activation.
     licensesLoaded: false,
     licenseComponents: [],
     googleSheets: [],
-    // Last unauthenticated /api/spreadsheets/google payload: the credentials
-    // filename, searched paths and setup link behind the "Don't have
-    // credentials.json?" disclosure. Cached because the auth poll re-renders
-    // the CTA without one, and these facts don't change mid-sign-in.
+    // Last unauthenticated Google payload (credentials paths, setup link); the auth poll re-renders without one.
     googleCreds: null,
     excelFiles: [],
     mindnodeFiles: [],
@@ -90,11 +82,7 @@
     statusData: null,
     recentProjects: [],
     projectName: "",          // the optional label typed in the right column
-    // The name field has no server-side source of truth — it is filled in from
-    // the matching recent-projects entry at the tail of refresh(). These two
-    // flags say whether that value is trustworthy yet, so a fast Cmd+Enter
-    // can't post an empty name that clears a stored label, and a late-landing
-    // prefill can't stomp what the user was typing meanwhile.
+    // Name prefills from recents; these flags stop early Cmd+Enter or late prefill clobbering it.
     projectNamePrefilled: false,  // applyCurrentSessionPrefill has run at least once
     startupNoticeShown: false,  // the boot -s failure toast fired (highlight persists)
     projectNameAuthored: false,   // the user typed it, or picked a recent project
@@ -103,19 +91,13 @@
     worksheetReqVer: 0,       // rejects stale worksheet fetches
     worksheetLoading: false,  // a worksheet fetch is in flight (gates Confirm)
     wsPasteTimer: null,       // debounce for paste-driven worksheet loads
-    // Source-video filename preview, keyed "type|id_or_path|worksheet|inputDir"
-    // — the input dir is part of the key because it decides found/missing.
+    // Source-video preview, keyed "type|id_or_path|worksheet|inputDir"; the folder decides found/missing.
     previewCache: {},
     previewReqVer: 0,         // rejects stale preview fetches
     previewDirTimer: null,    // debounce for input-folder-driven refreshes
-    // Set while a preview row's filename is being edited inline. The overlay's
-    // Escape is owned by a capture-phase modal trap that no listener on the
-    // input can pre-empt, so onEscape consults this first.
+    // Set during an inline filename edit; the capture-phase modal trap's onEscape checks it first.
     cancelPreviewEdit: null,
-    // Baseline = the (input, output, sheet selection, tab) snapshot at the
-    // moment the overlay opened (or when a recent project was clicked).
-    // Drives the .is-loaded / .is-dirty glow on the path-input and
-    // sheet-card chrome.
+    // Snapshot at open (or recent-project click); drives the .is-loaded / .is-dirty glow.
     baseline: {
       input: "",
       output: "",
@@ -137,9 +119,7 @@
     else node.classList.add("hidden");
   }
 
-  // Spin a panel's Refresh button while its reload runs. Shared by the Google
-  // and Excel buttons; both loaders recover from their own failures, so this
-  // only owns the button state.
+  // Spin a Refresh button while its loader runs; loaders handle their own failures.
   function runPanelRefresh(btn, load) {
     if (!btn || btn.disabled) return;
     btn.disabled = true;
@@ -153,11 +133,7 @@
       });
   }
 
-  // Sweeping "still working" status text. The carrier gets its own hugging span:
-  // .sheet-panel__status is a stretched flex column that also hosts CTA rows, and
-  // .cg-shimmer's transparent text fill inherits onto anything inside it. Every
-  // result/error write below is a plain textContent, which replaces the span and
-  // ends the sweep on its own.
+  // Shimmer text in its own span: .cg-shimmer's transparent fill would leak onto CTA rows.
   function setStatusShimmer(node, text) {
     if (!node) return;
     node.innerHTML = "";
@@ -192,10 +168,7 @@
         cacheEls();
         applyIcons();
         bind();
-        // The page-level clipgenInitBrandMark ran on DOMContentLoaded before
-        // the overlay was inserted, so re-run it now to hydrate the rail mark.
-        // It will skip the cascade animation if the session flag was already
-        // set by an earlier hydration of a topnav brand-mark on this page.
+        // Page-level clipgenInitBrandMark ran before the overlay existed; re-run to hydrate the rail mark.
         if (typeof window.clipgenInitBrandMark === "function") {
           window.clipgenInitBrandMark();
         }
@@ -337,9 +310,7 @@
     on(els.inputDir, "input", function () {
       clearFieldError(els.inputField);
       applyFieldStates();
-      // The folder decides which expected videos count as found, so re-resolve
-      // the preview once typing settles (cached per folder, so re-typing a
-      // folder already seen costs no request).
+      // The folder decides found/missing, so re-resolve the preview once typing settles.
       if (state.previewDirTimer) clearTimeout(state.previewDirTimer);
       state.previewDirTimer = setTimeout(function () {
         state.previewDirTimer = null;
@@ -358,8 +329,7 @@
       togglePicker("google");
     });
     on(els.googleRefresh, "click", function () {
-      // The server caches Drive's listing for 5 minutes; this is the escape
-      // hatch for a spreadsheet created mid-session.
+      // Bypass the server's 5-minute Drive cache for a spreadsheet created mid-session.
       runPanelRefresh(els.googleRefresh, function () {
         return loadGoogleSheets(true);
       });
@@ -384,9 +354,7 @@
     });
 
     on(document, "click", function (e) {
-      // Bail when the overlay isn't open — the listener stays bound for the
-      // page's lifetime (mount() is once-per-page; close() just hides),
-      // so guard explicitly to avoid pointless work on every page click.
+      // Bound for the page's lifetime (close() only hides), so bail when not open.
       if (!root || !state.open) return;
       closeRecentsIfOutside(e);
       closePickersIfOutside(e);
@@ -435,23 +403,17 @@
     on(els.mindnodePaste, "input", function () {
       var v = (els.mindnodePaste.value || "").trim();
       if (v) {
-        // A mind map has no worksheets, so there is nothing to schedule —
-        // setSelection alone settles the selection and Confirm is free.
+        // No worksheets on a mind map: setSelection alone settles it and frees Confirm.
         setSelection({ type: "mindnode", id_or_path: v, label: v.split("/").pop() || v });
       } else if (state.selection && state.selection.type === "mindnode") {
         renderMindnodeList(state.mindnodeFiles || []);
       }
     });
 
-    // Keyboard: Escape (close) and Tab containment are owned by the shared
-    // blocking-modal trap (see open()); the rest are shared-registry hotkeys so
-    // holding Alt reveals them and they list in the "?" cheatsheet. Gated by
-    // inModal + `when` so they fire only while the launcher owns the keyboard.
+    // Escape/Tab belong to the blocking-modal trap (see open()); the rest are registry hotkeys.
     if (window.ClipgenHotkeys) {
       var isOpen = function () { return state.open; };
-      // Spreadsheet/folder/confirm shortcuts target the Open pane. Gating only
-      // on state.open left G/E/I/Cmd+Enter live on About and Recent updates,
-      // where they mutated a hidden form or confirmed the workspace.
+      // Form shortcuts need the Open pane, else they mutate a hidden form from About/Updates.
       var isOpenForm = function () { return state.open && state.startTab === "open"; };
       ClipgenHotkeys.register([
         { id: "start.tabOpen",      inModal: true, when: isOpen, handler: function () { setStartTab("open"); } },
@@ -526,14 +488,11 @@
       .then(function (r) {
         if (r && r.ok && r.path) {
           input.value = r.path;
-          // Fire an input event so the dirty/loaded glow + clear-error logic
-          // run as if the user typed the path.
+          // Fire input so the glow and clear-error logic run as if typed.
           input.dispatchEvent(new Event("input", { bubbles: true }));
           input.focus();
         } else {
-          // No path returned — either the user cancelled or the platform has
-          // no native dialog. Falling back to focusing the field is the same
-          // behaviour as before this endpoint existed.
+          // Cancelled, or no native dialog on this platform: just focus the field.
           input.focus();
         }
       })
@@ -676,9 +635,7 @@
   }
 
   function setStartTab(name) {
-    // Only a real switch animates: re-selecting the active tab shouldn't
-    // replay, and the reset to "open" on every overlay open would otherwise
-    // fight the section cascade in runIntro().
+    // Only a real switch animates; re-selecting or the open-time reset would fight runIntro()'s cascade.
     var changed = state.startTab !== name;
     state.startTab = name;
     Array.prototype.forEach.call(els.startTabs, function (tab) {
@@ -693,9 +650,7 @@
     if (name === "updates" && !state.changelogLoaded) {
       loadChangelog();
     }
-    // Re-rendered on every activation rather than latched: it reads
-    // state.statusData, which /api/status may not have filled in yet the first
-    // time the tab is opened — a latch would freeze the panel on v0.0.0.
+    // Re-render every activation: statusData may be empty at first; latching would freeze v0.0.0.
     if (name === "about") {
       renderAbout();
       renderAttribution();
@@ -703,8 +658,7 @@
     }
   }
 
-  // One-shot enter animation on the panel being revealed. The class has to come
-  // off again or the animation won't replay on the next switch.
+  // One-shot enter animation; the class must come off so the next switch replays.
   function playTabEnter(panel) {
     if (!panel) return;
     var scroll = panel.querySelector(".start-tabpanel__scroll");
@@ -732,10 +686,7 @@
       updatePickerLabel("mindnode", sel.label || sel.id_or_path);
     }
     loadMindnodePreview(sel);
-    // A fresh spreadsheet identity resets the worksheet choice; bump the
-    // request version so any in-flight worksheet fetch for the prior selection
-    // is ignored, then reset the dropdown (loadWorksheets re-shows it for 2+
-    // tabs).
+    // New spreadsheet identity: invalidate in-flight worksheet fetches and reset the dropdown.
     state.worksheetReqVer++;
     hideWorksheetSection();
     clearSheetError();
@@ -775,9 +726,7 @@
       applyWorksheets(sel, cached, reqVer);
       return;
     }
-    // Fetching a spreadsheet's tabs can be slow (Google opens it server-side).
-    // Show a spinner and hold the Confirm button until we know the tab list, so
-    // the user can't Open before choosing (or seeing) a worksheet.
+    // Tab listing can be slow (Google opens server-side); hold Confirm until tabs are known.
     showWorksheetLoading();
     apiGet("/api/spreadsheets/worksheets?type=" + encodeURIComponent(sel.type) +
            "&id_or_path=" + encodeURIComponent(sel.id_or_path))
@@ -811,14 +760,12 @@
       renderWorksheetList(titles);
       showWorksheetList(want);
     } else {
-      // 0-1 tabs: nothing to choose — record the single tab (if any) so the
-      // sheet-card dirty state matches what will open, then hide the section.
+      // 0-1 tabs: record the single tab so dirty state matches what opens, then hide.
       state.selection.worksheet = titles.length === 1 ? titles[0] : "";
       hideWorksheetSection();
     }
     applyFieldStates();
-    // The worksheet is settled either way, so the filename preview can resolve
-    // against the tab that will actually open.
+    // Worksheet settled either way; the filename preview can resolve against it.
     loadSourcePreview();
   }
 
@@ -880,29 +827,19 @@
   }
 
   // ---- Source video preview ----
-  //
-  // clipgen resolves a participant's footage as {study}_{participant}.mp4 (or
-  // whatever the sheet's Filename row overrides it to). Getting that wrong used
-  // to surface only after the workspace opened, as clips with no source — so
-  // once a worksheet is settled we ask the server what it will look for and
-  // whether it is already in the input folder.
+  // Catches {study}_{participant}.mp4 naming mismatches before the workspace opens.
 
   function hideSourcePreview() {
     state.previewReqVer++;   // drop anything in flight
-    // An inline edit dies with the rows below; its cancel closure would
-    // otherwise outlive them and fire against a detached row.
+    // Rows are going away; a live cancel closure would fire against a detached row.
     state.cancelPreviewEdit = null;
     setHidden(els.sourcePreview, true);
     stopSourcePreviewLoading();
-    // Drop the rows too: the next thing to show here belongs to a different
-    // spreadsheet, and stale participants must not flash under the spinner.
+    // Drop the rows: stale participants must not flash under the next spinner.
     if (els.sourcePreviewList) els.sourcePreviewList.innerHTML = "";
   }
 
-  // Reveal the block in its loading state. The head row swaps its film icon for
-  // a spinner and the list (empty on a fresh selection, the previous rows on an
-  // input-folder recheck) stays put, so the box appears once and grows into the
-  // result rather than popping in fully formed.
+  // Reveal in loading state; existing rows stay so the box grows into the result.
   function showSourcePreviewLoading() {
     if (!els.sourcePreview) return;
     els.sourcePreview.classList.remove("is-error");
@@ -932,12 +869,9 @@
       applySourcePreview(sel, cached, reqVer);
       return;
     }
-    // Only on a real fetch — a cache hit renders instantly and would just flash
-    // the spinner.
+    // Cache hits render instantly; the spinner would only flash.
     showSourcePreviewLoading();
-    // Deliberately not apiGet(): this route answers a malformed spreadsheet with
-    // a 400 carrying user-facing guidance, which apiGet would collapse into a
-    // bare "Server error 400".
+    // Not apiGet(): a 400 here carries user-facing guidance apiGet would collapse.
     fetch("/api/spreadsheets/preview?type=" + encodeURIComponent(sel.type) +
           "&id_or_path=" + encodeURIComponent(sel.id_or_path) +
           "&worksheet=" + encodeURIComponent(worksheet) +
@@ -982,30 +916,21 @@
     renderPreviewRows(els.sourcePreviewList, els.sourcePreviewSummary, {
       type: sel.type,
       id_or_path: sel.id_or_path,
-      // The worksheet the server actually resolved (an auto-picked tab has no
-      // client-side name yet), because that is what an override is keyed on.
+      // Overrides key on the server-resolved worksheet; an auto-picked tab has no client name.
       worksheet: data.worksheet || sel.worksheet || "",
     }, data.study || "", rows, data.unmatched || []);
     setHidden(els.sourcePreview, false);
   }
 
   // ---- Editable preview rows ----
-  //
-  // One line per expected source video, shared by the spreadsheet and mind-map
-  // previews. Each line can be pointed at a different file: clipgen cannot
-  // write a spreadsheet back, so before this the only fix for a naming mismatch
-  // was to leave the app and edit the sheet's Filename row (and a mind map has
-  // no such row at all). An override is stored per user against the source's
-  // identity and beats the sheet's own row; see start_settings.py.
+  // Per-user overrides beat the sheet's Filename row; see start_settings.py.
 
   function renderPreviewRows(listEl, summaryEl, source, study, rows, unmatched) {
     if (!listEl) return;
     listEl.innerHTML = "";
     fillSourceDatalist(unmatched);
     var ctx = { source: source, study: study, rows: rows, summaryEl: summaryEl };
-    // Missing first: with the list capped to a few rows, the problem should not
-    // be the part you have to scroll for. Only on a full render — a row that
-    // just got fixed stays put, rather than jumping away under the cursor.
+    // Missing first, but only on a full render so a fixed row stays put.
     var ordered = rows.filter(function (r) { return !r.found; })
       .concat(rows.filter(function (r) { return r.found; }));
     var frag = document.createDocumentFragment();
@@ -1025,9 +950,7 @@
         " source videos found — " + missing + " missing";
   }
 
-  // The videos sitting in the input folder that no participant claims — i.e.
-  // exactly the files an override is likely to want. One datalist for both
-  // previews; only one of them is ever on screen.
+  // Unclaimed input-folder videos: the likely override targets. One datalist serves both previews.
   function fillSourceDatalist(unmatched) {
     if (!els.sourceFiles) return;
     els.sourceFiles.innerHTML = "";
@@ -1068,9 +991,7 @@
     return item;
   }
 
-  // Repaint one row from its (mutated in place) data. Rows are patched rather
-  // than re-rendered so the list neither reorders nor loses scroll position
-  // while the user works down it.
+  // Patch in place so the list neither reorders nor loses scroll position.
   function paintPreviewRow(item, row) {
     item.classList.toggle("is-missing", !row.found);
     item.classList.toggle("is-override", !!row.override_value);
@@ -1096,18 +1017,13 @@
     input.spellcheck = false;
     input.setAttribute("list", "startSourceFiles");
     input.placeholder = "filename.mp4";
-    // Prefill with what the row resolves to today, so a small correction is a
-    // small edit. Several files for one participant are separated by "+".
+    // Prefill with today's resolution; multiple files join with "+".
     input.value = row.override_value || (row.filenames || []).join(" + ");
     item.replaceChild(input, name);
     input.focus();
     input.select();
 
-    // Compared against on commit, and deliberately not row.override_value: with
-    // no override the field is prefilled with the *resolved* default, so
-    // opening the editor and clicking away would otherwise pin that default as
-    // a user override — silently overriding whatever the sheet's Filename row
-    // says next week.
+    // Not row.override_value: clicking away must not pin the resolved default as an override.
     var initial = input.value;
     var done = false;
     function finish(commit) {
@@ -1122,8 +1038,7 @@
         paintPreviewRow(item, row);
       }
     }
-    // The overlay's Escape belongs to a capture-phase modal trap, so it can't
-    // be intercepted from here; open() consults this instead.
+    // Escape belongs to the modal trap; open()'s onEscape calls this instead.
     state.cancelPreviewEdit = function () { finish(false); };
     on(input, "keydown", function (e) {
       if (e.key === "Enter") {
@@ -1149,8 +1064,7 @@
       .then(function (r) {
         var updated = r && r.row;
         if (updated) {
-          // Mutated in place: these row objects are the ones inside
-          // state.previewCache, so the edit survives a re-render from cache.
+          // Mutated in place: these rows live in state.previewCache, so cached re-renders keep the edit.
           row.filenames = updated.filenames;
           row.found = updated.found;
           row.override = updated.override;
@@ -1167,9 +1081,7 @@
       });
   }
 
-  // The Confirm ("Open workspace") button waits while worksheets are being
-  // fetched so a fast click can't open the recommended tab before the user
-  // sees (or picks) one. confirm() manages the in-flight open flag itself.
+  // Hold Confirm until worksheets list, so a fast click can't open an unseen tab.
   function updateConfirmEnabled() {
     if (!els.confirmBtn) return;
     els.confirmBtn.disabled = state.confirmInFlight || state.worksheetLoading;
@@ -1184,26 +1096,17 @@
   // ---- Data loading ----
 
   function loadStatus(force) {
-    // Shared memoized fetch (utils.js). The overlay's refresh passes
-    // force=true — it must see the current sheet state, not the page-load
-    // snapshot.
+    // Shared memoized fetch (utils.js); force=true bypasses the page-load snapshot.
     return clipgenStatus(force).then(function (s) {
       state.statusData = s;
       state.sheetLoaded = !!s.sheet_loaded;
-      // The startup_notice from a failed window-first `-s` launch is handled
-      // in applyCurrentSessionPrefill, not here: prefill's setTab calls run
-      // after this and always clearSheetError(), so a highlight applied now
-      // would be wiped before the user sees it.
-      // setStartTab("about") renders from statusData; if About is already
-      // visible when this lands, the panel would otherwise stay on v0.0.0.
+      // startup_notice is handled in applyCurrentSessionPrefill, whose setTab would wipe a highlight set here.
       if (state.startTab === "about") renderAbout();
       // The installed-version highlight reads statusData too.
       if (state.changelogLoaded) renderChangelog(state.changelogEntries);
       return s;
     }).catch(function (err) {
-      // Same contract as loadGoogleSheets: log and keep refresh()'s boot
-      // chain going — one failed link must not strand every later panel
-      // on its static "Scanning…" shimmer.
+      // Log and continue so refresh()'s boot chain reaches every panel.
       console.error("Status load failed", err);
     });
   }
@@ -1246,9 +1149,7 @@
     return parts[parts.length - 1] || path;
   }
 
-  // One chip = one fact (input folder, output folder, spreadsheet). The icon
-  // rides on data-icon so applyIcons() can resolve it against whichever host
-  // page's /icons/ route mounted the overlay.
+  // One chip per fact; data-icon lets applyIcons() resolve against the host page's /icons/ route.
   function recentChip(icon, text, mono) {
     var chip = el("span", "rail-recent__chip");
     var glyph = el("span", "so-icon so-icon--xs");
@@ -1258,10 +1159,7 @@
     return chip;
   }
 
-  // Two lines: title + relative time, then the folder/spreadsheet chips. The
-  // full paths live in a single row-level data-tooltip — never one per chip,
-  // since clipgenInitDataTooltips resolves via closest() and a nested
-  // [data-tooltip] would shadow the row's.
+  // One row-level data-tooltip for full paths; a nested one would shadow it via closest().
   function buildRecentRow(project, currentKey) {
     var btn = el("button", "rail-recent");
     btn.type = "button";
@@ -1308,8 +1206,7 @@
 
   function renderRailRecents(projects) {
     if (!els.railRecents) return;
-    // A re-render invalidates the fold-out's contents; never leave it open
-    // over a list that no longer matches.
+    // A re-render invalidates the fold-out; never leave it open over a changed list.
     setRecentsExpanded(false);
     els.railRecents.innerHTML = "";
     if (els.railRecentsOverflow) els.railRecentsOverflow.innerHTML = "";
@@ -1329,8 +1226,7 @@
     var rest = projects.slice(RAIL_RECENTS_VISIBLE);
     if (!rest.length || !els.railRecentsOverflow) return;
     var hidden = document.createDocumentFragment();
-    // Newest-first reads top-down in the visible list, but the fold-out grows
-    // upward from it — reverse so the whole stack stays chronological.
+    // The fold-out grows upward, so reverse to keep the stack chronological.
     rest.slice().reverse().forEach(function (project) {
       hidden.appendChild(buildRecentRow(project, currentKey));
     });
@@ -1365,8 +1261,7 @@
     setRecentsMoreLabel();
   }
 
-  // The input is a view of state.projectName, never the store — the guard
-  // keeps a programmatic prefill from stomping the caret mid-typing.
+  // The input mirrors state.projectName; the guard keeps a prefill from moving the caret mid-typing.
   function setProjectName(value) {
     state.projectName = value || "";
     if (els.projectName && els.projectName.value !== state.projectName) {
@@ -1384,12 +1279,7 @@
   function currentSessionKey() {
     var s = state.statusData || {};
     if (!s.input_dir && !s.output_dir) return "";
-    // Keyed off the source the server actually recorded, so this mirrors
-    // projectKey() for every source type. Deriving it from the spreadsheet
-    // fields alone left a mind-map session keyed "input::output::", which
-    // matched no stored project — no current-session highlight, and no
-    // restored project name. Falls back to the sheet fields for a session
-    // predating active_source (e.g. a CLI-loaded sheet with no recorded open).
+    // Mirror projectKey() using active_source, else a mind-map session keys as "input::output::" and matches nothing.
     var src = s.active_source;
     var sourceKey = src && src.type && src.id_or_path
       ? src.type + "|" + src.id_or_path
@@ -1418,8 +1308,7 @@
     return Math.floor(days / 365) + "y ago";
   }
 
-  // Accepts an ISO-8601 string (Google modifiedTime) or epoch-seconds number
-  // (Excel st_mtime) and returns an "Edited …" label, or "" when unavailable.
+  // value: ISO-8601 string (Google) or epoch seconds (Excel st_mtime). Returns "Edited …" or "".
   function formatEdited(value) {
     var when;
     if (typeof value === "number") {
@@ -1433,12 +1322,9 @@
 
   function restoreProject(project) {
     if (!project) return;
-    // The left rail is visible on every top-level tab. Filling Open-pane
-    // fields while About/Updates is showing reads as a dead click; switch
-    // first so the restored values are actually on screen.
+    // The rail shows on every tab; switch to Open so the restored fields are visible.
     setStartTab("open");
-    // Picking a recent project is an explicit authoring act — confirming after
-    // it should write that project's name, not fall back to "leave alone".
+    // Picking a recent is authoring: confirming should write its name, not leave it alone.
     state.projectNameAuthored = true;
     setProjectName(project.name || "");
     els.inputDir.value = project.input || "";
@@ -1461,8 +1347,7 @@
       setTab("none");
       state.selection = null;
     }
-    // Restoring a project resets the baseline so the field glow reads as
-    // "loaded" rather than "dirty" until the user edits again.
+    // Reset the baseline so the glow reads "loaded", not "dirty".
     state.baseline = baselineFromInputs();
     applyFieldStates();
     clearFieldError(els.inputField);
@@ -1485,14 +1370,12 @@
       if (els.persist) els.persist.checked = state.persistEnabled;
       state.rememberWindow = r.settings.remember_window !== false;
       if (els.rememberWindow) els.rememberWindow.checked = state.rememberWindow;
-      // A browser tab has no window for clipgen to place, so the toggle only
-      // appears in a desktop launch.
+      // Only a desktop launch has a window to place.
       if (els.rememberWindowRow) els.rememberWindowRow.hidden = !r.desktop;
       state.recentProjects = r.settings.recent_projects || [];
       renderRailRecents(state.recentProjects);
     }).catch(function (err) {
-      // Log-and-continue like the loaders below — and still render the
-      // recents rail so it shows its empty state instead of staying blank.
+      // Log and continue; still render the rail so it shows its empty state.
       console.error("Start settings load failed", err);
       renderRailRecents(state.recentProjects || []);
     });
@@ -1515,9 +1398,7 @@
     return "dirty";
   }
 
-  // Identity of a selection for dirty-state tracking: includes the worksheet
-  // so switching tabs on the same spreadsheet reads as "dirty" (a different
-  // tab would open).
+  // Includes the worksheet: a different tab on the same spreadsheet reads as dirty.
   function selectionKey(sel) {
     if (!sel) return "";
     return sel.type + "|" + sel.id_or_path + "|" + (sel.worksheet || "");
@@ -1584,8 +1465,7 @@
     card.classList.remove("has-error", "is-error");
   }
 
-  // force=true asks the server to re-list from Drive instead of serving its
-  // 5-minute cache — the Refresh button's path.
+  // force=true re-lists from Drive instead of the server's 5-minute cache (Refresh button).
   function loadGoogleSheets(force) {
     if (!els.googleStatus) return Promise.resolve();
     setStatusShimmer(els.googleStatus, "Checking authentication…");
@@ -1609,17 +1489,13 @@
       setHidden(els.googlePicker, false);
       setHidden(els.googleRefresh, false);
     }).catch(function (err) {
-      // Recovers rather than re-throwing, for two reasons: the panel is
-      // mid-load (status replaced, picker hidden) and nothing downstream would
-      // put it back, and a rejection would fail refresh()'s Promise.all and
-      // skip applyCurrentSessionPrefill, which must still run.
+      // Recover, don't rethrow: nothing downstream restores the panel, and Promise.all must reach applyCurrentSessionPrefill.
       console.error("Google sheet list failed", err);
       keepPreviousGoogleList("Couldn't reach clipgen.");
     });
   }
 
-  // Leave a failed listing recoverable: whatever we already had stays
-  // selectable, and Refresh stays reachable so the user can retry in place.
+  // Keep the last list selectable and Refresh reachable so the user can retry.
   function keepPreviousGoogleList(message) {
     var had = (state.googleSheets || []).length;
     els.googleStatus.textContent = had
@@ -1629,9 +1505,7 @@
     setHidden(els.googleRefresh, false);
   }
 
-  // `creds` is the unauthenticated /api/spreadsheets/google payload. It is
-  // absent on the poll's re-renders, so the last one seen is cached on state
-  // rather than re-fetched — the setup facts don't change mid-sign-in.
+  // creds is the unauthenticated payload; poll re-renders omit it, so cache the last one.
   function renderGoogleConnectCTA(inFlight, errorMsg, creds) {
     if (creds && creds.credentials_paths) state.googleCreds = creds;
     els.googleStatus.innerHTML = "";
@@ -1659,12 +1533,7 @@
     if (!inFlight) renderGoogleCredentialsHelp(els.googleStatus);
   }
 
-  // Everything a first-time user needs to get past "Connect Google" and has so
-  // far had no way to learn: what the file is, which three folders clipgen
-  // looks in, and where Google documents making one. The server has always
-  // known all of it — it just printed it to a stdout a windowed launch has no
-  // console for. Collapsed by default so it stays out of the way of the
-  // already-configured user.
+  // Credentials setup help a windowed launch has no stdout for. Collapsed by default.
   function renderGoogleCredentialsHelp(container) {
     var creds = state.googleCreds;
     if (!creds || !creds.credentials_paths || !creds.credentials_paths.length) return;
@@ -1799,8 +1668,7 @@
     });
   }
 
-  // No server-side cache to bust here — the route re-globs the input folder on
-  // every call, so the Refresh button just re-runs this.
+  // No server cache: the route re-globs each call, so Refresh just re-runs this.
   function loadExcelFiles() {
     if (!els.excelStatus) return Promise.resolve();
     setStatusShimmer(els.excelStatus, "Scanning input folder…");
@@ -1811,8 +1679,7 @@
         : "No .xlsx files in " + r.input_dir;
       renderExcelList(state.excelFiles);
     }).catch(function (err) {
-      // Same contract as loadGoogleSheets: never strand the panel on
-      // "Scanning…", and never break the rest of refresh()'s boot chain.
+      // Log and continue: never strand the panel on "Scanning…" or break refresh()'s chain.
       console.error("Excel scan failed", err);
       els.excelStatus.textContent = (state.excelFiles || []).length
         ? "Couldn't re-scan the input folder. Showing the last list."
@@ -1858,8 +1725,7 @@
     });
   }
 
-  // Mind maps live in the input folder alongside the videos, so this mirrors
-  // loadExcelFiles: the route re-globs on every call and Refresh just re-runs it.
+  // Mirrors loadExcelFiles: the route re-globs each call, so Refresh just re-runs this.
   function loadMindnodeFiles() {
     if (!els.mindnodeStatus) return Promise.resolve();
     setStatusShimmer(els.mindnodeStatus, "Scanning input folder…");
@@ -1918,9 +1784,7 @@
     });
   }
 
-  // Summarize the chosen map before it is opened — the equivalent of the
-  // source-video preview the spreadsheet tabs get, plus the bundle's own
-  // QuickLook render so the researcher can confirm it is the right document.
+  // Mind-map counterpart of the source-video preview, plus the bundle's QuickLook render.
   function loadMindnodePreview(sel) {
     if (!els.mindnodePreview) return;
     var reqVer = ++state.mindnodePreviewReqVer;
@@ -1965,9 +1829,7 @@
     } else {
       setHidden(els.mindnodePreviewThumb, true);
     }
-    // Same editable file list the spreadsheet tabs get. A mind map has no
-    // Filename row, so an override set here is the only way to point a
-    // participant at differently-named footage.
+    // Same editable list as spreadsheets; a mind map has no Filename row to edit.
     var sources = data.sources || [];
     if (sources.length) {
       renderPreviewRows(els.mindnodeSourcesList, els.mindnodeSourcesSummary, {
@@ -1986,8 +1848,7 @@
       state.licenseComponents = (r && r.components) || [];
       renderAttribution();
     }).catch(function () {
-      // A checkout without build/THIRD-PARTY-LICENSES still shows the section
-      // heading and the link out; only the generated list stays empty.
+      // Without build/THIRD-PARTY-LICENSES the heading and link still show; only the list stays empty.
       state.licensesLoaded = true;
       state.licenseComponents = [];
       renderAttribution();
@@ -2094,10 +1955,7 @@
     els.aboutGrid.appendChild(row);
   }
 
-  // Rows arrive in THIRD-PARTY-LICENSES order, which already clusters components
-  // by license, so a heading is opened whenever the group changes rather than by
-  // re-sorting. Nested rows (the cv2 FFmpeg DLL, the PP-OCR models) belong to the
-  // component above them and never open a group of their own.
+  // Rows arrive grouped by license: heading on group change; nested rows never start one.
   function renderAttribution() {
     if (!els.attributionList) return;
     var rows = state.licenseComponents || [];
@@ -2115,8 +1973,7 @@
       if (item.nested) row.classList.add("attribution__row--nested");
       row.appendChild(el("div", "attribution__name", item.component || ""));
       row.appendChild(el("div", "attribution__version", item.version || ""));
-      // The full cell, not the group: "MIT (macOS only)" and the cv2 DLL's
-      // platform caveat are the part a reader actually needs.
+      // The full cell, not the group: platform caveats like "MIT (macOS only)" matter.
       row.appendChild(el("div", "attribution__license", item.license || ""));
       frag.appendChild(row);
     });
@@ -2126,23 +1983,15 @@
   // ---- Open / dismiss flows ----
 
   function confirm() {
-    // Guard against re-entry: the click handler disables the button, but the
-    // Cmd/Ctrl+Enter shortcut bypasses that path. Two simultaneous flights
-    // would race the server-side _swap_worksheet.
+    // Re-entry guard: Cmd/Ctrl+Enter bypasses the disabled button and would race _swap_worksheet.
     if (state.confirmInFlight) return;
-    // Hold off while the worksheet list is loading so we never post a
-    // selection whose worksheet field isn't settled yet (which would open the
-    // priority tab instead of the dropdown default). The button is disabled in
-    // this state; this also blocks the Cmd/Ctrl+Enter shortcut.
+    // An unsettled worksheet field would open the priority tab instead of the dropdown default.
     if (state.worksheetLoading) return;
     state.confirmInFlight = true;
 
     var inputVal = (els.inputDir.value || "").trim();
     var outputVal = (els.outputDir.value || "").trim();
-    // null omits the field, which the server reads as "keep the stored name".
-    // Sending "" is a deliberate clear, so only do it once we actually know
-    // what was stored — a Cmd+Enter that beats refresh() must not wipe a label
-    // the user never saw, let alone edited.
+    // null keeps the stored name; "" clears it, so only send "" once known.
     var nameVal = (state.projectNameAuthored || state.projectNamePrefilled)
       ? state.projectName.trim()
       : null;
@@ -2184,19 +2033,10 @@
       }
       var skipSpreadsheet = state.activeTab === "none" || !state.selection;
       if (skipSpreadsheet) {
-        // "No spreadsheet" has to actually close whatever is open, not just
-        // record the session. Nothing else in the UI ever posted to
-        // /api/spreadsheets/close, so a source opened earlier lived for the
-        // rest of the process — a mind map especially, since it is never
-        // cleared by opening a sheet either.
+        // "No spreadsheet" must close the open source too; nothing else ever posts /api/spreadsheets/close.
         var st = state.statusData || {};
         var needsClose = !!(st.sheet_loaded || st.mindnode_loaded);
-        // One call per source: the route drops the mind map for
-        // {type: "mindnode"} and the worksheet otherwise, and the two coexist,
-        // so closing both takes both calls. Each is checked for r.ok like the
-        // open path below — the route refuses with 409 while a generation is
-        // running, and swallowing that would record a no-spreadsheet session
-        // and reload with the source still very much loaded.
+        // One call per coexisting source; check r.ok because the route 409s mid-generation.
         function postClose(body) {
           return fetch("/api/spreadsheets/close", {
             method: "POST",
@@ -2234,8 +2074,7 @@
             return recordSession(inputVal, outputVal, null, nameVal).finally(
               function () {
                 releaseConfirm();
-                // Reload only when something was actually unloaded — the other
-                // frontends are holding data for a source that is now gone.
+                // Reload only if something unloaded; other frontends hold data for the gone source.
                 if (needsClose) {
                   window.location.reload();
                   return;
@@ -2250,8 +2089,7 @@
           });
         return;
       }
-      // Built explicitly rather than posting state.selection verbatim so the
-      // name rides along with the open that records the session server-side.
+      // Built explicitly so the name rides along with the session-recording open.
       var openPayload = {
         type: state.selection.type,
         id_or_path: state.selection.id_or_path,
@@ -2273,8 +2111,7 @@
             markSheetError((res2.body && res2.body.error) || "Could not open spreadsheet");
             return;
           }
-          // Hard reload so all three frontends re-fetch their data.
-          // Don't release the in-flight flag — the page is about to unmount.
+          // Hard reload so every frontend re-fetches; the flag stays set since the page unmounts.
           window.location.reload();
         })
         .catch(function (err) {
@@ -2288,9 +2125,7 @@
   }
 
   function recordSession(input, output, spreadsheet, name) {
-    // Fire-and-forget on the no-sheet path. The sheet-open path records on
-    // the server during /api/spreadsheets/open, so this is the only call
-    // site that needs to invoke /api/sessions/record explicitly.
+    // Only the no-sheet path records explicitly; /api/spreadsheets/open records server-side.
     var payload = { input: input, output: output };
     // Omitted (not "") when the stored name isn't known yet — see confirm().
     if (name !== null && name !== undefined) payload.name = name;
@@ -2304,26 +2139,17 @@
 
   function open(tab) {
     if (!state.mounted) {
-      // Not mount().then(open): then() would pass mount's resolved value as tab.
-      // Re-enter only if the mount actually succeeded — mount() resolves (never
-      // rejects) on a missing slot or a failed template fetch, and recursing on
-      // that would spin forever re-fetching start-overlay.html.
+      // Not mount().then(open): that passes the resolved value as tab, and mount() resolves on failure.
       mount().then(function () { if (state.mounted) open(tab); });
       return;
     }
     if (state.open) return;
     state.open = true;
     show(root, true);
-    // Register as the shared blocking modal: Escape closes, Tab is trapped
-    // inside, and hotkeys.js scopes Alt-hold hints to this overlay's controls.
-    // initialFocus is the panel (tabindex="-1") so focus lands on a non-typing
-    // element — the reveal-hints and letter shortcuts work immediately, and the
-    // trap pulls Tab back into the cycle from there. restoreFocus returns focus
-    // to the launch trigger on dismiss (else it stays stuck on the hidden panel).
+    // Blocking modal. initialFocus is the non-typing panel so letter hotkeys work at once.
     if (typeof openBlockingModal === "function") {
       openBlockingModal(root, {
-        // Escape cancels an inline filename edit first, then peels the recents
-        // fold-out, then dismisses the overlay.
+        // Escape: cancel an inline edit, then fold the recents, then dismiss.
         onEscape: function () {
           if (state.cancelPreviewEdit) {
             state.cancelPreviewEdit();
@@ -2340,9 +2166,7 @@
         restoreFocus: true
       });
     }
-    // Always land on the workspace form, wherever the user left the tabs —
-    // unless the caller asked for a specific one (the desktop Help menu's
-    // "What's New…" opens straight onto the changelog).
+    // Default to the form; the desktop Help menu's "What's New…" passes "updates".
     setStartTab(tab || "open");
     runIntro();
     refresh();
@@ -2366,20 +2190,12 @@
       // Guard against a re-open during the fade (open() flips state.open back).
       if (state.open) return;
       show(root, false);
-      // Release the blocking modal only once the overlay is actually hidden.
-      // The start overlay never sets body.modal-open, so blockingModalOpen()
-      // tracks this trap; releasing it early would re-activate page hotkeys and
-      // background Alt-hint chips while the launcher is still fading out.
+      // Release only once hidden: an early release re-arms page hotkeys during the fade-out.
       if (typeof closeBlockingModal === "function") closeBlockingModal(root);
     }, 460);
   }
 
-  // Replay the rail brand-mark stroke-draw on every overlay open. The shared
-  // per-session gate in clipgenInitBrandMark (utils.js) draws only the first
-  // .brand-mark hydrated on the page — usually the topnav logo — so the launcher
-  // forces its own replay here, independent of that flag. Retries across a few
-  // animation frames because hydration (an async favicon.svg fetch) may not have
-  // landed yet on the first open; it no-ops once attempts run out.
+  // Replay the rail mark's draw every open, bypassing clipgenInitBrandMark's session gate; retry until hydrated.
   function replayBrandMark(attempts) {
     var mark = els.mark;
     if (!mark) return;
@@ -2432,14 +2248,7 @@
   }
 
   function refresh() {
-    // Concurrent, not serial: each loader renders its own panel on resolve
-    // and swallows its own errors, and the Google listing is a Drive network
-    // call (with exponential backoff on 429) that must not keep the local
-    // Excel/MindNode panels queued behind it. Only applyCurrentSessionPrefill
-    // waits for everything — it reads status + all three source lists. The
-    // changelog loads lazily when its tab opens (setStartTab).
-    // loadGoogleSheets is wrapped with no argument so it never mistakes
-    // anything for its `force` flag.
+    // Concurrent: the Drive call must not queue the local panels; only the prefill waits.
     Promise.all([
       loadStatus(true),
       loadDirs(),
@@ -2456,14 +2265,7 @@
 
   function applyCurrentSessionPrefill() {
     var s = state.statusData || {};
-    // A mind map is an independent source with no worksheet, so it branches ahead
-    // of the spreadsheet cases. Gate on active_source, NOT mindnode_loaded: the
-    // two coexist by design, so a bare mindnode_loaded check let one opened mind
-    // map hijack the prefill for the rest of the session — recents would highlight
-    // the spreadsheet opened afterwards while this panel switched to the Mind map
-    // tab, and confirming re-opened the map. currentSessionKey() already keys on
-    // active_source and the two must agree. An empty active_source keeps the
-    // original precedence, so a mind-map-only launch still prefills.
+    // Gate on active_source, not mindnode_loaded: the two coexist, and currentSessionKey() must agree.
     var activeType = (s.active_source && s.active_source.type) || "";
     var mindnodeIsActive = activeType === "mindnode" || !activeType;
     if (mindnodeIsActive && s.mindnode_loaded && s.mindnode_path) {
@@ -2482,10 +2284,7 @@
       return;
     }
     if (s.sheet_loaded && s.spreadsheet_type && s.spreadsheet_id_or_path) {
-      // Seed the picker so the current session shows as "loaded" without the
-      // user needing to re-select. Activate the correct tab + selection, and
-      // restore the loaded worksheet so re-confirming can't silently switch to
-      // the priority tab (and the dropdown reflects the active tab).
+      // Seed the picker as "loaded"; restoring the worksheet stops re-confirm switching tabs.
       setTab(s.spreadsheet_type);
       selectSpreadsheet({
         type: s.spreadsheet_type,
@@ -2494,8 +2293,7 @@
         worksheet: s.spreadsheet_worksheet || "",
       });
       if (s.spreadsheet_type === "google" && els.googlePaste) {
-        // Match against the open Google sheet list if possible; otherwise show
-        // the identifier in the paste field so the user can confirm the value.
+        // Not in the listed sheets: show the identifier in the paste field instead.
         var matches = (state.googleSheets || []).some(function (sheet) {
           return sheet.name === s.spreadsheet_id_or_path;
         });
@@ -2507,19 +2305,11 @@
         if (!inList) els.excelPaste.value = s.spreadsheet_id_or_path;
       }
     } else if (s.sheet_loaded) {
-      // Sheet loaded via CLI without matching meta — leave the picker on its
-      // default tab but show a "current" baseline as no-sheet so the user can
-      // change things without the dirty glow misfiring.
+      // CLI-loaded sheet without meta: baseline as no-sheet so the dirty glow doesn't misfire.
       state.baseline.sheetTab = state.activeTab;
       state.baseline.sheetKey = "";
     } else if (s.startup_notice) {
-      // A window-first `-s` launch failed to open this source on the boot
-      // thread. Land on the failed source's tab — never "none", which hides
-      // the pickers and the Google Connect CTA the notice points at — and
-      // highlight the sheet card *after* setTab (which always clears the
-      // highlight). The highlight re-applies on every overlay open while the
-      // notice stands (the server drops it once any sheet opens); the toast
-      // fires only the first time.
+      // Boot -s failed: never "none" (hides the CTA); highlight after setTab clears it.
       setTab(s.startup_notice_source === "excel" ? "excel" : "google");
       markSheetError(state.startupNoticeShown ? "" : s.startup_notice);
       state.startupNoticeShown = true;
@@ -2529,10 +2319,7 @@
     }
     state.baseline = baselineFromInputs();
     applyFieldStates();
-    // The name isn't a server-side field — it lives on the recent-projects
-    // record, so the current session's label is whichever stored project
-    // matches the session key. refresh() is fire-and-forget, so this can land
-    // after the user has already started typing; their value wins.
+    // The name lives on the recents record; typed input beats this late prefill.
     if (!state.projectNameAuthored) {
       var currentKey = currentSessionKey();
       var current = currentKey && state.recentProjects.filter(function (p) {

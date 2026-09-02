@@ -16,9 +16,7 @@
 
   var audioPanel = null; // ClipgenVideoControls audio-popover controller
 
-  // Playback-speed cycle. Coarse like Screenspace's (not Transcripts' fine
-  // 0.75–2x list): Composer plays whole session recordings, where the point of
-  // the control is skimming rather than close listening.
+  // Coarse steps like Screenspace: whole-session recordings are skimmed, not listened closely.
   var VIDEO_SPEEDS = [0.5, 1, 2, 3, 5];
 
   var state = {
@@ -77,10 +75,7 @@
   function initMarkerScrub() { return CO.initMarkerScrub && CO.initMarkerScrub.apply(null, arguments); }
 
   // ---- Multi-part video ----
-  // The <video> plays one part at a time; these helpers present a single
-  // GLOBAL timeline so the playhead, cuts, and markers all use global seconds.
-  // Composer's manifest calls the part-start field "offset" where the other
-  // pages say "cumulativeStart" — the startKey argument documents the fork.
+  // Global-seconds timeline over per-part playback; manifest part-start key is "offset".
 
   function partForGlobal(g) {
     return clipgenPartForGlobal(state.parts, g, "offset");
@@ -128,11 +123,7 @@
     _seek.seek(time);
   }
 
-  // The one-shot loadedmetadata seek of the part switch in flight, if any.
-  // Tracked so a second switch (or a participant change) before the metadata
-  // arrives can drop it — otherwise the stale handler fires on the NEW
-  // source's loadedmetadata, seeking to the old part's local time and
-  // auto-playing with the old call's resume flag.
+  // Pending part-switch loadedmetadata handler; newer switches drop it so it never seeks the wrong source.
   var _pendingPartMeta = null;
 
   function cancelPendingPartMeta() {
@@ -145,8 +136,7 @@
   function switchToPart(i, localTime, resume) {
     var video = qs("#coVideo");
     if (!video) return;
-    // A same-part seek may still be deferred on loadedmetadata; drop it so it
-    // can't fire after this part loads and clobber this cross-part seek.
+    // A deferred same-part seek would clobber this cross-part seek; drop it.
     cancelPendingSeek();
     cancelPendingPartMeta();
     state.activePart = i;
@@ -201,8 +191,7 @@
       " / " + formatTime(state.duration, { decimals: 0 });
   }
 
-  // The footer hint advertises double-click cuts only while the setting is on
-  // (config at boot; the Settings modal's onSave re-syncs it live).
+  // Advertises double-click cuts only while the setting is on; Settings onSave re-syncs it.
   function updateTimelineHint() {
     var hint = qs(".co-timeline-hint");
     if (!hint) return;
@@ -212,9 +201,7 @@
         : "");
   }
 
-  // Subheader source readout: duration · resolution · fps (Screenspace's
-  // video-info format). Resolution/fps ride along on the participant record;
-  // duration may firm up later for single-part participants (loadedmetadata).
+  // Subheader readout in Screenspace's format; single-part duration may firm up on loadedmetadata.
   function updateVideoInfo() {
     var elInfo = qs("#coVideoInfo");
     if (!elInfo) return;
@@ -238,10 +225,7 @@
       updatePlayButton();
     });
     video.addEventListener("ended", function () {
-      // A part can end before timeupdate ever lands inside the hand-off window
-      // below — timeupdate fires ~4x/s, so at 5x the element jumps ~1.25 s per
-      // event and steps clean over it. Hand off here too, or fast playback
-      // stalls at every part boundary.
+      // Fast playback can skip timeupdate's hand-off window entirely; hand off here too.
       if (state.activePart < state.parts.length - 1) {
         switchToPart(state.activePart + 1, 0.001, true);
         return;
@@ -268,8 +252,7 @@
         renderAnnotations(); // spans gate visibility against the playhead
       });
     });
-    // Single-part participants may have no probed duration (server couldn't
-    // ffprobe) — fall back to the element's own metadata.
+    // No probed duration (ffprobe failed): fall back to the element's metadata.
     video.addEventListener("loadedmetadata", function () {
       if (!state.duration && state.parts.length === 1 && isFinite(video.duration)) {
         state.duration = video.duration;
@@ -289,9 +272,7 @@
       updateSpeedButton();
     });
 
-    // Hover the mute button for a glassy 0–200% volume popover (click still
-    // mutes). getTracks reads the active participant's probed audio layout;
-    // trackAudioUrl enables per-track mixing for single-file participants.
+    // Hover volume popover; per-track mixing (trackAudioUrl) only for single-file participants.
     var muteBtn = qs("#coMuteBtn");
     audioPanel = window.ClipgenVideoControls.attachAudioPanel({
       video: video,
@@ -349,8 +330,7 @@
     // Drop cached sprites/audio + stop any playing snippet: they belong to the
     // previous participant's video.
     if (CO.resetScrubMedia) CO.resetScrubMedia();
-    // Undo ops reference the previous participant's cuts — an undo fired after
-    // a switch would invisibly mutate that other timeline. Drop the stacks.
+    // Undo ops target the previous participant's cuts; drop them.
     _undoStack.length = 0;
     _redoStack.length = 0;
     syncUndoButtons();
@@ -366,8 +346,7 @@
       video.removeAttribute("src");
       qs("#coVideoFrame").classList.remove("has-video");
     }
-    // Reconfigure the audio popover (per-track mixer vs master slider) and tear
-    // down the previous participant's track mix for this new participant.
+    // Rebuild the audio popover for this participant's track layout.
     if (audioPanel) audioPanel.refresh();
 
     ["#coPlayBtn", "#coMuteBtn", "#coSpeedBtn", "#coSetInBtn", "#coSetOutBtn",
@@ -403,9 +382,7 @@
     placeholder.value = "";
     select.appendChild(placeholder);
     state.participants.forEach(function (p) {
-      // An <option> can't hold a badge element, so an off-sheet participant —
-      // video on disk, no column in the loaded sheet — gets a label suffix.
-      // Only when a sheet is loaded: without one everything is off-sheet.
+      // <option> can't hold a badge, so off-sheet participants get a label suffix.
       var label = state.hasSheet && p.in_sheet === false ? p.id + " (off-sheet)" : p.id;
       var opt = el("option", "", label);
       opt.value = p.id;
@@ -421,8 +398,7 @@
   }
   CO.participantCuts = participantCuts;
 
-  // Chronological order — the cut list renders in this order and position+1 is
-  // the cut's index badge (list and timeline both number from here).
+  // Position+1 here is the cut's index badge in both list and timeline.
   function sortedCuts() {
     return participantCuts().slice().sort(function (a, b) { return a.start - b.start; });
   }
@@ -451,9 +427,7 @@
   }
   CO.setInPoint = setInPoint;
 
-  // Raw appliers — perform the API call + local state update, no undo
-  // recording. User actions wrap these and record an op; undo/redo replay
-  // them directly (recording again would corrupt the stacks).
+  // Raw appliers: API call + local state, no undo recording. Undo/redo replay them directly.
 
   function refreshCutViews() {
     updateGenerateButton();
@@ -504,9 +478,7 @@
     showToast(err && err.message ? err.message : "Cut update failed");
   }
 
-  // Find a loaded marker by key across the three lanes (markers are rebuilt on
-  // participant switch, so a trim op can outlive its marker — that's fine, the
-  // manifest still updates and the next lane load reflects it).
+  // Null is fine: a trim op can outlive its marker; the manifest still updates.
   function findMarker(key) {
     var sources = Object.keys(state.markers);
     for (var s = 0; s < sources.length; s++) {
@@ -524,11 +496,7 @@
     renderSidebar();
   }
 
-  // Raw trim applier: *values* = {start, end} sets the override, null resets
-  // it. Updates the manifest, the local trims map, and the loaded marker.
-  // Marker metadata rides along when the marker is loaded so Studio's
-  // Composer Intake can render the trim as a card; the server preserves
-  // previously stored metadata when a re-PUT (undo/redo) omits it.
+  // null resets the trim. Marker metadata lets Studio's Composer Intake render a card.
   function applyTrim(key, values, sourceSpan) {
     var payload = values ? { start: values.start, end: values.end } : null;
     var meta = values && findMarker(key);
@@ -547,10 +515,7 @@
         state.trims[key] = { start: data.trim.start, end: data.trim.end };
         if (marker) {
           if (!marker.trimmed) {
-            // A drag-trim mutates marker.start/end live, so the current span is
-            // already the trimmed value; *sourceSpan* (the pre-drag span passed
-            // by commitMarkerTrim) is the true original. Non-drag callers omit it
-            // and fall back to the current span, which hasn't been mutated.
+            // A drag already mutated the span live; sourceSpan carries the pre-drag original.
             var src = sourceSpan || { start: marker.start, end: marker.end };
             marker.origStart = src.start;
             marker.origEnd = src.end;
@@ -589,9 +554,7 @@
     syncUndoButtons();
   }
 
-  // Apply *op* in the given direction. A re-created cut gets a fresh server id,
-  // so the op's stored cut is swapped for the new one — the paired redo/undo
-  // then targets the id that actually exists.
+  // A re-created cut gets a fresh server id; store it for the paired op.
   function applyOp(op, isUndo) {
     if (op.type === "create") {
       return isUndo
@@ -622,18 +585,14 @@
       return applyAnnPatch(op.id, payload);
     }
     if (op.type === "ann-group") {
-      // Sub-ops are independent per-annotation edits/deletes; apply them all in
-      // the same direction (order-independent) and resolve when the last lands.
+      // Sub-ops are independent; apply all in the same direction.
       return Promise.all(op.ops.map(function (sub) { return applyOp(sub, isUndo); }));
     }
     // edit
     return applyTimes(op.id, isUndo ? op.before : op.after);
   }
 
-  // Peek-apply-pop: the op moves between stacks only once the server has
-  // accepted it, so a failed request keeps the op available for retry (the
-  // raw appliers never mutate local state on failure). The busy flag stops a
-  // rapid second ⌘Z from re-applying the still-peeked op.
+  // Peek-apply-pop: an op moves stacks only after the server accepts; busy blocks a second ⌘Z.
   var _historyBusy = false;
 
   function shiftHistory(fromStack, toStack, isUndo) {
@@ -690,9 +649,7 @@
   }
   CO.deleteCut = deleteCut;
 
-  // Persist a cut's edited span (timeline edge/body drags land here on drag
-  // end, with *before* = the pre-drag times so the edit is undoable). On
-  // failure the optimistic drag is rolled back so the view matches the server.
+  // Drag end lands here; *before* is the pre-drag span. Failure rolls the drag back.
   function commitCutTimes(cut, before) {
     var changed = !before || before.start !== cut.start || before.end !== cut.end;
     applyTimes(cut.id, { start: cut.start, end: cut.end }).then(function (saved) {
@@ -800,9 +757,7 @@
   }
   CO.deleteAnnotation = deleteAnnotation;
 
-  // Persist an edited field ("span" or "geometry"); *before* is the pre-edit
-  // value for undo. The record was already mutated locally by the caller —
-  // rolled back to *before* if the server rejects the edit.
+  // The caller already mutated *ann*; a rejected edit rolls it back to *before*.
   function commitAnnotationField(ann, field, before) {
     var payload = {};
     payload[field] = ann[field];
@@ -824,14 +779,7 @@
   }
   CO.commitAnnotationField = commitAnnotationField;
 
-  // Batch commit of *field* ("style" or "geometry") across many annotations, each
-  // already mutated, with *before* the pre-edit value. One undo step, so a group
-  // style change or move undoes atomically. Each op's *after* comes from the
-  // PATCH response (server-sanitized), as in the single-annotation path — a
-  // partial local object can't reset backfilled defaults. On partial failure
-  // only the *rejected* edits roll back locally: the accepted ones are already
-  // in the manifest, and reverting them in the view would make it disagree
-  // with the server until reload.
+  // One undo step per group. *after* is the PATCH response; only rejected edits roll back.
   function commitAnnotationFieldGroup(field, edits) {
     if (!edits.length) return Promise.resolve();
     var patches = edits.map(function (e) {
@@ -871,9 +819,7 @@
   }
   CO.commitAnnotationFieldGroup = commitAnnotationFieldGroup;
 
-  // Delete every selected annotation as a single undo step. Deletes that land
-  // still get an undo op when a sibling delete fails — without that, a partial
-  // failure left the succeeded deletes unrecoverable.
+  // One undo step; landed deletes still get an op when a sibling fails.
   function deleteSelectedAnnotations() {
     var snapshots = selectedAnnotations().map(function (ann) {
       return JSON.parse(JSON.stringify(ann));
@@ -918,8 +864,7 @@
   }
   CO.selectedAnnotations = selectedAnnotations;
 
-  // The record iff exactly one annotation is selected — gates the single-shape
-  // resize/rotate handles (group resize is not supported).
+  // Gates the resize/rotate handles; group resize is unsupported.
   function singleSelectedAnnotation() {
     var sel = selectedAnnotations();
     return sel.length === 1 ? sel[0] : null;
@@ -949,17 +894,13 @@
   }
   CO.toggleAnnotationSelection = toggleAnnotationSelection;
 
-  // Hide/reveal the whole annotation layer: the overlay skips drawing and the
-  // timeline lane dims. The #coToolHide button mirrors the state; its icon
-  // shows the action (eye-slash = will hide, eye = will reveal).
+  // Overlay skips drawing and the lane dims; the button icon shows the next action.
   function setAnnotationsHidden(hidden) {
     state.annHidden = !!hidden;
     var btn = qs("#coToolHide");
     if (btn) {
       btn.setAttribute("aria-pressed", state.annHidden ? "true" : "false");
-      // No key hint here — the hotkey registry renders its own chip for
-      // [data-hotkey] controls on Alt-hold, and a hand-written one goes stale
-      // the moment the user rebinds.
+      // No key hint: the hotkey registry renders its own chip and survives rebinds.
       var hideLabel = (state.annHidden ? "Show" : "Hide") + " annotations";
       btn.setAttribute("aria-label", hideLabel);
       btn.setAttribute("data-tooltip", hideLabel + " (hold to peek, tap to toggle)");
@@ -978,8 +919,7 @@
 
   var _exporting = false;
 
-  // Ask the server to abort the in-flight burn/GIF encode. Harmless when
-  // nothing is running: the event is cleared at the start of the next export.
+  // Harmless when idle: the next export clears the cancel event.
   function onCancelExport() {
     apiPost("api/export/cancel", {}).catch(function () {});
     showToast("Cancelling export…");
@@ -995,9 +935,7 @@
     return null;
   }
 
-  // *btn*: the toolbar button that launched a cancellable (burn/GIF) export.
-  // While the encode runs it reads "Cancel" and a re-click posts the cancel
-  // (see exportBurn); screenshot exports are near-instant and pass no button.
+  // *btn* (burn/GIF only) reads "Cancel" while encoding; a re-click posts the cancel.
   function runExport(path, body, busyLabel, btn) {
     if (_exporting) { showToast("An export is already running"); return; }
     _exporting = true;
@@ -1022,8 +960,7 @@
       showToast("Exported " + (data.artifact.file || ""));
     }).catch(function (err) {
       done();
-      // A 4xx envelope now rejects; err.message carries the server's text
-      // ("An export is already running", "The span is outside the recording").
+      // A 4xx envelope rejects with the server's message.
       showToast(err && err.message ? err.message : "Export failed");
     });
   }
@@ -1055,9 +992,7 @@
 
   // ---- Marker trims (user actions; non-destructive span overrides) ----
 
-  // Persist a marker's dragged span. The timeline mutated the marker live;
-  // *before* is the trim that was in force pre-drag (null = untrimmed) and
-  // *origSpan* the marker's pre-drag visual span (for failure rollback).
+  // *before* is the pre-drag trim (null = untrimmed); *origSpan* the pre-drag span for rollback.
   function commitMarkerTrim(marker, before, origSpan) {
     var after = { start: marker.start, end: marker.end };
     applyTrim(marker.key, after, origSpan).then(function () {
@@ -1087,8 +1022,7 @@
   }
   CO.resetTrim = resetTrim;
 
-  // Promote a marker's (possibly trimmed) span to a Composer cut so it feeds
-  // generation without new plumbing.
+  // A cut made from a marker feeds generation without new plumbing.
   function copyMarkerToCut(marker) {
     applyCreate({
       participant: state.participant,
@@ -1140,9 +1074,7 @@
     cuts.forEach(function (cut, i) {
       var item = el("div", "co-cut-item" + (cut.id === state.selectedCutId ? " selected" : ""));
 
-      // Row 1: chronological index + editable name (carried into generated
-      // clips as the event type; also feeds the Studio Composer-intake tab's
-      // cards) + delete button.
+      // Row 1: index, editable name (becomes the clip's event type), delete.
       var nameRow = el("div", "co-cut-row");
       nameRow.appendChild(el("span", "co-cut-index", String(i + 1)));
       var name = el("input", "co-cut-name");
@@ -1266,8 +1198,7 @@
       }
       item.appendChild(timeRow);
 
-      // Set-or-remove: an empty data-tooltip would still make the row a hover
-      // anchor, swallowing the child buttons' tooltips on the way past.
+      // An empty data-tooltip would still swallow the child buttons' tooltips.
       if (m.label) item.setAttribute("data-tooltip", m.label);
       else item.removeAttribute("data-tooltip");
       item.addEventListener("click", function () {
@@ -1315,10 +1246,7 @@
       var stored = localStorage.getItem(SIDEBAR_OPEN_KEY);
       if (stored !== null) state.sidebarOpen = stored !== "false";
     } catch (_) {}
-    // Apply before first paint so a persisted-collapsed panel shows collapsed
-    // immediately; the flex-basis transition is gated on `.tx-ready` (added
-    // after first paint below), so the initial open→collapsed flip never
-    // animates. Mirrors studio.js readPersistedSidebarOpen.
+    // Apply before first paint; .tx-ready gates the transition so the initial flip never animates.
     applySidebarOpen();
     var panel = qs("#coCutPanel");
     if (!panel) return;
@@ -1337,8 +1265,7 @@
     applySidebarOpen();
   }
 
-  // Run synchronously at script load (composer.js is deferred, so #coCutPanel
-  // already exists) rather than in boot(): sets data-open before first paint.
+  // Runs at script load, not boot(): data-open must land before first paint.
   readPersistedSidebarOpen();
 
   // ---- Generate (Studio intake endpoint; NDJSON streaming) ----
@@ -1419,12 +1346,8 @@
     if (_generateAbort) _generateAbort.abort();
   }
 
-  // ---- Artifact log (TopNav #logBtn) ----
-  //
-  // Shares Studio's markup, styling AND open/close path: utils.js's
-  // popModalIn/popModalOut drive the card pop and ramp the shared .cg-modal-veil
-  // backdrop. A separate copy with its own veil constants and exit timer is what
-  // made spam-toggling pop.
+  // ---- Artifact log ----
+  // Shares Studio's markup and popModalIn/popModalOut; a private copy flickered on spam-toggle.
 
   function logArtifactResult(data, cut) {
     var artifact = data.artifact || {};
@@ -1460,8 +1383,7 @@
       row.appendChild(badge);
       row.appendChild(el("span", "log-entry-file",
         entry.ok ? (entry.file || "clip") : (entry.error || "unknown error")));
-      // A screenshot is a single instant (start === end): show one timestamp, not
-      // a zero-length "t – t" range; drop the time entirely if we have no numbers.
+      // A screenshot (start === end) shows one timestamp, not a zero-length range.
       var meta = entry.participant;
       var hasStart = typeof entry.start === "number" && isFinite(entry.start);
       var hasEnd = typeof entry.end === "number" && isFinite(entry.end);
@@ -1483,12 +1405,9 @@
   function openLog() {
     var overlay = qs("#logOverlay");
     popModalIn(overlay, qs(".log-panel"));
-    // Gates the topnav's own backdrop-filter so this modal's veil composites
-    // over the bar instead of reading through it (see topnav.css).
+    // Lets the veil composite over the topnav's backdrop-filter (see topnav.css).
     document.body.classList.add("modal-open");
-    // Escape, Tab-trapping and focus restore, same as Studio's log. The trap
-    // owns Escape while it is active, so the page's back-out cascade does not
-    // need a branch for this overlay.
+    // The trap owns Escape, so the back-out cascade needs no branch for this overlay.
     openBlockingModal(overlay, {
       onEscape: closeLog,
       trapFocus: true,
@@ -1499,10 +1418,7 @@
 
   function closeLog() {
     var overlay = qs("#logOverlay");
-    // Trap and topnav gate are released with the visual hide, not before it:
-    // focus jumping back to the trigger while the veil is still up reads as the
-    // panel already being gone. popModalOut's generation guard makes deferring
-    // them safe against a re-open mid-exit.
+    // Release trap and topnav gate with the hide, not before: early focus restore looks broken.
     popModalOut(overlay, qs(".log-panel"), function () {
       closeBlockingModal(overlay);
       overlay.classList.add("hidden");
@@ -1512,8 +1428,7 @@
 
   // ---- Keyboard (shared hotkeys.js registry) ----
 
-  // j/k list-nav: select the next/previous cut (by start time) and move the
-  // playhead to its in point.
+  // j/k list-nav: select the adjacent cut and seek to its in point.
   function selectAdjacentCut(delta) {
     var cuts = sortedCuts();
     if (!cuts.length) return;
@@ -1619,10 +1534,7 @@
       { id: "composer.note.zoomTimeline" },
     ]);
 
-    // Back-out cascade, one level per press (order matters: overlay first,
-    // then pending in-point, then tool, then selections).
-    // The artifact log is absent here on purpose: it now runs a blocking-modal
-    // trap that owns Escape while open, so hotkeys.js never reaches this cascade.
+    // Back-out cascade, one level per press. The artifact log's modal trap owns its own Escape.
     window.ClipgenHotkeys.registerEscape(function () {
       if (state.pendingIn !== null) {
         state.pendingIn = null;
@@ -1637,9 +1549,7 @@
     });
   }
 
-  // Command palette (command-palette.js): Composer registers no TopNav quick
-  // actions, so besides the built-in nav/global entries this is the page's
-  // whole palette — toolbar actions, lane toggles, participant jumps.
+  // Composer registers no TopNav quick actions, so this is the page's whole palette.
   function initCommandPalette() {
     if (!window.ClipgenCommandPalette) return;
     function buttonCommand(id, title, icon, keywords, elId) {
@@ -1656,8 +1566,7 @@
         run: function () { qs("#" + elId).click(); },
       };
     }
-    // Left timeline-list tabs (Cuts / Sheet / Screen / Script) carry data-tab;
-    // click the matching tab so initSidebarTabs sets state.sidebarTab.
+    // Click the matching data-tab so initSidebarTabs owns the state change.
     function listTabCommand(dataTab, title, icon) {
       return {
         id: "composer:list-" + dataTab,
@@ -1717,8 +1626,7 @@
           run: function () { document.getElementById("logBtn").click(); },
         },
       ];
-      // "Jump to … in Composer" = stays here and selects in place; the
-      // palette's built-in provider adds the cross-page "Open … in <Page>".
+      // Selects in place; the palette's built-in provider adds cross-page "Open … in <Page>".
       (state.participants || []).forEach(function (p) {
         cmds.push({
           id: "composer:p:" + p.id,
@@ -1739,18 +1647,14 @@
   // ---- Boot ----
 
   function boot() {
-    // TopNav renders the theme toggle (#themeToggle) and Settings (#settingsBtn)
-    // buttons synchronously before this hub loads, so wire them here as the
-    // other surfaces do. Theme flips repaint the canvases (their colors are
-    // sampled from CSS variables at draw time).
+    // TopNav renders these buttons before the hub loads; wire them here. Theme flips repaint canvases.
     if (typeof initThemeToggle === "function") {
       initThemeToggle(function () {
         if (CO.invalidateLaneColors) CO.invalidateLaneColors();
         renderTimeline();
       });
     }
-    // Saved/reset settings apply live on this page: re-sync the mirrored
-    // config flag and the footer hint that advertises it.
+    // Settings apply live: re-sync the mirrored flag and its footer hint.
     function syncComposerSettings(settings) {
       (settings || []).forEach(function (s) {
         if (s.name === "COMPOSER_DOUBLE_CLICK_CUTS") {
@@ -1793,8 +1697,7 @@
     qs("#coCancelBtn").addEventListener("click", onCancelGenerate);
     qs("#coUndoBtn").addEventListener("click", undo);
     qs("#coRedoBtn").addEventListener("click", redo);
-    // Open-only, matching Studio: dismiss is the X, the backdrop, or Escape. A
-    // toggle here made the button a spam surface that fought its own animation.
+    // Open-only like Studio; a toggle here fought its own animation when spammed.
     var logBtn = qs("#logBtn");
     if (logBtn) logBtn.addEventListener("click", openLog);
     qs("#logClose").addEventListener("click", closeLog);
@@ -1804,10 +1707,7 @@
     qs("#coCutPanelToggle").addEventListener("click", toggleSidebar);
     initSidebarTabs();
 
-    // The two boot fetches run in parallel, but participant auto-select MUST
-    // wait for the manifest: selectParticipant → loadMarkers → commitLane
-    // overlays trims from state.trims, which is empty until the manifest
-    // lands — racing them showed saved trims at their source spans.
+    // Participant auto-select must wait for this: commitLane overlays trims from state.trims.
     var manifestLoaded = apiGet("api/manifest").then(function (data) {
       if (!data.ok || !data.manifest) return;
       state.cuts = data.manifest.cuts || [];
@@ -1850,8 +1750,7 @@
       if (!data.ok) return;
       if (data.config) {
         clipgenApplyConfig(data.config);
-        // boot() seeded state.ann* (and the annotate toolbar painted) from the
-        // JS defaults before this fetch landed; re-seed from the real config.
+        // state.ann* was seeded from JS defaults; re-seed from the real config.
         if (CO.syncAnnotationDefaults) CO.syncAnnotationDefaults();
       }
       updateTimelineHint(); // the double-click hint follows the fetched config
@@ -1859,9 +1758,7 @@
       state.participants = data.participants || [];
       populateParticipantSelect();
       return manifestLoaded.then(function () {
-        // A /composer/#P07 hash (command palette / cross-page links) wins;
-        // otherwise restore the last-worked-on participant, falling back to
-        // auto-select when there is only one.
+        // Hash wins, then the stored participant, then auto-select when there is one.
         var initial = clipgenPickParticipant(state.participants, {
           hashPid: clipgenHashParticipant(),
           storedId: getStoredUIState("composer").participant,

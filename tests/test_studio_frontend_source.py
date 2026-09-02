@@ -24,7 +24,7 @@ def test_studio_selection_requires_valid_timestamp_cells():
 def test_studio_parse_clip_timestamps_no_zero_fallback():
     src = _studio_js()
     start = src.index("function parseClipTimestamps")
-    end = src.index("  // Cross-referencing:", start)
+    end = src.index("\n  }\n", start)
     body = src[start:end]
     assert "segments.push({ startSeconds: 0" not in body
     assert "return parseClipSegmentsForCell" in body
@@ -249,7 +249,7 @@ def test_add_to_queue_handles_intake_sources():
     not expandCellToSegments() which requires spreadsheet row/timestamp shape."""
     src = _studio_js()
     start = src.index("function addToQueue(")
-    end = src.index("\n  // Collect selectable timestamp cell infos", start)
+    end = src.index("\n  }\n", start)
     body = src[start:end]
     intake_idx = body.index("if (isIntakeSource(info.source))")
     expand_idx = body.index("expandCellToSegments")

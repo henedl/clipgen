@@ -20,10 +20,7 @@
     "CLI",
   ];
 
-  // Entry/exit animation. The backdrop is the shared .cg-modal-veil, ramped by
-  // toggling `.is-veiled`; the panel slides in on `.is-in`. EXIT_MS must stay in
-  // step with --duration-veil (tokens.css) so the veil finishes fading exactly
-  // as the overlay is hidden.
+  // EXIT_MS must match --duration-veil (tokens.css) so veil and overlay finish together.
   var EXIT_MS = 360;
 
   var _root = null;
@@ -37,8 +34,7 @@
   var _opts = {};
   var _modelsCache = null;
   var _modelsCachePromise = null;
-  // Running GGUF downloads by model ref → listener list. A row rebuilt on
-  // reopen attaches here instead of starting a second poll.
+  // Running GGUF downloads by model ref; a rebuilt row joins the existing poll.
   var _llmDownloadWatch = {};
   // The Summaries tab's model block refresh, set when the block is built.
   var _llmBlockRefresh = null;
@@ -47,15 +43,12 @@
   var _cardsCache = null;
   var _cardsCachePromise = null;
   var _cardPickers = [];
-  // Desktop-only footer button; null in a browser tab. Built on first load,
-  // not in _buildDom: only the server knows whether this is a native window.
+  // Desktop-only footer button; built after load, once the server says native window.
   var _revealBtn = null;
   var _SAMPLE_TITLE_TEXT = "Sample description";
 
   function _getApiRoot() {
-    // Each page is served under a different prefix (/studio/, /transcripts/,
-    // /screenspace/). Settings + models are registered at the combined-app
-    // root, so request them from an absolute path.
+    // Settings and models live at the combined-app root, not under a page prefix.
     return "/api";
   }
 
@@ -69,9 +62,7 @@
     if (_modelsCachePromise) return _modelsCachePromise;
     _modelsCachePromise = apiGet(_getApiRoot() + "/models")
       .then(function (data) {
-        // Only pin a result that actually discovered the AI server. If it
-        // wasn't reachable yet, don't cache the empty list for the session —
-        // reset so a later open re-fetches and picks up installed models.
+        // Cache only when the AI server answered; otherwise retry on the next open.
         if (data && data.ok && !(data.llm && data.llm.available === false)) {
           _modelsCache = data;
         } else {
@@ -108,9 +99,7 @@
     }
   }
 
-  // Start (or join) a GGUF download and report status dicts to onProgress.
-  // Mirrors transcripts.js downloadLlmModel, but the modal can close and
-  // reopen mid-download, so one poll per model is shared across rows.
+  // Start or join a GGUF download; one shared poll per model survives modal reopen.
   function _watchLlmDownload(model, onProgress) {
     var watch = _llmDownloadWatch[model];
     if (watch) { watch.listeners.push(onProgress); return; }
@@ -158,9 +147,7 @@
     });
   }
 
-  // Downloaded AI models with show + delete actions, on the Summaries tab
-  // beneath the model selects — GGUFs are ~6 GB each, so this is where disk
-  // gets reclaimed. Deleting a symlinked external model only removes the link.
+  // Downloaded models with show/delete. Deleting a symlinked external model removes only the link.
   function _buildLlmModelsBlock() {
     var wrap = el("div", "settings-llm-models");
     wrap.appendChild(el("div", "settings-group-label", "Downloaded models"));
@@ -188,8 +175,7 @@
       });
     }
 
-    // Friendly name on top, raw id in mono beneath. A model outside the
-    // catalog has no friendly name, so its id stays the primary text.
+    // Friendly name over mono id; without a catalog label the id stays primary.
     function _modelNameBlock(model) {
       var name = el("div", "settings-llm-model-name");
       var title = el("span", "settings-llm-model-title", model.label || model.name);
@@ -284,8 +270,7 @@
       var row = el("div", "settings-llm-model-row");
       var name = _modelNameBlock(model);
       if (model.unusable) {
-        // Only a failed load can discover this, so say what the router said
-        // rather than a generic "incompatible".
+        // Show the router's own reason, not a generic "incompatible".
         name.appendChild(el("span", "settings-llm-model-reason", model.unusable));
         row.classList.add("settings-llm-model-row--unusable");
       }
@@ -356,8 +341,7 @@
         if (!currentValue) inheritOpt.selected = true;
         sel.appendChild(inheritOpt);
       }
-      // Settings hold HF refs while installed entries are file stems; the
-      // catalog carries both so an installed suggestion matches its ref.
+      // Settings hold HF refs, installed entries file stems; the catalog maps stem to ref.
       var suggested = (provider === "llm" && data.llm && data.llm.suggested) || [];
       var refByStem = {};
       for (var si = 0; si < suggested.length; si++) {
@@ -368,13 +352,11 @@
         var m = models[i];
         var opt = document.createElement("option");
         opt.value = refByStem[m.name] || m.name;
-        // An option has no room for the raw id under a friendly name, so it
-        // moves to the tooltip.
+        // No room for the raw id in an option; it goes in the tooltip.
         var label = m.label || m.name;
         if (m.size_mb) label += " (" + _formatSize(m.size_mb) + ")";
         if (m.description) label += " \u2014 " + m.description;
-        // Selectable on purpose: a llama.cpp upgrade may fix it, and the mark
-        // is what stops the user picking it again by accident.
+        // Still selectable: a llama.cpp upgrade may fix it; the mark warns.
         if (m.unusable) label += " \u2014 won't load";
         opt.textContent = label;
         opt.title = m.unusable ? m.name + " \u2014 " + m.unusable : m.name;
@@ -414,9 +396,7 @@
       }
       sel.disabled = false;
 
-      // An AI-model dropdown whose only entry is "<model> (current)" looks like a
-      // populated list, so a user with no runtime at all gets no signal that the
-      // setting cannot do anything. Say so next to the control.
+      // A single "(current)" option looks populated; say next to it when no runtime exists.
       if (provider === "llm") {
         var status = clipgenLlmStatus(data.llm);
         var note = sel.parentNode && sel.parentNode.querySelector(".settings-model-note");
@@ -468,9 +448,7 @@
 
     var panels = el("div", "settings-tab-panels");
     panels.id = "settingsContent";
-    // Keyboard entry point for the row cursor: the nav listener only engages
-    // while focus is inside this container, and on open no row is focused yet.
-    // Programmatically focusable only (-1), never in the Tab order.
+    // Focus target for the row cursor on open; programmatic only, never in Tab order.
     panels.tabIndex = -1;
     panel.appendChild(panels);
 
@@ -500,8 +478,7 @@
     _statusEl = status;
   }
 
-  // Footer status line. `working` marks the in-flight messages ("Saving…",
-  // "Uploading…") so they shimmer; every terminal message writes flat.
+  // Footer status line; `working` shimmers in-flight messages, terminal messages write flat.
   function _setStatus(text, working) {
     if (!_statusEl) return;
     _statusEl.classList.toggle("cg-shimmer", working === true);
@@ -525,15 +502,11 @@
 
     _root.classList.remove("hidden");
     document.body.classList.add("modal-open");
-    // Every session starts in mouse mode: no cursor, no ring. Focus the list
-    // container so the first arrow key still reaches the nav listener.
+    // Start in mouse mode; focus the list so arrow keys reach the nav listener.
     _navVisible = false;
     _navRow = null;
     if (_panelsEl) _panelsEl.focus();
-    // Let hotkeys.js scope Alt-hold hints to this modal's controls. This modal
-    // rolls its own Escape/focus (bubble-phase, so capture-phase owners like the
-    // hotkey recorder win first), so it can't rely on openBlockingModal to set
-    // the active-modal root — do it explicitly.
+    // Set the active-modal root ourselves: this modal bypasses openBlockingModal (own Escape/focus).
     if (typeof setActiveModalRoot === "function") setActiveModalRoot(_root);
 
     // Next frame: build in the backdrop blur and slide/scale the panel.
@@ -545,14 +518,11 @@
 
   function _close() {
     if (!_root || _root.classList.contains("hidden")) return;
-    // Release the active-modal root immediately; the showHints() guard keeps
-    // hints suppressed through the fade-out (body.modal-open lingers until the
-    // exit timer), so no background chips leak.
+    // Release the root now; showHints() keeps hints suppressed through the fade-out.
     if (typeof setActiveModalRoot === "function") setActiveModalRoot(null);
     // A hotkey recording capture-listener must never outlive the modal.
     _hkStopRecording();
-    // Dismiss the inline color popover; it lives on document.body at --z-toast
-    // and would otherwise outlive the modal.
+    // The color popover lives on document.body and would outlive the modal.
     if (window.ClipgenColorPicker) window.ClipgenColorPicker.close();
     // Drop the keyboard cursor so a re-open starts in mouse mode again.
     _navVisible = false;
@@ -563,20 +533,17 @@
     if (_closeTimer) clearTimeout(_closeTimer);
     _closeTimer = setTimeout(function () {
       if (_root) _root.classList.add("hidden");
-      // Clear the topnav gate only once the veil is gone, so the bar stays
-      // covered through the fade-out.
+      // Keep the topnav covered until the veil has faded.
       document.body.classList.remove("modal-open");
       _closeTimer = null;
     }, EXIT_MS);
   }
 
   function _load() {
-    // Inner span, not the container: .cg-shimmer's transparent fill and
-    // inline-block would follow onto the real settings UI rendered here later.
+    // Inner span, not the container: .cg-shimmer styles would leak onto the settings UI.
     _panelsEl.textContent = "";
     _panelsEl.appendChild(el("span", "cg-shimmer", "Loading settings\u2026"));
-    // Dismiss any stale color popover and refetch the card list each time the
-    // modal opens so externally added or removed uploads show up.
+    // Refetch the card list on every open so external uploads show up.
     if (window.ClipgenColorPicker) window.ClipgenColorPicker.close();
     _cardsCache = null;
     _cardsCachePromise = null;
@@ -595,9 +562,7 @@
       });
   }
 
-  // A native window has no address bar, so the button is the only way to reach
-  // the file. Gated on the server's GUI_LAUNCH, not html[data-desktop-chrome]:
-  // that attribute is macOS-only, and Windows webviews need the button too.
+  // Native windows have no address bar. Gate on GUI_LAUNCH: data-desktop-chrome is macOS-only.
   function _syncRevealBtn(isDesktop, path) {
     if (!isDesktop || !_actionsEl) return;
     if (!_revealBtn) {
@@ -626,8 +591,7 @@
   }
 
   function _isChanged(s) {
-    // Object-valued settings (mark_categories, hotkeys) need structural
-    // comparison; identity-compare is always true for two parsed JSON objects.
+    // Object-valued settings (mark_categories, hotkeys) need structural comparison.
     if (s.value !== null && typeof s.value === "object") {
       return JSON.stringify(s.value) !== JSON.stringify(s.default);
     }
@@ -657,8 +621,7 @@
     }
     _setStatus("Saving\u2026", true);
 
-    // Manual fetch (not apiPut) so a server-supplied data.error on a non-2xx
-    // response still reaches the status line; capture r.ok alongside the body.
+    // Manual fetch, not apiPut: keep data.error from non-2xx responses and r.ok.
     fetch(_getApiRoot() + "/settings", {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
@@ -678,9 +641,7 @@
         }
         _setStatus("Saved");
         setTimeout(function () { _setStatus(""); }, 2000);
-        // The save succeeded server-side. Run the post-save hook in isolation
-        // so a UI-refresh error can't bubble into the catch below and mislabel
-        // a persisted save as "Save failed".
+        // Save already persisted; isolate the hook so its errors don't read as "Save failed".
         if (typeof _opts.onSave === "function") {
           try {
             _opts.onSave(data.applied || {}, _settings.slice());
@@ -795,8 +756,7 @@
       msel.className = "settings-model-dropdown";
       var curOpt = document.createElement("option");
       curOpt.value = s.value;
-      // Show the inherit label up front for a blank value (avoids an empty
-      // placeholder flashing before the model list loads).
+      // Blank value shows the inherit label; avoids an empty placeholder before models load.
       curOpt.textContent = (!s.value && s.emptyLabel) ? s.emptyLabel : s.value;
       curOpt.selected = true;
       msel.appendChild(curOpt);
@@ -919,10 +879,7 @@
   }
 
   // ---- Hotkeys editor ----
-  // Renders from the JS action catalog (window.ClipgenHotkeys.catalog());
-  // the setting's value stores only overrides {actionId: "combo"} with ""
-  // meaning "disabled". Recording captures one combo which replaces the
-  // action's default alias list; per-action Reset deletes the override.
+  // Value holds only overrides {actionId: "combo"}; "" means disabled.
 
   var _hkRecordCleanup = null;
 
@@ -939,8 +896,7 @@
     if (!s.value || typeof s.value !== "object") s.value = {};
     if (combo === (action.combos || []).join(" ")) delete s.value[action.id];
     else s.value[action.id] = combo;
-    // Apply live so the open page reflects the new binding immediately;
-    // other pages pick it up from config on their next load.
+    // Apply live for this page; other pages read config on next load.
     window.ClipgenHotkeys.applyOverrides(s.value);
     CLIPGEN_CONFIG.hotkeyOverrides = s.value;
     _updateChanged(settingName);
@@ -1036,8 +992,7 @@
       return;
     }
     if (!setting.value || typeof setting.value !== "object") setting.value = {};
-    // Keep the live registry in sync with what the editor shows (also
-    // self-heals after reset-tab / reset-all re-renders).
+    // Keep the live registry in sync with the editor (also after resets).
     window.ClipgenHotkeys.applyOverrides(setting.value);
     CLIPGEN_CONFIG.hotkeyOverrides = setting.value;
 
@@ -1281,8 +1236,7 @@
     } else if (item.kind === "color") {
       preview.style.background = _cardCurrentColor(kind);
     }
-    // Approximate the ffmpeg drawtext overlay on titlecards: centered sample
-    // text over the chosen background. Endcards carry no text.
+    // Approximate the ffmpeg drawtext overlay; endcards carry no text.
     if (kind === "title" && item.kind !== "none") {
       preview.appendChild(el("span", "card-tile-text-overlay", _SAMPLE_TITLE_TEXT));
     }
@@ -1406,8 +1360,7 @@
     _setStatus("Uploading…", true);
     var form = new FormData();
     form.append("file", file);
-    // Manual fetch (not apiPost) — it is a FormData upload and a server-supplied
-    // data.error on a non-2xx still surfaces; capture r.ok alongside the body.
+    // Manual fetch, not apiPost: FormData upload; keep data.error from non-2xx and r.ok.
     fetch(_getApiRoot() + "/titlecards/upload", { method: "POST", body: form })
       .then(function (r) {
         return r.json().then(
@@ -1438,8 +1391,7 @@
 
   function _deleteCard(name) {
     _setStatus("Deleting…", true);
-    // Manual fetch (not apiDelete) so a server-supplied data.error on a non-2xx
-    // still surfaces in the status line; capture r.ok alongside the body.
+    // Manual fetch, not apiDelete: keep data.error from non-2xx responses and r.ok.
     fetch(_getApiRoot() + "/titlecards/image/" + encodeURIComponent(name), {
       method: "DELETE",
     })
@@ -1456,8 +1408,7 @@
           return;
         }
         _setStatus("Deleted");
-        // The server resets any selection that pointed at the deleted file;
-        // mirror that into the in-memory settings so the UI stays in sync.
+        // Mirror the server's reset of selections pointing at the deleted file.
         if (data.reset) {
           for (var key in data.reset) {
             var s = _findSetting(key);
@@ -1508,8 +1459,7 @@
       tabBtn.type = "button";
       tabBtn.setAttribute("role", "tab");
       tabBtn.setAttribute("data-tab", name);
-      // Alt-hold reveals a number chip on the first nine tabs; the shared
-      // settings.tab hotkey (1–9) switches to the corresponding tab.
+      // First nine tabs get Alt-hold chips; the settings.tab hotkey (1–9) switches.
       if (j < 9) {
         tabBtn.setAttribute("data-hotkey", "settings.tab");
         tabBtn.setAttribute("data-hotkey-combo", String(j));
@@ -1531,8 +1481,7 @@
       var groupOrder = [];
       for (var gi = 0; gi < items.length; gi++) {
         var it = items[gi];
-        // Hidden settings are persisted + sent to the client but have no row of
-        // their own (e.g. the card colors edited via the card picker's swatch).
+        // Hidden settings ship to the client but get no row (e.g. card colors).
         if (it.type === "hidden") continue;
         var g = it.group || "";
         if (!groups[g]) {
@@ -1590,26 +1539,12 @@
       if (p.getAttribute("data-tab") === name) p.classList.remove("hidden");
       else p.classList.add("hidden");
     }
-    // Park the keyboard cursor on the new panel's first row so arrow nav
-    // continues seamlessly after a tab switch.
+    // Park the cursor on the new panel's first row.
     _resetNavCursor(true);
   }
 
-  // ---- Keyboard list navigation (arrow-key cursor over setting rows) --------
-  // Up/Down (and Tab/Shift+Tab) move a highlighted cursor over the visible rows
-  // of the active tab; Left/Right toggle a bool (off/on), cycle a select, or
-  // step a number; Enter opens a text/number field for editing (Esc or Enter on
-  // a single-line field returns to the cursor). The listener runs in the capture
-  // phase so edit-mode Esc is caught before the modal-close listener below. It
-  // stays inert while the modal is closed, while the hotkey recorder or color
-  // picker owns the keyboard, or when focus sits outside the settings list.
-  //
-  // The cursor has two independent states: a *position* (_navRow, which also
-  // carries the roving tabindex) and a *visibility* (_navVisible). A freshly
-  // opened modal is in mouse mode — no position, no ring — and the first nav
-  // keypress reveals the cursor. Without that split the ring painted itself on
-  // row 0 of every tab the moment the modal opened, reading as a stuck focus
-  // frame to anyone using the mouse.
+  // ---- Keyboard list navigation ----
+  // _navRow is position, _navVisible the ring; mouse mode paints none.
   var _navRow = null;
   var _navVisible = false;
 
@@ -1630,8 +1565,7 @@
     var rows = _navRows();
     for (var i = 0; i < rows.length; i++) {
       var on = rows[i] === row;
-      // Ring only in keyboard mode; the roving tabindex tracks the position
-      // either way so a revealed cursor is immediately tabbable.
+      // Ring only in keyboard mode; the roving tabindex follows the position regardless.
       rows[i].classList.toggle("is-nav-selected", on && _navVisible);
       rows[i].tabIndex = on ? 0 : -1;
     }
@@ -1642,18 +1576,14 @@
     }
   }
 
-  // Reveal the cursor on the first nav keypress. Called before the key acts, so
-  // a press that also moves paints the ring at the destination.
+  // Reveal the cursor before the key acts so a move paints the destination.
   function _showNavCursor() {
     if (_navVisible) return;
     _navVisible = true;
     _selectNavRow(_navRow, false);
   }
 
-  // Park the cursor on the active panel's first row (called after render / tab
-  // switch). In mouse mode the cursor is cleared instead of parked, so the first
-  // ArrowDown lands on row 0 rather than skipping it (_moveNav treats a null
-  // cursor as "before the list"). Only steals focus when the modal is open.
+  // Park on the first row; mouse mode clears instead so ArrowDown hits row 0.
   function _resetNavCursor(focus) {
     if (!_navVisible) {
       _selectNavRow(null, false);
@@ -1687,9 +1617,7 @@
     return false;
   }
 
-  // Left/Right on the selected row: toggle a bool (off/on), cycle a select, or
-  // step a number. Routes through a change event so the existing per-control
-  // handlers persist the value.
+  // Left/Right: toggle, cycle, or step. Fires change so per-control handlers persist.
   function _actuateNav(row, dir) {
     if (!row) return;
     var control = row.querySelector(".settings-control");
@@ -1715,8 +1643,7 @@
     }
   }
 
-  // Enter on the selected row: toggle a bool, else focus the first editable
-  // field (text / number / textarea / select) to start typing.
+  // Enter: toggle a bool, else focus the first editable field.
   function _editNav(row) {
     if (!row) return;
     var control = row.querySelector(".settings-control");
@@ -1741,8 +1668,7 @@
     if (!_navActive()) return;
     var t = e.target;
 
-    // Edit mode: focus is in a text/number/select field. Esc (and Enter on a
-    // single-line field) return to the cursor; every other key is native.
+    // Edit mode: Esc (or Enter on single-line fields) returns to the cursor.
     if (_isEditableField(t) && _panelsEl && _panelsEl.contains(t)) {
       if (e.key === "Escape") {
         e.preventDefault();
@@ -1768,8 +1694,7 @@
       case "ArrowDown": e.preventDefault(); _showNavCursor(); _moveNav(1); break;
       case "ArrowUp":   e.preventDefault(); _showNavCursor(); _moveNav(-1); break;
       case "Tab":
-        // Move rows; at the list edges fall through to native Tab so focus can
-        // still leave the list (tab strip / footer).
+        // At the list edges fall through to native Tab so focus can leave.
         _showNavCursor();
         if (_moveNav(e.shiftKey ? -1 : 1)) e.preventDefault();
         break;
@@ -1781,10 +1706,7 @@
     }
   }, true);
 
-  // Escape closes the modal. Bubble-phase so capture-phase owners layered on
-  // top win first: the hotkey recorder stops propagation (Esc = cancel
-  // recording), and the color-picker popover stops propagation (Esc = close
-  // just the picker); the isOpen guard covers the picker's same-press case.
+  // Escape closes. Bubble-phase so the hotkey recorder and color picker (capture, stopPropagation) win.
   document.addEventListener("keydown", function (e) {
     if (e.key !== "Escape") return;
     if (!_root || _root.classList.contains("hidden")) return;
@@ -1797,8 +1719,7 @@
     return !!_root && !_root.classList.contains("hidden");
   }
 
-  // Move the active tab by delta (wrapping), mirroring Screenspace's Z/X tool
-  // cycling. Reuses the tab buttons' click path so aria/active state stays right.
+  // Cycle tabs with wrap via the buttons' click path (keeps aria state right).
   function _cycleTab(delta) {
     if (!_tabsEl) return;
     var btns = _tabsEl.querySelectorAll(".settings-tab");
@@ -1810,10 +1731,7 @@
     btns[((cur + delta) % btns.length + btns.length) % btns.length].click();
   }
 
-  // Tab hotkeys, active only while the modal owns the keyboard (inModal so page
-  // hotkeys stay dead; when-gated to this modal being open). Digit 1–9 jumps to
-  // a tab (buttons carry data-hotkey="settings.tab" so Alt-hold reveals chips);
-  // Z/X cycle prev/next like Screenspace's tool tabs.
+  // Modal-only tab hotkeys: digits 1–9 jump, Z/X cycle like Screenspace's tool tabs.
   if (window.ClipgenHotkeys) {
     window.ClipgenHotkeys.register([
       {
@@ -1830,8 +1748,7 @@
       },
       { id: "settings.cyclePrev", inModal: true, when: _isModalOpen, handler: function () { _cycleTab(-1); } },
       { id: "settings.cycleNext", inModal: true, when: _isModalOpen, handler: function () { _cycleTab(1); } },
-      // Reset hotkeys reuse the buttons' handlers (unconfirmed, like the
-      // buttons). R resets the active tab; Shift+R resets everything.
+      // Reset hotkeys reuse the buttons' unconfirmed handlers; Shift+R resets everything.
       { id: "settings.resetTab", inModal: true, when: _isModalOpen, handler: function () { _resetTab(_activeTab); } },
       { id: "settings.resetAll", inModal: true, when: _isModalOpen, handler: function () { _resetAll(); } }
     ]);
@@ -1844,14 +1761,7 @@
     _load();
   };
 
-  // Wire the TopNav #settingsBtn to the shared modal — one call per page
-  // instead of six hand-rolled listeners with divergent guards. opts:
-  //   initialTab — tab to open on
-  //   version    — string, or a function evaluated at click time (Studio's
-  //                sheet version loads after boot)
-  //   onApply(applied, settings) — called after Save (applied = the changed
-  //                map) and after Reset (applied = null); pages re-sync their
-  //                mirrored config the same way in both cases.
+  // Wire TopNav #settingsBtn to the modal. opts: initialTab, version (string|function), onApply(applied, settings).
   window.wireSettingsButton = function (opts) {
     opts = opts || {};
     var btn = document.getElementById("settingsBtn");

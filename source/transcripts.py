@@ -91,8 +91,7 @@ class TranscriptSegment(TypedDict):
     start: float  # seconds
     end: float  # seconds
     text: str
-    # Present when TRANSCRIBE_WORD_TIMESTAMPS produced per-word timing; absent on
-    # older manifests and when the knob is off. Consumers treat it as optional.
+    # Present only when TRANSCRIBE_WORD_TIMESTAMPS produced per-word timing.
     words: NotRequired[list[TranscriptWord]]
 
 
@@ -133,16 +132,10 @@ WHISPER_MODELS: list[dict[str, Any]] = [
 
 _cached_model: Any = None
 _cached_model_name: str | None = None
-# The full construction signature the cached model was built from. The name alone
-# is not enough: device, compute type and thread count are all read at
-# WhisperModel() time and all user-editable, so name-keying let a switch to
-# TRANSCRIBE_DEVICE=cuda save and display while transcription silently kept
-# running on the model already loaded for cpu.
+# Full construction signature: device, compute type and threads are user-editable, so name-keying served stale models.
 _cached_model_key: tuple[Any, ...] | None = None
 _model_load_lock = threading.Lock()
-# True while _load_model is actually constructing a WhisperModel — the ~10s a
-# cold load takes. Lets the model-status endpoint report "warming" for
-# on-demand loads too, not just the explicit warmup path.
+# Lets the model-status endpoint report "warming" for on-demand loads too.
 _model_loading = False
 
 
@@ -188,12 +181,7 @@ def is_transcription_model_loaded() -> bool:
     )
 
 
-# What faster_whisper.utils.download_model does for a bare size name, mirrored
-# here so the cache check can call huggingface_hub directly: importing
-# faster_whisper costs ~600 ms (it pulls ctranslate2/tokenizers/av at package
-# import), which used to land on the first /api/models request of every server
-# session. huggingface_hub imports in ~1 ms. The repo prefix and allow_patterns
-# are pinned against faster_whisper.utils in tests/test_transcripts.py.
+# Mirrors faster_whisper.utils.download_model so the cache check skips the ~600 ms faster_whisper import; tests/test_transcripts.py pins it.
 _WHISPER_REPO_PREFIX = "Systran/faster-whisper-"
 _WHISPER_ALLOW_PATTERNS = [
     "config.json",
@@ -356,17 +344,13 @@ def _load_model(model_name: str | None = None) -> Any:
         profiling.count("transcribe.model_cache.hit")
         return _cached_model
 
-    # Timed separately from the load itself: n here is the number of callers
-    # that missed the fast path, so a model_lock_wait n=14 across a 14-file
-    # batch means the cache is being thrashed by a settings change — which is
-    # exactly what _model_load_key exists to surface.
+    # Lock-wait n counts fast-path misses; a high n means settings churn is thrashing the cache.
     _t_lock = time.perf_counter() if config.PROFILING else 0.0
     with _model_load_lock:
         if _t_lock:
             profiling.add("transcribe.model_lock_wait", time.perf_counter() - _t_lock)
         if _cached_model is not None and _cached_model_key == load_key:
-            # Another thread finished the load while we waited. Still a hit —
-            # counting only the pre-lock check would report this as a miss.
+            # Another thread loaded it while we waited: still a hit.
             profiling.count("transcribe.model_cache.hit")
             return _cached_model
         profiling.count("transcribe.model_cache.miss")
@@ -382,14 +366,7 @@ def _load_model(model_name: str | None = None) -> Any:
             return None
 
         def _do_load() -> Any:
-            # Built from load_key, not re-read from config, so what is cached
-            # is exactly what was constructed even if a setting changes while
-            # this load is in flight.
-            #
-            # cpu_threads 0 = auto: CTranslate2's own heuristic under-uses
-            # many-core CPUs, so resolve to os.cpu_count(). num_workers stays
-            # default — the poller runs one job at a time, so >1 only multiplies
-            # model memory.
+            # Read load_key, not config: the cache key must match what was built.
             _name, device, compute_type, threads = load_key
             load_kwargs: dict[str, Any] = {
                 "compute_type": compute_type,
@@ -397,13 +374,7 @@ def _load_model(model_name: str | None = None) -> Any:
             }
             if threads > 0:
                 load_kwargs["cpu_threads"] = threads
-            # Scoped to the construction only — deliberately inside _do_load
-            # rather than around the run_with_spinner call below, so it excludes
-            # _confirm_model_download, which can block on interactive input. A
-            # span that includes a human deciding whether to fetch 3 GB is not a
-            # measurement. On a cold HF cache this *does* include the download,
-            # so a first run is orders of magnitude larger and is not a
-            # regression.
+            # Spans the construction only, excluding _confirm_model_download's interactive wait. A cold HF cache includes the download.
             with profiling.span("transcribe.model_load"):
                 return WhisperModel(model_name, **load_kwargs)
 
@@ -413,12 +384,7 @@ def _load_model(model_name: str | None = None) -> Any:
             if not _confirm_model_download(model_name):
                 return None
 
-            # Drop the previous model only once the load is definitely
-            # happening (post-consent), or ~1-2 GB of weights is double-held
-            # until the next GC cycle; gc.collect() also prods CUDA/MPS
-            # cleanup. Evicting before the consent prompt left the cache empty
-            # when the user declined, costing a pointless reload of the model
-            # that was already warm.
+            # Evict only after consent (declining must keep the warm model); gc.collect() also prods CUDA/MPS.
             if _cached_model is not None:
                 import gc
 
@@ -464,9 +430,7 @@ def _build_transcribe_kwargs(
     }
     if hotwords:
         kwargs["hotwords"] = hotwords
-    # Recall-safe VAD tuning: a low threshold plus boundary padding so quiet speech
-    # and word edges aren't clipped. Sent only when VAD is on; faster-whisper merges
-    # this partial dict with its VadOptions defaults.
+    # Recall-safe VAD: low threshold plus padding keeps quiet speech. faster-whisper fills the remaining VadOptions.
     if config.TRANSCRIBE_VAD_FILTER:
         kwargs["vad_parameters"] = {
             "threshold": config.TRANSCRIBE_VAD_THRESHOLD,
@@ -478,8 +442,7 @@ def _build_transcribe_kwargs(
     hall_silence = config.TRANSCRIBE_HALLUCINATION_SILENCE_THRESHOLD
     if hall_silence > 0:
         kwargs["hallucination_silence_threshold"] = hall_silence
-        # faster-whisper hard requirement: the silence skip needs word timing,
-        # so this wins even when TRANSCRIBE_WORD_TIMESTAMPS is off.
+        # faster-whisper requires word timing for the silence skip, even with TRANSCRIBE_WORD_TIMESTAMPS off.
         kwargs["word_timestamps"] = True
     return kwargs
 
@@ -506,12 +469,10 @@ def _resolve_audio_index(video_path: str, requested: int | None) -> int:
 # Energy edge-snap (TRANSCRIBE_EDGE_SNAP)
 # ---------------------------------------------------------------------------
 
-# RMS envelope framing. The frame is an exact multiple of the hop so frame
-# energies are sums of per-hop energies (no giant cumsum over the raw samples).
+# RMS framing: frames are whole hops, so frame energy is a sum of hop energies.
 _SNAP_FRAME_HOPS = 3  # 30 ms frames
 _SNAP_HOP_MS = 10
-# Threshold derivation: bail entirely when the file's speech/noise contrast is
-# below this (constant-noise or near-silent recordings — snapping would guess).
+# Bail when speech/noise contrast is below this; snapping would only guess.
 _SNAP_MIN_DYNAMIC_RANGE_DB = 12.0
 # Per-segment search windows and clamps, in seconds.
 _SNAP_START_BACK_S = 0.15  # how far before the nominal start to look for onset
@@ -554,8 +515,7 @@ def _build_energy_snapper(
     n_frames = n_hops - (_SNAP_FRAME_HOPS - 1)
     if n_frames < _SNAP_ONSET_FRAMES:
         return None
-    # Per-hop sum of squares, accumulated in float64 without materializing a
-    # float64 copy of the samples (einsum keeps peak memory at ~n_hops floats).
+    # Per-hop energy in float64 via einsum, without a float64 copy of the samples.
     blocks = audio[: n_hops * hop].reshape(n_hops, hop)
     hop_energy = np.einsum("ij,ij->i", blocks, blocks, dtype=np.float64)
     frame_energy = hop_energy[:n_frames].copy()
@@ -579,8 +539,7 @@ def _build_energy_snapper(
         end = segment["end"]
         words = segment.get("words")
 
-        # Start: first sustained speech run in a bounded window around the
-        # nominal start. Not found → unchanged.
+        # Start: first sustained speech run near the nominal start; none → unchanged.
         new_start = start
         lo = _frame_at(max(start - _SNAP_START_BACK_S, prev_end, 0.0))
         hi = _frame_at(min(start + _SNAP_START_FWD_S, end))
@@ -590,10 +549,7 @@ def _build_energy_snapper(
                 run += 1
                 if run >= _SNAP_ONSET_FRAMES:
                     cand = (i - _SNAP_ONSET_FRAMES + 1) * hop_s - _SNAP_LEAD_IN_S
-                    # Ceilings first, floors last: a "don't start too late" clamp
-                    # (first-word margin, min-duration) must never drag the start
-                    # back below prev_end — playhead sync assumes non-overlapping
-                    # segments, so the non-overlap floor always wins.
+                    # Ceilings first, floors last: playhead sync assumes non-overlapping segments, so prev_end always wins.
                     if words:
                         cand = min(cand, words[0]["end"] - _SNAP_WORD_MARGIN_S)
                     cand = min(cand, end - _SNAP_MIN_SEGMENT_S)
@@ -602,9 +558,7 @@ def _build_energy_snapper(
             else:
                 run = 0
 
-        # End: scan backward for the last sustained speech run; trim only. No
-        # speech in the window → unchanged (quiet trailing speech below the
-        # threshold must not be amputated).
+        # End: last sustained speech run, trim only; none → unchanged (quiet trailing speech survives).
         new_end = end
         floor_t = new_start + _SNAP_MIN_SEGMENT_S
         if words:
@@ -626,8 +580,7 @@ def _build_energy_snapper(
         segment["start"] = round(new_start, 3)
         segment["end"] = round(new_end, 3)
         if words:
-            # Clamp the edge words into the snapped span, then keep word times
-            # monotonic non-decreasing across the list.
+            # Clamp edge words into the span, then keep word times monotonic.
             words[0]["start"] = max(words[0]["start"], segment["start"])
             words[-1]["end"] = min(words[-1]["end"], segment["end"])
             prev = segment["start"]
@@ -748,8 +701,7 @@ def transcribe_video(
     if _is_cancelled():
         raise _TranscriptionCancelled
 
-    # Short-circuit when the file has no audio stream — faster-whisper raises
-    # an opaque "tuple index out of range" from its decoder in that case.
+    # No audio stream: faster-whisper would raise an opaque "tuple index out of range".
     import video as video_mod
 
     props = video_mod.probe_video_properties(video_path)
@@ -785,10 +737,7 @@ def transcribe_video(
 
     lang = language or config.TRANSCRIBE_LANGUAGE
 
-    # Decode the selected stream to PCM ourselves (ffmpeg CLI, ``-map 0:a:N``)
-    # instead of handing faster-whisper the path: its own decoder is PyAV,
-    # which is deliberately not installed (see _ensure_av_stub), and it can
-    # only read the container's first audio stream anyway.
+    # Decode via ffmpeg ourselves: PyAV is absent (see _ensure_av_stub) and reads only stream 0.
     win_start = max(0.0, start_seconds or 0.0)
     win_duration = end_seconds - win_start if end_seconds is not None else None
     audio_source = video_mod.decode_audio_pcm(
@@ -798,8 +747,7 @@ def transcribe_video(
         duration_seconds=win_duration,
     )
     if audio_source is None:
-        # Never fall back to another track — that would silently transcribe the
-        # wrong audio, which reads as "clipgen is broken", not "it failed".
+        # Never fall back to another track: transcribing the wrong audio looks like a clipgen bug.
         utils.warning_print(
             f"Could not decode audio track {idx + 1} from "
             f"{Path(video_path).name} — skipping transcription."
@@ -818,12 +766,7 @@ def transcribe_video(
             initial_prompt=prompt,
             hotwords=", ".join(known_terms) if known_terms else None,
         )
-        # Not a free call: faster-whisper extracts features and runs VAD +
-        # language detection *eagerly* here, then hands back a lazy
-        # generator. That is why info.duration_after_vad is already populated
-        # below. Without this span the TRANSCRIBE_VAD_* knobs — the ones
-        # PERFORMANCE.md calls "the big win" — are the one thing the transcribe
-        # labels cannot see, because their cost is here and not in the pull.
+        # Not free: VAD, features and language detection run eagerly here, so TRANSCRIBE_VAD_* costs land here.
         with profiling.span("transcribe.prepare"):
             _t_prepare = time.perf_counter()
             segments_iter, info = model.transcribe(audio_source, **transcribe_kwargs)
@@ -831,10 +774,7 @@ def transcribe_video(
         if _is_cancelled():
             raise _TranscriptionCancelled
         segments: list[TranscriptSegment] = []
-        # Profiling accumulates into locals and flushes once after the loop, so
-        # the off-path per-segment cost is a single boolean check (see
-        # profiling.py). The flush lives in a finally because a cancelled
-        # 20-minute run is exactly the one whose numbers you want.
+        # Profiling accumulates in locals; the finally flush keeps a cancelled run's numbers (see profiling.py).
         _prof = config.PROFILING
         _dec_s = _cb_s = _dec_max = _cb_max = 0.0
         _n_seg = _n_cb = 0
@@ -853,12 +793,9 @@ def transcribe_video(
                 if _is_cancelled():
                     raise _TranscriptionCancelled
                 text = seg.text.strip()
-                # Inverted from `if not text: continue` so the re-stamp below is
-                # never skipped — an empty segment would otherwise charge its
-                # (tiny) processing to the *next* pull.
+                # Not `if not text: continue`: the re-stamp below must run for empty segments too.
                 if text:
-                    # Tighten to the aligned words when present: Whisper's
-                    # segment bounds include the VAD pad; its word bounds don't.
+                    # Prefer word bounds: segment bounds include the VAD pad, word bounds don't.
                     words = [
                         TranscriptWord(
                             start=round(w.start, 2),
@@ -878,9 +815,7 @@ def transcribe_video(
                     # Snap before streaming so partials equal the final list.
                     if snapper is not None:
                         snapper(segment, _prev_end)
-                    # The snapper and _prev_end floor work in window-relative
-                    # time (the decoded array starts at win_start); shift onto
-                    # the file's timeline only after both have seen the segment.
+                    # Snapper and _prev_end work in window-relative time; shift to the file timeline afterwards.
                     _prev_end = segment["end"]
                     if win_start:
                         segment = _shift_segment(segment, win_start)
@@ -985,16 +920,12 @@ def transcribe_timeline(
     merged: list[TranscriptSegment] = []
     out_language = ""
     out_model = ""
-    # Resolve the audio track ONCE, from the first part, and pass the concrete
-    # index to every part. Auto-detecting per part would splice two different
-    # microphones into one transcript if the recorder's track order shifted
-    # between files.
+    # Resolve the track once from the first part; per-part auto-detect could splice two microphones.
     resolved_audio_index = (
         _resolve_audio_index(timeline[0][0], audio_index) if timeline else 0
     )
     for path, duration, cumulative in timeline:
-        # Intersect the global window with this part's [cumulative, +duration)
-        # span; a part wholly outside is skipped before any work happens.
+        # Skip parts wholly outside the global window before any work.
         if start_seconds is not None and start_seconds >= cumulative + duration:
             continue
         if end_seconds is not None and end_seconds <= cumulative:
@@ -1007,8 +938,7 @@ def transcribe_timeline(
         if on_segment is not None:
             inner = on_segment
 
-            # Small per-part shifter: rebases this part's segment times onto the
-            # stitched timeline via the default-arg captures below.
+            # Rebase this part's segment times onto the stitched timeline (default-arg captures).
             def part_on_segment(
                 end_time: float,
                 segment: "TranscriptSegment",
@@ -1145,8 +1075,7 @@ def apply_corrections(
         frm, to = c.get("from"), c.get("to")
         if not frm or not to:
             continue
-        # Anchor with \b only where the pattern edge is a word character —
-        # "\b" against punctuation would never match ("e.g." or "?!").
+        # Anchor with \b only at word-character edges; \b never matches beside punctuation.
         pattern = re.escape(frm)
         if frm[0].isalnum() or frm[0] == "_":
             pattern = r"\b" + pattern
@@ -1168,8 +1097,7 @@ def apply_corrections(
                 seg_applied += count
         total_applied += seg_applied
         new_seg = TranscriptSegment(start=seg["start"], end=seg["end"], text=text)
-        # Word timings stay valid even when the text changed — the frontend
-        # falls back to row-level highlight on corrected rows.
+        # Word timings stay; the frontend falls back to row-level highlight on corrected rows.
         if "words" in seg:
             new_seg["words"] = seg["words"]
         corrected.append(new_seg)
@@ -1213,8 +1141,7 @@ def get_known_terms(manifest: dict[str, Any]) -> list[str]:
 # Dictionary interchange (corrections + known terms as one CSV)
 # ---------------------------------------------------------------------------
 
-# One flat table carries both halves so a study's vocabulary travels as a single
-# file: "correction" rows use both text columns, "term" rows only ``to``.
+# One table for both halves: "correction" rows use both text columns, "term" rows only ``to``.
 DICTIONARY_CSV_COLUMNS = ("type", "from", "to")
 _CSV_FORMULA_SIGILS = frozenset("=+-@\t\r")
 
@@ -1249,8 +1176,7 @@ def dictionary_to_csv(corrections: list[dict[str, Any]], known_terms: list[str])
         for term in known_terms
     ]
     if not rows:
-        # to_csv derives its columns from the data, so an empty dictionary would
-        # export a zero-byte file that cannot be re-imported.
+        # to_csv derives columns from the data; an empty export could not be re-imported.
         return ",".join(DICTIONARY_CSV_COLUMNS) + "\r\n"
     return data_export.to_csv(rows, preferred_column_order=DICTIONARY_CSV_COLUMNS)
 
@@ -1544,8 +1470,7 @@ def _parse_markdown(text: str, filepath: str) -> TranscriptResult:
         start = _md_time_to_seconds(match.group(1))
         end = _md_time_to_seconds(match.group(2))
         if start is None or end is None:
-            # Hand-edited / third-party stamp the parser can't read (e.g.
-            # "0:00.5"): skip loudly rather than fabricate a 0:00 segment.
+            # Unparseable stamp (e.g. "0:00.5"): skip loudly rather than fabricate 0:00.
             utils.warning_print(
                 f"Skipping transcript line with unparseable timestamp: "
                 f"{match.group(1)} - {match.group(2)}"
@@ -1611,9 +1536,7 @@ def create_transcript_task(
         "start_seconds": start_seconds,
         "end_seconds": end_seconds,
         "status": TASK_STATUS_QUEUED,
-        # Sub-state of "running": "loading_model" while the Whisper model is
-        # constructed (~10s cold, invisible to the progress float), then
-        # "transcribing". Lets the frontend say what the 0% wait actually is.
+        # Sub-state of running: "loading_model" (~10s cold, invisible to progress), then "transcribing".
         "phase": "queued",
         "progress": 0.0,
         "partial_segments": [],
@@ -1767,12 +1690,7 @@ class TranscriptWorker:
                     continue
                 task["status"] = TASK_STATUS_RUNNING
 
-            # The worker must outlive any single task. _execute_task owns its
-            # own try/except for the transcription itself, but work outside it
-            # (the model preload, ffprobe/timeline setup) can still raise, and
-            # there is no restart path for this thread — is_alive is reported
-            # to the frontend but never acted on, so a death here wedges every
-            # later transcribe request in a queue nothing drains.
+            # Nothing restarts this thread, so a death here wedges every later transcribe request.
             try:
                 self._execute_task(task)
             except Exception as exc:
@@ -1803,13 +1721,10 @@ class TranscriptWorker:
                 task["completed_at"] = datetime.now(UTC).isoformat()
             return
 
-        # Multi-video participants form one continuous timeline; transcribe each
-        # part and merge with global-shifted times. Single video → fast path,
-        # no extra duration probe beyond the audio guard below.
+        # Multi-video participants form one timeline: transcribe each part, merge with shifted times.
         timeline = video_mod.timeline_or_none(video_paths)
 
-        # Probe the first part for the audio guard; derive the progress
-        # denominator from the whole timeline for multi-video.
+        # Probe the first part for the audio guard; the timeline gives the progress denominator.
         props = video_mod.probe_video_properties(video_paths[0])
         tracks: list[dict[str, Any]] = (props or {}).get("audio_tracks") or []
         if props is not None and not props.get("audio_codec") and not tracks:
@@ -1822,9 +1737,7 @@ class TranscriptWorker:
                 task["completed_at"] = datetime.now(UTC).isoformat()
             return
 
-        # Resolve here rather than inside transcribe_video so the task can record
-        # which track was actually used (the inner guard would only surface a
-        # generic "returned None").
+        # Resolve here, not inside transcribe_video, so the task records which track was used.
         audio_index = _resolve_audio_index(video_paths[0], task.get("audio_index"))
         if tracks and not 0 <= audio_index < len(tracks):
             with self._lock:
@@ -1842,10 +1755,7 @@ class TranscriptWorker:
         else:
             duration = float(props.get("duration", 0.0)) if props else 0.0
 
-        # In/out marker window, clamped to the known duration so ``-ss`` never
-        # lands past EOF. The clamped values (not the raw task fields) drive
-        # the dispatch, the progress math, and the result provenance below.
-        # ``win_end is None`` = unbounded (no end marker and duration unknown).
+        # Marker window clamped to the duration so ``-ss`` never passes EOF; None end = unbounded.
         win_start = max(0.0, float(task.get("start_seconds") or 0.0))
         win_end: float | None = duration if duration > 0 else None
         if task.get("end_seconds") is not None:
@@ -1869,23 +1779,11 @@ class TranscriptWorker:
         context_kw = get_corrections_keywords(corrections) or None
         known_terms = get_known_terms(manifest) or None
 
-        # Load the model up front (a no-op when already cached) so the ~10s
-        # cold construction is visible as its own phase instead of an opaque
-        # "running, 0%". The DEBUGGING guard is load-bearing: debug mode
-        # returns stub results without ever touching Whisper, and worker tests
-        # depend on that. transcribe_video's own _load_model call then hits
-        # the cache. A task cancelled while queued must not pay for a model
-        # load either — transcribe_video aborts it right below.
+        # Preload so the cold load gets its own phase; DEBUGGING never touches Whisper (worker tests).
         if not config.DEBUGGING and not task.get("_cancelled"):
             with self._lock:
                 task["phase"] = "loading_model"
-            # _load_model does not only return None on failure — it raises.
-            # run_with_spinner calls its callback bare, and the WhisperModel
-            # construction inside has a finally but no except, so a CTranslate2
-            # "Library cublas64_12.dll is not found", an unsupported
-            # compute_type, or a huggingface download OSError all propagate.
-            # This sits outside the try below, so without this handler the
-            # exception escapes _run and kills the worker thread for good.
+            # _load_model also raises (CTranslate2 DLL, compute_type, download errors); an escape here kills the worker.
             try:
                 loaded = _load_model(task.get("model"))
             except Exception as exc:
@@ -1906,22 +1804,19 @@ class TranscriptWorker:
             task["transcribe_started_at"] = datetime.now(UTC).isoformat()
 
         def _on_seg(end_time: float, segment: TranscriptSegment) -> None:
-            # Check cancel flag outside the lock to avoid deadlock — the
-            # except handler also acquires self._lock.
+            # Check the cancel flag outside the lock; the except handler also takes self._lock.
             if task.get("_cancelled"):
                 raise _TranscriptionCancelled
             with self._lock:
                 if window_len > 0:
-                    # end_time is global — the transcribe functions emit
-                    # already-shifted times — so rebase onto the window.
+                    # end_time is already global (shifted); rebase onto the window.
                     task["progress"] = min(
                         max(end_time - win_start, 0.0) / window_len, 0.99
                     )
                 task["partial_segments"].append(segment)
 
         try:
-            # Pass None for unbounded sides so the unbounded path is untouched
-            # (and the decode argv byte-identical to pre-window clipgen).
+            # None for unbounded sides keeps the decode argv identical to the unbounded path.
             dispatch_start = win_start or None
             dispatch_end = win_end
             if win_end is not None and duration > 0 and win_end >= duration:
@@ -1969,19 +1864,14 @@ class TranscriptWorker:
                     "language": result["language"],
                     "model": result["model"],
                     "source_file": result["source_file"],
-                    # Recorded so a transcript that changed after an auto-detect
-                    # deviation can be explained (surfaced as the pill's
-                    # "Last run: Track 2 · Interview" hint).
+                    # Recorded so an auto-detect deviation can be explained (the pill's "Last run: Track 2" hint).
                     "audio_index": audio_index,
                     "audio_track_label": (
                         tracks[audio_index].get("label", "")
                         if audio_index < len(tracks)
                         else ""
                     ),
-                    # Window provenance — always present (None = unbounded), so
-                    # a later full transcribe's merge (`existing.update(...)`)
-                    # overwrites a prior run's window rather than leaving it
-                    # stale on the participant entry.
+                    # Always present (None = unbounded) so a later full run's `existing.update(...)` overwrites a stale window.
                     "start_seconds": dispatch_start,
                     "end_seconds": dispatch_end,
                     "transcribed_at": datetime.now(UTC).isoformat(),

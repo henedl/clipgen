@@ -32,8 +32,7 @@
     boundary: 1, attention: 1, timelapse: 1,
   };
 
-  // Build a span that renders the task icon via mask-image (see .ss-task-icon
-  // family in screenspace.css). Color follows currentColor on the parent.
+  // Task-type icon span via mask-image; see .ss-task-icon in screenspace.css.
   function buildTypeIcon(type) {
     if (!SS_TASK_ICON_TYPES[type]) return null;
     var span = document.createElement("span");
@@ -41,9 +40,8 @@
     return span;
   }
 
-  // Generic mask-image icon span. `name` is the basename of a file in
-  // assets/icons/ (no extension); `sizeClass` is an optional .ss-icon
-  // modifier (e.g. "ss-icon--sm"). See .ss-icon family in screenspace.css.
+  // Mask-image icon span; `name` is an assets/icons basename, `sizeClass` an .ss-icon
+  // modifier.
   function iconSpan(name, sizeClass) {
     return iconMaskSpan(name, {
       className: "ss-icon" + (sizeClass ? " " + sizeClass : ""),
@@ -51,11 +49,8 @@
     });
   }
 
-  // Three-state OCR-normalize direction control: a segmented capsule track
-  // (createSegTrack in utils.js) over a hidden input holding the mode string.
-  // Folds easily-confused glyphs toward the chosen canonical form before the
-  // fuzzy compare — see _normalize_ocr_text in screenspace_ocr.py. Off sits in
-  // the middle: digit→letter | off | letter→digit.
+  // OCR normalize direction; folds confusable glyphs before fuzzy compare (see
+  // _normalize_ocr_text).
   var NORMALIZE_MODES = [
     { value: "letters", icon: "language", desc: "Fold digits to letters before matching (0→o, 1→l, 5→s). For word targets that OCR may read as digits" },
     { value: "off", icon: "no-symbol", desc: "No character folding" },
@@ -76,17 +71,15 @@
     });
   }
 
-  // Reflect a mode string back onto an existing segmented control (used when
-  // rehydrating a saved task into the editor).
+  // Reflect a saved mode onto an existing segmented control.
   function applyNormalizeMode(id, mode) {
     var hidden = qs("#" + id);
     if (!hidden || !hidden.parentNode) return;
     segTrackSetValue(hidden.parentNode, _normalizeMode(mode));
   }
 
-  // Two-state Color match-mode control: "average" (region's mean color) vs
-  // "presence" (target color appears anywhere in the region, per-pixel). Backed
-  // by a hidden input holding the mode string. See ColorTool in screenspace_tools.py.
+  // Color match mode: region mean color vs per-pixel presence; see ColorTool in
+  // screenspace_tools.py.
   var COLOR_MODES = [
     { value: "average", icon: "swatch", desc: "Match the region's average colour" },
     { value: "presence", icon: "magnifying-glass-circle", desc: "Match when the target colour appears anywhere in the region (per-pixel)" },
@@ -96,8 +89,7 @@
     return mode === "presence" ? "presence" : "average";
   }
 
-  // Reflect a color mode back onto an existing segmented control + presence-only
-  // min-area row (used when rehydrating a saved single-tool color task).
+  // Reflect a saved color mode onto its control and min-area row.
   function applyColorMode(id, mode) {
     var hidden = qs("#" + id);
     if (!hidden) return;
@@ -107,8 +99,8 @@
     if (row) row.classList.toggle("hidden", m !== "presence");
   }
 
-  // `onChange(mode)` fires after the active segment flips, before the bubbling
-  // input event — callers use it to show/hide the presence-only min-area row.
+  // `onChange(mode)` fires before the bubbling input event; callers toggle the min-area
+  // row.
   function buildColorModeControl(id, mode, small, onChange) {
     return createSegTrack({
       id: id,
@@ -121,10 +113,7 @@
   }
 
   var _paletteDocListeners = null;
-  // Cached HSV hidden inputs for the single-tool color picker. Populated by
-  // renderColorParams() when the panel is built; reused by setTargetColor,
-  // updateColorPreview, _collectPreviewParams, etc. so they don't re-query
-  // the DOM on every drag tick. Null when no color tool panel is active.
+  // HSV hidden inputs cached by renderColorParams(); spares DOM queries on drag ticks.
 
   var REGION_COLOR_COUNT = 8;
 
@@ -149,29 +138,22 @@
     regions: {},
     activeRegion: null,
     drawingRegion: null,
-    // Shaped-region drawing: the active selector ("rect" | "lasso" | "wand"),
-    // the in-progress freehand point trail, the wand's flood-fill RGB
-    // tolerance, and the wand's press-drag-release scrub state (seed + live
-    // preview contour). On state (not satellite vars) — the hub Escape handler
-    // and the overlay painter both read them across file boundaries.
+    // Shaped-region draw state; lives on state because the Escape handler and overlay
+    // painter read it.
     regionTool: "rect",
     drawingLasso: null,
     wandTolerance: 32,
     wandDragging: null,
-    // Shape-draw mode: freehand shape-reference painting for the Shape tool.
-    // The session holds an offscreen mask canvas at native frame size. On
-    // state (not satellite vars) — the hub Escape handler and the overlay
-    // painter both read it across file boundaries.
+    // Shape-draw session with an offscreen native-size mask canvas; cross-file readers
+    // keep it on state.
     shapeDraw: null,
     shapeBrushSize: 24,
     pendingRegion: null,
     draggingRegion: null,
     resizingRegion: null,
     hoveredRegion: null,
-    // Set by the hub's chip drag-reorder (initRegionDrag) to swallow the click
-    // that fires right after a drop; read/cleared by renderRegionChips' chip
-    // click handler in screenspace-overlay-interaction.js (cross-file — must
-    // live on state, not a hub-local var).
+    // Set by initRegionDrag to swallow the post-drop click; cleared by renderRegionChips
+    // (cross-file).
     regionSuppressNextClick: false,
     timelineZoom: 1,
     timelineOffset: 0,
@@ -183,13 +165,8 @@
     // match the Python default before /api/settings resolves.
     groupedToolNav: true,
     activeWorkflow: "color",
-    // Panel-focus keyboard navigation (Shift+1..4 + arrows). focusRegion is the
-    // surface the arrows drive: "video" (default) is transport seek and what
-    // Escape returns to, the rest rove within a panel. focusCursor indexes
-    // ssNavItems(focusRegion); navEditing is true while a text control holds real
-    // focus; pickerCursor indexes an open run-picker dropdown. focusAnchor
-    // identifies the focused item so a re-rendering list (the poller rebuilds
-    // #taskList wholesale) restores the cursor to the same row, not the old index.
+    // Panel-focus keyboard nav state; semantics in the Panel focus navigation section
+    // below.
     focusRegion: "video",
     focusCursor: 0,
     focusAnchor: null,
@@ -201,21 +178,17 @@
     selectedTaskId: null,
     hoveredTaskId: null,
     selectedTaskResults: null,
-    // Per-task result cache (taskId -> results array). Status ticks no longer
-    // carry result lists; the timeline and results panel read from here, kept
-    // current by appending result tails (see _syncTaskResults in tasks).
+    // Per-task results (taskId -> array); status ticks carry none. Kept current by
+    // _syncTaskResults.
     taskResults: {},
     resultsLoading: false,
     resultsLazyObserver: null,
-    // Coordination flags shared between the hub and screenspace-tasks.js:
-    // resultsRequestVersion gates in-flight results fetches; suppressCalibration-
-    // Refresh is set while restoreTaskToWorkflow rebuilds the param panel.
+    // Hub<->tasks flags: resultsRequestVersion gates results fetches;
+    // suppressCalibrationRefresh spans restoreTaskToWorkflow's rebuild.
     resultsRequestVersion: 0,
     heatmapOverlayRequestVersion: 0,
-    // Play state for the animated heatmap thumbs, keyed "<taskId>|<attachment>".
-    // They start paused on a scrubbable sprite; renderResults() rebuilds the whole
-    // strip on every filter change and SSE tick, so anything the user toggled has
-    // to live out here. Task-scoped so a different task starts paused again.
+    // Heatmap thumb play state keyed "<taskId>|<attachment>"; renderResults() rebuilds the
+    // strip, so toggles live here.
     heatmapPlaying: {},
     suppressCalibrationRefresh: false,
     poller: null,
@@ -231,8 +204,8 @@
     pipetteActive: false,
     runParticipants: [],
     runRegions: [],
-    // True while runRegions holds only the implicit active-chip seed (no
-    // explicit run-picker choice yet) — see renderRunRegionPicker.
+    // True while runRegions holds only the implicit active-chip seed; see
+    // renderRunRegionPicker.
     runRegionsSeeded: false,
     scanMode: "normal",
     taskEvents: {},
@@ -274,28 +247,20 @@
     calibrationResult: null,
     calibrationOcrWarmed: false,
     calibrationGreen: false,
-    // Workflow param panel, keyed by control id. paramValues accumulates every
-    // tool's settings for the session so switching tools doesn't discard them;
-    // paramDefaults records what each control was built with, so a row can tell
-    // whether it has been touched and offer a reset. See _snapshotParamValues.
+    // Param panel by control id: paramValues survives tool switches, paramDefaults backs
+    // reset buttons. See _snapshotParamValues.
     paramValues: {},
     paramDefaults: {},
   };
 
   var _playheadRaf = 0;
-  // _lastPollFingerprint / _etaTrackers / _etaTicker moved into
-  // screenspace-tasks.js along with the task-queue surface that owns them.
   var _preloadedFrames = {};
-  // Per-participant source-video mtime_ns, sourced from /api/participants and
-  // /api/video/info. Used as a ?v= cache-bust suffix on frame and stream URLs
-  // so a re-encoded or replaced source file invalidates HTTP, backend, and
-  // blob caches together. Empty string means "no version known yet".
+  // Per-participant source mtime_ns; the ?v= cache-bust suffix on frame and stream URLs.
+  // Empty = unknown.
   var _videoVersions = {};
 
-  // Frame 0 of every participant is preloaded so switching participants paints
-  // instantly. Bounded, because each request is a server-side frame extraction
-  // against a 3-slot capture pool: an unbounded fan-out on a 40-participant
-  // study starves the one frame the user is actually waiting for at boot.
+  // Frame-0 preload concurrency. Bounded: the server's 3-slot capture pool must not starve
+  // the visible frame.
   var PRELOAD_CONCURRENCY = 2;
   var _preloadQueue = [];
   var _preloadActive = 0;
@@ -303,9 +268,8 @@
 
   function queueFrameZeroPreload(participantIds) {
     participantIds.forEach(function (pid) {
-      // Version at enqueue time: a preload that resolves after selectParticipant
-      // saw a newer mtime and dropped the stale blob must not put the old ?v=
-      // frame back.
+      // Enqueue-time version: a late preload must not restore a blob selectParticipant
+      // already dropped.
       _preloadQueue.push({ pid: pid, version: _videoVersions[pid] || "" });
     });
     _pumpFrameZeroPreload();
@@ -333,8 +297,7 @@
         }
         _preloadedFrames[item.pid] = url;
       })
-      // Fire-and-forget: a failed preload just skips the cache warm. The trailing
-      // .then runs on both paths so the slot is always released.
+      // Failed preloads just skip the warm; the trailing .then always releases the slot.
       .catch(function () {})
       .then(function () {
         _preloadActive--;
@@ -343,17 +306,15 @@
   }
 
   window.addEventListener("pagehide", function () {
-    // Stop draining and mark in-flight preloads as unowned, so a blob that lands
-    // after teardown revokes itself instead of leaking.
+    // Mark in-flight preloads unowned so late blobs revoke themselves.
     _preloadStopped = true;
     _preloadQueue.length = 0;
     Object.keys(_preloadedFrames).forEach(function (pid) {
       try { URL.revokeObjectURL(_preloadedFrames[pid]); } catch (_) {}
       delete _preloadedFrames[pid];
     });
-    // The model-view preview holds one blob URL in state and one on the <img>
-    // expando. Both are revoked on replacement, so at most two are ever live —
-    // released here anyway so every blob URL on this page has one owner.
+    // Model-view blob URLs (state + <img> expando) are revoked on replacement; release
+    // here too.
     if (state.overlayImageObjectUrl) {
       try { URL.revokeObjectURL(state.overlayImageObjectUrl); } catch (_) {}
       state.overlayImageObjectUrl = null;
@@ -367,10 +328,8 @@
   var _participantRequestVersion = 0;
   var _frameRequestVersion = 0;
 
-  // Region palette is screenspace-specific (REGION_COLOR_COUNT entries from
-  // --region-color-1..N); the common canvas colors come from the shared
-  // getCanvasThemeColors() cache in utils.js, which auto-invalidates on
-  // theme toggle.
+  // Region palette is screenspace-only (--region-color-1..N); common canvas colors use
+  // getCanvasThemeColors() in utils.js.
   var _cachedRegionPalette = null;
 
   function refreshThemeColors() {
@@ -447,10 +406,7 @@
   }
 
   // ---- Multi-video timeline helpers ----
-  // For a participant whose recording spans several files, api/video/info
-  // returns ``parts`` ([{filename, duration, cumulativeStart}]) and a total
-  // ``duration``. Frame display already works at global time (the backend maps
-  // it); only the <video> play element switches source per part below.
+  // Frames work at global time; <video> alone switches per part.
   function _ssParts() {
     var info = state.videoInfo;
     return info && info.parts && info.parts.length > 1 ? info.parts : null;
@@ -462,10 +418,8 @@
 
   // ---- Participants ----
 
-  // Both pickers are plain text (an <option> can't hold a badge element), so an
-  // off-sheet participant — video on disk, no column in the loaded sheet — is
-  // marked with a label suffix instead. Only when a sheet is loaded: without one
-  // everything is off-sheet and the suffix would be noise.
+  // Plain-text <option>s: off-sheet participants get a label suffix, only when a sheet is
+  // loaded.
   function participantLabel(p) {
     return state.hasSheet && p.in_sheet === false ? p.id + " (off-sheet)" : p.id;
   }
@@ -693,15 +647,7 @@
     state.runRegions = state.runRegions
       .map(normalizeRegionRef)
       .filter(function (r) { return r && availableKeys[regionRefKey(r)]; });
-    // Auto-select the active region when nothing is explicitly selected. The
-    // seed is implicit (runRegionsSeeded) and keeps FOLLOWING the highlighted
-    // chip until the user touches the picker; without that re-seed the first
-    // created region stayed pinned and the model preview ignored chip selection.
-    //
-    // With no user regions there is no chip to follow, so full frame takes the
-    // seed — otherwise a fresh page has nothing selected and Run is dead. The
-    // first drawn region replaces it (the follow-up branch accepts a seeded
-    // full_frame just as it accepts a seeded active).
+    // Implicit seed follows the active chip until the picker is touched; else full frame.
     var seedRef = state.activeRegion && names.indexOf(state.activeRegion) >= 0
       ? activeRegionRef(state.activeRegion)
       : null;
@@ -724,9 +670,7 @@
 
     var panel = el("div", "run-picker-panel hidden");
 
-    // Full-frame entry — always available, sits above the active/stash regions.
-    // Its separator hairline is class-gated on something actually following it
-    // (active regions, or a stash folder with regions).
+    // Full-frame entry first; its separator hairline only shows when rows follow.
     var hasFollowingRows = names.length > 0 || state.stashes.some(function (stash) {
       return Object.keys(stash.regions).length > 0;
     });
@@ -867,10 +811,8 @@
 
     wrap.appendChild(btn);
     wrap.appendChild(panel);
-    // The seed above mutates runRegions, so the Run gate has to be re-evaluated
-    // here — the regions/stashes load paths don't call it themselves, and
-    // without this a fresh page keeps Run disabled despite full frame being
-    // selected.
+    // The seed mutates runRegions; the regions/stashes load paths never re-gate Run
+    // themselves.
     updateRunButton();
   }
 
@@ -903,10 +845,8 @@
     multitool: "Skips unchanged frames, widens interval"
   };
 
-  // A tool supports fast scan iff it has a fast-scan description. This is the
-  // single source of truth for the toggle's visibility and whether a submitted
-  // task carries scan_mode:"fast" — timelapse (media output) and boundary (runs
-  // its own coarse phash pass) are both absent above and so opt out.
+  // Single source of truth for fast-scan support; timelapse and boundary opt out by
+  // omission.
   function toolSupportsFastScan(type) { return !!FAST_SCAN_DESCRIPTIONS[type]; }
 
   var PARAM_DESCRIPTIONS = {
@@ -1066,8 +1006,7 @@
     }
 
     container.addEventListener("mouseenter", function (e) {
-      // Segmented-track buttons (e.g. the Normalize direction set) carry their
-      // own description on data-desc; reuse the same dark-pill tooltip.
+      // Segmented-track buttons carry data-desc; reuse the dark-pill tooltip.
       var seg = e.target.closest && e.target.closest(".cg-segtrack-btn");
       if (seg) {
         var segDesc = seg.getAttribute("data-desc");
@@ -1092,20 +1031,15 @@
     }, true);
   }
 
-  // Switching participants must clear the entire frame/overlay/playback
-  // pipeline together — keeping any one of these around (frameImage, video
-  // src, scene refs, pending fetch ids) would let the previous participant's
-  // state leak into the new one. Bumping the request-version counters also
-  // invalidates any in-flight frame/heatmap loads from the prior participant.
+  // Clear the whole frame/overlay/playback pipeline so nothing leaks between participants;
+  // version bumps drop in-flight loads.
   function selectParticipant(pid, initialTimestamp) {
     var participantRequestVersion = ++_participantRequestVersion;
     _frameRequestVersion += 1;
     state.heatmapOverlayRequestVersion += 1;
     state.selectedParticipant = pid;
     setStoredUIStateField("screenspace", "selectedParticipant", pid);
-    // Fill the result cache for the newly selected participant's tasks so the
-    // timeline draws their markers (the sync is participant-scoped, and no SSE
-    // tick may follow when their tasks are already completed).
+    // Participant-scoped result sync; completed tasks get no SSE tick to do it later.
     if (SS.syncTaskResults) SS.syncTaskResults();
     state.currentTimestamp = 0;
     state.videoInfo = null;
@@ -1116,21 +1050,17 @@
     state.referenceTimestamp = null;
     state.sceneReferences = [];
     cancelShapeDraw();
-    // In/out markers are per participant and persisted for the tab — swap in
-    // the incoming participant's pair (nulls when they have none) rather than
-    // letting the outgoing participant's markers leak across.
+    // In/out markers are per participant; swap in the incoming pair (nulls if none).
     if (SS.restoreMarkers) SS.restoreMarkers(pid);
     updateMarkerInfo();
     state.resultOverlay = null;
     state.heatmapOverlay = null;
     state.pins = [];
     state.hoveredPinId = null;
-    // Tray visibility is per-participant: don't carry one participant's hidden
-    // tray over to another that has pins (mirrors the reset when pinning).
+    // Tray visibility is per participant (mirrors the reset when pinning).
     state.pinTrayHidden = false;
-    // Drop the prior participant's calibration scores and invalidate any
-    // in-flight /api/calibrate response so it can't repaint the strip; the pin
-    // load below re-evaluates once the new participant's pins arrive.
+    // Drop stale calibration scores and in-flight /api/calibrate responses; the pin load
+    // re-evaluates.
     state.calibrationResult = null;
     if (SS.calBumpGen) SS.calBumpGen();
     updateCalibrationVisibility();
@@ -1149,9 +1079,7 @@
     _pendingFrameTs = null;
     _loadedFrameTs = null;
     qs("#participantSelect").value = pid;
-    // Skeleton frame + a textual "Loading…" in the subheader make the switch
-    // legibly in-progress; both are replaced once video info resolves (or on the
-    // error path below).
+    // Skeleton frame + "Loading…" subheader until video info resolves or fails.
     qs("#videoInfo").classList.add("cg-shimmer");
     qs("#videoInfo").textContent = "Loading…";
     qs("#frameEmpty").classList.remove("hidden");
@@ -1176,9 +1104,7 @@
         if (SS.clampMarkersToDuration) SS.clampMarkersToDuration(data.info.duration);
         // Reconfigure the audio popover for this participant's track layout.
         if (state.audioPanel) state.audioPanel.refresh();
-        // If the server reports a different mtime than we last saw, the
-        // source file was replaced \u2014 drop the stale frame-0 blob so the
-        // next loadFrame(0) hits the API and the new ?v= URL.
+        // A changed mtime means a replaced source: drop the stale frame-0 blob.
         var newVersion = data.info.version != null ? String(data.info.version) : "";
         var prevVersion = _videoVersions[pid] || "";
         _videoVersions[pid] = newVersion;
@@ -1199,8 +1125,7 @@
         loadFrame(initialTimestamp !== undefined ? initialTimestamp : 0);
       })
       .catch(function () {
-        // Clear the "Loading…" placeholder for the still-current participant so
-        // it doesn't hang after a failed fetch.
+        // Clear "Loading…" for the still-current participant after a failed fetch.
         if (participantRequestVersion === _participantRequestVersion && pid === state.selectedParticipant) {
           qs("#videoInfo").classList.remove("cg-shimmer");
           qs("#videoInfo").textContent = "";
@@ -1249,11 +1174,7 @@
   }
 
   // ---- Calibration pins ----
-  //
-  // A pin marks "this frame matters" with a polarity (positive = the
-  // condition is true here; negative = it must not fire here). Pins are
-  // tool-agnostic and drive detector calibration (later phase). The tray below
-  // the viewer shows on-demand thumbnails; the timeline shows polarity ticks.
+  // Pins mark frames with polarity; positive must fire, negative must not.
 
   var PIN_THUMB_WIDTH = 140;
 
@@ -1637,11 +1558,8 @@
     _fetchFrame(timestamp);
   }
 
-  // Frame loads are async and the user can scrub faster than the network, so at
-  // most one image is in flight: newer requests park their timestamp in
-  // `_pendingFrameTs` and the onload/onerror handler picks it up. Plus
-  // `frameRequestVersion` and the participant check, so a frame belonging to a
-  // participant already switched away from is never painted.
+  // One frame in flight; later scrubs park in `_pendingFrameTs`; version checks drop stale
+  // paints.
   function _fetchFrame(timestamp) {
     var participantId = state.selectedParticipant;
     var frameRequestVersion = ++_frameRequestVersion;
@@ -1656,11 +1574,8 @@
     var img = new Image();
     img.onload = function () {
       if (frameRequestVersion !== _frameRequestVersion || participantId !== state.selectedParticipant) return;
-      // The wand traces a pixel snapshot of the *outgoing* frame and the canvas
-      // may be resized below, so a scrub that is somehow still live here would
-      // commit a contour in the old frame's pixel space. The transport hotkeys
-      // are gated during a drag; this covers every other path into a reload
-      // (participant switch, timeline click, playback tick).
+      // A live wand scrub traces the outgoing frame's pixels; cancel it on every reload
+      // path.
       cancelWandDrag();
       state.frameImage = img;
       state.frameLoading = false;
@@ -1741,9 +1656,8 @@
       }
     });
 
-    // Hover the mute button for a glassy 0–200% volume popover (click still
-    // mutes). getTracks reads the audio-track layout from /api/video/info;
-    // trackAudioUrl enables per-track mixing for single-file participants.
+    // Hover mute for a 0–200% volume popover; per-track mixing works for single-file
+    // participants only.
     state.audioPanel = window.ClipgenVideoControls.attachAudioPanel({
       video: video,
       button: muteBtn,
@@ -1844,8 +1758,7 @@
       }
       video.currentTime = state.currentTimestamp;
     }
-    // Route through the audio panel so multitrack mode keeps the <video> muted
-    // (its baked track stays silent while the per-track mix plays).
+    // Route through the audio panel so multitrack mode keeps the <video> muted.
     if (state.audioPanel) state.audioPanel.setMuted(state.videoMuted);
     else video.muted = state.videoMuted;
 
@@ -1856,8 +1769,7 @@
     updateVideoButtons();
 
     applyPlaybackRate();
-    // Rejection here means playback never started (autoplay policy, or a
-    // pause/seek landing first), so the button state must fall back.
+    // Rejection means playback never started; the button state must fall back.
     window.ClipgenVideoControls.safePlay(video, pauseVideo);
   }
 
@@ -1901,11 +1813,8 @@
     }
   }
 
-  // ---- Region drawing + overlay interaction (impl in screenspace-overlay-interaction.js) ----
-  // The region draw/drag/resize state machine, region chips, the region-name
-  // modal, and the overlay-rect cache live in the satellite. These thin
-  // delegators forward the hub's own call sites (region-editor init, the Escape
-  // handler, and the stashing / chip-reorder code) to it.
+  // ---- Region drawing (impl in screenspace-overlay-interaction.js) ----
+  // Thin delegators for the hub's own call sites.
   function initRegionDrawing() { return SS.initRegionDrawing && SS.initRegionDrawing.apply(null, arguments); }
   function renderRegionChips() { return SS.renderRegionChips && SS.renderRegionChips.apply(null, arguments); }
   function updateRegionButtons() { return SS.updateRegionButtons && SS.updateRegionButtons.apply(null, arguments); }
@@ -1918,8 +1827,7 @@
 
   // ---- Region stashing ----
 
-  // Id of the stash just created, so renderStashCards() can play the landing
-  // animation on exactly the new card (consumed + cleared on first render).
+  // Stash id whose card gets the landing animation; consumed on first render.
   var _justStashedStashId = null;
 
   function stashRegions() {
@@ -2099,9 +2007,8 @@
     }
   }
 
-  // Delegated drop handlers so a dragged region chip can be copied into a stash.
-  // Bound once on the persistent #stashArea node (its innerHTML is rebuilt each
-  // render, but the element itself is reused).
+  // Drop handlers for copying a chip into a stash, bound once on the persistent
+  // #stashArea.
   var _stashDragOverCard = null;
 
   function clearStashDragIndicators() {
@@ -2147,10 +2054,8 @@
     });
   }
 
-  // ---- Region chip drag (reorder within #regionChips + copy into stashes) ----
-  // Horizontal mirror of the multitool/task vertical drag helpers: midpoints use
-  // left+width/2 and compare clientX. Excluding the .dragging chip from the cache
-  // keeps the drop index aligned with the post-splice array (no off-by-one).
+  // ---- Region chip drag ----
+  // Mirrors the vertical task drag; excluding .dragging keeps indices aligned.
   var REGION_DRAG_MIME = "application/x-region-name";
   var _regionDragMidpoints = null;
   var _regionDragOverRaf = null;
@@ -2170,8 +2075,7 @@
   }
 
   function hasRegionDragPayload(e) {
-    // Firefox/Safari may hide custom MIME types during dragover. Since these
-    // drags start inside this document, the local flag is the reliable signal.
+    // Firefox/Safari may hide custom MIME types on dragover; the local flag is reliable.
     return _regionDragActive || dataTransferHasType(e.dataTransfer, REGION_DRAG_MIME);
   }
 
@@ -2315,8 +2219,8 @@
         reordered[n] = state.regions[n];
       });
       state.regions = reordered;
-      // Region colors are position-based (regionColorForIndex), so reordering
-      // recolors regions — intentional. Repaint chips and overlay together.
+      // Colors are position-based, so reordering recolors regions on purpose; repaint
+      // both.
       renderRegionChips();
       renderOverlay();
       apiPut("api/regions/reorder", { names: names }).then(function (data) {
@@ -2369,18 +2273,13 @@
     return { x: x, y: y, w: w, h: h };
   }
 
-  // renderOverlay lives in screenspace-overlay.js; this hub delegator forwards
-  // its ~33 hub call sites to the satellite implementation.
+  // Delegator; renderOverlay lives in screenspace-overlay.js.
   function renderOverlay() {
     return SS.renderOverlay && SS.renderOverlay.apply(null, arguments);
   }
 
   // ---- Timeline — screenspace-timeline.js ----
-  // The timeline canvas lives in the satellite. The hub keeps same-named
-  // delegators for the entry points its own code calls; the tasks and results
-  // satellites destructure SS.renderTimeline / SS.updateMarkerInfo at load
-  // (timeline loads before them). seekPlayhead/loadFrame stay here and the
-  // satellite reaches them via SS.
+  // Delegators; the tasks and results satellites destructure SS.renderTimeline at load.
   function initTimeline() { return SS.initTimeline && SS.initTimeline.apply(null, arguments); }
   function renderTimeline() { return SS.renderTimeline && SS.renderTimeline.apply(null, arguments); }
   function renderPlayhead() { return SS.renderPlayhead && SS.renderPlayhead.apply(null, arguments); }
@@ -2462,8 +2361,7 @@
 
   function initWorkflowTabs() {
     qsa(".wf-tab").forEach(function (tab, i) {
-      // Alt-hold hint: tabs 1–9 map to the selectTool digit combos (the flat
-      // row's digit shortcuts). Tabs 10+ have no digit (only 9 combos exist).
+      // Alt-hold hint: tabs 1–9 map to digit combos; tabs 10+ have none.
       if (i < 9) {
         tab.setAttribute("data-hotkey", "screenspace.selectTool");
         tab.setAttribute("data-hotkey-combo", String(i));
@@ -2476,9 +2374,7 @@
         tab.classList.add("active");
         renderWorkflowParams();
         updateRunButton();
-        // Every selection path (tab click, category-delegated click, cycleTool,
-        // session restore) funnels through here, so this keeps the grouped
-        // category nav's active chip in sync however the tool was chosen.
+        // Every selection path funnels through here; keep the category nav in sync.
         syncToolCategoryNav();
       });
     });
@@ -2504,11 +2400,7 @@
     renderWorkflowParams();
   }
 
-  // Cycle the active tool (the Z/X hotkeys). Layout-aware: in grouped mode it
-  // walks the category order (left-to-right, tool-by-tool within a category) so
-  // the traversal matches what the user sees; in flat-tab mode it walks the tab
-  // DOM order. Both delegate to selectWorkflowType/.click() so the persist +
-  // param re-render + Run-button refresh run through the one existing path.
+  // Z/X tool cycling in on-screen order; delegates to the tab click path.
   function cycleTool(delta) {
     if (state.groupedToolNav) {
       var order = [];
@@ -2527,15 +2419,8 @@
     tabs[(cur + delta + tabs.length) % tabs.length].click();
   }
 
-  // ---- Grouped category tool nav (SCREENSPACE_GROUPED_TOOL_NAV) ----
-  // A presentational layer over the flat .wf-tab row: the tabs stay in the DOM
-  // (CSS-hidden) in both modes, and selecting a category delegates to the matching
-  // tab's .click(), so state, persistence, param rendering, cycleTool and restore
-  // all run one path. Ordered source of truth for grouping. Every category is a
-  // dropdown, even single-tool ones, for a uniform look; multitool is the lone
-  // standalone chip (direct-select, alwaysIcon) since it is not a detector.
-  // `icon` is an assets/icons basename standing for the group itself — it marks
-  // a resting chip and its menu title, and never repeats a member tool's icon.
+  // ---- Grouped tool nav ----
+  // Layer over hidden .wf-tab row; selecting delegates to tab clicks.
   var TOOL_CATEGORIES = [
     { label: "Multitool", tools: ["multitool"], alwaysIcon: true, standalone: true },
     { label: "Difference", tools: ["change", "similarity", "inactivity"], icon: "square-2-stack" },
@@ -2545,9 +2430,8 @@
     { label: "Utility", tools: ["timelapse"], icon: "cog-6-tooth" },
   ];
 
-  // Heroicon basenames per tool — mirrors the .ss-task-icon--<type> mask map in
-  // screenspace.css. Used for the command-palette tool-switch entries (the chip
-  // glyphs use the CSS masks via buildTypeIcon, not these names).
+  // Heroicon basenames per tool for the command palette; mirrors .ss-task-icon--<type> in
+  // screenspace.css.
   var TOOL_ICON_NAMES = {
     multitool: "wrench-screwdriver", color: "eye-dropper", change: "bolt",
     similarity: "photo", text: "language", numbers: "hashtag",
@@ -2564,8 +2448,7 @@
     return type ? type.charAt(0).toUpperCase() + type.slice(1) : "";
   }
 
-  // Category glyph. Borrows .ss-task-icon's sizing; the mask is set inline
-  // since category icons have no .ss-task-icon--<type> class.
+  // Category glyph; mask set inline since no .ss-task-icon--<type> class exists.
   function buildCatIcon(name) {
     if (!name) return null;
     return iconMaskSpan(name, {
@@ -2574,10 +2457,8 @@
     });
   }
 
-  // Alt-hold digit hints for the category chips. While a dropdown is open the
-  // digits route into that menu's items (see handleToolDigit), so the chip
-  // hints are removed and the open menu's items carry the 1..N hints instead
-  // (items hold data-hotkey from build time and only render while visible).
+  // Alt-hold chip hints; while a dropdown is open its items carry the digits (see
+  // handleToolDigit).
   function _setCatChipHints(enabled) {
     qsa("#workflowCategories .ss-cat-chip").forEach(function (chip, i) {
       var trig = chip.querySelector(".ss-cat-trigger");
@@ -2619,9 +2500,7 @@
     else openCatMenu(chip);
   }
 
-  // Delegate to the hidden flat tab so the whole existing selection path runs
-  // (state.activeWorkflow, persistence, renderWorkflowParams, updateRunButton,
-  // and the syncToolCategoryNav() call at the tail of the tab handler).
+  // Delegate to the hidden flat tab so the whole selection path runs.
   function selectWorkflowType(type) {
     var tab = qs('.wf-tab[data-type="' + type + '"]');
     if (tab) tab.click();
@@ -2636,8 +2515,8 @@
       // Every category is a dropdown (uniform look); only the standalone
       // Multitool is a direct-select chip.
       var isDropdown = !cat.standalone;
-      // Wrapper (div) + trigger (button) + sibling menu — menu items must NOT
-      // nest inside a <button> (invalid HTML). Mirrors #exportEventsWrap.
+      // Menu items must not nest inside a <button> (invalid HTML); mirrors
+      // #exportEventsWrap.
       var chip = el("div", "ss-cat-chip");
       chip.setAttribute("data-cat", cat.label);
       chip.setAttribute("data-tools", cat.tools.join(","));
@@ -2671,8 +2550,7 @@
           item.type = "button";
           item.setAttribute("data-type", type);
           item.setAttribute("role", "menuitem");
-          // Alt-hold hint: while the dropdown is open, digit ti+1 selects this
-          // item. Only rendered when the menu is visible (open chip).
+          // Alt-hold hint: digit ti+1 selects this item while the menu is open.
           if (ti < 9) {
             item.setAttribute("data-hotkey", "screenspace.selectTool");
             item.setAttribute("data-hotkey-combo", String(ti));
@@ -2708,11 +2586,8 @@
     _refreshCatHints();
   }
 
-  // Reflect state.activeWorkflow in the category chips: the owning segment gets
-  // the solid tool-color fill (via data-active-type) and shows just the active
-  // tool's icon + name (the category name is dropped to keep chips compact and
-  // equally sized). Resting chips show the category icon + name; the alwaysIcon
-  // chip (Multitool) shows its tool icon instead.
+  // Active chip: solid tool-color fill, tool icon + name only. Resting: category icon +
+  // name.
   function syncToolCategoryNav() {
     var nav = qs("#workflowCategories");
     if (!nav) return;
@@ -2725,8 +2600,8 @@
       var glyph = chip.querySelector(".ss-cat-glyph");
       var text = chip.querySelector(".ss-cat-text");
       chip.classList.toggle("active", isActive);
-      // Glyph: the active tool's icon when active; the (single) tool's icon on
-      // an alwaysIcon resting chip; the category's own icon otherwise.
+      // Glyph: active tool's icon, else the tool's on alwaysIcon chips, else the
+      // category's.
       var glyphType = isActive ? active : (alwaysIcon ? tools[0] : null);
       if (glyph) {
         glyph.innerHTML = "";
@@ -2748,11 +2623,7 @@
     });
   }
 
-  // Numeral hotkey (1–9) tool selection — ISO-friendly, works in both modes.
-  // Old tab mode: digit N selects the Nth tool tab. Grouped mode: digit N
-  // selects the Nth segment; a dropdown category opens and the next digit
-  // selects the Nth tool within it (hotkey → numeral); the standalone Multitool
-  // selects directly.
+  // Digits 1–9: flat mode picks tab N; grouped picks segment N, then tool N inside.
   function handleToolDigit(n) {
     if (!n || n < 1) return;
     if (!state.groupedToolNav) {
@@ -2773,9 +2644,7 @@
     else selectWorkflowType((chip.getAttribute("data-tools") || "").split(",")[0]);
   }
 
-  // Switch between the grouped category nav and the flat tab row based on
-  // state.groupedToolNav (SCREENSPACE_GROUPED_TOOL_NAV). Builds the category
-  // nav lazily on first enable.
+  // Toggle grouped nav vs flat tabs per state.groupedToolNav; builds the nav lazily.
   function applyToolNavMode() {
     var section = qs("#workflowSection");
     if (!section) return;
@@ -2946,9 +2815,8 @@
     );
     minAreaRow.id = "paramColorMinAreaRow";
     minAreaRow.classList.add("hidden");
-    // Widen the readout so it can show "X% · ~N px" / "Any presence …" beside
-    // the slider; addParamRow's generic listener runs first and writes the raw
-    // value, ours runs after and replaces it with the region-aware readout.
+    // Region-aware readout; runs after addParamRow's generic listener and overwrites the
+    // raw value.
     var minAreaVal = qs("#paramColorMinAreaVal");
     if (minAreaVal) minAreaVal.classList.add("param-value--minarea");
     var minAreaSlider = qs("#paramColorMinArea");
@@ -3095,9 +2963,8 @@
     container.appendChild(fmtRow);
   }
 
-  // Snapshot the active region's pixels at capture time so the reference row
-  // can show what will be matched (the run re-extracts server-side; this
-  // thumbnail is a same-frame client-side crop of the same rect).
+  // Client-side same-frame crop of the region for the reference row; the run re-extracts
+  // server-side.
   function captureRefSnapshot(ts) {
     var img = state.frameImage;
     var regs = state.previewRegions || state.regions;
@@ -3123,10 +2990,8 @@
     return { dataUrl: c.toDataURL("image/png"), region: name, ts: ts };
   }
 
-  // Thumbnail + source-region label for the last capture. Shared by the
-  // Template/Shape reference row (editable) and Similarity (view-only). A
-  // task-Edit restore knows the region name but has no pixels (the server
-  // strips binaries), so the thumbnail — and its click target — is optional.
+  // Last-capture thumbnail + region label. A task-Edit restore has no pixels, so thumbnail
+  // is optional.
   function refSnapshotInfo(labelText, editable) {
     var snap = state.capturedRefPreview;
     if (!snap || snap.ts !== state.referenceTimestamp) return null;
@@ -3146,8 +3011,7 @@
           dataUrl: snap.dataUrl,
           regionName: snap.region,
           onApply: function (b64) {
-            // An edited capture becomes an upload: the server can no longer
-            // re-derive its pixels from the region + timestamp.
+            // An edited capture becomes an upload; the server cannot re-derive its pixels.
             applyEditedSample((snap.region || "sample") + "-edited.png", b64);
           },
         });
@@ -3173,10 +3037,8 @@
     refreshModelView({ debounce: true });
   }
 
-  // Shared by Template and Shape: the capture-region / upload-PNG reference
-  // row. Both tools read state.referenceTimestamp / state.uploadedTemplate;
-  // the drag overlay stays template-only (templateOverlayBounds gates on the
-  // active tool). opts.draw adds the paint-on-frame button (Shape only).
+  // Template + Shape reference row; the drag overlay stays template-only. opts.draw adds
+  // paint-on-frame.
   function renderRefCaptureRow(container, labelText, opts) {
     var tmplRefRow = el("div", "param-row");
     tmplRefRow.appendChild(el("span", "param-label", labelText));
@@ -3189,8 +3051,7 @@
     tmplCapBtn.appendChild(tmplCapGlyph);
     tmplCapBtn.addEventListener("click", function () {
       var snap = captureRefSnapshot(state.currentTimestamp);
-      // Refuse a region-less capture: the sample would silently become the
-      // task's run region (the whole frame under a Full-frame target).
+      // Refuse a region-less capture: the sample would silently become the run region.
       if (!snap) {
         showToast("Select or draw a region to capture from");
         return;
@@ -3288,9 +3149,7 @@
       tmplRefCtrl.appendChild(uploadInfo);
     } else if (state.referenceTimestamp !== null) {
       tmplRefCtrl.appendChild(refTimeChip(state.referenceTimestamp));
-      // Show what was captured: a crop thumbnail + the source region's name.
-      // A restore from task Edit has no snapshot (server strips the binary),
-      // so the ts guard degrades those to the plain time chip.
+      // Task-Edit restores have no snapshot; the ts guard falls back to the time chip.
       var capInfo = refSnapshotInfo(labelText, true);
       if (capInfo) tmplRefCtrl.appendChild(capInfo);
     }
@@ -3325,9 +3184,7 @@
     var rowXMax = container.lastChild;
     addParamRow(container, "Scale steps", numberInput("paramShapeSteps", 1, 12, 7, 1));
     var rowXSteps = container.lastChild;
-    // Unlinked axes: the sliders above become width-only and a height ladder
-    // appears — for buttons that keep their height but stretch in width.
-    // The sweep crosses the ladders, so cost multiplies.
+    // Unlinked axes: width-only sliders plus a height ladder; the sweep multiplies cost.
     var linkCb = document.createElement("input");
     linkCb.type = "checkbox";
     linkCb.id = "paramShapeLinkAxes";
@@ -3411,8 +3268,8 @@
       var nameEl = qs("#paramSceneName");
       var name = nameEl ? nameEl.value.trim() : "";
       if (!name) { showToast("Enter a scene name"); return; }
-      // Underscore fields are display-only; gather maps refs to
-      // {name, timestamp, threshold} so they never reach the server.
+      // Underscore fields are display-only; gather strips them before the server sees
+      // refs.
       var scSnap = captureRefSnapshot(state.currentTimestamp);
       state.sceneReferences.push({
         name: name,
@@ -3430,16 +3287,8 @@
     renderIntervalSlot("paramSceneInterval", 0.5, 60, 1.0, 0.5);
   }
 
-  // Param inputs are DOM-only (rangeInput/numberInput hold hardcoded defaults,
-  // not state), so every panel rebuild — tool switch, Capture Current Frame, a
-  // scene/template add, a picker toggle — would snap every value back to its
-  // default. Values snapshot by id into state.paramValues before each teardown
-  // and write back after, so a setting survives however it was made. Ids are
-  // tool-prefixed, so one flat store holds every tool without collisions.
-  //
-  // Multitool step params are the exception: their ids are positional, so after
-  // a delete-and-reindex a stored value would land on a different step. They are
-  // state-backed (step._initial) and restore themselves.
+  // DOM-only param inputs snapshot by tool-prefixed id across rebuilds; multitool steps
+  // (positional ids) self-restore.
   var _MT_STEP_ID = /_mt\d+$/;
 
   function _paramControlValue(el) {
@@ -3487,12 +3336,8 @@
         el.checked = saved;
       } else if (el.type === "hidden" && el.parentNode
                  && el.parentNode.classList.contains("cg-segtrack")) {
-        // A segmented capsule's value lives in a hidden input, but the visible
-        // state (thumb position, .active segment) is CSS driven off the track
-        // element — writing el.value alone restores the value behind a control
-        // still showing the rebuilt default, and the scan then runs a mode the
-        // UI denies. applyColorMode/applyNormalizeMode also re-apply the
-        // value-dependent row visibility.
+        // Capsule visuals are CSS off the track, so el.value alone desyncs; apply* also
+        // re-toggles rows.
         if (el.value === String(saved)) return;
         if (id === "paramColorMode") applyColorMode(id, saved);
         else segTrackSetValue(el.parentNode, saved);
@@ -3500,18 +3345,15 @@
         if (el.value === String(saved)) return;
         el.value = saved;
       }
-      // Fire input so value readouts + the model view reflect the restored
-      // value, and change so listeners that only watch it (the numbers operator
-      // row-visibility toggle) don't leave the UI denying the restored value.
+      // Fire input for readouts and model view, change for change-only listeners (numbers
+      // operator row).
       el.dispatchEvent(new Event("input", { bubbles: true }));
       el.dispatchEvent(new Event("change", { bubbles: true }));
     });
   }
 
-  // The color target lives in three hidden inputs that drive a canvas picker,
-  // not a readout, so restoring their values alone leaves the swatch, hex field
-  // and palette showing the default. setTargetColor is the only path that
-  // repaints them; feed it back what the restore just wrote.
+  // Only setTargetColor repaints the swatch, hex field and palette; feed it the restored
+  // values.
   function _restoreColorTarget() {
     if (state.activeWorkflow !== "color") return;
     var c = SS.getColorHiddenInputs();
@@ -3521,16 +3363,12 @@
     );
   }
 
-  // `opts.defaults` skips the restore, leaving the freshly-built defaults in
-  // place: task restore (which writes the task's own saved parameters next)
-  // must not inherit whatever the panel happened to be showing.
+  // `opts.defaults` skips the restore; task restore writes its own saved params next.
   function renderWorkflowParams(opts) {
     if (state.shapeDraw && state.activeWorkflow !== "shape") cancelShapeDraw();
     _mergeParamMap(state.paramValues, _snapshotParamValues());
     _renderWorkflowParamsBuild();
-    // A just-built panel *is* the defaults, so they are read off the DOM rather
-    // than kept as a second table that would drift from the rangeInput() and
-    // numberInput() call sites above.
+    // Defaults are read off the just-built panel, not a second table that could drift.
     _mergeParamMap(state.paramDefaults, _snapshotParamValues());
     if (!(opts && opts.defaults)) {
       _restoreParamValues(state.paramValues);
@@ -3539,13 +3377,8 @@
     updateParamResetButtons();
   }
 
-  // ---- Reset-to-default affordance ----
-  //
-  // A circular-arrow button appears on any param row whose value differs from
-  // what the panel was built with. The row, not the control, is the unit: the
-  // numbers Range row carries two inputs that read as one parameter, so resetting
-  // one alone would be a half-reset. Multitool step rows have no entry in
-  // state.paramDefaults, so they get no button.
+  // ---- Reset-to-default ----
+  // Per row, not control: the Range row's two inputs are one parameter.
   function _buildParamResetButton(row) {
     var btn = el("button", "param-reset hidden");
     btn.type = "button";
@@ -3557,8 +3390,7 @@
       _paramControls(row).forEach(function (c) {
         if (state.paramDefaults[c.id] !== undefined) map[c.id] = state.paramDefaults[c.id];
       });
-      // No _restoreColorTarget here: the H/S/V inputs sit in the picker group,
-      // not in a .param-row, so no reset button can reach them.
+      // No _restoreColorTarget: the H/S/V inputs sit outside any .param-row.
       _restoreParamValues(map);
       updateParamResetButtons();
     });
@@ -3597,8 +3429,7 @@
     if (container) {
       _paramRows(container).forEach(_syncParamResetButton);
     }
-    // The interval control lives in its own slot outside #workflowParams and
-    // has no .param-row wrapper, so it stands in as its own row.
+    // The interval control has no .param-row wrapper, so it is its own row.
     var slot = qs("#workflowIntervalSlot");
     if (slot) _syncParamResetButton(slot);
   }
@@ -3607,9 +3438,8 @@
     return Array.prototype.slice.call(container.querySelectorAll(".param-row"));
   }
 
-  // One delegated pair on each stable container, mirroring initCalibration():
-  // catches every control the panels build, including the hand-assembled rows
-  // that never go through addParamRow.
+  // One delegated pair per stable container (like initCalibration) catches hand-assembled
+  // rows too.
   function initParamResets() {
     ["workflowParams", "workflowIntervalSlot"].forEach(function (id) {
       var container = qs("#" + id);
@@ -3648,16 +3478,11 @@
       dfCb.type = "checkbox";
       dfCb.id = "paramDetectFirst";
       addParamRow(container, "Detect first", dfCb);
-      // Every multitool mutation funnels through renderWorkflowParams; refresh
-      // the Run button here so task-import / reorder paths (which don't call
-      // updateRunButton explicitly) still enable the button once the list is
-      // long enough.
+      // Every multitool mutation lands here; task-import and reorder paths skip
+      // updateRunButton.
       updateRunButton();
       updateCalibrationVisibility();
-      // Drop the prior tool's scores so the strip doesn't render a stale axis;
-      // multitool returns early, so mirror the bottom-of-function cleanup here.
-      // renderCalibration() also resets calibrationGreen and the Run tooltip
-      // synchronously, before the async re-eval arrives.
+      // Multitool returns early, so mirror the bottom-of-function calibration reset here.
       state.calibrationResult = null;
       renderCalibration();
       if (!state.suppressCalibrationRefresh) refreshCalibration();
@@ -3689,9 +3514,8 @@
       renderIntervalSlot("paramInactInterval", 0.5, 60, 1.0, 0.5);
     }
     else if (type === "boundary") {
-      // Metric: Auto sends nothing (server applies its configured default,
-      // currently Hybrid). Scene/Hybrid use a content fingerprint + period
-      // model; pHash is the v1 consecutive-frame spike detector.
+      // Metric: Auto sends nothing (server default, currently Hybrid); pHash is the v1
+      // spike detector.
       var metricSel = document.createElement("select");
       metricSel.id = "paramBoundaryMetric";
       [["", "Auto"], ["scene", "Scene"], ["phash", "pHash"], ["hybrid", "Hybrid"]].forEach(function (pair) {
@@ -3700,22 +3524,18 @@
         metricSel.appendChild(opt);
       });
       addParamRow(container, "Metric", metricSel);
-      // Range is the full phash Hamming span (8x8 hash → 0..64); higher values
-      // fire only on near-total frame changes, which cuts noise on busy footage.
-      // Drives the phash threshold (pHash metric, and Hybrid's spike check).
+      // Full phash Hamming span (0..64); drives the pHash metric and Hybrid's spike check.
       addParamRow(container, "Sensitivity", rangeInput("paramBoundaryThresh", 0, 64, 14, 1), "paramBoundaryThreshVal");
       addParamRow(container, "Min gap (s)", numberInput("paramBoundaryMinGap", 0.5, 60, 3.0, 0.5));
       renderIntervalSlot("paramBoundaryInterval", 0.5, 60, 1.0, 0.5);
     }
     else if (type === "attention") {
-      // Normalized peak-jump distance for a shift event (fraction of the
-      // screen diagonal-ish; 0.15 default) and the EMA alpha for temporal
-      // smoothing (1.0 = follow each frame instantly).
+      // Peak-jump distance as a fraction of the screen diagonal, and the EMA smoothing
+      // alpha.
       addParamRow(container, "Sensitivity", rangeInput("paramAttnShift", 0.05, 0.50, 0.15, 0.01), "paramAttnShiftVal");
       addParamRow(container, "Smoothing", rangeInput("paramAttnSmooth", 0.1, 1.0, 0.6, 0.05), "paramAttnSmoothVal");
-      // Channel weights (defaults mirror SCREENSPACE_ATTENTION_WEIGHT_*).
-      // Faces at 0 disables the Haar face channel entirely; the Model view
-      // re-renders live as these move, so tuning is visual.
+      // Channel weights (defaults mirror SCREENSPACE_ATTENTION_WEIGHT_*); Faces at 0
+      // disables the Haar channel.
       addParamRow(container, "Spectral wt.", rangeInput("paramAttnWSpectral", 0, 2.0, 1.0, 0.05), "paramAttnWSpectralVal");
       addParamRow(container, "Contrast wt.", rangeInput("paramAttnWContrast", 0, 2.0, 0.7, 0.05), "paramAttnWContrastVal");
       addParamRow(container, "Motion wt.", rangeInput("paramAttnWMotion", 0, 2.0, 1.2, 0.05), "paramAttnWMotionVal");
@@ -3728,9 +3548,8 @@
       var eventLabel = textInput("paramEventLabel", "e.g. low_health");
       eventLabel.className = "param-input-half";
       addParamRow(container, "Event label", eventLabel);
-      // Boundary marks period transitions and attention streams shift
-      // moments, not discrete detections, so "Detect first" (stop after the
-      // first hit) doesn't apply — omit it for both.
+      // Boundary and attention emit transitions, not detections, so "Detect first" doesn't
+      // apply.
       if (type !== "boundary" && type !== "attention") {
         var dfCb = document.createElement("input");
         dfCb.type = "checkbox";
@@ -3740,8 +3559,7 @@
     }
 
     var scanPicker = qs("#runScanModePicker");
-    // Timelapse produces media (no scan modes); boundary runs its own coarse
-    // phash pass and opts out of fast scan, so hide the toggle for both.
+    // Timelapse has no scan modes; boundary runs its own coarse pass. Hide for both.
     if (scanPicker) {
       scanPicker.style.display = toolSupportsFastScan(type) ? "" : "none";
     }
@@ -3752,20 +3570,15 @@
     _updateOverlayUi();
     refreshModelView();
     updateCalibrationVisibility();
-    // Drop the prior tool's scores so the strip doesn't briefly render the old
-    // axis before the new evaluation returns. renderCalibration() also resets
-    // calibrationGreen and the Run tooltip synchronously, before the async
-    // re-eval arrives.
+    // Drop stale scores before the new evaluation; renderCalibration() resets
+    // calibrationGreen synchronously.
     state.calibrationResult = null;
     renderCalibration();
     if (!state.suppressCalibrationRefresh) refreshCalibration();
   }
 
-  // A captured reference-frame timestamp with a click-to-seek affordance.
-  // Shared by every tool that captures a reference (similarity, template, scene
-  // list, and the multitool steps) so the markup and the seek behaviour stay in
-  // one place. `textId` is optional and lands on the inner text span, which is
-  // what callers update in place after a re-capture.
+  // Click-to-seek reference timestamp chip shared by every capturing tool; `textId` marks
+  // the in-place-updated span.
   function refTimeChip(seconds, textId) {
     var wrap = el("span", "param-value param-value--ref");
     var text = el("span", null, formatTime(seconds, { decimals: 1 }));
@@ -3814,10 +3627,8 @@
   }
 
   // ---- Model view (impl in screenspace-model-view.js) ----
-  // Thin delegators forward the hub's own call sites to the satellite once it
-  // has registered SS.*. The satellite also publishes _overlayEligibleForActiveTool
-  // (read by screenspace-overlay.js), _updateMinAreaReadout (tasks +
-  // multitool-params) and _previewRegionRef (calibration) — see its tail.
+  // Delegators; the satellite also publishes _overlayEligibleForActiveTool,
+  // _updateMinAreaReadout, _previewRegionRef.
   function initModelView() { return SS.initModelView && SS.initModelView.apply(null, arguments); }
   function refreshModelView(opts) { return SS.refreshModelView && SS.refreshModelView.apply(null, arguments); }
   function _updateOverlayUi() { return SS._updateOverlayUi && SS._updateOverlayUi.apply(null, arguments); }
@@ -3825,10 +3636,8 @@
   function _updateMinAreaReadout(sfx) { return SS._updateMinAreaReadout && SS._updateMinAreaReadout.apply(null, arguments); }
 
   // ---- Calibration strip (impl in screenspace-calibration.js) ----
-  // Thin delegators keep the ~30 hub call sites unchanged and forward to the
-  // satellite once it has registered SS.cal*. state.suppressCalibrationRefresh
-  // is hub<->tasks coordination: set during restoreTaskToWorkflow (in
-  // screenspace-tasks.js) and checked in the single-tool param panels here.
+  // Delegators; state.suppressCalibrationRefresh is set by restoreTaskToWorkflow, checked
+  // here.
   function refreshCalibration(opts) { return SS.calRefresh && SS.calRefresh(opts); }
   function updateCalibrationThresholdLine() { return SS.calUpdateThresholdLine && SS.calUpdateThresholdLine(); }
   function renderCalibration() { return SS.calRender && SS.calRender(); }
@@ -3836,8 +3645,7 @@
   function initCalibration() { return SS.calInit && SS.calInit(); }
 
   // ---- Color picker (impl in screenspace-color.js) ----
-  // Thin delegators forward to the color satellite; keeps existing call sites
-  // and the sampleColorFromRegion click-handler reference unchanged.
+  // Delegators; sampleColorFromRegion's handler reference stays unchanged.
   function updateColorPreview() { return SS.updateColorPreview && SS.updateColorPreview(); }
   function setTargetColor(h, s, v) { return SS.setTargetColor && SS.setTargetColor(h, s, v); }
   function renderColorPalette() { return SS.renderColorPalette && SS.renderColorPalette(); }
@@ -3872,8 +3680,7 @@
     // Multitool uses per-step regions instead of a global region
     var isMultitool = state.activeWorkflow === "multitool";
     var multitoolReady = isMultitool && state.multitoolSteps.length >= 2;
-    // A template step with an uploaded image scans the full frame, so it
-    // satisfies the per-step region requirement without a region.
+    // An uploaded template scans the full frame, so it needs no region.
     var multitoolHasRegions = multitoolReady && state.multitoolSteps.every(function (s) {
       return !!s.region || (s.type === "template" && s._upload);
     });
@@ -3894,9 +3701,8 @@
       var isFullFrameTool = state.activeWorkflow === "boundary"
         || state.activeWorkflow === "attention";
       var hasUploadedTemplate = !!state.uploadedTemplate;
-      // Template scans full frames regardless of region selection; shape
-      // scopes matches to the run region. Either way the region (or uploaded
-      // image) supplies the reference patch, so one of the two is required.
+      // Region or uploaded image must supply the reference patch; template ignores the run
+      // region.
       var templateMissingPatch = isTemplate && !hasRegion && !hasUploadedTemplate;
       // Boundary and Attention are full-frame only — they need no region at all.
       var nonTemplateMissingRegion = !isTemplate && !isFullFrameTool && !hasRegion;
@@ -3911,11 +3717,8 @@
         btn.removeAttribute("data-tooltip");
       }
     }
-    // Surface calibration agreement as a subtle hover hint on an enabled Run
-    // button (no blocking when red — researcher agency preserved). Shown
-    // whenever pins are satisfied, independent of the strip's collapsed state;
-    // calibrationGreen is only ever true after a green evaluation, which
-    // implies pins exist.
+    // Calibration agreement is a hover hint, never a block; calibrationGreen implies pins
+    // exist.
     if (!btn.disabled && state.calibrationGreen) {
       btn.setAttribute("data-tooltip", "Calibrated: pins satisfied");
     }
@@ -4011,15 +3814,13 @@
   }
 
   function gatherMultitoolStepParams(stepType, idx, opts) {
-    // opts.silent suppresses missing-input toasts so the calibration strip can
-    // probe params on every keystroke without spamming the user (the Run path
-    // leaves it off and keeps the toasts).
+    // opts.silent drops missing-input toasts for the calibration strip's per-keystroke
+    // probes.
     var silent = !!(opts && opts.silent);
     function toast(msg) { if (!silent) showToast(msg); }
     var sfx = "_mt" + idx;
-    // Suffix-aware DOM readers — collapse the (qs("#id" + sfx) || {}) idiom so
-    // each branch reads as "param, default". rawNum is the deliberate-NaN
-    // reader for inputs whose emptiness is checked (target/range/scale).
+    // Suffix-aware readers; rawNum deliberately yields NaN for inputs whose emptiness is
+    // checked.
     function num(id, d) { return numberOrDefault((qs("#" + id + sfx) || {}).value, d); }
     function intv(id, d) { return intOrDefault((qs("#" + id + sfx) || {}).value, d); }
     function chk(id) { return !!((qs("#" + id + sfx) || {}).checked); }
@@ -4110,14 +3911,13 @@
   }
 
   function gatherWorkflowParams(type, opts) {
-    // opts.silent suppresses missing-input toasts (used by the calibration
-    // strip, which probes params continuously); the Run path omits it.
+    // opts.silent drops missing-input toasts for the calibration strip's per-keystroke
+    // probes.
     var silent = !!(opts && opts.silent);
     function toast(msg) { if (!silent) showToast(msg); }
     var sfx = "";
-    // Suffix-aware DOM readers — collapse the (qs("#id" + sfx) || {}) idiom so
-    // each branch reads as "param, default". rawNum is the deliberate-NaN
-    // reader for inputs whose emptiness is checked (target/range/scale).
+    // Suffix-aware readers; rawNum deliberately yields NaN for inputs whose emptiness is
+    // checked.
     function num(id, d) { return numberOrDefault((qs("#" + id + sfx) || {}).value, d); }
     function intv(id, d) { return intOrDefault((qs("#" + id + sfx) || {}).value, d); }
     function chk(id) { return !!((qs("#" + id + sfx) || {}).checked); }
@@ -4237,8 +4037,7 @@
         if (state.uploadedTemplate.name) params.template_name = state.uploadedTemplate.name;
       } else if (state.referenceTimestamp !== null) {
         params.reference_timestamp = state.referenceTimestamp;
-        // Pin the sample to its capture region so the run target (e.g. Full
-        // frame) only scopes the search, never the reference extraction.
+        // Pin the sample to its capture region; the run target only scopes the search.
         var tplSnap = state.capturedRefPreview;
         if (tplSnap && tplSnap.ts === state.referenceTimestamp && tplSnap.region) {
           params.reference_region = tplSnap.region;
@@ -4259,8 +4058,7 @@
         if (state.uploadedTemplate.name) params.shape_name = state.uploadedTemplate.name;
       } else if (state.referenceTimestamp !== null) {
         params.reference_timestamp = state.referenceTimestamp;
-        // Pin the sample to its capture region so the run target (e.g. Full
-        // frame) only scopes the search, never the reference extraction.
+        // Pin the sample to its capture region; the run target only scopes the search.
         var capSnap = state.capturedRefPreview;
         if (capSnap && capSnap.ts === state.referenceTimestamp && capSnap.region) {
           params.reference_region = capSnap.region;
@@ -4327,10 +4125,7 @@
   }
 
   // ---- Task queue (impl in screenspace-tasks.js) ----
-  // The task-queue / SSE-polling / results-switcher surface lives in
-  // screenspace-tasks.js. These thin delegators keep the hub's own call sites
-  // (DOMContentLoaded init, timeline render, queue/run path) unchanged and
-  // forward to the satellite once it has registered its SS.* entry points.
+  // Thin delegators for the hub's own call sites.
   function findTask(id) { return SS.findTask && SS.findTask(id); }
   function focusedTaskId() { return SS.focusedTaskId && SS.focusedTaskId(); }
   function renderTaskList() { return SS.renderTaskList && SS.renderTaskList(); }
@@ -4343,10 +4138,7 @@
   function initTaskFilters() { return SS.initTaskFilters && SS.initTaskFilters(); }
 
   // ---- Results (impl in screenspace-results.js) ----
-  // The Results panel lives in screenspace-results.js. These thin delegators
-  // keep the hub's own call sites (DOMContentLoaded init, histogram-toggle
-  // re-render) unchanged and forward to the satellite once it has registered
-  // its SS.* entry points.
+  // Thin delegators for the hub's own call sites.
   function initResultsPanel() { return SS.initResultsPanel && SS.initResultsPanel(); }
   function renderResults() { return SS.renderResults && SS.renderResults(); }
 
@@ -4357,21 +4149,10 @@
     loadFrame(clamp(state.currentTimestamp + delta, 0, Math.max(0, state.videoInfo.duration - 0.001)));
   }
 
-  // ---- Panel focus navigation (Shift+1..4 + arrows) ----
-  //
-  // Project convention: Shift+numeral targets a panel, the arrows then rove
-  // within it, and bare numerals keep selecting tools. The video player is the
-  // default surface (arrows = transport seek) that Escape returns to. Selection
-  // is a painted cursor (.ss-nav-cursor), NOT real DOM focus — real focus would
-  // flip the dispatcher's isTypingTarget check and suppress the arrow handlers.
-  // The notes textarea is the lone exception, taking real focus for editing.
+  // ---- Panel focus navigation ----
+  // Painted cursor (.ss-nav-cursor), not DOM focus, which would trip isTypingTarget.
 
-  // True while a panel owns the arrows. A focused panel can go dark without ever
-  // passing through Escape — clicking a task card switches the right-pane tab,
-  // and the info / bottom panels have their own collapse controls — and its rows
-  // survive in the DOM behind the hidden container. Left unchecked the arrows
-  // stay claimed (and preventDefault'ed) by an invisible cursor and video
-  // seeking silently dies, so an empty region hands focus back to the video.
+  // True while a panel owns the arrows; a hidden, empty region hands them back.
   function ssNavFocused() {
     if (state.focusRegion === "video") return false;
     if (ssNavItems(state.focusRegion).length) return true;
@@ -4389,9 +4170,7 @@
     return r.width > 0 || r.height > 0;
   }
 
-  // The interactive control of a tool-region nav item: a param row wraps its
-  // control (slider / select / checkbox / a button such as "Capture Current
-  // Frame") in .param-control; the top-row run controls are already the control.
+  // A tool item's control: the .param-control child, or the top-row control itself.
   function ssToolControl(item) {
     if (item && item.classList && item.classList.contains("param-row")) {
       return item.querySelector("input, select, textarea, button");
@@ -4399,11 +4178,8 @@
     return item;
   }
 
-  // Ordered, currently-visible items the arrows walk in each region.
-  //
-  // The visibility filter is load-bearing: `.hidden` is `display: none`, so a
-  // panel can go dark while its rows stay in the DOM. Returning those would paint
-  // the cursor on an invisible row and keep the arrows claimed — see ssNavFocused.
+  // Ordered visible items per region; the visibility filter keeps hidden rows from
+  // claiming the arrows.
   function ssNavItems(region) {
     // slice: the task/results branches return a NodeList, which has no .filter.
     return Array.prototype.slice.call(_ssNavItemsRaw(region)).filter(ssElVisible);
@@ -4414,9 +4190,8 @@
       var items = [];
       var notes = qs("#ssInfoNotes");
       if (notes) items.push(notes);
-      // Each collapsible section contributes its header (Enter toggles collapse,
-      // so a collapsed Top-issues / Transcript-tags section can still be reached
-      // and reopened) followed by its rows while expanded.
+      // Each section contributes its header (Enter toggles collapse), then its rows while
+      // expanded.
       qsa("#ssInfoPanel .ss-info-section").forEach(function (section) {
         if (section.classList.contains("hidden")) return;
         var header = section.querySelector(".ss-info-section-header");
@@ -4428,9 +4203,8 @@
       return items;
     }
     if (region === "tool") {
-      // The "top row" run controls (participant / interval / region / fast-mode),
-      // then the active tool's parameter rows. The tool *selector* is not here:
-      // bare numerals and Z/X switch tools, so Shift+2 focuses the panel itself.
+      // Top-row run controls, then the tool's param rows; numerals and Z/X cover the
+      // selector.
       var toolItems = [];
       [
         qs("#runParticipantPicker .run-picker-btn"),
@@ -4453,10 +4227,7 @@
   }
 
   // ---- Run-picker sub-navigation ----
-  // Opening a participant/region picker with Enter drops the cursor into the
-  // dropdown: arrows walk its options (the Select-all row + per-item checkbox
-  // labels) and Enter toggles the focused one. pickerCursor >= 0 means we're
-  // inside a dropdown, so the tool-region handlers delegate here.
+  // pickerCursor >= 0 means inside a dropdown; tool-region handlers delegate here.
 
   function ssOpenPicker() {
     return qs(".run-picker-panel:not(.hidden)");
@@ -4484,10 +4255,8 @@
     }
   }
 
-  // Repaint the item cursor. Regions re-render their innerHTML (poller, results
-  // load, param rebuild), so the index is always re-clamped and never trusted
-  // stale; the next nav keypress self-heals a wiped cursor. Only the focused
-  // item is highlighted (no whole-panel outline — matches Studio).
+  // Repaint the cursor; regions re-render innerHTML, so the index is re-clamped every
+  // time.
   function ssPaintNav() {
     ssClearNavPaint();
     if (state.focusRegion === "video") return;
@@ -4502,9 +4271,7 @@
     }
   }
 
-  // Stable identity for a nav item, where it has one. Index alone is not enough
-  // for the task queue: it is rebuilt from scratch on every poll and re-sorted
-  // when a task finishes, so the old index points at a different task.
+  // Stable nav item identity; the task queue re-sorts on every poll, so indices go stale.
   function ssNavKey(item) {
     if (!item) return null;
     if (item.dataset && item.dataset.taskId) return "task:" + item.dataset.taskId;
@@ -4512,14 +4279,11 @@
     return null;
   }
 
-  // Re-anchor and repaint after a region's list was rebuilt wholesale. Without
-  // this the painted cursor is simply gone (innerHTML = "") and the user has to
-  // re-target the panel with Shift+N.
+  // Re-anchor and repaint after a wholesale list rebuild wipes the painted cursor.
   function ssRefreshNav() {
     if (state.focusRegion === "video") return;
     var items = ssNavItems(state.focusRegion);
-    // Nothing to land on: leave focusRegion alone — ssNavFocused hands the
-    // arrows back to the video on the next keypress.
+    // Nothing to land on; ssNavFocused hands the arrows back on the next keypress.
     if (!items.length) return;
     if (state.focusAnchor) {
       for (var i = 0; i < items.length; i++) {
@@ -4540,12 +4304,8 @@
     ssPaintNav();
   }
 
-  // Mouse and keyboard focus must not disagree: once the user clicks, the arrows
-  // belong to what they clicked — an item of the focused region moves the cursor
-  // there, anything else hands the arrows back to the video for transport seek.
-  // Without this a region stays focused while its panel is merely visible, so the
-  // arrows keep roving a list the user clicked away from and seeking looks broken
-  // until they think to press Escape.
+  // Clicks re-own the arrows: a focused-region item moves the cursor; other clicks refocus
+  // the video.
   function ssSyncFocusToClick(e) {
     if (state.focusRegion === "video" || state.navEditing) return;
     if (ssInPicker()) return; // an open dropdown owns its own click handling
@@ -4560,8 +4320,8 @@
     ssSetFocusRegion("video");
   }
 
-  // Shift+N: reveal the target panel, then land the cursor in it. Declines
-  // (stays put) when the panel has nothing to land on, mirroring Studio kbJumpTo.
+  // Shift+N: reveal the panel, then land the cursor; declines when empty (mirrors Studio
+  // kbJumpTo).
   function ssFocusRegionByNumber(n) {
     var region;
     if (n === 1) {
@@ -4583,8 +4343,7 @@
       return;
     }
     if (!ssNavItems(region).length) return;
-    // Taking over with the painted cursor: drop any lingering native DOM focus
-    // (e.g. a tabbed-to top-nav button) so only one focus indicator shows.
+    // Drop lingering native focus so only one focus indicator shows.
     if (window.ClipgenHotkeys && window.ClipgenHotkeys.blurStrayFocus) {
       window.ClipgenHotkeys.blurStrayFocus();
     }
@@ -4605,11 +4364,8 @@
     ssPaintNav();
   }
 
-  // Left/Right nudges a control by one native step and fires the input event
-  // addParamRow listens for (so the model view refreshes). We set .value rather
-  // than real-focusing the range, which would double-apply the browser's own
-  // arrow stepping. Sliders and number inputs step; selects cycle; buttons,
-  // checkboxes and text inputs ignore horizontal (they act on Enter).
+  // Step controls by setting .value and firing input; real focus would double-apply
+  // browser arrow stepping.
   function ssAdjustControl(ctrl, dir) {
     if (!ctrl) return;
     if (ctrl.type === "range" || ctrl.type === "number") {
@@ -4631,10 +4387,8 @@
     }
   }
 
-  // Left/Right: adjust the focused item's control. Only the tool region has
-  // horizontal controls; the other regions are vertical lists, so horizontal is
-  // a consumed no-op — the handler still preventDefaults so the arrows never
-  // leak to a video seek.
+  // Only the tool region has horizontal controls; elsewhere consume the key so arrows
+  // never seek.
   function ssNavAdjust(dir) {
     if (state.focusRegion !== "tool" || ssInPicker()) return;
     var cur = ssNavItems("tool")[state.focusCursor];
@@ -4685,17 +4439,14 @@
       cur.click(); // -> loadFrame(row.dataset.timestamp)
       return;
     }
-    // Tool region: operate the focused control. Buttons/checkboxes (run pickers,
-    // fast-mode toggle, "Capture Current Frame", "Detect first") activate on
-    // Enter; text/number/select controls take real focus so the user can type or
-    // open them (Escape steps back out to the cursor). Sliders act on Left/Right.
+    // Enter activates buttons/checkboxes; text, number and select controls take real focus
+    // (Escape returns).
     var ctrl = ssToolControl(cur);
     if (!ctrl) return;
     if (ctrl.tagName === "BUTTON") {
       var opensPicker = ctrl.classList.contains("run-picker-btn");
       ctrl.click();
-      // A run picker opens its dropdown: drop the cursor into it so the arrows
-      // navigate its options (Escape closes it and returns here).
+      // A run picker opens its dropdown; drop the cursor in (Escape returns here).
       if (opensPicker && ssOpenPicker()) {
         state.pickerCursor = 0;
         ssPaintPicker();
@@ -4709,12 +4460,8 @@
     }
   }
 
-  // A live pointer drag owns the frame: the wand caches the frame's pixels at
-  // press and traces the release against that snapshot, so letting a
-  // frame-changing key through mid-drag would commit a region drawn from a frame
-  // that is no longer on screen. (Arrow seeks are already gated on
-  // ssVideoFocused; play/pause and the ,/. frame steps were not gated at all,
-  // and during a mouse drag document.activeElement is <body>, so they dispatch.)
+  // The wand snapshots pixels at press, so frame-changing keys must wait out a pointer
+  // drag.
   function noPointerDrag() {
     return !state.wandDragging && !state.drawingLasso && !state.drawingRegion;
   }
@@ -4732,24 +4479,20 @@
           else playVideo();
         },
       },
-      // Arrows are the coarse seek; ,/. step a single frame (the page's
-      // pre-registry arrows were frame-steps — that role moved to ,/.).
-      // Arrow-key transport is gated to video focus so that a focused panel
-      // (Shift+1..4) fully owns the arrows; ,/. fine-step is never an arrow so it
-      // works regardless of focus.
+      // Arrows coarse-seek only with video focus so a focused panel owns them; ,/.
+      // fine-step regardless.
       { id: "transport.seekBack", when: ssVideoFocused, handler: function () { _seekBy(-SEEK_STEP); } },
       { id: "transport.seekFwd", when: ssVideoFocused, handler: function () { _seekBy(SEEK_STEP); } },
       { id: "transport.stepBack", when: noPointerDrag, handler: function () { _seekBy(-FRAME_STEP); } },
       { id: "transport.stepFwd", when: noPointerDrag, handler: function () { _seekBy(FRAME_STEP); } },
-      // Shift+arrow mirrors the ,/. fine step so the 1 s / 5 s pair is discoverable
-      // from the arrow keys alone (screenspace-scoped to avoid Composer's Shift+arrow).
+      // Shift+arrow mirrors the ,/. fine step; screenspace-scoped to avoid Composer's
+      // binding.
       { id: "screenspace.stepBackFine", when: ssVideoFocused, handler: function () { _seekBy(-FRAME_STEP); } },
       { id: "screenspace.stepFwdFine", when: ssVideoFocused, handler: function () { _seekBy(FRAME_STEP); } },
       { id: "screenspace.setIn", handler: function () { if (SS.setInMark) SS.setInMark(); } },
       { id: "screenspace.setOut", handler: function () { if (SS.setOutMark) SS.setOutMark(); } },
-      // Hold to peek the overlay, tap to latch it on — the same hold-or-tap
-      // shape as Composer's B. The tap goes through the checkbox so its change
-      // handler still persists the preference and repaints.
+      // Hold to peek, tap to latch (like Composer's B); tapping the checkbox persists and
+      // repaints.
       {
         id: "screenspace.blink",
         repeat: false,
@@ -4830,14 +4573,12 @@
       },
     ]);
 
-    // Capture phase: page click handlers re-render panels (a task card switches
-    // the right-pane tab), so read the click against the *current* DOM before
-    // they run.
+    // Capture phase: read the click against the current DOM before page handlers
+    // re-render.
     document.addEventListener("mousedown", ssSyncFocusToClick, true);
 
-    // Back-out cascade: leave the notes editor, then return panel focus to the
-    // video, then an open run-picker dropdown, then the active pointer
-    // interaction, then the pending/active region, then the region-name modal.
+    // Back-out cascade: notes editor, panel focus, picker dropdown, pointer interaction,
+    // region, name modal.
     window.ClipgenHotkeys.registerEscape(function () {
       if (state.navEditing) {
         var active = document.activeElement;
@@ -4881,10 +4622,8 @@
         document.body.style.userSelect = "";
         renderOverlay();
       } else if (state.wandDragging) {
-        // Abort an in-progress wand scrub. Route through the satellite rather
-        // than nulling the state here: only its cancel path releases the cached
-        // full-frame ImageData (~8 MB at 1080p, ~33 MB at 4K) and drops the
-        // pending re-flood RAF.
+        // Only the satellite's cancel path frees the cached full-frame ImageData (~33 MB
+        // at 4K).
         cancelWandDrag();
       } else if (state.shapeDraw) {
         // Exit shape-draw mode before touching pending/active regions.
@@ -4904,15 +4643,14 @@
       } else {
         consumed = false;
       }
-      // Mirrors the pre-registry behavior: the region-name modal never
-      // survives an Escape press, whatever else was cancelled.
+      // The region-name modal never survives Escape, whatever else was cancelled.
       var modal = qs("#regionNameModal");
       if (modal && !modal.classList.contains("hidden")) {
         hideRegionNameModal();
         consumed = true;
       }
-      // A stray tabbed focus (top-nav button, source <select>, …) is dropped by
-      // the shared Escape fallback in hotkeys.js when nothing here claims it.
+      // Stray tabbed focus falls to hotkeys.js's shared Escape fallback when nothing
+      // claims it.
       return consumed;
     });
   }
@@ -5074,12 +4812,8 @@
 
   // ---- Init ----
 
-  // One-click boundary detection: enqueue a full-frame boundary task for every
-  // participant that has a source video (state.participants is already filtered
-  // to has_video). New tasks are pushed to state.tasks + rendered immediately,
-  // matching the Run button's enqueue path; results stream in over SSE. The
-  // in-flight guard blocks duplicate posts if the action is triggered again
-  // before the sequential enqueue chain finishes.
+  // One-click boundary detection for every participant with video; the guard blocks
+  // duplicate posts mid-chain.
   var _boundaryEnqueueInFlight = false;
 
   function detectBoundariesForAll() {
@@ -5141,19 +4875,15 @@
     rebuild();
     window.ClipgenExportActions.refreshExportStatus(rebuild);
     window.ClipgenTopNav.onBeforeOpen(function () {
-      // Rebuild on every open so the boundary action reflects the current
-      // participant list (loaded async after init). refreshExportStatus only
-      // re-runs rebuild when the export flag flips, so it can't do this alone —
-      // without this the boundary item stays frozen in its init-time (empty,
-      // disabled) state.
+      // Rebuild on every open so the boundary item tracks participants;
+      // refreshExportStatus rebuilds on flag flips.
       rebuild();
       window.ClipgenExportActions.refreshExportStatus(rebuild);
     });
   }
 
-  // Command palette (command-palette.js): additions beyond the auto-ingested
-  // quick actions — Run, plus per-participant jumps (the provider runs on
-  // every palette open, so the list tracks state.participants).
+  // Command palette additions: Run plus per-participant jumps; the provider re-runs on
+  // every open.
   function initCommandPalette() {
     if (!window.ClipgenCommandPalette) return;
     window.ClipgenCommandPalette.setParticipants(function () {
@@ -5221,8 +4951,7 @@
           run: function () { toggleBottomPanel(); },
         },
       ];
-      // Switch-to-tool commands, one per analysis tool (grouped by category).
-      // run() delegates to selectWorkflowType so it works in both nav modes.
+      // One switch-to-tool command per tool; selectWorkflowType works in both nav modes.
       TOOL_CATEGORIES.forEach(function (cat) {
         cat.tools.forEach(function (type) {
           cmds.push({
@@ -5235,8 +4964,8 @@
           });
         });
       });
-      // "Jump to … in Screenspace" = stays here and selects in place; the
-      // palette's built-in provider adds the cross-page "Open … in <Page>".
+      // "Jump to …" selects in place; the built-in provider adds cross-page "Open … in
+      // <Page>".
       (state.participants || []).forEach(function (p) {
         cmds.push({
           id: "screenspace:p:" + p.id,
@@ -5256,10 +4985,8 @@
   }
 
   // ---- Settings (server-side STUDIO_SETTINGS) ----
-  //
-  // Backed by /api/settings, with the Screenspace-relevant flags mirrored onto
-  // state so hot paths read them without a network call. The settings modal's
-  // onSave/onReset hooks call applyScreenspaceSettingsSnapshot to resync.
+  // Flags mirror onto state; the modal's onSave/onReset call
+  // applyScreenspaceSettingsSnapshot.
 
   function applyScreenspaceSettingsSnapshot(applied, settings) {
     function pick(name) {
@@ -5357,8 +5084,7 @@
         if (data.config) clipgenApplyConfig(data.config);
         state.hasSheet = !!data.has_sheet;
         state.participants = (data.participants || []).filter(function (p) { return p.has_video; });
-        // Seed _videoVersions before any frameUrl/videoStreamUrl call so the
-        // preload queue below already includes the ?v= cache-bust suffix.
+        // Seed _videoVersions first so the preload queue gets the ?v= suffix.
         state.participants.forEach(function (p) {
           if (p.version != null) _videoVersions[p.id] = String(p.version);
         });
@@ -5375,8 +5101,7 @@
           if (typeof initialTs !== "number") initialTs = undefined;
           selectParticipant(pickId, initialTs);
           state.runParticipants = [pickId];
-          // Matched against the live tab strip rather than a name list, so a
-          // new tab never falls silently back to the default.
+          // Match the live tab strip so a new tab never silently falls back.
           if (stored.rightPaneTab
               && qs('.rp-tab[data-tab="' + CSS.escape(stored.rightPaneTab) + '"]')) {
             setRightPaneTab(stored.rightPaneTab);
@@ -5386,10 +5111,8 @@
             if (wfTab) wfTab.click();
           }
         }
-        // Warm frame 0 for the participants the user might switch to. The
-        // selected one goes last: selectParticipant above already issued its own
-        // frame request, and _fetchFrame only consults _preloadedFrames at
-        // request time, so warming it first would just duplicate that work.
+        // Warm frame 0 for other participants; the selected one last, its request already
+        // went out.
         var preloadOrder = [];
         state.participants.forEach(function (p) {
           if (p.id !== pickId) preloadOrder.push(p.id);
@@ -5428,9 +5151,7 @@
           state.tasks = data.tasks || [];
           renderTaskList();
           renderTimeline();
-          // Fill the per-task result cache so the timeline has markers on load.
-          // handleTaskData does this on every tick, but with all tasks already
-          // completed the SSE stream below never starts, so seed it here too.
+          // Seed the result cache; with every task completed the SSE stream never starts.
           if (SS.reconcileResultCache) SS.reconcileResultCache(state.tasks);
           if (SS.syncTaskResults) SS.syncTaskResults();
           if (state.tasks.some(function (t) { return t.status === "queued" || t.status === "running"; })) {
@@ -5442,15 +5163,10 @@
   });
 
   // ---- Satellite interface (window.ClipgenScreenspace) ----
-  // Published for the screenspace-*.js satellites loading after this script: they
-  // read the hub's state + helpers through it and attach their own functions
-  // back. Assigned synchronously during this script's load, so the object is
-  // fully populated before any satellite IIFE runs — and DOMContentLoaded init
-  // plus every user-event handler fire later still.
+  // Assigned synchronously, so fully populated before any satellite IIFE runs.
   var SS = (window.ClipgenScreenspace = window.ClipgenScreenspace || {});
   SS.state = state;
-  // Calibration entry points are thin hub delegators (see the calibration strip
-  // section above) forwarding to SS.calRefresh / SS.calUpdateThresholdLine.
+  // Calibration entry points are hub delegators; see the calibration strip section.
   SS.refreshCalibration = refreshCalibration;
   SS.updateCalibrationThresholdLine = updateCalibrationThresholdLine;
   // Hub helpers the satellites call outward.
@@ -5469,8 +5185,7 @@
   SS.regionRefKey = regionRefKey;
   SS.regionRefLabel = regionRefLabel;
   SS.buildTypeIcon = buildTypeIcon;
-  // Grouped tool nav sync — the tasks satellite (restoreTaskToWorkflow) calls
-  // this late-bound after it moves the active .wf-tab manually.
+  // The tasks satellite calls this after moving the active .wf-tab manually.
   SS.syncToolCategoryNav = syncToolCategoryNav;
   SS.iconSpan = iconSpan;
   SS.buildNormalizeControl = buildNormalizeControl;
@@ -5481,15 +5196,10 @@
   SS.renderWorkflowParams = renderWorkflowParams;
   SS.updateParamResetButtons = updateParamResetButtons;
   SS.updateRunButton = updateRunButton;
-  // Hub helpers the tasks + results satellites reuse. findTask /
-  // restoreTaskToWorkflow / setInputValue / syncValueDisplays live in
-  // screenspace-tasks.js, and initResultsPanel / loadAndShowResults /
-  // renderResults in screenspace-results.js — each published from there, with
-  // thin hub delegators for the entry points the hub's own code calls.
+  // Helpers for the tasks + results satellites; their own entry points publish from there.
   SS.applyColorMode = applyColorMode;
   SS.applyNormalizeMode = applyNormalizeMode;
-  // renderOverlay itself lives in screenspace-overlay.js and publishes SS.renderOverlay;
-  // these are the hub helpers that satellite reads (regionToPixels/taskTypeColor below).
+  // Helpers the overlay satellite reads; it publishes SS.renderOverlay itself.
   SS.regionColorForIndex = regionColorForIndex;
   SS.getThemeColors = getThemeColors;
   SS.templateOverlayBounds = templateOverlayBounds;
@@ -5497,10 +5207,8 @@
   SS.selectParticipant = selectParticipant;
   // Hub helper the color satellite reuses.
   SS.regionToPixels = regionToPixels;
-  // Hub helpers the overlay-interaction satellite reads (the region draw/drag/
-  // resize state machine + toolbar live there; these stay hub-side). It owns
-  // computeLabelRect / renderRegionChips / updateRegionButtons / invalidateOverlayRect
-  // and publishes those back.
+  // Helpers the overlay-interaction satellite reads; it publishes renderRegionChips,
+  // computeLabelRect, updateRegionButtons, invalidateOverlayRect back.
   SS.pauseVideo = pauseVideo;
   SS.stashRegions = stashRegions;
   SS.pinCurrentFrame = pinCurrentFrame;
