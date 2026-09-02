@@ -197,16 +197,15 @@ def _build_card_frame(
     if drawtext_filter:
         vf_with_scale += f",{drawtext_filter}"
 
+    output_trim: list[str] = []
     if use_image_background:
         assert background_path is not None  # guaranteed by use_image_background
-        video_input = [
-            "-loop",
-            "1",
-            "-t",
-            str(duration),
-            "-i",
-            str(background_path),
-        ]
+        # Decode, scale and draw the text once, then loop that one frame for
+        # the card's length. `-loop 1` on the input re-decoded the image and
+        # re-rendered the text for every frame; output is bit-identical.
+        video_input = ["-i", str(background_path)]
+        vf_with_scale += ",loop=loop=-1:size=1:start=0"
+        output_trim = ["-t", str(duration)]
         input_label = str(background_path)
     else:
         video_input = [
@@ -258,6 +257,7 @@ def _build_card_frame(
         *map_args,
         *video_out_args,
         *audio_out_args,
+        *output_trim,
         card_path,
     ]
 

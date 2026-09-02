@@ -2050,3 +2050,46 @@ def test_extract_sprite_sheet_seek_all_grabs_fail_returns_none(monkeypatch, tmp_
         video.extract_sprite_sheet_bytes(str(src), 0.0, 10.0, 2, 2, seek_frames=True)
         is None
     )
+
+
+def test_probe_video_properties_single_flight(monkeypatch, tmp_path):
+    """Concurrent probes of one file share a single ffprobe.
+
+    A participant select fires the video-info and pins routes together; both
+    missed the cache and each ran its own ffprobe on the same file.
+    """
+    import threading
+    import time as _time
+
+    import video as video_mod
+
+    video_mod._video_properties_cache.clear()
+    src = tmp_path / "probe.mp4"
+    src.write_bytes(b"stub")
+    payload = (
+        '{"streams":[{"codec_type":"video","width":1280,"height":720,'
+        '"codec_name":"h264","r_frame_rate":"30/1","nb_frames":"30"}],'
+        '"format":{"duration":"1.0"}}'
+    )
+    calls = []
+
+    def slow_probe(*_a, **_k):
+        calls.append(1)
+        _time.sleep(0.05)
+        return payload
+
+    monkeypatch.setattr(video_mod.subprocess, "check_output", slow_probe)
+    results: list = []
+    threads = [
+        threading.Thread(
+            target=lambda: results.append(video_mod.probe_video_properties(str(src)))
+        )
+        for _ in range(4)
+    ]
+    for th in threads:
+        th.start()
+    for th in threads:
+        th.join()
+    assert len(calls) == 1
+    assert all(r == results[0] for r in results) and results[0]["width"] == 1280
+    assert not video_mod._probe_inflight  # flight entry released

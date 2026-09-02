@@ -37,8 +37,8 @@ from typing import Any
 import config
 
 _LOCK = threading.Lock()
-# label -> [total_seconds, count, max_seconds]. Labels are static strings (or
-# Flask url_rule strings, ~200 of them); the cap is a safety net, not an LRU.
+# label -> [total_seconds, count, max_seconds, bytes]. Labels are static strings
+# (or Flask url_rule strings, ~200 of them); the cap is a safety net, not an LRU.
 _TOTALS: dict[str, list[float]] = {}
 _MAX_LABELS = 1024
 _REPORT_REGISTERED = False
@@ -128,9 +128,19 @@ def enable() -> None:
 
 
 def add(
-    label: str, seconds: float = 0.0, n: int = 1, *, peak: float | None = None
+    label: str,
+    seconds: float = 0.0,
+    n: int = 1,
+    *,
+    peak: float | None = None,
+    nbytes: int = 0,
 ) -> None:
-    """Accumulate *seconds* and *n* occurrences under *label*.
+    """Accumulate *seconds*, *n* occurrences and *nbytes* under *label*.
+
+    *nbytes* is a payload size — a response body, a streamed drain, a manifest
+    section — summed like *seconds*. It is the second axis a poll can go wrong
+    on: ``route`` timing alone hides an endpoint that answers in 2 ms with a
+    5 MB body every tick.
 
     *peak* is the largest single occurrence in this contribution. A batched
     flush (``n > 1``) has no per-item max in *seconds* — that is a sum — so the
@@ -152,12 +162,13 @@ def add(
         if entry is None:
             if len(_TOTALS) >= _MAX_LABELS:
                 return
-            _TOTALS[label] = [seconds, float(n), peak or 0.0]
+            _TOTALS[label] = [seconds, float(n), peak or 0.0, float(nbytes)]
         else:
             entry[0] += seconds
             entry[1] += n
             if peak is not None and peak > entry[2]:
                 entry[2] = peak
+            entry[3] += nbytes
 
 
 def count(label: str, n: int = 1) -> None:
@@ -250,8 +261,16 @@ def timed(label: str) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
     return decorate
 
 
-def stream_span(label: str, body: Iterable[str]) -> Generator[str, None, None]:
+def stream_span(
+    label: str, body: Iterable[Any], *, first_label: str | None = None
+) -> Generator[Any, None, None]:
     """Yield through *body*, recording total generation time under *label*.
+
+    *first_label* (``stream.first <rule>``) gets the time to the first chunk —
+    the perceived latency of a drain, which the total cannot show: a generate
+    that streams its first cached clip at 10 ms and finishes at 40 s and one
+    that sits silent for 20 s then floods have the same ``stream`` total.
+    Chunk lengths sum into the label's ``bytes`` (characters for text bodies).
 
     Streaming responses are invisible to the ``after_request`` timing that
     produces ``route <rule>``: Flask runs that hook in ``finalize_request``, on
@@ -274,28 +293,52 @@ def stream_span(label: str, body: Iterable[str]) -> Generator[str, None, None]:
         yield from body
         return
     start = time.perf_counter()
+    total = 0
+    first = True
     try:
-        yield from body
+        for chunk in body:
+            if first:
+                first = False
+                if first_label:
+                    add(first_label, time.perf_counter() - start)
+            total += len(chunk)
+            yield chunk
     finally:
-        add(label, time.perf_counter() - start)
+        # A plain loop (unlike ``yield from``) does not forward close() to the
+        # body, so a client disconnect would leave the route's own cleanup
+        # unrun until GC. Close it first, so its finally lands inside the span.
+        close = getattr(body, "close", None)
+        if close is not None:
+            close()
+        add(label, time.perf_counter() - start, nbytes=total)
 
 
 def snapshot() -> dict[str, dict[str, float]]:
-    """Return ``{label: {"seconds": s, "count": n, "max": m}}`` sorted by seconds desc.
+    """Return ``{label: {seconds, count, max, bytes}}`` sorted by seconds desc.
 
     ``max`` is 0.0 for labels fed only by batched flushes that supplied no
-    ``peak=`` — see :func:`add`. Sorting stays on seconds so the max never
-    reorders the report.
+    ``peak=`` — see :func:`add`. ``bytes`` is 0 for labels that never passed
+    ``nbytes=``. Sorting stays on seconds so neither reorders the report.
     """
     with _LOCK:
         items = [
-            (label, entry[0], int(entry[1]), entry[2])
+            (label, entry[0], int(entry[1]), entry[2], int(entry[3]))
             for label, entry in _TOTALS.items()
         ]
     items.sort(key=lambda item: (-item[1], item[0]))
     return {
-        label: {"seconds": secs, "count": n, "max": mx} for label, secs, n, mx in items
+        label: {"seconds": secs, "count": n, "max": mx, "bytes": nb}
+        for label, secs, n, mx, nb in items
     }
+
+
+def format_bytes(nbytes: int) -> str:
+    """``1.2MB``-style size for report lines; bytes below 1 KB stay exact."""
+    if nbytes < 1024:
+        return f"{nbytes}B"
+    if nbytes < 1024 * 1024:
+        return f"{nbytes / 1024:.1f}KB"
+    return f"{nbytes / (1024 * 1024):.1f}MB"
 
 
 def peak_rss_mb() -> float | None:
@@ -372,6 +415,9 @@ def report() -> None:
             line += f"  avg={secs / n * 1000:.1f}ms"
         if mx:
             line += f"  max={mx * 1000:.1f}ms"
+        nb = int(entry.get("bytes", 0))
+        if nb:
+            line += f"  bytes={format_bytes(nb)}"
         print(line)  # bare print: Rich would wrap piped output (see module docstring)
     # Gated on "did we print anything", not on config.PROFILING: report()'s
     # documented contract is silence when nothing was recorded, and it has never

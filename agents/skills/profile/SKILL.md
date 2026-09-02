@@ -34,6 +34,11 @@ covers the frame-JPEG, decoded-frame, and pin-OCR LRUs in
 `pipeline.clip` / `pipeline.pool_wall`, `ocr.pool_wait` / `ocr.reader_build`,
 `heatmap.gif` / `heatmap.rolling` / `heatmap.gifs` (pair wall) /
 `heatmap.grid_layers` (shared grid accumulation — see below),
+`manifest.load <section>` / `manifest.save <section>` (one JSON parse or
+dump+write of that `clipgen.json` section, with its size as `bytes=`) and
+`manifest.save.unchanged <section>` (saves skipped as identical — a debounced
+persister that mostly skips is healthy, a poll path that loads a multi-MB
+section every tick is not),
 `ollama.generate`, `titlecard.wrap` plus
 `titlecard.copy` / `titlecard.reencode` counts (the concat-demuxer vs filter
 fallback), `workflows.run` / `workflows.node <type>` / `workflows.batch_child` /
@@ -81,8 +86,14 @@ launch, read `/api/profile` from the running app — the frozen bootloader
 ignores `PYTHONUNBUFFERED`, so grepping a killed process's stdout loses the
 buffered `startup |` lines.
 
-Two report tokens are easy to misread:
+Three report tokens are easy to misread:
 
+- **`bytes=`** is a payload sum, present only on labels that carry one:
+  `route <rule>` (the `Content-Length` of every non-streamed response),
+  `stream <rule>` (characters drained), and `manifest.*` (that section's
+  JSON text). It is the second axis a poll goes wrong on — `route` time alone
+  hides an endpoint that answers in 2 ms with a 2 MB body every tick. Divide
+  by `n=` for the per-response size; `/api/profile` exposes it as `bytes`.
 - **`max=`** is the largest single occurrence. It is absent on labels fed only by
   batched flushes, because a batch's `seconds` is a sum with no per-item max. A
   flusher that tracked its own maximum passes `add(..., peak=)` to populate it —
@@ -266,6 +277,22 @@ line for parsing; the server's `profile | ` route report follows at exit.
 "open DevTools" of last resort. The headless shell's paint metrics are only
 indicative; add `--full-chromium` when paint fidelity matters.
 
+**Leaks and idle churn — `--soak SECONDS`.** Load-time numbers say nothing
+about a page that merely sits open: pollers re-rendering into the DOM,
+listeners re-bound per tick, payloads retained per poll. `--perf --soak 20`
+re-samples after the page has idled that long and prints `perf | soak.*`
+deltas — `soak.Nodes` / `soak.JSEventListeners` / `soak.JSHeapUsedSize`
+(growth with nothing happening is a leak; a few nodes for a toast or a clock
+is not), `soak.poll.<page>.<name> n=+N` (ticks during the window — check
+against the poller's interval, and against 0 for a page that should be
+paused), and `soak.longtasks`. Read the server's exit report alongside it:
+`route` lines with a large `bytes=` ÷ `n=` are the polls to slim.
+
+```bash
+CLIPGEN_UI_CHECK=1 uv run --extra ui python tests/ui/shot.py transcripts \
+    --perf --soak 20 --output /tmp/tsbench
+```
+
 ## Step 4 — Interpret
 
 - `scan.decode_wait` dominates → the scan is decode-bound: look at the fast-scan
@@ -339,6 +366,12 @@ indicative; add `--full-chromium` when paint fidelity matters.
   measures how long a tab stayed open, and it auto-reconnects, so a duration
   would shrink the more broken the stream is. The bounded summary-token stream is
   the exception and *is* timed, because it ends when the run ends.
+- **`stream.first <rule>` is the perceived latency of a drain** — time to the
+  first chunk, which the `stream` total cannot show: a generate that streams
+  its first cached clip at 10 ms and finishes at 40 s and one that sits silent
+  for 20 s then floods have the same total. Optimize `stream.first` for
+  time-to-first-response (see the two-pass pattern in
+  [PERFORMANCE.md](../../PERFORMANCE.md)); `stream` for throughput.
 - `longtasks` / `cdp.LayoutCount` → render work; check DocumentFragment batching and
   rAF-throttling per [CODE-REVIEW.md](../../CODE-REVIEW.md).
 
