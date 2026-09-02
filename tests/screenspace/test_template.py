@@ -199,7 +199,9 @@ class TestCorrelationRoi:
             < 5e-5
         )
 
-    def test_roi_values_match_exactly(self):
+    def test_roi_values_track_full_map(self):
+        # Crop width picks the SIMD path, so ROI scores land ulp-close to the
+        # full map rather than bit-identical. The peak still agrees.
         rng = np.random.RandomState(82)
         source = rng.randint(0, 5, (39, 61), dtype=np.uint8).astype(np.float32)
         template = source[7:16, 13:27].copy()
@@ -208,13 +210,13 @@ class TestCorrelationRoi:
         packed = screenspace_primitives._match_corr_window(source, template, window)
         assert packed is not None
         corr, x_offset, y_offset = packed
-        assert np.array_equal(
-            corr,
-            full[
-                y_offset : y_offset + corr.shape[0],
-                x_offset : x_offset + corr.shape[1],
-            ],
-        )
+        want = full[
+            y_offset : y_offset + corr.shape[0],
+            x_offset : x_offset + corr.shape[1],
+        ]
+        assert corr.shape == want.shape
+        assert float(np.abs(corr - want).max()) < 1e-5
+        assert int(corr.argmax()) == int(want.argmax())
 
     def test_masked_keeps_full_map(self, monkeypatch):
         rng = np.random.RandomState(83)
