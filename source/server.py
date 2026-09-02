@@ -3561,11 +3561,18 @@ def _profile_request_end(response):
 
     Labeling by ``url_rule.rule`` (not path) bounds label cardinality to the
     app's ~200 rules and aggregates poll endpoints instead of spamming one
-    line per hit — the totals view is the useful one for polls anyway.
+    line per hit — the totals view is the useful one for polls anyway. The
+    response size rides along as ``bytes=`` so a cheap-but-bloated poll shows.
     """
     t0 = getattr(g, "_prof_t0", None)
     if t0 is not None and request.url_rule is not None:
-        profiling.add(f"route {request.url_rule.rule}", time.perf_counter() - t0)
+        # content_length is the header, never a body walk: streamed bodies have
+        # none here (stream_span counts those), file sends already know theirs.
+        profiling.add(
+            f"route {request.url_rule.rule}",
+            time.perf_counter() - t0,
+            nbytes=response.content_length or 0,
+        )
     return response
 
 

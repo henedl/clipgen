@@ -33,6 +33,11 @@ INVALID_END_TIMESTAMP = None
 # the pattern in viewer.py and pipeline.py.
 _file_duration_cache: dict[tuple[str, int], int] = {}
 _video_properties_cache: dict[tuple[str, int], dict[str, Any]] = {}
+# Single-flight for probe_video_properties: a participant select fires the
+# video-info and pins routes together, and both missed the cache and ran their
+# own ffprobe on the same file. The second waits for the first instead.
+_probe_inflight: dict[tuple[str, int], threading.Lock] = {}
+_probe_inflight_guard = threading.Lock()
 # Max keyframe gap (seconds) per file; None means "unknown / too sparse to
 # confirm" and callers must treat that as "do not enable keyframe-only decode".
 _keyframe_gap_cache: dict[tuple[str, int], float | None] = {}
@@ -1685,11 +1690,11 @@ def _parallel_probe(items: list[str], probe_fn: Callable[[str], Any]) -> list[An
     probe instead of the sum. Results land at their original index, which every
     caller relies on (props lists run parallel to their path list).
 
-    No lock is needed: the probe caches (``_video_properties_cache`` /
+    No lock is needed here: the probe caches (``_video_properties_cache`` /
     ``_file_duration_cache``) are plain dicts keyed by
     ``(resolved_path, mtime_ns)``, the paths in one call are distinct, and a
-    duplicate concurrent probe of the same file is idempotent — both threads
-    write the same value under the same key. Fewer than 2 items skips the pool.
+    duplicate concurrent probe of the same file is single-flighted inside
+    ``probe_video_properties`` itself. Fewer than 2 items skips the pool.
 
     Every ``probe_fn`` passed here reads container headers (duration, stream
     properties) rather than decoding, so the width is set by how many ffprobe
@@ -1836,9 +1841,28 @@ def probe_video_properties(filepath: str) -> dict[str, Any] | None:
         if config.PROFILING:
             profiling.count("video.props_cache.hit")
         return _video_properties_cache[key]
-    if config.PROFILING:
-        profiling.count("video.props_cache.miss")
+    with _probe_inflight_guard:
+        flight = _probe_inflight.get(key)
+        if flight is None:
+            flight = _probe_inflight[key] = threading.Lock()
+    with flight:
+        if key in _video_properties_cache:
+            if config.PROFILING:
+                profiling.count("video.props_cache.hit")
+            return _video_properties_cache[key]
+        if config.PROFILING:
+            profiling.count("video.props_cache.miss")
+        try:
+            return _probe_video_properties_uncached(filepath, key)
+        finally:
+            with _probe_inflight_guard:
+                _probe_inflight.pop(key, None)
 
+
+def _probe_video_properties_uncached(
+    filepath: str, key: tuple[str, int]
+) -> dict[str, Any] | None:
+    """The ffprobe behind probe_video_properties; caller holds the key's flight."""
     probe_command = [
         "ffprobe",
         "-v",
@@ -2797,12 +2821,13 @@ def extract_frame_at_timestamp(
         "pipe:1",
     ]
     try:
-        result = subprocess.run(
-            cmd,
-            capture_output=True,
-            timeout=10,
-            check=False,
-        )
+        with profiling.span("ffmpeg.bytes"):
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                timeout=10,
+                check=False,
+            )
     except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
         return None
 

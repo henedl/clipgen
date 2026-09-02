@@ -49,8 +49,8 @@ def test_add_and_count_accumulate_when_on(monkeypatch):
     profiling.count("hits", 3)
     snap = profiling.snapshot()
     # The n=2 batch contributes no peak (a sum has no per-item max); the n=1 add does.
-    assert snap["work"] == {"seconds": 0.75, "count": 3, "max": 0.25}
-    assert snap["hits"] == {"seconds": 0.0, "count": 3, "max": 0.0}
+    assert snap["work"] == {"seconds": 0.75, "count": 3, "max": 0.25, "bytes": 0}
+    assert snap["hits"] == {"seconds": 0.0, "count": 3, "max": 0.0, "bytes": 0}
 
 
 def test_span_times_the_block(monkeypatch):
@@ -346,7 +346,11 @@ def test_api_profile_snapshot_and_reset(client, monkeypatch):
         "seconds": 1.5,
         "count": 10,
         "max": 0.0,
+        "bytes": 0,
     }
+    # The route hook records the response size beside its wall time (it runs
+    # after the snapshot above was taken, so read the live totals).
+    assert profiling.snapshot()["route /api/profile"]["bytes"] > 0
     # Monotonic and process-global, so it rides beside the label map, not in it.
     assert "peak_rss_mb" in body
     # Request itself was timed by the route hook.
@@ -406,6 +410,10 @@ def test_route_label_alone_misses_streamed_body(stream_app, monkeypatch):
     snap = profiling.snapshot()
     assert snap["stream /slow"]["seconds"] >= 0.09
     assert snap["stream /slow"]["count"] == 1
+    assert snap["stream /slow"]["bytes"] == 2
+    # Time to first chunk is the perceived latency; here ~50 ms of the ~100 ms.
+    first = snap["stream.first /slow"]["seconds"]
+    assert 0.04 <= first < 0.09, first
     profiling.reset()
 
 
@@ -419,17 +427,68 @@ def test_stream_span_is_passthrough_when_off(stream_app, monkeypatch):
 def test_stream_span_records_on_client_disconnect(monkeypatch):
     """An abandoned generation still reports what it spent (GeneratorExit)."""
     monkeypatch.setattr(config, "PROFILING", True)
+    cleaned = []
 
     def body():
-        for _ in range(100):
-            time.sleep(0.01)
-            yield "x"
+        try:
+            for _ in range(100):
+                time.sleep(0.01)
+                yield "x"
+        finally:
+            cleaned.append(True)  # the route's own disconnect cleanup
 
     gen = profiling.stream_span("stream /abandoned", body())
     next(gen)
     gen.close()  # what the WSGI server does when the client drops
+    assert cleaned, "inner generator was not closed with the span"
     assert profiling.snapshot()["stream /abandoned"]["seconds"] > 0
     profiling.reset()
+
+
+# ---------- bytes ------------------------------------------------------------
+
+
+def test_bytes_accumulate_and_report(monkeypatch, capsys):
+    monkeypatch.setattr(config, "PROFILING", True)
+    profiling.add("route /x", 0.001, nbytes=1500)
+    profiling.add("route /x", 0.001, nbytes=600)
+    profiling.add("route /y", 0.001)
+    assert profiling.snapshot()["route /x"]["bytes"] == 2100
+    profiling.report()
+    out = capsys.readouterr().out
+    x_line = next(line for line in out.splitlines() if "route /x" in line)
+    y_line = next(line for line in out.splitlines() if "route /y" in line)
+    assert "bytes=2.1KB" in x_line
+    assert "bytes=" not in y_line  # zero bytes stays silent, like max
+
+
+def test_format_bytes_units():
+    assert profiling.format_bytes(512) == "512B"
+    assert profiling.format_bytes(2048) == "2.0KB"
+    assert profiling.format_bytes(3 * 1024 * 1024) == "3.0MB"
+
+
+def test_manifest_load_and_save_labels(monkeypatch, tmp_path):
+    import utils
+
+    monkeypatch.setattr(config, "OUTPUT_DIR", str(tmp_path))
+    monkeypatch.setattr(config, "PROFILING", True)
+    utils._reset_manifest_cache()
+    profiling.reset()
+    utils.save_manifest_section("composer", {"cuts": [1, 2, 3]})
+    utils.save_manifest_section("composer", {"cuts": [1, 2, 3]})  # identical
+    assert utils.load_manifest_section("composer") == {"cuts": [1, 2, 3]}
+    snap = profiling.snapshot()
+    assert snap["manifest.save composer"]["count"] == 1
+    assert snap["manifest.save composer"]["bytes"] > 0
+    assert snap["manifest.save.unchanged composer"]["count"] == 1
+    assert snap["manifest.load composer"]["count"] == 1
+    assert (
+        snap["manifest.load composer"]["bytes"]
+        == snap["manifest.save composer"]["bytes"]
+    )
+    profiling.reset()
+    utils._reset_manifest_cache()
 
 
 # ---------- max / tail -------------------------------------------------------

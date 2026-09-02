@@ -114,6 +114,15 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "'perf-json:' line.",
     )
     parser.add_argument(
+        "--soak",
+        type=float,
+        default=0.0,
+        metavar="SECONDS",
+        help="With --perf: keep the page open this long after the first capture, "
+        "then re-sample. Prints 'perf | soak.*' deltas (DOM nodes, listeners, "
+        "heap, poll ticks) — growth here is a poller or a render that leaks.",
+    )
+    parser.add_argument(
         "--trace",
         type=Path,
         help="Write a Chrome trace-event JSON (Perfetto-compatible) covering "
@@ -226,7 +235,40 @@ def _print_perf(data: dict[str, Any]) -> None:
             f"perf | longtasks {lt['totalMs']:.1f}ms n={lt['count']} "
             f"max={lt['maxMs']:.1f}ms"
         )
+    if data.get("soak"):
+        _print_soak(data, data["soak"])
     print("perf-json: " + json.dumps(data, ensure_ascii=False, default=str))
+
+
+# Growth in any of these while the page merely sits open is a leak: a poller
+# re-rendering into the DOM, listeners re-bound per tick, retained payloads.
+_SOAK_CDP_METRICS = ("Nodes", "JSEventListeners", "JSHeapUsedSize", "Documents")
+
+
+def _print_soak(before: dict[str, Any], soak: dict[str, Any]) -> None:
+    after = soak["after"]
+    secs = soak["seconds"]
+    for name in _SOAK_CDP_METRICS:
+        b, a = before["cdp"].get(name), after["cdp"].get(name)
+        if b is None or a is None:
+            continue
+        print(f"perf | soak.{name} {b:.0f} -> {a:.0f} ({a - b:+.0f}) over {secs:g}s")
+    cg_b = (before.get("page") or {}).get("clipgenPerf") or {}
+    cg_a = (after.get("page") or {}).get("clipgenPerf") or {}
+    m_b = cg_b.get("measures") or {}
+    for label, m in sorted((cg_a.get("measures") or {}).items()):
+        prev = m_b.get(label) or {"n": 0, "totalMs": 0.0}
+        dn = m["n"] - prev["n"]
+        if dn:
+            dms = m["totalMs"] - prev["totalMs"]
+            print(f"perf | soak.{label} n=+{dn} {dms:.1f}ms")
+    lt_b = cg_b.get("longtasks") or {"count": 0, "totalMs": 0.0}
+    lt_a = cg_a.get("longtasks") or {"count": 0, "totalMs": 0.0}
+    if lt_a["count"] - lt_b["count"]:
+        print(
+            f"perf | soak.longtasks n=+{lt_a['count'] - lt_b['count']} "
+            f"{lt_a['totalMs'] - lt_b['totalMs']:.1f}ms"
+        )
 
 
 def _viewport(raw: str) -> dict[str, int]:
@@ -322,6 +364,12 @@ def main(argv: list[str] | None = None) -> int:
                 if cdp is not None:
                     try:
                         perf_data = _collect_perf(page, cdp)
+                        if args.soak > 0:
+                            page.wait_for_timeout(args.soak * 1000)
+                            perf_data["soak"] = {
+                                "seconds": args.soak,
+                                "after": _collect_perf(page, cdp),
+                            }
                     except _ui_browser.playwright_error() as exc:
                         eval_error = eval_error or str(exc).splitlines()[0]
             finally:

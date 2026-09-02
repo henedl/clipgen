@@ -12,6 +12,7 @@ import string
 import subprocess
 import sys
 import threading
+import time
 from collections.abc import Callable
 from datetime import datetime
 from numbers import Integral, Real
@@ -19,6 +20,7 @@ from pathlib import Path
 from typing import Any, TypedDict, TypeVar
 
 import config
+import profiling
 
 
 # ---- Non-interactive mode flag ----
@@ -870,10 +872,20 @@ def load_manifest_section(section: str, *, default: Any = None) -> Any:
     """Parse one section of the output-dir manifest; *default* when absent.
 
     Every call returns fresh objects, so callers may mutate the result freely.
+    Profiled as ``manifest.load <section>`` with the section's text size: the
+    parse is per call, so a poll that reloads a multi-MB section shows here.
     """
+    t0 = time.perf_counter() if config.PROFILING else 0.0
     with _MANIFEST_LOCK:
         text = _sections_locked().get(section)
-    return default if text is None else json.loads(text)
+    if text is None:
+        return default
+    data = json.loads(text)
+    if t0:
+        profiling.add(
+            f"manifest.load {section}", time.perf_counter() - t0, nbytes=len(text)
+        )
+    return data
 
 
 def save_manifest_section(section: str, data: Any) -> Path | None:
@@ -888,6 +900,7 @@ def save_manifest_section(section: str, data: Any) -> Path | None:
     nothing and leave the mtime alone, so pollers see no phantom change.
     """
     text: str | None = None
+    t0 = time.perf_counter() if config.PROFILING else 0.0
     if data is not None:
         try:
             text = _dump_section(data)
@@ -904,9 +917,19 @@ def save_manifest_section(section: str, data: Any) -> Path | None:
             sections.pop(section, None)
         else:
             if sections.get(section) == text:
+                if t0:
+                    profiling.count(f"manifest.save.unchanged {section}")
                 return _manifest_path()
             sections[section] = text
-        return _write_sections_locked(sections)
+        written = _write_sections_locked(sections)
+    if t0:
+        # Dump + re-indent + write; bytes is this section alone, not the file.
+        profiling.add(
+            f"manifest.save {section}",
+            time.perf_counter() - t0,
+            nbytes=len(text) if text else 0,
+        )
+    return written
 
 
 def manifest_sections() -> set[str]:

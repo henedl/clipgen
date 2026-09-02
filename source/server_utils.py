@@ -427,7 +427,9 @@ def profiled_stream(body: Any) -> Any:
     """
     if not config.PROFILING:
         return body
-    return profiling.stream_span(_profiled_rule("stream"), body)
+    return profiling.stream_span(
+        _profiled_rule("stream"), body, first_label=_profiled_rule("stream.first")
+    )
 
 
 def make_sse_channel(
