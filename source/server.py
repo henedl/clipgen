@@ -104,6 +104,7 @@ from server_utils import (
 from datetime import UTC
 
 FlaskResponse = Response | tuple[Response, int]
+_SERVER_POLL_INTERVAL = 0.5
 
 # ---- Module-level state (set once by _init_studio_state) ----
 
@@ -4899,7 +4900,10 @@ def serve_combined_app(
     srv.block_on_close = False
 
     thread = threading.Thread(
-        target=srv.serve_forever, daemon=True, name="clipgen-server"
+        target=srv.serve_forever,
+        kwargs={"poll_interval": _SERVER_POLL_INTERVAL},
+        daemon=True,
+        name="clipgen-server",
     )
     thread.start()
 

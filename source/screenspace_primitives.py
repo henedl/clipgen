@@ -913,6 +913,40 @@ def _prepare_template(
     return (tmpl_gray, gray_mask, degenerate)
 
 
+def _match_corr_window(
+    source: np.ndarray,
+    template: np.ndarray,
+    window: tuple[float, float, float, float] | None,
+) -> tuple[np.ndarray, int, int] | None:
+    """Correlate only source pixels producing centers inside *window*.
+
+    OpenCV may shift raw scores below 5e-5 when crop dimensions change.
+    """
+    sh, sw = source.shape[:2]
+    th, tw = template.shape[:2]
+    if th > sh or tw > sw:
+        return None
+    rw, rh = sw - tw + 1, sh - th + 1
+    if window is None:
+        xa, ya, xb, yb = 0, 0, rw, rh
+    else:
+        xa = max(0, math.floor(window[0] - tw / 2.0))
+        ya = max(0, math.floor(window[1] - th / 2.0))
+        xb = min(rw, math.ceil(window[2] - tw / 2.0) + 1)
+        yb = min(rh, math.ceil(window[3] - th / 2.0) + 1)
+    if xa >= xb or ya >= yb:
+        return None
+    cropped = source[ya : yb + th - 1, xa : xb + tw - 1]
+    result = cv2.matchTemplate(cropped, template, cv2.TM_CCOEFF_NORMED)
+    return result, xa, ya
+
+
+def _template_frame_gray(frame: np.ndarray) -> np.ndarray:
+    """Blur and grayscale a frame for template correlation."""
+    k = config.SCREENSPACE_BLUR_KERNEL
+    return cv2.cvtColor(cv2.GaussianBlur(frame, (k, k), 0), cv2.COLOR_BGR2GRAY)
+
+
 def _template_correlation_map(
     frame: np.ndarray, prepared: _PreparedTemplate
 ) -> np.ndarray | None:
@@ -927,8 +961,7 @@ def _template_correlation_map(
     if degenerate:
         # Zero-variance template: see _prepare_template's degeneracy note.
         return None
-    k = config.SCREENSPACE_BLUR_KERNEL
-    frame_gray = cv2.cvtColor(cv2.GaussianBlur(frame, (k, k), 0), cv2.COLOR_BGR2GRAY)
+    frame_gray = _template_frame_gray(frame)
     th, tw = tmpl_gray.shape[:2]
     if th > frame_gray.shape[0] or tw > frame_gray.shape[1]:
         return None
@@ -940,6 +973,24 @@ def _template_correlation_map(
     return result
 
 
+def _template_corr_window(
+    frame: np.ndarray,
+    prepared: _PreparedTemplate,
+    window: tuple[float, float, float, float],
+) -> tuple[np.ndarray, int, int] | None:
+    """Compute an unmasked template correlation ROI."""
+    tmpl_gray, gray_mask, degenerate = prepared
+    if degenerate or gray_mask is not None:
+        return None
+    packed = _match_corr_window(_template_frame_gray(frame), tmpl_gray, window)
+    if packed is None:
+        return None
+    result, x_offset, y_offset = packed
+    if not np.all(np.isfinite(result)):
+        result = np.where(np.isfinite(result), result, -1.0)
+    return result, x_offset, y_offset
+
+
 def _match_template_prepared(
     frame: np.ndarray,
     prepared: _PreparedTemplate,
@@ -947,6 +998,7 @@ def _match_template_prepared(
     nms_overlap: float,
     corr: np.ndarray | None = None,
     window: tuple[float, float, float, float] | None = None,
+    origin: tuple[int, int] = (0, 0),
 ) -> list[dict[str, Any]]:
     """Match a frame against an already-prepared template payload.
 
@@ -956,10 +1008,18 @@ def _match_template_prepared(
     passing frame. *window* (see :func:`region_search_window`) restricts
     matching to positions whose match center falls inside the rect.
     """
-    result = _template_correlation_map(frame, prepared) if corr is None else corr
+    tmpl_gray, gray_mask, _degenerate = prepared
+    if corr is None and window is not None and gray_mask is None:
+        packed = _template_corr_window(frame, prepared, window)
+        if packed is None:
+            return []
+        result, x_offset, y_offset = packed
+        origin = (x_offset, y_offset)
+        window = None
+    else:
+        result = _template_correlation_map(frame, prepared) if corr is None else corr
     if result is None:
         return []
-    tmpl_gray, _gray_mask, _degenerate = prepared
     th, tw = tmpl_gray.shape[:2]
     if window is not None:
         masked = _mask_corr_outside_window(result, tw, th, window)
@@ -998,7 +1058,15 @@ def _match_template_prepared(
     kept: list[dict[str, Any]] = []
     while xs.size:
         x0, y0 = int(xs[0]), int(ys[0])
-        kept.append({"x": x0, "y": y0, "w": tw, "h": th, "score": float(scores[0])})
+        kept.append(
+            {
+                "x": x0 + origin[0],
+                "y": y0 + origin[1],
+                "w": tw,
+                "h": th,
+                "score": float(scores[0]),
+            }
+        )
         if xs.size == 1:
             break
         inter = np.maximum(0, tw - np.abs(xs[1:] - x0)) * np.maximum(
@@ -1279,27 +1347,41 @@ def match_shape(
         threshold-independent scalar calibration reads even on a miss
         (``-1.0`` when no scale was matchable).
     """
+    return _match_shape_scales(
+        frame_edges, prepared, threshold, nms_overlap, window=window
+    )
+
+
+def _match_shape_scales(
+    frame_edges: np.ndarray,
+    prepared: _PreparedShape,
+    threshold: float = 0.0,
+    nms_overlap: float = 0.0,
+    window: tuple[float, float, float, float] | None = None,
+    executor: Any = None,
+) -> tuple[list[dict[str, Any]], float]:
+    """Match prepared Shape rungs, optionally through an ordered executor."""
     if threshold <= 0.0:
         threshold = config.SCREENSPACE_SHAPE_MATCH_THRESHOLD
     if nms_overlap <= 0.0:
         nms_overlap = config.SCREENSPACE_TEMPLATE_NMS_OVERLAP
     _MAX_CANDIDATES = 5000
-    fh, fw = frame_edges.shape[:2]
     best_peak = -1.0
     candidates: list[dict[str, Any]] = []
-    for entry in prepared:
-        tw, th = entry["w"], entry["h"]
-        if th > fh or tw > fw:
+
+    def _one(entry: dict[str, Any]) -> tuple[dict[str, Any], Any]:
+        return entry, _match_corr_window(frame_edges, entry["edges"], window)
+
+    rows = executor.map(_one, prepared) if executor is not None else map(_one, prepared)
+    for entry, packed in rows:
+        if packed is None:
             continue
-        result = cv2.matchTemplate(frame_edges, entry["edges"], cv2.TM_CCOEFF_NORMED)
+        result, x_offset, y_offset = packed
+        tw, th = entry["w"], entry["h"]
         # Flat windows normalize by ~0 std; neutralize like template matching.
         if not np.all(np.isfinite(result)):
             result = np.where(np.isfinite(result), result, -1.0)
         np.clip(result, -1.0, 1.0, out=result)
-        if window is not None:
-            result = _mask_corr_outside_window(result, tw, th, window)
-            if result is None:
-                continue
         if result.size:
             best_peak = max(best_peak, float(result.max()))
         locs = np.where(result >= threshold)
@@ -1312,8 +1394,8 @@ def match_shape(
             ys, xs, scores = ys[top_idx], xs[top_idx], scores[top_idx]
         candidates.extend(
             {
-                "x": int(x),
-                "y": int(y),
+                "x": int(x) + x_offset,
+                "y": int(y) + y_offset,
                 "w": tw,
                 "h": th,
                 "score": float(sc),

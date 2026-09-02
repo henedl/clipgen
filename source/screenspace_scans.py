@@ -6,8 +6,10 @@ template, shape, flow, scene, inactivity, boundary, attention). Scans never
 call each other.
 """
 
+import os
 import subprocess
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
 import cv2
@@ -22,6 +24,7 @@ from screenspace_primitives import (
     _frame_diff_mask_gray,
     _frame_is_static,
     _is_static_skip,
+    _match_shape_scales,
     blur_gray,
     _frame_edge_map,
     _match_template_prepared,
@@ -29,7 +32,6 @@ from screenspace_primitives import (
     _prepare_shape_reference,
     _prepare_template,
     _scale_template,
-    match_shape,
     region_search_window,
     color_matches,
     color_present,
@@ -746,7 +748,6 @@ def scan_template(
         if config.SCREENSPACE_CV_RESOLUTION_SCALE > 0
         else 1.0
     )
-
     # Static-frame carry: template rows are per-frame with no consecutive buffer,
     # so a naive skip would drop a persistent match's rows and flicker the
     # detection. Cache the last result and re-emit it (re-stamped) on a static
@@ -919,6 +920,12 @@ def scan_shape(
         return results
 
     _nms_overlap = config.SCREENSPACE_TEMPLATE_NMS_OVERLAP
+    outer_workers = max(1, config.SCREENSPACE_PARALLEL_WORKERS)
+    cpu_capacity = max(1, (os.cpu_count() or 1) // outer_workers)
+    rung_workers = min(4, cpu_capacity, len(_prepared))
+    executor = (
+        ThreadPoolExecutor(max_workers=rung_workers) if rung_workers > 1 else None
+    )
     # ffmpeg already scaled the frame by cv_scale, so match boxes need both that
     # and the fast-scan internal 2x downscale undone to land in original pixels.
     _cv_scale = (
@@ -966,8 +973,13 @@ def scan_shape(
         # Unlike template, the run region scopes the search: only matches
         # centered inside it count (Full frame = zero-size rect = anywhere).
         window = region_search_window(region, _cv_scale / scale_back)
-        matches, _peak = match_shape(
-            _frame_edge_map(work_frame), _prepared, threshold, _nms_overlap, window
+        matches, _peak = _match_shape_scales(
+            _frame_edge_map(work_frame),
+            _prepared,
+            threshold,
+            _nms_overlap,
+            window,
+            executor,
         )
         if matches:
             # Undo fast-scan downscale, then undo cv_scale, so reported
@@ -1008,17 +1020,21 @@ def scan_shape(
             on_progress((ts - start_seconds) / total_range)
         return None
 
-    scan_video_full_frames(
-        video_path,
-        interval_seconds,
-        _cb,
-        start_seconds=start_seconds,
-        end_seconds=end_seconds,
-        fps=vid_fps,
-        duration=vid_duration,
-        fast_opts=fast_opts,
-        profile_kind="shape",
-    )
+    try:
+        scan_video_full_frames(
+            video_path,
+            interval_seconds,
+            _cb,
+            start_seconds=start_seconds,
+            end_seconds=end_seconds,
+            fps=vid_fps,
+            duration=vid_duration,
+            fast_opts=fast_opts,
+            profile_kind="shape",
+        )
+    finally:
+        if executor is not None:
+            executor.shutdown()
 
     if on_progress:
         on_progress(1.0)

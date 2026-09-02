@@ -1,11 +1,16 @@
 """Tests for the Shape tool: scale-swept edge matching primitives, scan, tool."""
 
+from concurrent.futures import ThreadPoolExecutor
+from unittest.mock import Mock
+
 import cv2
 import numpy as np
+import pytest
 
 import config
 import screenspace
 import screenspace_frames
+import screenspace_primitives
 import screenspace_scans
 
 _BG = 40  # flat dark background with strong luma contrast to white outlines
@@ -27,6 +32,51 @@ def _make_outline_frame(
     frame = np.full((frame_h, frame_w, 3), _BG, dtype=np.uint8)
     frame[y : y + size, x : x + size] = _make_outline(size, color=color)
     return frame
+
+
+def _full_shape(frame_edges, prepared, threshold, overlap, window):
+    """Previous full-map Shape matcher used as an exact reference."""
+    candidates = []
+    best_peak = -1.0
+    fh, fw = frame_edges.shape[:2]
+    for entry in prepared:
+        tw, th = entry["w"], entry["h"]
+        if th > fh or tw > fw:
+            continue
+        result = cv2.matchTemplate(frame_edges, entry["edges"], cv2.TM_CCOEFF_NORMED)
+        if not np.all(np.isfinite(result)):
+            result = np.where(np.isfinite(result), result, -1.0)
+        np.clip(result, -1.0, 1.0, out=result)
+        if window is not None:
+            result = screenspace_primitives._mask_corr_outside_window(
+                result, tw, th, window
+            )
+            if result is None:
+                continue
+        if result.size:
+            best_peak = max(best_peak, float(result.max()))
+        locs = np.where(result >= threshold)
+        ys, xs = locs[0], locs[1]
+        scores = result[locs]
+        if scores.size > 5000:
+            top_idx = np.argpartition(scores, -5000)[-5000:]
+            ys, xs, scores = ys[top_idx], xs[top_idx], scores[top_idx]
+        candidates.extend(
+            {
+                "x": int(x),
+                "y": int(y),
+                "w": tw,
+                "h": th,
+                "score": float(score),
+                "scale": entry["scale"],
+                "scale_y": entry["scale_y"],
+            }
+            for y, x, score in zip(ys, xs, scores, strict=True)
+        )
+    if len(candidates) > 5000:
+        candidates.sort(key=lambda candidate: -candidate["score"])
+        del candidates[5000:]
+    return screenspace.nms_boxes_iou(candidates, overlap), best_peak
 
 
 class TestPrepareShapeReference:
@@ -198,6 +248,73 @@ class TestMatchShape:
 
 
 class TestSearchWindow:
+    def test_roi_matches_full_map(self):
+        rng = np.random.RandomState(84)
+        frame = rng.randint(0, 255, (96, 144, 3), dtype=np.uint8)
+        reference = frame[20:52, 37:81].copy()
+        prepared = screenspace._prepare_shape_reference(
+            reference, scale_min=0.75, scale_max=1.4, scale_steps=4
+        )
+        edges = screenspace._frame_edge_map(frame)
+        for window in ((0.0, 0.0, 33.0, 26.0), (31.0, 17.0, 93.0, 72.0)):
+            want = _full_shape(edges, prepared, 0.05, 0.3, window)
+            got = screenspace.match_shape(edges, prepared, 0.05, 0.3, window)
+            got_matches, got_peak = got
+            want_matches, want_peak = want
+            assert [
+                {key: value for key, value in row.items() if key != "score"}
+                for row in got_matches
+            ] == [
+                {key: value for key, value in row.items() if key != "score"}
+                for row in want_matches
+            ]
+            assert all(
+                abs(got_row["score"] - want_row["score"]) < 5e-5
+                for got_row, want_row in zip(got_matches, want_matches, strict=True)
+            )
+            assert abs(got_peak - want_peak) < 5e-5
+
+    def test_unmatchable_scale_is_identical(self):
+        edges = screenspace._frame_edge_map(_make_outline_frame(80, 60, 10, 8, 30))
+        prepared = screenspace._prepare_shape_reference(
+            _make_outline(120), scale_min=1.0, scale_max=1.0, scale_steps=1
+        )
+        window = (0.0, 0.0, 20.0, 20.0)
+        assert screenspace.match_shape(edges, prepared, 0.1, 0.3, window) == (
+            [],
+            -1.0,
+        )
+
+    def test_executor_is_exact_and_ordered(self):
+        frame = _make_outline_frame(180, 120, 72, 36, 42)
+        edges = screenspace._frame_edge_map(frame)
+        prepared = screenspace._prepare_shape_reference(
+            _make_outline(42), scale_min=0.7, scale_max=1.4, scale_steps=5
+        )
+        sequential = screenspace_primitives._match_shape_scales(
+            edges, prepared, 0.1, 0.3
+        )
+        with ThreadPoolExecutor(max_workers=4) as executor:
+            parallel = screenspace_primitives._match_shape_scales(
+                edges, prepared, 0.1, 0.3, executor=executor
+            )
+        assert parallel == sequential
+
+        pool = Mock()
+        seen = []
+
+        def ordered(fn, entries):
+            entries = list(entries)
+            seen.extend(entry["scale"] for entry in entries)
+            return map(fn, entries)
+
+        pool.map.side_effect = ordered
+        got = screenspace_primitives._match_shape_scales(
+            edges, prepared, 0.1, 0.3, executor=pool
+        )
+        assert got == sequential
+        assert seen == [entry["scale"] for entry in prepared]
+
     def test_window_scopes_matches_and_peak(self):
         # Same frame, two run regions: over the shape → hit; elsewhere → the
         # peak drops too (region-local calibration honesty).
@@ -339,6 +456,67 @@ class TestScanShape:
         )
         assert [r["timestamp"] for r in results] == [0.0, 1.0]
         assert results[0]["best_score"] == results[1]["best_score"]
+
+    def test_executor_shutdown(self, monkeypatch):
+        frame = _make_outline_frame(160, 120, 50, 30, 40)
+        pool = Mock()
+        created = {}
+        pool.map.side_effect = lambda fn, entries: map(fn, entries)
+
+        def make_pool(**kwargs):
+            created.update(kwargs)
+            return pool
+
+        monkeypatch.setattr(screenspace_scans, "ThreadPoolExecutor", make_pool)
+        monkeypatch.setattr(screenspace_scans.os, "cpu_count", lambda: 8)
+        monkeypatch.setattr(config, "SCREENSPACE_PARALLEL_WORKERS", 1)
+        self._patch_single_frame(monkeypatch, frame)
+        screenspace.scan_shape(
+            "/fake.mp4",
+            {"x": 0, "y": 0, "w": 160, "h": 120},
+            _make_outline(40),
+            threshold=0.5,
+        )
+        assert created["max_workers"] == 4
+        pool.shutdown.assert_called_once_with()
+
+    def test_executor_shutdown_on_cancel(self, monkeypatch):
+        pool = Mock()
+        monkeypatch.setattr(screenspace_scans, "ThreadPoolExecutor", lambda **_k: pool)
+        monkeypatch.setattr(screenspace_scans.os, "cpu_count", lambda: 8)
+        monkeypatch.setattr(config, "SCREENSPACE_PARALLEL_WORKERS", 1)
+        self._patch_single_frame(monkeypatch, _make_outline_frame(160, 120, 50, 30, 40))
+        assert (
+            screenspace.scan_shape(
+                "/fake.mp4",
+                {"x": 0, "y": 0, "w": 160, "h": 120},
+                _make_outline(40),
+                cancel_flag=lambda: True,
+            )
+            == []
+        )
+        pool.shutdown.assert_called_once_with()
+
+    def test_executor_shutdown_on_error(self, monkeypatch):
+        pool = Mock()
+        monkeypatch.setattr(screenspace_scans, "ThreadPoolExecutor", lambda **_k: pool)
+        monkeypatch.setattr(screenspace_scans.os, "cpu_count", lambda: 8)
+        monkeypatch.setattr(config, "SCREENSPACE_PARALLEL_WORKERS", 1)
+        monkeypatch.setattr(
+            screenspace_frames, "_probe_video_meta", lambda _path: (30.0, 1.0)
+        )
+
+        def fail(*_args, **_kwargs):
+            raise RuntimeError("scan failed")
+
+        monkeypatch.setattr(screenspace_scans, "scan_video_full_frames", fail)
+        with pytest.raises(RuntimeError, match="scan failed"):
+            screenspace.scan_shape(
+                "/fake.mp4",
+                {"x": 0, "y": 0, "w": 160, "h": 120},
+                _make_outline(40),
+            )
+        pool.shutdown.assert_called_once_with()
 
 
 class TestShapeTool:

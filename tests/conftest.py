@@ -95,8 +95,8 @@ def _sandbox_cwd(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
 
 
-@pytest.fixture(autouse=True)
-def _sandbox_user_config(tmp_path, monkeypatch):
+@pytest.fixture(scope="session", autouse=True)
+def _sandbox_user_config(tmp_path_factory):
     """Keep per-user clipgen state out of the developer's real home.
 
     ``start_settings.config_dir()`` resolves from ``Path.home()`` (or
@@ -109,9 +109,25 @@ def _sandbox_user_config(tmp_path, monkeypatch):
     ``Path.home``/``LOCALAPPDATA`` in the test body, which runs after this
     fixture and therefore still wins. Stubbing ``config_dir`` would break it.
     """
-    home = tmp_path / "home"
-    monkeypatch.setattr(Path, "home", lambda: home)
-    monkeypatch.setenv("LOCALAPPDATA", str(home / "Local"))
+    home = tmp_path_factory.mktemp("user-home")
+    with pytest.MonkeyPatch.context() as monkeypatch:
+        monkeypatch.setattr(Path, "home", lambda: home)
+        monkeypatch.setenv("LOCALAPPDATA", str(home / "Local"))
+        yield
+
+
+@pytest.fixture(autouse=True)
+def _clear_user_config():
+    """Keep persisted test preferences from reaching later module fixtures."""
+    import start_settings
+
+    root = start_settings.config_dir()
+    paths = (root / "start.json", root / "studio_settings.json")
+    for path in paths:
+        path.unlink(missing_ok=True)
+    yield
+    for path in paths:
+        path.unlink(missing_ok=True)
 
 
 @pytest.fixture(autouse=True)
