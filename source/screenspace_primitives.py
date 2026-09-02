@@ -921,6 +921,13 @@ def _template_frame_gray(frame: np.ndarray) -> np.ndarray:
     return cv2.cvtColor(cv2.GaussianBlur(frame, (k, k), 0), cv2.COLOR_BGR2GRAY)
 
 
+def _template_is_evaluable(frame: np.ndarray, prepared: _PreparedTemplate) -> bool:
+    """Whether correlation is defined: a non-degenerate template that fits the frame."""
+    tmpl_gray, _gray_mask, degenerate = prepared
+    th, tw = tmpl_gray.shape[:2]
+    return not degenerate and th <= frame.shape[0] and tw <= frame.shape[1]
+
+
 def _template_correlation_map(
     frame: np.ndarray, prepared: _PreparedTemplate
 ) -> np.ndarray | None:
@@ -931,14 +938,11 @@ def _template_correlation_map(
     patches) are neutralized to ``-1.0`` so callers can safely threshold the map
     or read its peak (the threshold-independent scalar used by calibration).
     """
-    tmpl_gray, gray_mask, degenerate = prepared
-    if degenerate:
-        # Zero-variance template: see _prepare_template's degeneracy note.
+    tmpl_gray, gray_mask, _degenerate = prepared
+    # Degenerate or oversized: see _prepare_template's degeneracy note.
+    if not _template_is_evaluable(frame, prepared):
         return None
     frame_gray = _template_frame_gray(frame)
-    th, tw = tmpl_gray.shape[:2]
-    if th > frame_gray.shape[0] or tw > frame_gray.shape[1]:
-        return None
     result = cv2.matchTemplate(
         frame_gray, tmpl_gray, cv2.TM_CCOEFF_NORMED, mask=gray_mask
     )
