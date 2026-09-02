@@ -52,23 +52,14 @@
     nav.appendChild(buildCenter());
     nav.appendChild(buildRight());
 
-    // In the native desktop window the title bar is hidden and the bar runs to
-    // the top of the window, so it has to double as the drag handle. WKWebView
-    // ignores -webkit-app-region, so opt into pywebview's substitute: it drags on
-    // mousedown over a .pywebview-drag-region element. desktop.py sets
-    // DRAG_REGION_DIRECT_TARGET_ONLY, so only the bar's own background and the
-    // flex gaps drag — the brand, tabs and buttons are their own event targets
-    // and keep behaving normally. The server sets data-desktop-chrome; a browser
-    // page never has it and is untouched.
+    // Desktop chrome hides the title bar; pywebview drags .pywebview-drag-region direct targets. See desktop.py.
     if (document.documentElement.dataset.desktopChrome) {
       nav.classList.add("pywebview-drag-region");
       var columns = nav.children;
       for (var c = 0; c < columns.length; c++) {
         columns[c].classList.add("pywebview-drag-region");
       }
-      // The hidden title bar also owes the user its double-click action, which
-      // AppKit can no longer deliver. Gate on the same direct-target rule the
-      // drag uses, so both gestures cover exactly the same pixels.
+      // Restore the title bar's double-click, gated on the same direct-target rule as dragging.
       nav.addEventListener("dblclick", function (e) {
         var cls = e.target && e.target.classList;
         if (!cls || !cls.contains("pywebview-drag-region")) return;
@@ -159,9 +150,7 @@
     startBtn.appendChild(startIcon);
     right.appendChild(startBtn);
 
-    // Log button — only on surfaces that wire an artifact log (Studio's
-    // #logOverlay in studio.js; Composer's log panel in composer.js). On
-    // every other surface the button would be dead chrome.
+    // Log button only where an artifact log exists (studio.js #logOverlay, composer.js log panel).
     if (state.activeFrontend === "studio" || state.activeFrontend === "composer") {
       var logBtn = document.createElement("button");
       logBtn.type = "button";
@@ -189,9 +178,7 @@
     settingsBtn.appendChild(settingsIcon);
     right.appendChild(settingsBtn);
 
-    // Theme toggle.
-    // Keeps the existing #themeToggle id + .theme-toggle-icon class names so
-    // initThemeToggle() in utils.js continues to work without changes.
+    // Theme toggle. Keeps #themeToggle and .theme-toggle-icon for initThemeToggle() in utils.js.
     var themeBtn = document.createElement("button");
     themeBtn.type = "button";
     themeBtn.id = "themeToggle";
@@ -252,8 +239,7 @@
   }
 
   function getQuickActions(opts) {
-    // refresh:true re-runs the same gating callbacks the menu runs on open,
-    // so callers (the command palette) see the same snapshot the menu would.
+    // refresh:true re-runs the menu's open-time gating so the palette sees the same snapshot.
     if (opts && opts.refresh) {
       for (var i = 0; i < beforeOpenCallbacks.length; i++) {
         try { beforeOpenCallbacks[i](); } catch (_) {}
@@ -269,8 +255,7 @@
     state.quickActions.forEach(function (item) {
       els.qaPanel.appendChild(buildQuickActionItem(item));
     });
-    // If the menu is empty, hide the trigger entirely so the cluster doesn't
-    // show a button that opens onto nothing.
+    // Hide the trigger when the menu is empty.
     els.qaWrap.style.display = state.quickActions.length === 0 ? "none" : "";
   }
 

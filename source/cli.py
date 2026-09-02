@@ -74,8 +74,8 @@ class _LicensesAction(argparse.Action):
         text = utils.get_licenses_text()
         if text is None:
             parser.exit(1, "THIRD-PARTY-LICENSES is missing from this installation.\n")
-        # Bare print, not utils.standard_print(): that one is verbosity-gated and
-        # Rich-formatted, which would re-wrap license text that must be verbatim.
+        # Bare print: standard_print() is verbosity-gated and Rich re-wraps verbatim
+        # license text.
         print(text)
         parser.exit()
 
@@ -961,16 +961,12 @@ def get_runtime_working_dir() -> str:
         bundle = exe_dir.parent.parent
         if bundle.suffix == ".app":
             return str(bundle.parent)
-    # .../clipgen/clipgen.exe with the payload in .../clipgen/lib/ → .../
-    # Under one-dir, _MEIPASS is that payload directory — a *child* of the
-    # executable's own directory. One-file's _MEIPASS is an unrelated temp dir, so
-    # it never matches. (macOS puts the payload in Contents/Frameworks, not a child
-    # of Contents/MacOS; the .app branch above handles it.)
+    # One-dir build: _MEIPASS is lib/ under the exe dir. One-file's temp dir never
+    # matches.
     meipass = getattr(sys, "_MEIPASS", None)
     if meipass and Path(meipass).resolve().parent == exe_dir:
-        # Portable zip: .../clipgen/{clipgen.exe, lib/} → cwd is .../
-        # Inno installer: %LOCALAPPDATA%/Programs/clipgen/{clipgen.exe, lib/}
-        # → stay in {app}, not in Programs.
+        # Portable zip: parent of the exe dir. Inno install: stay in {app}, not
+        # Programs.
         if (exe_dir / "unins000.exe").is_file() or exe_dir.parent.name.lower() == (
             "programs"
         ):
@@ -1073,17 +1069,15 @@ def authenticate_google() -> Any | None:
     try:
         utils.debug_print("Attempting login...")
         if credentials is None:
-            # No file anywhere: let gspread raise against its own default path, so
-            # the error names a location the user can act on.
+            # No file anywhere: gspread's own error names its default path.
             gspread_client = gspread.oauth()
         else:
             utils.debug_print(f"Using credentials at {credentials}")
             gspread_client = gspread.oauth(credentials_filename=str(credentials))
         utils.debug_print("Login successful!")
         return gspread_client
-    # ValueError covers json.JSONDecodeError: a malformed-but-present
-    # credentials.json would otherwise escape this handler as a traceback — the
-    # exact case the guidance below is written for.
+    # ValueError covers json.JSONDecodeError from a malformed credentials.json; the
+    # hint below addresses it.
     except (
         gspread.exceptions.GSpreadException,
         FileNotFoundError,
@@ -1157,8 +1151,7 @@ def select_worksheet(gspread_client: Any, args: Any, cli_mode: bool) -> Any:
     _doc_list_cache: list[list[str]] = []
 
     def get_doc_list() -> list[str]:
-        # Fetch the rate-limited Drive listing at most once, and only when a path
-        # actually needs it — URL / Excel opens skip it entirely.
+        # Rate-limited Drive listing: fetch once, and only when a path needs it.
         if not _doc_list_cache:
             _doc_list_cache.append(google_api.get_all_spreadsheets(gspread_client))
         return _doc_list_cache[0]
@@ -1420,8 +1413,8 @@ def _run_gallery_cli(args: argparse.Namespace) -> None:
         return
 
     output_format = "gif" if getattr(args, "gif", False) else "screen"
-    # Mirror the interactive gallery guard: a missing, zero or negative interval
-    # falls back to the default (a bare ``or`` would pass a negative through).
+    # Mirrors the interactive gallery guard; a bare ``or`` would pass a negative
+    # through.
     interval = getattr(args, "interval", None)
     if interval is None or interval <= 0:
         interval = config.GALLERY_INTERVAL_SECONDS
@@ -1517,9 +1510,8 @@ def _run_pre_transcribe(worksheet: Any, args: Any) -> None:
                 known_terms=known_terms,
             )
         else:
-            # Multi-video: parts form one continuous timeline; transcribe each
-            # and shift its times by the part's cumulative start so the stored
-            # transcript shares the clip artifacts' global timeline.
+            # Multi-video: shift each part's times by its cumulative start onto the
+            # global timeline.
             timeline = video.build_source_timeline([str(p) for p in source_paths])
             result = (
                 None
@@ -1823,8 +1815,8 @@ def _ss_build_params(
                 entry["threshold"] = ref["threshold"]
             reference_scenes.append(entry)
         params["reference_scenes"] = reference_scenes
-        # Keep the input form too: survives the manifest save (frames are stripped),
-        # so a CLI-created scene task stays re-runnable via --ss-run-task.
+        # Frames are stripped on manifest save; the input form keeps --ss-run-task
+        # working.
         params["scene_references"] = parsed
         if args.ss_threshold is not None:
             params["threshold"] = args.ss_threshold
@@ -2024,8 +2016,7 @@ def _run_ss_task(args: argparse.Namespace) -> None:
     """Run a Screenspace analysis task synchronously and persist the result."""
     import screenspace
 
-    # REGION is optional: `--ss-task TYPE PARTICIPANT` scans the whole frame
-    # (resolves to the FULL_FRAME_REGION via the literal name below).
+    # REGION is optional; two args scan the full frame.
     ss_task = list(args.ss_task)
     if len(ss_task) == 2:
         ss_task.append(screenspace.FULL_FRAME_REGION_NAME)
@@ -2043,8 +2034,8 @@ def _run_ss_task(args: argparse.Namespace) -> None:
         )
         sys.exit(1)
     if task_type == "attention" and region_name != screenspace.FULL_FRAME_REGION_NAME:
-        # Attention is full-frame only by contract (mirrors the server's forced
-        # rewrite); a supplied region would mislabel events the scan ignores.
+        # Attention is full-frame only (the server forces this too); a region would
+        # mislabel events.
         utils.warning_print(
             f"attention is full-frame only; ignoring region {region_name!r}."
         )
@@ -2052,17 +2043,14 @@ def _run_ss_task(args: argparse.Namespace) -> None:
 
     manifest = screenspace.load_screenspace_manifest()
 
-    # Resolve the named region with active-first / per-stash precedence (never
-    # flattens stashes with last-write-wins) — the same resolver --ss-run-task uses,
-    # so a name that exists in both an active region and a stash resolves to the
-    # active one instead of being silently shadowed by a stashed copy.
+    # Active regions win over same-named stashed copies; same resolver as
+    # --ss-run-task.
     try:
         _, resolved_region = screenspace.resolve_region_request(
             region_name, None, manifest
         )
     except ValueError:
-        # Resolution uses precedence; the error hint may still list every known
-        # name (active + stashed) to help the user pick a valid one.
+        # The hint lists every known name, active and stashed.
         available = sorted(
             {
                 *manifest.get("regions", {}),
@@ -2433,9 +2421,8 @@ def _run_ss_rerun_task(args: argparse.Namespace) -> None:
     if props and props.get("width") and props.get("height"):
         dims = (int(props["width"]), int(props["height"]))
 
-    # Prefer region_ref-aware resolution (honors source/stash_id, never flattens
-    # stashes), then fall back to the saved top-level region_coords (un-stripped on
-    # save) for older tasks, per-step multitools, or when dims are unavailable.
+    # region_ref-aware resolution first; saved region_coords cover older tasks,
+    # multitool steps, and missing dims.
     region_coords: dict[str, int] | None = None
     try:
         _, resolved_region = screenspace.resolve_region_request(
@@ -3411,9 +3398,8 @@ def run_cli_mode(worksheet: Any, args: Any, cli_mode_args: CliModeArgs) -> None:
 # ---- Main entry point ----
 
 
-# Clip-selection flags (which rows/timestamps become clips). Shared across the
-# three sites that enumerate them: _generate_cli_clips, _BASE_SELECTOR_ATTRS,
-# and main()'s cli_mode detection.
+# Clip-selection flags, shared by _generate_cli_clips, _BASE_SELECTOR_ATTRS, and
+# main()'s cli_mode detection.
 _SELECTION_ATTRS = (
     "batch",
     "lines",
@@ -3768,8 +3754,7 @@ def _make_worksheet_factory(args: Any) -> Any:
 
     def factory(client: Any) -> tuple[Any, dict[str, str] | None]:
         if source_type == "google" and client is None:
-            # No cached token to reuse silently, and a background thread must
-            # never launch the interactive browser OAuth flow.
+            # No cached token; a background thread must never start browser OAuth.
             message = (
                 f"Google sign-in is needed to open '{sheet_arg}' — connect "
                 "below, then pick it again."
@@ -3778,9 +3763,8 @@ def _make_worksheet_factory(args: Any) -> Any:
         try:
             return select_worksheet(client, args, cli_mode=False), None
         except BaseException as exc:
-            # BaseException on purpose: select_worksheet exits via sys.exit(1)
-            # (SystemExit is a BaseException), and swallowing that here is the
-            # point — a bad sheet must not kill the boot build.
+            # BaseException on purpose: select_worksheet's sys.exit must not kill the
+            # boot build.
             utils.warning_print(f"Could not open spreadsheet '{sheet_arg}': {exc}")
             message = f"Could not open spreadsheet '{sheet_arg}' — pick a source below."
             return None, {"message": message, "source_type": source_type}
@@ -3909,18 +3893,13 @@ def _dispatch_standalone_mode(
         _run_friction_agent(args)
         return True
 
-    # Standalone web frontend (no spreadsheet) — Studio, Screenspace, or Transcripts.
-    # The Start overlay lets the user pick a spreadsheet from the frontend.
+    # Standalone web frontend, no spreadsheet; the Start overlay picks one in-app.
     web_mode = _resolve_web_mode(args)
     if web_mode is not None and not args.spreadsheet:
         profiling.mark("startup.web_dispatch")
         _maybe_apply_persisted_dirs(args)
-        # Silent best-effort reuse of the cached Google token (frozen .app
-        # double-clicks land here; without this, every launch forces the user
-        # back through "Connect Google" even when their token is still good).
-        # Passed as a factory, not called here: the gspread import behind it
-        # costs >100 ms warm (far more frozen), so it runs on the boot-build
-        # thread instead of ahead of the window.
+        # Reuse the cached Google token; the factory defers gspread's slow import to
+        # the boot thread.
         _launch_web_frontend(
             args,
             web_mode,
@@ -3969,32 +3948,23 @@ def main() -> None:
     args = parse_arguments()
     profiling.mark("startup.args_parsed")
 
-    # Double-clicked from Finder/Explorer (frozen bundle, no CLI args) → land in
-    # Studio. The Start overlay handles in-app spreadsheet selection.
+    # Frozen bundle with no args (Finder/Explorer double-click) lands in Studio.
     if getattr(sys, "frozen", False) and not sys.argv[1:]:
         args.studio = True
 
-    # `--desktop` / `--browser` on their own name a *surface*, not a frontend, so
-    # they mean "open the app" — Studio, the same landing page a double-clicked
-    # bundle gets. With a frontend flag alongside they just pick the surface.
+    # --desktop / --browser alone name a surface, not a frontend; default to Studio.
     surface_only = getattr(args, "desktop", False) or getattr(args, "browser", False)
     if surface_only and _resolve_web_mode(args) is None:
         args.studio = True
 
     utils.NO_INPUT_MODE = bool(getattr(args, "no_input", False))
 
-    # A windowed launch has no console, so every hard exit below this point has
-    # to surface natively instead of printing into the void. Set the flag before
-    # the first thing that can abort startup.
+    # A windowed launch has no console; set this before anything can abort startup.
     utils.GUI_LAUNCH = _use_desktop_window(args) and _resolve_web_mode(args) is not None
-    # Bundled tools first, package managers appended after: the desktop build
-    # ships its own feature-verified ffmpeg/ffprobe under <bundle>/bin, which
-    # must win over any system copy, while the Homebrew append below remains
-    # the fallback for tools the bundle does not carry (e.g. a user-installed
-    # llama.cpp). Both must run before anything calls shutil.which.
+    # Bundled ffmpeg/ffprobe must beat system copies; Homebrew (appended next) is
+    # the fallback. Run before shutil.which.
     utils.prepend_bundled_bin_to_path()
-    # Finder gives a GUI process a bare PATH that omits Homebrew, so ffmpeg is
-    # invisible and startup aborts.
+    # Finder gives GUI processes a bare PATH without Homebrew, hiding ffmpeg.
     utils.augment_path_for_gui_launch()
 
     if config.DEBUGGING:
@@ -4006,10 +3976,8 @@ def main() -> None:
     gallery_arg = modes["gallery_arg"]
     pre_transcribe_mode = modes["pre_transcribe"]
 
-    # Determine if running in CLI mode (any mode argument provided). Headless
-    # CLI modes are flagged via _ModeSpec.implies_cli_mode; the web/standalone
-    # frontends (studio/screenspace/transcripts/workflows/gallery/regenerate)
-    # deliberately do not set cli_mode.
+    # Headless modes set cli_mode via _ModeSpec.implies_cli_mode; web frontends,
+    # gallery, and regenerate do not.
     cli_mode = (
         any(getattr(args, a, None) for a in _SELECTION_ATTRS)
         or args.highlights
@@ -4041,8 +4009,7 @@ def main() -> None:
                 "--settings requires interactive input and cannot be combined with --no-input."
             )
             sys.exit(1)
-        # Reopen the grid after each change so several settings can be
-        # adjusted in one sitting; empty input exits the loop.
+        # Reopen the grid after each change; empty input exits.
         while utils.set_program_settings():
             pass
 
@@ -4092,12 +4059,8 @@ def main() -> None:
     if _dispatch_standalone_mode(args, cli_mode, gallery_arg):
         sys.exit(0)
 
-    # Window-first `-s` desktop launch: a GUI launch has no console, so the
-    # interactive auth + worksheet selection below would block (or die)
-    # invisibly before any window exists. Defer both to the boot-build thread —
-    # the boot page narrates, and a failure degrades to a sheetless Studio with
-    # the Start overlay explaining why. Browser/console `-s` runs keep the
-    # interactive path below.
+    # Desktop -s launch has no console: defer auth and worksheet selection to the
+    # boot thread.
     web_mode = _resolve_web_mode(args)
     if web_mode is not None and _use_desktop_window(args):
         profiling.mark("startup.web_dispatch")
@@ -4110,16 +4073,14 @@ def main() -> None:
         )
         sys.exit(0)
 
-    # Authenticate with Google (once per run) – skip for local Excel files.
-    # The Drive listing (get_all_spreadsheets) is deferred to select_worksheet
-    # and fetched lazily only on paths that need it (URL opens skip it).
+    # Google auth once per run; skipped for Excel. select_worksheet fetches the
+    # Drive listing lazily.
     gspread_client = None
     if not _is_excel_spreadsheet_arg(getattr(args, "spreadsheet", None)):
         gspread_client = authenticate_google()
         if gspread_client is None:  # noqa: SIM102 - the comment below belongs to the inner branch
-            # Auth failed. CLI mode or an explicit -s argument can't recover
-            # interactively — fall back to a sole local .xlsx when possible,
-            # else point the user at the Excel option and exit.
+            # Auth failed and no interactive recovery: try a sole local .xlsx, else
+            # exit.
             if cli_mode or getattr(args, "spreadsheet", None):
                 fallback = None
                 if cli_mode and not getattr(args, "spreadsheet", None):
@@ -4138,8 +4099,7 @@ def main() -> None:
                         ],
                     )
                     sys.exit(1)
-            # Interactive mode: fall through with gspread_client=None; the
-            # while loop below will prompt for an Excel file instead.
+            # Interactive mode: the loop below prompts for an Excel file instead.
 
     # Outer loop so 'top' can return to spreadsheet selection
     while True:
@@ -4154,10 +4114,8 @@ def main() -> None:
             else:
                 worksheet = select_worksheet(gspread_client, args, cli_mode)
 
-            # The Start overlay's per-source filename overrides are functional
-            # config — they decide which file a participant's clips are cut
-            # from. Web launches seed them in server._seed_filename_overrides;
-            # seed here so headless CLI and interactive runs honor them too.
+            # Filename overrides pick the source file per participant; web launches
+            # seed them in server._seed_filename_overrides.
             meta = files.derive_sheet_meta(worksheet)
             if meta is not None:
                 import start_settings

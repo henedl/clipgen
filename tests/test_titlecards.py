@@ -109,7 +109,15 @@ def test_wrap_clip_with_cards_single_encode_happy_path(monkeypatch, make_clip):
             "width": 1280,
             "height": 720,
             "video_codec": "h264",
-            "audio_codec": "aac",
+            "audio_tracks": [
+                {
+                    "index": 0,
+                    "codec": "aac",
+                    "channels": 2,
+                    "sample_rate": 48000,
+                    "channel_layout": "stereo",
+                }
+            ],
             "fps": 30.0,
             "duration": 12.0,
             "nb_frames": 360,
@@ -171,7 +179,15 @@ def test_wrap_clip_with_cards_title_only_fallback(monkeypatch, make_clip):
             "width": 1920,
             "height": 1080,
             "video_codec": "h264",
-            "audio_codec": "aac",
+            "audio_tracks": [
+                {
+                    "index": 0,
+                    "codec": "aac",
+                    "channels": 2,
+                    "sample_rate": 48000,
+                    "channel_layout": "stereo",
+                }
+            ],
             "fps": 30.0,
             "duration": 8.0,
             "nb_frames": 240,
@@ -217,7 +233,7 @@ def test_wrap_clip_with_cards_no_audio_drops_audio_stream(monkeypatch, make_clip
             "width": 1280,
             "height": 720,
             "video_codec": "h264",
-            "audio_codec": None,
+            "audio_tracks": [],
             "fps": 30.0,
             "duration": 4.0,
             "nb_frames": 120,
@@ -265,7 +281,15 @@ def test_wrap_clip_with_cards_no_cards_is_noop(monkeypatch, make_clip):
             "width": 1280,
             "height": 720,
             "video_codec": "h264",
-            "audio_codec": "aac",
+            "audio_tracks": [
+                {
+                    "index": 0,
+                    "codec": "aac",
+                    "channels": 2,
+                    "sample_rate": 48000,
+                    "channel_layout": "stereo",
+                }
+            ],
             "fps": 30.0,
             "duration": 4.0,
             "nb_frames": 120,
@@ -291,11 +315,16 @@ _COPY_SAFE_PROBE = {
     "width": 1280,
     "height": 720,
     "video_codec": "h264",
-    "audio_codec": "aac",
     "pix_fmt": "yuv420p",
-    "audio_sample_rate": 48000,
-    "audio_channels": 2,
-    "audio_channel_layout": "stereo",
+    "audio_tracks": [
+        {
+            "index": 0,
+            "codec": "aac",
+            "channels": 2,
+            "sample_rate": 48000,
+            "channel_layout": "stereo",
+        }
+    ],
     "fps": 30.0,
     "duration": 12.0,
     "nb_frames": 360,
@@ -355,10 +384,7 @@ def test_wrap_clip_with_cards_copy_path_no_audio(monkeypatch, make_clip):
     titlecards.clear_endcard_cache()
     probe: dict = {
         **_COPY_SAFE_PROBE,
-        "audio_codec": None,
-        "audio_sample_rate": 0,
-        "audio_channels": 0,
-        "audio_channel_layout": None,
+        "audio_tracks": [],
     }
     monkeypatch.setattr(titlecards.config, "TITLECARDS_ENABLED", True)
     monkeypatch.setattr(titlecards.config, "ENDCARD_IMAGE", "")
@@ -740,7 +766,15 @@ def test_wrap_reencode_uses_fast_preset(monkeypatch, make_clip):
             "width": 1280,
             "height": 720,
             "video_codec": "h264",
-            "audio_codec": "aac",
+            "audio_tracks": [
+                {
+                    "index": 0,
+                    "codec": "aac",
+                    "channels": 2,
+                    "sample_rate": 48000,
+                    "channel_layout": "stereo",
+                }
+            ],
             "fps": 30.0,
             "duration": 12.0,
             "nb_frames": 360,
@@ -801,7 +835,15 @@ def test_pipeline_wraps_clip_without_forcing_source_resolution(monkeypatch, make
             "width": 1280,
             "height": 720,
             "video_codec": "h264",
-            "audio_codec": "aac",
+            "audio_tracks": [
+                {
+                    "index": 0,
+                    "codec": "aac",
+                    "channels": 2,
+                    "sample_rate": 48000,
+                    "channel_layout": "stereo",
+                }
+            ],
             "fps": 30.0,
             "duration": 60.0,
             "nb_frames": 1800,

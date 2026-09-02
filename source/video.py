@@ -28,18 +28,14 @@ import itertools
 
 INVALID_END_TIMESTAMP = None
 
-# Caches are keyed on (resolved_path, mtime_ns) so a re-encoded or replaced
-# source file naturally yields a fresh entry instead of stale data. Mirrors
-# the pattern in viewer.py and pipeline.py.
+# Keyed on (resolved_path, mtime_ns) so a replaced source misses the cache.
 _file_duration_cache: dict[tuple[str, int], int] = {}
 _video_properties_cache: dict[tuple[str, int], dict[str, Any]] = {}
-# Single-flight for probe_video_properties: a participant select fires the
-# video-info and pins routes together, and both missed the cache and ran their
-# own ffprobe on the same file. The second waits for the first instead.
+# Single-flight for probe_video_properties: concurrent routes share one ffprobe per
+# file.
 _probe_inflight: dict[tuple[str, int], threading.Lock] = {}
 _probe_inflight_guard = threading.Lock()
-# Max keyframe gap (seconds) per file; None means "unknown / too sparse to
-# confirm" and callers must treat that as "do not enable keyframe-only decode".
+# Max keyframe gap (s) per file; None means unknown, so no keyframe-only decode.
 _keyframe_gap_cache: dict[tuple[str, int], float | None] = {}
 
 
@@ -89,19 +85,15 @@ def _ffmpeg_bytes(cmd: list[str], *, timeout: float) -> bytes | None:
     return result.stdout
 
 
-# Container seekability per file; None means "shape not determined" (not an
-# MP4, truncated, unreadable) and callers must stay silent rather than warn.
+# Container seekability per file; None means undetermined and callers stay silent.
 _container_seekability_cache: dict[tuple[str, int], dict[str, Any] | None] = {}
 
-# Generic audio-stream handler names muxers emit by default — treated as "no
-# useful name" when labelling audio tracks (fall back to language / ordinal).
+# Default muxer handler names; treated as unnamed when labelling audio tracks.
 _GENERIC_AUDIO_HANDLERS = frozenset(
     {"soundhandler", "core media audio", "isom", "audio"}
 )
 
-# Track-name hints for pick_speech_audio_track(). A stream's name ("Participant
-# Mic", "System Audio") is the only signal available without decoding, so the
-# heuristic is purely lexical.
+# Lexical hints for pick_speech_audio_track(); the stream name is the only cheap signal.
 _SPEECH_TRACK_HINTS = [
     "participant", "participants", "interview", "interviewee", "interviewer",
     "meeting", "mic", "mics", "microphone", "mikrofon", "voice", "voices",
@@ -110,9 +102,8 @@ _SPEECH_TRACK_HINTS = [
     "boom", "call", "zoom", "teams", "webex",
     "deltagare", "intervju", "röst", "samtal",
 ]  # fmt: skip
-# "speaker"/"speakers" is deliberately NEGATIVE: on macOS/Windows a "Speakers"
-# track is the *output* capture, not a person, and reading it as speech would
-# silently transcribe system audio — the failure this feature exists to prevent.
+# "speaker(s)" is NEGATIVE on purpose: an OS "Speakers" track is output capture, not a
+# person.
 _NON_SPEECH_TRACK_HINTS = [
     "system", "screen", "desktop", "display", "music", "game", "output",
     "loopback", "playback", "monitor", "soundtrack", "background", "ambience",
@@ -147,8 +138,7 @@ def pick_speech_audio_track(audio_tracks: list[dict[str, Any]]) -> int:
     probe cache would serve stale picks if the hints ever become tunable.
     """
     best_index = 0
-    # None (not 0) so a field of only *negatively* scored tracks still moves off
-    # track 0 — "System Audio" then an unnamed track should pick the unnamed one.
+    # None, not 0: all-negative fields must still move off track 0.
     best_score: int | None = None
     for position, track in enumerate(audio_tracks):
         haystack = " ".join(
@@ -252,9 +242,7 @@ def check_ffmpeg_tools_available() -> bool:
         "clipgen requires both ffmpeg and ffprobe to cut and inspect videos.",
     ]
     if getattr(sys, "frozen", False):
-        # Desktop builds bundle both tools under <bundle>/bin, so reaching this
-        # branch means a damaged bundle — a system ffmpeg would only paper over a
-        # broken download or a stripped app.
+        # Frozen builds bundle both tools; missing here means a damaged bundle.
         details.append(
             "This build bundles ffmpeg — if it is missing, the app is "
             "damaged. Reinstall clipgen, or place ffmpeg on your PATH as a "
@@ -262,11 +250,9 @@ def check_ffmpeg_tools_available() -> bool:
         )
     details.extend(_ffmpeg_install_guidance_lines())
     if not getattr(sys, "frozen", False):
-        # Source checkouts ship a script that does the whole job; a frozen
-        # bundle has no repo to run it from, so only mention it when there is.
+        # The install script only exists in a source checkout.
         details.append("Or, from this checkout: scripts/install-deps.sh")
-    # Not error_print: this aborts startup, and a windowed launch has no console
-    # for the guidance above — the app would quit with nothing on screen.
+    # Not error_print: a windowed launch has no console to show this.
     utils.fatal_startup_error("Required video tools are missing from PATH.", details)
     return False
 
@@ -280,9 +266,8 @@ def _probe_ffmpeg_listing(listing_arg: str, target_tokens: set[str]) -> bool:
     listing whose second column is the encoder/filter name.
     """
     try:
-        # check=False throughout this module: every ffmpeg/ffprobe call inspects
-        # returncode itself and degrades to a warning or None. check=True would
-        # raise past that handling and lose the diagnostics.
+        # check=False module-wide: every call inspects returncode and degrades to
+        # warning/None.
         result = subprocess.run(
             ["ffmpeg", "-hide_banner", listing_arg],
             capture_output=True,
@@ -306,9 +291,7 @@ _vp9_support_cache: bool | None = None
 _vp9_missing_warned: bool = False
 _videotoolbox_support_cache: bool | None = None
 _hw_encoder_warned: bool = False
-# Session-sticky: one hardware-encode failure disables it for the rest of the
-# run, so a broken media engine costs one wasted encode rather than one per clip.
-# Reset only by restarting clipgen (or by tests).
+# Session-sticky: one hardware-encode failure disables it for the run; tests reset it.
 _hw_encode_failed: bool = False
 
 
@@ -562,9 +545,8 @@ def run_ffmpeg_process(
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
             )
-            # Drain pipes via communicate() in a polling loop: reading only after
-            # proc.poll() returns deadlocks once ffmpeg fills the ~64 KB OS pipe
-            # buffer. Retrying after TimeoutExpired does not lose output.
+            # Poll with communicate(): reading only after poll() deadlocks on a full 64
+            # KB pipe.
             while True:
                 if cancel_flag():
                     utils.terminate_subprocess(proc)
@@ -654,8 +636,7 @@ def _run_ffmpeg_with_progress(
     stderr_chunks: list[str] = []
 
     def _drain_stderr() -> None:
-        # Read until EOF; without this the stderr pipe can fill its 64 KB
-        # OS buffer and deadlock ffmpeg while we're blocked on stdout.
+        # Drain to EOF or a full stderr pipe deadlocks ffmpeg while we read stdout.
         assert proc.stderr is not None
         stderr_chunks.extend(proc.stderr)
 
@@ -794,8 +775,7 @@ def _concat_list_file(clip_paths: list[str]) -> Iterator[str]:
                 )
 
 
-# EBU R128 single-pass preset shared by clip cutting and in-place source
-# normalization: I=-16 (target LUFS), TP=-1.5 (true peak dB), LRA=11 (loudness range).
+# EBU R128 single-pass preset: I=target LUFS, TP=true peak dB, LRA=loudness range.
 LOUDNORM_FILTER = "loudnorm=I=-16:TP=-1.5:LRA=11"
 
 
@@ -857,10 +837,8 @@ def build_ffmpeg_cut_command(
     return base + encoder_args + [output_file]
 
 
-# Output containers mux_subtitles can write, and the codec each needs. Public
-# because it flows to JS via utils.get_frontend_config()["subtitleContainers"],
-# so the Embed Subtitles dialog filters out sources this would reject rather than
-# promising output and collecting a failure line per participant.
+# Containers mux_subtitles writes and their codec; JS gets it as subtitleContainers to
+# filter sources.
 SUBTITLE_CODEC_BY_CONTAINER = {
     ".mp4": "mov_text",
     ".m4v": "mov_text",
@@ -868,9 +846,7 @@ SUBTITLE_CODEC_BY_CONTAINER = {
     ".mkv": "srt",
     ".webm": "webvtt",
 }
-# The mp4 family reports the subtitle track default=1 whatever -disposition:s:0
-# says (measured on ffmpeg 8.1.2): an ISOBMFF track is enabled or absent, with no
-# present-but-off state. Only .mkv/.webm honour the flag.
+# ISOBMFF ignores -disposition:s:0 (measured, ffmpeg 8.1.2); only .mkv/.webm honour it.
 SUBTITLE_ALWAYS_DEFAULT_CONTAINERS = frozenset({".mp4", ".m4v", ".mov"})
 
 
@@ -935,12 +911,8 @@ def mux_subtitles(
         input_video,
         "-i",
         srt_path,
-        # Video + audio only, never `-map 0`: mapping every input stream carries a
-        # pre-existing subtitle track in *ahead* of the new one, so the index-0
-        # arguments below would relabel and default that old track while the
-        # transcript arrives untagged. A pre-existing bitmap track (PGS/VobSub) is
-        # worse — `-c:s` targets it, mov_text can't encode it, and the command
-        # fails. The `?` suffixes make each map optional so a silent video muxes.
+        # Never -map 0: an old subtitle track would take index 0. `?` allows silent
+        # videos.
         "-map",
         "0:v?",
         "-map",
@@ -1042,13 +1014,8 @@ def run_ffmpeg(
             ],
         )
         return False
-    # A span running past the end of the recording is shortened, not dropped.
-    # The common case is a bare single timestamp near the end of a session: its
-    # end is start + DEFAULT_DURATION_SECONDS, so it overshoots by construction,
-    # and rejecting it meant the last observation of a study produced nothing.
-    # ffmpeg stops at EOF on its own, which is exactly what the other two clip
-    # paths already rely on — utils.map_global_range_to_segments clamps the end
-    # for multi-video participants, and transcript intake clamps only the start.
+    # Shorten, never drop, a span past EOF; tests/test_video_commands.py covers the end-
+    # of-session case.
     if start_seconds is not None and start_seconds + duration > duration_seconds:
         clamped = int(duration_seconds - start_seconds)
         if clamped <= 0:
@@ -1102,8 +1069,7 @@ def run_ffmpeg(
             encoder=encoder if reencode else None,
         )
 
-    # A stream copy has no encoder to fail over, so it stays on libx264's
-    # "add nothing" branch and never spends a probe on the hardware listing.
+    # Stream copy has no encoder to fail over; skip the hardware probe.
     encoder = resolve_video_encoder() if reencode else "libx264"
     utils.debug_print(f"ffmpeg_command is '{' '.join(build_command(encoder))}'")
     ffmpeg_result = run_ffmpeg_encode(
@@ -1114,10 +1080,8 @@ def run_ffmpeg(
         os_error_message="ffmpeg could not successfully run.",
         cancel_flag=cancel_flag,
     )
-    # File-size enforcement is deliberately NOT done here: a cut is often followed
-    # by a titlecard wrap or concat that re-encodes the body, discarding any
-    # bitrate targeting (and wasting two passes). Callers apply
-    # enforce_filesize_limit() to the *final* artifact instead.
+    # No filesize enforcement here: later wraps/concats re-encode. Callers enforce on
+    # the final artifact.
     return _finalize_ffmpeg_output(
         ffmpeg_result,
         output_file,
@@ -1500,9 +1464,7 @@ def extract_gif(
                 [f"Video file: '{input_file}'"],
             )
             return False
-        # Shortened rather than skipped, for the same reason as run_ffmpeg's
-        # clamp above: a GIF from a bare end-of-session timestamp overshoots by
-        # construction and used to produce nothing at all.
+        # Shortened, not skipped; same reason as run_ffmpeg's clamp.
         if (
             start_seconds is not None
             and start_seconds + duration_seconds > file_duration
@@ -1546,8 +1508,7 @@ def extract_gif(
         f"fps={config.GIF_FPS},scale={config.GIF_SCALE_WIDTH}:-1:flags=lanczos",
     )
     if is_webm:
-        # Silent VP9 loop; the loop is controlled by the <video loop> attribute
-        # in the viewer, not by the container. -an strips audio.
+        # Silent VP9; looping is the viewer's <video loop> job, not the container's.
         ffmpeg_command += [
             "-c:v",
             "libvpx-vp9",
@@ -1655,8 +1616,7 @@ def get_file_duration(filepath: str) -> int | None:
     if cached_dur is not None:
         if config.PROFILING:
             profiling.count("video.duration_cache.hit")
-        # -1 is a sentinel recording a prior probe that couldn't determine the
-        # duration, so repeat calls skip re-running the full probe chain.
+        # -1 caches a failed probe so repeat calls skip the probe chain.
         return cached_dur if cached_dur >= 0 else None
     if config.PROFILING:
         profiling.count("video.duration_cache.miss")
@@ -1739,11 +1699,8 @@ def prewarm_probes(paths: Iterable[str]) -> None:
         try:
             probe_video_properties(path)
         except Exception as exc:
-            # Deliberately broad. probe_video_properties already handles the
-            # failures it expects and returns None; anything reaching here is
-            # unexpected, and the correct response is still to leave the file
-            # uncached — the caller re-probes it and handles None as it always
-            # did. Raising would turn a slow page into a broken one.
+            # Deliberately broad: leave the file uncached and let the caller re-probe,
+            # never break the page.
             utils.verbose_print(f"Could not prewarm probe for {path}: {exc}")
 
     _parallel_probe(unique, _quiet)
@@ -1788,14 +1745,20 @@ def timeline_or_none(paths: list[str]) -> list[tuple[str, int, int]] | None:
     return build_source_timeline(paths) if len(paths) >= 2 else None
 
 
+def first_audio_track(props: dict[str, Any] | None) -> dict[str, Any] | None:
+    """First audio stream of a probe result, or None when the file has no audio."""
+    tracks = (props or {}).get("audio_tracks") or []
+    return tracks[0] if tracks else None
+
+
 def probe_video_properties(filepath: str) -> dict[str, Any] | None:
     """Probe video file for stream properties (resolution, codecs, timing).
 
     Returns:
         Dict with 'width' (int), 'height' (int), 'video_codec' (str),
-        'audio_codec' (str or None if no audio stream),
         'audio_tracks' (list of per-audio-stream dicts: index/codec/channels/
-        title/language/handler/label), 'audio_track_count' (int),
+        sample_rate/channel_layout/title/language/handler/label),
+        'audio_track_count' (int),
         'fps' (float, 0.0 if unknown), 'duration' (float seconds, 0.0 if unknown),
         'nb_frames' (int, 0 if unknown),
         or None if probe fails.
@@ -1805,16 +1768,14 @@ def probe_video_properties(filepath: str) -> dict[str, Any] | None:
             "width": 1920,
             "height": 1080,
             "video_codec": "h264",
-            "audio_codec": "aac",
             "pix_fmt": "yuv420p",
-            "audio_sample_rate": 48000,
-            "audio_channels": 2,
-            "audio_channel_layout": "stereo",
             "audio_tracks": [
                 {
                     "index": 0,
                     "codec": "aac",
                     "channels": 2,
+                    "sample_rate": 48000,
+                    "channel_layout": "stereo",
                     "title": "",
                     "language": "",
                     "handler": "",
@@ -1827,8 +1788,7 @@ def probe_video_properties(filepath: str) -> dict[str, Any] | None:
             "nb_frames": 9000,
             "start_time": 0.0,
         }
-        # In DEBUGGING mode the file may not exist on disk; fall back to a
-        # synthetic key so callers still get a cached result.
+        # DEBUGGING files may not exist; a synthetic key keeps the cache working.
         key = _resolved_path_and_mtime(filepath) or (str(Path(filepath).resolve()), 0)
         _video_properties_cache[key] = result
         _file_duration_cache[key] = round(result["duration"])
@@ -1893,11 +1853,7 @@ def _probe_video_properties_uncached(
     streams = data.get("streams", [])
     width = height = 0
     video_codec: str | None = None
-    audio_codec: str | None = None
     pix_fmt: str | None = None
-    audio_sample_rate = 0
-    audio_channels = 0
-    audio_channel_layout: str | None = None
     audio_tracks: list[dict[str, Any]] = []
     fps = 0.0
     nb_frames = 0
@@ -1930,11 +1886,9 @@ def _probe_video_properties_uncached(
             title = (tags.get("title") or "").strip()
             language = (tags.get("language") or "").strip()
             handler = (tags.get("handler_name") or "").strip()
-            # Audio-relative index (0, 1, 2…) — the `a:N` selector ffmpeg needs
-            # for per-track extraction (multitrack mixing lands in a follow-up).
+            # Audio-relative index: ffmpeg's a:N selector for per-track extraction.
             track_index = len(audio_tracks)
-            # Prefer an explicit title, then a meaningful handler name (skip the
-            # generic muxer defaults), then the language code, then an ordinal.
+            # Label priority: title, non-generic handler name, language, ordinal.
             meaningful_handler = (
                 handler
                 if handler and handler.lower() not in _GENERIC_AUDIO_HANDLERS
@@ -1947,27 +1901,23 @@ def _probe_video_properties_uncached(
             label = (
                 title or meaningful_handler or lang_label or f"Track {track_index + 1}"
             )
+            try:
+                track_sample_rate = int(stream.get("sample_rate") or 0)
+            except (ValueError, TypeError):
+                track_sample_rate = 0
             audio_tracks.append(
                 {
                     "index": track_index,
                     "codec": stream.get("codec_name"),
                     "channels": track_channels,
+                    "sample_rate": track_sample_rate,
+                    "channel_layout": stream.get("channel_layout"),
                     "title": title,
                     "language": language,
                     "handler": handler,
                     "label": label,
                 }
             )
-            # Retain the first audio stream's details as the flat top-level fields
-            # (backward-compatible with the ~20 existing callers).
-            if audio_codec is None:
-                audio_codec = stream.get("codec_name")
-                try:
-                    audio_sample_rate = int(stream.get("sample_rate") or 0)
-                except (ValueError, TypeError):
-                    audio_sample_rate = 0
-                audio_channels = track_channels
-                audio_channel_layout = stream.get("channel_layout")
 
     if not video_codec or width <= 0 or height <= 0:
         return None
@@ -1994,11 +1944,7 @@ def _probe_video_properties_uncached(
         "width": width,
         "height": height,
         "video_codec": video_codec,
-        "audio_codec": audio_codec,
         "pix_fmt": pix_fmt,
-        "audio_sample_rate": audio_sample_rate,
-        "audio_channels": audio_channels,
-        "audio_channel_layout": audio_channel_layout,
         "audio_tracks": audio_tracks,
         "audio_track_count": len(audio_tracks),
         "fps": fps,
@@ -2012,10 +1958,8 @@ def _probe_video_properties_uncached(
     return result
 
 
-# Per-(file, index) locks for extract_audio_track. Two requests for the same
-# track are routine (a re-select tears the <audio> element down and re-requests
-# it; range requests can arrive on a second connection), and the Flask server is
-# threaded, so without this two ffmpeg processes would race on one output path.
+# Per-(file, index) locks: duplicate requests are routine and two ffmpegs would race on
+# one path.
 _audio_track_locks: dict[tuple[str, int], threading.Lock] = {}
 _audio_track_locks_guard = threading.Lock()
 
@@ -2082,15 +2026,12 @@ def extract_audio_track(filepath: str, audio_index: int) -> Path | None:
         # Re-check: another thread may have finished while we waited on the lock.
         if out_path.is_file() and out_path.stat().st_size > 0:
             return out_path
-        # Unique per caller so a concurrent extraction of a *different* track of
-        # the same file can never share a scratch path either.
+        # Unique per caller; concurrent extractions of other tracks never share it.
         tmp_path = (
             cache_dir
             / f"{out_path.stem}.partial.{os.getpid()}.{threading.get_ident()}.m4a"
         )
-        # +faststart relocates the moov atom to the front so the browser can
-        # stream and seek the track smoothly (a tail moov forces buffering
-        # stalls → pops).
+        # +faststart puts moov first; a tail moov stalls browser seeks.
         base = [
             "ffmpeg",
             "-y",
@@ -2102,18 +2043,16 @@ def extract_audio_track(filepath: str, audio_index: int) -> Path | None:
             "-movflags",
             "+faststart",
         ]
-        # Try a stream copy first (instant for AAC), then an AAC re-encode for
-        # codecs that can't be copied into an MP4/M4A container (Opus, PCM, …).
+        # Stream copy first (instant for AAC); re-encode codecs M4A can't carry (Opus,
+        # PCM).
         for codec_args in (["-c:a", "copy"], ["-c:a", "aac", "-b:a", "160k"]):
             try:
                 subprocess.run(
                     base + codec_args + [str(tmp_path)],
                     check=True,
                     capture_output=True,
-                    # Generous: the copy path is near-instant but the AAC
-                    # re-encode fallback runs the length of a long session
-                    # recording. Bounded all the same, so a wedged ffmpeg can't
-                    # pin this request thread (and every waiter on the lock).
+                    # Generous for the re-encode path; bounded so a wedged ffmpeg can't
+                    # pin lock waiters.
                     timeout=300,
                 )
             except (
@@ -2187,9 +2126,7 @@ def decode_audio_pcm(
                 cmd,
                 capture_output=True,
                 check=False,
-                # Audio-only decode runs far faster than realtime, but it does
-                # scale with session length — bound it loosely so a wedged
-                # ffmpeg can't pin a transcription worker forever.
+                # Loose bound; a wedged ffmpeg must not pin a transcription worker.
                 timeout=900,
             )
     except (subprocess.TimeoutExpired, FileNotFoundError, OSError) as exc:
@@ -2202,8 +2139,8 @@ def decode_audio_pcm(
             f"(exit {result.returncode}): {stderr_tail or 'no output'}"
         )
         return None
-    # bytearray copy: frombuffer over immutable bytes yields a read-only array,
-    # and the model must be free to operate on a writable waveform.
+    # bytearray copy: frombuffer over bytes is read-only, and the model needs a writable
+    # array.
     return np.frombuffer(bytearray(result.stdout), dtype=np.float32)
 
 
@@ -2267,8 +2204,7 @@ def probe_max_keyframe_gap(filepath: str) -> float | None:
         _keyframe_gap_cache[key] = None
         return None
 
-    # Each CSV row is "pts_time,flags" (e.g. "1.000000,K__"). A keyframe packet
-    # carries 'K' as the first flag char. Collect keyframe PTS in order.
+    # Rows are "pts_time,flags" (e.g. "1.000000,K__"); a leading K marks a keyframe.
     keyframe_times: list[float] = []
     for line in raw.splitlines():
         parts = line.split(",")
@@ -2292,11 +2228,7 @@ def probe_max_keyframe_gap(filepath: str) -> float | None:
     return result
 
 
-# Top-level boxes scanned before giving up on finding `moov`. A fragmented MP4
-# always writes `moov` before its first `moof`, and a normal MP4 writes at most
-# a handful of boxes (`ftyp`/`free`/`mdat`) before or after it, so the real
-# files need 2-4 iterations. The bound only exists so a corrupt file whose box
-# sizes walk us through garbage can't loop for long.
+# Real files find moov within a few boxes; the bound only stops corrupt files looping.
 _MAX_TOPLEVEL_BOXES = 64
 
 
@@ -2346,8 +2278,7 @@ def probe_container_seekability(filepath: str) -> dict[str, Any] | None:
     otherwise be reported as a problem. Cached per ``(resolved_path, mtime)``.
     """
     if config.DEBUGGING:
-        # Synthetic "fine" answer so DEBUGGING runs never touch the disk;
-        # mirrors the probe_max_keyframe_gap / probe_video_properties branches.
+        # Synthetic answer so DEBUGGING never touches disk; matches the other probes.
         return {"fragmented": False, "header_duration": 300.0, "browser_seekable": True}
 
     key = _resolved_path_and_mtime(filepath)
@@ -2414,15 +2345,13 @@ def _scan_moov(handle: Any, start: int, end: int) -> dict[str, Any] | None:
         if size < 8:
             break
         if box_type == b"mvex":
-            # A movie-extends box is the spec's definition of "fragmented":
-            # sample data lives in later moof boxes, not in moov's tables.
+            # mvex is the spec's fragmentation marker: samples live in later moof boxes.
             fragmented = True
         elif box_type == b"mvhd":
             header_duration = _read_mvhd_duration(handle.read(min(size - 8, 32)))
         offset += size
     if not fragmented and header_duration is None:
-        # Found moov but neither marker — not a shape we understand well enough
-        # to make a claim about.
+        # moov without either marker is a shape we can't judge.
         return None
     return {
         "fragmented": fragmented,
@@ -2431,10 +2360,7 @@ def _scan_moov(handle: Any, start: int, end: int) -> dict[str, Any] | None:
     }
 
 
-# Kept beside the remuxed source until the user discards it. The suffix lands
-# *after* the extension (``study_P15.mp4.orig``) on purpose: the participant
-# scan globs ``*.mp4``, so anything still ending in .mp4 would come back as a
-# second, phantom participant.
+# Suffix goes after .mp4 on purpose: the participant glob (*.mp4) must not see backups.
 REMUX_ORIGINAL_SUFFIX = ".orig"
 
 _remux_locks: dict[str, threading.Lock] = {}
@@ -2501,15 +2427,14 @@ def remux_to_faststart(
         # Re-check under the lock: a racing job may have finished the swap.
         if backup.exists():
             return False, "Another remux of this file just completed."
-        # No .mp4 extension — pathlib.glob('*.mp4') matches dotfiles too, so a
-        # hidden name alone would not keep the scratch file out of the
-        # participant list. -f mp4 supplies the format the name no longer does.
+        # Extensionless: glob('*.mp4') matches dotfiles, so hiding alone leaks it. -f
+        # supplies the format.
         tmp = src.parent / f".{src.stem}.remux.{os.getpid()}.{threading.get_ident()}"
         command = _ffmpeg_cmd(
             "-i",
             str(src),
-            # Every stream: these recordings routinely carry two audio tracks
-            # (mic + system) and ffmpeg's default mapping would keep only one.
+            # Every stream: recordings often carry mic + system audio; default mapping
+            # keeps one.
             "-map",
             "0",
             "-c",
@@ -2622,9 +2547,7 @@ def discard_remux_original(filepath: str) -> tuple[bool, str]:
     return True, "Original deleted."
 
 
-# Containers normalize_audio_inplace can rewrite, and the -f value the
-# extensionless scratch file needs. .webm is absent on purpose: it cannot
-# carry AAC, and re-encoding to Opus would silently change the codec family.
+# Muxer per container for the extensionless scratch file. No .webm: it can't carry AAC.
 NORMALIZE_MUXER_BY_EXT = {
     ".mp4": "mp4",
     ".m4v": "mp4",
@@ -2657,9 +2580,8 @@ def build_normalize_audio_command(
             f"{config.AUDIO_BITRATE_KBPS}k",
             f"-filter:a:{index}",
             LOUDNORM_FILTER,
-            # loudnorm resamples to 192 kHz internally; without an explicit
-            # rate the AAC encoder would land on 96 kHz — tolerable in a
-            # throwaway clip, ugly baked into a source file.
+            # loudnorm upsamples to 192 kHz; without -ar the AAC encoder lands on 96
+            # kHz.
             f"-ar:a:{index}",
             str(sample_rate),
         ]
@@ -2722,16 +2644,14 @@ def normalize_audio_inplace(
         # Re-check under the lock: a racing rewrite may have finished the swap.
         if backup.exists():
             return False, "Another rewrite of this file just completed."
-        # No source extension — pathlib.glob('*.mp4') matches dotfiles too, so a
-        # hidden name alone would not keep the scratch file out of the
-        # participant list. -f supplies the format the name no longer does.
+        # Extensionless for the same reason as remux_to_faststart's scratch file.
         tmp = src.parent / f".{src.stem}.loudnorm.{os.getpid()}.{threading.get_ident()}"
         command = build_normalize_audio_command(
             str(src),
             str(tmp),
             indices,
             muxer,
-            int(before.get("audio_sample_rate") or 0) or 48000,
+            int((first_audio_track(before) or {}).get("sample_rate") or 0) or 48000,
         )
         if config.DEBUGGING:
             config.debug_ic(command)
@@ -2754,8 +2674,7 @@ def normalize_audio_inplace(
             if result.returncode != 0:
                 return False, f"ffmpeg failed: {(result.stderr or '').strip()[:400]}"
 
-            # Only the mp4 family can be positively asserted browser-seekable;
-            # the probe answers None (= unknown) for .mkv and must not fail.
+            # Only the mp4 family is provably seekable; the probe returns None for .mkv.
             problem = _remux_output_mismatch(
                 tmp, before, seekability_required=muxer == "mp4"
             )
@@ -2865,13 +2784,8 @@ def get_duration(start_time: str, end_time: str | None) -> int | None:
         )
         return None
 
-    # Parse each end independently with the canonical timestamp parser rather
-    # than picking one strptime format for both ends: the two ends can
-    # legitimately need different formats (a clip 59:50 -> 1:00:10 straddling
-    # the hour, or a single timestamp whose default-duration end crosses it),
-    # and MM:SS minutes may exceed 59 ("75:00", a long session written without
-    # an hours component). A shared-format strptime rejected all of those and
-    # silently dropped the clip.
+    # Parse ends separately: formats differ across the hour boundary, and minutes may
+    # exceed 59.
     start_seconds = utils.timestamp_to_seconds(start_time)
     end_seconds = utils.timestamp_to_seconds(end_time)
     if start_seconds is None or end_seconds is None:
@@ -3013,8 +2927,7 @@ def compress_to_size(
         )
 
         utils.debug_print(f"Pass 1 command: {' '.join(pass1_command)}")
-        # Split the progress bar 50/50 between the two passes so the UI shows a
-        # single monotonic 0→1 fill across both ffmpeg invocations.
+        # Progress splits 50/50 across the two passes for one monotonic fill.
         pass1_progress = (
             (lambda f: on_progress(f * 0.5)) if on_progress is not None else None
         )
@@ -3149,7 +3062,7 @@ def _detect_clip_mismatches(
 
     resolutions = Counter((p["width"], p["height"]) for p in probed)
     video_codecs = Counter(p["video_codec"] for p in probed)
-    has_audio = [p["audio_codec"] is not None for p in probed]
+    has_audio = [first_audio_track(p) is not None for p in probed]
 
     has_resolution_mismatch = len(resolutions) > 1
     has_audio_presence_mismatch = len(set(has_audio)) > 1
@@ -3200,9 +3113,7 @@ def _build_filter_complex_concat(
         (filter_complex_string, has_any_audio)
     """
     filter_parts: list[str] = []
-    has_any_audio = any(
-        p is not None and p.get("audio_codec") is not None for p in props_list
-    )
+    has_any_audio = any(first_audio_track(p) is not None for p in props_list)
 
     for i, props in enumerate(props_list):
         filter_parts.append(
@@ -3212,12 +3123,11 @@ def _build_filter_complex_concat(
             f"setsar=1[v{i}]"
         )
         if has_any_audio:
-            if props is not None and props.get("audio_codec") is not None:
+            if first_audio_track(props) is not None:
                 filter_parts.append(f"[{i}:a]aresample=44100[a{i}]")
             else:
-                # Reuse the duration already probed into props_list (by
-                # _detect_clip_mismatches) rather than a redundant lookup; fall
-                # back to a fresh probe only for an unprobed clip.
+                # Reuse the duration _detect_clip_mismatches already probed; re-probe
+                # only unprobed clips.
                 if props is not None and props.get("duration"):
                     dur = props["duration"]
                 else:
@@ -3520,9 +3430,7 @@ def _batch_extract_screenshots(
         return None
     tmpdir = tempfile.mkdtemp(prefix="clipgen_gallery_")
     try:
-        # The fps filter samples from t=0, so for an offset grid (a multi-video
-        # part aligned to the global interval) seek the input first; frame index
-        # i then still maps to timestamps[i] because the grid is evenly spaced.
+        # fps samples from t=0: seek to the grid start so frame i maps to timestamps[i].
         start_offset = timestamps[0] if timestamps else 0
         seek_args = ["-ss", str(start_offset)] if start_offset > 0 else []
         ffmpeg_command = _ffmpeg_cmd(

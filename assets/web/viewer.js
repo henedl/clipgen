@@ -52,10 +52,7 @@
 
   var _cardScrub = null; // { mediaEl, videoEl, raf, audioKey, audioUrl }
 
-  // Opt-in: layer the shared card-scrubber's audio snippets + waveform overlay
-  // onto the existing <video>-seek scrub. Audio is decoded in-browser from the
-  // clip file (no server, no extra exported assets); degrades to silent if the
-  // browser can't decode that codec.
+  // Opt-in: card-scrubber audio + waveform over the <video>-seek scrub; decoded in-browser, silent if undecodable.
   var _scrubAudioEnabled = false;
   var SCRUBAUDIO_STORAGE_KEY = "clipgen-viewer-scrubaudio";
 
@@ -83,17 +80,14 @@
     return "clip";
   }
 
-  // Non-timeline artifact types: single output files surfaced in the Attachments
-  // panel rather than on the timeline track.
+  // Single output files shown in the Attachments panel, not on the timeline.
   var ATTACHMENT_TYPES = { timelapse: true, heatmap: true, export: true };
 
   function isAttachmentType(a) {
     return !!ATTACHMENT_TYPES[a && a.type];
   }
 
-  // Render the Attachments panel: heatmaps as <img>, timelapse mp4 as a looping
-  // <video>, timelapse gif as <img>, document exports (json/csv/md/srt/vtt) as
-  // download-link cards. Hidden when there are no attachments.
+  // Attachments panel: heatmaps/gifs as <img>, timelapse mp4 as looping <video>, exports as download cards.
   function renderAttachments(attachments) {
     var pane = qs("#attachmentsPane");
     var grid = qs("#attachmentsGrid");
@@ -108,8 +102,7 @@
       var card = document.createElement("div");
       card.className = "attachment-card";
       var media;
-      // Reels (from a Build Reel node) are full mp4s, played with sound and no
-      // loop; timelapse mp4s loop muted. Both render as a <video>.
+      // Reels play with sound, no loop; timelapse mp4s loop muted.
       var isVideo =
         (a.type === "timelapse" || a.type === "reel") && /\.mp4$/i.test(a.file);
       var isDoc = /\.(json|csv|md|srt|vtt|txt)$/i.test(a.file || "");
@@ -190,10 +183,7 @@
 
   // ---- Clip thumbnails ----
 
-  // Off-DOM video element seeks to ~25% (clamped to 0.5–5s) and captures a
-  // 320x180 JPEG poster. The 8s timeout guards against clips that never fire
-  // 'seeked' (corrupt files, codec stalls); finish() is idempotent so timeout
-  // and seek both safely call it. Blob URL is owned by _thumbCache.
+  // Off-DOM video poster capture at ~25%; the 8s timeout covers clips that never fire 'seeked'.
   function generateClipThumbnail(mediaEl, artifact, callback) {
     var done = false;
     function finish() {
@@ -373,11 +363,7 @@
     _cardScrub = null;
   }
 
-  // Lazy clip thumbnails. Called on initial render and again after any list
-  // rebuild — we tear down the previous observer first so old card elements
-  // (now detached) don't keep firing intersection callbacks. Each card is
-  // either served from `_thumbCache` immediately or queued for generation;
-  // unobserve fires once the card has been seen so we don't re-enqueue.
+  // Lazy thumbnails, rebuilt per render; disconnect the old observer or detached cards keep firing.
   function initClipThumbnails() {
     if (_thumbObserver) { _thumbObserver.disconnect(); _thumbObserver = null; }
     _thumbQueue = [];
@@ -738,16 +724,12 @@
       return;
     }
 
-    // Attachments (timelapse / heatmap) are single output files, not timeline
-    // events — split them out before the timeline pipeline and render separately.
+    // Attachments are single files, not timeline events; split them out before the timeline pipeline.
     var rawArtifacts = (data.artifacts || []).filter(function (a) {
       return a.id && a.file;
     });
     state.attachments = rawArtifacts.filter(isAttachmentType);
-    // Reels (from a Build Reel node) live in their own `reels` slot and have no
-    // start/end, so they never fit the timeline. Surface them as playable cards
-    // in the Attachments pane (mirrors the CLI, where a reel-only run would
-    // otherwise produce an empty viewer too).
+    // Reels have no start/end, so they show as playable Attachments cards instead of timeline events.
     var reelCards = (data.reels || [])
       .filter(function (r) {
         return r && r.file;
@@ -808,8 +790,7 @@
 
   // ---- Hotkeys (shared hotkeys.js registry, inlined into exports) ----
 
-  // j/k walk the filtered artifact list in its current sort order, selecting
-  // the adjacent card (which also seeks the player / opens the detail pane).
+  // j/k select the adjacent card in the filtered list's current sort order.
   function selectAdjacentArtifact(delta) {
     var list = state.filtered || [];
     if (!list.length) return;
@@ -849,9 +830,7 @@
   function showEmptyState(hasOtherOutputs) {
     var empty = qs("#emptyState");
     if (empty) {
-      // The Attachments pane sits outside #layout and stays visible, so when a
-      // reel/timelapse/heatmap is the only output, point the reader to it rather
-      // than claiming nothing was generated.
+      // The Attachments pane stays visible; when it holds the only output, point there.
       var p = empty.querySelector("p");
       if (p) {
         p.textContent = hasOtherOutputs
@@ -1404,10 +1383,7 @@
     updateSortToolbarUI();
   }
 
-  // Single pair of delegated listeners on #artifactList that dispatch to the
-  // scrub/tooltip/click handlers based on the event target. Installed once on
-  // first render and reused on subsequent renders — avoids attaching 4+
-  // listeners per card (O(N) with the artifact count).
+  // One delegated listener pair on #artifactList, installed once; avoids 4+ listeners per card.
   var _artifactListDelegated = false;
   var _hoveredCardId = null;
   var _hoveredMediaEl = null;
@@ -1447,8 +1423,7 @@
         var card = document.querySelector(
           '#artifactList .artifact-card[data-id="' + _hoveredCardId + '"]'
         );
-        // If the card is gone (list re-rendered mid-hover) or the pointer left
-        // it, drop the hover state so the tooltip can't get orphaned.
+        // Card gone (re-rendered mid-hover) or pointer left it: drop hover state so no orphaned tooltip.
         if (!card || !related || !card.contains(related)) {
           _hoveredCardId = null;
           hideTooltip();
@@ -1850,9 +1825,7 @@
     }
     vid.muted = false;
     vid.controls = true;
-    // Exported viewers inline this file without video-controls.js, so the
-    // play() promise is handled here rather than via safePlay(). Clicking
-    // away from a preview interrupts the start and rejects it.
+    // Exported viewers lack video-controls.js, so handle the play() promise here instead of safePlay().
     var playing = vid.play();
     if (playing && playing.catch) playing.catch(function () {});
     if (_preview.overlay) _preview.overlay.classList.add("hidden");
@@ -1972,8 +1945,7 @@
     tip.appendChild(header);
 
     var time = el("span", "tooltip-time");
-    // A boundary is a single instant; padded/range display would misstate when
-    // it occurred. Show one time for a point boundary, a span for a run.
+    // A boundary is one instant; show a single time, a span only for a run.
     if (c.navigational && c.start === c.end) {
       time.textContent = formatTime(c.start);
     } else {
@@ -2278,8 +2250,7 @@
         !cur ||
         ev.participant !== cur.participant ||
         ev.eventType !== cur.eventType ||
-        // Boundary ticks are individual points — never merge them, or a cluster
-        // would render only its first tick and hide later boundaries.
+        // Never merge boundary ticks; a cluster would hide all but its first.
         ev.navigational ||
         ev.timeIn - cur.end > 5
       ) {
@@ -2308,9 +2279,7 @@
     if (cur) clusters.push(cur);
 
     for (var j = 0; j < clusters.length; j++) {
-      // Navigational (boundary) ticks must sit at the real boundary time — keep
-      // their exact instant. Other point detections get a ±2s window so their
-      // hover/clip context is usable.
+      // Boundary ticks keep their real instant; other point detections get a ±2s window.
       if (!clusters[j].navigational && clusters[j].start === clusters[j].end) {
         clusters[j].start = Math.max(0, clusters[j].start - 2);
         clusters[j].end = Math.min(timelineDuration, clusters[j].end + 2);
@@ -2330,8 +2299,7 @@
       var width = Math.max(((clampedEnd - clampedStart) / timelineDuration) * 100, 0.4);
       var marker = document.createElement("div");
       marker.className = "screenspace-marker ss-type-" + c.type;
-      // Navigational (boundary) events are orientation scaffolding — draw them
-      // as thin, lighter ticks rather than findings spans.
+      // Boundary events are orientation scaffolding: thin, lighter ticks, not finding spans.
       if (c.navigational) marker.className += " screenspace-marker--navigational";
       marker.style.left = left + "%";
       marker.style.width = c.navigational ? "1px" : (width + "%");

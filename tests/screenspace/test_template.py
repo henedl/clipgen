@@ -200,8 +200,7 @@ class TestCorrelationRoi:
         )
 
     def test_roi_values_track_full_map(self):
-        # Crop width picks the SIMD path, so ROI scores land ulp-close to the
-        # full map rather than bit-identical. The peak still agrees.
+        # Crop width picks the SIMD path: ulp-close to the full map, same peak.
         rng = np.random.RandomState(82)
         source = rng.randint(0, 5, (39, 61), dtype=np.uint8).astype(np.float32)
         template = source[7:16, 13:27].copy()
@@ -322,8 +321,7 @@ class TestScanTemplateControls:
         """A 40px template should miss a 20px in-frame icon at scale 1.0
         but hit at scale 0.5."""
         frame = _make_icon_frame(400, 200, [(100, 50, 20)])
-        # Template at the original (larger) size — mimics an uploaded PNG
-        # captured at 2x the in-video rendering.
+        # Original-size template, like a PNG captured at 2x the in-video size.
         template = _make_icon(40)
         self._patch_single_frame(monkeypatch, frame)
 
@@ -507,8 +505,7 @@ class TestGenerateRollingHeatmapGif:
         assert (tmp_path / "rolling_change.gif").stat().st_size > 0
 
     def test_large_count_rolling_gif(self, tmp_path):
-        # 47 results / 24 frames: the old floor-division bucketing dumped the
-        # remainder onto the final frame; this just guards it still renders.
+        # 47 results over 24 frames once piled the remainder onto the last frame.
         out = str(tmp_path / "rolling_large.gif")
         info = screenspace.generate_rolling_heatmap_gif(
             self._matches(47), 200, 200, out
@@ -637,8 +634,7 @@ class TestHeatmapSprite:
             self._matches(8), 200, 100, str(tmp_path / "heatmap.gif")
         )
         assert info is not None
-        # Frame count and cell shape come from the animation itself, never from
-        # config, so a stored descriptor can't drift from a later-rendered sheet.
+        # Frame count and cell shape come from the GIF, never config; no drift.
         assert info["frames"] == 8
         assert (info["w"], info["h"]) == (200, 100)
         # The GIF is the only file written.

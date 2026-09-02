@@ -112,78 +112,52 @@ _worksheet: Any = None
 _sheet_context: spreadsheet.SheetContext | None = None
 _sheet_payload_cache: tuple[Any, dict[str, Any]] | None = None
 _sheet_payload_cache_lock = threading.Lock()
-# Drive's spreadsheet listing, cached as (monotonic stamp, metas). One picker
-# flow asks for it three times (list → worksheet dropdown → open-by-name); see
-# _cached_spreadsheet_meta. Cleared when a new Google client authenticates.
+# Drive listing cache: one picker flow reads it three times. Cleared on re-auth.
 _google_sheet_list_cache: tuple[float, list[dict[str, str]]] | None = None
 _google_sheet_list_lock = threading.Lock()
 _GOOGLE_SHEET_LIST_TTL_SEC = 300.0
-# Active spreadsheet metadata, read by /api/status so the Start overlay can
-# pre-select the right tab (Google/Excel) and re-highlight the right item. Only
-# set when opened via the runtime picker; CLI-loaded sheets leave it None.
+# Read by /api/status to pre-select the Start overlay tab. None for CLI-loaded sheets.
 _active_sheet_meta: dict[str, str] | None = None
-# The parsed MindNode document, when the session opened from a mind map instead
-# of (or alongside) a spreadsheet. Mind-map teams run Studio with no sheet at all,
-# so it is an independent source: never cleared by a sheet swap, and read only by
-# Studio's MindNode Intake tab.
+# Independent source, not cleared by sheet swaps; read only by Studio's MindNode Intake tab.
 _mindnode_doc: dict[str, Any] | None = None
 _mindnode_lock = threading.Lock()
-# What this session's recent-projects entry is keyed by (the last descriptor given
-# to `record_project_session`). The Start overlay's "current session" highlight
-# compares against exactly this, so it can't be re-derived from _active_sheet_meta
-# / _mindnode_doc: with both open, only the one opened *last* was recorded.
+# Last descriptor given to record_project_session; the Start overlay's highlight
+# compares against exactly this.
 _active_project_source: dict[str, str] | None = None
 _generated_artifacts: list[dict[str, Any]] = []
-# Index by (cellRow, cellCol, type) for O(1) lookup in /api/generate Phase 1.
-# Mutated under _generated_output_lock together with _generated_artifacts.
+# Keyed (cellRow, cellCol, type); mutated under _generated_output_lock with _generated_artifacts.
 _generated_artifacts_index: dict[tuple[int, int, str], list[dict[str, Any]]] = {}
 _generated_reels: list[dict[str, Any]] = []
-# Bounded LRU: entries are JPEG bytes (tens of KB), so a few hundred is plenty.
-# _MediaCache below adds single-flight semantics, so concurrent identical misses
-# don't each spawn ffmpeg (Flask's dev server serves api_* routes threaded).
+# JPEG bytes, tens of KB each; MediaCache single-flights concurrent misses.
 _THUMBNAIL_CACHE_MAX = 256
-# Card-scrubber assets (opt-in hover preview). Sprite sheets are small JPEGs;
-# audio segments are PCM WAV (~1 MB per short clip), so cap audio far lower.
+# Card-scrubber assets. Audio segments are ~1 MB PCM WAV, so cap far lower.
 _SPRITE_CACHE_MAX = 256
 _AUDIO_CACHE_MAX = 32
-# A second concurrent /api/generate or /api/reel call would clobber the
-# shared cancel event; reject with 409 instead while one is in flight.
+# Shared cancel events; a concurrent second call gets 409 instead of clobbering them.
 _reel_cancel_event = threading.Event()
 _generate_cancel_event = threading.Event()
-# Independent cancel event for /api/generate-intake: the sheet and intake branches
-# run concurrently from one Studio Generate click on separate streams, so Cancel
-# posts to both /api/generate/cancel and /api/generate-intake/cancel.
+# Separate event: sheet and intake streams run concurrently, so Cancel posts to both.
 _intake_cancel_event = threading.Event()
-# Cancel events for the two long-running viewer builds (/api/timeline-viewer
-# re-cuts every clip, /api/gallery extracts frames/GIFs). Both run synchronously in
-# the request thread, but Flask is threaded, so the matching /cancel endpoint can
-# set the event mid-build and the cancel_flag checks short-circuit it.
+# Viewer builds run in the request thread; threaded Flask lets /cancel set these mid-build.
 _timeline_viewer_cancel_event = threading.Event()
 _gallery_cancel_event = threading.Event()
 _busy_lock = threading.Lock()
-# Single-job slots for those builds: each shares one module-level cancel event, so
-# a second concurrent build (a second Studio tab) must be rejected rather than
-# allowed to clobber the other's signal.
+# One cancel event per build, so a second concurrent build (another tab) is rejected.
 _busy_slots: dict[str, bool] = {
     "generate": False,
     "reel": False,
     "timeline_viewer": False,
     "gallery": False,
 }
-# Count of in-flight /api/generate-intake streams. Intake has no single-job
-# slot (it must run alongside /api/generate for mixed queues), but a sheet
-# swap still needs to know whether any intake work is active.
+# Intake has no busy slot (it runs alongside generate); sheet swaps still check this.
 _intake_active = 0
-# Serializes load → mutate → save for the stash manifests so concurrent
-# stash CRUD requests don't drop each other's writes.
+# Serializes stash load → mutate → save across concurrent CRUD requests.
 _stash_lock = threading.Lock()
 # Serializes mutations to in-memory generated lists and quiet manifest saves.
 _generated_output_lock = threading.Lock()
-# Latest progress per in-flight job, exposed by /api/job-status so Studio can
-# re-attach (progress + Cancel) after navigating away mid-build and back.
+# Latest per-job progress for /api/job-status, so Studio can re-attach after navigating away.
 _job_state_lock = threading.Lock()
-# `started_at` is a wall-clock epoch (seconds) stamped when a build begins, so a
-# Studio reattach can show accurate elapsed time after a page reload.
+# started_at is a wall-clock epoch so a reattach shows accurate elapsed time.
 _reel_job_state: dict[str, Any] = {
     "total_clips": 0,
     "clips_done": 0,
@@ -204,8 +178,7 @@ _intake_job_state: dict[str, Any] = {
 }
 
 
-# Cached gspread client + threaded-auth state for the Start overlay's Google
-# Sheets picker. Populated lazily by /api/spreadsheets/google/auth.
+# Google Sheets picker auth state; populated lazily by /api/spreadsheets/google/auth.
 @dataclass
 class _GoogleAuthState:
     client: Any = None
@@ -216,16 +189,10 @@ class _GoogleAuthState:
 
 _google_auth = _GoogleAuthState()
 
-# Set by the boot build when a window-first `-s` launch could not open the
-# requested spreadsheet (no cached Google token, bad name, network failure):
-# ``{"message": ..., "source_type": "google"|"excel"}``. Surfaced on
-# /api/status so the Start overlay — the recovery surface for a sheetless
-# boot — can say why nothing is loaded and land on the failed source's tab;
-# cleared when a sheet opens.
+# Why a `-s` boot loaded no sheet; /api/status surfaces it until a sheet opens.
 _startup_notice: dict[str, str] | None = None
 
-# Snapshot config defaults before any settings file is loaded.
-# Deep-copied so dict-valued defaults are not aliased to live config state.
+# Config defaults before any settings file loads; deep-copied so dict values aren't aliased.
 _settings_defaults: dict[str, Any] = {
     name: copy.deepcopy(getattr(config, name))
     for name in getattr(config, "STUDIO_SETTINGS", {})
@@ -234,8 +201,7 @@ _settings_defaults: dict[str, Any] = {
 _HEX_COLOR_RE = re.compile(r"^#[0-9a-fA-F]{6}$")
 _MARK_KEY_RE = re.compile(r"^[a-z0-9_]+$")
 
-# Hotkey overrides: structural validation only. The action catalog lives in
-# assets/web/hotkeys.js, so unknown ids are stored as-is and never dispatch.
+# Structural validation only; the action catalog lives in assets/web/hotkeys.js, unknown ids never dispatch.
 _HOTKEY_ID_RE = re.compile(r"^[a-z][a-zA-Z0-9]*(\.[a-zA-Z0-9]+)+$")
 _HOTKEY_COMBO_RE = re.compile(
     r"^((Mod|Ctrl|Alt|Shift)\+)*([\x21-\x7E]|[A-Za-z][A-Za-z0-9]+)$"
@@ -293,8 +259,7 @@ def _coerce_mark_categories(value: Any) -> dict[str, dict[str, str]] | None:
     return cleaned
 
 
-# Moved to server_utils.MediaCache (shared with the Composer scrubber routes);
-# the alias keeps the historical `server._MediaCache` name for tests.
+# Alias keeps the `server._MediaCache` name for tests.
 _MediaCache = MediaCache
 
 _thumbnail_cache = _MediaCache(_THUMBNAIL_CACHE_MAX)
@@ -496,9 +461,7 @@ def _override_config(**overrides: Any) -> Iterator[None]:
 
 studio_bp = Blueprint("studio", __name__)
 
-# media_dir_getter resolves per request, not as a snapshot, so /studio/media/<file>
-# keeps serving artifacts after POST /api/dirs moves config.OUTPUT_DIR mid-session.
-# The Overview Reports tab's clip strip plays from here.
+# Resolved per request so /studio/media/ follows POST /api/dirs moving OUTPUT_DIR mid-session.
 utils.register_static_routes(
     studio_bp,
     "studio.html",
@@ -541,15 +504,13 @@ def api_thumbnail(participant: str, start_seconds: str) -> FlaskResponse:
     if _sheet_context is None:
         return err("No spreadsheet loaded", 404)
 
-    # Thumbnails are second-granular: int_only floors "12.5" and max(0, ...) clamps
-    # negatives rather than rejecting, matching the other media routes.
+    # Second-granular: floor fractions and clamp negatives, like the other media routes.
     start_sec = max(0, parse_number_arg(start_seconds, "timestamp", int_only=True))
     sources = _resolve_participant_sources(participant)
     if not sources or not sources[0].is_file():
         return err("Source video not found", 404)
 
-    # Multi-video participant: map the global second into the owning sub-video so
-    # the hover thumbnail comes from the right file at the right local offset.
+    # Multi-video: map the global second into the owning part's local offset.
     cut_sec = start_sec
     video_path = sources[0]
     if len(sources) >= 2:
@@ -796,9 +757,8 @@ def _sheet_common_fields() -> dict[str, Any]:
 @studio_bp.route("/api/sheet")
 def api_sheet() -> FlaskResponse:
     if _sheet_context is None:
-        # A mind-map-only session still has a study and participants, but they ride
-        # their own keys: every consumer reads `participants` as *sheet columns*
-        # paired with `rows`, so filling it would invent a cohort with no rows.
+        # Consumers pair `participants` with `rows` as sheet columns; a mind-map-only
+        # session leaves both empty.
         mn = _mindnode_doc or {}
         return jsonify(
             {
@@ -848,14 +808,10 @@ def api_mindnode() -> FlaskResponse:
     try:
         fresh = mindnode.parse_document(doc["path"])
     except ValueError as exc:
-        # The bundle moved or was corrupted since it was opened. Report it
-        # rather than serving a stale tree the researcher can no longer see.
+        # Bundle moved or corrupted since open; report rather than serve a stale tree.
         return err(str(exc), 404)
     with _mindnode_lock:
-        # Re-check under the lock: the parse above runs with it released (slow, and
-        # re-run per request so an edited map shows new notes), so a close landing
-        # in that window would otherwise be undone here — leaving the map open
-        # server-side while the UI believed it shut.
+        # Re-check under the lock: a close during the unlocked parse must not be undone here.
         if _mindnode_doc is not doc:
             return jsonify(
                 {
@@ -919,8 +875,7 @@ def _save_manifest_quiet() -> None:
     bubble up so they aren't lost silently — those are real bugs we want to
     see, not transient I/O issues.
     """
-    # Snapshot the shared lists before serializing so a concurrent intake or
-    # generate-worker extend can't surface as a partially-saved manifest.
+    # Snapshot under the lock so a concurrent extend can't save a partial manifest.
     with _generated_output_lock:
         artifacts = list(_generated_artifacts)
         reels = list(_generated_reels)
@@ -995,8 +950,7 @@ def _process_intake_item(
     event_ids = item.get("event_ids", [])
     source = item.get("source", "screenspace")
     mark_ids = item.get("mark_ids", [])
-    # A MindNode document can hold several detached trees, each with its own
-    # root title, so an item may name a study of its own.
+    # A MindNode document may hold several trees, so an item can name its own study.
     study = str(item.get("study") or "") or study
 
     video_paths = _resolve_intake_video_paths(participant, source)
@@ -1008,10 +962,7 @@ def _process_intake_item(
     out_path: str | None = None
 
     span_hash = hashlib.md5(f"{participant}_{start}_{end}".encode()).hexdigest()[:8]
-    # Two intake events can cover the same participant span (e.g. distinct
-    # Screenspace events at the same timestamp). Fold source metadata and the
-    # batch index into the artifact id so manifest dedup does not silently
-    # collapse them onto one record.
+    # Fold source metadata and batch index into the id: distinct events can share a span.
     id_basis = "|".join(
         [
             participant,
@@ -1037,10 +988,7 @@ def _process_intake_item(
         files.release_reservation(out_path)
         return {"_ok": False, "_error": "cancelled", "_cancelled": True}
 
-    # Map the global span into the participant's source video(s), stitching across
-    # a recording boundary when multi-video; single-video is a plain cut. Release
-    # the reserved placeholder on any failure (None return *or* exception) so no
-    # 0-byte file is left behind.
+    # Cut the global span (stitched when multi-video); release the placeholder on any failure.
     try:
         source_fields = pipeline.cut_global_range(
             timeline,
@@ -1059,8 +1007,7 @@ def _process_intake_item(
         files.release_reservation(out_path)
         return {"_ok": False, "_error": "ffmpeg failed"}
 
-    # Enforce the size cap on the finished clip (intake has no titlecard wrap, so
-    # this is the only gate). Screenshots/GIFs are never compressed.
+    # Intake has no titlecard wrap, so this is the only size gate. Clips only.
     if output_format == "clip":
         video.enforce_filesize_limit(out_path, cancel_flag=cancel_flag)
 
@@ -1072,8 +1019,7 @@ def _process_intake_item(
     item_label = str(item.get("label") or "").strip()
     description = event_type or default_desc
     if source == "transcript":
-        # Prefer the user's label, then a truncated transcript excerpt,
-        # then the category — so cards aren't all titled "Transcript intake".
+        # Label, then excerpt, then category, so cards aren't all titled "Transcript intake".
         if item_label:
             description = item_label
         elif item_text:
@@ -1089,8 +1035,7 @@ def _process_intake_item(
         "thumbnail": "",
         "study": study,
         "participant": participant,
-        # Sheet-backed intake sources carry no category; a mind map's question
-        # branch is one, so honour it when the item supplies it.
+        # Only mind-map items carry a category (the question branch).
         "category": str(item.get("category") or ""),
         "severity": "",
         "description": description,
@@ -1105,8 +1050,7 @@ def _process_intake_item(
         "_ok": True,
         "_error": "",
     }
-    # sourceVideo + localStart/localEnd (+ parts for a stitched span) drive
-    # regeneration; for single-video they equal the global start/end.
+    # sourceVideo + localStart/localEnd (+ parts) drive regeneration.
     artifact.update(source_fields)
     if source == "transcript":
         import transcripts_server
@@ -1502,10 +1446,8 @@ def _apply_time_overrides(clips: list[Any], overrides: dict[str, Any]) -> None:
     """
     if not overrides:
         return
-    # Folded lookup: the client keys these on the ref it posted, while the clip
-    # carries the sheet header the server resolved it to, and the two only match
-    # case-insensitively (spreadsheet.find_participant_column). An exact-match
-    # lookup would silently drop the user's edited in/out points.
+    # Case-insensitive (see find_participant_column): client keys on its ref, clip
+    # on the resolved header.
     by_key = {str(k).lower(): v for k, v in overrides.items()}
     for clip in clips:
         key = (clip["participant"] + "." + str(clip["cell"].row)).lower()
@@ -1521,8 +1463,7 @@ def _apply_time_overrides(clips: list[Any], overrides: dict[str, Any]) -> None:
                 continue
             if end_sec <= start_sec:
                 continue
-            # Force hours on both ends when either crosses the hour mark: a mixed
-            # M:SS / H:MM:SS pair breaks downstream duration parsing.
+            # Mixed M:SS / H:MM:SS pairs break duration parsing; force hours on both ends.
             needs_hours = start_sec >= 3600 or end_sec >= 3600
             new_times.append(
                 (
@@ -1545,8 +1486,7 @@ def api_generate() -> FlaskResponse:
     cell_strings = data.get("cells", [])
     output_format = data.get("format", "clip")
     overrides: dict[str, Any] = data.get("overrides") or {}
-    # Folded for the same reason _apply_time_overrides folds its lookup: the
-    # client keys on the ref it posted, the clip carries the sheet header.
+    # Folded for the same reason as _apply_time_overrides.
     override_keys = {str(k).lower() for k in overrides}
     titlecards_enabled, titlecard_duration_seconds = _parse_titlecard_request(data)
 
@@ -1578,13 +1518,8 @@ def api_generate() -> FlaskResponse:
         _release_busy("generate")
         return err(str(e), 500)
 
-    # Parse timestamps up front so progress is counted in artifacts (one per
-    # segment) rather than cells — a cell holding "1:20-1:35 4:02-4:20" produces
-    # two files and two queue cards, and the readout must agree with both.
-    # prepare_clip is pure string work (~3 ms for 500 cells) and its pre-parsed
-    # fast path makes the pipeline's later call a no-op; /api/reel does the same.
-    # Per-clip guard keeps a malformed cell failing on its own line inside
-    # _generate_and_persist instead of 500-ing the whole request.
+    # Count progress per segment, not per cell; the pipeline's later prepare_clip
+    # is then a no-op.
     for clip in clips:
         try:
             files.prepare_clip(clip)
@@ -1594,8 +1529,7 @@ def api_generate() -> FlaskResponse:
 
     def stream() -> Any:
         _generate_cancel_event.clear()
-        # Fall back to the cell count if nothing parsed, so the readout still
-        # shows a denominator instead of hiding itself.
+        # Fall back to the cell count so the readout still shows a denominator.
         _reset_generate_job_state(total_artifacts or len(cell_strings))
         cancel_flag = _generate_cancel_event.is_set
         clip_cells: set[str] = set()
@@ -1609,9 +1543,7 @@ def api_generate() -> FlaskResponse:
         existence_cache: dict[str, bool] = {}
         for clip in clips:
             cell_str = clip["participant"] + "." + str(clip["cell"].row)
-            # Folded: cell_str is the *sheet header* the ref resolved to, and the
-            # match is case-insensitive, so the trailing "No clip found" sweep
-            # below must not treat a differently-spelled ref as unresolved.
+            # Lowercased: the trailing "No clip found" sweep matches case-insensitively.
             clip_cells.add(cell_str.lower())
 
             existing = _find_existing_artifacts(
@@ -1620,11 +1552,8 @@ def api_generate() -> FlaskResponse:
                 output_format,
                 existence_cache=existence_cache,
             )
-            # A cached clip is reusable only when its recorded titlecard state
-            # matches the request, so toggling Titlecards (or its duration) takes
-            # effect on the next Generate. An overridden cell is always stale:
-            # artifacts are keyed by cell row/col/format only, so an edited in/out
-            # point would otherwise be reused at the old duration.
+            # Reuse only when the cached titlecard state matches; an overridden cell
+            # is always stale.
             cell_overridden = cell_str.lower() in override_keys
             fresh: list[dict[str, Any]] = []
             stale: list[dict[str, Any]] = []
@@ -1646,9 +1575,8 @@ def api_generate() -> FlaskResponse:
                 (fresh if matches else stale).append(a)
 
             if fresh:
-                # Advance by the cell's segment count, not len(fresh): a
-                # 3-segment cell with 2 cached artifacts still retires 3 queue
-                # cards on the client, and the two counters must stay in step.
+                # Advance by segment count, not len(fresh), to stay in step with the
+                # client's queue cards.
                 _increment_generate_done(len(clip.get("times") or []))
                 yield (
                     json.dumps(
@@ -1663,8 +1591,7 @@ def api_generate() -> FlaskResponse:
                     + "\n"
                 )
             else:
-                # Drop stale records + files so regeneration reuses the same
-                # filename/id and the new record cleanly replaces the old one.
+                # Drop stale records and files so regeneration reuses the same filename/id.
                 if stale:
                     stale_ids = {a.get("id") for a in stale}
                     with _generated_output_lock:
@@ -1683,9 +1610,8 @@ def api_generate() -> FlaskResponse:
                             pass
                 to_generate.append((clip, cell_str))
 
-        # Pass 2: generate in parallel, yielding as each completes. The per-clip
-        # worker self-persists via _extend_generated_artifacts, so results landing
-        # while the client disconnects still reach the manifest.
+        # Pass 2: parallel generate. Each worker self-persists, so results survive a
+        # client disconnect.
         def _generate_and_persist(
             clip: Any,
         ) -> tuple[int, list[dict[str, Any]]]:
@@ -1697,9 +1623,8 @@ def api_generate() -> FlaskResponse:
                 titlecard_duration_seconds=titlecard_duration_seconds,
                 clear_titlecard_cache=False,
             )
-            # A future finishing concurrently with the cancel signal still returns
-            # (generated, artifacts), but the streaming contract forbids appending
-            # those post-cancel — drop the files too, so no orphan media.
+            # Post-cancel results must not be appended; unlink their files so no
+            # orphan media remains.
             if cancel_flag():
                 for a in artifacts:
                     try:
@@ -1715,9 +1640,8 @@ def api_generate() -> FlaskResponse:
 
         if to_generate:
             workers = pipeline._resolve_clip_workers()
-            # Same pipeline.clip / pipeline.pool_wall pair as
-            # pipeline._parallel_map_ordered — CLIP_PARALLEL_WORKERS drives this
-            # pool too, so CLI-only coverage would leave half the knob dark.
+            # Same labels as pipeline._parallel_map_ordered: CLIP_PARALLEL_WORKERS
+            # drives this pool too.
             _worker = profiling.timed("pipeline.clip")(_generate_and_persist)
             if workers >= 2 and len(to_generate) >= 2:
                 with (
@@ -1781,8 +1705,8 @@ def api_generate() -> FlaskResponse:
 
         for cs in cell_strings:
             if str(cs).lower() not in clip_cells:
-                # No clip means no segments, so this ref contributed nothing to
-                # total_artifacts — advancing here would overshoot the total.
+                # Unresolved refs added no segments to total_artifacts; advancing here
+                # would overshoot.
                 yield (
                     json.dumps({"cell": cs, "ok": False, "error": "No clip found"})
                     + "\n"
@@ -1794,10 +1718,8 @@ def api_generate() -> FlaskResponse:
         try:
             yield from stream()
         finally:
-            # Persist + purge the endcard cache even on a mid-stream disconnect,
-            # so artifacts never sit on disk without manifest records and temp
-            # files don't leak. Per-cell process_clips() runs with
-            # clear_titlecard_cache=False, so the purge happens once, here.
+            # Persist and purge the endcard cache even on disconnect; per-cell
+            # process_clips skipped the purge.
             titlecards.clear_endcard_cache()
             _save_manifest_quiet()
             _release_busy("generate")
@@ -1887,9 +1809,8 @@ def api_reel() -> FlaskResponse:
         return err("A reel build is already in progress", 409)
 
     def stream() -> Any:
-        # _stream_process_reel's worker owns the busy slot once control passes to
-        # it; until then every exit path releases, so the slot can't leak when the
-        # route returns without starting work.
+        # The worker owns the busy slot once started; until then every exit path
+        # releases it.
         worker_started = False
         try:
             with _override_config(**highlights_overrides):
@@ -1916,9 +1837,8 @@ def api_reel() -> FlaskResponse:
                     )
                     return
 
-                # Check if an identical reel already exists. compute_reel_id only
-                # hashes cellRow/cellCol/start/end, so the components built here
-                # don't need an accurate sourceVideo — they are throwaway.
+                # Dedup check. compute_reel_id hashes only cell/start/end, so
+                # sourceVideo can be empty here.
                 components: list[dict[str, Any]] = []
                 for clip in clips:
                     files.prepare_clip(clip)
@@ -2069,8 +1989,8 @@ def api_timeline_viewer() -> FlaskResponse:
         if not artifacts:
             return err("No artifacts were generated")
 
-        # Generate intake clips if requested. Accumulate (but don't publish)
-        # alongside the sheet clips so a cancel anywhere below discards them all.
+        # Accumulate intake clips unpublished alongside sheet clips so a later cancel
+        # discards all.
         intake_artifacts: list[dict[str, Any]] = []
         if include_intake and intake_items:
             raw = _generate_intake_clips(
@@ -2082,9 +2002,8 @@ def api_timeline_viewer() -> FlaskResponse:
                     intake_artifacts.append(r)
             artifacts = artifacts + intake_artifacts
 
-        # Cancel gate before any publish. Nothing has entered _generated_artifacts
-        # yet, so discard every clip already written to disk (discard-on-cancel,
-        # like generate) and skip writing the viewer HTML entirely.
+        # Cancel gate before publish: nothing is in _generated_artifacts yet, so
+        # discard the files.
         if _timeline_viewer_cancel_event.is_set():
             _discard_artifact_files(artifacts)
             return jsonify({"ok": False, "cancelled": True})
@@ -2153,9 +2072,7 @@ def api_gallery() -> FlaskResponse:
             return err(f"Source video not found for {participant}", 404)
 
         _gallery_cancel_event.clear()
-        # Multi-video participants form one continuous timeline: capture each part
-        # and shift its timestamps by the part's cumulative start so the gallery
-        # spans the whole recording with global times. Single-video is unchanged.
+        # Multi-video: capture each part and shift its timestamps to the global timeline.
         timeline = video.timeline_or_none([str(p) for p in sources])
         if timeline is None:
             artifacts = video.generate_interval_captures(
@@ -2172,10 +2089,8 @@ def api_gallery() -> FlaskResponse:
             for part_path, dur, cumulative in timeline:
                 if _gallery_cancel_event.is_set():
                     break
-                # Align each part's local grid to the global interval so spacing
-                # stays even across part boundaries; a part whose duration isn't
-                # a multiple of the interval would otherwise shift the next
-                # part's grid off the global cadence.
+                # Align each part's grid to the global interval so spacing stays even
+                # across boundaries.
                 first = (interval - cumulative % interval) % interval
                 local_ts = list(range(first, dur, interval))
                 part_artifacts = video.generate_interval_captures(
@@ -2209,9 +2124,7 @@ def api_gallery() -> FlaskResponse:
             interval=interval,
             bundle=bundle,
         )
-        # Final cancel gate before writing the gallery HTML, closing the window
-        # where capture extraction finished but the user clicks Cancel during
-        # the duration probe / finalize.
+        # Last cancel gate: Cancel may land during the duration probe / finalize.
         if _gallery_cancel_event.is_set():
             _discard_artifact_files(artifacts)
             return jsonify({"ok": False, "cancelled": True})
@@ -2277,8 +2190,7 @@ def api_manifest() -> FlaskResponse:
         artifacts, reels = viewer.load_manifest_both()
         return ok(artifacts=artifacts, reels=reels)
 
-    # Snapshot the shared lists so a worker thread extending mid-export
-    # can't produce a partial/aliased manifest snapshot.
+    # Snapshot under the lock so a concurrent extend can't produce a partial export.
     with _generated_output_lock:
         artifacts = list(_generated_artifacts)
         reels = list(_generated_reels)
@@ -2334,9 +2246,7 @@ def _handle_stash_crud(load_fn: Any, save_fn: Any, id_prefix: str) -> FlaskRespo
     data = request.get_json(silent=True) or {}
     action = data.get("action", "create")
 
-    # Serialize the load → mutate → save cycle so two concurrent stash
-    # POSTs can't both read the same list, both append, and have the
-    # second save overwrite the first.
+    # Serialize load → mutate → save so concurrent POSTs don't overwrite each other.
     with _stash_lock:
         stashes = load_fn()
 
@@ -2457,10 +2367,8 @@ def _apply_settings_payload(data: dict[str, Any]) -> tuple[dict[str, Any], str |
             setattr(config, name, default)
             applied[name] = default
 
-        # Preserve other non-default overrides already on disk: merge the reset
-        # subset (now at defaults) with the current non-default values of
-        # everything else, and let _save_studio_settings drop any keys that
-        # equal their default (including the ones we just reset).
+        # Snapshot every setting; _save_studio_settings drops defaults, keeping other
+        # overrides intact.
         merged = {name: getattr(config, name) for name in config.STUDIO_SETTINGS}
         _save_studio_settings(merged)
         return applied, None
@@ -2474,8 +2382,7 @@ def _apply_settings_payload(data: dict[str, Any]) -> tuple[dict[str, Any], str |
             continue
         new_value = str(settings_data[format_name]).lower()
         current_value = str(getattr(config, format_name, "")).lower()
-        # Only validate when the user is *changing* the value; an unchanged
-        # value already on disk shouldn't block edits to other fields.
+        # Validate only changed values; a stored value shouldn't block edits to other fields.
         if new_value == current_value:
             continue
         if new_value == ".webp" and not video.check_webp_support():
@@ -2518,11 +2425,8 @@ def _apply_settings_payload(data: dict[str, Any]) -> tuple[dict[str, Any], str |
         setattr(config, name, coerced)
         applied[name] = coerced
 
-    # Persist the full current settings state, not just the submitted keys: a
-    # partial PUT (e.g. only the inline titlecard toggle) must not drop other
-    # non-default settings already on disk. Every submitted key is now on
-    # config, so snapshot all of STUDIO_SETTINGS and let _save_studio_settings
-    # drop the ones equal to their default. Mirrors the reset path above.
+    # Snapshot every setting, not just submitted keys, so a partial PUT keeps other
+    # overrides.
     merged = {name: getattr(config, name) for name in config.STUDIO_SETTINGS}
     _save_studio_settings(merged)
     return applied, None
@@ -2533,8 +2437,7 @@ def api_settings_get() -> FlaskResponse:
     return ok(
         settings=_settings_records(),
         path=str(_studio_settings_path()),
-        # `desktop` tells the modal whether to offer the reveal button: a
-        # browser tab can open the path itself, a native window cannot.
+        # `desktop` gates the reveal button: a native window can't open the path itself.
         desktop=utils.GUI_LAUNCH,
     )
 
@@ -2551,11 +2454,8 @@ def api_settings_put() -> FlaskResponse:
 # ── Titlecard / endcard background picker ────────────────────────────────
 _ALLOWED_CARD_EXTS: set[str] = {".png", ".jpg", ".jpeg", ".webp"}
 _MAX_CARD_UPLOAD_BYTES: int = 10 * 1024 * 1024  # 10 MB
-# URL-reserved / unsafe ASCII characters that sanitize_filename leaves intact.
-# Card images are served at /api/titlecards/image/<name>, so a stem containing
-# e.g. '#' would have its tail dropped by the browser as a URL fragment. These
-# are replaced with '_' at upload time; unicode is preserved (only these ASCII
-# characters are touched, matching sanitize_filename's unicode policy).
+# URL-reserved ASCII that sanitize_filename keeps; '#' would truncate
+# /api/titlecards/image/<name>. Replaced with '_' at upload.
 _URL_UNSAFE_CARD_CHARS: str = "#%&+=;@$,!*()[]{}^~` "
 
 
@@ -2592,8 +2492,7 @@ def _coerce_card_image(value: Any, kind: str) -> str | None:
         return value
     if kind == "end" and value == config.CARD_IMAGE_NONE:
         return value
-    # Otherwise it must be a real uploaded file inside the pool: a bare basename
-    # with an allowed extension that exists on disk.
+    # Otherwise a bare basename with an allowed extension that exists in the pool.
     if Path(value).name != value:
         return None
     if Path(value).suffix.lower() not in _ALLOWED_CARD_EXTS:
@@ -2695,8 +2594,8 @@ def api_titlecard_upload() -> FlaskResponse:
     if size > _MAX_CARD_UPLOAD_BYTES:
         return err("File too large (max 10 MB).")
 
-    # sanitize_filename strips the dot from extensions, so clean the stem only,
-    # then replace URL-reserved chars so the served image URL isn't truncated.
+    # sanitize_filename strips extension dots, so clean the stem only; then replace
+    # URL-reserved chars.
     stem = utils.sanitize_filename(Path(filename).stem).strip()
     for ch in _URL_UNSAFE_CARD_CHARS:
         stem = stem.replace(ch, "_")
@@ -2774,9 +2673,8 @@ def api_generate_intake() -> FlaskResponse:
             ok = result.pop("_ok", False)
             error = result.pop("_error", "")
             result.pop("_cancelled", None)
-            # Drop artifacts that finished after cancel was set: don't append
-            # to the manifest and unlink the produced file so cancelled
-            # intake work leaves no orphan media.
+            # Results finishing after cancel are dropped and unlinked so no orphan
+            # media remains.
             if ok and cancel_flag():
                 try:
                     Path(utils.resolve_output_path(result.get("file", ""))).unlink(
@@ -2796,9 +2694,8 @@ def api_generate_intake() -> FlaskResponse:
         _reset_intake_job_state(len(items))
         try:
             workers = pipeline._resolve_clip_workers()
-            # Same pipeline.clip / pipeline.pool_wall pair as
-            # pipeline._parallel_map_ordered — CLIP_PARALLEL_WORKERS drives this
-            # pool too, so CLI-only coverage would leave half the knob dark.
+            # Same labels as pipeline._parallel_map_ordered: CLIP_PARALLEL_WORKERS
+            # drives this pool too.
             _worker = profiling.timed("pipeline.clip")(_process_intake_item)
             if workers >= 2 and len(items) >= 2:
                 with (
@@ -2831,9 +2728,8 @@ def api_generate_intake() -> FlaskResponse:
                         _increment_intake_done()
                         yield _emit(idx, result)
                         if cancel_flag():
-                            # Drain remaining submitted futures so workers can
-                            # observe cancel_flag and terminate ffmpeg, but
-                            # short-circuit yielding once the event is set.
+                            # Cancel pending futures so workers see cancel_flag; stop
+                            # yielding once set.
                             for f in future_to_idx:
                                 f.cancel()
                             break
@@ -2892,15 +2788,14 @@ def api_reel_direct() -> FlaskResponse:
     )
 
     def stream() -> Iterator[str]:
-        # temp_clips is hoisted so cleanup() can purge it after the worker
-        # finishes, even on a mid-build failure.
+        # Hoisted so cleanup() can purge it even after a mid-build failure.
         temp_clips: list[str] = []
 
         def work(emit_event: Callable[[dict[str, Any]], None]) -> None:
             output_dir = Path(utils.get_effective_output_dir())
             clip_paths: list[str] = []
-            # A reel is one deliverable: a segment that fails to cut must abort the
-            # build, not silently shrink it (see pipeline.process_reel).
+            # One failed segment aborts the reel rather than shrinking it (see
+            # pipeline.process_reel).
             failed_segments: list[str] = []
             all_cards_applied = True
             # Throttle concat progress emissions to ~5 Hz, same as before.
@@ -2961,14 +2856,12 @@ def api_reel_direct() -> FlaskResponse:
                     suffix=config.FILEFORMAT,
                     dir=str(output_dir),
                 )
-                # Track for cleanup BEFORE os.close(fd) or any other call
-                # that could raise; otherwise the tmp file is on disk but
-                # not in temp_clips, so cleanup() won't unlink it.
+                # Track before os.close(fd) or anything else that could raise, so
+                # cleanup() finds it.
                 temp_clips.append(tmp_path)
                 os.close(fd)
 
-                # Map the global span into the participant's source video(s)
-                # (stitching across a recording boundary); single-video is a plain cut.
+                # Cut the global span, stitching across parts when multi-video.
                 ok = (
                     pipeline.cut_global_range(
                         timeline,
@@ -2982,10 +2875,8 @@ def api_reel_direct() -> FlaskResponse:
                     is not None
                 )
                 if ok and cards_enabled:
-                    # Wrap at the cut clip's own resolution (probed inside
-                    # wrap_clip_with_cards). A global span may be cut from a
-                    # later source part whose resolution differs from the
-                    # first; trusting the clip avoids a concat mismatch.
+                    # Wrap at the cut clip's resolution; source parts can differ, and
+                    # concat needs a match.
                     wrap_clip: utils.ClipRecord = {
                         "desc": seg.get("event_type") or seg.get("desc") or "",
                     }
@@ -3029,9 +2920,8 @@ def api_reel_direct() -> FlaskResponse:
                 return
 
             if failed_segments:
-                # Abort rather than ship a reel that looks complete but omits
-                # marked moments. The temp cuts are dropped by cleanup(), so a
-                # re-run starts clean once the sources are fixed.
+                # Abort rather than ship a reel missing marked moments; cleanup()
+                # drops the temp cuts.
                 emit_event(
                     {
                         "ok": False,
@@ -3061,8 +2951,8 @@ def api_reel_direct() -> FlaskResponse:
                 concat_ok = False
 
             if concat_ok:
-                # Record the cards that actually landed, not the ones requested —
-                # a lying manifest makes the generate-cache skip this reel forever.
+                # Record the cards that landed, not those requested, or the
+                # generate-cache skips this reel forever.
                 reel_carded = cards_enabled and all_cards_applied
                 direct_title_img, direct_end_img = pipeline._resolve_titlecard_images(
                     reel_carded
@@ -3085,9 +2975,8 @@ def api_reel_direct() -> FlaskResponse:
                 emit_event({"ok": False, "error": "Reel concatenation failed"})
 
         def cleanup() -> None:
-            # Endcard temp files are cached per-process across all wrap calls;
-            # purge them here so per-request cards do not leak between
-            # consecutive reel builds.
+            # Endcard temp files are cached per process; purge so builds don't leak
+            # into each other.
             titlecards.clear_endcard_cache()
             for tmp in temp_clips:
                 try:
@@ -3204,8 +3093,7 @@ def _init_studio_state(worksheet: Any) -> None:
             utils.error_print("Could not load spreadsheet data for Studio.")
             sys.exit(1)
     _set_sheet_context(new_context)
-    # Rebind the shared generated lists under their lock so a streaming
-    # generate/intake append can't run against a half-swapped reference.
+    # Rebind under the lock so a streaming append never sees a half-swapped reference.
     with _generated_output_lock:
         _generated_artifacts, _generated_reels = viewer.load_manifest_both()
         _rebuild_artifact_index()
@@ -3287,9 +3175,8 @@ def _swap_worksheet(new_worksheet: Any) -> None:
             _generated_artifacts = prev_artifacts
             _generated_reels = prev_reels
             _rebuild_artifact_index()
-        # Best-effort: re-pin the sister blueprints to the restored state.
-        # If these themselves throw, swallow — the studio state is already
-        # consistent and the original exception is what we want to surface.
+        # Best-effort re-pin of sister blueprints; swallow so the original exception
+        # surfaces.
         try:
             screenspace_server._init_screenspace_state(
                 sheet_context=_sheet_context,
@@ -3591,8 +3478,7 @@ def _profile_request_end(response):
     """
     t0 = getattr(g, "_prof_t0", None)
     if t0 is not None and request.url_rule is not None:
-        # content_length is the header, never a body walk: streamed bodies have
-        # none here (stream_span counts those), file sends already know theirs.
+        # content_length is the header only; streamed bodies are counted by stream_span.
         profiling.add(
             f"route {request.url_rule.rule}",
             time.perf_counter() - t0,
@@ -3650,9 +3536,7 @@ def _init_combined_state(
     import workflows_server
 
     _init_studio_state(worksheet)
-    # Seed the meta + recent-projects rail for CLI launches that already
-    # have a worksheet — the runtime /api/spreadsheets/open path handles
-    # both of these itself.
+    # CLI launches seed the meta and recents here; /api/spreadsheets/open does it itself.
     global _active_sheet_meta
     _active_sheet_meta = _derive_sheet_meta(worksheet)
     # Before the sibling initialisers below, which resolve participants.
@@ -3682,9 +3566,8 @@ def _init_combined_state(
         sheet_context=_sheet_context,
     )
 
-    # The report thinking agent reads sheet observations and transcript marks,
-    # both of which live in other modules' process state — inject them (import
-    # cycles rule out direct imports from thinking_agents).
+    # Inject the report agent's sheet/marks getters; import cycles rule out direct
+    # imports.
     import thinking_agents
 
     thinking_agents.configure(
@@ -3692,9 +3575,8 @@ def _init_combined_state(
         participant_marks_getter=transcripts_server.marks_for_participant,
     )
 
-    # Last, so an armed trigger firing on the daemon's immediate first poll
-    # can't start a workflow run against half-initialized sibling state (or a
-    # report agent with the getters above still unset).
+    # Last: an armed trigger's first poll must not run against half-initialized
+    # sibling state.
     workflows_server._start_watch_thread()
 
 
@@ -3716,9 +3598,8 @@ def build_combined_app(
     import workflows_server
 
     combined = Flask(__name__, static_folder=None)
-    # Preserve insertion order in JSON responses. Flask defaults to sorting object
-    # keys alphabetically, which would clobber manifest-ordered data such as the
-    # region list (drag-to-reorder relies on GET /api/regions echoing manifest order).
+    # Keep insertion order: drag-to-reorder relies on GET /api/regions echoing
+    # manifest order.
     assert isinstance(combined.json, DefaultJSONProvider)  # Flask's stock provider
     combined.json.sort_keys = False
 
@@ -3755,11 +3636,8 @@ def build_combined_app(
         snap = profiling.snapshot()
         if request.args.get("reset") == "1":
             profiling.reset()
-        # peak_rss rides alongside the label map rather than inside it: it is not
-        # a label (no seconds/count), it is monotonic, and ?reset=1 cannot clear
-        # it. The knobs it exists for (SCREENSPACE_OCR_POOL_SIZE,
-        # WORKFLOWS_BATCH_WORKERS) are live-server knobs, so it has to be
-        # reachable here and not only from the atexit report.
+        # peak_rss is not a label (monotonic, unaffected by ?reset=1); live-server
+        # knobs need it here.
         return ok(
             profile=snap,
             peak_rss_mb=profiling.peak_rss_mb(),
@@ -3975,11 +3853,8 @@ def build_combined_app(
         if _google_auth.client is None:
             import cli as _cli
 
-            # The searched paths and the setup link ride along on the
-            # unauthenticated response only: they answer "what is
-            # credentials.json and where does it go", which is the one question
-            # the overlay could never answer. cli already computes the list —
-            # it just had nowhere to go but a stdout no windowed launch has.
+            # Searched paths and setup link ride the unauthenticated response; windowed
+            # launches have no stdout.
             return ok(
                 authenticated=False,
                 auth_in_flight=_google_auth.in_flight,
@@ -4001,8 +3876,8 @@ def build_combined_app(
                 auth_error=str(exc),
                 sheets=[],
             )
-        # id stays the name so the open-by-name path is unchanged; modifiedTime
-        # (Drive ISO-8601) powers the "Edited …" sub-line in the picker.
+        # id stays the name for open-by-name; modifiedTime (Drive ISO-8601) feeds the
+        # "Edited …" sub-line.
         return ok(
             authenticated=True,
             auth_in_flight=False,
@@ -4043,8 +3918,7 @@ def build_combined_app(
                     return err("Not authenticated with Google.")
                 import app as _app
 
-                # A URL resolves without a Drive listing (see 35a7a606); only
-                # name lookups need the cached doc list handed down.
+                # A URL needs no Drive listing (see 35a7a606); only name lookups do.
                 doc_list = (
                     None
                     if id_or_path.startswith(("http://", "https://"))
@@ -4107,9 +3981,8 @@ def build_combined_app(
         participants = spreadsheet.get_participant_list(
             ctx.header_row, ctx.id_cell, ctx.num_participants
         )
-        # The sheet's own Filename row only: the user overrides belong to the
-        # *previewed* identity, which is usually not the open one, so they are
-        # read here rather than taken from config.FILENAME_OVERRIDES.
+        # Sheet Filename row only; user overrides belong to the previewed identity,
+        # not config.FILENAME_OVERRIDES.
         sheet_overrides = spreadsheet.participant_filename_overrides(ctx, {})
         loaded_worksheet = getattr(ws, "title", "") or (worksheet or "")
         user_overrides = start_settings.filename_overrides(
@@ -4163,10 +4036,8 @@ def build_combined_app(
         user_overrides = start_settings.set_filename_override(
             type_, id_or_path, worksheet, participant, filename
         )
-        # If this is the source the session already has open, the change has to
-        # take effect without reopening it — including in the two blueprints
-        # that cache their participant list, hence re-seeding rather than
-        # assigning the map here.
+        # If this source is open, re-seed so the blueprints' cached participant lists
+        # pick it up.
         active = _active_project_source
         if (
             active
@@ -4181,9 +4052,8 @@ def build_combined_app(
             if input_dir
             else utils.get_effective_input_dir()
         )
-        # Only this participant's row is recomputed. The datalist the client
-        # holds may now list a file this row claims; a suggestion list that is
-        # one entry stale is not worth a second full preview read.
+        # Recompute this participant's row only; a one-entry-stale datalist isn't
+        # worth a full preview read.
         rows, _unmatched = _preview_source_rows(
             study,
             [participant],
@@ -4209,10 +4079,8 @@ def build_combined_app(
 
                 client = _cli.authenticate_google()
                 if client is None:
-                    # "check credentials.json" is unhelpful when there is no
-                    # such file to check — that is a setup step the user has
-                    # not done yet, not a broken file. The overlay expands on
-                    # whichever of the two this is.
+                    # Missing credentials.json is a setup step, not a broken file; the
+                    # overlay expands on each.
                     _google_auth.error = (
                         "No credentials.json found."
                         if _cli.resolve_credentials_path() is None
@@ -4243,8 +4111,7 @@ def build_combined_app(
         worksheet = (data.get("worksheet") or "").strip() or None
         if type_ not in ("google", "excel", "mindnode") or not id_or_path:
             return err("Required: type ('google'|'excel'|'mindnode') and id_or_path")
-        # Absent → None → record_project_session keeps any stored name. Only the
-        # Start overlay sends it; Studio's runtime sheet switch never does.
+        # None keeps any stored name; only the Start overlay sends project_name.
         project_name = data.get("project_name")
         if project_name is not None and not isinstance(project_name, str):
             return err("project_name must be a string")
@@ -4270,8 +4137,8 @@ def build_combined_app(
         if new_ws is None:
             return err("Could not open spreadsheet", 404)
 
-        # Record the worksheet actually loaded (title after auto-pick fallback)
-        # so recent-projects can restore the exact tab, not just the request.
+        # Record the worksheet actually loaded (after auto-pick) so recents restore
+        # the exact tab.
         loaded_worksheet = getattr(new_ws, "title", "") or (worksheet or "")
         source = {
             "type": type_,
@@ -4279,9 +4146,8 @@ def build_combined_app(
             "label": label,
             "worksheet": loaded_worksheet,
         }
-        # Before the swap: the blueprint re-inits it runs resolve participants,
-        # and they must already see this sheet's overrides. Restored with the
-        # rest of the state if the swap fails.
+        # Seed before the swap: blueprint re-inits resolve participants. Restored if
+        # the swap fails.
         prev_overrides = config.FILENAME_OVERRIDES
         _seed_filename_overrides(source)
         try:
@@ -4315,8 +4181,7 @@ def build_combined_app(
         global _active_sheet_meta, _mindnode_doc, _active_project_source
         if _generation_busy():
             return err("Generation is in progress — wait for it to finish.", 409)
-        # A mind map is an independent source, so closing "the spreadsheet" from
-        # the Start overlay must drop whichever one is actually open.
+        # A mind map is an independent source; close whichever the overlay actually means.
         if (request.get_json(silent=True) or {}).get("type") == "mindnode":
             with _mindnode_lock:
                 _mindnode_doc = None
@@ -4401,17 +4266,14 @@ def build_combined_app(
 
     @combined.route("/api/licenses")
     def api_licenses() -> Response:
-        # The SUMMARY table only — the Start overlay's About tab lists what is
-        # bundled and links out for the full texts. `--licenses` still prints
-        # the whole ~100 KB notice.
+        # SUMMARY table only; `--licenses` prints the whole ~100 KB notice.
         import licenses
 
         return ok(components=licenses.load_components())
 
     @combined.route("/api/start-settings", methods=["GET"])
     def api_start_settings_get() -> Response:
-        # `desktop` tells the overlay whether to offer the window-rect toggle:
-        # in a browser tab there is no window for clipgen to remember.
+        # `desktop` gates the window-rect toggle: a browser tab has no window to remember.
         return ok(
             settings=start_settings.load_start_settings(),
             desktop=utils.GUI_LAUNCH,
@@ -4509,8 +4371,7 @@ def build_combined_app(
         methods=["DELETE"],
     )
 
-    # The settings modal opens from every page, so its model delete and
-    # download calls hit the combined root; the rules live on transcripts_bp.
+    # Every page opens the settings modal, so mount at root; rules live on transcripts_bp.
     combined.add_url_rule(
         "/api/models/llm/<name>",
         "combined_llm_delete",
@@ -4550,12 +4411,10 @@ def build_combined_app(
 
         # A filesystem scan, so the catalog answers even with the server down.
         raw = llm_client.list_models()
-        # Models the router already refused once. Discovery cannot predict this
-        # — an Ollama-converted GGUF looks fine until llama.cpp tries to read
-        # it — so the picker reports what the last attempt learned.
+        # Models the router already refused; an Ollama-converted GGUF looks fine until
+        # llama.cpp reads it.
         failures = llm_client.load_failures()
-        # label/model_url are empty for anything outside the catalog: a
-        # hand-dropped GGUF has no repo we can name or link to.
+        # Empty outside the catalog: a hand-dropped GGUF has no repo to link.
         llm_models = [
             {
                 "name": m["name"],
@@ -4581,8 +4440,7 @@ def build_combined_app(
             for m in llm_client.SUGGESTED_MODELS
         ]
 
-        # Per thinking-agent model + install status, so the Transcripts UI can
-        # confirm a download before running an agent against a missing model.
+        # Per-agent model + install status, so the UI can confirm downloads before running.
         llm_agents = []
         for a in thinking_agents.AGENTS:
             model = thinking_agents.resolve_model(a)
@@ -4601,12 +4459,8 @@ def build_combined_app(
             whisper={"models": whisper_models},
             llm={
                 "available": llm_client.is_available(),
-                # "not installed" and "installed but not running" need opposite
-                # advice, and `available` alone cannot tell them apart — the
-                # pages used to tell a user who had never installed the runtime
-                # to "start it". install_hint carries the platform-specific
-                # commands. Frozen builds bundle llama-server, so installed is
-                # effectively always True there.
+                # "not installed" and "not running" need opposite advice; `available`
+                # alone can't tell them apart.
                 "installed": llm_client.is_installed(),
                 "install_hint": llm_client.install_guidance_lines(),
                 "models": llm_models,
@@ -4619,10 +4473,8 @@ def build_combined_app(
     return combined
 
 
-# Successful (GET + 2xx) hits on these exact paths are suppressed from the
-# Werkzeug access log because Studio polls them every 5–10s and the noise
-# drowns out real activity. 4xx/5xx still surface, so a silently-failing
-# poll endpoint won't be hidden. With VERBOSITY >= VERBOSE everything logs.
+# Polled every 5–10s, so successful GETs skip the access log; errors and VERBOSE
+# still log.
 _QUIET_POLL_PATHS: frozenset[str] = frozenset(
     {
         "/screenspace/api/tasks",
@@ -4671,9 +4523,8 @@ class LiveServer:
     ready: threading.Event  # set once the build thread finished (success or not)
 
 
-# Boot narration, keyed by phase id. The boot page renders `message` verbatim
-# (no Python↔JS constant mirroring), and the same strings are echoed to the
-# console so a terminal launch narrates the cold start too.
+# Boot narration by phase id; the boot page renders `message` verbatim, the
+# console echoes it.
 _BOOT_MESSAGES = {
     "starting": "Starting clipgen…",
     "vision_libs": "Loading computer-vision libraries…",
@@ -4742,9 +4593,8 @@ def _make_boot_dispatcher(boot_state: dict[str, Any]) -> Callable:
         path = environ.get("PATH_INFO", "")
         if path == "/api/boot-status":
             if not boot_state.get("first_poll_seen"):
-                # First poll proves the boot page's JS is executing — i.e. the
-                # window has painted content. One-shot; races at worst record
-                # two marks a few ms apart.
+                # First poll proves the boot page painted. One-shot; a race records two
+                # marks.
                 boot_state["first_poll_seen"] = True
                 profiling.mark("startup.boot_page_alive")
             body = json.dumps(
@@ -4758,15 +4608,13 @@ def _make_boot_dispatcher(boot_state: dict[str, Any]) -> Callable:
             return _boot_wsgi_response(
                 start_response, "200 OK", "application/json", body
             )
-        # Single read → the swap is atomic per request; a request that read the
-        # boot handler finishes against it harmlessly.
+        # Single read makes the swap atomic per request.
         app = boot_state["app"]
         if app is not None:
             return app(environ, start_response)
         if "/api/" in path:
-            # Stale tabs and satellites poll during boot; the standard envelope
-            # lets their createPoller loops degrade quietly instead of parsing
-            # HTML as JSON.
+            # Stale tabs poll during boot; the standard envelope lets createPoller
+            # degrade quietly.
             body = json.dumps({"ok": False, "error": "Server is starting up"}).encode(
                 "utf-8"
             )
@@ -4790,10 +4638,7 @@ def _port_available(port: int) -> bool:
     ``sys.exit(1)``) off the console in the ordinary second-instance case.
     """
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
-        # Match werkzeug's bind semantics (HTTPServer sets allow_reuse_address):
-        # without SO_REUSEADDR the probe reports a port still draining TIME_WAIT
-        # connections as taken, and a quick restart silently relocates off 8089
-        # even though the real bind would have succeeded.
+        # Match werkzeug's SO_REUSEADDR bind, or a TIME_WAIT port reads as taken.
         probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         try:
             probe.bind(("127.0.0.1", port))
@@ -4836,17 +4681,11 @@ def serve_combined_app(
     continues sheetless and *notice* lands in ``_startup_notice`` — the Start
     overlay, not a dead boot-error page, is the recovery surface.
     """
-    # The web server has no interactive console: every request/run/background
-    # task executes on a Flask/daemon thread with no attached stdin. Force
-    # non-interactive resolution so a missing source video (or any pipeline
-    # prompt) is skipped-and-reported instead of blocking the thread forever on
-    # ``input()`` — this previously hung Studio generate and watch-dir-triggered
-    # workflow runs alike. Set synchronously: requests can arrive before the
-    # build thread runs.
+    # No stdin on Flask/daemon threads: pipeline prompts must skip-and-report, never
+    # block on input(). Set synchronously.
     utils.NO_INPUT_MODE = True
 
-    # A fresh serve must not inherit a prior serve's notice (tests spin up
-    # several servers per process).
+    # A fresh serve must not inherit a prior notice (tests serve several per process).
     global _startup_notice
     _startup_notice = None
 
@@ -4863,8 +4702,8 @@ def serve_combined_app(
     # Not `port or ...`: 0 is a meaningful value here (bind an ephemeral port).
     requested = port if port is not None else config.SERVER_PORT
     if requested and not _port_available(requested):
-        # Usually a second clipgen instance already holding the port. Fall back
-        # to an ephemeral one rather than refusing to start at all.
+        # Usually another clipgen instance; fall back to an ephemeral port rather
+        # than refusing.
         utils.warning_print(
             f"Port {requested} is already in use — starting on a free port instead."
         )
@@ -4878,9 +4717,8 @@ def serve_combined_app(
             request_handler=QuietWSGIRequestHandler,
         )
     except (OSError, SystemExit):
-        # Belt and braces for the race between the probe above and this bind.
-        # werkzeug turns EADDRINUSE into sys.exit(1), so SystemExit — which is a
-        # BaseException — has to be caught explicitly alongside OSError.
+        # Probe/bind race. werkzeug turns EADDRINUSE into sys.exit(1), so catch
+        # SystemExit too.
         if requested == 0:
             raise
         srv = make_server(
@@ -4891,12 +4729,10 @@ def serve_combined_app(
             request_handler=QuietWSGIRequestHandler,
         )
 
-    # `threaded=True` guarantees this, but make_server's return type is the base
-    # class and only the ThreadingMixIn subclass has block_on_close.
+    # `threaded=True` guarantees this; make_server's return type is the base class.
     assert isinstance(srv, ThreadedWSGIServer)
-    # socketserver defaults block_on_close to True, so server_close() joins every
-    # tracked connection thread. A single open SSE stream at teardown would hang
-    # shutdown forever — the nastiest failure mode in this path.
+    # Otherwise server_close() joins every connection thread, and one open SSE
+    # stream hangs shutdown forever.
     srv.block_on_close = False
 
     thread = threading.Thread(
@@ -4921,17 +4757,14 @@ def serve_combined_app(
 
     def build() -> None:
         try:
-            # Preload first, under the stderr suppressor, before the blueprint
-            # imports below pull cv2 themselves — see preload_vision_libs_quietly
-            # for why order matters.
+            # Preload before the blueprint imports pull cv2; see
+            # preload_vision_libs_quietly for the ordering.
             utils.preload_vision_libs_quietly(
                 on_phase=lambda lib: set_phase("vision_libs")
             )
             set_phase("workspace")
-            # Reclaim orphaned scratch files (atomic-write .tmp siblings, reel
-            # temp-clips) a prior hard kill may have left in the output dir.
-            # Must stay before the build: it unlinks *.json.tmp regardless of
-            # age, and build_combined_app starts workers that atomic-write.
+            # Must precede the build: it unlinks *.json.tmp regardless of age, and
+            # workers atomic-write.
             utils.sweep_stale_temp_artifacts()
             client = gspread_client
             if client is None and gspread_client_factory is not None:
@@ -4956,24 +4789,19 @@ def serve_combined_app(
             boot_state["ready"] = True
             utils.info_print(f"clipgen ready in {time.monotonic() - started:.1f}s")
             if config.PROFILING:
-                # A live desktop session should not have to exit (atexit
-                # report) to see the startup attribution.
+                # A live desktop session shouldn't need to exit to see startup attribution.
                 profiling.report_startup()
             if _google_auth.client is not None:
-                # Warm the 300s-TTL Drive listing cache so the auto-opened
-                # Start overlay's Google panel answers instantly. Not an extra
-                # API call in the common flow: the overlay would issue the
-                # same files.list moments later, and the single-flight cache
-                # dedupes the two.
+                # Warm the Drive listing cache; the overlay's own files.list moments
+                # later dedupes via single-flight.
                 threading.Thread(
                     target=_warm_spreadsheet_meta_cache,
                     daemon=True,
                     name="clipgen-drive-warm",
                 ).start()
         except BaseException as exc:
-            # BaseException on purpose: _init_studio_state exits via sys.exit(1)
-            # on a bad worksheet, and a SystemExit swallowed by a daemon thread
-            # would leave the boot page spinning forever.
+            # BaseException on purpose: _init_studio_state calls sys.exit(1), and a
+            # swallowed SystemExit spins the boot page forever.
             boot_state["error"] = f"{type(exc).__name__}: {exc}"
             utils.error_print(
                 "clipgen failed to start.",
@@ -5014,18 +4842,14 @@ def stop_combined_app(live: LiveServer) -> None:
     live.srv.server_close()
     live.thread.join(timeout=10)
 
-    # A close during boot: give an almost-finished build a moment to settle,
-    # then skip the worker teardown if the app never got installed — the
-    # blueprint modules were never imported, there are no workers to stop, and
-    # importing screenspace_server cold just to find None would itself cost
-    # seconds. A build still in flight is a daemon thread; it dies with the
-    # process, which is where every mid-boot close leads anyway.
+    # Mid-boot close: let a near-finished build settle, else skip teardown; no
+    # workers exist yet.
     live.ready.wait(timeout=1)
     if not live.boot.get("ready"):
         return
 
-    # Imported lazily for the same reason build_combined_app does: keeping cv2
-    # and onnxruntime off the import path of callers that never serve Screenspace.
+    # Lazy for the same reason as build_combined_app: keep cv2/onnxruntime off
+    # unrelated import paths.
     import screenspace_server
     import transcripts_server
     import workflows_server
@@ -5077,8 +4901,7 @@ def start_combined_server(
     utils.info_print(f"clipgen server running at {live.origin}")
     webbrowser.open(live.url)
     try:
-        # Join in slices rather than blocking forever: on Windows a bare join
-        # swallows Ctrl+C until the thread exits.
+        # Join in slices: on Windows a bare join swallows Ctrl+C.
         while live.thread.is_alive():
             live.thread.join(timeout=1)
     except KeyboardInterrupt:

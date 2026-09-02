@@ -20,8 +20,7 @@ TASK_STATUS_FAILED = "failed"
 TASK_STATUS_CANCELLED = "cancelled"
 TASK_STATUS_PAUSED = "paused"
 
-# Task parameter keys carrying binary payloads (base64 frames/templates) that
-# must never reach the manifest on disk or JSON API responses.
+# Binary (base64) parameter keys; never written to the manifest or JSON responses.
 TASK_BINARY_KEYS = (
     "reference_frame",
     "template_image",
@@ -48,8 +47,7 @@ def strip_task_param_binaries(params: dict[str, Any]) -> dict[str, Any]:
     return params
 
 
-# OpenCV-style HSV hue buckets (h in 0-179, wraparound at 180) for color-task
-# names. Each entry is (upper_bound_exclusive, name); red owns both ends.
+# OpenCV hue buckets (0-179) as (upper_bound_exclusive, name); red owns both ends.
 _HUE_BUCKETS = [
     (10, "red"),
     (22, "orange"),
@@ -325,8 +323,7 @@ def generate_events_from_results(
     if task_type == "timelapse":
         return []
     if task_type == "attention":
-        # Events come from the shift-only on_result stream; this guards the
-        # regeneration paths that could hand over the full per-sample list.
+        # Guards regeneration paths that may pass the full per-sample list.
         raw_results = [r for r in raw_results if r.get("shift")]
     events: list[dict[str, Any]] = []
     for r in raw_results:
@@ -365,8 +362,8 @@ def generate_events_from_results(
             metadata["peak_value"] = r.get("peak_value", 0.0)
         elif task_type == "boundary":
             metadata["distance"] = r.get("distance", 0.0)
-            # Scene/hybrid metrics emit the period each boundary opens (absent for
-            # phash), so Studio/Viewer can render segments instead of bare ticks.
+            # Scene/hybrid boundaries carry a period (phash does not) so viewers
+            # render segments.
             if "period_start" in r:
                 metadata["period_start"] = r.get("period_start")
             if "period_end" in r:

@@ -21,24 +21,16 @@ import profiling
 import utils
 from workflows_catalog import ADAPTERS, NODE_TYPES, NodeContext
 
-# ``WorkflowRunner`` runs one blueprint on a daemon thread (spawned by the
-# server), calling executors directly with the uniform ``NodeContext`` contract so
-# a cross-domain DAG gets end-to-end progress + cancellation without routing
-# through the per-domain worker queues. Execution is strictly sequential —
-# Whisper/LLM are single-resource — though intra-node pools still apply.
+# ``WorkflowRunner`` calls executors directly, bypassing the per-domain worker
+# queues. Sequential: Whisper/LLM are single-resource.
 
-# Run + per-node status constants. Deliberately duplicated from
-# screenspace_manifest's TASK_STATUS_* (and transcripts' status strings): the only
-# viable import direction would drag screenspace_tools' top-level cv2 into the
-# workflows import chain, and a shared module for five strings fails the repo's
-# minimalism bar. Keep in sync by eye.
+# Duplicates screenspace_manifest's TASK_STATUS_* on purpose: importing it would
+# pull in cv2. Sync by eye.
 RUN_STATUS_QUEUED = "queued"
 RUN_STATUS_RUNNING = "running"
 RUN_STATUS_COMPLETED = "completed"
-# Every node ran, but at least one produced a result we know is incomplete (an
-# input that failed to coerce, or a result sidecar that could not be written).
-# Distinct from COMPLETED so the run history can't show green over lost data,
-# and distinct from FAILED because the outputs that did land are usable.
+# Every node ran, but some result is known incomplete (coercion failed, sidecar
+# unwritten).
 RUN_STATUS_DEGRADED = "degraded"
 RUN_STATUS_FAILED = "failed"
 RUN_STATUS_CANCELLED = "cancelled"
@@ -50,16 +42,12 @@ NODE_STATUS_FAILED = "failed"
 NODE_STATUS_DEGRADED = "degraded"
 NODE_STATUS_SKIPPED = "skipped"
 
-# Canvas-only sticky-note pseudo-node (frontend-created, not in NODE_TYPES).
-# Notes live in blueprint["nodes"] so they ride save/undo/copy/import for free;
-# the runner filters them out so they never execute or appear in run snapshots.
+# Frontend-only sticky note, absent from NODE_TYPES; lives in blueprint nodes,
+# filtered before running.
 NOTE_NODE_TYPE = "note"
 
-# Auto-run trigger types: a new video landing, or a transcript / Screenspace
-# scan completing, fires an armed blueprint for that participant. Served through
-# /api/catalog so the frontend picker never duplicates the list;
-# workflows_server's watcher polls each type's source (input dir, transcripts
-# manifest, screenspace manifest) only while a blueprint of that type is armed.
+# Served via /api/catalog so the frontend never duplicates the list; watcher
+# polls only armed types.
 TRIGGER_TYPES: list[dict[str, str]] = [
     {"id": "new_video", "label": "New video lands"},
     {"id": "transcript_complete", "label": "Transcript completes"},
@@ -93,10 +81,8 @@ def topo_order(nodes: list[dict[str, Any]], edges: list[dict[str, Any]]) -> list
     indeg: dict[str, int] = {nid: 0 for nid in ids}
     for edge in edges:
         src, dst = edge.get("from"), edge.get("to")
-        # A wire missing either endpoint (or carrying a non-string one) is
-        # malformed, not merely stale. `in id_set` below already excluded these
-        # incidentally — None is never a node id — but it reads as a membership
-        # test and ty can't use it to narrow `.get()`'s Optional.
+        # Malformed wire, not stale. The isinstance check also narrows the Optional
+        # for ty.
         if not isinstance(src, str) or not isinstance(dst, str):
             continue
         if src in id_set and dst in id_set:
@@ -204,13 +190,10 @@ def _node_result_summary(result: Any) -> dict[str, Any]:
 
 # ---- Per-node result sidecars ----------------------------------------------
 #
-# The snapshot ships only counts/pointers; the *full* inspectable result is
-# written to ``<output_dir>/workflow_runs/<run_id>/<node_id>.json`` so the
-# run-history UI can lazily fetch and render it after the runner is evicted.
+# Full results land in ``workflow_runs/<run_id>/<node_id>.json``; snapshots carry
+# only pointers.
 
-# Output port types the run-history UI renders on row-expand. Plumbing types
-# (video/region/timeRange handles, control) are persisted for resume (below)
-# but hidden from the inspector.
+# Port types the run-history inspector renders; plumbing types stay hidden.
 _INSPECTABLE_PORT_TYPES = frozenset(
     {
         "artifacts",
@@ -226,10 +209,8 @@ _INSPECTABLE_PORT_TYPES = frozenset(
     }
 )
 
-# Output port types persisted in the sidecar — everything JSON-safe, so a resume
-# (``compute_resume_plan``) can reload a completed node's outputs verbatim. Only
-# ``clipRecords`` is excluded: its records carry gspread ``Cell`` objects that
-# don't survive JSON, so its producers always re-run (cheap — one Sheets read).
+# JSON-safe port types persisted for resume. ``clipRecords`` is excluded: gspread
+# ``Cell`` objects don't serialize.
 _SIDECAR_PORT_TYPES = _INSPECTABLE_PORT_TYPES | frozenset(
     {
         "transcript",
@@ -341,9 +322,8 @@ def write_node_sidecar(
         return "failed"
 
 
-# Collection nodes that pass an events value's ``raw_results`` through
-# unchanged (see ``_COLLECTION_KINDS["events"]["preserve"]`` / merge's concat).
-# The resume planner walks heatmap ancestry through these.
+# Collection nodes that pass ``raw_results`` through; the resume planner walks
+# heatmap ancestry through them.
 _RAW_RESULTS_PRESERVING = frozenset(
     {
         "filter_events",
@@ -404,8 +384,7 @@ def compute_resume_plan(
         declared = (NODE_TYPES.get(str(n.get("type", ""))) or {}).get("outputs", [])
         stored = {k: v for k, v in payload.items() if k != "__type__"}
         if not declared or any(p["name"] not in stored for p in declared):
-            # Some output port wasn't persisted (non-JSON-safe type, or the
-            # executor omitted it) — downstream would see None; re-run instead.
+            # A missing port would hand downstream None; re-run instead.
             rerun.add(nid)
             continue
         seeds[nid] = stored
@@ -418,8 +397,7 @@ def compute_resume_plan(
                     rerun.add(child)
                     stack.append(child)
 
-    # Fixpoint: descendant closure and the heatmap raw_results rule feed each
-    # other (a forced ancestor invalidates its own seeded descendants).
+    # Fixpoint: descendant closure and the heatmap raw_results rule feed each other.
     while True:
         before = len(rerun)
         _close_under_descendants()
@@ -430,10 +408,8 @@ def compute_resume_plan(
             visited: set[str] = set()
             while stack:
                 pid = stack.pop()
-                # Track visits separately from the rerun set: an ancestor that
-                # is already re-running for its own reasons must still be
-                # traversed *through*, or the walk never reaches the events
-                # producer behind it.
+                # Visited is separate from rerun: already-rerunning ancestors must
+                # still be walked through.
                 if pid in visited:
                     continue
                 visited.add(pid)
@@ -475,30 +451,24 @@ class WorkflowRunner:
     ) -> None:
         self.run_id = run_id
         self.blueprint_id = str(blueprint.get("id", "") or "")
-        # Sample-window test run: >0 bounds every unwired detector timeRange to
-        # the video's first N seconds, so a "does this detector fire?" check
-        # doesn't cost a full-video scan. Never touches a wired timeRange.
+        # >0 bounds every unwired detector timeRange to the first N seconds; wired
+        # ranges untouched.
         self.sample_window = max(0.0, float(sample_window or 0.0))
-        # Partial run: when set, only this node and its transitive ancestors
-        # execute; the rest are marked skipped. Empty → run the whole graph.
+        # Partial run: only this node and its ancestors execute; empty runs
+        # everything.
         self.target_node_id = target_node_id
-        # Pre-seeded results: {node_id: result} for nodes whose output is already
-        # known — participant-independent sources a batch coordinator computed
-        # once, or completed nodes reloaded from a prior run's sidecars on resume.
-        # A seeded node is stored as if it ran, skipping its executor.
+        # {node_id: result} known up front (batch precompute or resume); seeded
+        # nodes skip their executor.
         self._seed_results = seed_results or {}
         self._seed_note = seed_note
-        # Batch identity: empty for a normal single run; a child run carries its
-        # participant + parent batch id so the snapshot can be grouped.
+        # Batch identity; empty for a single run, set on child runs for grouping.
         self.participant = participant
         self.batch_id = batch_id
-        # True when the watcher launched this run (surfaced as a badge in the run
-        # history); ``trigger_type`` records which trigger fired it.
+        # Set when the watcher launched this run; ``trigger_type`` names the trigger.
         self.triggered = triggered
         self.trigger_type = trigger_type
-        # Sticky notes are canvas annotations, not executable nodes — drop them
-        # before node_states is built so they never run, fail as "No executor",
-        # or pad the snapshot's node counts.
+        # Drop sticky notes before node_states exists; they must never run or pad
+        # counts.
         self.nodes = [
             n for n in blueprint.get("nodes", []) if n.get("type") != NOTE_NODE_TYPE
         ]
@@ -511,9 +481,7 @@ class WorkflowRunner:
                 "status": NODE_STATUS_QUEUED,
                 "progress": 0.0,
                 "error": None,
-                # Non-fatal note for a degraded-but-completed node (AI server down,
-                # nothing wired, an adapter that couldn't coerce) — distinct from
-                # ``error`` (which means FAILED). Surfaced in the run history.
+                # Non-fatal note for a degraded node; ``error`` alone means FAILED.
                 "note": None,
                 "started_at": None,
                 "completed_at": None,
@@ -521,8 +489,7 @@ class WorkflowRunner:
             for n in self.nodes
         }
         self._results: dict[str, dict[str, Any]] = {}
-        # Node ids with an inspectable result sidecar on disk; surfaced as
-        # ``hasResult`` in the snapshot so the UI knows it can fetch on demand.
+        # Node ids with an inspectable sidecar on disk; the snapshot's ``hasResult``.
         self._sidecars: set[str] = set()
         self.status = RUN_STATUS_QUEUED
         self.started_at: str | None = None
@@ -589,8 +556,7 @@ class WorkflowRunner:
                 self._nodes_by_id[dep].get("type"), edge.get("fromPort"), "out"
             )
             if out_type == "control":
-                # A gate edge: skip if the gate can't pass us through — it blocked
-                # (``pass`` False) or it never completed (failed/skipped).
+                # Gate edge: skip when the gate blocked or never completed.
                 if status in (NODE_STATUS_FAILED, NODE_STATUS_SKIPPED):
                     return True
                 if status in (
@@ -721,8 +687,7 @@ class WorkflowRunner:
             self._notify(force=True)
             return
 
-        # Partial run: keep only the target node and its ancestors; the rest are
-        # skipped up front (they never execute and don't block completion).
+        # Partial run: skip everything outside the target's ancestry up front.
         if self.target_node_id and self.target_node_id in self._nodes_by_id:
             keep = self._ancestors_inclusive(self.target_node_id)
             for nid in order:
@@ -739,23 +704,14 @@ class WorkflowRunner:
                     node_id, status=NODE_STATUS_SKIPPED, completed_at=_now_iso()
                 )
                 continue
-            # Seeded result (batch precompute or resume): the node's output is
-            # authoritatively known — store it as if it just ran, skipping its
-            # executor. Checked BEFORE the mute/skip gates: a resume seed for a
-            # completed node must survive even when a (re-run) parent upstream
-            # is currently marked skipped/muted — the prior run already proved
-            # this node's output. (Batch seeds are parentless sources, so the
-            # ordering change is behavior-neutral for them.)
+            # Seed check precedes the mute/skip gates: a resume seed survives a
+            # skipped upstream re-run.
             if node_id in self._seed_results:
                 seeded = self._seed_results[node_id]
                 with self._lock:
                     self._results[node_id] = seeded
-                # Compare against "written" explicitly: every return value is a
-                # truthy string, so a truthiness check here would advertise a
-                # hasResult badge for a node whose sidecar was never written
-                # (404 when the inspector fetches it) and hide a failed write
-                # behind a green COMPLETED — the same failure the execute path
-                # below surfaces as DEGRADED.
+                # Every write_node_sidecar return is a truthy string; only "written"
+                # means a sidecar exists.
                 sidecar = write_node_sidecar(
                     self.ctx.output_dir, self.run_id, node_id, node["type"], seeded
                 )
@@ -779,8 +735,8 @@ class WorkflowRunner:
                 self._notify(force=True)
                 continue
 
-            # A muted node is skipped intrinsically; _should_skip then propagates
-            # SKIPPED to its whole downstream subtree (same as a blocking gate).
+            # Muted nodes skip; _should_skip then propagates SKIPPED downstream like
+            # a blocking gate.
             if node.get("disabled"):
                 self._set_node(
                     node_id, status=NODE_STATUS_SKIPPED, completed_at=_now_iso()
@@ -818,20 +774,16 @@ class WorkflowRunner:
                 with profiling.span(f"workflows.node {node['type']}"):
                     result = executor(self.ctx, inputs, params)
                 result = result if isinstance(result, dict) else {}
-                # A reserved ``__note__`` key lets an executor flag a non-fatal
-                # degraded outcome (e.g. AI server unavailable, nothing wired) that
-                # still completes — surfaced on the node, never stored as a result
-                # port. Merge it with any adapter-coercion notes from gathering.
+                # Reserved ``__note__`` flags a non-fatal degraded outcome; shown on
+                # the node, never a port.
                 notes = list(input_notes)
                 exec_note = result.pop("__note__", None)
                 if exec_note:
                     notes.append(str(exec_note))
                 with self._lock:
                     self._results[node_id] = result
-                # Persist the JSON-safe result ports (resume reloads them; the
-                # run-history UI fetches the inspectable subset on demand even
-                # after this runner is evicted from memory). ``hasResult`` only
-                # advertises sidecars with something the inspector can render.
+                # Persist JSON-safe ports for resume and the inspector, outliving
+                # this runner; ``hasResult`` only when renderable.
                 sidecar = write_node_sidecar(
                     self.ctx.output_dir, self.run_id, node_id, node["type"], result
                 )

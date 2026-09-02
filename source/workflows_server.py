@@ -43,21 +43,16 @@ _manifest_lock = threading.Lock()
 
 # ---- Run state ----
 
-# Live runners by id (authoritative for in-flight progress); the manifest holds
-# the persisted history. SSE clients are (run_id, queue) pairs scoped to one run.
+# Live runners by id; the manifest holds persisted history.
 _runs: dict[str, workflows.WorkflowRunner] = {}
 _runs_lock = threading.Lock()
-# SSE clients scoped to one run: notify with the run_id key. ``_sse_clients`` is
-# the channel's live registry (``(run_id, queue)`` tuples); see make_sse_channel.
+# Per-run SSE channel; ``_sse_clients`` holds ``(run_id, queue)`` pairs. See make_sse_channel.
 _notify_run_clients, _run_stream, _sse_clients = make_sse_channel()
 _MAX_RUN_HISTORY = 50  # cap persisted runs (small ephemeral tool; keep most recent)
 
 # ---- Batch state (whole-study fan-out) ----
 
-# Live batch coordinators by id, symmetric to ``_runs`` (history is *derived* by
-# grouping persisted runs on their ``batchId`` tag — no separate manifest key).
-# Each value is ``{blueprintId, participants, runIds, cancel_event, status,
-# createdAt}``. A batch SSE client is a (batch_id, queue) pair.
+# Live batch coordinators by id; history is derived by grouping persisted runs on ``batchId``.
 _batches: dict[str, dict[str, Any]] = {}
 _batches_lock = threading.Lock()
 # A batch SSE client is a (batch_id, queue) pair; notify with the batch_id key.
@@ -70,14 +65,6 @@ _RUN_TERMINAL = {
 }
 
 # ---- Auto-run trigger state ----
-#
-# One polling daemon thread checks each trigger type's source while a blueprint
-# of that type is armed — the input dir for new videos, the transcripts manifest
-# for fresh ``transcribed_at`` stamps, the screenspace manifest for completed
-# tasks — firing one run per arrival. Baselines seed at startup and re-seed on
-# arm so the pre-existing backlog never fires, and a new video must stat
-# identically across two consecutive polls (the partial-copy guard). With nothing
-# armed a tick does no I/O at all.
 _watch_seen: set[str] = set()  # pids already accounted for (never fire again)
 _watch_pending: dict[str, tuple[int, float]] = {}  # pid -> last-poll (size, mtime)
 # Chaining-trigger baselines: completions already accounted for (never re-fire).
@@ -98,8 +85,7 @@ workflows_bp = Blueprint("workflows", __name__)
 utils.register_static_routes(
     workflows_bp,
     "workflows.html",
-    # Per request, not a snapshot — POST /api/dirs moves config.INPUT_DIR
-    # mid-session and never re-inits this blueprint. See transcripts_bp.
+    # Per request: POST /api/dirs moves config.INPUT_DIR mid-session. See transcripts_bp.
     media_dir_getter=lambda: str(utils.get_effective_input_dir()),
     media_error="Input directory not configured",
     icons=True,
@@ -137,26 +123,22 @@ def api_catalog() -> Any:
     import screenspace
 
     videos = utils.discover_participant_videos()
-    # Saved Screenspace regions, so the Region node's name param can be a picker
-    # instead of a free string a typo silently full-frames.
+    # Region names for the Region node's picker; a typoed free string silently full-frames.
     region_names = sorted(
         (screenspace.load_screenspace_manifest().get("regions") or {}).keys()
     )
     return ok(
-        # Bootstrap channel for shared frontend config (hotkey overrides etc.);
-        # this page has no sheet-data fetch, so the config rides along here.
+        # Shared frontend config rides along; this page has no sheet-data fetch.
         config=utils.get_frontend_config(),
         catalog=workflows.serialize_catalog(),
-        # Adapter pairs the runner coerces across (events→clipRecords, …) so
-        # the frontend's canConnect accepts the same wires the runner runs.
+        # Adapter pairs the runner coerces, so canConnect accepts the same wires.
         adapters=workflows.serialize_adapters(),
         context={
             "sheet": _sheet_context is not None,
             "videoDir": bool(videos),
             "participants": [v["id"] for v in videos if v.get("has_video")],
             "regions": region_names,
-            # Where a run's artifacts land — surfaced in the run panel so the
-            # user knows where to find their clips/reels/viewers.
+            # Shown in the run panel so the user can find their artifacts.
             "outputDir": str(utils.get_effective_output_dir()),
             # Auto-run trigger types for the toolbar picker (no duplicated
             # Python↔JS constants; workflows.TRIGGER_TYPES is the source).
@@ -262,8 +244,7 @@ def api_blueprint_trigger(bp_id: str) -> Any:
                 else:
                     b["trigger"] = _disarmed_trigger(b.get("trigger"), trigger_type)
         else:
-            # Disarm whatever is currently bound on this blueprint (the client
-            # may not know its type); fall back to the requested type.
+            # Disarm whatever type is bound (the client may not know it).
             current = target.get("trigger")
             off_type = (
                 str(current.get("type"))
@@ -273,11 +254,7 @@ def api_blueprint_trigger(bp_id: str) -> Any:
             target["trigger"] = {"type": off_type, "enabled": False}
         _persist_locked()
         result = copy.deepcopy(target)
-    # Re-baseline on arm so the current backlog (present videos, already-finished
-    # transcripts/scans) never retro-fires. The poll maintains no baselines while
-    # nothing is armed, so this re-seed is what upholds that promise. Scoped to
-    # the type being armed: the other two may already be armed and live, and a
-    # blanket re-seed would drop their pending arrivals/completions.
+    # Re-seed this type only: the backlog never retro-fires, other armed types keep their pending arrivals.
     if enabled:
         _seed_watch_seen(trigger_type)
     return ok(blueprint=result)
@@ -291,12 +268,6 @@ def _disarmed_trigger(trigger: Any, trigger_type: str) -> Any:
 
 
 # ---- Stash CRUD (save/instantiate sub-graphs) ----
-#
-# A stash is a reusable sub-graph fragment ({id, name, nodes, edges, createdAt,
-# builtin}). The server does CRUD only; the frontend instantiates one onto the
-# canvas (id remap + position offset) client-side. ``GET`` prepends the read-only
-# built-in recipes ahead of the user's persisted stashes, under the same
-# combined-manifest locking the blueprint routes use.
 
 
 @workflows_bp.route("/api/stashes")
@@ -546,9 +517,7 @@ def _launch_run(
         finally:
             _persist_run(runner.snapshot())
             _notify_run_clients(run_id)
-            # Evict the terminal runner: its summary is in the manifest and its
-            # per-node results are on disk as sidecars, so keeping it would only
-            # leak the full in-memory results.
+            # Evict the finished runner; its summary and sidecars are already on disk.
             with _runs_lock:
                 _runs.pop(run_id, None)
 
@@ -574,25 +543,18 @@ def api_run_create() -> Any:
         workflows.topo_order(blueprint.get("nodes", []), blueprint.get("edges", []))
     except workflows.WorkflowCycleError as exc:
         return err(str(exc))
-    # Optional partial run: restrict to this node + its ancestors. Reject an
-    # unknown id rather than silently running the whole graph, so a stale
-    # selection surfaces as a clear error.
+    # Optional partial run (target + ancestors); an unknown id errors rather than running everything.
     target = str(data.get("targetNodeId") or "")
     if target and not any(n.get("id") == target for n in blueprint.get("nodes", [])):
         return err("Unknown target node")
 
-    # Optional sample-window test: bound every unwired detector timeRange to the
-    # video's first N seconds (see WorkflowRunner._apply_sample_window).
+    # Optional sample window: bound unwired detector timeRanges (see WorkflowRunner._apply_sample_window).
     try:
         sample_window = max(0.0, float(data.get("sampleWindowSeconds") or 0.0))
     except (TypeError, ValueError):
         return err("sampleWindowSeconds must be a number")
 
-    # Optional resume: reload the prior run's completed-node sidecars as seeds and
-    # execute only what failed or changed, plus everything downstream. Resumes
-    # against the CURRENT blueprint (same semantics as Re-run) — an edited graph
-    # just seeds fewer nodes. Sidecars load into memory here, so a concurrent
-    # history-trim pruning that run's dir mid-flight is harmless.
+    # Optional resume: seed completed-node sidecars against the CURRENT blueprint; an edited graph seeds fewer nodes.
     participant = ""
     seed_results: dict[str, dict[str, Any]] | None = None
     seed_note = ""
@@ -695,8 +657,7 @@ def api_run_node_result(run_id: str, node_id: str) -> Any:
         payload = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return err("No result for node", 404)
-    # Sidecars persist every JSON-safe port for resume; the inspector renders
-    # only the inspectable subset (and never the __type__ marker).
+    # Sidecars keep every port for resume; the inspector shows only the inspectable subset.
     view = workflows.inspectable_sidecar_view(payload)
     if not view:
         return err("No result for node", 404)
@@ -802,11 +763,7 @@ def _sse_batch_payload(batch_id: str) -> str:
     return "data: " + json.dumps({"ok": summary is not None, "batch": summary}) + "\n\n"
 
 
-# Source node types whose result is participant-independent across a batch and
-# expensive enough to compute once and seed into every child. ``sheet_selection``
-# calls the heavily rate-limited Google Sheets API; ``bind_participant`` never
-# rebinds it, so re-running it per participant is N identical API round-trips.
-# (``region``/``time_range`` are cheap, local, and not worth the bookkeeping.)
+# Participant-independent sources computed once per batch; sheet_selection hits the rate-limited Sheets API.
 _BATCH_CACHEABLE_TYPES = {"sheet_selection"}
 
 
@@ -868,16 +825,12 @@ def _run_batch_child(
         on_update=_on_child_update,
         participant=participant,
         batch_id=batch_id,
-        # Every child gets its own deep copy: downstream executors mutate
-        # seeded values in place (files.prepare_clip adds `times` to sheet
-        # records), so one shared dict would cross-contaminate siblings —
-        # quasi-benign sequentially, an outright race with workers > 1.
+        # Own deep copy per child: executors mutate seeds in place (files.prepare_clip adds `times`).
         seed_results=copy.deepcopy(seed_results),
     )
     with _runs_lock:
         _runs[run_id] = runner
-    # A cancel that lands between the check above and run() still reaches this
-    # child: the cancel endpoint cancels every live runner tagged to the batch.
+    # The cancel endpoint cancels every live runner, so a late cancel still reaches this child.
     try:
         runner.run()
     except Exception as exc:  # belt-and-suspenders; run() catches per node
@@ -908,8 +861,7 @@ def _run_batch(batch_id: str, blueprint: dict[str, Any]) -> None:
     cancel_event: threading.Event = record["cancel_event"]
     plan = list(zip(record["runIds"], record["participants"]))
 
-    # Compute participant-independent sources (sheet_selection) once and seed them
-    # into every child, so an N-participant batch hits the Sheets API once, not N.
+    # Shared sources once per batch: one Sheets API hit, not N.
     seed_results = _precompute_shared_nodes(
         blueprint, _build_node_context(threading.Event())
     )
@@ -979,10 +931,7 @@ def api_batch_create() -> Any:
         return err("No participants with video found")
 
     batch_id = "batch_" + uuid.uuid4().hex[:8]
-    # Child runs are persisted as they execute, not up front: pre-persisting one
-    # queued record per participant would flood the run-history cap and could evict
-    # this batch's own not-yet-started children. The live ``_batches`` record makes
-    # the batch (and its queued children) visible immediately via ``_batch_summary``.
+    # Children persist as they run; pre-persisting N queued records could breach the history cap.
     run_ids = ["run_" + uuid.uuid4().hex[:8] for _ in participants]
     with _batches_lock:
         _batches[batch_id] = {
@@ -1328,9 +1277,7 @@ def _init_workflows_state(
     _sheet_context = sheet_context
     _worksheet = worksheet
     _manifest = workflows.load_workflows_manifest()
-    # Reclaim a stale empty manifest (e.g. an abandoned auto-created "Untitled"
-    # blueprint) left by a prior session: the guarded save removes the file when
-    # empty and is an idempotent rewrite otherwise.
+    # Reclaim a stale empty manifest from a prior session (the save deletes empty files).
     with _manifest_lock:
         _persist_locked()
     _seed_watch_seen()

@@ -25,11 +25,9 @@
 
   var STUDIO = window.ClipgenStudio;
   var state = STUDIO.state;
-  // setButtonProgress is a ClipgenPrimitives namespace fn (primitives.js global),
-  // aliased here the same way the hub aliases it.
+  // primitives.js global, aliased as in the hub.
   var setButtonProgress = ClipgenPrimitives.setButtonProgress;
-  // Hub-owned helpers + shared elapsed-time trackers, published during the hub's
-  // load (and buildCellOverrides during studio-trim.js's), before this file runs.
+  // Published by the hub (buildCellOverrides by studio-trim.js) before this file loads.
   var setArtifactGenerating = STUDIO.setArtifactGenerating,
     showResult = STUDIO.showResult,
     revealStatusOverlay = STUDIO.revealStatusOverlay,
@@ -43,12 +41,7 @@
     _generateEtaTracker = STUDIO._generateEtaTracker,
     _studioEtaTicker = STUDIO._studioEtaTicker;
 
-  // Canonical key for a "participant.row" cell ref. The POST carries the
-  // client's own string, but a result line echoes the *sheet header* the server
-  // resolved it to (spreadsheet.generate_cell_timestamps), and the two match
-  // case-insensitively rather than exactly — so every map keyed on a cell ref
-  // must fold, or a case difference splits one cell across two keys and the
-  // trailing "No clip found" line paints cards that already succeeded.
+  // Result lines echo the sheet header's casing; every cell-ref map keys on this.
   function generateCellKey(ref) {
     return String(ref).toLowerCase();
   }
@@ -82,9 +75,7 @@
     _generateEtaTracker.start();
     _studioEtaTicker.ensure();
 
-    // Per-branch AbortControllers let onCancelGenerate stop the network
-    // fetches immediately; the server-side cancel endpoints also trip the
-    // cancel events so in-flight ffmpeg subprocesses get terminated.
+    // onCancelGenerate aborts these; the server cancel endpoints kill ffmpeg.
     var sheetAbort = new AbortController();
     var intakeAbort = new AbortController();
     state.activeGenerateAborts = [sheetAbort, intakeAbort];
@@ -93,17 +84,13 @@
     var list = qs("#artifactsList");
     var items = state.artifactQueue.slice();
 
-    // Capture the queue cards before any async work so per-item result
-    // markers don't drift onto the wrong card if the queue re-renders mid
-    // request. allCards is in DOM order, which matches state.artifactQueue.
+    // Capture cards before async work; a mid-request re-render must not move markers.
     var allCards = list.querySelectorAll(".queue-card");
     for (var i = 0; i < allCards.length; i++) {
       setCardQueued(allCards[i]);
     }
 
-    // Separate spreadsheet and intake items, keeping each split's card
-    // element parallel to its item array so the resolve handler can match
-    // by index against the captured card list (immune to later re-renders).
+    // Each split keeps its card list parallel to its item list.
     var sheetItems = [];
     var sheetCardEls = [];
     var intakeItems = [];
@@ -124,9 +111,7 @@
     var failReasons = [];
     var cancelled = false;
     var pending = (sheetItems.length > 0 ? 1 : 0) + (intakeItems.length > 0 ? 1 : 0);
-    // Everything below counts artifacts (one per queue card), never cells: a
-    // cell holding several timestamp pairs posts as one ref but produces one
-    // file per pair, and the readout must match the panel's card count.
+    // Counts are artifacts (one per card), never cells; a cell can hold several pairs.
     var sheetArtifactTotal = sheetItems.length;
     var sheetArtifactsDone = 0;
     var intakeDone = 0;
@@ -134,9 +119,7 @@
     var generateCardIndex = null;
     updateGenerateProgress(0, sheetArtifactTotal + intakeTotal);
 
-    // Both branches feed one readout and one button fill. They share a unit now,
-    // so an intake-only run gets a real count instead of elapsed alone — which
-    // is also what a mid-run reload reattaches to from /api/job-status.
+    // One readout for both branches; /api/job-status reattaches to the same unit.
     function updateGenerateButtonProgress() {
       var total = sheetArtifactTotal + intakeTotal;
       if (total <= 0) return;
@@ -150,8 +133,7 @@
       setButtonProgress("generateBtn", null);
       setArtifactGenerating(false);
       _generateEtaTracker.reset();
-      // Hide after artifactGenerating is false so the elapsed-only fallback in
-      // _paintGenerateProgress doesn't keep the readout visible.
+      // After setArtifactGenerating(false), or _paintGenerateProgress keeps the readout up.
       updateGenerateProgress(0, 0);
       qs("#cancelGenerateBtn").classList.add("hidden");
       var msg;
@@ -162,8 +144,7 @@
           : null;
         err = totalSuccess > 0 ? null : "Generation cancelled";
       } else if (totalSuccess === 0 && totalFail === 0) {
-        // Stream ended without any per-item results — treat as an error
-        // rather than silently reporting "Generated 0 artifacts".
+        // No per-item results at all is an error, not "Generated 0 artifacts".
         msg = null;
         err = "No artifacts were generated";
       } else {
@@ -174,8 +155,7 @@
           err = "All generations failed";
         }
       }
-      // Append up to 3 distinct failure reasons so the user can act on them
-      // instead of just seeing a count (full reason is also on each card title).
+      // Up to 3 distinct reasons; each card title holds the full one.
       if (totalFail > 0 && failReasons.length) {
         var seenReason = {};
         var uniqReasons = [];
@@ -198,14 +178,12 @@
 
     // Handle spreadsheet items via streaming api/generate
     if (sheetItems.length > 0) {
-      // One POST ref per cell, but tally how many cards each ref stands for so
-      // a returning line can advance the readout by that cell's artifacts.
+      // One ref per cell; cardsPerCell lets a result line advance by its card count.
       var cellsSeen = {};
       var cells = [];
       var cardsPerCell = {};
       for (var si = 0; si < sheetItems.length; si++) {
-        // The POST carries the ref as written; the tallies key on the folded
-        // form so a returning line finds them whatever casing it comes back in.
+        // POST the ref as written; tally on the folded key.
         var ref = sheetItems[si].participant + "." + sheetItems[si].row;
         var ck = generateCellKey(ref);
         if (!cellsSeen[ck]) { cellsSeen[ck] = true; cells.push(ref); }
@@ -227,10 +205,7 @@
           return;
         }
         if (!data.cell) return;
-        // At most one advance per cell: the server can emit both a result line
-        // and a trailing "No clip found" for the same ref when its casing
-        // differs from the sheet header, which would push done past total.
-        // Folded, so those two spellings are one key (see generateCellKey).
+        // One advance per cell; a result line and "No clip found" may both arrive.
         var cellKey = generateCellKey(data.cell);
         if (!cellCounted[cellKey]) {
           cellCounted[cellKey] = true;
@@ -281,8 +256,7 @@
             finishBranch();
             return;
           }
-          // Mark every captured sheet card as failed so they don't stay
-          // visually queued; finishBranch reports the failure tally.
+          // Fail every captured sheet card; finishBranch reports the tally.
           for (var j = 0; j < sheetCardEls.length; j++) {
             if (sheetCardEls[j]) setCardResult(sheetCardEls[j], false);
           }
@@ -311,9 +285,7 @@
         if (!data) return;
         if (data.cancelled) {
           cancelled = true;
-          // Clear queued state from any intake card that hasn't received a
-          // per-item result yet, so the cards don't stay visually queued
-          // after the server short-circuits on cancel.
+          // Cancel short-circuits the server; clear cards still marked queued.
           for (var qi = 0; qi < intakeCardEls.length; qi++) {
             var qcard = intakeCardEls[qi];
             if (qcard && qcard.classList.contains("queue-card-queued")) {

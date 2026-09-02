@@ -37,25 +37,17 @@ from typing import Any
 import config
 
 _LOCK = threading.Lock()
-# label -> [total_seconds, count, max_seconds, bytes]. Labels are static strings
-# (or Flask url_rule strings, ~200 of them); the cap is a safety net, not an LRU.
+# label -> [total_seconds, count, max_seconds, bytes]. Cap is a safety net, not LRU.
 _TOTALS: dict[str, list[float]] = {}
 _MAX_LABELS = 1024
 _REPORT_REGISTERED = False
 
-# Deep profiling (--profile-deep LABEL): cProfile attached to the spans whose
-# label contains config.PROFILE_DEEP. Keyed per (label, thread) because a
-# cProfile.Profile is not safe to enable from two threads at once (parallel
-# scans share a label); the report merges the per-thread profiles per label.
+# --profile-deep cProfile per (label, thread): one Profile cannot enable from two threads.
 _DEEP: dict[tuple[str, int], cProfile.Profile] = {}
 _MAX_DEEP = 16
 _DEEP_TOP = 15  # rows of pstats output per label
 
-# Startup milestones. Unlike the label totals these are recorded even when
-# profiling is off: the earliest marks land before --profile has been parsed
-# (clipgen.py fires the first one right after `import cli`), and an append is
-# cheap enough to pay unconditionally. They are only *reported* when profiling
-# is on. Append-only and bounded — startup happens once per process.
+# Recorded even with profiling off (first mark precedes argv parsing); reported only when on.
 _STARTUP_T0: float | None = None
 _STARTUP_MARKS: list[tuple[str, float]] = []
 _MAX_STARTUP_MARKS = 64
@@ -243,9 +235,7 @@ def timed(label: str) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
         def wrapper(*args: Any, **kwargs: Any) -> Any:
             if not config.PROFILING:
                 return fn(*args, **kwargs)
-            # Deep-profile here, not via span(): timed functions often run in
-            # executor threads (heatmap GIF pair), and the profiler must be
-            # enabled on the thread doing the work to see it.
+            # Not span(): the profiler must enable on the executor thread doing the work.
             deep = deep_profiler(label)
             deep_on = deep is not None and deep_enable(deep)
             start = time.perf_counter()
@@ -304,9 +294,7 @@ def stream_span(
             total += len(chunk)
             yield chunk
     finally:
-        # A plain loop (unlike ``yield from``) does not forward close() to the
-        # body, so a client disconnect would leave the route's own cleanup
-        # unrun until GC. Close it first, so its finally lands inside the span.
+        # A plain loop never forwards close(); call it so cleanup lands inside the span.
         close = getattr(body, "close", None)
         if close is not None:
             close()
@@ -382,10 +370,7 @@ def _deep_report() -> None:
             groups.setdefault(label, []).append(prof)
     for label, profs in sorted(groups.items()):
         out = io.StringIO()
-        # Merge per-profiler, skipping the ones that never enabled: Python 3.12
-        # allows one active cProfile per interpreter, so in a thread pool only
-        # the thread that wins the slot records stats — the losers raise here
-        # and must not take the winner's block down with them.
+        # One active cProfile per interpreter; losing threads raise here, the winner must survive.
         stats = None
         for prof in profs:
             try:
@@ -419,9 +404,7 @@ def report() -> None:
         if nb:
             line += f"  bytes={format_bytes(nb)}"
         print(line)  # bare print: Rich would wrap piped output (see module docstring)
-    # Gated on "did we print anything", not on config.PROFILING: report()'s
-    # documented contract is silence when nothing was recorded, and it has never
-    # read the flag itself.
+    # Gate on output, not config.PROFILING: report() stays silent when nothing was recorded.
     if snap:
         peak = peak_rss_mb()
         if peak is not None:

@@ -55,8 +55,7 @@ def _export_config() -> dict[str, Any]:
     """
     cfg = utils.get_frontend_config()
     cfg.pop("hotkeyOverrides", None)
-    # Exported HTML never profiles: the flag mirrors a live --profile launch,
-    # and a standalone file has no report sink to read the marks from.
+    # Exports have no report sink, so never profile.
     cfg.pop("profiling", None)
     return cfg
 
@@ -162,10 +161,7 @@ def finalize_timeline_data(
     return data
 
 
-# Module-level mtime cache for the screenspace-events-for-viewer transform.
-# Viewer exports call load_screenspace_events_for_viewer() repeatedly; re-parsing
-# the screenspace section each time is pure overhead. Keyed on the manifest's
-# (output dir, mtime_ns), so any rewrite invalidates it. One entry suffices.
+# One-entry cache keyed on (output dir, mtime_ns); exports call this repeatedly.
 _SS_EVENTS_CACHE_LOCK = threading.Lock()
 _ss_events_cache: dict[str, Any] = {
     "path": None,
@@ -289,9 +285,7 @@ def _generate_viewer_html(
         except OSError:
             pass
 
-    # Inline the shared hotkey registry (cheatsheet + dispatcher). Exported
-    # viewers always run the default keymap: the embedded config deliberately
-    # omits hotkeyOverrides (see _export_config).
+    # Inline the hotkey registry; exports run the default keymap (see _export_config).
     hk_css_tag = '<link rel="stylesheet" href="hotkeys.css">'
     hk_js_tag = '<script src="hotkeys.js" defer></script>'
     if hk_css_tag in template_html:
@@ -306,19 +300,13 @@ def _generate_viewer_html(
         hk_js_path = assets_dir / "hotkeys.js"
         if hk_js_path.is_file():
             try:
-                # utils.js is prepended below, ahead of this, so the final
-                # order stays utils -> hotkeys -> page modules.
+                # utils.js is prepended later, so the order stays utils -> hotkeys -> page.
                 js_text = _read_bundled_asset(str(hk_js_path)) + "\n" + js_text
             except OSError:
                 pass
         template_html = template_html.replace(hk_js_tag, "")
 
-    # Inline the shared motion engine (ClipgenMotion) so exported viewers animate
-    # the same way the live pages do — an export has no asset routes, so without
-    # this the toast's guarded fade silently no-ops and it snaps instead. JS-only:
-    # motion.js ships no stylesheet. Position among these blocks is immaterial —
-    # utils.js is prepended last (so it always ends up first) and every consumer
-    # reads window.ClipgenMotion lazily inside a function, never at load time.
+    # Inline motion.js (JS-only) or the export's toast fade no-ops; consumers read ClipgenMotion lazily.
     mo_js_tag = '<script src="motion.js" defer></script>'
     if mo_js_tag in template_html:
         mo_js_path = assets_dir / "motion.js"
@@ -329,9 +317,7 @@ def _generate_viewer_html(
                 pass
         template_html = template_html.replace(mo_js_tag, "")
 
-    # Inline the card-scrubber module into viewers that reference it (timeline,
-    # not gallery). Its CSS/JS join the shared bundles so the export stays
-    # self-contained; the external tags are stripped below.
+    # Inline card-scrubber where referenced (timeline only); external tags are stripped below.
     cs_css_tag = '<link rel="stylesheet" href="card-scrubber.css">'
     cs_js_tag = '<script src="card-scrubber.js" defer></script>'
     if cs_css_tag in template_html:
@@ -394,9 +380,7 @@ def _generate_viewer_html(
         template_html = template_html.replace("</body>", f"{inline_js_block}\n</body>")
 
     data_json = json.dumps(data, ensure_ascii=False, separators=(",", ":"))
-    # Escape chars that could break out of the <script> tag or a JS string literal
-    # (</script>, <!--, <script, and the U+2028/U+2029 line separators). All stay valid
-    # JSON via \uXXXX, so JSON.parse decodes the payload back to the original unchanged.
+    # Escape </script>, <!--, and U+2028/U+2029 as \uXXXX; JSON.parse still round-trips.
     data_json = (
         data_json.replace("<", "\\u003c")
         .replace(">", "\\u003e")
@@ -508,8 +492,7 @@ def generate_gallery_viewer(
     )
 
 
-# Serializes the full load-merge-write cycle in save_manifest() so concurrent
-# Studio completions cannot last-writer-wins a partial merge.
+# Serializes save_manifest()'s load-merge-write cycle across concurrent Studio completions.
 _MANIFEST_WRITE_LOCK = threading.Lock()
 
 
@@ -545,10 +528,7 @@ def save_manifest(
     Deduplicates by ``id``; newer entries win.
     Returns the manifest path on success, or None on failure.
     """
-    # Hold the write lock across the whole load-merge-write cycle: a concurrent
-    # writer must see this writer's persisted result before computing its merge,
-    # otherwise both read the same old manifest and the second write drops the
-    # first writer's records.
+    # Hold the lock across load-merge-write, or a concurrent writer drops this one's records.
     with _MANIFEST_WRITE_LOCK:
         existing, existing_reels = load_manifest_both()
         merged = {a["id"]: a for a in existing}

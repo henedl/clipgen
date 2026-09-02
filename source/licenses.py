@@ -42,8 +42,7 @@ _RULE_RE = re.compile(r"^={10,}$")
 # The table header, whose following '-----' divider is skipped with it.
 _HEADER_RE = re.compile(r"^Component\s+Version\s+License\s*$")
 _COLUMN_SPLIT_RE = re.compile(r"\s{2,}")
-# Where a compound license string stops being the name of a license family:
-# "MIT (macOS only)", "MIT (bindings) + Apache 2.0 (OpenCV)", "MPL-2.0 AND MIT".
+# Where a compound license stops naming one family: "MIT (macOS only)", "MPL-2.0 AND MIT".
 _GROUP_SEPARATORS = (" (", " + ", " AND ")
 
 

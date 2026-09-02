@@ -26,16 +26,9 @@
     active: false,
     initialized: false,
     baselines: null,
-    // Per-lane display offset (signed seconds) compensating for videos that
-    // started at different wall-clock moments, or one source drifting from the
-    // others: { "P01": { sheet: 12.5, screenspace: 12.5, transcript: 0 } }. A key
-    // is omitted when 0, a participant with no offsets has no entry. Stacks on
-    // top of `baselines` (a sheet-only clock→video shift).
+    // Per-lane offsets in seconds, {pid: {source: seconds}}; zero keys omitted. Stacks on `baselines`.
     offsets: {},
-    // Transient per-participant "uncoupled" edit flag ({pid: true}). When set,
-    // each of the participant's source lanes is edited independently; when
-    // absent (coupled, the default) edits move all three lanes together. UI
-    // state only — never loaded or saved, cleared on reset.
+    // Transient {pid: true}: edit lanes independently. Coupled (default) moves all lanes. Never persisted.
     uncoupled: {},
     offsetsLoaded: false,
     editing: null,           // participant id currently in "unlocked" edit mode
@@ -57,9 +50,7 @@
     participants: [],
     sortByDensity: false,
     swimLaneEl: null,
-    // Cross-references were flipped while this tab was hidden; re-render on
-    // the next activate. A hidden panel measures zero width, so rendering
-    // straight away would bake a broken swim lane in.
+    // Cross-refs flipped while hidden; a hidden panel measures zero width, so re-render on activate.
     crossRefsStale: false,
     _snapshot: null,
   };
@@ -67,14 +58,10 @@
   var _cvFrameCache = {};
   var _cvFramePreviewEl = null;
   var _cvHoverDebounce = null;
-  // Bumped on every preview show so a slow fetch can't paint over a newer
-  // hover (would otherwise display participant A's frame under B's label).
+  // Bumped per preview show so a slow fetch can't paint over a newer hover.
   var _cvPreviewSeq = 0;
 
-  // Frame-cache keys are unique per participant+timestamp, so the same-key
-  // revoke in cvShowFramePreview almost never fires; without this every marker
-  // frame hovered during a scrub session stays pinned for the document's
-  // lifetime. Mirrors viewer.js's _thumbCache handler.
+  // Cache keys are unique per participant+timestamp, so revoke on pagehide (mirrors viewer.js _thumbCache).
   window.addEventListener("pagehide", function () {
     Object.keys(_cvFrameCache).forEach(function (key) {
       var url = _cvFrameCache[key];
@@ -135,8 +122,7 @@
     var preview = cvEnsureFramePreview();
     var img = preview.querySelector("img");
     var lbl = preview.querySelector(".cv-frame-preview-label");
-    // Frame preview must hit the source video at its real (raw) time, never the
-    // offset-adjusted convergence-display time.
+    // Preview at raw video time, never offset-adjusted display time.
     var url = cvFrameUrl(event.source, event.participant, event.rawStart);
     var seq = ++_cvPreviewSeq;
 
@@ -215,20 +201,13 @@
     var events = [];
     var participantSet = {};
 
-    // `start`/`end` on each event are offset-adjusted (display-time on the
-    // convergence timeline). `rawStart`/`rawEnd` preserve the original video
-    // time so frame previews, queue dispatches, and detail/callout labels
-    // can hit the underlying video correctly. The two offsets stack:
-    //   raw video time (already baseline-corrected for sheet events) + offsetFor(pid, source)
+    // start/end are display time (raw + offsetFor); rawStart/rawEnd keep source video time.
     function applyOffset(pid, source, rawStart, rawEnd) {
       var off = offsetFor(pid, source);
       return {
         rawStart: Math.max(0, rawStart),
         rawEnd: Math.max(0, rawEnd),
-        // Do NOT clamp start/end to 0: a large negative offset legitimately
-        // places events off the left edge (negative %) and the swim lane clips
-        // them via overflow:hidden. Clamping to 0 would pin all such events at
-        // t=0 and create phantom convergence zones there.
+        // Never clamp to 0: negative offsets legitimately go off-edge; clamping fakes zones at t=0.
         start: rawStart + off,
         end: rawEnd + off,
       };
@@ -273,8 +252,7 @@
     for (var i = 0; i < ssClusters.length; i++) {
       var cl = ssClusters[i];
       var clCount = cl.events ? cl.events.length : 1;
-      // Navigational ticks must sit at the real boundary time, not the cluster's
-      // padded clip window (clusterIntakeEvents widens point events by ±5s).
+      // Navigational ticks sit at the real boundary, not the cluster's ±5s padded window.
       var sStart = cl.start;
       var sEnd = cl.end;
       if (cl.navigational && cl.events && cl.events.length) {
@@ -323,9 +301,7 @@
       participantSet[tc.participant] = true;
     }
 
-    // Composer cuts (named in/out pairs). Each cut carries its own participant
-    // and real source-video seconds (end > start), so it renders as a span like
-    // sheet ranges and — being non-navigational — seeds convergence zones too.
+    // Composer cuts render as spans (like sheet ranges) and seed convergence zones.
     var composerCuts = state.composerCuts || [];
     for (var ci = 0; ci < composerCuts.length; ci++) {
       var cut = composerCuts[ci];
@@ -348,11 +324,7 @@
       participantSet[cut.participant] = true;
     }
 
-    // Duration: take the max of raw and offset-adjusted ends so a negative
-    // offset on the right-most participant doesn't collapse the timeline.
-    // (Without considering rawEnd, the timeline would shrink in lockstep with
-    // a leftward shift and the marker's normalized position would stay put,
-    // masking the visible movement the user expects to see.)
+    // Max of raw and offset ends: a negative offset must not shrink the timeline.
     var maxEnd = 0;
     for (var k = 0; k < events.length; k++) {
       if (events[k].end > maxEnd) maxEnd = events[k].end;
@@ -384,10 +356,7 @@
   }
 
   // --- Convergence Algorithm ---
-  //
-  // Two passes: (1) per event, count distinct participants whose events overlap
-  // [start - W, start + W] — those meeting `minParticipants` qualify; (2) walk the
-  // qualifying events in time order, merging any two within W into one zone.
+  // Qualify events with minParticipants inside ±W; merge qualifiers within W.
 
   function computeConvergenceZones(events, windowSec, minParticipants) {
     if (!events.length) return [];
@@ -400,9 +369,7 @@
       var center = sorted[i].start;
       var windowStart = center - windowSec;
       var windowEnd = center + windowSec;
-      // Events are sorted by start, so the left edge of the ±W window only
-      // moves forward. Advance past intervals that ended before windowStart;
-      // a long-lived interval (started early, still overlapping) holds left.
+      // Sorted by start: the left edge only advances; still-overlapping intervals hold it.
       while (
         left < sorted.length &&
         sorted[left].start < windowStart &&
@@ -503,9 +470,7 @@
     }
 
     cvState.filteredEvents = filtered;
-    // Navigational (boundary) events are orientation scaffolding, not findings:
-    // they still render as thin ticks in the swimlane (via filteredEvents) but
-    // must not seed or merge into convergence zones.
+    // Navigational events are scaffolding: drawn as ticks, never seeding zones.
     cvState.convergenceZones = computeConvergenceZones(
       filtered.filter(function (e) { return !e.navigational; }),
       cvState.filters.windowSec,
@@ -514,9 +479,7 @@
   }
 
   function recalculate() {
-    // Re-read baselines from the hub on every recompute: a Refresh reassigns
-    // state.convergenceBaselines to a brand-new object, so the reference captured
-    // at first activation would go stale and misplace sheet events on the timeline.
+    // Re-read baselines each time: Refresh reassigns state.convergenceBaselines to a new object.
     cvState.baselines = getState().convergenceBaselines || {};
     clearSelection();
     clipgenPerf.span("overview.computeConvergence", function () {
@@ -525,8 +488,7 @@
       applyFilters();
     });
     render();
-    // collectAllEvents just refreshed _snapshot to the current version, so
-    // checkStaleness will clear the paint on the subheader Refresh button.
+    // _snapshot is current now, so checkStaleness clears the Refresh button paint.
     checkStaleness();
   }
 
@@ -771,8 +733,7 @@
   function renderTimeline() {
     var container = qs("#convergenceTimeline");
     if (!container) return;
-    // Commit any in-flight drag before destroying the DOM; a debounce-triggered
-    // recalculate can fire mid-drag and the accumulated delta must not be lost.
+    // A debounced recalculate can land mid-drag; commit the delta before rebuilding.
     _cvAbortDrag();
     container.textContent = "";
     cvState.swimLaneEl = null;
@@ -899,8 +860,7 @@
     card.appendChild(dur);
 
     var ts = el("span", "cv-callout-ts cg-mono");
-    // Show raw (median) time so the timestamp is invariant under per-participant
-    // offsets — users adjusting lanes don't see callout times jump around.
+    // Raw (median) time stays invariant under per-participant offsets.
     ts.textContent = "· " + formatTime(typeof zone.rawStart === "number" ? zone.rawStart : zone.start);
     card.appendChild(ts);
 
@@ -1058,8 +1018,7 @@
     var row = el("div", "cv-detail-event");
 
     var time = el("span", "cv-detail-time cg-mono");
-    // Display raw video time — what the user will see if they jump to this
-    // moment in the source video. Offset is purely a convergence display tool.
+    // Raw video time: what the user sees when jumping to the source.
     time.textContent = formatTime(event.rawStart) + " – " + formatTime(event.rawEnd);
     row.appendChild(time);
 
@@ -1082,8 +1041,7 @@
     }
 
     if (window.ClipgenOverview.findOverlappingData) {
-      // Overlap is computed against raw video time, matching how other
-      // panels index their artifacts. buildXrefBadges is a utils.js global.
+      // Overlap uses raw video time like the other panels. buildXrefBadges is a utils.js global.
       var xref = window.ClipgenOverview.findOverlappingData(event.participant, event.rawStart, event.rawEnd);
       var badges = buildXrefBadges(xref, event.source);
       if (badges) {
@@ -1096,9 +1054,7 @@
     return row;
   }
 
-  // Queue dispatch (sending a convergence moment into Studio's artifact/reel
-  // queue) was a Studio-page feature; those queues are in-page Studio state a
-  // standalone Overview page cannot reach. Deliberately dropped in the move.
+  // Queue dispatch was dropped: Studio's queues are in-page state Overview cannot reach.
 
   // --- Lifecycle ---
 
@@ -1110,9 +1066,7 @@
     }
 
     if (cvState.baselines === null) {
-      // First activation: the hub's memoized ensureData() supplies all three
-      // streams + baselines; only the per-participant alignment offsets are
-      // convergence-specific (they live on the overview blueprint).
+      // First activation: the hub's ensureData() plus the convergence-only alignment offsets.
       Promise.all([
         window.ClipgenOverview.ensureData(),
         apiGet("api/convergence/offsets").catch(function () { return { ok: false }; }),
@@ -1125,8 +1079,7 @@
         recalculate();
       });
     } else if (cvState._snapshot && cvState._snapshot.version !== getState().dataVersion) {
-      // The hub refetched (subheader Refresh) and re-activated us. Rebuild:
-      // recalculate() re-reads the reassigned baselines and clears the paint.
+      // The hub refetched; recalculate() re-reads baselines and clears the paint.
       recalculate();
     } else {
       if (cvState.crossRefsStale) render();
@@ -1162,8 +1115,7 @@
     return sign + rounded + "s";
   }
 
-  // Parse + clamp an offset to ±max(duration, 60) seconds. Returns 0 for
-  // non-numeric input. Shared by typed input, drag commit, and abort-on-rerender.
+  // Parse and clamp to ±max(duration, 60) seconds; non-numeric gives 0.
   function clampOffset(seconds) {
     var num = typeof seconds === "number" ? seconds : parseFloat(seconds);
     if (!isFinite(num)) num = 0;
@@ -1171,16 +1123,13 @@
     return Math.max(-maxAbs, Math.min(maxAbs, num));
   }
 
-  // Drop a participant's offsets entry once it has no remaining lanes, so
-  // Object.keys(cvState.offsets).length stays an accurate "any offsets set?"
-  // signal (drives reset-button visibility).
+  // Drop empty entries so Object.keys(cvState.offsets).length means "any offsets set".
   function pruneParticipant(pid) {
     var o = cvState.offsets[pid];
     if (o && Object.keys(o).length === 0) delete cvState.offsets[pid];
   }
 
-  // Write an offset for one source (uncoupled) or every source (coupled, when
-  // `source` is null). Sub-0.05s values clear the affected lane(s).
+  // source null writes every lane (coupled). Sub-0.05s values clear the lane.
   function commitOffset(pid, source, seconds) {
     if (!pid) return;
     var num = clampOffset(seconds);
@@ -1207,8 +1156,7 @@
   }
 
   function setEditingParticipant(pid) {
-    // Single-editor mode: switching to a new participant commits + locks any
-    // current editor (no extra step — its offset is already in cvState.offsets).
+    // Single editor: switching participants locks the current one; its offset is already committed.
     if (cvState.editing === pid) {
       cvState.editing = null;
     } else {
@@ -1217,18 +1165,13 @@
     applyEditingClasses();
   }
 
-  // True when any of a participant's source lanes carries a non-zero offset.
-  // commitOffset prunes zeroed lanes/participants, so an existing entry already
-  // implies at least one adjusted lane, but check explicitly to stay robust.
+  // commitOffset prunes zeroed lanes, so an entry implies an adjusted lane; check anyway.
   function participantHasOffset(pid) {
     var o = cvState.offsets && cvState.offsets[pid];
     return !!(o && Object.keys(o).length);
   }
 
-  // Badge text shown on a locked, adjusted label. Coupled (all lanes equal) →
-  // the shared value (e.g. "+12s"); diverged lanes → "split" so the user can
-  // tell, even after a reload (when the transient uncoupled flag is cleared),
-  // that the lanes are independently offset.
+  // Locked-label badge: shared value when coupled, "split" when lanes diverge (survives reload).
   function offsetBadgeText(pid) {
     if (!participantHasOffset(pid)) return "";
     var sources = CLIPGEN_CONFIG.convergenceSources;
@@ -1239,8 +1182,7 @@
     return formatOffsetBadge(first);
   }
 
-  // Per-lane summary used as the badge's tooltip so diverged lanes are legible
-  // without unlocking: "sheet +3s · screenspace 0s · transcript −2s".
+  // Tooltip listing each lane, so diverged lanes read without unlocking.
   function offsetSummaryTitle(pid) {
     var sources = CLIPGEN_CONFIG.convergenceSources;
     var parts = [];
@@ -1251,9 +1193,7 @@
     return parts.join(" · ");
   }
 
-  // Build a number input. `source === null` is the coupled input (writes every
-  // lane); a source string makes a per-lane input. Escape reverts to the stored
-  // value; change commits.
+  // Number input; source null is the coupled input. Escape reverts, change commits.
   function makeOffsetInput(pid, source) {
     var input = document.createElement("input");
     input.type = "number";
@@ -1279,8 +1219,7 @@
     return input;
   }
 
-  // Sync an unlocked label's input value(s) to the current stored offsets
-  // without stealing focus (used after recalculate-driven rerenders).
+  // Sync an unlocked label's inputs to stored offsets without stealing focus.
   function syncLabelInputs(lbl, pid) {
     if (!lbl) return;
     var inp = lbl.querySelector(".cv-offset-input");
@@ -1296,10 +1235,7 @@
     var sw = cvState.swimLaneEl;
     sw.classList.toggle("is-editing", !!cvState.editing);
 
-    // Clear is-unlocked on every label/row/event, then re-add to the active
-    // participant. Events get the class too so marker pointer-events can be
-    // disabled — otherwise they intercept the drag mousedown / fire a stray
-    // click selection on mouseup.
+    // Events carry is-unlocked too: it disables marker pointer-events that would intercept drags.
     var labels = sw.querySelectorAll(".cg-swim-label");
     for (var i = 0; i < labels.length; i++) {
       labels[i].classList.remove("is-unlocked");
@@ -1319,9 +1255,7 @@
       for (var k = 0; k < rs.length; k++) rs[k].classList.add("is-unlocked");
       var evs = sw.getEventsForParticipant(cvState.editing);
       for (var m = 0; m < evs.length; m++) evs[m].classList.add("is-unlocked");
-      // Sync the input value(s) with the current offset; user clicks to focus
-      // (intentional — we don't want a recalculate-driven rerender to steal
-      // focus from wherever the user just clicked).
+      // Sync values only; never steal focus during a recalculate-driven rerender.
       syncLabelInputs(lbl, cvState.editing);
     }
   }
@@ -1329,10 +1263,7 @@
   function setUncoupled(pid, on) {
     if (on) cvState.uncoupled[pid] = true;
     else delete cvState.uncoupled[pid];
-    // Rebuild just this label (coupled vs uncoupled layouts differ) and re-apply
-    // the unlock/sync classes. No recalculate/save: toggling the input mode does
-    // not change the underlying offsets. Markers reflow automatically since the
-    // label width is CSS-driven and marker positions are percentage-based.
+    // Rebuild only this label; no recalculate or save, the offsets are unchanged.
     if (cvState.swimLaneEl) {
       buildOffsetLabel(cvState.swimLaneEl, pid);
       applyEditingClasses();
@@ -1360,8 +1291,7 @@
     });
     label.appendChild(lockBtn);
 
-    // Uncouple toggle: split a participant's lanes so each data source can be
-    // offset independently (e.g. spreadsheet timestamps drifting from screen).
+    // Uncouple toggle: offset each data source independently.
     var coupleBtn = document.createElement("button");
     coupleBtn.type = "button";
     coupleBtn.className = "cv-offset-couple-btn";
@@ -1385,9 +1315,7 @@
     if (participantHasOffset(pid)) badge.title = offsetSummaryTitle(pid);
     label.appendChild(badge);
 
-    // Coupled: one input drives all lanes. Uncoupled: a stacked column of tiny
-    // inputs, one per source, each aligned to its sub-row. Both are built; CSS
-    // shows the right one based on .is-uncoupled.is-unlocked.
+    // Coupled input and per-lane inputs are both built; CSS picks via .is-uncoupled.is-unlocked.
     label.appendChild(makeOffsetInput(pid, null));
 
     var laneWrap = el("div", "cv-offset-lane-inputs");
@@ -1408,11 +1336,7 @@
     installDragHandlers(swimLane);
   }
 
-  // Hatched overlay over the portion of one source lane where that source's
-  // data had not yet started (positive offset, void on the left) or had already
-  // ended (negative offset, void on the right). Per-lane so an uncoupled source
-  // shows its own void over just its 14px sub-row. Re-rendered on every
-  // recalculate and live-updated during drag.
+  // Hatched per-lane overlay where a source has no data: positive offset left, negative right.
   function renderVoidOverlays(swimLane, participants) {
     var lanes = swimLane.querySelector(".cg-swim-lanes");
     if (!lanes) return;
@@ -1472,10 +1396,7 @@
     }
   }
 
-  // Commit the in-flight drag delta when renderTimeline() is about to destroy
-  // the DOM (e.g. a debounce-driven recalculate landed mid-drag). The current
-  // renderTimeline pass already extracted events with the pre-drag offset, so
-  // schedule a deferred recalculate to re-render with the committed value.
+  // Commit the in-flight drag before renderTimeline() rebuilds; defer a recalculate for the committed value.
   function _cvAbortDrag() {
     var tx = cvState._dragTx;
     if (!tx) return;
@@ -1494,16 +1415,12 @@
       }
       pruneParticipant(tx.pid);
       cvSaveOffsets();
-      // Cannot recalculate() synchronously — this runs inside renderTimeline(),
-      // itself inside recalculate(). Defer so the committed offset renders.
+      // Runs inside recalculate() via renderTimeline(); defer the re-render.
       setTimeout(recalculate, 0);
     }
   }
 
-  // Document-level drag tracking. Mousedown listener is rebound to each new
-  // swim-lane (the DOM is rebuilt on every recalculate), but the mousemove/
-  // mouseup listeners are installed once at module init so re-renders don't
-  // accumulate handlers.
+  // mousemove/mouseup bind once at init; mousedown rebinds per swim-lane rebuild.
   var _cvDragRafPending = false;
   var _cvDragLastX = 0;
   var _cvDragLiveInput = null;
@@ -1519,10 +1436,7 @@
       var pxPerSec = swimLane.getLanesPxPerSec();
       if (!pxPerSec || !isFinite(pxPerSec) || pxPerSec <= 0) return;
 
-      // In uncoupled mode, a drag that starts on a specific source row scopes
-      // to that lane; otherwise (coupled, or grabbing the label gutter) move all
-      // three lanes together. Only the editing participant's rows are
-      // pointer-active, so e.target resolves to one of its three source rows.
+      // Uncoupled drags on a source row scope to that lane; otherwise all lanes move.
       var rowHit = e.target.closest(".cg-swim-row[data-source-idx]");
       var sIdx = (cvState.uncoupled[pid] && rowHit)
         ? parseInt(rowHit.dataset.sourceIdx, 10) : -1;
@@ -1569,8 +1483,7 @@
       var deltaSec = deltaPx / tx2.pxPerSec;
       for (var i = 0; i < tx2.markers.length; i++) {
         var m = tx2.markers[i];
-        // Preserve any baseline transform (e.g. translateX(-50%) for zero-width markers)
-        // by stacking the drag translation in front of it.
+        // Stack the drag translation in front of any baseline transform (e.g. translateX(-50%)).
         var orig = m.dataset._origTransform;
         if (orig === undefined) {
           orig = m.style.transform || "";
@@ -1581,9 +1494,7 @@
       if (_cvDragLiveInput) {
         _cvDragLiveInput.value = (tx2.baseOffset + deltaSec).toFixed(1);
       }
-      // Keep the void overlay(s) in sync with the in-flight offset so the
-      // hatched "no-data" region grows/shrinks live as the user drags. Coupled
-      // drag updates all three lanes; uncoupled updates only the grabbed one.
+      // Live-update the void overlays; coupled drags touch all lanes, uncoupled only the grabbed one.
       if (tx2.swimLane) {
         var liveOff = tx2.baseOffset + deltaSec;
         if (tx2.source) {
@@ -1601,8 +1512,7 @@
   function _cvOnDocMouseUp(e) {
     var tx = cvState._dragTx;
     if (!tx) return;
-    // e.clientX is always numeric (0 at viewport left edge), so never use ||
-    // which would fall back to _cvDragLastX when the mouse releases at x=0.
+    // Never `||` here: e.clientX is 0 at the viewport's left edge.
     var deltaPx = e.clientX - tx.startX;
     var deltaSec = deltaPx / tx.pxPerSec;
     for (var i = 0; i < tx.markers.length; i++) {
@@ -1622,8 +1532,7 @@
     document.body.style.userSelect = "";
     cvState._dragTx = null;
     _cvDragLiveInput = null;
-    // Match _cvAbortDrag's threshold — ignore sub-0.05s jiggles so an
-    // accidental click-drag doesn't trigger a full recalculate.
+    // Match _cvAbortDrag's threshold; sub-0.05s jiggles skip the recalculate.
     if (Math.abs(deltaSec) >= 0.05) {
       commitOffset(tx.pid, tx.source, tx.baseOffset + deltaSec);
     }
@@ -1632,11 +1541,7 @@
   function deactivate() {
     cvState.active = false;
     closeDetailInline();
-    // The frame preview is appended to document.body, not to #convergencePanel,
-    // so hiding the panel does not hide it — switching tabs mid-hover left the
-    // thumbnail painted over the Metadata tab. The pending debounce has to go
-    // too, or a switch within its window paints a preview on the tab the user
-    // just moved to. (Same class as the empty mapDeactivate in 2a387fd6.)
+    // The preview hangs off document.body and survives panel hiding; cancel the debounce too.
     clearTimeout(_cvHoverDebounce);
     _cvHoverDebounce = null;
     cvHideFramePreview();
@@ -1652,9 +1557,7 @@
     document.addEventListener("mousemove", _cvOnDocMouseMove);
     document.addEventListener("mouseup", _cvOnDocMouseUp);
 
-    // Zone navigation via the shared hotkey registry. The offset inputs no
-    // longer need an explicit guard — the dispatcher's typing guard covers
-    // focused <input>s.
+    // Zone navigation hotkeys; the dispatcher's typing guard covers the offset inputs.
     function _zoneNavReady() {
       return cvState.active && !!(cvState.selection && cvState.selection.zone);
     }
@@ -1691,9 +1594,7 @@
     });
   }
 
-  // The detail rows bake their cross-reference badges into the DOM, so a
-  // settings flip needs a re-render — render() rebuilds the swim lane and
-  // reopens the selected zone's detail from cvState.selection.
+  // Badges are baked into the detail rows, so a settings flip needs render().
   function renderCrossRefs() {
     if (cvState.active) render();
     else cvState.crossRefsStale = true;

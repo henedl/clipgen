@@ -2369,7 +2369,15 @@ def test_video_info_reprobes_on_mtime_change(client, tmp_path, monkeypatch):
             "width": 1920,
             "height": 1080,
             "video_codec": "h264",
-            "audio_codec": "aac",
+            "audio_tracks": [
+                {
+                    "index": 0,
+                    "codec": "aac",
+                    "channels": 2,
+                    "sample_rate": 48000,
+                    "channel_layout": "stereo",
+                }
+            ],
             "fps": 30.0,
             "duration": duration,
             "nb_frames": int(duration * 30),

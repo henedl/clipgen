@@ -22,10 +22,8 @@
 
   var SEARCH_DEBOUNCE = 300;
   var _searchTimer = null;
-  // Request generation: the debounce limits how many requests fire, not their
-  // ordering. A slow response for an old query landing after a fast one for
-  // the current query must not overwrite state.searchResults — "Mark All"
-  // reads it and would persist marks for a query the user already replaced.
+  // Request generation: a stale response must not overwrite searchResults, which
+  // Mark All persists.
   var _searchVer = 0;
 
   function markAllSearchResults() {
@@ -49,8 +47,6 @@
   function initSearch() {
     var input = qs("#searchInput");
 
-    // Static markup now, so it is wired once here rather than re-created on
-    // every render (which is what the old inject-on-first-result path did).
     qs("#searchMarkAllBtn").addEventListener("click", function () {
       markAllSearchResults();
     });
@@ -119,9 +115,7 @@
   function _searchPartialSegments(query, pid) {
     var results = [];
     var lowerQ = query.toLowerCase();
-    // Status polls carry partial_count, not the segment array; the streaming
-    // participant's accumulated segments live in the hub (fetched via the tail
-    // cursor). This is only called for state.streamingParticipant.
+    // Status polls carry only partial_count; the hub holds the streaming segments.
     var segments = TS.streamingSegmentsFor(pid);
     for (var i = 0; i < segments.length; i++) {
       var seg = segments[i];
@@ -144,8 +138,7 @@
     var list = qs("#searchResultsList");
     var header = qs("#searchResultsHeader");
 
-    // No header on an empty result set: the "No matches found" row already says
-    // it, and a Mark All button with nothing to mark is a dead control.
+    // No header on empty results: a Mark All with nothing to mark is dead.
     if (data.total_count === 0) {
       header.classList.add("hidden");
       list.innerHTML = '<div class="search-result-row" style="justify-content:center;color:var(--color-text-dim)">No matches found</div>';
@@ -197,10 +190,8 @@
 
   function highlightQuery(text, query) {
     if (!query) return escapeHtml(text);
-    // Match on the RAW text and escape each piece separately: matching the
-    // escaped text let a query like "amp" or "lt" land inside an entity
-    // escapeHtml had just produced and split it with the span, rendering the
-    // entity literally.
+    // Match the raw text, escape per piece; matching escaped text split entities
+    // like &amp;.
     var regex = new RegExp(query.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "gi");
     var out = "";
     var last = 0;

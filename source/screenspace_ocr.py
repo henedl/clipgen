@@ -24,24 +24,15 @@ from screenspace_primitives import extract_region, point_in_mask_points
 # Engine pool
 # ---------------------------------------------------------------------------
 #
-# RapidOCR gives no official thread-safety guarantee for a shared engine, and
-# each engine owns private onnxruntime sessions, so each caller borrows its own
-# engine from a small per-model pool rather than sharing one behind a global
-# lock (which would cap OCR concurrency at 1 regardless of
-# SCREENSPACE_PARALLEL_WORKERS). Bounded rather than per-thread: Flask's
-# ephemeral calibration request threads would otherwise accumulate one model
-# copy each.
+# Per-model pool: RapidOCR engines aren't thread-safe; bounded against Flask
+# thread churn.
 
 _ocr_pools: dict[str, queue.Queue] = {}
 _ocr_pool_lock = threading.Lock()  # guards _ocr_pools creation
 _ocr_build_lock = threading.Lock()  # serializes first-time engine construction
 
-# Language → recognition-model family. Detection/orientation always use the
-# wheel's bundled defaults; only the recognition model varies by script.
-# "default" is the wheel's offline PP-OCR Chinese+English model; the other
-# families are vendored at build time (build/fetch_binaries.py OCR_MODEL_PINS,
-# bundled as ocr_models/) and auto-downloaded by rapidocr in source checkouts
-# that skipped the fetch. The UI language dropdown mirrors this table's keys.
+# Language → recognition model; non-default families are vendored
+# (build/fetch_binaries.py). UI dropdown mirrors these keys.
 _OCR_MODEL_DEFAULT = "default"
 _OCR_LANG_TO_MODEL: dict[str, str] = {
     "en": _OCR_MODEL_DEFAULT,
@@ -62,8 +53,8 @@ def _resolve_ocr_model(languages: list[str] | None) -> str:
         raise ValueError(f"Unsupported OCR language(s): {unknown}")
     models = {_OCR_LANG_TO_MODEL[lang] for lang in langs}
     if models == {_OCR_MODEL_DEFAULT, "latin"}:
-        # latin covers English glyphs, not the Chinese half of the default rec
-        # model. ["en", "de"] can share latin; ["zh", "de"] cannot.
+        # latin lacks the default model's Chinese half: ["en","de"] share latin,
+        # ["zh","de"] cannot.
         default_langs = [
             lang for lang in langs if _OCR_LANG_TO_MODEL[lang] == _OCR_MODEL_DEFAULT
         ]
@@ -98,14 +89,10 @@ def _build_ocr_reader(model: str) -> Any:
 
     params: dict[str, Any] = {
         "Global.log_level": "error",
-        # RapidOCR silently drops readings scoring below Global.text_score
-        # (default 0.5) before clipgen ever sees them — a pre-filter EasyOCR
-        # never had, and one the user-facing confidence slider cannot reach
-        # (lowering the slider below 0.5 would change nothing). Near-zero here
-        # makes clipgen's own ocr_confidence_threshold the single gate.
+        # RapidOCR pre-filters below text_score (default 0.5); near-zero makes
+        # ocr_confidence_threshold the single gate.
         "Global.text_score": 0.05,
-        # Each pooled engine owns a private onnxruntime session; cap intra-op
-        # threads so pool_size × threads cannot oversubscribe the CPU.
+        # Cap intra-op threads so pool_size × threads cannot oversubscribe the CPU.
         "EngineConfig.onnxruntime.intra_op_num_threads": max(
             1, (os.cpu_count() or 4) // _ocr_pool_size()
         ),
@@ -115,10 +102,8 @@ def _build_ocr_reader(model: str) -> Any:
         if vendored is not None:
             params["Rec.model_path"] = str(vendored)
         else:
-            # Source checkout without build/vendor/ocr: let rapidocr fetch its
-            # own pinned model (dev only — frozen bundles always hit the
-            # vendored path). Versions match OCR_MODEL_PINS in
-            # build/fetch_binaries.py: v5 has no japan ONNX model, hence v4.
+            # Dev-only fallback: rapidocr fetches its pinned model. v5 has no
+            # japan model, hence v4.
             params["Rec.lang_type"] = {
                 "latin": LangRec.LATIN,
                 "japan": LangRec.JAPAN,
@@ -148,11 +133,8 @@ def _get_ocr_pool(languages: list[str]) -> queue.Queue:
     with _ocr_pool_lock:
         pool = _ocr_pools.get(key)
         if pool is None:
-            # LIFO, not FIFO: a sequential caller (one scan, one checkout per
-            # frame) must get the engine it just returned back. A FIFO pool
-            # rotates through the None placeholders and builds one engine per
-            # slot for a single-threaded workload — measured as
-            # ocr.reader_build n=2 and ~1.7 GB peak_rss on one text scan.
+            # LIFO so a sequential caller gets its engine back; FIFO built one
+            # engine per slot.
             pool = queue.LifoQueue()
             for _ in range(_ocr_pool_size()):
                 pool.put(None)
@@ -171,10 +153,8 @@ def _checkout_ocr_reader(languages: list[str]) -> Iterator[Any]:
     """
     model = _resolve_ocr_model(languages)
     pool = _get_ocr_pool(languages)
-    # The one number that settles SCREENSPACE_OCR_POOL_SIZE, which is otherwise
-    # tuned on reasoning alone: time spent blocked here is OCR concurrency the
-    # pool is refusing. Direct analogue of worker.progress_lock_wait, and one
-    # add() per OCR call rather than per frame, so the hot-loop rule holds.
+    # Wait time here is OCR concurrency the pool refuses; sizes
+    # SCREENSPACE_OCR_POOL_SIZE. One add() per call.
     _t0 = time.perf_counter() if config.PROFILING else 0.0
     reader = pool.get()
     if _t0:
@@ -242,11 +222,8 @@ def _preprocess_for_ocr(pixels: np.ndarray, *, min_height: int = 0) -> np.ndarra
     return cv2.cvtColor(enhanced, cv2.COLOR_GRAY2BGR)
 
 
-# Opt-in confusion-collapsing for the text tool: fold the glyphs OCR engines
-# most often swap on compressed footage before the fuzzy compare. Either toward
-# digits ("100" matches a reading of "l00") or letters ("stop" matches "5top").
-# The pairs were tuned against EasyOCR's misread profile; re-tune against
-# PP-OCR's once real-footage misreads accumulate (the mechanism is unchanged).
+# Opt-in glyph confusion folding before the fuzzy compare; pairs tuned on
+# EasyOCR, re-tune for PP-OCR.
 _OCR_FOLD_TO_DIGITS = str.maketrans(
     {"o": "0", "l": "1", "i": "1", "|": "1", "s": "5", "b": "8"}
 )
@@ -365,8 +342,7 @@ def _fuzzy_match_ratio(needle: str, haystack: str) -> float:
         return difflib.SequenceMatcher(None, needle, haystack).ratio()
     if needle in haystack:
         return 1.0
-    # SequenceMatcher caches its second sequence, so the constant needle goes
-    # there and each window is set_seq1 (ratio() is symmetric).
+    # SequenceMatcher caches seq2, so the constant needle goes there.
     matcher = difflib.SequenceMatcher(None, "", needle)
     best = 0.0
     for i in range(len(haystack) - len(needle) + 1):

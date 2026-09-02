@@ -112,12 +112,7 @@ def _extract_confidence(tool_type: str, result: dict[str, Any]) -> float:
 # Per-frame memoization (multitool chains)
 # ---------------------------------------------------------------------------
 #
-# Within a multitool chain every step re-derives crop/gray/phash/OCR from the
-# same ``(frame, region)``. ``scan_multitool`` passes a fresh per-frame ``cache``
-# (plus the previous frame's as ``prev_cache``, rolled forward), so steps sharing
-# a region compute each value once and temporal tools (change/flow/inactivity)
-# reuse the previous frame's crop/gray. Single-frame callers (pin calibration)
-# pass none — ``None`` disables memoization and keeps results byte-identical.
+# scan_multitool passes per-frame cache/prev_cache; None disables memoization.
 
 _MISSING = object()
 
@@ -349,10 +344,7 @@ def score_frame_for_tool(
     pin so fuzzy/confidence changes re-score without re-running OCR; when absent
     the tool runs OCR live through its ``check_frame``.
     """
-    # Template and shape match full-frame and ignore ``region``, so a zero-size
-    # region (an uploaded reference scanning the whole frame with no region_ref)
-    # is valid for them alone. Every other tool crops, where an empty crop
-    # breaks cv2.
+    # Template and shape ignore region; every other tool crops, and empty crops break cv2.
     if tool_type not in ("template", "shape") and (
         region.get("w", 0) <= 0 or region.get("h", 0) <= 0
     ):
@@ -382,22 +374,15 @@ class AnalysisTool:
     """
 
     name: ClassVar[str] = ""
-    # Max region dimension when running in "fast" scan mode (passed to the
-    # generic frame extractor as ``max_region_dim``). 0 means no downscale.
+    # Fast-scan max region dimension (max_region_dim to the frame extractor); 0 = no downscale.
     fast_scan_region_dim: ClassVar[int] = 0
-    # Whether the tool participates in the fast-scan optimization at all.
-    # Timelapse opts out because it has its own ``sample_interval``.
+    # False opts out of fast scan (timelapse has its own sample_interval).
     supports_fast_scan: ClassVar[bool] = True
     # Extra keys merged into ``fast_opts`` (e.g. ``{"template_downscale": True}``).
     fast_scan_extra_opts: ClassVar[dict[str, Any]] = {}
-    # Detail-dict key holding the threshold-independent calibration scalar that
-    # ``check_frame`` populates on both branches. Empty ⇒ tool not calibratable.
+    # Detail key of the threshold-independent calibration scalar; empty means not calibratable.
     score_key: ClassVar[str] = ""
-    # Name of the module-global ``scan_<x>`` function the base ``scan`` calls.
-    # A *name* resolved via ``globals()`` at call time — never the function
-    # object, which would snapshot the original and blind tests that
-    # monkeypatch ``screenspace_tools.scan_<x>``. Empty ⇒ the subclass
-    # overrides ``scan`` outright (template, timelapse, multitool).
+    # scan_<x> name, resolved via globals() per call so test monkeypatches apply. Empty: subclass overrides scan.
     scan_fn_name: ClassVar[str] = ""
     # Tool-specific scan kwargs, forwarded as ``params.get(key, default)``.
     scan_defaults: ClassVar[dict[str, Any]] = {}
@@ -531,8 +516,7 @@ class ColorTool(AnalysisTool):
         on_result,
         fast_opts,
     ):
-        # Presence scans must stay full-resolution: the fast-scan max_region_dim
-        # downscale uses INTER_AREA averaging, which erases small color patches.
+        # Presence needs full resolution: INTER_AREA downscaling erases small color patches.
         if params.get("color_mode", "average") == "presence":
             fast_opts = None
         return super().scan(
@@ -578,11 +562,7 @@ class ChangeTool(AnalysisTool):
 
 
 class SimilarityTool(AnalysisTool):
-    # A spatial Similarity heatmap is feasible but deferred: this tool computes
-    # only a scalar SSIM. An accumulated heatmap needs the per-pixel map
-    # (``ssim_diff_map``, already used by the Model view preview off the hot
-    # path), costing per-frame CPU/memory — so gate it behind the phash
-    # pre-filter if added.
+    # Scalar SSIM only; a spatial heatmap needs per-frame ssim_diff_map, so gate it behind phash.
     name = "similarity"
     fast_scan_region_dim = 128
     score_key = "score"
@@ -616,8 +596,7 @@ class SimilarityTool(AnalysisTool):
         on_result,
         fast_opts,
     ):
-        # `is None` on purpose (contrast Scene's falsy check): the reference is
-        # an ndarray, whose truthiness is ambiguous.
+        # `is None`, not falsy: the reference is an ndarray with ambiguous truthiness.
         if params.get("reference_frame") is None:
             raise ValueError("Similarity scan requires a reference_frame parameter")
         return super().scan(
@@ -635,9 +614,7 @@ class SimilarityTool(AnalysisTool):
 
 class TextTool(AnalysisTool):
     name = "text"
-    # Calibration scalar is fuzzy match quality. Deliberately distinct from
-    # ``_extract_confidence``'s "confidence" key (OCR reading confidence) — two
-    # different axes; do not unify them.
+    # Fuzzy match quality, a different axis from _extract_confidence's OCR "confidence"; keep them apart.
     score_key = "fuzzy_ratio"
     scan_fn_name = "scan_text"
     scan_interval_default = 2.0
@@ -709,17 +686,12 @@ class TemplateTool(AnalysisTool):
     def check_frame(
         self, frame, prev_frame, region, params, cache=None, prev_cache=None
     ):
-        # Template searches the whole frame but the run region scopes which
-        # matches count; nothing region-scoped to memoize, and it already
-        # caches its scaled template on ``params``.
+        # Nothing region-scoped to memoize: template searches the whole frame and caches its prep on params.
         template_img = params.get("template_image")
         if template_img is None:
             return False, None
         threshold = params.get("threshold", config.SCREENSPACE_TEMPLATE_MATCH_THRESHOLD)
-        # Cache the task-constant scaled template/mask + grayscale prep on the
-        # parameters dict so multitool scans amortize it across frames. The
-        # template_scale slider resizes the (often uploaded) template to its
-        # in-video pixel size before matching, mirroring scan_template.
+        # Cache the scaled template prep on params so multitool amortizes it; template_scale mirrors scan_template.
         cached = params.get("_prepared_template")
         if cached is None:
             scaled_img, scaled_mask = _scale_template(
@@ -734,10 +706,7 @@ class TemplateTool(AnalysisTool):
             )
             params["_prepared_template"] = cached
         _scaled_img, _scaled_mask, prepared = cached
-        # Peak correlation is the threshold-independent scalar; available even on
-        # a miss (unlike match_template, which only returns above-threshold hits).
-        # The run region scopes both the search and the peak (Full frame /
-        # zero-size = anywhere), so calibration scores the targeted spot.
+        # Peak correlation scores even a miss; the run region (zero-size = anywhere) scopes it.
         window = region_search_window(region)
         origin = (0, 0)
         if window is not None and prepared[1] is None:
@@ -766,9 +735,7 @@ class TemplateTool(AnalysisTool):
             corr,
             origin=origin,
         )
-        # Shaped region: the polygon refines the rect window as a detection
-        # filter — passing requires at least one surviving match. best_score
-        # stays the window-local peak (the calibration scalar).
+        # Region polygon filters detections; passing needs a surviving match. best_score stays the window peak.
         matches = filter_matches_by_region_mask(matches, region)
         if region.get("mask_points") and not matches:
             return False, {"best_score": round(peak, 4), "match_count": 0}
@@ -791,9 +758,7 @@ class TemplateTool(AnalysisTool):
         if template_img is None:
             raise ValueError("Template scan requires a template_image parameter")
         tmpl_mask = params.get("template_mask")
-        # Fast scan: downscale template + mask by 2x before passing to the
-        # scan function (which separately downscales the frame via the
-        # ``template_downscale`` fast_opts flag).
+        # Fast scan halves template + mask; the template_downscale fast_opts flag halves frames.
         if scan_mode == "fast":
             th, tw = template_img.shape[:2]
             ntw, nth = tw // 2, th // 2
@@ -830,8 +795,7 @@ class ShapeTool(AnalysisTool):
     def check_frame(
         self, frame, prev_frame, region, params, cache=None, prev_cache=None
     ):
-        # Shape matches the full frame (ignores region); the per-scale edge
-        # reference prep is task-constant, so cache it on ``params``.
+        # Shape ignores region; the per-scale edge prep is task-constant, so cache it on params.
         shape_img = params.get("shape_image")
         if shape_img is None:
             return False, None
@@ -852,11 +816,7 @@ class ShapeTool(AnalysisTool):
         if not prepared:
             # Degenerate reference: no scale kept enough edge pixels.
             return False, None
-        # match_shape returns the cross-scale peak alongside the matches — the
-        # threshold-independent scalar, available even on a miss. A real
-        # region rect scopes both the search and the peak to matches centered
-        # inside it (Full frame / zero-size = anywhere), so calibration scores
-        # the spot the run is aimed at, not a lookalike elsewhere.
+        # Cross-scale peak: threshold-independent, available on a miss. The run region scopes search and peak.
         window = region_search_window(region)
         matches, peak = match_shape(
             _frame_edge_map(frame), prepared, threshold, window=window
@@ -886,8 +846,7 @@ class ShapeTool(AnalysisTool):
         if shape_img is None:
             raise ValueError("Shape scan requires a shape_image parameter")
         shape_mask = params.get("shape_mask")
-        # Fast scan: halve reference + mask like TemplateTool (frames get the
-        # matching 2x downscale via the ``template_downscale`` fast_opts flag).
+        # Fast scan halves reference + mask like TemplateTool; template_downscale halves frames.
         if scan_mode == "fast":
             sh, sw = shape_img.shape[:2]
             nsw, nsh = sw // 2, sh // 2
@@ -977,9 +936,7 @@ class SceneTool(AnalysisTool):
                 mask=_cached_mask(cache, frame, region),
             ),
         )
-        # Fingerprints are only comparable under the same mask, so the per-ref
-        # cache is keyed by the region's polygon (refs are cached on the ref
-        # dict, which multitool steps with different regions could share).
+        # Ref dicts are shared across steps with different regions; fingerprints only compare under one mask.
         mask_key = mask_points_key(region.get("mask_points"))
         best_name = ""
         best_score = 0.0
@@ -1015,8 +972,7 @@ class SceneTool(AnalysisTool):
         on_result,
         fast_opts,
     ):
-        # Falsy on purpose (an empty reference list is as unusable as None);
-        # contrast Similarity's `is None`, forced by ndarray truthiness.
+        # Falsy on purpose: an empty list is as unusable as None. Contrast Similarity's `is None`.
         if not params.get("reference_scenes"):
             raise ValueError("Scene scan requires reference_scenes parameter")
         return super().scan(
@@ -1035,8 +991,7 @@ class SceneTool(AnalysisTool):
 class InactivityTool(AnalysisTool):
     name = "inactivity"
     fast_scan_region_dim = 64
-    # Calibration scalar is the raw phash distance (Sensitivity-slider units);
-    # the strip inverts the axis for display (lower distance = more inactive).
+    # Raw phash distance in Sensitivity-slider units; the strip inverts it (lower = more inactive).
     score_key = "distance"
     scan_fn_name = "scan_inactivity"
     scan_defaults: ClassVar[dict[str, Any]] = {
@@ -1062,14 +1017,9 @@ class InactivityTool(AnalysisTool):
 
 class BoundaryTool(AnalysisTool):
     name = "boundary"
-    # The scanner is already coarse and runs its own phash on every sample;
-    # the generic fast-scan phash-skip would fight that logic, so opt out.
+    # The scanner runs its own phash per sample; the fast-scan phash-skip would fight it.
     supports_fast_scan = False
-    # Scan-only in v1: not a multitool step and not calibratable (no score_key),
-    # so the pinned-frame strip and /api/calibrate correctly skip it. Wiring
-    # calibration later means adding score_key + a per-frame check_frame here,
-    # plus a `needs_prev` entry and full-frame handling in the calibrate endpoint
-    # (boundary needs the previous sampled frame and always scans the full frame).
+    # Scan-only: no check_frame or score_key, so the pinned strip and /api/calibrate skip it.
     scan_fn_name = "scan_boundaries"
     scan_defaults: ClassVar[dict[str, Any]] = {
         "threshold": 0,
@@ -1078,22 +1028,16 @@ class BoundaryTool(AnalysisTool):
 
     def _scan_kwargs(self, params):
         kwargs = super()._scan_kwargs(params)
-        # Policy default lives here, not in the scan primitive: a task with
-        # no metric (UI "Auto") gets the configured default; the primitive's
-        # own default stays "phash" for direct callers/tests.
+        # Policy default lives here; the primitive keeps "phash" for direct callers and tests.
         kwargs["metric"] = params.get("metric") or config.SCREENSPACE_BOUNDARY_METRIC
         return kwargs
 
 
 class AttentionTool(AnalysisTool):
     name = "attention"
-    # The scanner controls its own pipe downscale and needs every sampled
-    # frame for dwell weighting (heatmap heat ∝ time on screen); the generic
-    # fast-scan phash-skip would drop exactly the static frames that matter.
+    # Dwell weighting needs every sampled frame; the fast-scan phash-skip would drop the static ones.
     supports_fast_scan = False
-    # Scan-only: full-frame with temporal state (EMA + shift confirmation), so
-    # it is neither a multitool step nor calibratable (no score_key); the
-    # pinned-frame strip and /api/calibrate correctly skip it.
+    # Scan-only (full-frame, temporal state): no check_frame or score_key, so calibration skips it.
     scan_fn_name = "scan_attention"
     scan_defaults: ClassVar[dict[str, Any]] = {
         "shift_threshold": 0.0,
@@ -1102,17 +1046,14 @@ class AttentionTool(AnalysisTool):
 
     def _scan_kwargs(self, params):
         kwargs = super()._scan_kwargs(params)
-        # Per-task channel weights / center bias / face toggle (absent
-        # keys fall back to the SCREENSPACE_ATTENTION_* config defaults).
+        # Channel weights, center bias, face toggle; absent keys use SCREENSPACE_ATTENTION_* defaults.
         kwargs.update(saliency_kwargs_from_params(params))
         return kwargs
 
 
 class TimelapseTool(AnalysisTool):
     name = "timelapse"
-    # Has its own ``sample_interval`` and produces a media file rather than
-    # per-frame events, so the generic fast-scan path does not apply and no
-    # Viewer SS_DETECTOR_COLORS / SS_DETECTOR_ICON_PATHS entries are needed.
+    # Own sample_interval and a media-file output; fast scan and Viewer detector entries don't apply.
     supports_fast_scan = False
 
     def scan(
@@ -1164,10 +1105,7 @@ class MultitoolTool(AnalysisTool):
         on_result,
         fast_opts,
     ):
-        # Function-local import breaks the tools<->multitool cycle: scan_multitool
-        # needs check_frame_for_tool/score_frame_for_tool from this module, while
-        # only this one method needs scan_multitool. Imported at task-execution
-        # time, never at module import, so there is no hot-path cost.
+        # Local import breaks the tools<->multitool cycle; runs at task time, not import time.
         from screenspace_multitool import scan_multitool
 
         steps = [dict(s) for s in params.get("steps", [])]
@@ -1213,11 +1151,7 @@ TOOLS: dict[str, AnalysisTool] = {
     )
 }
 
-# ``AnalysisTool.scan`` dispatches by *name* — ``globals()[scan_fn_name]``,
-# resolved at call time so tests monkeypatching ``screenspace_tools.scan_<x>``
-# are seen. This set keeps those imports lexically referenced (they would
-# otherwise read as unused), and the loop turns a typo'd ``scan_fn_name`` into
-# an import-time failure instead of a KeyError mid-scan.
+# Keeps the by-name scan_<x> imports referenced; a typo'd scan_fn_name fails at import, not mid-scan.
 _DISPATCHABLE_SCAN_FNS = {
     scan_attention,
     scan_boundaries,

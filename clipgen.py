@@ -28,8 +28,7 @@ import sys
 import time
 from pathlib import Path
 
-# Startup anchor: everything the `startup |` report attributes is measured
-# from here, before any clipgen import has run.
+# Startup anchor for the `startup |` report; precedes every clipgen import.
 _T0 = time.perf_counter()
 
 if not getattr(sys, "frozen", False):
@@ -52,10 +51,7 @@ if __name__ == "__main__":
         utils.info_print("Interrupted by user")
         sys.exit(0)
     except Exception:
-        # Last resort for a windowed launch (Finder double-click of the frozen
-        # bundle): with no attached console an unexpected crash is a bouncing
-        # dock icon and silence. fatal_startup_error prints on console runs too,
-        # but the re-raise keeps the full traceback as the final word there.
+        # Windowed launches have no console; show the error, then re-raise for the traceback.
         if utils.GUI_LAUNCH:
             import traceback
 

@@ -813,7 +813,7 @@ class TestTranscribeVideoWhisperKwargs:
                 "width": 1920,
                 "height": 1080,
                 "video_codec": "h264",
-                "audio_codec": None,
+                "audio_tracks": [],
                 "fps": 60.0,
                 "duration": 10.0,
                 "nb_frames": 600,
@@ -846,7 +846,6 @@ def _multitrack_probe(*labels):
             "width": 1920,
             "height": 1080,
             "video_codec": "h264",
-            "audio_codec": "aac",
             "fps": 60.0,
             "duration": 10.0,
             "nb_frames": 600,
@@ -1653,7 +1652,7 @@ class TestTranscriptWorker:
         monkeypatch.setattr(
             video_mod,
             "probe_video_properties",
-            lambda *_a, **_k: {"duration": 100.0, "audio_codec": "aac"},
+            lambda *_a, **_k: {"duration": 100.0, "audio_tracks": [{"index": 0}]},
         )
         monkeypatch.setattr(
             video_mod, "decode_audio_pcm", lambda _path, _idx=0, **_kw: _FAKE_AUDIO
@@ -1701,7 +1700,7 @@ class TestTranscriptWorker:
         monkeypatch.setattr(
             video_mod,
             "probe_video_properties",
-            lambda *_a, **_k: {"duration": 100.0, "audio_codec": None},
+            lambda *_a, **_k: {"duration": 100.0, "audio_tracks": []},
         )
         monkeypatch.setattr(
             transcripts, "load_transcripts_manifest", lambda: {"corrections": []}
@@ -1730,7 +1729,7 @@ class TestTranscriptWorker:
         monkeypatch.setattr(
             video_mod,
             "probe_video_properties",
-            lambda *_a, **_k: {"duration": 100.0, "audio_codec": "aac"},
+            lambda *_a, **_k: {"duration": 100.0, "audio_tracks": [{"index": 0}]},
         )
         monkeypatch.setattr(
             transcripts, "load_transcripts_manifest", lambda: {"corrections": []}
@@ -1760,7 +1759,7 @@ class TestTranscriptWorker:
         monkeypatch.setattr(
             video_mod,
             "probe_video_properties",
-            lambda *_a, **_k: {"duration": 100.0, "audio_codec": "aac"},
+            lambda *_a, **_k: {"duration": 100.0, "audio_tracks": [{"index": 0}]},
         )
         monkeypatch.setattr(
             transcripts, "load_transcripts_manifest", lambda: {"corrections": []}
@@ -1791,7 +1790,7 @@ class TestTranscriptWorker:
         monkeypatch.setattr(
             video_mod,
             "probe_video_properties",
-            lambda *_a, **_k: {"duration": 100.0, "audio_codec": "aac"},
+            lambda *_a, **_k: {"duration": 100.0, "audio_tracks": [{"index": 0}]},
         )
         monkeypatch.setattr(
             transcripts, "load_transcripts_manifest", lambda: {"corrections": []}

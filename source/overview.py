@@ -52,8 +52,7 @@ def _clean_convergence_offsets(raw: object) -> dict[str, dict[str, float]]:
     return cleaned
 
 
-# Registered before register_static_routes so the catch-all /<path:filename>
-# static route can never shadow the API (mirrors the other blueprints).
+# Registered before register_static_routes so the catch-all static route cannot shadow it.
 @overview_bp.route("/api/convergence/offsets")
 def api_convergence_offsets_get():
     """Return persisted per-lane convergence display offsets (seconds, signed).

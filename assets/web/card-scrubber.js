@@ -1,21 +1,16 @@
-// Card scrubber: hover-to-scrub on a sprite-sheet thumbnail with synced audio
-// snippets and a translucent waveform overlay.
-//
-// Audio is global: only one snippet plays at a time across all attached cards.
-// CSS lives in card-scrubber.css (.waveform-canvas, .waveform-scrim).
+/* Card scrubber: hover-to-scrub on a sprite-sheet thumbnail with synced audio
+ * snippets and a translucent waveform overlay.
+ *
+ * Audio is global: only one snippet plays at a time across all attached cards.
+ * CSS lives in card-scrubber.css (.waveform-canvas, .waveform-scrim).
+ */
 
 (function () {
   // ---- Module-scope state (shared across all attached cards) ----
 
   var _spriteRaf = 0;
   var _audioCtx = null;
-  // Decoded-audio cache. Key: the consumer's audio key (filename or span key —
-  // a span edit changes the key, so the same bar re-caches under a new entry).
-  // Invalidation: LRU by _audioTicks once _audioTotalSeconds exceeds the cap,
-  // plus purgeAudio() for consumers that switch source video wholesale.
-  // Bound: total buffered seconds — entries range from a 2 s clip snippet to a
-  // 180 s Composer bar (~35 MB decoded), so an entry count would not bound
-  // memory. 600 s ≈ ~115 MB float32 at a 48 kHz context rate.
+  // Decoded-audio cache, LRU by total seconds: one 180 s Composer bar is ~35 MB decoded.
   var _AUDIO_CACHE_MAX_SECONDS = 600;
   var _audioBuffers = {};
   var _audioLoading = {};
@@ -82,8 +77,7 @@
       .then(function (buf) { return getAudioContext().decodeAudioData(buf); })
       .then(function (decoded) {
         delete _audioLoading[key];
-        // A purge mid-decode means this buffer belongs to a dropped source;
-        // hand it to the caller but keep it out of the cache.
+        // Purged mid-decode: return the buffer but keep it out of the cache.
         if (gen === _audioGen) {
           _audioBuffers[key] = decoded;
           _touchAudio(key);
@@ -99,8 +93,7 @@
     return _audioLoading[key];
   }
 
-  // Drop every cached buffer + waveform (e.g. on a source-video switch). Live
-  // playback stops; in-flight decodes resolve but skip the cache.
+  // Drop all cached buffers and waveforms; in-flight decodes resolve but skip the cache.
   function purgeAudio() {
     _audioGen++;
     audioScrubStop();
@@ -236,9 +229,7 @@
     return canvas;
   }
 
-  // Render the static bars into an offscreen canvas once, cached on the target
-  // <canvas> via expando props. The bars never change with the playhead, so this
-  // turns a per-frame 200-bar fill loop into a single drawImage() blit.
+  // Static bars render once to an offscreen canvas; per-frame draw becomes one blit.
   function getBarsLayer(canvas, waveformData) {
     var w = canvas.width;
     var h = canvas.height;
@@ -295,27 +286,13 @@
 
   // ---- Public API ----
 
-  // Attach scrubbing to a media element. The consumer is responsible for
-  // setting backgroundImage (and any other static styling) on the element;
-  // this module owns backgroundSize + backgroundPosition.
-  //
-  // opts:
-  //   spriteData:   { cols, rows, frameCount, interval } — required
-  //   audioFile:    string filename used as cache key — optional; enables audio + waveform
-  //   audioBaseUrl: string prefix for audio fetch — optional, default "media/"
-  //   restFrame:    frame shown before the first hover and after mouseleave —
-  //                 optional, default 0. Screenspace's heatmap animations rest on
-  //                 the last frame, which is the finished accumulation.
-  //   onScrub:      called with (frac, frameIndex) on each scrub step — optional
-  //
-  // Returns a detach() function that removes listeners and any DOM additions.
+  // Attach scrubbing; consumer sets backgroundImage, this owns backgroundSize/Position. opts: spriteData, audioFile, audioBaseUrl, restFrame, onScrub.
   function attach(mediaEl, opts) {
     if (!mediaEl || !opts || !opts.spriteData) return function () {};
     var sd = opts.spriteData;
     var audioFile = opts.audioFile || null;
     var audioBaseUrl = opts.audioBaseUrl || "media/";
-    // Consumers with a query-string audio endpoint pass an explicit audioUrl so we
-    // don't encodeURIComponent the whole URL (which would corrupt "?start=&end=").
+    // An explicit audioUrl skips encodeURIComponent, which would corrupt "?start=&end=" queries.
     var audioUrl = opts.audioUrl
       ? opts.audioUrl
       : audioFile
@@ -383,8 +360,7 @@
     };
   }
 
-  // Detach every attachment and clear shared audio state. Useful when toggling
-  // a global "fancy cards" switch off, or before a wholesale UI rebuild.
+  // Detach everything and stop audio, e.g. when the fancy-cards toggle goes off.
   function detachAll() {
     var copy = _attached.slice();
     for (var i = 0; i < copy.length; i++) {
@@ -400,9 +376,7 @@
     audioScrubStop();
   }
 
-  // Detach only attachments whose element has left the DOM. Consumers that
-  // rebuild a card list (e.g. Studio re-rendering a queue's innerHTML) call this
-  // before re-attaching so the _attached array doesn't leak stale entries.
+  // Detach entries whose element left the DOM; call before re-attaching after an innerHTML rebuild.
   function detachStale() {
     for (var i = _attached.length - 1; i >= 0; i--) {
       var entry = _attached[i];
@@ -414,9 +388,7 @@
     }
   }
 
-  // Stop in-flight audio without detaching. Useful on transient UI events
-  // (sidebar resize, modal open) that should silence playback but keep cards
-  // wired up.
+  // Stop audio without detaching (sidebar resize, modal open).
   function stopAll() {
     audioScrubStop();
   }
@@ -427,8 +399,7 @@
     detachStale: detachStale,
     stopAll: stopAll,
     purgeAudio: purgeAudio,
-    // Primitives — let a consumer with its own hover handler (e.g. the viewer's
-    // <video>-seek scrub) drive audio + waveform without a second attach().
+    // Primitives for consumers with their own hover handler (the viewer's <video>-seek scrub).
     loadAudioBuffer: loadAudioBuffer,
     audioScrubAt: audioScrubAt,
     audioScrubStop: audioScrubStop,

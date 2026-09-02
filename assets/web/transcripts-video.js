@@ -19,8 +19,7 @@
   var state = TS.state;
   var getMarkForSegment = TS.getMarkForSegment;
 
-  // Speed cycle for the custom video controls. Transcript-friendly steps so
-  // users can slow review or skim faster without large jumps.
+  // Playback-rate stops for the speed button; small steps suit transcript review.
   var VIDEO_SPEEDS = [0.75, 1, 1.25, 1.5, 2];
 
   var _markerHitRects = [];
@@ -31,11 +30,8 @@
   var _frictionBandRect = null;   // {y, h} of the friction band, set by renderTimeline
   var _frictionBandHover = false; // a friction tooltip is up from the band hover
 
-  // Transcribe-progress band: while the selected participant has a running
-  // transcription task, the timeline fills left→right in sync with progress
-  // (a fraction of the video's duration processed). The eased display value is
-  // driven toward its polled target by a small RAF loop; renderTimeline() only
-  // *draws* it (never mutates the target/RAF) so it can't re-enter the ease.
+  // Transcribe-progress band. The RAF ease owns these; renderTimeline() only reads
+  // them.
   var _txFillTarget = 0;      // 0..1 target progress (latest poll)
   var _txFillDisplay = 0;     // 0..1 eased value currently drawn
   var _txFillRaf = 0;         // RAF handle for the ease loop
@@ -56,8 +52,8 @@
     if (playBtn) {
       var pIcon = playBtn.querySelector(".player-btn-icon");
       setIconClass(pIcon, state.videoPlaying ? "player-icon-pause" : "player-icon-play");
-      // No "(Space)" here — the hotkey registry renders its own chip for
-      // [data-hotkey] controls, and a hand-written hint goes stale on rebind.
+      // No "(Space)" hint: the hotkey registry renders its own chip and survives
+      // rebinds.
       var playLabel = state.videoPlaying ? "Pause" : "Play";
       playBtn.setAttribute("data-tooltip", playLabel);
       playBtn.setAttribute("aria-label", playLabel);
@@ -100,12 +96,8 @@
     window.ClipgenVideoControls.applyPlaybackRate(qs("#videoPlayer"), state.videoPlaybackRate);
   }
 
-  // ---- Multi-video timeline (client-side source switching) ----
-  // For a participant whose recording spans several files, p.timeline carries
-  // [{filename, duration, cumulativeStart}]. The <video> plays one part at a
-  // time; these helpers present a single GLOBAL timeline to the controls so the
-  // playhead, labels, and segment sync all use global time. Single-video
-  // participants have state.videoTimeline === null and take the original path.
+  // ---- Multi-video timeline ----
+  // One GLOBAL timeline over p.timeline parts; single-video has videoTimeline === null.
   function _timelineTotal(tl) {
     if (!tl || !tl.length) return 0;
     var last = tl[tl.length - 1];
@@ -171,12 +163,7 @@
     });
   }
 
-  // Smoothed friction density band across the timeline ruler. Per-pixel averaging
-  // of overlapping segment scores (mirroring the Screenspace amplitude graph's
-  // binning) gives a continuous band with no separate smoothing constant; alpha
-  // scales with score. Reads the *derived* union map the agents satellite writes,
-  // not the raw scores, so the band shows exactly the segments the pane's
-  // threshold + category filters select.
+  // Friction band: per-pixel mean of scores from the filtered union map.
   function _drawFrictionBand(ctx, timeToX, bandY, bandH, cssW) {
     if (state.frictionMode === "off") return;
     if (!state.segments.length) return;
@@ -198,8 +185,7 @@
       for (var x = x0; x <= x1; x++) { sums[x] += sc; counts[x] += 1; }
     }
     if (!any) return;
-    // Solid fill + per-pixel globalAlpha composites identically to a per-pixel
-    // rgba() string but skips building one color string per column.
+    // globalAlpha per column avoids building an rgba() string per pixel.
     ctx.fillStyle = fcolor;
     for (var px = 0; px < numBins; px++) {
       if (!counts[px]) continue;
@@ -211,8 +197,7 @@
     ctx.globalAlpha = 1;
   }
 
-  // The selected participant's running transcription task (the last match, so
-  // duplicates resolve the same way they always have), or null.
+  // Selected participant's running task, or null; last match wins for duplicates.
   function _selectedRunningTask() {
     var pid = state.selectedParticipant;
     if (!pid || !state.tasks) return null;
@@ -224,13 +209,8 @@
     return found;
   }
 
-  // The selected participant's running-transcription progress (0..1), or null
-  // when it has no running task — or when its cancel is already in flight.
-  // Progress is media-time processed / duration, so it maps directly onto the
-  // timeline's x-axis. The cancel case is the whole point: the server reports
-  // "running" until the worker checkpoints, and a dotted band that outlives the
-  // click by a model load is the timeline telling the user their cancel did not
-  // take.
+  // Progress 0..1, or null when idle or cancelling; the server says "running" until it
+  // checkpoints.
   function _selectedTranscribeProgress() {
     var t = _selectedRunningTask();
     if (!t || state.cancellingTasks[t.id]) return null;
@@ -249,9 +229,7 @@
     );
   }
 
-  // Controller: recompute the band's target from the latest tasks and start (or
-  // stop) the eased fill. Called every poll by the hub, and on participant
-  // switch. Self-correcting — it turns the band on/off purely from state.
+  // Recompute the band target from state and start/stop the ease. Called per poll.
   function updateTranscribeFill() {
     var target = _selectedTranscribeProgress();
     if (target === null) {
@@ -299,25 +277,15 @@
     _startTranscribeEase();
   }
 
-  // Grid pitch (px) of the dot texture, and its peak opacity at the very bottom
-  // of the timeline. The pattern fades to nothing toward the top (see the
-  // per-row globalAlpha below), so it reads as a faint speckle concentrated
-  // along the bottom edge. Tune these two to taste.
+  // Dot grid pitch (px) and peak alpha at the timeline's bottom edge; fades upward.
   var _TX_DOT_STEP = 6;
   var _TX_DOT_PEAK_ALPHA = 0.4;
   // Offscreen dot-texture cache; rebuilt when size/color/dpr change.
   var _txDotTexture = null;
   var _txDotTextureKey = null;
 
-  // Paint the faint "unfilled" dot texture across the *untranscribed* remainder
-  // of the timeline (full height, right of the fill front). The transcribed
-  // region is left untouched so it stays the plain surfaceAlt background — the
-  // dots simply look wiped away left→right as transcription advances. The dots
-  // fade out toward the top via a per-row alpha ramp (strongest at the bottom).
-  // Pure draw: reads _txFillActive/_txFillDisplay set by the controller.
-  // p0/p1 (0..1 fractions, default full-width) confine the band to a windowed
-  // task's in/out range: the wipe runs from p0 to p1 and everything outside
-  // stays plain — that footage is not part of the run at all.
+  // Dot-texture the untranscribed remainder between p0..p1 (0..1 fractions); the wipe
+  // advances with progress. Pure draw.
   function _drawTranscribeBand(ctx, cssW, cssH, progress, theme, p0, p1) {
     if (p0 === undefined) p0 = 0;
     if (p1 === undefined) p1 = 1;
@@ -330,8 +298,7 @@
     ctx.beginPath();
     ctx.rect(fillW, 0, endX - fillW, cssH); // untranscribed remainder only
     ctx.clip();
-    // The texture is static per size/color, but this draw runs at 60fps for
-    // the whole run (RAF easing), so render it once offscreen and blit.
+    // Runs at 60fps during the ease, so cache the texture offscreen.
     var dpr = window.devicePixelRatio || 1;
     var key = cssW + "|" + cssH + "|" + theme.textDim + "|" + dpr;
     if (_txDotTextureKey !== key) {
@@ -373,11 +340,8 @@
     ctx.fillStyle = theme.surfaceAlt;
     ctx.fillRect(0, 0, cssW, cssH);
 
-    // Transcribe-progress dot texture (full height, behind the ruler + marks).
-    // Drawn before the dur<=0 early return so it also shows during the
-    // pre-metadata window. Window fractions come from the *task* (not live
-    // marker state, which the user can change mid-run); pre-metadata the
-    // duration is unknown and the band falls back to full width.
+    // Transcribe band; drawn before the dur<=0 return. Window fractions come from the
+    // task.
     if (_txFillActive) {
       var winP0 = 0;
       var winP1 = 1;
@@ -396,8 +360,7 @@
       ctx.fillStyle = theme.textDim;
       ctx.font = "11px -apple-system, sans-serif";
       ctx.textAlign = "center";
-      // "Loading…" is about the *video*, so falling back to it the instant a
-      // cancel wipes the band would read as "something else is still starting up".
+      // A pending cancel must not fall back to "Loading…", which is about the video.
       var placeholder = _txFillActive
         ? "Transcribing… " + Math.round(_txFillDisplay * 100) + "%"
         : _selectedCancelPending()
@@ -427,8 +390,7 @@
     var markerY = 22;
     var markerH = cssH - markerY - 4;
     _markerHitRects = [];
-    // Remembered for the friction-band hover hit test, which runs long after
-    // this frame and must not re-derive the band geometry from constants.
+    // Kept for hitTestFrictionBand, which must not re-derive band geometry.
     _frictionBandRect = { y: markerY, h: markerH };
 
     // Friction heatmap band (behind marks).
@@ -455,9 +417,7 @@
       });
     }
 
-    // In/Out transcribe-range shading — scrim "outside" the active range, over
-    // the surfaceAlt background. fg works in both themes (fg is white in dark
-    // → lightens, dark in light → darkens; both differentiate the range).
+    // Scrim outside the In/Out range; fg-based so it works in both themes.
     if (state.inMarker !== null || state.outMarker !== null) {
       ctx.fillStyle = hexToRgba(theme.fg, 0.12);
       if (state.inMarker !== null) {
@@ -523,13 +483,7 @@
   }
 
   // ---- In/out transcribe-range markers ----
-  // Shared by the toolbar buttons and the I/O hotkeys; mirrors Screenspace's
-  // analysis bounds. Persisted per participant in sessionStorage so leaving
-  // Transcripts and coming back (every TopNav tab is a full page load, i.e. a
-  // fresh `state`) doesn't silently drop a range the user set. Per-tab, not
-  // localStorage: the markers describe the session you're bounding right now,
-  // not a preference. transcribeParticipants reads them (for any pid, via
-  // getStoredMarkersFor) into the request's start_seconds/end_seconds.
+  // sessionStorage per pid: tab switches reload; ranges are session-bound.
   var MARKERS_STORAGE_KEY = "ts_markers";
 
   function _markersScope() {
@@ -563,8 +517,7 @@
     } catch (_) { /* sessionStorage may be unavailable */ }
   }
 
-  // {in, out} (numbers or null) for any participant — the batch transcribe
-  // path needs markers for pids that are not currently selected.
+  // {in, out} for any pid; batch transcribe needs non-selected participants' markers.
   function getStoredMarkersFor(pid) {
     var entry = pid ? _readStoredMarkers()[pid] : null;
     return {
@@ -582,8 +535,8 @@
     _writeStoredMarkers(all);
   }
 
-  // Clear a (possibly non-selected) participant's stored markers — the pill
-  // popover's Range row. Syncs live state when it is the selected participant.
+  // Clear any pid's stored markers (pill popover Range row); syncs live state if
+  // selected.
   function clearMarkersFor(pid) {
     if (!pid) return;
     var all = _readStoredMarkers();
@@ -604,8 +557,8 @@
     state.outMarker = entry && typeof entry.out === "number" ? entry.out : null;
   }
 
-  // Drop markers past the end of the participant's video — a stale one would
-  // reach the transcription as an out-of-range start_seconds/end_seconds.
+  // Drop markers past the video end; a stale one would reach the transcription out-of-
+  // range.
   function clampMarkersToDuration(duration) {
     if (!(duration > 0)) return;
     var changed = false;
@@ -667,11 +620,7 @@
     return null;
   }
 
-  // The friction band is drawn behind the mark bars and had no hover of its own,
-  // so a dense stretch of orange was unreadable — you could see that something
-  // was flagged but not what or why. Resolve the pointer's x to the segment
-  // playing there and hand it to the agents satellite's friction tooltip (the
-  // same one the hot segment rows use), so the band explains itself.
+  // Resolve pointer x to the segment under the band and reuse the friction tooltip.
   function hitTestFrictionBand(clientX, clientY) {
     if (state.frictionMode === "off" || !_frictionBandRect) return null;
     var canvas = qs("#timelineCanvas");
@@ -683,10 +632,7 @@
     for (var i = 0; i < state.segments.length; i++) {
       var seg = state.segments[i];
       if (t < seg.start || t > (seg.end || seg.start)) continue;
-      // Only segments the current filter actually selected — the band draws
-      // exactly those, so anything else would explain a stripe that isn't there.
-      // Keyed on the same union map the band draws from, or an AI-only stripe
-      // would hover as if it were not there.
+      // Key on the union map the band draws from, or hover and paint disagree.
       if ((state.frictionBandBySegId || {})[seg.id] === undefined) return null;
       var frow = state.frictionBySegId[seg.id];
       return frow ? { frow: frow, seg: seg } : null;
@@ -713,9 +659,7 @@
     var label = mark && mark.label ? " · " + mark.label : "";
     tip.textContent = "";
     var catSpan = el("span", "tr-tooltip-cat", cat.label);
-    // Set color via property API rather than string-interpolating into a
-    // style attribute — mark.color comes from a stash/manifest file and a
-    // crafted value (e.g. `red" onmouseover=...`) would otherwise break out.
+    // Property API, not a style string: mark.color is untrusted manifest input.
     catSpan.style.color = (mark && mark.color) || cat.color || "";
     tip.appendChild(catSpan);
     tip.appendChild(document.createTextNode(formatTime(seg.start) + label));
@@ -739,22 +683,18 @@
   }
 
   function hideTimelineTooltip() {
-    // Yield if a friction (hot-segment) tooltip currently owns the shared
-    // element, so a canvas mouseleave doesn't clobber it mid-display.
+    // A friction tooltip owns the shared element; don't clobber it on mouseleave.
     if (state.frictionTooltipShown) return;
     var tip = qs("#trTooltip");
     if (tip) tip.classList.add("hidden");
   }
 
-  // Whether the timeline canvas currently has a marker hover. The friction
-  // satellite's _hideFrictionTooltip reads this (via TS.hasTimelineHover) to
-  // yield the shared #trTooltip to the canvas hover.
+  // Marker hover is up; _hideFrictionTooltip reads this to yield #trTooltip.
   function hasTimelineHover() {
     return !!_lastTimelineHit;
   }
 
-  // Reset the marker hit-test rects. Called by the hub's renderEmptyState
-  // before it repaints an empty timeline.
+  // Reset hit-test rects; the hub's renderEmptyState calls this.
   function clearTimelineMarkers() {
     _markerHitRects = [];
   }
@@ -774,9 +714,7 @@
     var video = qs("#videoPlayer");
     if (!video) return;
 
-    // Restore CC preference. We restore via getStoredUIState rather than a
-    // module-level constant so that switching browsers / clearing storage
-    // gives the user the documented default (off).
+    // Read UI prefs from storage so cleared storage yields the documented defaults.
     var stored = getStoredUIState("transcripts");
     state.ccEnabled = !!(stored && stored.ccEnabled);
     state.videoCollapsed = !!(stored && stored.videoCollapsed);
@@ -789,9 +727,8 @@
       if (video.paused) window.ClipgenVideoControls.safePlay(video);
       else video.pause();
     });
-    // Hover the mute button for a glassy 0–200% volume popover (click still
-    // mutes). getTracks reads the layout fetched by selectParticipant;
-    // trackAudioUrl enables per-track mixing for single-file participants.
+    // Mute-button hover opens the volume popover; trackAudioUrl enables per-track
+    // mixing.
     state.audioPanel = window.ClipgenVideoControls.attachAudioPanel({
       video: video,
       button: qs("#videoMuteBtn"),
@@ -824,10 +761,8 @@
     });
     qs("#videoPipBtn").addEventListener("click", function () {
       state.pipEnabled = !state.pipEnabled;
-      // When the user disables PiP while the player is detached, drop it
-      // back into flow immediately. _setPipActive is provided by initPipScroll
-      // and undefined until then; guard so the button still toggles state
-      // even if scroll wiring failed for some reason.
+      // Disabling PiP while detached re-flows the player; _setPipActive is null before
+      // initPipScroll.
       if (!state.pipEnabled && state.pipActive && typeof _setPipActive === "function") {
         _setPipActive(false);
       }
@@ -890,8 +825,7 @@
       renderTimeline();
     });
 
-    // The <track> can finish loading after the video metadata; re-apply the
-    // caption mode once cues are parsed or some browsers render nothing.
+    // The <track> may load after metadata; re-apply caption mode once cues parse.
     var track = qs("#subtitleTrack");
     if (track) {
       track.addEventListener("load", applyCaptionMode);
@@ -902,8 +836,7 @@
       renderTimeline();
     });
     video.addEventListener("timeupdate", function () {
-      // Multi-video: hand off to the next part as playback nears the boundary so
-      // continuous playback spans the whole recording.
+      // Multi-video: hand off to the next part near the boundary.
       if (state.videoTimeline) {
         var tl = state.videoTimeline;
         var i = state.videoActivePart;
@@ -964,9 +897,8 @@
         _timelineTooltipRaf = 0;
         var hit = hitTestTimeline(cx, cy);
         if (hit) {
-          // Set the hit first: _hideFrictionTooltip yields to hasTimelineHover(),
-          // so this clears the friction flag without blanking the element we are
-          // about to write the mark tooltip into.
+          // Set the hit first so _hideFrictionTooltip yields instead of blanking the
+          // element.
           _lastTimelineHit = hit;
           hideFrictionBandTooltip();
           showTimelineTooltip(hit, cx, cy);
@@ -996,22 +928,17 @@
 
   // ---- PiP scroll behaviour ----
 
-  // Hoisted so initVideoPlayer's PiP-toggle handler can drop the player back
-  // into flow when the user disables PiP. Assigned in initPipScroll.
+  // Assigned in initPipScroll; initVideoPlayer's PiP toggle calls it.
   var _setPipActive = null;
 
-  // Chrome strip height — TopNav (48) + subheader (44) + pill bar (56). Mirrored
-  // in transcripts.css `#trMain { padding-top: 148px }`; PiP compensation has
-  // to add the videoSection height on top of this so layout doesn't jump.
+  // Chrome strip height (topnav + subheader + pill bar); mirrors transcripts.css
+  // #trMain padding-top.
   var TR_CHROME_TOP = 148;
 
   function initPipScroll() {
     var section = qs("#videoSection");
-    // #trMain is the scroll container (pass 6 floating-nav scroll-under) so
-    // scrolled content slides under the chrome strip. PiP triggers when the
-    // user scrolls past a commit; only returning to the very top dismisses
-    // it. Asymmetric thresholds avoid the bounce caused by switching the
-    // video section to position:fixed mid-scroll.
+    // #trMain is the scroll container; asymmetric enter/release thresholds avoid
+    // position:fixed bounce.
     var scroller = qs("#trMain");
     if (!section || !scroller) return;
 
@@ -1021,11 +948,8 @@
     function setPipActive(active) {
       if (active === state.pipActive) return;
       if (active) {
-        // Reserve the section's natural height on top of the chrome inset so
-        // transcript content does not jump up when the player detaches from
-        // flow. We restore the scroll position on the next frame because the
-        // browser may rebase scrollTop relative to the new content size when
-        // padding is added.
+        // Reserve the section's height so content doesn't jump; padding changes can
+        // rebase scrollTop.
         var h = Math.round(section.getBoundingClientRect().height);
         if (h > 0) scroller.style.paddingTop = TR_CHROME_TOP + h + "px";
         var keepTop = scroller.scrollTop;
@@ -1055,9 +979,7 @@
       if (!state.pipEnabled) return;
       var top = scroller.scrollTop;
       if (state.pipActive) {
-        // Only release PiP once the user is back at the very top, so the user
-        // makes a deliberate "scroll up" or "click PiP" gesture rather than
-        // having the player drop out as soon as they ease back.
+        // Release only at the very top so easing back up doesn't drop the player.
         if (top <= 0) setPipActive(false);
       } else {
         if (top > ENTER_THRESHOLD) setPipActive(true);
@@ -1087,21 +1009,16 @@
     return row ? row.querySelector(".segment-mark") : null;
   }
 
-  // True when friction's Isolate mode has hidden this segment's row. Arrow-key
-  // navigation must skip those, or the keys read as dead while the video jumps
-  // around behind rows the reader can't see.
+  // Row hidden by friction Isolate; arrow navigation skips these or reads as dead.
   function _segmentIsolatedOut(idx) {
     if (state.frictionMode !== "isolate") return false;
     var seg = state.segments[idx];
     if (!seg) return false;
-    // The union map, same as the band and _decorateSegmentList's isolate test —
-    // spelling "keyword match OR cited" out a third time is how those three
-    // drifted apart in the first place.
+    // Same union map as the band and _decorateSegmentList, so the three stay aligned.
     return (state.frictionBandBySegId || {})[seg.id] === undefined;
   }
 
-  // Move the active segment by *delta*, seeking + scrolling to it. Establishes an
-  // active segment at an edge when none is selected yet.
+  // Move the active segment by delta; with none selected, start at an edge.
   function _moveActiveSegment(delta) {
     var n = state.segments.length;
     if (!n) return;
@@ -1128,8 +1045,7 @@
     }
   }
 
-  // Mark the active segment. categoryKey null = toggle (create, or open the
-  // popover if already marked); a category key sets/creates that category.
+  // Mark the active segment; null categoryKey toggles (or opens the popover if marked).
   function _markActiveSegment(categoryKey) {
     var idx = state.activeSegmentIndex;
     var seg = idx >= 0 ? state.segments[idx] : null;
@@ -1146,10 +1062,8 @@
     }
   }
 
-  // Shared gate for every transcript hotkey: dead while a text edit is live or
-  // while the corrections modal / mark popover own the keyboard. (The generic
-  // input/contenteditable guard and blocking-modal suppression live in the
-  // hotkeys.js dispatcher.)
+  // Gate for every transcript hotkey; dead during text edits, corrections modal, mark
+  // popover.
   function _hotkeysActive() {
     if (state.editingTextEl) return false;
     var modal = qs("#correctionsModal");
@@ -1163,8 +1077,7 @@
     return _hotkeysActive() && !!(state.segments && state.segments.length);
   }
 
-  // While the participant-options dropdown is open the arrows drive it instead
-  // of the video: pill-nav claims the arrows and coarse seek yields them.
+  // Open pill menu claims the arrows; coarse seek yields them.
   function _pillMenuActive() {
     return _hotkeysActive() && !!(TS.isPillMenuOpen && TS.isPillMenuOpen());
   }
@@ -1214,8 +1127,7 @@
       { id: "transcripts.mark", when: _segmentsReady, handler: function () { _markActiveSegment(null); } },
       {
         id: "transcripts.markCategory",
-        // Active when segments are ready OR the participant-options dropdown is
-        // open (so digits can run its agent rows even before a transcript exists).
+        // Also active with the pill menu open so digits run its agent rows.
         when: function () {
           return _segmentsReady() || (_hotkeysActive() && TS.isPillMenuOpen && TS.isPillMenuOpen());
         },
@@ -1343,16 +1255,14 @@
     }
   );
 
-  // Cancel an in-flight/deferred seek. Called by the hub's selectParticipant
-  // when switching participants so a pending seek can't land on the new video.
+  // selectParticipant calls this so a pending seek can't land on the new video.
   function cancelPendingSeek() {
     _seek.cancel();
   }
 
   function seekVideo(time) {
-    // *time* is GLOBAL. For a multi-video participant, switch the <video> source
-    // to the part that owns it and seek the local offset; single-video falls
-    // straight through to the original local seek.
+    // time is GLOBAL: multi-video switches to the owning part and seeks the local
+    // offset.
     if (state.videoTimeline) {
       var tl = state.videoTimeline;
       var g = time < 0 ? 0 : Math.min(time, _timelineTotal(tl));
@@ -1390,8 +1300,7 @@
     // Native scrubbing on a paused video doesn't always fire timeupdate.
     video.addEventListener("seeked", save);
 
-    // Word karaoke rides the same element: loop only while playing, one manual
-    // update on pause/seek so the highlighted word matches the resting playhead.
+    // Karaoke loops only while playing; pause/seek do one update to match the playhead.
     video.addEventListener("play", _startKaraoke);
     video.addEventListener("pause", function () { _stopKaraoke(); _updateActiveWord(); });
     video.addEventListener("ended", function () { _stopKaraoke(); _clearActiveWord(); });
@@ -1404,9 +1313,7 @@
     setStoredUIMapEntry("transcripts", "videoTimeByParticipant", state.selectedParticipant, t);
   }
 
-  // Move the .active highlight to *newIndex* and optionally seek the video to its
-  // start. Shared by playhead sync (highlightActiveSegment) and keyboard nav.
-  // opts.follow scrolls the row into view; opts.seek jumps the video there.
+  // Move .active to newIndex; opts.follow scrolls the row, opts.seek jumps the video.
   function setActiveSegment(newIndex, opts) {
     opts = opts || {};
     if (newIndex === state.activeSegmentIndex && !opts.force) return;
@@ -1447,19 +1354,13 @@
 
     if (newIndex === state.activeSegmentIndex) return;
 
-    // Chase the playhead when auto-follow is on (or in PiP, where the embedded
-    // player is hidden so there's nothing else to read against). Skip while the
-    // user is reading elsewhere — a manual scroll pauses follow for a few seconds.
+    // Follow when auto-follow or PiP is on, unless a manual scroll paused it.
     var follow = (state.autoFollow || state.pipActive) && !_autoFollowPaused();
     setActiveSegment(newIndex, { follow: follow });
   }
 
   // ---- Word-level karaoke ----
-  // Sweeps a .word-active class across the active row's timed word spans
-  // (data-ws, written by renderSegments when per-word timing exists). Driven by
-  // its own rAF loop while the video plays: the ~4 Hz timeupdate that paces the
-  // row highlight is too chunky for a word sweep. Early-outs when the active
-  // row has no timed spans (old manifests, corrected rows, streaming rows).
+  // rAF sweeps .word-active over data-ws spans; timeupdate is too coarse.
   var _karaokeRaf = 0;
   var _wordSpans = null; // cached timed spans of the active row
   var _wordRow = -1; // segment index the cache belongs to
@@ -1479,8 +1380,7 @@
       if (_activeWordEl) _clearActiveWord();
       return;
     }
-    // (Re)build the span cache when the row changed or the list was re-rendered
-    // out from under us (renderSegments swaps innerHTML, orphaning old spans).
+    // Rebuild the span cache when the row changes or renderSegments orphaned the spans.
     if (_wordRow !== idx || (_wordSpans && _wordSpans[0] && !_wordSpans[0].isConnected)) {
       _wordSpans = null;
       _wordRow = idx;
@@ -1496,8 +1396,7 @@
     }
     if (!_wordSpans) return;
     var t = videoGlobalTime();
-    // Last word with start <= t; spans and words are index-aligned by contract
-    // (renderSegments only writes data-ws when the counts match).
+    // Last word with start <= t; renderSegments keeps spans and words index-aligned.
     var words = seg.words;
     var lo = 0, hi = words.length - 1, wi = -1;
     while (lo <= hi) {
@@ -1529,9 +1428,7 @@
   }
 
   // ---- Auto-follow scroll-pause ----
-  // A user scroll on #trMain pauses playhead-following for a few seconds so it
-  // doesn't yank the transcript away while they read. scrollToSegment marks its
-  // own programmatic scrolls so they don't count as a manual scroll.
+  // A user scroll on #trMain pauses following; programmatic scrolls flag themselves.
   var AUTO_FOLLOW_PAUSE_MS = 3000;
   var _autoFollowPausedUntil = 0;
   var _ignoreScrollUntil = 0;
@@ -1540,10 +1437,8 @@
     return Date.now() < _autoFollowPausedUntil;
   }
 
-  // Any programmatic write to #trMain.scrollTop fires the listener below, which
-  // cannot tell it from a reader scrolling and would pause following for three
-  // seconds. renderSegments' scroll restore is the other caller (scrollToSegment
-  // sets the window inline).
+  // Programmatic scrollTop writes look like reader scrolls; renderSegments calls this
+  // first.
   function ignoreNextScroll() {
     _ignoreScrollUntil = Date.now() + 120;
   }
@@ -1558,14 +1453,9 @@
   }
 
   function scrollToSegment(row) {
-    // A display:none row (friction Isolate mode) reports an all-zero rect, which
-    // would compute a target of roughly scrollTop - 188 and yank the transcript
-    // upward — once per highlightActiveSegment transition during playback, since
-    // PiP forces auto-follow on. Bail before any layout read.
+    // A display:none row (Isolate) has a zero rect and would yank the scroll upward.
     if (!row || !row.isConnected || row.classList.contains("segment-hidden")) return;
-    // Pass 6 floating-nav scroll-under: #trMain is the scroll container; the
-    // top 148px of its viewport sits *under* the fixed chrome strip, so the
-    // visible top edge is at scroller.top + TR_CHROME_TOP, not at scroller.top.
+    // The top TR_CHROME_TOP px of #trMain sit under the fixed chrome strip.
     var scroller = qs("#trMain");
     if (!scroller) return;
     var rowRect = row.getBoundingClientRect();
@@ -1585,11 +1475,7 @@
   }
 
   // ---- Published back to the hub ----
-  // Boot wires the init*; selectParticipant uses clipgenPartForGlobal/_partMediaUrl/
-  // applyCaptionMode/cancelPendingSeek; renderEmptyState uses clearTimelineMarkers;
-  // the segment list, loadTranscript, search, and the agents panel use seekVideo/
-  // renderTimeline/scrollToSegment; the friction tooltip uses hasTimelineHover;
-  // the task poller + selectParticipant use updateTranscribeFill.
+  // tests/test_frontend_satellite_wiring.py guards the callers.
   TS.initVideoPlayer = initVideoPlayer;
   TS.initTimelineCanvas = initTimelineCanvas;
   TS.initPipScroll = initPipScroll;

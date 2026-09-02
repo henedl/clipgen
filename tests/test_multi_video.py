@@ -1123,7 +1123,7 @@ def test_transcript_worker_multi_video_builds_timeline(monkeypatch):
     monkeypatch.setattr(
         video,
         "probe_video_properties",
-        lambda p: {"audio_codec": "aac", "duration": 80.0},
+        lambda p: {"audio_tracks": [{"index": 0}], "duration": 80.0},
     )
     monkeypatch.setattr(
         video,
@@ -1166,7 +1166,6 @@ def test_transcript_worker_records_the_audio_track_it_used(monkeypatch):
         video,
         "probe_video_properties",
         lambda p: {
-            "audio_codec": "aac",
             "duration": 80.0,
             "audio_tracks": [
                 {"index": 0, "label": "System"},
@@ -1207,7 +1206,6 @@ def test_transcript_worker_rejects_out_of_range_audio_track(monkeypatch):
         video,
         "probe_video_properties",
         lambda p: {
-            "audio_codec": "aac",
             "duration": 10.0,
             "audio_tracks": [{"index": 0, "label": "Mic"}],
             "audio_track_count": 1,
@@ -1258,7 +1256,7 @@ def test_transcript_worker_single_video_no_timeline(monkeypatch):
     monkeypatch.setattr(
         video,
         "probe_video_properties",
-        lambda p: {"audio_codec": "aac", "duration": 50.0},
+        lambda p: {"audio_tracks": [{"index": 0}], "duration": 50.0},
     )
     build = Mock()
     monkeypatch.setattr(video, "build_source_timeline", build)
@@ -1295,7 +1293,7 @@ def test_transcript_worker_window_reaches_transcribe_and_result(monkeypatch):
     monkeypatch.setattr(
         video,
         "probe_video_properties",
-        lambda p: {"audio_codec": "aac", "duration": 50.0},
+        lambda p: {"audio_tracks": [{"index": 0}], "duration": 50.0},
     )
     monkeypatch.setattr(video, "timeline_or_none", lambda paths: None)
     captured = {}
@@ -1336,7 +1334,7 @@ def test_transcript_worker_unbounded_result_carries_null_window(monkeypatch):
     monkeypatch.setattr(
         video,
         "probe_video_properties",
-        lambda p: {"audio_codec": "aac", "duration": 50.0},
+        lambda p: {"audio_tracks": [{"index": 0}], "duration": 50.0},
     )
     monkeypatch.setattr(video, "timeline_or_none", lambda paths: None)
     captured = {}
@@ -1363,7 +1361,7 @@ def test_transcript_worker_fails_window_outside_video(monkeypatch):
     monkeypatch.setattr(
         video,
         "probe_video_properties",
-        lambda p: {"audio_codec": "aac", "duration": 50.0},
+        lambda p: {"audio_tracks": [{"index": 0}], "duration": 50.0},
     )
     monkeypatch.setattr(video, "timeline_or_none", lambda paths: None)
     monkeypatch.setattr(

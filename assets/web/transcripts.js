@@ -24,21 +24,9 @@
     corrections: [],
     knownTerms: [],
     tasks: [],
-    // Task ids with a cancel DELETE in flight → { at, progress }. The server
-    // keeps reporting a cancelled-but-still-running task as "running" until the
-    // worker reaches its next checkpoint — up to a whole cold model load away —
-    // so every surface that reads task.status has to ask this too, or it goes on
-    // saying "transcribing" for ten seconds after the click.
-    //
-    // Keyed by task id, never by participant: a re-transcribe issued right after
-    // a cancel is a *new* task, and a pid key that had not yet been swept would
-    // paint the fresh run as "Cancelling…" and disable its own stop button.
-    // Written by the pills satellite, read by pills + video — hence state, not a
-    // module var (see agents/skills/carve-satellite/SKILL.md).
+    // Task id -> { at, progress } for cancels in flight; server still reports "running".
     cancellingTasks: {},
-    // In/out transcribe-range markers (seconds on the global timeline, null =
-    // unset). Owned by the video satellite (set/persist/restore/draw); the
-    // pills satellite reads sessionStorage directly for the request bounds.
+    // Transcribe-range markers in global-timeline seconds; null = unset. Video satellite owns.
     inMarker: null,
     outMarker: null,
     searchQuery: "",
@@ -64,47 +52,27 @@
     citationsGenerating: false,
     activeTab: "summary",
     frictionData: null,
-    // Which participant frictionData belongs to. loadFriction blanks the pane
-    // only when this changes, so a same-participant refetch mid-run keeps the
-    // deterministic scores rather than emptying the tab until the agent lands.
+    // Owner of frictionData; loadFriction blanks the pane only when this changes.
     frictionPid: null,
     frictionBySegId: {},
     frictionGenerating: false,
-    // Server-recorded friction run start (epoch ms) so the elapsed clock
-    // survives page navigation; null while idle or for a just-clicked run.
+    // Server-recorded run start (epoch ms); survives navigation. Null while idle.
     frictionStartedAt: null,
-    // "off" | "highlight" | "isolate" — what the friction filter does to
-    // #segmentList. Persisted; owned by transcripts-agents.js, read here and by
-    // the video satellite's timeline band.
+    // "off" | "highlight" | "isolate". Persisted; owned by transcripts-agents.js.
     frictionMode: "off",
-    // Score band the filter keeps, both ends draggable on the histogram. Opens
-    // fully open (every segment the scorer flagged) — the histogram makes the
-    // distribution visible, so narrowing from everything beats opening
-    // pre-filtered to something the user can't see.
+    // Score band the filter keeps; starts fully open so the histogram shows everything.
     frictionMin: 0,
     frictionMax: 1,
-    // Two independent filters, one per evidence source — the keyword scorer
-    // labels segments, the agent labels its own moments, and the two never
-    // agree on a line. Sharing one dict meant hiding a category on one side
-    // silently hid it on the other. Both persist; frictionMomentFilter also
-    // carries the "other" bucket for categories the model invented.
+    // Separate filters per evidence source (scorer vs agent); both persist.
     frictionCategoryFilter: null,
     frictionMomentFilter: null,
-    // Derived from (threshold, categoryFilter, frictionData, segments) by
-    // _recomputeFrictionMatches. The single source every friction consumer reads:
-    // segment id -> score for matching segments, the visible moments resolved to
-    // segment indices, and segment id -> 1-based moment number for cited rows.
+    // Outputs of _recomputeFrictionMatches; every friction consumer reads these.
     frictionMatchBySegId: {},
-    // The union both evidence sources contribute to, keyed to the strongest
-    // score on each line. What the timeline density band draws and hit-tests —
-    // an AI-cited line scores 0 with the keyword scorer, so the match map alone
-    // left the agent's moments off the band entirely.
+    // Union of both sources, strongest score per line; the timeline band draws this.
     frictionBandBySegId: {},
     frictionVisibleMoments: [],
     frictionCitedBySegId: {},
-    // Moments that passed the filter but cite segment ids absent from
-    // state.segments (transcript edited since the run). Counted alongside the
-    // three maps above so the jump strip can say *why* it came out empty.
+    // Filtered moments citing segment ids no longer in state.segments.
     frictionUnsourcedMoments: 0,
     frictionMomentIndex: -1,
     transcribePrewarm: "queue_open",
@@ -112,8 +80,7 @@
     modelFailSince: 0,
     videoPlaying: false,
     videoMuted: false,
-    // Audio-track layout for the current participant (from /api/audio-info);
-    // feeds the volume popover's detected-track caption + per-track mixer.
+    // From /api/audio-info; feeds the volume popover's track caption and mixer.
     audioTracks: [],
     audioPanel: null, // ClipgenVideoControls audio-popover controller
     videoPlaybackRate: 1,
@@ -121,34 +88,20 @@
     pipActive: false,
     pipEnabled: true,
     videoCollapsed: false,
-    // Lazily-built cache of .segment-row elements (invalidated on re-render);
-    // shared by the segments editor (hub) and the video satellite's playhead
-    // highlight / marker-click. frictionTooltipShown coordinates the shared
-    // #trTooltip between the timeline-canvas hover (video) and the hot-segment
-    // friction tooltip (agents), so neither clobbers the other.
+    // Lazy .segment-row cache, invalidated on re-render. frictionTooltipShown arbitrates #trTooltip.
     cachedSegmentRows: null,
     frictionTooltipShown: false,
-    // Bumped on every participant switch so per-participant fetches that resolve
-    // late (loadTranscript, loadSummary, summary/citations/friction polls — now
-    // in the agents satellite) can detect they're stale and bail before
-    // clobbering the active participant's UI.
+    // Bumped per participant switch; late-resolving fetches compare and bail.
     participantReqVer: 0,
-    // Keyboard cursor into the open participant-options dropdown (-1 = none);
-    // see pillNav* in transcripts-pills.js.
+    // Keyboard cursor into the participant-options dropdown (-1 = none); see pillNav*.
     pillOptionsCursor: -1,
   };
 
   var _transcriptionWarmupPosted = false;
-  // Prewarm never downloads silently: when the model isn't cached we confirm
-  // the download with the user. _prewarmDownloadPrompting guards against
-  // double-prompting; _prewarmDeclinedModel records the specific model the user
-  // declined so we stop re-asking for it — but switching to a different model
-  // (or changing TRANSCRIBE_MODEL in settings) still gets its own prompt. The
-  // model still loads on demand, with confirmation, at transcribe time.
+  // Prewarm confirms downloads; a declined model is not re-asked until it changes.
   var _prewarmDownloadPrompting = false;
   var _prewarmDeclinedModel = null;
-  // Last-known TRANSCRIBE_MODEL, so a settings change can reset the prewarm
-  // guards for the new model. Seeded once from the model-status hint.
+  // Last-known TRANSCRIBE_MODEL; a change resets the prewarm guards.
   var _lastTranscribeModel = null;
   var _modelHintPoller = null;
   var _hadActiveTranscriptionLastPoll = false;
@@ -176,11 +129,8 @@
 
   function startXrefPolling() {
     if (!state.xrefEligible || state.xrefPoller) return;
-    // Re-arm the sheet leg: this also runs on tab focus, and a spreadsheet may
-    // have been opened from another tab since we last looked.
+    // Re-arm the sheet leg; a sheet may have opened from another tab since.
     _sheetXrefIdle = false;
-    // createPoller runs loadCrossRefData once immediately (runImmediately
-    // default), then every 30s.
     state.xrefPoller = createPoller(loadCrossRefData, 30000, { label: "transcripts.xref" });
     state.xrefPoller.start();
   }
@@ -192,9 +142,7 @@
     }
   }
 
-  // A genuinely unreachable sibling tool (network error or non-2xx) flips a
-  // per-source flag so the status tooltip can say cross-references are missing,
-  // rather than the badges silently never appearing. A successful poll clears it.
+  // Per-source unreachable flag for the status tooltip; a good poll clears it.
   function _markXrefSource(source, failed) {
     var prev = !!(state.xrefErrors && (state.xrefErrors.screenspace || state.xrefErrors.studio));
     if (!state.xrefErrors) state.xrefErrors = { screenspace: false, studio: false };
@@ -208,12 +156,7 @@
     updateStatusIndicator();
   }
 
-  // With no spreadsheet open, /studio/api/sheet answers {ok, sheet_loaded: false}
-  // with no rows — nothing this page can index — so stop asking after the first
-  // such answer. Cleared on tab focus (see startXrefPolling's resume): a sheet
-  // opened from another tab reloads only that document, not this one. The
-  // clipgenApplyConfig call below is a refresh only; loadParticipants applies
-  // the same config from this page's own api/participants at boot.
+  // Set after sheet_loaded: false; stops polling the sheet until tab focus re-arms.
   var _sheetXrefIdle = false;
 
   function loadCrossRefData() {
@@ -253,18 +196,14 @@
   }
 
   function parseSheetTimestamps(raw) {
-    // Cross-reference search; baselines are not applied here so timestamps
-    // are interpreted in their relative form (MM:SS for 2-part).
+    // No baseline applied; timestamps stay relative (MM:SS for 2-part).
     var segs = parseClipSegmentsForCell(raw, 0, CLIPGEN_CONFIG.defaultDuration);
     return segs.map(function (s) {
       return { start: s.startSeconds, duration: s.duration };
     });
   }
 
-  // Per-participant indexes keyed on start time. Rebuilt when loadCrossRefData
-  // receives fresh data, so findOverlapsForSearch can binary-search instead of
-  // linearly scanning ssEvents / sheetRows (and re-parsing sheet timestamps)
-  // on every rendered segment.
+  // Per-participant indexes sorted by start so findOverlapsForSearch can binary-search.
 
   function _buildEventsIndex() {
     var byP = {};
@@ -308,8 +247,7 @@
     state.xrefIndex.sheetByParticipant = byP;
   }
 
-  // Binary search: return the first index where arr[i].key >= value, using the
-  // provided key function.
+  // First index where keyFn(arr[i]) >= value.
   function _lowerBound(arr, value, keyFn) {
     var lo = 0;
     var hi = arr.length;
@@ -326,8 +264,7 @@
 
     var events = state.xrefIndex.eventsByParticipant[participant];
     if (events && events.length > 0) {
-      // Candidates are entries where `in < end`. Since events are sorted by
-      // `in`, lower-bound on `end` gives us the exclusive upper cursor.
+      // Sorted by `in`, so lower-bound on `end` is the exclusive upper cursor.
       var upper = _lowerBound(events, end, function (e) { return e.in; });
       for (var i = 0; i < upper; i++) {
         if (events[i].out > start) result.screenspaceEvents.push(events[i].ev);
@@ -337,9 +274,7 @@
     var segs = state.xrefIndex.sheetByParticipant[participant];
     if (segs && segs.length > 0) {
       var upper2 = _lowerBound(segs, end, function (s) { return s.start; });
-      // Preserve the original "first observation per row" behavior by de-duping
-      // on rowIdx. Row-iteration order matched sheet row order before; replicate
-      // that by collecting matches and sorting by rowIdx.
+      // One observation per row, in sheet row order.
       var seenRow = {};
       var matches = [];
       for (var m = 0; m < upper2; m++) {
@@ -374,11 +309,9 @@
   function applyTranscriptionModelHint(data) {
     if (!data || !data.ok) return;
     state.modelStatus = data;
-    // Seed the change-detector once; thereafter only settings saves update it,
-    // so a poll landing mid-save can't mask a model change.
+    // Seed once; only settings saves update it afterwards.
     if (data.model && _lastTranscribeModel === null) _lastTranscribeModel = data.model;
-    // Track how long we've been in an apparent "failed to load" state, so
-    // the indicator doesn't flash red on cold load before the first response.
+    // Time the failed-looking state so cold load doesn't flash red.
     var looksFailed = !data.loaded && !data.warming && data.prewarm !== "off";
     if (looksFailed) {
       if (state.modelFailSince === 0) state.modelFailSince = Date.now();
@@ -405,9 +338,7 @@
     return latest;
   }
 
-  // A cancel DELETE is in flight for this task. Every surface that words a
-  // task's progress asks this; without a shared predicate each one re-derives
-  // "running means working" and they drift apart.
+  // Every surface that words task progress asks this, so they agree.
   function _cancelPending(task) {
     return !!(task && state.cancellingTasks[task.id]);
   }
@@ -451,9 +382,7 @@
     if (!pid) {
       taskLine = "No participant selected";
     } else if (_cancelPending(task)) {
-      // Stays --working, not --ready: the worker really is still winding down,
-      // and a ready dot beside a pill that says "Cancelling…" is a second
-      // contradiction on top of the one this whole change removes.
+      // Still --working: the worker is winding down.
       cls = "status-indicator--working";
       taskLine = pid + ": cancelling…";
     } else if (task && task.status === "running" && task.phase === "loading_model") {
@@ -478,8 +407,7 @@
       taskLine = pid + ": no source video";
     }
 
-    // Model failure overrides non-task-active states (keep working class if a
-    // task is currently running — the user can see the task is progressing).
+    // Model failure overrides every state except an active task.
     if (cls !== "status-indicator--working" && _modelHasFailed()) {
       cls = "status-indicator--error";
     }
@@ -523,11 +451,7 @@
     updateStatusIndicator();
   }
 
-  // Repaint the three hub-owned surfaces that word a task's progress — the
-  // status dot, the empty-pane copy and the streaming footer — without waiting
-  // for the next poll. Only the pills satellite needs this: it is the one place
-  // that changes task wording outside the poll loop. Deliberately NOT folded
-  // into _txEtaTicker's tick body, which is a per-second hot path.
+  // Repaint task wording now, without waiting for the poll. Keep out of _txEtaTicker.
   function refreshTranscribeWording() {
     updateStatusIndicator();
     var task = _taskForSelectedParticipant();
@@ -551,11 +475,7 @@
     }
   }
 
-  // Forget which Whisper downloads the user has agreed to and refresh the
-  // models cache. Call when a download attempt has concluded (transcription
-  // finished, or a warmup load loaded/failed) so the next gate re-reads real
-  // cache state — re-prompting for a model whose download failed, staying
-  // quiet for one that succeeded. Never call mid-download (it would re-prompt).
+  // Call once a download attempt has concluded; never mid-download (would re-prompt).
   function _forgetWhisperDownloadAgreements() {
     _whisperDownloadConfirmed = {};
     _trModelsCache = null;
@@ -581,16 +501,13 @@
             return;
           }
           if (!data.warming) {
-            // Warmup ended without loading (failed/idle) — let the next attempt
-            // re-confirm rather than silently re-downloading.
+            // Warmup ended without loading; the next attempt re-confirms.
             stopModelHintPoll();
             _forgetWhisperDownloadAgreements();
           }
         })
         .catch(function () {});
     };
-    // createPoller runs poll() once immediately (runImmediately default), then
-    // every 1.5s.
     _modelHintPoller = createPoller(poll, 1500, { label: "transcripts.modelHint" });
     _modelHintPoller.start();
   }
@@ -601,13 +518,7 @@
     tryPostTranscriptionWarmup();
   }
 
-  // Ask the backend to preload the Whisper model. Idempotent per page load via
-  // `_transcriptionWarmupPosted`, whose flag resets whenever the post didn't lead
-  // to a load (skipped / error / no-op) so a later trigger can retry.
-  //   skipped           — backend declined; flag stays down to allow a re-prompt.
-  //   already_loaded    — in memory, nothing to poll.
-  //   started / warming — run the model-hint poller until it finishes.
-  //   !ok / catch       — transient; clear the flag for retry.
+  // Preload the Whisper model once per page load; the flag resets unless a load began.
   function tryPostTranscriptionWarmup() {
     if (_transcriptionWarmupPosted) return;
     if (state.transcribePrewarm === "off") return;
@@ -643,11 +554,7 @@
       });
   }
 
-  // Prewarm wanted to load a model that isn't downloaded yet. We never
-  // download silently — confirm with the user first (once per session). On
-  // confirm, re-post warmup with force=true so the backend proceeds; on
-  // decline, leave the warmup flag set so we stop re-posting/re-prompting
-  // (the model still loads, with confirmation, at transcribe time).
+  // Confirm before downloading; confirm re-posts with force=true, decline stops re-asking.
   function _confirmPrewarmDownload(data) {
     if (_prewarmDownloadPrompting) return;
     if (_prewarmDeclinedModel === data.model) {
@@ -669,8 +576,7 @@
         refreshTranscriptionModelHintOnce();
         return;
       }
-      // Agreed once — don't re-prompt at transcribe time before the download
-      // completes (the models cache still reports it as not cached).
+      // Skip the transcribe-time prompt while this download is still running.
       if (data.model) _whisperDownloadConfirmed[data.model] = true;
       apiPost("api/transcribe/warmup", { force: true })
         .then(function (d) {
@@ -694,31 +600,17 @@
     });
   }
 
-  // One-shot #P07 deep-link guard: the hash must not re-hijack selection on
-  // later participant-list refreshes after the user has moved on.
+  // The #P07 deep link applies once; later refreshes must not re-hijack selection.
   var _hashPidApplied = false;
 
-  // The pill row and the transcript pane both ship placeholders (skeleton pills,
-  // a hidden #transcriptEmpty) that only the first successful render replaces.
-  // If that render never happens the page shimmers forever and the transcript
-  // pane stays blank, which reads as "still loading" rather than "unreachable" —
-  // so a failed *boot* fetch has to fall back to the real empty states. A later
-  // refresh failing is harmless: the already-rendered list stays put.
+  // A failed boot fetch must replace the skeleton placeholders with real empty states.
   function _clearBootPlaceholders() {
     if (state.participants.length) return;
     renderPills();
     renderEmptyState();
   }
 
-  // An AI run that fails stores nothing and the panel just goes empty. This is
-  // the one poll that watches every participant, so it is where the reason
-  // reaches the user however the run was started (panel button, pill menu, or
-  // an auto-chained agent on a participant that isn't even selected).
-  //
-  // Deduped per participant+agent: the poll repeats the reason until the next
-  // run clears it server-side, and re-toasting it every few seconds would bury
-  // the page. Dropping the key when the error clears is what lets an identical
-  // second failure toast again.
+  // Toast failed AI runs for every participant, deduped per pid/agent until cleared.
   function _reportAgentErrors(participants) {
     var live = {};
     for (var i = 0; i < participants.length; i++) {
@@ -736,9 +628,7 @@
     }
   }
 
-  // The single toast for a failed AI run, shared with the per-agent panel polls
-  // (which see the same reason sooner on the selected participant). Whichever
-  // gets there first wins; the other is deduped.
+  // Shared with the per-agent panel polls; first caller wins, the rest dedupe.
   function reportAgentError(pid, agentKey, message) {
     if (!message) return;
     var key = pid + "/" + agentKey;
@@ -753,9 +643,7 @@
         _clearBootPlaceholders();
         return;
       }
-      // Primary config channel for this page: the only other caller of
-      // clipgenApplyConfig here is the xref poller's /studio/api/sheet leg,
-      // which is status-gated and lands (if ever) after first render.
+      // Primary config channel; the xref sheet leg only refreshes it later.
       if (data.config) clipgenApplyConfig(data.config);
       state.participants = data.participants;
       _reportAgentErrors(data.participants);
@@ -771,9 +659,7 @@
       }
       refreshTranscriptionModelHintOnce();
 
-      // Precedence: deep link (#P07, from the Overview Map's explain panel;
-      // wins once, on the first load that has the participant list) > current
-      // in-memory selection (soft refresh) > localStorage (fresh page load).
+      // Precedence: #P07 deep link (once) > in-memory selection > localStorage.
       var hashPid = _hashPidApplied ? "" : clipgenHashParticipant();
       if (hashPid && state.participants.length) _hashPidApplied = true;
       var pick = clipgenPickParticipant(state.participants, {
@@ -800,8 +686,7 @@
   }
 
 
-  // Move the selection to the previous/next participant in the sidebar order,
-  // wrapping around. Bound to Z / X (see transcripts-video.js).
+  // Previous/next participant, wrapping. Bound to Z / X in transcripts-video.js.
   function cycleParticipant(delta) {
     var list = state.participants;
     if (!list || list.length < 2) return;
@@ -822,8 +707,7 @@
     hideMarkPopover();
     state.selectedParticipant = pid;
     setStoredUIStateField("transcripts", "selectedParticipant", pid);
-    // Restore this participant's transcribe-range markers (video satellite;
-    // late-bound — loadedmetadata clamps them once the duration is known).
+    // Restore transcribe-range markers; loadedmetadata clamps them later.
     if (TS.restoreMarkers) {
       TS.restoreMarkers(pid);
       TS.updateMarkerInfo();
@@ -850,20 +734,12 @@
     video.pause();
     cancelPendingSeek();
 
-    // ?v=<mtime_ns> mirrors the screenspace cache-bust, so a replaced source file
-    // invalidates the browser cache rather than relying on Last-Modified
-    // revalidation. The audio-layout reset sits outside the has_video branch on
-    // purpose: selecting a participant *without* video must also drop the mix, or
-    // orphaned <audio> elements keep playing, the <video> stays force-muted, and
-    // the volume popover shows the previous participant's sliders.
+    // Reset the mix even without video, or orphaned <audio> elements keep playing.
     state.audioTracks = [];
     if (state.audioPanel) state.audioPanel.refresh();
 
     if (p.has_video) {
-      // Lazily probe the audio-track layout for the volume popover's caption +
-      // per-track mixer, then reconfigure once the layout arrives. Shares the
-      // pill picker's cache (_trFetchAudioInfo). Guarded by participantReqVer so
-      // a stale response can't overwrite the current tracks.
+      // Probe audio layout for the volume popover; participantReqVer drops stale replies.
       (function (ver) {
         _trFetchAudioInfo(pid, p.video_version)
           .then(function (info) {
@@ -874,8 +750,7 @@
           .catch(function () {});
       })(state.participantReqVer);
 
-      // Multi-video participants carry a per-part timeline; play part-by-part
-      // with client-side source switching (see the timeline helpers).
+      // Multi-part participants play part-by-part with client-side source switching.
       state.videoTimeline = p.timeline && p.timeline.length > 1 ? p.timeline : null;
       state.videoVersion = p.video_version != null ? p.video_version : null;
       state.videoActivePart = 0;
@@ -883,12 +758,7 @@
       video.classList.remove("hidden");
       videoEmpty.classList.add("hidden");
 
-      // Set VTT track. Browsers reset textTracks[0].mode when the track src
-      // changes, so re-apply the user's preference now and again on the
-      // track's load event in initVideoPlayer. The native overlay track carries
-      // GLOBAL cue times, which only align with a single continuous file — for
-      // multi-video participants it is disabled (the in-app transcript list still
-      // highlights the active segment via global time).
+      // VTT cues use global time, so multi-part participants get no native track.
       var track = qs("#subtitleTrack");
       if (state.videoTimeline) {
         track.removeAttribute("src");
@@ -897,10 +767,7 @@
       }
       applyCaptionMode();
 
-      // Restore the saved playback offset (GLOBAL) for this participant if we
-      // have one; otherwise seek to 0.001s so the first frame renders without
-      // waiting for play/scrub. `preload="metadata"` decodes duration but not
-      // pixels, so without this nudge the viewer shows a blank gray box on load.
+      // Restore saved global time, else 0.001s so preload="metadata" paints a frame.
       var storedMap = getStoredUIState("transcripts").videoTimeByParticipant;
       var savedTime =
         storedMap && typeof storedMap[pid] === "number" ? storedMap[pid] : 0.001;
@@ -960,36 +827,28 @@
       state.segments = [];
       state.streamingParticipant = null;
       renderSegments();
-      // _taskForSelectedParticipant, not taskForPid: the pane must agree with
-      // the indicator's running-over-queued pick when duplicate tasks exist.
+      // Not taskForPid: the pane must match the indicator's pick among duplicate tasks.
       _setTranscriptEmptyText(_taskForSelectedParticipant());
       renderTimeline();
       clearAnalysisPanel();
     }
 
-    // Reflect the newly-selected participant's transcription progress on the
-    // timeline immediately (draws the band if it's mid-transcription, clears it
-    // otherwise) rather than waiting up to a full poll interval.
+    // Draw or clear the transcribe band now, not at the next poll.
     updateTranscribeFill();
   }
 
-  // Contextual text for the #transcriptEmpty pane: while the newest task for
-  // the selected participant is queued / loading the model / decoding with no
-  // segments streamed yet, "No transcript available" is misleading — say what
-  // the wait actually is. Called with null to restore the defaults.
+  // #transcriptEmpty copy for the selected participant's task; null restores defaults.
   function _setTranscriptEmptyText(task) {
     var empty = qs("#transcriptEmpty");
     if (!empty) return;
     var main = empty.querySelector("p");
     var hint = empty.querySelector(".empty-hint");
-    // The three waiting lines shimmer; "No transcript available" is a resting
-    // state, not an in-flight one, so it stays flat.
+    // Only in-flight states shimmer.
     var waiting = !!(task && (task.status === "running" || task.status === "queued"));
     main.classList.toggle("cg-shimmer", waiting);
     if (_cancelPending(task)) {
       main.textContent = "Cancelling…";
-      // Deliberately not "finishing the current segment": a cancel during
-      // loading_model is waiting on the model load, not on a segment.
+      // Not "finishing the current segment": a cancel may wait on the model load.
       hint.textContent = "Waiting for the transcription worker to stop";
     } else if (task && task.status === "running" && task.phase === "loading_model") {
       main.textContent = "Loading transcription model…";
@@ -1037,11 +896,7 @@
     });
   }
 
-  // ---- Analysis panel: summary + citations + friction (impl in transcripts-agents.js) ----
-  // Thin hub delegators forward to the satellite. selectParticipant + the poller +
-  // the visibility/focus handlers drive load*/clear*/stop*/_restoreActiveTab; boot
-  // wires the init*; the segment-list hover calls _show/_hideFrictionTooltip; the
-  // poller's re-arm asks _currentParticipant/_frictionDepMet.
+  // ---- Analysis panel delegators; implementation in transcripts-agents.js ----
   function loadSummary() { return TS.loadSummary && TS.loadSummary.apply(null, arguments); }
   function loadFriction() { return TS.loadFriction && TS.loadFriction.apply(null, arguments); }
   function clearAnalysisPanel() { return TS.clearAnalysisPanel && TS.clearAnalysisPanel(); }
@@ -1063,10 +918,7 @@
 
   // ---- Segment rendering ----
 
-  // Spanned to close PERFORMANCE-PLAN-3 §8c, which gates virtualizing this list
-  // on "profiling shows >2000-segment sessions hurting". Same shape as
-  // studio.renderGrid; the CSS content-visibility and scroll-preservation
-  // halves already landed.
+  // Perf span decides whether >2000-segment lists ever need virtualizing.
   function renderSegments() {
     return clipgenPerf.span("transcripts.renderSegments", renderSegmentsImpl);
   }
@@ -1076,14 +928,10 @@
     var empty = qs("#transcriptEmpty");
     state.editingTextEl = null;
     state.cachedSegmentRows = null;
-    // We're rendering the finalized transcript — drop any queued streaming
-    // indicator so a paused-tab RAF can't re-insert it over the real segments.
+    // Drop any queued streaming indicator before the final render.
     _cancelStreamingIndicator();
 
-    // Scroll lives on #trMain, not on #segmentList (the floating nav scrolls
-    // under it) — same probe renderPartialSegments uses. A full rebuild of a
-    // same-participant list (heatmap toggle, tooltip toggle, streaming→final
-    // swap) must not drop the reader to the top; a participant change must.
+    // Scroll lives on #trMain. Same-participant rebuilds keep the offset; switches reset.
     var scrollHost = qs("#trMain") || container;
     var samePid = _renderedSegmentsPid === state.selectedParticipant;
     var restoreTop = samePid ? scrollHost.scrollTop : 0;
@@ -1119,9 +967,7 @@
         sevDotHtml = '<span class="segment-sev-dot ' + severityClass(markObj.severity) + '" data-tooltip="' + escapeHtml(markObj.severity) + '"></span>';
       }
 
-      // No friction markup here on purpose: applyFrictionDecorations() below owns
-      // every friction class/inline var, so the rebuild path and the live filter
-      // path can't drift apart.
+      // No friction markup here; applyFrictionDecorations() owns it all.
       html += '<div class="segment-row' + activeClass + correctedClass + '" data-index="' + i + '" data-start="' + seg.start + '">';
       html += '<span class="' + markClass + '" data-segment-id="' + escapeHtml(seg.id) + '"' + markStyle + markLabel + '></span>';
       html += sevDotHtml;
@@ -1148,11 +994,7 @@
         }
       }
       html += '</span>';
-      // Split text into word spans. When per-word timing exists and the row is
-      // uncorrected, the Nth token gets the Nth word's data-ws/data-we for the
-      // karaoke sweep (transcripts-video.js). Display text stays exactly
-      // seg.text; a token/word count mismatch (corrections, tokenization drift)
-      // just leaves the spans untimed and the row degrades to row-level highlight.
+      // Word spans carry data-ws/data-we for the karaoke sweep; count mismatch leaves them untimed.
       var tokens = seg.text.split(/(\s+)/);
       var wordCount = 0;
       for (var w = 0; w < tokens.length; w++) {
@@ -1175,17 +1017,9 @@
       html += '</div>';
     }
     container.innerHTML = html;
-    // Before the scroll restore, not after: isolate mode hides rows and the
-    // callouts add height, so decorating afterwards would let the browser clamp
-    // the restored offset against a stale scrollHeight.
+    // Decorate before the scroll restore; isolate mode changes scrollHeight.
     applyFrictionDecorations();
-    // Same task as the wipe, so the new scrollHeight is already laid out and the
-    // browser can't clamp us to 0 — and initPipScroll's rAF-coalesced listener
-    // reads the restored value rather than the transient top. The write itself
-    // looks like a reader scroll to the auto-follow pause, hence the marker.
-    // Written unconditionally: on a participant switch restoreTop is 0, and
-    // without the write the browser keeps the outgoing transcript's offset and
-    // drops the reader into the middle of the new one.
+    // Always write, even 0, or the outgoing offset survives a participant switch.
     ignoreNextScroll();
     scrollHost.scrollTop = restoreTop;
 
@@ -1196,16 +1030,10 @@
     _partialRender.marksVersion = _streamingMarksVersion;
   }
 
-  // Which participant #segmentList currently shows, so a rebuild can tell a
-  // same-transcript re-render (restore scroll) from a participant switch (top).
-  // renderPartialSegments keeps it current too — the streaming→final swap is
-  // exactly when the reader is deepest in the list.
+  // Participant #segmentList shows; renderPartialSegments keeps it current too.
   var _renderedSegmentsPid = null;
 
-  // Append-only state for renderPartialSegments. Each streaming poll appends new
-  // trailing segments to #segmentList instead of rebuilding the entire list. A
-  // full rebuild is only performed when the participant changes, when the
-  // segment count drops (restart), or when the in-memory marks cache changes.
+  // Append cursor for renderPartialSegments; full rebuild on pid change, count drop, or marks change.
 
   var _partialRender = {
     pid: null,
@@ -1214,11 +1042,7 @@
     marksVersion: 0,
   };
 
-  // Client-side accumulator for streaming partial segments. The status poll only
-  // carries partial_count now (not the full array), so we fetch the tail beyond
-  // our cursor and append. partial_segments is append-only server-side, so the
-  // count is a safe cursor and the request payload stays flat as the transcript
-  // grows. Resets when the streamed task changes.
+  // Streaming accumulator; partial_segments is append-only server-side, so count is the cursor.
   var _streamSegs = { taskId: null, segments: [], fetching: false };
 
   function _syncStreamSegs(task, cb) {
@@ -1275,9 +1099,7 @@
   }
 
   // ---- Elapsed / ETA tracking ----
-  // Transcription progress is a linear fraction of media duration, so its ETA
-  // extrapolation is meaningful (per-participant trackers). The thinking agents
-  // expose no progress fraction, so they show elapsed only (single trackers).
+  // Transcription gets an ETA; thinking agents show elapsed only.
   var _txEtaTrackers = {};
   var _summaryEtaTracker = createEtaTracker();
   var _citationsEtaTracker = createEtaTracker();
@@ -1286,13 +1108,7 @@
     isActive: _anyTxEtaActive,
   });
 
-  // " \u00b7 0:42 \u00b7 ~1:20 left" suffix for a participant's running transcription, or
-  // "" when not running (or still loading the model \u2014 no decode progress to
-  // time yet). Each entry is keyed by the task's created_at so a re-run of the
-  // same participant seeds a fresh tracker from the new task rather than
-  // continuing the prior run's elapsed. Seeded from transcribe_started_at so
-  // elapsed/ETA exclude the queue wait and the model load. Stale entries are
-  // pruned in _tickTxEta.
+  // " \u00b7 0:42 \u00b7 ~1:20 left" or "". Keyed by created_at; seeded from transcribe_started_at.
   function _txEtaSuffix(pid, task) {
     if (!pid || !task || task.status !== "running") return "";
     if (task.phase === "loading_model") return "";
@@ -1315,9 +1131,7 @@
   function _streamingTextStr(progress) {
     var pid = state.streamingParticipant || state.selectedParticipant;
     var task = _taskForSelectedParticipant();
-    // Single choke point for the footer \u2014 the append path, the coalesced RAF
-    // update and the per-second ETA ticker all render through here, so one
-    // branch keeps all three honest while a cancel is in flight.
+    // Every footer writer renders through here, so one branch covers cancel.
     if (_cancelPending(task)) return "Cancelling\u2026";
     return "Transcribing\u2026 " + Math.round(progress * 100) + "%" + _txEtaSuffix(pid, task);
   }
@@ -1339,10 +1153,7 @@
   }
 
   function _tickTxEta() {
-    // The ticker's isActive guard (_anyTxEtaActive) self-stops it; this body
-    // only runs while transcription or a thinking agent is active.
-    // Drop trackers for participants with no running transcription so memory
-    // stays bounded and a later re-run starts fresh.
+    // Runs only while something is active (_anyTxEtaActive). Prune idle trackers.
     var runningPids = {};
     for (var r = 0; r < state.tasks.length; r++) {
       if (state.tasks[r].status === "running") runningPids[state.tasks[r].participant] = true;
@@ -1373,11 +1184,7 @@
   var _streamIndicatorRaf = null;
   var _streamIndicatorPending = null;
 
-  // Cancel a queued streaming-indicator insert. requestAnimationFrame callbacks
-  // are paused while the tab is backgrounded, so a RAF scheduled during the last
-  // streaming poll can outlive the transcript being finalized and re-insert a
-  // stale "Transcribing… X%" row when the user returns. Call this whenever the
-  // finalized transcript replaces the streaming view.
+  // A RAF paused in a background tab could re-insert a stale indicator after finalize.
   function _cancelStreamingIndicator() {
     if (_streamIndicatorRaf) {
       cancelAnimationFrame(_streamIndicatorRaf);
@@ -1403,8 +1210,7 @@
     });
   }
 
-  // The streaming counterpart: fires per poll tick during transcription, so it
-  // is the one that would show up as jank while a long session decodes.
+  // Fires per poll tick while streaming; the likelier jank source.
   function renderPartialSegments(segments, progress) {
     return clipgenPerf.span("transcripts.renderPartialSegments", function () {
       return renderPartialSegmentsImpl(segments, progress);
@@ -1423,9 +1229,7 @@
     // Row list changes shape on both append and rebuild paths.
     state.cachedSegmentRows = null;
 
-    // Pass 6 floating-nav scroll-under: scroll lives on #trMain, not on
-    // #segmentList. Probe the actual scroll container so the
-    // auto-follow-streaming-tail behaviour keeps working.
+    // Scroll lives on #trMain, not #segmentList.
     var trMain = qs("#trMain");
     var scrollHost = trMain || container;
     var nearBottom = scrollHost.scrollHeight - scrollHost.scrollTop - scrollHost.clientHeight < 100;
@@ -1470,18 +1274,14 @@
     _partialRender.count = segments.length;
     _partialRender.segments = segments;
     _partialRender.marksVersion = _streamingMarksVersion;
-    // The list now shows this participant, so the finalized render that replaces
-    // it counts as a same-participant rebuild and keeps the reader's position.
+    // So the finalized render counts as a same-participant rebuild and keeps scroll.
     _renderedSegmentsPid = pid;
 
     if (nearBottom) {
       scrollHost.scrollTop = scrollHost.scrollHeight;
     }
 
-    // Mirror partial segments into state.segments so the marker timeline can
-    // resolve marker positions during streaming. Each row's id is the
-    // composed "<pid>:<index>" string, matching what _streamingMarks is keyed
-    // on via _renderPartialSegmentRow above.
+    // Mirror into state.segments for the marker timeline; ids are "<pid>:<index>".
     var mirrored = [];
     for (var mi = 0; mi < segments.length; mi++) {
       var s = segments[mi];
@@ -1502,10 +1302,7 @@
   // ---- Segment list event delegation ----
 
   var _segmentListDelegated = false;
-  // Coalesces the segment-list mousemove (hot-segment friction tooltip) the same
-  // way the timeline canvas does. Lives here with its only user — the delegation
-  // handler below — even though the tooltip render itself is in the agents
-  // satellite (reached via TS._show/_hideFrictionTooltip).
+  // RAF handle coalescing the friction-tooltip mousemove below.
   var _segTooltipRaf = 0;
 
   function _ensureSegmentListDelegation() {
@@ -1575,9 +1372,7 @@
       startSegmentEditing(textEl);
     });
 
-    // Friction tooltip on hot segments (only while friction mode is on).
-    // RAF-coalesced like the timeline canvas so getBoundingClientRect isn't
-    // called on every mousemove event.
+    // Friction tooltip on hot segments; RAF-coalesced like the timeline canvas.
     container.addEventListener("mousemove", function (e) {
       if (_segTooltipRaf) return;
       var cx = e.clientX, cy = e.clientY, tgt = e.target;
@@ -1596,14 +1391,10 @@
     container.addEventListener("mouseleave", function () { _hideFrictionTooltip(); });
   }
 
-  // Cache marks made during streaming so they survive DOM rebuilds.
-  // Each entry: { color, id, category, label, severity }. `version` is bumped on
-  // any write to invalidate renderPartialSegments' append-only fast path.
+  // Streaming marks: id -> { color, id, category, label, severity }; version bumps on write.
   var _streamingMarks = {};
   var _streamingMarksVersion = 0;
-  // Keyed by participant: a single boolean would make the first streaming
-  // participant's load swallow every later one's, leaving a second live
-  // stream's persisted marks unrendered until some task completed.
+  // Per participant, or the first stream's load would swallow later ones.
   var _streamingMarksLoadedByPid = {};
 
   function _bumpStreamingMarksVersion() {
@@ -1635,21 +1426,14 @@
     });
   }
 
-  // getMarkForSegment resolves a segment's active mark — the persisted
-  // seg.marks[0], falling back to the streaming-marks cache. Kept in the hub
-  // (reads _streamingMarks); the video satellite reads it via TS.getMarkForSegment
-  // for timeline marker rendering + tooltips.
+  // Persisted seg.marks[0], else the streaming cache. Video satellite reads via TS.
   function getMarkForSegment(seg) {
     if (seg.marks && seg.marks.length > 0) return seg.marks[0];
     var streaming = _streamingMarks[seg.id];
     return streaming || null;
   }
 
-  // ---- Video player + timeline (impl in transcripts-video.js) ----
-  // Thin hub delegators forward to the satellite; selectParticipant, the segment
-  // list, renderEmptyState/loadTranscript, the agents panel, search, and boot keep
-  // calling these bare names. cancelPendingSeek / clearTimelineMarkers /
-  // hasTimelineHover encapsulate the video-internal state the hub used to poke.
+  // ---- Video player + timeline delegators; implementation in transcripts-video.js ----
   function initVideoPlayer() { return TS.initVideoPlayer && TS.initVideoPlayer(); }
   function initTimelineCanvas() { return TS.initTimelineCanvas && TS.initTimelineCanvas(); }
   function initPipScroll() { return TS.initPipScroll && TS.initPipScroll(); }
@@ -1808,7 +1592,7 @@
       if (updated) parts.push(updated === 1 ? "1 correction saved" : updated + " corrections saved");
       if (removed) parts.push(removed === 1 ? "1 reverted" : removed + " reverted");
       showToast(parts.join(", ") || "No changes");
-      // During streaming, skip reload — corrections are persisted and will apply on completion
+      // No reload during streaming; corrections apply on completion.
       if (state.streamingParticipant) return;
       var pid = state.selectedParticipant;
       if (pid) {
@@ -1841,9 +1625,7 @@
     return null;
   }
 
-  // Repaint a single segment's mark dot + annotation badge in place (mirrors the
-  // template in renderSegments) so a mark add/remove/recolor shows instantly
-  // without a full loadTranscript round-trip. markObj null clears the mark.
+  // Repaint one row's mark dot and badge in place; mirrors renderSegments. Null clears.
   function _paintSegmentMark(idx, markObj) {
     var list = qs("#segmentList");
     if (!list) return;
@@ -1892,8 +1674,7 @@
     var idx = _segmentIndexById(segmentId);
     var seg = idx >= 0 ? state.segments[idx] : null;
     if (!seg) {
-      // No loaded row (shouldn't happen for the persisted path) — fall back to a
-      // reload so the new mark still appears.
+      // No loaded row; reload so the new mark still appears.
       apiPost("api/marks", { segment_ids: [segmentId], category: state.lastMarkCategory }).then(function (data) {
         if (data.ok && state.selectedParticipant) loadTranscript(state.selectedParticipant);
       });
@@ -2043,10 +1824,7 @@
       }
       return;
     }
-    // Mirror updateMarkCategory/Severity: write the state and repaint
-    // optimistically, restore on failure. Without the state write the badge
-    // never appears, reopening the popover shows the old label, and a later
-    // category/severity repaint resurrects it.
+    // Write state and repaint optimistically, like updateMarkCategory; restore on failure.
     var found = _findSegmentByMarkId(markId);
     if (!found) {
       apiPut("api/marks/" + markId, { label: label || null }).catch(function () {
@@ -2066,10 +1844,7 @@
 
   function updateMarkSeverity(markId, severity) {
     var sev = severity || null;
-    // Streaming participant: mirror updateMarkCategory — update the cache and
-    // re-render on confirmed success. Severity changes the visible segment dot,
-    // so a version bump alone isn't enough; pollTaskStatus re-renders the list
-    // now instead of leaving a stale dot until the next scheduled poll.
+    // Streaming: update the cache, then pollTaskStatus re-renders the dot now.
     if (state.streamingParticipant) {
       apiPut("api/marks/" + markId, { severity: sev }).then(function (data) {
         if (data.ok) {
@@ -2085,8 +1860,7 @@
       });
       return;
     }
-    // Loaded participant: optimistically repaint the dot, restore on failure
-    // (mirrors updateMarkCategory).
+    // Loaded: optimistic repaint, restore on failure (mirrors updateMarkCategory).
     var found = _findSegmentByMarkId(markId);
     if (!found) {
       apiPut("api/marks/" + markId, { severity: sev }).then(function (data) {
@@ -2105,9 +1879,7 @@
   }
 
   function showMarkPopover(anchorEl, segmentId, markObj) {
-    // A provisional mark (optimistic paint, POST still in flight) has no id
-    // yet — every popover action would hit api/marks/null. The POST resolves
-    // in well under a click-reopen, so just don't open for it.
+    // A provisional mark has no id yet; actions would hit api/marks/null.
     if (markObj && markObj.id == null) return;
     var popover = qs("#markPopover");
     hideMarkPopover();
@@ -2152,9 +1924,7 @@
       if (e.key === "Escape") { e.preventDefault(); hideMarkPopover(); }
     };
 
-    // Severity dropdown (optional). Options come from CLIPGEN_CONFIG.severity
-    // (mirrored from config.py SEVERITY_NUMERIC_TO_LABEL); a blank first option
-    // means "no severity".
+    // Severity options from CLIPGEN_CONFIG.severity; blank first option = none.
     var sevSelect = popover.querySelector(".mark-popover-severity");
     if (!sevSelect.options.length) {
       var blankOpt = document.createElement("option");
@@ -2171,9 +1941,7 @@
     }
     sevSelect.value = markObj.severity || "";
     sevSelect.onchange = function () {
-      // updateMarkSeverity owns the mark-state mutation (like updateMarkCategory)
-      // so it can capture the previous value and roll back on failure. markObj is
-      // the live seg.marks[0]/streaming-cache ref, so it stays in sync.
+      // updateMarkSeverity owns the mutation so it can roll back on failure.
       updateMarkSeverity(markObj.id, sevSelect.value);
     };
 
@@ -2184,9 +1952,7 @@
       removeMark(markObj.id);
     };
 
-    // Keyboard: arrows rove between category pills, Enter applies the focused
-    // category (the pill's own click), Esc dismisses. Typing in the label input
-    // keeps its own Enter/Esc handling and is skipped for arrow roving.
+    // Arrows rove the pills, Enter clicks, Esc dismisses; inputs keep their own keys.
     popover.onkeydown = function (e) {
       if (e.key === "Escape") { e.preventDefault(); hideMarkPopover(); return; }
       if (document.activeElement === labelInput || document.activeElement === sevSelect) return;
@@ -2206,17 +1972,13 @@
     popover.style.left = (rect.left + window.scrollX - 4) + "px";
     popover.classList.remove("hidden");
 
-    // Focus the current category so arrows/Enter work immediately. preventScroll
-    // keeps the segment list from jumping when the popover opens via the keyboard.
+    // Focus the current category; preventScroll keeps the list from jumping.
     if (pills.length) {
       try { pills[activeIdx].focus({ preventScroll: true }); }
       catch (err) { pills[activeIdx].focus(); }
     }
 
-    // Close on outside click (deferred so this click doesn't trigger it).
-    // Track the timeout so a fast hideMarkPopover (e.g. Esc within the same
-    // tick) cancels the pending attach instead of leaving a permanently
-    // attached listener after the deferred .addEventListener fires.
+    // Deferred outside-click close; the timer lets hideMarkPopover cancel the attach.
     if (_popoverAttachTimer) clearTimeout(_popoverAttachTimer);
     document.removeEventListener("click", _popoverOutsideClick);
     _popoverAttachTimer = setTimeout(function () {
@@ -2244,28 +2006,18 @@
     document.removeEventListener("click", _popoverOutsideClick);
   }
 
-  // ---- Search (impl in transcripts-search.js) ----
-  // Thin hub delegator: boot wires initSearch. Search renders its own results
-  // internally, so no renderSearchResults delegator is needed.
+  // ---- Search delegator; implementation in transcripts-search.js ----
   function initSearch() {
     return TS.initSearch && TS.initSearch();
   }
 
-  // ---- Participant pills (impl in transcripts-pills.js) ----
-  // Thin hub delegators: loadParticipants / selectParticipant / pollTaskStatus
-  // call renderPills; boot wires initPillOutsideClick / initPillWheelScroll; the
-  // Transcribe All quick action enqueues through transcribeParticipants.
+  // ---- Participant pill delegators; implementation in transcripts-pills.js ----
   function renderPills() { return TS.renderPills && TS.renderPills(); }
   function transcribeParticipants() { return TS.transcribeParticipants && TS.transcribeParticipants.apply(null, arguments); }
   function initPillOutsideClick() { return TS.initPillOutsideClick && TS.initPillOutsideClick(); }
   function initPillWheelScroll() { return TS.initPillWheelScroll && TS.initPillWheelScroll(); }
 
-  // _confirmUncachedWhisperModels stays in the hub (model-install state:
-  // _trModelsCache / _trModelsCachePromise / _whisperDownloadConfirmed +
-  // confirmModelInstall). The pills satellite's _postTranscribe reaches it via
-  // TS._confirmUncachedWhisperModels.
-
-  // Confirm each distinct non-cached Whisper model in turn; any cancel aborts.
+  // Confirm each uncached Whisper model in turn; any cancel aborts. Pills reach via TS.
   function _confirmUncachedWhisperModels(uncached) {
     return uncached.reduce(function (chain, m) {
       return chain.then(function (okSoFar) {
@@ -2287,12 +2039,11 @@
   }
 
   // ---- Task polling ----
-  // state.pollPoller → pollTaskStatus for Whisper jobs; summary/citations use
-  // separate pollers (see file header).
+  // Whisper jobs only; summary/citations have their own pollers (see file header).
 
   function startPolling() {
     if (state.pollPoller) return;
-    // runImmediately is false to match the previous setInterval (first poll after POLL_INTERVAL).
+    // First poll after POLL_INTERVAL, not immediately.
     state.pollPoller = createPoller(pollTaskStatus, POLL_INTERVAL, {
       runImmediately: false,
       label: "transcripts.tasks",
@@ -2307,29 +2058,16 @@
     }
   }
 
-  // Keyed by task id (NOT participant) so each task's completion is handled
-  // exactly once. A participant can have several completed tasks over a session
-  // (re-transcription creates a new task while old completed tasks linger in the
-  // worker and are restored from the manifest), so a participant key would let a
-  // stale completed task suppress the new run's completion transition.
+  // Keyed by task id, not participant: old completed tasks linger and would suppress new runs.
   var _refreshedCompletedTaskIds = {};
-  // After a whisper task flips to "completed", keep the main poll loop alive
-  // for a few cycles so the summary "Generating…" state surfaces even if the
-  // next /api/participants or /api/summary response races the in-flight slot.
+  // Poll cycles kept alive after completion so the agent "Generating…" state surfaces.
   var _postCompletionGrace = 0;
   var POST_COMPLETION_GRACE_CYCLES = 4; // ~12s at POLL_INTERVAL=3000ms
 
-  // Ceiling on how long a pill may sit in "Cancelling…". Nothing normal comes
-  // close — the worst real case is a cold model load (~10s, uninterruptible)
-  // plus one poll. This exists only so a wedged worker thread, whose task stays
-  // "running" forever, hands the stop button back instead of leaving a dead pill.
+  // "Cancelling…" ceiling; only a wedged worker gets near it. Hands the stop button back.
   var CANCEL_PENDING_MAX_MS = 30000;
 
-  // Drop the pending-cancel flag for every task the server no longer reports as
-  // active. One predicate covers all four exits: the status flipped to cancelled
-  // (the happy path), it flipped to completed or failed (the cancel raced the
-  // finish line), or the task vanished from the list entirely (dismissed, worker
-  // restart).
+  // Drop pending-cancel flags for tasks no longer active or past the ceiling.
   function _sweepCancellingTasks() {
     var active = {};
     for (var i = 0; i < state.tasks.length; i++) {
@@ -2352,23 +2090,15 @@
     return false;
   }
 
-  // During the post-completion grace window an agent may register as running a
-  // cycle or two after the whisper task completes. Re-load the selected
-  // participant's summary so renderSummaryGenerating()/_startSummaryPoll fire
-  // once the backend reports it generating; also refresh friction when its dep
-  // is met. Guarded so it won't stomp an already-armed/rendered panel.
+  // Agents may register as running a cycle after completion; reload panels without stomping armed ones.
   function _rearmSelectedAgentPanels() {
     var pid = state.selectedParticipant;
     if (!pid) return;
     var p = _currentParticipant();
     var summaryRunning = !!(p && p.agents && p.agents.summary === "running");
-    // _summaryPoller lives in the agents satellite; ask it whether the summary
-    // poll is already armed (TS.isSummaryPolling) rather than reading the var.
+    // _summaryPoller lives in the agents satellite; ask via TS.isSummaryPolling.
     if (summaryRunning && !(TS.isSummaryPolling && TS.isSummaryPolling()) && !state.summaryText) loadSummary(pid);
-    // Reload friction when the panel is empty, or when the deterministic-only
-    // placeholder is showing and the summary-gated agent has now started/finished
-    // — otherwise the deterministic blob keeps this guard shut and
-    // the AI moments would never replace it (see agents/CODE-REVIEW.md poll gates).
+    // Also reload when only deterministic scores show and the agent has since run.
     var frictionActive = !!(p && p.agents && (p.agents.friction === "running" || p.agents.friction === "done"));
     var showingDeterministic = !!(state.frictionData && state.frictionData.deterministic);
     if (!state.frictionGenerating && _frictionDepMet() &&
@@ -2377,23 +2107,14 @@
     }
   }
 
-  // Called from pill agent onStart/onStop after the API POST resolves.
-  // Reloads participants so pill state reflects the new running/idle state
-  // immediately, and starts the poll loop so the pill keeps updating without
-  // waiting for the next external trigger (poll loop is otherwise gated on
-  // `_anyAgentActive()` which reads stale state right after a manual run).
+  // After a pill agent start/stop: reload pills now and kick the poll loop.
   function _refreshAgentStateNow() {
     loadParticipants().then(function () {
       if (_anyAgentActive()) startPolling();
     });
   }
 
-  // Reconcile a participant still showing the streaming view against the backend:
-  // once its whisper task is done and the transcript ready, swap the
-  // "Transcribing… X%" footer for the finalized transcript and reveal the analysis
-  // panel, mirroring selectParticipant's has_transcript path. Self-healing because
-  // state.streamingParticipant clears only after the finalized transcript really
-  // rendered, so a transient API failure retries next poll instead of freezing.
+  // Swap the streaming view for the final transcript; retried each poll until rendered.
   function _finalizeStreamingIfComplete(pid) {
     var running = false;
     var completed = false;
@@ -2403,19 +2124,11 @@
       if (t.status === "running" || t.status === "queued") running = true;
       else if (t.status === "completed") completed = true;
     }
-    // Still transcribing → leave the streaming view up; a later poll re-enters.
     if (running) return;
-    // No running task and nothing completed (failed/cancelled/dismissed) → drop
-    // the streaming flag so the normal empty/failed rendering can take over and
-    // the poll loop can wind down (matches the prior behaviour here).
+    // Failed/cancelled/dismissed: drop the flag so normal rendering takes over.
     if (!completed) {
       state.streamingParticipant = null;
-      // The partial rows stay — they are real transcript the user may still want
-      // to read — but the footer under them has to go, or a cancelled run leaves
-      // a frozen "Cancelling…" line forever: nothing calls renderSegments() on
-      // this path, and renderSegmentsImpl is the only other place the indicator
-      // is removed. Cancel the queued insert first, or a RAF scheduled while the
-      // tab was hidden re-inserts the footer right after we remove it.
+      // Keep the partial rows, drop the footer; cancel the queued RAF insert first.
       _cancelStreamingIndicator();
       var ind = document.querySelector("#segmentList .streaming-indicator");
       if (ind) ind.parentNode.removeChild(ind);
@@ -2424,8 +2137,7 @@
     var ver = state.participantReqVer;
     apiGet("api/transcript/" + pid).then(function (data) {
       if (ver !== state.participantReqVer || state.selectedParticipant !== pid) return;
-      // Transcript not merged yet (rare race) → keep streamingParticipant set so
-      // the next poll retries rather than leaving a frozen footer.
+      // Not merged yet: keep the flag so the next poll retries.
       if (!(data.ok && data.segments && data.segments.length > 0)) return;
       state.streamingParticipant = null;
       state.segments = data.segments;
@@ -2443,25 +2155,17 @@
     apiGet("api/transcribe/status").then(function (data) {
       if (!data.ok) return;
       state.tasks = data.tasks;
-      // Before updateTranscribeFill / updateStatusIndicator / renderPills below
-      // — all three read the flag, and a stale one would keep the band off and
-      // the pill inert for a full extra tick.
+      // Sweep first; the fill, indicator and pills below all read the flag.
       _sweepCancellingTasks();
       if (_anyTxEtaActive()) _txEtaTicker.ensure();
 
-      // Fill the timeline in sync with the selected participant's transcription
-      // progress (starts/updates/clears the band purely from state.tasks).
       updateTranscribeFill();
 
-      // Snapshot before _finalizeStreamingIfComplete can clear streamingParticipant
-      // in its async /api/transcript callback; the newlyCompleted refresh must not
-      // double-fire loadTranscript/loadSummary/loadFriction for that transition.
+      // Snapshot before _finalizeStreamingIfComplete clears it asynchronously.
       var wasStreamingSelected =
         state.streamingParticipant === state.selectedParticipant;
 
-      // Re-render the status circle immediately so completed tasks reflect
-      // before the async loadParticipants()/loadTranscript() chain resolves.
-      // This is what keeps the indicator from freezing at "95%".
+      // Now, not after the async chain, or the indicator freezes at "95%".
       updateStatusIndicator();
 
       // Stream partial segments for the selected participant's running task
@@ -2472,10 +2176,7 @@
             selectedRunningTask = t;
           }
         });
-        // Keep the empty pane's wait text current (queued → loading model →
-        // starting) while nothing has streamed yet; harmless when hidden.
-        // Same running-over-queued pick as the status indicator, so the two
-        // never disagree when duplicate tasks exist for the participant.
+        // Keep the wait text current; same task pick as the status indicator.
         _setTranscriptEmptyText(_taskForSelectedParticipant());
       }
       if (selectedRunningTask) {
@@ -2485,12 +2186,7 @@
           if (segs.length > 0) renderPartialSegments(segs, selectedRunningTask.progress);
         });
       } else if (state.streamingParticipant) {
-        // The selected participant's streaming view is up but it has no running
-        // task. Finalize in place once its transcript is ready. This is
-        // state-driven and retried every poll (not a one-shot tied to the
-        // newlyCompleted de-dup), so a transient /api/participants or
-        // /api/transcript failure can't leave the "Transcribing… X%" footer
-        // frozen forever. It owns clearing state.streamingParticipant.
+        // Streaming view up with no running task; finalize once the transcript is ready.
         _finalizeStreamingIfComplete(state.streamingParticipant);
       }
 
@@ -2504,17 +2200,11 @@
         }
       });
 
-      // Refresh participants and transcript as each task completes.
-      // Thinking-agents (summary → citations) are spawned on whisper completion
-      // and on server startup, so we always refresh after anything completes
-      // or if any agent is currently running on any pill.
-      // Refresh during the grace window too, so participants are re-fetched each
-      // cycle until the summary agent registers as running (or grace expires).
+      // Refresh on completion, while any agent runs, and through the grace window.
       var needsRefresh =
         newlyCompleted.length > 0 || _anyAgentActive() || _postCompletionGrace > 0;
       if (newlyCompleted.length > 0) {
-        // Re-arm on every fresh completion so a multi-participant queue keeps
-        // extending the grace window.
+        // Re-arm per completion so a queue keeps extending the window.
         _postCompletionGrace = POST_COMPLETION_GRACE_CYCLES;
         _streamingMarks = {};
         _streamingMarksLoadedByPid = {};
@@ -2525,31 +2215,18 @@
           if (newlyCompleted.length > 0 && state.selectedParticipant &&
               newlyCompleted.indexOf(state.selectedParticipant) >= 0 &&
               !wasStreamingSelected) {
-            // The selected participant finished but was NOT mid-stream in this
-            // view (e.g. it was queued/idle when it completed), so reveal the
-            // analysis panel and load the finalized transcript here, mirroring
-            // selectParticipant's has_transcript path. The streaming→done case
-            // is owned by _finalizeStreamingIfComplete (state-driven + retried),
-            // so skip when wasStreamingSelected to avoid double-firing after it
-            // clears streamingParticipant and loads summary/friction first.
+            // Completed while not streaming; the streaming case belongs to _finalizeStreamingIfComplete.
             _setAnalysisPanelVisible(true);
             _restoreActiveTab(state.selectedParticipant);
             loadTranscript(state.selectedParticipant);
             loadSummary(state.selectedParticipant);
             loadFriction(state.selectedParticipant);
           } else if (state.selectedParticipant) {
-            // Summary/citations/friction may be auto-chaining server-side after
-            // an earlier completion, or registering during the grace window;
-            // re-arm the selected participant's panels so the running state
-            // surfaces without a manual reload.
+            // Agents may be chaining server-side; surface the running state.
             _rearmSelectedAgentPanels();
           }
           updateStatusIndicator();
-          // Agents typically kick in right after whisper completes; keep the
-          // poll alive across the grace window so dot transitions (running →
-          // done → next) are seen even before the agent registers as running.
-          // Also stay alive while a streaming view still needs finalizing, so
-          // _finalizeStreamingIfComplete keeps retrying until it renders.
+          // Stay alive through the grace window and while a stream awaits finalizing.
           if (_anyAgentActive() || _postCompletionGrace > 0 || state.streamingParticipant) startPolling();
           else if (!hasActive) {
             stopPolling();
@@ -2567,24 +2244,19 @@
 
       if (!hasActive && _hadActiveTranscriptionLastPoll) {
         refreshTranscriptionModelHintOnce();
-        // Transcription just finished — re-validate downloads against real
-        // cache state (downloaded → no prompt, failed → prompt again).
+        // Transcription finished; re-read real cache state before the next gate.
         _forgetWhisperDownloadAgreements();
       }
       _hadActiveTranscriptionLastPoll = hasActive;
 
-      // Count down the grace window at the end so the current cycle still
-      // counts as "in grace" for the decisions above.
+      // Count down last so this cycle still counts as in grace.
       if (_postCompletionGrace > 0) _postCompletionGrace--;
 
       renderPills();
     });
   }
 
-  // ---- Corrections modal (impl in transcripts-corrections.js) ----
-  // Thin hub delegators forward to the satellite; the inline-edit
-  // saveCorrections() flow (loadCorrections) and boot (initCorrectionsModal)
-  // keep calling these bare names.
+  // ---- Corrections modal delegators; implementation in transcripts-corrections.js ----
   function initCorrectionsModal() {
     return TS.initCorrectionsModal && TS.initCorrectionsModal();
   }
@@ -2594,17 +2266,12 @@
 
   // ---- Settings (shared modal lives in settings-modal.js) ----
 
-  // Models are also fetched for per-pill model overrides; keep a tiny
-  // cached fetcher here. The shared modal maintains its own cache.
+  // Cached models fetch for per-pill overrides; the shared modal has its own cache.
   var _trModelsCache = null;
   var _trModelsCachePromise = null;
-  // Whisper models the user has already agreed to download this session. The
-  // models response is cached and a just-confirmed model won't read back as
-  // cached until its background download finishes, so without this we'd
-  // re-prompt on every transcription. Keyed by model name.
+  // Model name -> agreed this session; a downloading model still reads as uncached.
   var _whisperDownloadConfirmed = {};
-  // Serializes confirmModelInstall() calls: there is one shared modal element,
-  // so overlapping callers (e.g. prewarm + an agent run) must take turns.
+  // Serializes confirmModelInstall(); there is one shared modal element.
   var _modelInstallChain = Promise.resolve();
 
   function _trFetchModels() {
@@ -2612,9 +2279,7 @@
     if (_trModelsCachePromise) return _trModelsCachePromise;
     _trModelsCachePromise = apiGet("/api/models")
       .then(function (data) {
-        // Don't pin a result where the AI server wasn't reachable — otherwise
-        // the agent gate and pickers stay blind to available models for the
-        // whole session. Reset so the next call re-fetches once it is up.
+        // Never cache an unreachable-AI-server result; re-fetch next call.
         if (data && data.ok && !(data.llm && data.llm.available === false)) {
           _trModelsCache = data;
         } else {
@@ -2626,12 +2291,7 @@
     return _trModelsCachePromise;
   }
 
-  // Audio-track layout per participant, shared by the volume mixer (which only
-  // ever wants the *selected* participant) and the pill transcribe picker (which
-  // opens for any pill). One endpoint, one cache — two independent fetchers of
-  // /api/audio-info would drift. Keyed by pid + video_version (an mtime sum from
-  // /api/participants) so replacing a source file re-probes; bounded by the
-  // participant count. Never cached on a failed response.
+  // One /api/audio-info cache for mixer and pill picker; keyed by pid + video_version.
   var _trAudioInfoCache = {};
   var _trAudioInfoPromises = {};
 
@@ -2639,9 +2299,7 @@
     return pid + ":" + (videoVersion == null ? "" : videoVersion);
   }
 
-  // Synchronous peek — returns the cached layout or null. Lets the pill popover
-  // render its track row in the same tick when warm, so the 3 s poll's pane
-  // rebuild doesn't strobe the row in and out.
+  // Synchronous peek so the pill popover's track row doesn't strobe per poll.
   function audioInfoCached(pid, videoVersion) {
     return _trAudioInfoCache[_trAudioInfoKey(pid, videoVersion)] || null;
   }
@@ -2669,9 +2327,7 @@
   }
 
   // ---- Local-model install confirmation ----
-  // Both whisper transcription models and GGUF agent models are "local
-  // models" that get downloaded on demand. We never download one silently:
-  // confirmModelInstall() gates every download behind an explicit dialog.
+  // confirmModelInstall() gates every Whisper and GGUF download behind a dialog.
 
   function _trFormatModelSize(mb) {
     if (!mb || mb <= 0) return "";
@@ -2679,18 +2335,12 @@
     return Math.round(mb) + " MB";
   }
 
-  // Stream a GGUF download, reporting progress dicts via onProgress. Resolves
-  // true on success, false on failure/cancellation. isCancelled() is polled
-  // each tick so a dismissed dialog stops the poll (the server-side download
-  // keeps running). The poll also self-terminates after a run of unanswered
-  // status checks so it can never leak forever.
+  // Resolves true on success. Dismissal stops the poll only; the server download continues.
   function downloadLlmModel(model, onProgress, isCancelled) {
     return apiPost("api/models/llm/download", { model: model }).then(function (data) {
       if (!data || !data.ok) return false;
       return new Promise(function (resolve) {
-        // createPoller, not a raw setInterval: the download dialog can sit
-        // open in a backgrounded tab for minutes, and this must pause with
-        // it instead of streaming 1 Hz requests at the server.
+        // createPoller pauses in a backgrounded tab; a raw setInterval would not.
         var misses = 0;
         var poller = createPoller(function () {
           if (isCancelled && isCancelled()) {
@@ -2720,15 +2370,11 @@
     }).catch(function () { return false; });
   }
 
-  // Show the confirm/install dialog. Resolves true when the model is available
-  // to use (whisper: user agreed to the download; llm: download succeeded),
-  // false when the user cancels or the install fails. Calls are serialized
-  // (see _modelInstallChain) so concurrent callers never share the one modal.
+  // Resolves true when usable (whisper: agreed; llm: downloaded). Serialized via _modelInstallChain.
   function confirmModelInstall(opts) {
     var run = function () { return _confirmModelInstallNow(opts); };
     var result = _modelInstallChain.then(run, run);
-    // Advance the chain when this dialog settles, swallowing its outcome so a
-    // cancelled/failed dialog doesn't break the queue for the next caller.
+    // Swallow the outcome so a failed dialog doesn't break the queue.
     _modelInstallChain = result.then(function () {}, function () {});
     return result;
   }
@@ -2748,9 +2394,7 @@
       var licenseEl = qs("#modelInstallLicense");
       var licenseLink = qs("#modelInstallLicenseLink");
 
-      // The progress line shimmers only while the install/check is actually
-      // moving; pass working=false for anything terminal (failed, installed,
-      // "close and retry") so a stalled dialog stops claiming to be busy.
+      // Shimmer only while moving; pass working=false for terminal states.
       function setProgressText(text, working) {
         progressText.classList.toggle("cg-shimmer", working !== false);
         progressText.textContent = text;
@@ -2769,13 +2413,7 @@
       confirmBtn.classList.remove("hidden");
 
       if (opts.kind === "llm-runtime") {
-        // A missing runtime is the one AI state clipgen cannot fix for itself
-        // (a stopped one is simply started), so it is the only one that asks.
-        // Frozen builds bundle llama-server, so this only appears on
-        // source-tree runs: show the commands and offer a re-check. Not
-        // status.message — that is written for a panel banner and ends in
-        // "then Refresh", the wrong instruction beside a button that does the
-        // re-check itself.
+        // Source-tree runs only (frozen builds bundle llama-server). Not status.message: its "then Refresh" misleads here.
         titleEl.textContent = "AI runtime isn't installed";
         msgEl.textContent = "clipgen couldn't find llama-server on this machine. " +
           "The AI summaries, citations and reports need it — everything else works without it.";
@@ -2800,8 +2438,7 @@
         msgEl.textContent = 'The AI model "' + (opts.label || opts.model) +
           '" used by the ' + (opts.agentKey || "analysis") +
           " agent isn't downloaded. Download it now? The model is stored locally and may take several minutes.";
-        // Only curated models have a source page, so this is what tells the
-        // user whose terms they are accepting before a multi-GB download.
+        // Curated models only; shows whose terms a multi-GB download accepts.
         if (opts.modelUrl) {
           licenseLink.href = opts.modelUrl;
           licenseEl.classList.remove("hidden");
@@ -2822,16 +2459,12 @@
       }
       function onCancel() { close(false); }
 
-      // "I've installed it — retry": re-fetch rather than trusting the user,
-      // so a runtime that still isn't on PATH reads as a failure.
+      // Re-fetch rather than trust the user; a runtime still off PATH fails.
       function onRuntimeConfirm() {
         confirmBtn.disabled = true;
         progress.classList.remove("hidden");
         setProgressText("Checking…");
-        // Re-enabling the button and relabelling Cancel is the only way out of
-        // the "Checking…" state, so it has to happen on *every* ending — a
-        // /api/models that rejects left the dialog stuck mid-check with both
-        // buttons dead.
+        // Must run on every ending, or the dialog sticks mid-check with dead buttons.
         function stillUnavailable(text) {
           if (cancelled) return;
           setProgressText(text, false);
@@ -2843,17 +2476,12 @@
         _trModelsCachePromise = null;
         _trFetchModels().then(function (data) {
           if (cancelled) return;
-          // _trFetchModels resolves null rather than rejecting when the fetch
-          // fails, and clipgenLlmStatus(null) is "ok" by design (an unknown
-          // state must never block an action elsewhere). Here that default is
-          // wrong in the other direction: the user asked "is it ready now?" and
-          // a failed check is not a yes.
+          // clipgenLlmStatus(null) reads "ok"; here a failed check is not a yes.
           if (!data || !data.ok) {
             stillUnavailable("Couldn't check — clipgen didn't answer. Try again.");
             return;
           }
-          // "stopped" counts: a freshly installed runtime is never already
-          // running, and the caller starts it.
+          // "stopped" counts; a fresh install is never running yet.
           if (clipgenLlmStatus(data.llm).state !== "missing") {
             showToast("AI runtime found");
             close(true);
@@ -2872,8 +2500,7 @@
           return;
         }
         if (opts.kind === "whisper") { close(true); return; }
-        // llm: kick off the download and show progress in place. Cancel stays
-        // enabled so the user can dismiss while it runs.
+        // llm: download with progress in place; Cancel stays enabled.
         confirmBtn.classList.add("hidden");
         progress.classList.remove("hidden");
         setProgressText("Starting…");
@@ -2886,15 +2513,14 @@
             setProgressText(st.status || "Working…");
           }
         }, function () { return cancelled; }).then(function (ok) {
-          if (cancelled) return; // dialog dismissed mid-download — no toast, no re-close
+          if (cancelled) return; // dismissed mid-download: no toast, no re-close
           if (ok) {
             _trModelsCache = null;
             _trModelsCachePromise = null;
             showToast("Model downloaded");
             close(true);
           } else {
-            // Leave the dialog open so the user can read the failure and
-            // dismiss it; Cancel now resolves false.
+            // Stay open so the failure is readable; Cancel now resolves false.
             setProgressText("Download failed. Check the model name and connection.", false);
             cancelBtn.textContent = "Close";
           }
@@ -2904,20 +2530,12 @@
       cancelBtn.addEventListener("click", onCancel);
       confirmBtn.addEventListener("click", onConfirm);
       modal.classList.remove("hidden");
-      // Escape and backdrop click both cancel (no focus trap — matches prior
-      // behavior for this lightweight progress dialog).
+      // Escape and backdrop click both cancel; no focus trap.
       openBlockingModal(modal, { onEscape: onCancel, onBackdropClick: onCancel });
     });
   }
 
-  // Gate an agent run on the AI server being usable and its model downloaded;
-  // resolves true to proceed, false to abort.
-  //
-  // A runtime that is installed but not answering is not a decision the user
-  // has to make, so it is started here rather than asked about. Only a missing
-  // runtime gets the dialog: nothing clipgen can do fixes that one. An
-  // *unknown* state (fetch failed) passes: never block an action on a question
-  // we couldn't ask.
+  // Gate an agent run: start a stopped runtime, ask about a missing one.
   function ensureAgentModelInstalled(agentKey) {
     return _trFetchModels().then(function (data) {
       var llm = data && data.llm;
@@ -2926,8 +2544,7 @@
       if (status.state === "stopped") {
         return _startAiServer().then(function (fresh) {
           if (!fresh) return false;
-          // The server is up now, but that says nothing about the agent's
-          // model — the payload we started from may list no models at all.
+          // Server up says nothing about the agent's model yet.
           return _ensureModelFromPayload(fresh, agentKey);
         });
       }
@@ -2949,9 +2566,7 @@
     }).catch(function () { return true; });
   }
 
-  // Start the AI server and resolve the refreshed /api/models payload, or null
-  // if it never came up. The toast is the only sign of the ~2 s boot, which
-  // otherwise reads as a click that did nothing.
+  // Resolves the refreshed /api/models payload, or null. The toast covers the ~2 s boot.
   function _startAiServer() {
     showToast("Starting AI server…");
     return apiPost("api/models/llm/start", {})
@@ -2973,8 +2588,7 @@
       });
   }
 
-  // The "is this agent's model downloaded?" half of the gate, against an
-  // already fetched /api/models payload. Resolves true to proceed.
+  // Model-downloaded half of the gate, against a fetched /api/models payload.
   function _ensureModelFromPayload(data, agentKey) {
     var llm = data && data.llm;
     if (!llm) return true;
@@ -3030,11 +2644,7 @@
   }
   window.clipgenRerenderCrossRefs = rerenderCrossRefs;
 
-  // A changed transcription model invalidates the prewarm guards: the new
-  // model may be uncached and must get its own download confirmation, so we
-  // clear the "already posted/declined" state and let prewarm re-offer it.
-  // Clearing the declined model also means re-selecting a previously-declined
-  // model gets a fresh prompt (the user explicitly chose it again).
+  // A model change resets the prewarm guards so the new model gets its own prompt.
   function _onTranscribeModelMaybeChanged(newModel) {
     if (newModel === undefined || newModel === null) return;
     if (newModel !== _lastTranscribeModel) {
@@ -3071,26 +2681,13 @@
   }
 
   // ---- Clip marked lines ----
-  //
-  // Cuts one clip per cluster of marked lines through Studio's
-  // ../studio/api/generate-intake — the endpoint Studio's Transcript Intake tab
-  // uses — so output lands in the clips manifest section as if queued there and this
-  // page needs no generation backend. Unlike Studio's queue path it also sends
-  // `text`/`label`, which is what gives each artifact a readable description
-  // instead of a bare category (see _process_intake_item in server.py).
+  // One clip per mark cluster via Studio's generate-intake.
 
-  // Mirrors Studio's #trIntakeClusterThreshold default so identical marks
-  // cluster identically on both pages. Padding defaults to 0 for the same
-  // reason — the spans then match Studio's exactly. Segment boundaries are
-  // word/energy-tight since TRANSCRIBE_WORD_TIMESTAMPS + TRANSCRIBE_EDGE_SNAP,
-  // so pad-0 cuts no longer clip the first or last word; the pad remains for
-  // users who want breathing room around the speech.
+  // Mirror Studio's #trIntakeClusterThreshold and pad-0 so both pages cut identical spans.
   var CLIP_MARKS_DEFAULT_GAP_SECONDS = 10;
   var CLIP_MARKS_DEFAULT_PAD_SECONDS = 0;
 
-  // { done, failed, total, abort } while a batch streams; null when idle. The
-  // modal can be dismissed mid-run (the run continues) and reopened onto the
-  // live progress, so this outlives the dialog.
+  // { done, failed, total, abort } while streaming, null idle; outlives a dismissed modal.
   var _clipMarksRun = null;
   // Valid resolved marks, refetched every time the modal opens.
   var _clipMarksMarks = [];
@@ -3108,8 +2705,7 @@
     return Math.min(max, Math.max(min, raw));
   }
 
-  // The preview and the payload cluster through the same shared helper, so the
-  // count the user reads is the number of clips they get.
+  // Preview and payload share this, so the shown count is the clip count.
   function _clipMarksClusters() {
     var marks = _clipMarksScopedMarks();
     if (!marks.length) return [];
@@ -3142,8 +2738,7 @@
     confirmBtn.disabled = false;
   }
 
-  // Both option labels carry live counts so the scope choice and its
-  // consequence are legible in one place.
+  // Option labels carry live mark counts.
   function _renderClipMarksScopeOptions() {
     var sel = qs("#clipMarksScope");
     if (!sel || sel.options.length < 2) return;
@@ -3219,8 +2814,7 @@
     var clusters = _clipMarksClusters();
     if (!clusters.length) return;
     var pad = _clipMarksNumber("#clipMarksPad", CLIP_MARKS_DEFAULT_PAD_SECONDS, 0, 10);
-    // Only the start needs clamping — ffmpeg stops at EOF, and a multi-video
-    // participant's span is bounded when it is mapped onto the timeline.
+    // Only the start needs clamping; ffmpeg stops at EOF.
     var items = clusters.map(function (c) {
       return {
         participant: c.participant,
@@ -3242,8 +2836,7 @@
     function handleLine(line) {
       var data;
       try { data = JSON.parse(line); } catch (_) { return; }
-      // The trailing {"cancelled": true} line carries no index — this also
-      // keeps it out of the completion tally.
+      // The trailing {"cancelled": true} line has no index and stays out of the tally.
       if (!data || typeof data.index !== "number") return;
       run.done++;
       if (!data.ok) run.failed++;
@@ -3293,25 +2886,12 @@
   }
 
   // ---- Embed subtitles ----
-  //
-  // Muxes each participant's transcript back into a copy of their source video as
-  // a soft subtitle track (stream copy, no re-encode). Structurally a twin of the
-  // Clip Marked Lines dialog above — same scope picker, live summary and NDJSON
-  // progress bar — with the track's default disposition as its only extra
-  // parameter; container codec, track title and language are derived server-side.
-  //
-  // No fetch on open, unlike clip-marks: state.participants already carries
-  // has_transcript and video_paths from the poll.
+  // Soft-mux transcripts into video copies; twin of Clip Marked Lines.
 
-  // { done, failed, total, abort } while a batch streams; null when idle. Lives
-  // out here so the dialog can be dismissed mid-run and reopened onto the live
-  // progress, exactly like _clipMarksRun.
+  // { done, failed, total, abort } while streaming, null idle; outlives a dismissed modal.
   var _embedSubsRun = null;
 
-  // The server refuses a participant whose transcript spans several source
-  // files (muxing it back would mean concatenating the parts first), and
-  // video_paths already ships on /api/participants — so drop them here rather
-  // than spending a whole ffmpeg round-trip to surface a failure line.
+  // Multi-part participants are filtered client-side; the server would refuse them anyway.
   function _embedSubsCandidates() {
     var ps = state.participants || [];
     var out = [];
@@ -3343,10 +2923,7 @@
     return CLIPGEN_CONFIG.subtitleContainers || { supported: [], alwaysDefault: [] };
   }
 
-  // A container mux_subtitles has no codec for is rejected server-side at its
-  // `codec is None` guard. Filtering here for the same reason multi-part is
-  // filtered here: otherwise the summary promises "8 subtitled videos" and the
-  // run comes back with 8 failure lines.
+  // Mirrors mux_subtitles' `codec is None` guard so the summary count is honest.
   function _embedSubsIsUnsupported(p) {
     var supported = _embedSubsContainers().supported || [];
     return supported.indexOf(_embedSubsExt(p)) === -1;
@@ -3358,11 +2935,7 @@
     });
   }
 
-  // The mp4 family always ships its subtitle track enabled — measured on ffmpeg
-  // 8.1.2, the muxer reports default=1 whatever -disposition:s:0 is given (an
-  // ISOBMFF track is enabled or absent; only .mkv/.webm have a present-but-off
-  // state). Unticking the box is therefore a no-op for those files, and a
-  // control that silently does nothing is worse than one that says so.
+  // ISOBMFF ignores -disposition:s:0 (measured, ffmpeg 8.1.2); only .mkv/.webm can be off.
   function _embedSubsAlwaysDefault(targets) {
     var always = _embedSubsContainers().alwaysDefault || [];
     return targets.filter(function (p) {
@@ -3392,10 +2965,7 @@
     }
     if (!targets.length) {
       var scope = (qs("#embedSubsScope") || {}).value;
-      // Three different dead ends: nothing transcribed yet, transcripts that
-      // exist but span several files, or a container the muxer cannot write.
-      // Only the first is fixed by running a transcription, so saying that when
-      // the real blocker is the footage sends the user at a no-op.
+      // Name the real blocker; only "no transcript" is fixed by transcribing.
       if (unsupported.length && !skipped.length) {
         summaryEl.textContent =
           (unsupported.length === 1
@@ -3418,8 +2988,7 @@
       confirmBtn.disabled = true;
       return;
     }
-    // Only worth saying when the box is unticked: with it ticked the mp4
-    // muxer's behaviour and the user's request agree.
+    // Only when unticked; ticked agrees with the mp4 muxer anyway.
     var stuckOn = (qs("#embedSubsDefault") || {}).checked
       ? []
       : _embedSubsAlwaysDefault(targets);
@@ -3435,8 +3004,7 @@
     confirmBtn.disabled = false;
   }
 
-  // Both option labels carry live counts so the scope choice and its
-  // consequence are legible in one place (mirrors the clip-marks picker).
+  // Option labels carry live counts (mirrors the clip-marks picker).
   function _renderEmbedSubsScopeOptions() {
     var sel = qs("#embedSubsScope");
     if (!sel || sel.options.length < 2) return;
@@ -3513,9 +3081,7 @@
       var data;
       try { data = JSON.parse(line); } catch (_) { return; }
       if (!data) return;
-      // The header line carries the destination and the trailing
-      // {"cancelled": true} / {"done": true} carry nothing — none has an
-      // index, which is also what keeps them out of the completion tally.
+      // Header and trailing sentinel lines have no index; they stay out of the tally.
       if (data.output_dir) outputDir = data.output_dir;
       if (data.token) run.token = data.token; // echoed by Stop to scope the cancel
       if (data.done) sawDone = true;
@@ -3540,10 +3106,7 @@
       .then(function () {
         var made = run.done - run.failed;
         var where = outputDir ? " to " + outputDir : "";
-        // No sentinel means the server died partway and the body simply
-        // stopped. The stream reader cannot tell that from a clean end, so
-        // without this check a run that blew up at participant 4 of 10
-        // reported "3 subtitled videos written" and nothing else.
+        // No sentinel means the server died partway; the reader can't tell otherwise.
         if (!sawDone) {
           finish(
             "Subtitle embedding stopped early — " +
@@ -3569,8 +3132,7 @@
       closeEmbedSubsModal();
       return;
     }
-    // The server stops between files (a mux cannot be interrupted mid-copy), so
-    // the abort just drops our end of a stream that is already winding down.
+    // The server stops between files; the abort just drops our end.
     apiPost("api/embed-subtitles/cancel", { token: _embedSubsRun.token || null }).catch(function () {});
     _embedSubsRun.abort.abort();
   }
@@ -3579,39 +3141,20 @@
     qs("#embedSubsCancel").addEventListener("click", onEmbedSubsCancel);
     qs("#embedSubsConfirm").addEventListener("click", submitEmbedSubs);
     qs("#embedSubsScope").addEventListener("change", renderEmbedSubsSummary);
-    // The checkbox does not change the file count, but it does decide whether
-    // the .mp4 caveat applies — so the summary has to re-render for it.
+    // The checkbox decides whether the .mp4 caveat shows.
     qs("#embedSubsDefault").addEventListener("change", renderEmbedSubsSummary);
   }
 
   // ---- Normalize audio ----
-  //
-  // Rewrites source videos in place with loudness-normalized audio: the picture
-  // (and any unselected track) is stream-copied, the chosen tracks are
-  // re-encoded through the server's loudnorm preset, and the original is parked
-  // beside the source as .orig — the same kept-original flow the remux banner
-  // manages, so Restore/Delete come for free after the run. Structurally a twin
-  // of the Embed Subtitles dialog above; its one extra wrinkle is the track
-  // field, which swaps between a coarse mode select (scope: all — per-participant
-  // track layouts are heterogeneous, so explicit indices would be ambiguous) and
-  // per-track checkboxes fetched from api/audio-info (scope: current).
+  // Loudnorm videos in place, keeping .orig like remux.
 
-  // { done, failed, total, abort } while a batch streams; null when idle. Lives
-  // out here so the dialog can be dismissed mid-run and reopened onto the live
-  // progress, exactly like _embedSubsRun.
+  // { done, failed, total, abort } while streaming, null idle; outlives a dismissed modal.
   var _normAudioRun = null;
 
-  // pid -> how many of the participant's parts have a kept .orig occupying
-  // their backup slot (from api/remux/status on open). Only a *fully* occupied
-  // participant is excluded: the server counts already-rewritten parts as done,
-  // so a run that failed or was stopped halfway through a multi-part
-  // participant resumes from the parts that are left rather than being locked
-  // out until the successful backups are deleted or restored.
+  // pid -> parts with a kept .orig. Only fully-kept participants are excluded.
   var _normAudioKept = {};
 
-  // The current-scope track checkboxes are built from an async audio-info
-  // fetch; these pin which participant the rendered list (and its indices)
-  // belong to, so a stale response can never dress the wrong participant.
+  // Pin which participant the async-built track checkboxes belong to.
   var _normAudioTrackPid = null;
   var _normAudioTrackInfo = null;
 
@@ -3657,9 +3200,7 @@
     return n;
   }
 
-  // Which tracks the submit should send: the mode select's word for scope=all,
-  // the checked checkbox indices for a multi-track current participant, and
-  // "auto" when there is nothing to choose (single track).
+  // Mode word for scope=all, checked indices for multi-track current, else "auto".
   function _normAudioTracksSpec() {
     if ((qs("#normAudioScope") || {}).value !== "current") {
       return (qs("#normAudioTrackMode") || {}).value || "auto";
@@ -3689,8 +3230,7 @@
         " skipped (an earlier original is still kept — delete or restore it first)."
       : "";
     if (resuming.length) {
-      // Partially-rewritten multi-part participants: the server skips the
-      // parts whose backup slot is occupied, so the run finishes what's left.
+      // The server skips parts whose backup slot is occupied.
       keptNote += " " + resuming.map(function (p) { return p.id; }).join(", ") +
         (resuming.length === 1
           ? " resumes where it stopped"
@@ -3730,8 +3270,7 @@
     confirmBtn.disabled = false;
   }
 
-  // Both option labels carry live counts so the scope choice and its
-  // consequence are legible in one place (mirrors the embed picker).
+  // Option labels carry live counts (mirrors the embed picker).
   function _renderNormAudioScopeOptions() {
     var sel = qs("#normAudioScope");
     if (!sel || sel.options.length < 2) return;
@@ -3749,8 +3288,7 @@
     if (!mine) sel.value = "all";
   }
 
-  // Swap the track field between the coarse mode select (scope: all) and the
-  // per-track checkboxes (scope: current, multi-track file).
+  // Mode select for scope=all; per-track checkboxes for a multi-track current participant.
   function _renderNormAudioTrackField() {
     var modeLabel = qs("#normAudioTrackModeLabel");
     var list = qs("#normAudioTrackList");
@@ -3784,8 +3322,7 @@
           var row = document.createElement("label");
           row.className = "param-modal-label";
           var text = document.createElement("span");
-          // Late-bound: transcripts-pills.js loads after the hub and publishes
-          // the label helper on the namespace.
+          // Late-bound; transcripts-pills.js publishes the helper after the hub loads.
           text.textContent = TS.trackOptionLabel
             ? TS.trackOptionLabel(_normAudioTrackInfo.tracks[i], i)
             : "Track " + (i + 1);
@@ -3837,9 +3374,7 @@
     _normAudioKept = {};
     _renderNormAudioScopeOptions();
     _renderNormAudioTrackField();
-    // Kept-original state lives on disk, not in state.participants — the remux
-    // status endpoint re-probes it on every call, so one fetch on open is
-    // always current.
+    // Kept-original state lives on disk; remux/status re-probes on every call.
     apiGet("api/remux/status")
       .then(function (data) {
         if (!data || !data.ok || _normAudioRun) return;
@@ -3884,15 +3419,13 @@
       var data;
       try { data = JSON.parse(line); } catch (_) { return; }
       if (!data) return;
-      // The header and the trailing {"cancelled": true} / {"done": true} lines
-      // carry no index, which is also what keeps them out of the tally.
+      // Header and trailing sentinel lines have no index; they stay out of the tally.
       if (data.token) run.token = data.token; // echoed by Stop to scope the cancel
       if (data.done) sawDone = true;
       if (typeof data.index !== "number") return;
       run.done++;
       if (!data.ok) run.failed++;
-      // Files actually swapped — can be non-zero on an ok=false line when a
-      // later part of a multi-part participant failed or was stopped.
+      // Files swapped; can be non-zero on an ok=false multi-part line.
       if (typeof data.parts_done === "number") run.changed += data.parts_done;
       _renderNormAudioProgress();
     }
@@ -3902,14 +3435,7 @@
       _renderNormAudioProgress();
       closeNormalizeAudioModal();
       showToast(message);
-      // Any swapped file was pulled out from under the page: the <video> is
-      // mid-stream on a renamed-away inode and the per-track mixers point at
-      // stale extracts. Keyed on parts swapped (run.changed), not successful
-      // participants — a participant that failed on part 2 still replaced
-      // part 1. media-banner.js reloads for the identical file swap
-      // (reloadAfterFileSwap); the delay lets the batch toast — which, unlike
-      // remux's single-file one, carries failure counts — be seen first.
-      // Playback position survives via videoTimeByParticipant.
+      // Swapped files invalidate the <video> stream; reload like media-banner.js, after the toast.
       if (run.changed > 0) {
         setTimeout(function () { window.location.reload(); }, 1500);
       }
@@ -3922,9 +3448,7 @@
     )
       .then(function () {
         var made = run.done - run.failed;
-        // No sentinel means the server died partway and the body simply
-        // stopped; without this check a run that blew up at participant 4 of
-        // 10 would report 3 rewrites as a clean finish.
+        // No sentinel means the server died partway; the reader can't tell otherwise.
         if (!sawDone) {
           finish(
             "Audio normalization stopped early — " +
@@ -3950,9 +3474,7 @@
       closeNormalizeAudioModal();
       return;
     }
-    // Unlike the embed run, the cancel event is threaded into ffmpeg itself, so
-    // Stop interrupts the current file mid-encode; the abort just drops our end
-    // of a stream that is already winding down.
+    // Unlike embed, Stop interrupts ffmpeg mid-encode; the abort just drops our end.
     apiPost("api/normalize-audio/cancel", { token: _normAudioRun.token || null }).catch(function () {});
     _normAudioRun.abort.abort();
   }
@@ -3960,8 +3482,7 @@
   function initNormalizeAudioModal() {
     qs("#normAudioCancel").addEventListener("click", onNormalizeAudioCancel);
     qs("#normAudioConfirm").addEventListener("click", submitNormalizeAudio);
-    // Scope decides which track control is shown, so it re-renders the field
-    // (which re-renders the summary itself once the async probe settles).
+    // Scope picks the track control; the field re-renders the summary itself.
     qs("#normAudioScope").addEventListener("change", _renderNormAudioTrackField);
     qs("#normAudioTrackMode").addEventListener("change", renderNormAudioSummary);
     // Delegated: the checkbox rows are rebuilt per participant.
@@ -3970,10 +3491,7 @@
 
   // ---- Boot ----
 
-  // Participants the Transcribe All action would enqueue: a source video, no
-  // transcript yet, and nothing already queued or running for them. That last
-  // filter is not optional — /api/transcribe has no in-flight guard, so without
-  // it a second click while the batch runs enqueues every pending pid twice.
+  // Video, no transcript, nothing queued/running: /api/transcribe has no in-flight guard.
   function _untranscribedParticipants() {
     var ps = state.participants || [];
     var tasks = state.tasks || [];
@@ -3988,9 +3506,7 @@
     return pids;
   }
 
-  // One POST for the whole list; the worker thread runs them sequentially and the
-  // pills render each task's progress off the existing poller. _postTranscribe
-  // owns the toast, the polling restart, and the uncached-model confirm.
+  // One POST for the list; _postTranscribe owns toast, poll restart and model confirm.
   function runTranscribeAll() {
     var pids = _untranscribedParticipants();
     if (!pids.length) return;
@@ -3999,9 +3515,7 @@
 
   var _rebuildTopNavActions = function () {};
 
-  // Published on TS for transcripts-agents.js, which gates its panel-visible
-  // refreshes on it. The topnav no longer reads it — the Embed Subtitles dialog
-  // does its own scoping — but the satellite still does.
+  // Published on TS; transcripts-agents.js gates panel refreshes on it.
   function _currentParticipantHasTranscript() {
     var pid = state.selectedParticipant;
     if (!pid || !state.participants) return false;
@@ -4033,25 +3547,21 @@
           icon: "language",
           label: "Embed Subtitles…",
           action: openEmbedSubsModal,
-          // Never gated, same as Clip Marked Lines below: the modal reports the
-          // transcript count and disables its own Embed button, so the scope
-          // choice lives where its consequence is visible.
+          // Never gated: the modal reports counts and disables its own button.
           title: "Write a subtitled copy of each source video into the output folder; the originals are never modified",
         },
         {
           icon: "speaker-wave",
           label: "Normalize Audio…",
           action: openNormalizeAudioModal,
-          // Never gated, same as the neighbours: the modal reports the video
-          // count and disables its own Normalize button.
+          // Never gated, same as the neighbours.
           title: "Rewrite source videos in place with loudness-normalized audio; the original is kept beside each file until you delete it",
         },
         {
           icon: "scissors",
           label: "Clip Marked Lines…",
           action: openClipMarksModal,
-          // Never gated: the modal reports the mark count and disables its own
-          // Generate button, which keeps the menu free of an async mark fetch.
+          // Never gated; keeps the menu free of an async mark fetch.
           title: "Cut a clip for every manually marked line",
         },
         window.ClipgenExportActions.exportQuickAction(),
@@ -4060,17 +3570,14 @@
     _rebuildTopNavActions = rebuild;
     rebuild();
     window.ClipgenExportActions.refreshExportStatus(rebuild);
-    // Always rebuild on menu open so Transcribe All re-counts against in-flight
-    // tasks; also refresh export-enabled state.
+    // Rebuild on open so Transcribe All re-counts against in-flight tasks.
     window.ClipgenTopNav.onBeforeOpen(function () {
       rebuild();
       window.ClipgenExportActions.refreshExportStatus(rebuild);
     });
   }
 
-  // Command palette (command-palette.js): additions beyond the auto-ingested
-  // quick actions — search focus, cheatsheet, panel tabs, participant jumps
-  // (the provider runs on every palette open, so it tracks state.participants).
+  // Palette commands beyond the auto-ingested quick actions; provider runs per open.
   function initCommandPalette() {
     if (!window.ClipgenCommandPalette) return;
     function clickCommand(id, title, icon, keywords, elId) {
@@ -4096,8 +3603,7 @@
           keywords: "find text query",
           section: "Transcripts",
           visible: function () { return !!document.getElementById("searchInput"); },
-          // Runs after the palette closes and restores focus, so this focus
-          // call wins.
+          // Runs after the palette restores focus, so this call wins.
           run: function () { document.getElementById("searchInput").focus(); },
         },
         clickCommand("transcripts:shortcuts", "Keyboard shortcuts", "command-line",
@@ -4116,8 +3622,7 @@
           icon: "fire",
           keywords: "friction analysis overlay heatmap filter isolate highlight timeline",
           section: "Transcripts",
-          // Gated on data, not on a control: the mode track only means anything
-          // once the selected participant has friction scores.
+          // Gated on data: the mode means nothing without friction scores.
           enabled: function () {
             var fd = state.frictionData;
             return !!(fd && fd.segments && fd.segments.length);
@@ -4125,8 +3630,7 @@
           run: function () { cycleFrictionMode(); },
         },
       ];
-      // "Jump to … in Transcripts" = stays here and selects in place; the
-      // palette's built-in provider adds the cross-page "Open … in <Page>".
+      // Selects in place; the palette's built-in provider adds cross-page "Open …".
       (state.participants || []).forEach(function (p) {
         cmds.push({
           id: "transcripts:p:" + p.id,
@@ -4159,8 +3663,7 @@
     initPipScroll();
     initPlayerKeyboard();
     initPanelTabs();
-    // /transcripts/#tab=friction style deep links (command palette). The
-    // participant hash form (#P07) is handled separately in loadParticipants.
+    // #tab=friction deep links; the #P07 form is handled in loadParticipants.
     var hashTab = clipgenHashTab();
     if (hashTab === "summary" || hashTab === "friction") {
       var hashTabBtn = qs(hashTab === "friction" ? "#tabBtnFriction" : "#tabBtnSummary");
@@ -4173,9 +3676,7 @@
     initTopNavActions();
     initCommandPalette();
 
-    // Pause every poller when tab is hidden; resume what was active on focus.
-    // Without this, summary/citations/model-hint pollers (1.5–3 s cadence)
-    // keep hammering the backend from background tabs.
+    // Pause every poller while hidden; resume what was active on focus.
     document.addEventListener("visibilitychange", function () {
       if (document.hidden) {
         stopPolling();
@@ -4189,15 +3690,7 @@
         pollTaskStatus();
         startXrefPolling();
         if (_anyTxEtaActive()) _txEtaTicker.ensure();
-        // Re-check summary + citations on tab refocus. Background-running
-        // Thinking agents finish without notifying the frontend; if the citations
-        // poll already gave up (or summary completed after we stopped polling)
-        // the manifest result would only surface on a full page reload. This
-        // catches the common "user goes to another tab, comes back" case.
-        // loadSummary re-arms the summary/citations polls if generation is
-        // still in flight, and the transcribe-status poll re-arms the
-        // model-hint poll on the next active task transition. loadFriction does
-        // the same for the friction pass.
+        // Agents finish silently in the background; reload and re-arm their polls.
         if (state.selectedParticipant) {
           loadSummary(state.selectedParticipant);
           loadFriction(state.selectedParticipant);
@@ -4205,14 +3698,7 @@
       }
     });
 
-    // Window focus is a separate signal from tab visibility: switching to
-    // another window/app (Cmd-Tab) leaves the tab "visible" (document.hidden
-    // stays false, so the visibilitychange handler above never fires) yet
-    // browsers — Safari most aggressively — still pause/throttle setInterval for
-    // the unfocused window. That freezes the streaming "Transcribing… X%"
-    // progress until the next throttled tick or a manual reload. Re-poll
-    // immediately on focus so the transcription progress resyncs without a
-    // reload (the per-agent summary/friction pollers self-resume on focus).
+    // Cmd-Tab keeps document.hidden false yet Safari throttles timers; re-poll on focus.
     window.addEventListener("focus", function () {
       if (document.hidden) return;
       pollTaskStatus();
@@ -4238,19 +3724,7 @@
   });
 
   // ---- Satellite interface (window.ClipgenTranscripts) ----
-  // Published for the transcripts-*.js satellite files (corrections, search,
-  // video, pills, agents) that load after this script. They read the hub's
-  // shared `state` + helpers through this object and attach their own published
-  // functions back onto it — mirrors screenspace.js / window.ClipgenScreenspace.
-  // Assigned synchronously here (during the hub script's load) so the object is
-  // fully populated before any satellite IIFE runs; the DOMContentLoaded init
-  // above and all user-event handlers fire later still, by which point
-  // satellites have registered their functions.
-  //
-  // Hub helpers the satellites call outward are published below as they are
-  // needed by each carved satellite. Functions the hub calls that live in a
-  // satellite are reached through thin guarded delegators (see the delegators
-  // section) so the hub degrades to a no-op if a satellite fails to load.
+  // Assigned synchronously so satellites see it; see agents/skills/carve-satellite/SKILL.md.
   var TS = (window.ClipgenTranscripts = window.ClipgenTranscripts || {});
   TS.state = state;
   TS.showToast = showToast;
@@ -4260,8 +3734,7 @@
   TS.findOverlapsForSearch = findOverlapsForSearch; // search
   TS.selectParticipant = selectParticipant; // search, pills
   TS.cycleParticipant = cycleParticipant; // video (Z/X participant cycle)
-  // Accumulated streaming segments for the currently-streamed participant. The
-  // status poll no longer carries partial_segments, so search reads them here.
+  // Streaming segments for the streamed participant; search reads them here.
   TS.streamingSegmentsFor = function (pid) {
     return pid && pid === state.streamingParticipant ? _streamSegs.segments : [];
   }; // search
@@ -4281,8 +3754,7 @@
   TS.ensureAgentModelInstalled = ensureAgentModelInstalled; // pills, agents
   TS.confirmModelInstall = confirmModelInstall; // shot.py state probing; future satellites
   TS._confirmUncachedWhisperModels = _confirmUncachedWhisperModels; // pills (model-install kept in hub)
-  // Hub helpers the agents satellite calls outward (loadFriction is owned by the
-  // agents satellite now and reached through the delegator above).
+  // Hub helpers the agents satellite calls outward.
   TS.renderSegments = renderSegments; // agents (heatmap toggle, friction mark-all)
   TS._txEtaTicker = _txEtaTicker; // agents (summary/citations/friction elapsed)
   TS._summaryEtaTracker = _summaryEtaTracker; // agents

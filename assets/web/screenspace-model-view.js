@@ -26,9 +26,7 @@
 
   var SS = window.ClipgenScreenspace;
   var state = SS.state;
-  // Hub helpers (published synchronously during the hub's load, before this
-  // file runs). apiGet / qs / numberOrDefault / _formatMinAreaReadout are
-  // ambient utils.js / screenspace-utils.js globals.
+  // Hub helpers, published before this file loads; other helpers are ambient globals.
   var normalizeRegionRef = SS.normalizeRegionRef,
     activeRegionRef = SS.activeRegionRef;
 
@@ -127,10 +125,7 @@
     return _activeOverlayLayers().length > 0;
   }
 
-  // N steps the overlay layer picker. Driven through the <select> so the change
-  // handler above stays the one place that persists and refetches; the select
-  // is only populated when a tool has more than one layer, which is exactly
-  // when cycling means anything.
+  // Drive the <select> so its change handler stays the one persist + refetch path.
   function cycleOverlayLayer() {
     var sel = qs("#modelViewOverlayLayer");
     if (!sel || sel.options.length < 2) return;
@@ -194,9 +189,7 @@
     }
   }
 
-  // The Preview tab is the panel's only disclosure, so an inactive tab means the
-  // image is not on screen. The overlay and the B-blink draw on the video
-  // instead, so each is an independent escape from that gate.
+  // Inactive Preview tab hides the image; overlay and B-blink draw on the video instead.
   function refreshModelView(opts) {
     if (state.rightPaneTab !== "preview" && !state.overlayEnabled && !state.overlayBlinkActive) return;
     if (_modelViewTimer) {
@@ -212,9 +205,7 @@
 
   var _FULL_FRAME_REGION_STRING = "0.000000,0.000000,1.000000,1.000000";
 
-  // Serialize a region data object ({x,y,w,h}, normalized when source_width is
-  // set, otherwise canvas pixels) into the comma-joined fraction string the
-  // preview/calibration endpoints expect.
+  // Region {x,y,w,h} (normalized when source_width is set, else canvas pixels) → fraction string.
   function _regionDataToString(r) {
     if (r.source_width) {
       return [r.x, r.y, r.w, r.h]
@@ -228,8 +219,7 @@
       .join(",");
   }
 
-  // Resolve any region ref (active / stash / full-frame) to its coordinate
-  // string, or null when the referenced region data can't be found.
+  // Any region ref (active / stash / full-frame) → coordinate string, or null if unresolved.
   function _regionStringForRef(ref) {
     var r = normalizeRegionRef(ref);
     if (!r) return null;
@@ -249,12 +239,7 @@
     return _regionDataToString(data);
   }
 
-  // The region the preview/calibration should target: the last region toggled
-  // on in the run-region picker (the dropdown), falling back to the highlighted
-  // chip. Multitool/boundary hide the picker (see renderWorkflowParams), so
-  // their stale runRegions are ignored and they keep using the active region.
-  // Template/shape samples are pinned to their capture region separately, so
-  // a full-frame run target is legitimate everywhere and never skipped.
+  // Preview target: last run-region toggled on, else the active chip. Multitool/boundary hide the picker.
   function _previewRegionRef() {
     if (state.activeWorkflow !== "multitool" && state.activeWorkflow !== "boundary") {
       for (var i = state.runRegions.length - 1; i >= 0; i--) {
@@ -299,11 +284,7 @@
       .join("|");
   }
 
-  // Bbox-relative contours of the previewed region as "u1,v1;u2,v2;…" (one
-  // segment per contour, joined with "|") for the preview endpoint's optional
-  // mask= param, or null for rect regions. A pending shaped draw carries
-  // canvas-pixel absolute contours — convert them against its own bbox; saved
-  // regions already store bbox-relative contours.
+  // Bbox-relative contours as "u,v;u,v|…" for mask=, or null for rects. Pending draws are canvas-absolute.
   function _regionMaskString() {
     var contours = null;
     if (state.pendingRegion) {
@@ -322,8 +303,7 @@
     return _encodeMaskContours(contours);
   }
 
-  // True when the previewed region is shaped but the active tool can only
-  // analyze its bounding rect (config-mirrored list).
+  // Shaped region but the tool only analyzes its bounding rect (config-mirrored list).
   function _maskFallbackActive() {
     if (CLIPGEN_CONFIG.screenspaceMaskFallbackTools.indexOf(state.activeWorkflow) === -1) {
       return false;
@@ -335,8 +315,7 @@
     return !!(data && data.points && data.points.length > 0);
   }
 
-  // Resolve a region ref to its stored {x,y,w,h} object (fractions of the
-  // frame). Returns null for full-frame / unresolved refs.
+  // Stored {x,y,w,h} (frame fractions) for a region ref; null for full-frame / unresolved.
   function _regionObjectForRef(ref) {
     var r = normalizeRegionRef(ref);
     if (!r || r.source === "full_frame") return null;
@@ -351,10 +330,7 @@
     return state.regions[r.name] || null;
   }
 
-  // Approximate pixel area (source resolution) of the region a color tool /
-  // multitool color step will analyze. `sfx` is "" for the single-tool panel or
-  // "_mt{idx}" for a multitool step. Returns null when the video size is unknown
-  // (caller then shows just the percentage). Full-frame / no region → frame area.
+  // Source-pixel area the color step analyzes; null when video size is unknown.
   function _colorRegionPixelArea(sfx) {
     var info = state.videoInfo;
     if (!info || !info.width || !info.height) return null;
@@ -378,9 +354,7 @@
     return Math.max(1, Math.round((r.w * info.width) * (r.h * info.height)));
   }
 
-  // Readout shown beside the "Min area %" slider: percentage plus the
-  // approximate matching-pixel count for the current region, or an explicit
-  // "any presence" note at 0% (no minimum size).
+  // "Min area %" readout: percentage plus approximate pixel count, or the 0% "any presence" note.
   function _updateMinAreaReadout(sfx) {
     sfx = sfx || "";
     var slider = qs("#paramColorMinArea" + sfx);
@@ -449,8 +423,7 @@
     var meta = qs("#modelViewMeta");
     var img = qs("#modelViewImage");
     if (!meta || !img) return;
-    // Clear the in-flight shimmer up front so every path below — including the
-    // early returns — starts flat; the fetch branch re-adds it.
+    // Clear the shimmer first so every early return starts flat; the fetch branch re-adds it.
     meta.classList.remove("cg-shimmer");
 
     if (!state.selectedParticipant) {
@@ -470,8 +443,7 @@
       if (state.uploadedTemplate && state.uploadedTemplate.data) {
         // POST with the upload — region optional
       } else if (state.referenceTimestamp != null) {
-        // Shape's sample rides its capture region, so the run target being
-        // Full frame no longer blocks the preview.
+        // Shape's sample rides its capture region, so a Full-frame run target still previews.
         if (!hasRegion && !snapRegion) {
           meta.textContent = "Select or draw a region to preview the captured reference.";
           img.removeAttribute("src");
@@ -642,11 +614,7 @@
     tmp.src = url;
   }
 
-  // ---- Publish to the hub + sibling satellites ----
-  // Entry points the hub calls through same-named delegators; the helpers below
-  // are destructured at load time by overlay (_overlayEligibleForActiveTool),
-  // multitool-params + tasks (_updateMinAreaReadout) and calibration
-  // (_previewRegionRef) — all of which load after this file.
+  // ---- Published to the hub; later satellites destructure the helpers at load ----
   SS.initModelView = initModelView;
   SS.cycleOverlayLayer = cycleOverlayLayer;
   SS.refreshModelView = refreshModelView;

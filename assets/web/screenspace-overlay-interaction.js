@@ -57,15 +57,11 @@
   function setTargetColor(h, s, v) { return SS.setTargetColor && SS.setTargetColor(h, s, v); }
   function updateColorSampleBtnLabel() { return SS.updateColorSampleBtnLabel && SS.updateColorSampleBtnLabel(); }
 
-  // Overlay-rect cache + render RAF, moved from the hub (this satellite owns
-  // ~every read/write). The hub keeps an invalidateOverlayRect delegator for its
-  // Escape handler; the timeline satellite drops the rect via SS.invalidateOverlayRect.
+  // Overlay-rect cache + render RAF; the timeline satellite drops it via SS.invalidateOverlayRect.
   var _overlayRaf = 0;
   var _cachedOverlayRect = null;
 
-  // Magic-wand press-drag-release scrub: the clicked frame's ImageData (read
-  // once at press so the per-frame flood re-uses it), a coalescing RAF, and the
-  // drag→tolerance sensitivity. Horizontal drag right widens, left narrows.
+  // Magic-wand scrub state: frame ImageData read once at press, coalescing RAF.
   var _wandRaf = 0;
   var _wandFrame = null;
   var WAND_SCRUB_SENSITIVITY = 0.4; // tolerance units per horizontal px
@@ -134,9 +130,7 @@
     return null;
   }
 
-  // A saved region's shape in absolute canvas pixels, for mask rasterization:
-  // {contours: …} for shaped regions (stored contours are bbox-relative),
-  // {rect: …} for plain rectangles.
+  // Saved region's shape in absolute canvas pixels: {contours} (stored ones are bbox-relative) or {rect}.
   function regionShapeAbs(region) {
     var px = regionToPixels(region);
     if (region.points && region.points.length > 0) {
@@ -158,8 +152,7 @@
     var px = regionToPixels(region);
     var body = { name: name, x: px.x, y: px.y, w: px.w, h: px.h, canvas_width: canvas.width, canvas_height: canvas.height };
     if (region.points && region.points.length > 0) {
-      // Stored contours are bbox-relative; the API takes canvas-pixel
-      // absolutes (and recomputes the bbox from them server-side).
+      // Stored contours are bbox-relative; the API takes canvas-pixel absolutes and recomputes the bbox.
       body.points = regionShapeAbs(region).contours;
       body.shape = region.shape || "lasso";
     }
@@ -177,10 +170,7 @@
       .catch(function () { showToast("Failed to update region"); });
   }
 
-  // Overwrite an existing region with a boolean-edit / merge result: absolute
-  // canvas-pixel contours, saved as shape "combo" — or as a plain rect when
-  // the result collapses to a single axis-aligned box (e.g. merging two
-  // overlapping rectangles), keeping the region on the unmasked fast path.
+  // Saves a boolean-edit or merge result as "combo"; an axis-aligned result becomes an unmasked rect.
   function saveRegionShape(name, contours, successToast, onDone) {
     var canvas = qs("#overlayCanvas");
     var region = state.regions[name] || {};
@@ -194,8 +184,7 @@
     body.canvas_width = canvas.width;
     body.canvas_height = canvas.height;
     if (region.description) body.description = region.description;
-    // Returns the request promise (it always resolves — the catch below swallows
-    // failures) so callers can serialize successive saves of the same region.
+    // Always resolves (the catch swallows failures) so callers can chain saves of one region.
     return apiPost("api/regions", body)
       .then(function (data) {
         if (!data.ok) {
@@ -214,20 +203,14 @@
       .catch(function () { showToast("Failed to update region"); });
   }
 
-  // Build a pending shaped region from a simplified contour list, or null
-  // when the shape fails the size guards (mirrors finishDrawingRegion's
-  // >5x5 minimum, plus a shoelace-area floor so a scribble along a line
-  // can't produce a degenerate mask). The bbox is the CONTAINING integer
-  // box (floor/ceil, not round) so normalizing the absolute points against
-  // it — the preview mask= param, the modal readout — always lands in
-  // [0, 1]; the server recomputes the bbox from the points on save anyway.
+  // Pending shaped region, or null when under finishDrawingRegion's 5x5 minimum or the area floor.
   function pendingShapedRegion(contours, shape) {
     contours = contours.filter(function (c) { return c.length >= 3; });
     if (!contours.length) return null;
     var bounds = contoursBounds(contours);
     var x = Math.floor(bounds.x);
     var y = Math.floor(bounds.y);
-    var w = Math.ceil(bounds.x + bounds.w) - x;
+    var w = Math.ceil(bounds.x + bounds.w) - x; // containing integer box, so normalized points stay in [0, 1]
     var h = Math.ceil(bounds.y + bounds.h) - y;
     if (w <= 5 || h <= 5 || contoursArea(contours) < 64) return null;
     return { x: x, y: y, w: w, h: h, points: contours, shape: shape };
@@ -235,8 +218,7 @@
 
   var COMBINE_VERBS = { add: "Added to", subtract: "Subtracted from", intersect: "Intersected" };
 
-  // Rasterize base ∪/∖/∩ shape and trace it back to contours, or null when
-  // nothing meaningful survives.
+  // Rasterize base ∪/∖/∩ shape and trace back to contours; null when nothing survives.
   function combineToContours(baseShape, shape, op) {
     var overlay = qs("#overlayCanvas");
     if (!overlay.width || !overlay.height) return null;
@@ -251,20 +233,10 @@
     return contours;
   }
 
-  // Pending edits to a saved region are serialized per region name. The base
-  // geometry is read from state.regions[name], which is only updated when the
-  // POST resolves — so two combines fired inside one round-trip (an easy
-  // sub-second double shift+wand scrub) would both read the *pre-edit* base and
-  // the second would silently overwrite the first, after the user saw a success
-  // toast for both. Chaining makes the second read the first's saved result.
+  // Per-region promise chain: a second combine within one round-trip must read the first's saved base.
   var _regionCombineChain = {};
 
-  // Boolean-edit the active region — or, when none is saved-and-active, the
-  // unsaved pending region — with a freshly drawn shape (shift = add, alt =
-  // subtract, shift+alt = intersect — the selection modifiers users know from
-  // Photoshop). `shape` is {rect} or {contours} in canvas pixels. A saved
-  // region round-trips through the server; a pending region is edited in place
-  // and stays unsaved until it's named via the modal.
+  // Boolean-edit the active or unsaved pending region with a drawn shape: shift=add, alt=subtract, both=intersect.
   function applyRegionCombine(op, shape) {
     var name = state.activeRegion;
     if (name && state.regions[name]) {
@@ -277,8 +249,7 @@
   }
 
   function combineIntoRegion(op, shape, name) {
-    // Re-read at run time: an earlier queued combine may have replaced it, and
-    // the region can be deleted while this one waits its turn.
+    // Re-read now: a queued combine may have replaced it, or the region was deleted meanwhile.
     var region = state.regions[name];
     if (!region) return Promise.resolve();
     var contours = combineToContours(regionShapeAbs(region), shape, op);
@@ -298,8 +269,7 @@
       ? { contours: pending.points }
       : { rect: { x: pending.x, y: pending.y, w: pending.w, h: pending.h } };
     var contours = combineToContours(baseShape, shape, op);
-    // Update in place, no server round-trip. Collapse to a plain rect when the
-    // result is axis-aligned (parity with saveRegionShape).
+    // In place, no round-trip; axis-aligned results collapse to a rect like saveRegionShape.
     var rect = contours ? contoursToAxisRect(contours, 2) : null;
     var updated = !contours
       ? null
@@ -317,16 +287,7 @@
   }
 
   // ---- Overlay interaction state machine ----
-  //
-  // Mousedown picks a mode based on what's under the cursor:
-  //   - inside the template overlay        → state.draggingTemplate
-  //   - on a region's resize handle        → state.resizingRegion
-  //   - inside a region body               → state.draggingRegion
-  //   - empty area                         → state.drawingRegion (new region)
-  //
-  // Mousemove updates the active mode, mouseup commits and clears it.
-  // Document-level move/up listeners mirror the canvas handlers, so a drag
-  // continues when the cursor leaves the overlay and the canvas handlers stop.
+  // Document-level listeners keep drags alive off-canvas.
   function initRegionDrawing() {
     var overlay = qs("#overlayCanvas");
 
@@ -349,9 +310,7 @@
         if (combine) applyRegionCombine(combine, { rect: r });
         else state.pendingRegion = r;
       } else if (r.w > 0 || r.h > 0) {
-        // Drop the draw silently for click-without-drag (zero size), but
-        // surface a hint when the user actually dragged a too-small box —
-        // otherwise the picker just snaps closed with no feedback.
+        // Silent for a click without drag; a dragged too-small box gets a hint.
         showToast("Region too small. Drag a larger area");
       }
       flushOverlayRender();
@@ -359,8 +318,7 @@
       return true;
     }
 
-    // Append a freehand point when the cursor moved far enough from the last
-    // one (~3 display px) — keeps the raw trail dense but bounded.
+    // Append a point once the cursor moved ~3 display px, so the trail stays bounded.
     function appendLassoPoint(pos, s) {
       var pts = state.drawingLasso.points;
       var last = pts[pts.length - 1];
@@ -384,8 +342,7 @@
       return simplified;
     }
 
-    // Close and simplify the freehand trail into a pending polygon region —
-    // or, for a shift/alt combine draw, boolean-apply it to the active region.
+    // Close and simplify the trail into a pending polygon, or boolean-apply a combine draw.
     function finishDrawingLasso() {
       if (!state.drawingLasso) return false;
       var pts = state.drawingLasso.points;
@@ -416,16 +373,9 @@
       return true;
     }
 
-    // Magic wand: a press-drag-release scrub. Press caches the clicked frame's
-    // pixels + seed; dragging horizontally scrubs the flood-fill tolerance while
-    // the contour previews live (state.wandDragging.previewPoints); release
-    // commits — a new pending region, or a boolean edit of the active/pending
-    // region for a shift/alt combine (applied on release, like a combine draw).
-    // Reads #frameCanvas pixels like the pipette — the frame and overlay
-    // canvases share dimensions, so seed pos maps 1:1.
+    // Wand: press caches frame pixels + seed (canvases share dimensions), drag scrubs tolerance, release commits.
 
-    // Flood the cached frame at the current scrub tolerance and stash the
-    // simplified outer contour for the painter (null when nothing contiguous).
+    // Flood the cached frame at the scrub tolerance; stash the outer contour for the painter.
     function computeWandPreview() {
       var f = _wandFrame;
       if (!f || !state.wandDragging) return;
@@ -434,8 +384,7 @@
       state.wandDragging.previewPoints = pts.length >= 3 ? [pts] : null;
     }
 
-    // Re-flood at most once per frame (floodFillMask is O(w*h)); a scrub can
-    // fire many mousemoves per frame, so coalesce them onto the RAF.
+    // floodFillMask is O(w*h); coalesce the many per-frame mousemoves onto one RAF.
     function scheduleWandRecompute() {
       if (_wandRaf) return;
       _wandRaf = requestAnimationFrame(function () {
@@ -448,13 +397,9 @@
 
     function beginWandDrag(e, pos, s, combine) {
       var frameCanvas = qs("#frameCanvas");
-      // Gate on the loaded image, not on frameCanvas.width: a <canvas> with no
-      // width/height attributes reports the 300x150 default, so a width check
-      // never fires and the wand would flood the blank placeholder into a bogus
-      // full-canvas region. The caller already cleared the pending/active
-      // region, so repaint before bailing or the buttons and selection go stale.
+      // Gate on frameImage, not canvas width: an unsized canvas reports 300x150 and would flood blank.
       if (!frameCanvas || !state.frameImage) {
-        flushOverlayRender();
+        flushOverlayRender(); // caller cleared the region; repaint or the UI goes stale
         renderRegionChips();
         updateRegionButtons();
         return;
@@ -464,8 +409,7 @@
         data: frameCanvas.getContext("2d").getImageData(0, 0, w, h).data,
         w: w, h: h, seedX: pos.x, seedY: pos.y, s: s,
       };
-      // seedX/seedY/headOffsetPx are for the painter's drag chrome (anchor dot,
-      // track, head dot) — it can't see the module-local _wandFrame.
+      // seedX/seedY/headOffsetPx feed the painter's drag chrome; it can't see _wandFrame.
       state.wandDragging = {
         startClientX: e.clientX,
         startTolerance: state.wandTolerance,
@@ -476,10 +420,7 @@
         seedY: pos.y,
         headOffsetPx: 0,
       };
-      // The scrub is horizontal, so advertise ew-resize — on the *overlay*, not
-      // just the body: #overlayCanvas has its own `cursor: crosshair` rule and
-      // the hover pass writes an inline cursor, both of which beat an inherited
-      // body cursor for the whole drag (which happens over the canvas).
+      // Set on the overlay too; its crosshair rule and inline hover cursor beat body's.
       overlay.style.cursor = "ew-resize";
       document.body.style.cursor = "ew-resize";
       document.body.style.userSelect = "none";
@@ -496,13 +437,7 @@
       var delta = e.clientX - state.wandDragging.startClientX;
       var tol = clamp(Math.round(state.wandDragging.startTolerance + delta * WAND_SCRUB_SENSITIVITY), lo, hi);
       state.wandDragging.tolerance = tol;
-      // Track head follows the *clamped* tolerance, not the raw cursor, so the
-      // painted track stops growing once the scrub saturates at min/max —
-      // hitting the end of the range is visible instead of running off-screen.
-      // Stored as a CSS-pixel offset rather than a canvas-pixel x so the painter
-      // maps it with the *live* canvas scale: toggling a side panel or resizing
-      // the window mid-drag changes that ratio, and a scale captured at press
-      // would detach the head dot from the cursor.
+      // Clamped tolerance so the track stops at min/max; CSS px so the painter scales live.
       var wd = state.wandDragging;
       wd.headOffsetPx = (tol - wd.startTolerance) / WAND_SCRUB_SENSITIVITY;
       state.wandTolerance = tol;
@@ -524,10 +459,7 @@
     function commitWandDrag() {
       var wd = state.wandDragging;
       if (!wd) return;
-      // A quick release can beat the coalesced recompute RAF, leaving
-      // previewPoints one tolerance behind the slider/readout. Cancel the
-      // pending frame and re-flood synchronously at the latest tolerance
-      // (while _wandFrame is still valid) so the committed contour matches.
+      // A quick release can beat the RAF; re-flood synchronously so the commit matches the readout.
       if (_wandRaf) { cancelAnimationFrame(_wandRaf); _wandRaf = 0; }
       computeWandPreview();
       var contour = wd.previewPoints && wd.previewPoints[0];
@@ -556,16 +488,11 @@
       flushOverlayRender();
       updateRegionButtons();
     }
-    // Published here rather than in the export block at the bottom because the
-    // whole wand cluster is scoped to initRegionDrawing. The hub's Escape
-    // cascade and the frame loader both need to abort a live scrub, and only
-    // this path releases the cached full-frame ImageData (~33 MB at 4K).
+    // Published here since the wand cluster is local; Escape and the frame loader abort scrubs.
     SS.cancelWandDrag = cancelWandDrag;
 
     // ---- Shape-draw mode ----
-    // Highlighter for the Shape tool's reference: strokes accumulate in an
-    // offscreen mask canvas at native frame size, Shift-drag erases, Apply
-    // crops the mask bbox from the frame into the upload path.
+    // Strokes fill an offscreen mask; Apply uploads its bbox crop.
 
     // The draw button lives in the re-rendered params panel; sync by class.
     function syncDrawButton() {
@@ -596,8 +523,7 @@
       syncDrawButton();
       flushOverlayRender();
     }
-    // Published like cancelWandDrag: the Escape cascade, the frame loader,
-    // and participant/tool switches all abort a live session.
+    // Published like cancelWandDrag: Escape, the frame loader, and tool switches abort sessions.
     SS.toggleShapeDraw = toggleShapeDraw;
     SS.cancelShapeDraw = cancelShapeDraw;
 
@@ -709,8 +635,7 @@
           var mtHex = qs("#paramColorHex" + mtSfx);
           if (mtHex) mtHex.value = rgbToHex(pixel[0], pixel[1], pixel[2]);
           state._mtPipetteStep = -1;
-          // Hidden inputs set programmatically — no DOM event fires, so nudge
-          // calibration directly (mirrors setTargetColor on the single-tool path).
+          // Programmatic sets fire no DOM event, so nudge calibration directly (as setTargetColor does).
           refreshCalibration({ debounce: true });
         } else {
           setTargetColor(hsv.h, hsv.s, hsv.v);
@@ -722,9 +647,7 @@
       _cachedOverlayRect = overlay.getBoundingClientRect();
       pos = canvasCoords(overlay, e, _cachedOverlayRect);
       var displayW = _cachedOverlayRect.width || overlay.width;
-      // Bail if the overlay has no usable size (e.g. hidden / display:none
-      // container). Without this, `s` becomes NaN and propagates into hit
-      // testing and any region coords stored downstream.
+      // Hidden overlay: no size, and `s` would go NaN into hit tests and stored coords.
       if (!displayW || !overlay.width) return;
       var s = overlay.width / displayW;
       var ctx = overlay.getContext("2d");
@@ -733,12 +656,7 @@
         beginShapeStroke(e, pos, s);
         return;
       }
-      // Shift/alt with a target region: boolean-edit its shape instead of
-      // dragging or drawing a new region (shift = add, alt = subtract,
-      // shift+alt = intersect). The target is the selected saved region, or —
-      // when none is active — the unsaved pending region, so a freshly drawn
-      // shape can be refined before it's named. Bypasses the template/label/
-      // handle hit tests so the edit can start on top of the region itself.
+      // Shift/alt with a target (active saved region, else the pending one) boolean-edits it; see applyRegionCombine.
       var combineBase =
         state.activeRegion && state.regions[state.activeRegion]
           ? "active"
@@ -747,8 +665,7 @@
             : null;
       if ((e.shiftKey || e.altKey) && combineBase) {
         var combineOp = e.shiftKey && e.altKey ? "intersect" : (e.altKey ? "subtract" : "add");
-        // Keep the pending region when it's the edit target; drop it only when
-        // editing a saved region (the two are mutually exclusive anyway).
+        // Keep the pending region when it's the target; drop it when editing a saved one.
         if (combineBase === "active") state.pendingRegion = null;
         if (state.regionTool === "wand") {
           beginWandDrag(e, pos, s, combineOp);
@@ -866,10 +783,7 @@
         scheduleOverlayRender();
         return;
       }
-      // While a combine modifier is held with a target region (the selected
-      // saved region, or the unsaved pending region when none is active), the
-      // next mousedown boolean-edits it — advertise draw mode instead of the
-      // move/resize affordances ("copy" shows a + cursor for shift-add).
+      // Combine modifier held with a target: advertise draw mode ("copy" shows + for shift-add).
       if ((e.shiftKey || e.altKey) &&
           ((state.activeRegion && state.regions[state.activeRegion]) || state.pendingRegion)) {
         state.hoveredRegion = null;
@@ -894,10 +808,7 @@
 
     overlay.addEventListener("mouseup", function (e) {
       if (state.pipetteActive) return;
-      // Mirror mousedown's `e.button !== 0` guard. Without it, right-clicking
-      // (or a middle / back-forward click) mid-drag commits the gesture while
-      // the left button is still held — the region lands at whatever tolerance
-      // happened to be current, under the open context menu.
+      // Mirror mousedown's button guard, else a right/middle click mid-drag commits the gesture.
       if (e.button !== 0) return;
       if (state.wandDragging) { commitWandDrag(); return; }
       if (state.shapeDraw) { endShapeStroke(); return; }
@@ -935,12 +846,7 @@
       finishDrawingRegion(e);
     });
 
-    // Cancel a live scrub when the press can no longer be released normally:
-    // the pointer left the window and came back up, focus moved to another app
-    // (both would otherwise leave `wandDragging` set forever — the document
-    // mousemove branch below returns unconditionally, so every later move would
-    // keep re-flooding and every other drag mode would be dead), or a context
-    // menu opened mid-drag.
+    // Blur or a context menu mid-scrub would otherwise leave wandDragging set forever, killing other drags.
     window.addEventListener("blur", cancelWandDrag);
     overlay.addEventListener("contextmenu", cancelWandDrag);
     // A stroke that loses focus mid-drag just ends; the session survives.
@@ -1096,9 +1002,7 @@
         .catch(function () { showToast("Failed to delete regions"); });
     });
 
-    // Region selector tools: rectangle (default), freehand lasso, magic wand.
-    // One segmented capsule track (mutually exclusive), native title tooltips —
-    // this bar sits outside #workflowParams so initParamTooltips never sees it.
+    // Region tool track. Sits outside #workflowParams, so native title tooltips, not initParamTooltips.
     var regionToolTrack = createSegTrack({
       value: state.regionTool,
       options: [
@@ -1112,8 +1016,7 @@
     qs("#regionActions").insertBefore(regionToolTrack, qs("#wandToleranceWrap"));
     function setRegionTool(tool) {
       state.regionTool = tool;
-      // Abandon any in-progress draw from the previous tool, else mouseup
-      // could still commit it while the new tool appears selected.
+      // Abandon the previous tool's in-progress draw, else mouseup could still commit it.
       if (state.wandDragging) cancelWandDrag();
       if (state.shapeDraw) cancelShapeDraw();
       state.drawingLasso = null;
@@ -1121,14 +1024,10 @@
       // Idempotent after a click (the track already moved); needed when
       // setRegionTool is called programmatically.
       segTrackSetValue(regionToolTrack, tool);
-      // Eased width collapse (see .wand-tolerance in screenspace.css), so the
-      // capsule track glides rather than jumps when the slider (dis)appears.
+      // Eased width collapse (.wand-tolerance in screenspace.css) so the track glides, not jumps.
       qs("#wandToleranceWrap").classList.toggle("collapsed", tool !== "wand");
     }
-    // Registered here rather than the hub's initKeyboard(): setRegionTool is local
-    // to initRegionDrawing (which runs once), so the switcher stays unexported.
-    // Ungated on purpose — a tool key pressed mid-draw aborts the draw and
-    // switches, which setRegionTool already handles.
+    // Registered here because setRegionTool is local. Ungated on purpose: mid-draw presses abort and switch.
     window.ClipgenHotkeys.register([
       { id: "screenspace.regionRect", repeat: false, handler: function () { setRegionTool("rect"); } },
       { id: "screenspace.regionLasso", repeat: false, handler: function () { setRegionTool("lasso"); } },
@@ -1221,8 +1120,7 @@
     qs("#regionNameInput").addEventListener("keydown", function (e) {
       if (e.key === "Enter") qs("#regionNameSave").click();
       if (e.key === "Escape") {
-        // Fully handled here: stop the page Escape cascade so cancelling the
-        // name prompt doesn't also discard the pending region underneath.
+        // Stop the page Escape cascade, else cancelling the prompt also discards the pending region.
         e.stopPropagation();
         hideRegionNameModal();
       }
@@ -1257,15 +1155,10 @@
     _regionNameModalPrevFocus = null;
   }
 
-  // Regions shift-clicked into the merge set (layer-style multi-select; the
-  // active region is the merge target). Satellite-local: every reader —
-  // chips, buttons, the merge action — lives in this file, and
-  // renderRegionChips prunes names that stop existing or become active.
+  // Shift-clicked merge set; the active region is the target. renderRegionChips prunes stale names.
   var _mergeSelection = [];
 
-  // Union the active region with every shift-selected one, save the result
-  // into the active region, and delete the rest — Photoshop's "merge layers"
-  // for regions. Disjoint shapes become one multi-contour region.
+  // Union selected regions into the active one and delete the rest; disjoint shapes stay multi-contour.
   function mergeSelectedRegions() {
     var target = state.activeRegion;
     var others = _mergeSelection.filter(function (n) { return state.regions[n] && n !== target; });
@@ -1316,9 +1209,7 @@
     toggleRegionsBtn.appendChild(state.showRegionOverlays ? iconSpan("eye") : iconSpan("eye-slash"));
   }
 
-  // Region names present at the last render, so renderRegionChips() can play the
-  // entry animation on just the newly-appeared pills (null on first render → no
-  // load-time burst; reset to {} whenever the bar empties).
+  // Names at the last render so only new pills animate; null skips the first render.
   var _prevRegionNames = null;
 
   function renderRegionChips() {
@@ -1334,10 +1225,7 @@
       _prevRegionNames = {};
       var hint = el("span", "region-hint", "Click and drag on the video to create a region");
       container.appendChild(hint);
-      // Still refresh the run-region picker so it prunes any runRegions that
-      // referenced now-deleted / stashed regions (delete-all, delete-last,
-      // stash-all). Otherwise a stale region_ref survives and reaches the
-      // preview / calibrate endpoints, which 400 ("Region '<name>' not found").
+      // Still refresh the picker so stale runRegions don't reach preview/calibrate and 400.
       renderRunRegionPicker();
       updateColorSampleBtnLabel();
       return;
@@ -1366,8 +1254,7 @@
           e.stopPropagation();
           return;
         }
-        // Shift-click with another region active: toggle this chip in the
-        // merge set (layer-style multi-select) instead of re-activating.
+        // Shift-click with another region active toggles the merge set instead of re-activating.
         if (e.shiftKey && state.activeRegion && state.activeRegion !== name) {
           var idx = _mergeSelection.indexOf(name);
           if (idx >= 0) _mergeSelection.splice(idx, 1);
@@ -1389,8 +1276,7 @@
         updateRunButton();
       });
       container.appendChild(chip);
-      // Animate in only pills that are new since the last render (created or
-      // restored) — reuses the shared stash-card landing animation.
+      // Animate in only pills new since the last render; reuses the stash-card landing animation.
       if (_prevRegionNames && !_prevRegionNames[name] && window.ClipgenMotion) {
         ClipgenMotion.animateIn(chip, "stashLand");
       }
@@ -1412,11 +1298,6 @@
   }
 
   // ---- Publish to the hub + sibling satellites ----
-  // Hub calls these through same-named delegators (region-editor init, the
-  // Escape handler, the stashing / chip-reorder code). computeLabelRect is
-  // destructured at load by screenspace-overlay.js, invalidateOverlayRect by
-  // screenspace-timeline.js, renderRegionChips / updateRegionButtons by
-  // screenspace-tasks.js.
   SS.initRegionDrawing = initRegionDrawing;
   SS.renderRegionChips = renderRegionChips;
   SS.updateRegionButtons = updateRegionButtons;

@@ -31,9 +31,7 @@
 
   var REPORT_POLL_MS = 1200;
   var TASK_POLL_MS = 3000;
-  // Consecutive idle participant-poll ticks required before the poll stops:
-  // a just-fired trigger can race the worker/orchestrator claiming its slot,
-  // so one idle reading straight after a POST is not proof nothing runs.
+  // A trigger races the worker's claim, so one idle tick after a POST proves nothing.
   var TASK_IDLE_TICKS_TO_STOP = 2;
 
   var rpState = {
@@ -143,10 +141,7 @@
     return false;
   }
 
-  // Generate is blocked only when the AI runtime is positively missing or the
-  // report model is positively missing (same stance as the Transcripts page:
-  // an unknown /api/models state never blocks). A stopped server does not
-  // block — the run starts it.
+  // Block only on a positively missing runtime or model; unknown or stopped never blocks.
   function llmGate() {
     var o = rpState.llm;
     if (!o) return null;
@@ -213,8 +208,7 @@
     report.appendChild(dom.body);
     dom.content.appendChild(report);
 
-    // Report timestamps are re-rendered wholesale, so clip playback rides one
-    // delegated listener instead of per-span handlers.
+    // Timestamps re-render wholesale, so one delegated listener handles clip playback.
     dom.body.addEventListener("click", function (ev) {
       var target = ev.target && ev.target.closest ? ev.target.closest(".rp-ts--linked") : null;
       if (!target) return;
@@ -291,9 +285,7 @@
     row.appendChild(el("span", "rp-source-dot is-" + kind));
     row.appendChild(el("span", "rp-source-label", labelText));
     var statusEl = el("span", "rp-source-status");
-    // Only a busy row is in flight, and the shimmer goes on an inner span:
-    // statusEl also carries element children on other rows, and .cg-shimmer's
-    // transparent text fill inherits onto anything inside it.
+    // Shimmer goes on an inner span: .cg-shimmer's transparent text fill inherits onto children.
     if (typeof status !== "string") statusEl.appendChild(status);
     else if (kind === "busy") statusEl.appendChild(el("span", "cg-shimmer", status));
     else statusEl.textContent = status;
@@ -415,8 +407,7 @@
     return null;
   }
 
-  // Wrap [M:SS] / [H:MM:SS] stamps in mono chips; ones a generated clip covers
-  // become playable (the delegated dom.body handler). Runs on escaped HTML.
+  // Wrap [M:SS] stamps in chips; clip-covered ones become playable. Runs on escaped HTML.
   function decorateTimestamps(html) {
     return html.replace(/\[(\d{1,2}:\d{2}(?::\d{2})?)\]/g, function (m, ts) {
       var sec = tsToSeconds(ts);
@@ -425,10 +416,7 @@
     });
   }
 
-  // Color severity labels, but only inside tag-free parenthesized groups —
-  // the "(category, severity)" shape the prompt's source lines carry — so a
-  // bare "high" in prose is never painted. Longest label first, one hit per
-  // group ("Very Positive" must not be re-matched by "Positive").
+  // Paint severities only inside "(category, severity)" groups; longest label first, one hit per group.
   function decorateSeverity(html) {
     var sevs = (CLIPGEN_CONFIG.severity || []).slice();
     sevs.sort(function (a, b) { return b.label.length - a.label.length; });
@@ -452,10 +440,7 @@
     return decorateSeverity(decorateTimestamps(clipgenRenderInlineMarkdown(text)));
   }
 
-  // Minimal markdown for the report shape the prompt asks for (## headings,
-  // "- " bullets, paragraphs) plus inline emphasis, timestamp chips, and
-  // severity coloring. Everything passes through escapeHtml (inside
-  // clipgenRenderInlineMarkdown); the model never gets to inject markup.
+  // Minimal markdown (## headings, "- " bullets, paragraphs). Everything passes through escapeHtml.
   function renderReportText(text) {
     var lines = String(text || "").split("\n");
     var html = "";
@@ -633,8 +618,7 @@
       rpState.reportPartial = "";
       rpState.reportMissing = false;
       renderReportArea();
-      // The pill dot (agents.report) is served by the participants API; a
-      // local nudge keeps it honest until the next refetch.
+      // The participants API serves the pill dot; nudge it locally until the next refetch.
       var r = rec();
       if (r && r.agents) r.agents.report = "done";
       renderParticipants();
@@ -662,9 +646,7 @@
         applyReportResponse(data, pid, g);
       })
       .catch(function (err) {
-        // 404 = no report stored for this participant (apiGet throws on it).
-        // It carries a reason when the run actually failed — an AI failure was
-        // otherwise a terminal warning and a silently empty panel here.
+        // 404 = no stored report (apiGet throws). serverMessage carries the reason when the run failed.
         if (g !== rpState.gen || !rpState.active) return;
         if (err && err.serverMessage) {
           showNotice(err.serverMessage, null, null, null);
@@ -952,9 +934,7 @@
     apiPost("../transcripts/api/agent/summary/" + pid + "/regenerate", {})
       .then(function () {
         if (!rpState.active) return;
-        // The backend clears dependent agent results (report included) when
-        // the summary regenerates — drop the in-memory copy too, or the stale
-        // mini-report keeps rendering until the participant is re-selected.
+        // The backend drops the report when the summary regenerates; drop the in-memory copy too.
         stopReportPoll();
         rpState.report = null;
         rpState.reportGenerating = false;
@@ -1007,9 +987,7 @@
       });
   }
 
-  // While a triggered upstream task runs, re-poll the participants list (a
-  // quiet-poll path) so the source rows track transcription → summary → done,
-  // and the Generate button unlocks the moment the summary lands.
+  // Quiet-poll participants while an upstream task runs so rows and Generate track progress.
   function startTaskPoll() {
     rpState.taskIdleTicks = 0;
     if (rpState.taskPoll) return;
@@ -1067,8 +1045,7 @@
         if (!rpState.active) return;
         takeSnapshot();
         checkStaleness();
-        // Re-activation keeps the selection, so selectParticipant's clip load
-        // never fires — refresh the strip here (new clips may have landed).
+        // Re-activation keeps the selection, so selectParticipant never reloads clips; refresh here.
         if (rpState.selected) loadClips(rpState.selected, rpState.gen);
       });
     });

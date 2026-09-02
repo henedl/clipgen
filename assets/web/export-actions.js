@@ -21,9 +21,7 @@
 
   var _enabled = false;
 
-  // "clipgen_export_screenspace_events.json" -> "screenspace_events", so the
-  // toast names what was exported instead of only counting files (each surface
-  // writes one .json and one .csv, hence the dedupe).
+  // "clipgen_export_screenspace_events.json" -> "screenspace_events"; deduped because each surface writes .json + .csv.
   function surfaceNames(written) {
     var seen = [];
     (written || []).forEach(function (name) {
@@ -35,9 +33,7 @@
   }
 
   function runExport() {
-    // Manual fetch (not apiPost) so a server-supplied j.error on non-2xx still
-    // surfaces in the toast — apiPost would throw "Server error <code>" and
-    // drop the body.
+    // Manual fetch: apiPost throws "Server error <code>" and drops the body's j.error.
     fetch("/api/export", { method: "POST" })
       .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, j: j }; }); })
       .then(function (res) {

@@ -12,10 +12,7 @@
   var WF = window.ClipgenWorkflows;
   var state = WF.state;
 
-  // Satellite-local transport handles: only this file touches them, so they stay
-  // module-local rather than on WF.state. The run pair streams the focused child
-  // (or a single run), the batch pair the batch summary — both run at once during
-  // a batch.
+  // Transport handles stay module-local; run and batch pairs stream concurrently during batches.
   var _stream = null; // EventSource for the active/focused run
   var _poller = null; // createPoller fallback when run SSE drops
   var _batchStream = null; // EventSource for the active batch
@@ -29,9 +26,7 @@
     return !!TERMINAL[status];
   }
 
-  // A blueprint fans out when any Video Source is set to "All participants" or to
-  // a subset of ≥2 participants — the single Run button then launches a batch
-  // instead of one run. A single id (string) or a 1-element array runs once.
+  // "All participants" or a subset of ≥2 ids launches a batch; else one run.
   function blueprintWantsBatch() {
     var nodes = state.nodes || [];
     for (var i = 0; i < nodes.length; i++) {
@@ -74,8 +69,7 @@
         if (data && data.run) handleRunData(data.run);
       },
       onError: function () {
-        // SSE dropped — flag the gap (surfaces a "Reconnecting…" pill) and fall
-        // back to polling so progress still flows; the next poll clears the flag.
+        // SSE dropped: show "Reconnecting…", poll instead; the next poll clears the flag.
         _reconnecting = true;
         _stream = null;
         startPolling(runId);
@@ -175,15 +169,12 @@
       showToast("A run is already in flight");
       return;
     }
-    // Errors gate the run (the button is already disabled; this guards the
-    // programmatic path). Warnings never block.
+    // Guards the programmatic path; the button is already disabled. Warnings never block.
     if (state.validation && state.validation.errors.length) {
       showToast("Fix the errors in the Issues panel to run");
       return;
     }
-    // "All participants" makes Run fan out over the study, but a partial "run to
-    // here" or a resume is always single (a resumed batch child keeps its
-    // participant binding server-side).
+    // Partial runs and resumes stay single; a resumed child keeps its participant server-side.
     if (!targetNodeId && !resumeFromRunId && blueprintWantsBatch()) {
       startBatch();
       return;
@@ -217,8 +208,7 @@
   }
 
   function stopRun() {
-    // The single Stop button cancels whichever is in flight — a batch cancels the
-    // whole fan-out (current child + remaining), else a single run.
+    // Stop cancels the in-flight batch (current child + remaining), else the single run.
     if (activeBatchInFlight()) {
       apiPost(
         "api/batches/" + encodeURIComponent(state.activeBatchId) + "/cancel",
@@ -234,11 +224,7 @@
     // UI flips to idle when the stream/poll reports the cancelled status.
   }
 
-  // The explicit participant subset to fan out over, or null for "all". Read from
-  // the first Video Source whose value is an array or the ALL sentinel; multiple
-  // Video Sources share one batch list, since the server rebinds them all per
-  // child run. ALL (or no explicit selection) omits the field so the server's
-  // "all participants" branch runs.
+  // Explicit subset from the first Video Source, or null for "all" (field omitted).
   function batchParticipants() {
     var nodes = state.nodes || [];
     for (var i = 0; i < nodes.length; i++) {
@@ -251,9 +237,7 @@
     return null;
   }
 
-  // Fan the active blueprint out across the selected participants: one run each,
-  // sequential, grouped under one batch card. Reached from startRun when a Video
-  // Source is set to "All participants" or a subset.
+  // One sequential run per selected participant, grouped under one batch card.
   function startBatch() {
     if (!state.ready || !state.activeBlueprintId) return;
     if (activeRunInFlight() || activeBatchInFlight()) {
@@ -290,9 +274,7 @@
   function refreshRuns() {
     var bpId = state.activeBlueprintId;
     if (!bpId) return;
-    // Keep the cross-blueprint list current while it's the visible scope: the
-    // discover poller stays blueprint-scoped, so "All" refreshes on toggle and on
-    // blueprint switches like this one.
+    // The discover poller is blueprint-scoped, so refresh the "All" list here too.
     if (state.runScope === "all") fetchAllRuns();
     stopTransport();
     stopBatchTransport();
@@ -311,8 +293,7 @@
         state.runs = (results[0] && results[0].runs) || [];
         state.batches = (results[1] && results[1].batches) || [];
 
-        // A live batch owns the Run/Stop buttons; reattach to it first and focus
-        // its running child for the canvas tint.
+        // A live batch owns Run/Stop; reattach first and focus its running child.
         var liveBatch = firstNonTerminal(state.batches);
         if (liveBatch) {
           state.activeBatchId = liveBatch.id;
@@ -354,10 +335,7 @@
       .catch(function () {});
   }
 
-  // Cross-blueprint history click-through: the row sets pendingFocusRunId and
-  // opens the target blueprint, then once refreshRuns has its runs loaded we drill
-  // into the requested one (batch children are in state.runs too). Cleared
-  // silently when the run has since been evicted.
+  // History row click-through: drill into pendingFocusRunId once this blueprint's runs load.
   function consumePendingFocus() {
     var pf = state.pendingFocusRunId;
     if (!pf) return;
@@ -374,12 +352,7 @@
 
   // ---- Data handling --------------------------------------------------------
 
-  // Dirty-check gate for the run panel (mirrors screenspace-tasks' fingerprint).
-  // handleRunData/handleBatchData fire on every SSE push / poll tick; without a
-  // gate renderRuns() wipes + rebuilds #wfRuns each time, churning the panel and
-  // (before the scroll-preserve below) yanking it to the top. renderRuns() itself
-  // refreshes _lastRunsFp at the end, so user-driven renders (filter/focus/lifecycle)
-  // keep it current too.
+  // Dirty-check gate: SSE/poll ticks re-render only on change. renderRuns() refreshes it.
   var _lastRunsFp = "";
 
   function runsFingerprint() {
@@ -439,8 +412,7 @@
     upsertRun(run);
     if (run.id === state.activeRunId && isTerminal(run.status)) {
       stopTransport();
-      // During a batch the batch summary owns the Run/Stop buttons — a finished
-      // child must not flip them back to idle while siblings are still running.
+      // The batch summary owns Run/Stop; a finished child must not reset them.
       if (!activeBatchInFlight()) setRunningUI(false);
     }
     if (runsFingerprint() !== _lastRunsFp) renderRuns();
@@ -476,8 +448,7 @@
     if (runsFingerprint() !== _lastRunsFp) renderRuns();
   }
 
-  // Drill into one participant's run: stream its per-node detail + tint the canvas
-  // by it, without touching the batch's ownership of the Run/Stop buttons.
+  // Stream one child's per-node detail and tint the canvas; Run/Stop stay batch-owned.
   function focusChild(runId) {
     if (!runId) return;
     state.activeRunId = runId;
@@ -498,9 +469,7 @@
     "run-skipped",
   ];
 
-  // Toggle per-node status classes + a progress bar on the canvas cards. Only
-  // tints when the run belongs to the blueprint currently on the canvas (a stale
-  // run from another blueprint must not paint these cards).
+  // Tint cards by node status; runs from other blueprints clear instead of painting.
   function annotateCanvas(run) {
     var cards = qsa("#wfWorld .wf-node");
     if (!run || run.blueprintId !== state.activeBlueprintId) {
@@ -545,9 +514,7 @@
 
   // ---- Rendering ------------------------------------------------------------
 
-  // Build a label map for the active blueprint's nodes: the user's rename when
-  // set, else the catalog label, falling back to the id for a run from another
-  // blueprint. The rename is what disambiguates three "Make Clips" rows.
+  // Rename, else catalog label, else the id; renames disambiguate duplicate node types.
   function nodeLabel(nodeId) {
     var nodes = state.nodes || [];
     for (var i = 0; i < nodes.length; i++) {
@@ -560,9 +527,7 @@
     return nodeId;
   }
 
-  // A leading status glyph for a run-detail / batch-child row. The Heroicon and
-  // colour are set by CSS keyed on data-status (so the row reads at a glance,
-  // not just by its left-border tint).
+  // Status glyph for detail rows; CSS keyed on data-status sets icon and colour.
   function statusIcon(status) {
     var icon = el("span", "wf-run-node-icon");
     icon.setAttribute("data-status", status || "queued");
@@ -580,10 +545,7 @@
   }
 
   function buildResultChips(run) {
-    // Surface terminal pointers/counts (viewer path, artifact/event counts).
-    // A path chip is a link into the output dir via the studio media route —
-    // the produced reel/viewer/export opens from here rather than being a
-    // filename the user has to go hunt for on disk.
+    // Terminal chips: counts, plus path chips linking into the output dir via studio media.
     var results = run.results || {};
     var chips = el("div", "wf-run-results");
     var any = false;
@@ -622,9 +584,7 @@
     return parts[parts.length - 1] || path;
   }
 
-  // Per-node detail rows + result chips for an expanded run (shared by single-run
-  // cards and a drilled-in batch child). Rows whose snapshot says `hasResult`
-  // expand to lazily fetch + render the node's stored result sidecar.
+  // Per-node rows + result chips; `hasResult` rows lazily fetch the stored sidecar.
   function buildNodeDetail(run) {
     var wrap = document.createDocumentFragment();
     var rows = el("div", "wf-run-nodes");
@@ -642,8 +602,7 @@
       if (ns.error) row.title = ns.error;
       else if (ns.note) row.title = ns.note;
       rows.appendChild(row);
-      // A non-fatal note (AI server down, nothing wired, an adapter that couldn't
-      // coerce): the node completed but produced nothing useful — surface why.
+      // A note means the node completed but produced nothing useful; show why.
       if (ns.note) rows.appendChild(el("div", "wf-run-node-note", ns.note));
       if (ns.hasResult) {
         row.classList.add("wf-run-node-expandable");
@@ -669,14 +628,10 @@
 
   // ---- Lazy per-node result ------------------------------------------------
 
-  // Which result panels are expanded, keyed "runId:nodeId". Kept in module
-  // state (not the DOM) because every SSE status tick re-renders the panel —
-  // without this, a live run collapses whatever the user was reading.
+  // Expanded result panels, keyed "runId:nodeId"; kept off the DOM since ticks re-render.
   var _expandedResults = {};
 
-  // Expand/collapse one node's result panel. The full payload is fetched once
-  // and cached on the run object, so re-expanding (even after a card rebuild)
-  // never re-hits the endpoint.
+  // Toggle a result panel; the payload is fetched once and cached on the run.
   function toggleNodeResult(run, nodeId, panel) {
     var key = run.id + ":" + nodeId;
     if (!panel.classList.contains("hidden")) {
@@ -723,9 +678,7 @@
       });
   }
 
-  // Render the stored result (a {port: value} map) into `container`, branching on
-  // the value's shape — artifacts/events/segments lists, reel manifest, viewer
-  // path, summary/citation/friction text, scalar.
+  // Render a {port: value} result map, branching on each value's shape.
   function appendResultBody(container, result) {
     var ports = Object.keys(result || {});
     if (!ports.length) {
@@ -798,8 +751,7 @@
       body.appendChild(resultItem(it));
     });
     if (items.length > LIMIT) {
-      // Clickable "+N more" reveals the rest in place (the payload is already
-      // here — no further fetch). stopPropagation so it doesn't toggle the row.
+      // "+N more" reveals the rest in place; stopPropagation avoids toggling the row.
       var more = el("button", "wf-result-more", "+" + (items.length - LIMIT) + " more");
       more.type = "button";
       more.addEventListener("click", function (e) {
@@ -840,8 +792,7 @@
     return Math.floor(s / 60) + "m " + (s % 60) + "s";
   }
 
-  // Compact relative time ("just now" / "5m ago" / "2h ago" / "3d ago") for the
-  // cross-blueprint history rows, where absolute clock times don't scan well.
+  // Relative time ("5m ago") for history rows; clock times don't scan well there.
   function fmtRelTime(iso) {
     if (!iso) return "";
     var then = new Date(iso).getTime();
@@ -870,8 +821,7 @@
 
     var head = el("div", "wf-run-head");
     head.appendChild(el("span", "wf-run-status wf-run-status-" + run.status, run.status));
-    // Auto-launched by a trigger — a bolt chip distinguishes it
-    // from a manual run (margin-right:auto keeps it hugging the status label).
+    // Bolt chip marks a trigger-launched run; margin-right:auto hugs the status label.
     if (run.triggered) {
       var trig = el("span", "wf-run-triggered", "triggered");
       if (run.triggerType) trig.title = "Auto-run trigger: " + run.triggerType;
@@ -892,23 +842,16 @@
     var counts = statusCounts(run);
     var total = Object.keys(run.nodeStates || {}).length;
     var done = (counts.completed || 0) + (counts.skipped || 0);
-    // Meta line: node progress · start time · duration (the last two only once
-    // the run has a startedAt / has finished). Folded into one span so the head's
-    // space-between layout stays stable regardless of how many parts there are.
+    // Meta: progress · start · duration in one span so space-between stays stable.
     var metaParts = [done + "/" + total + " nodes"];
     var started = fmtStartTime(run.startedAt);
     if (started) metaParts.push(started);
     var dur = fmtDuration(run.startedAt, run.completedAt);
     if (dur) metaParts.push(dur);
     head.appendChild(el("span", "wf-run-meta", metaParts.join(" · ")));
-    // Re-run a terminal run of the active blueprint — relaunches the same graph
-    // (no partial/memoized re-run; the engine just re-executes). Disabled while
-    // a run/batch is in flight, mirroring the toolbar Run gate.
+    // Re-run relaunches the same graph; disabled while anything is in flight.
     if (isTerminal(run.status) && run.blueprintId === state.activeBlueprintId) {
-      // Resume a failed/cancelled run: the server reloads this run's completed
-      // node results from its sidecars and executes only what failed (plus
-      // everything downstream). Falls back to a full run when nothing is
-      // reusable (expired sidecars).
+      // Resume reuses completed sidecar results and re-executes only failed nodes plus downstream.
       if (run.status === "failed" || run.status === "cancelled") {
         var resume = el("button", "wf-run-rerun wf-run-resume", "Resume");
         resume.type = "button";
@@ -987,8 +930,7 @@
           focusChild(child.runId);
         });
         rows.appendChild(row);
-        // The focused child expands inline with its per-node detail (if its full
-        // snapshot has streamed in via focusChild → subscribeRun).
+        // The focused child expands inline once its full snapshot has streamed in.
         var run = focused ? findRun(child.runId) : null;
         if (run && run.nodeStates) rows.appendChild(buildNodeDetail(run));
       });
@@ -997,23 +939,19 @@
     return card;
   }
 
-  // Client-side run-history filter (state.runFilter). "running" spans every
-  // non-terminal status; "failed" also folds in cancelled (both are red ends).
+  // "running" spans every non-terminal status; "failed" also folds in cancelled.
   function runMatchesFilter(status) {
     var f = state.runFilter || "all";
     if (f === "all") return true;
     if (f === "running") return !isTerminal(status);
-    // "degraded" is a finished run whose outputs are known incomplete — it
-    // belongs with completed (it ran to the end), not with failed.
+    // "degraded" ran to the end, so it files under completed, not failed.
     if (f === "completed")
       return status === "completed" || status === "degraded";
     if (f === "failed") return status === "failed" || status === "cancelled";
     return true;
   }
 
-  // One compact row of the cross-blueprint ("All") history list. Clicking a
-  // row opens its blueprint and drills into the run (pendingFocusRunId
-  // handshake); a run whose blueprint was deleted renders inert.
+  // Cross-blueprint history row; click opens the blueprint and drills in. Deleted blueprints render inert.
   function buildHistoryRow(run) {
     var bp = null;
     var bps = state.blueprints || [];
@@ -1057,14 +995,11 @@
   function renderRuns() {
     var container = qs("#wfRuns");
     if (!container) return;
-    // Every render refreshes the dirty-check baseline so the SSE/poll handlers
-    // (and user-driven callers) share one source of truth.
+    // Refresh the dirty-check baseline so all callers share one source of truth.
     _lastRunsFp = runsFingerprint();
     var prevScrollTop = container.scrollTop;
     container.innerHTML = "";
-    // "All" scope: a flat cross-blueprint list (batch children included as
-    // plain rows — they carry their participant). Rendered from state.allRuns,
-    // never state.runs, so canvas tinting / reattachment are untouched.
+    // "All" scope renders state.allRuns flat, never state.runs, so canvas tinting stays untouched.
     if (state.runScope === "all") {
       var all = (state.allRuns || []).filter(function (r) {
         return runMatchesFilter(r.status);
@@ -1110,8 +1045,7 @@
       return;
     }
     var frag = document.createDocumentFragment();
-    // Batches first (the active one expanded), then loose single runs. Keyed by id
-    // so a newer run can't steal the expansion from an older in-flight one.
+    // Batches first, then loose runs; keyed by id so expansion follows the right card.
     batches.forEach(function (batch) {
       frag.appendChild(buildBatchCard(batch, batch.id === state.activeBatchId));
     });
@@ -1125,10 +1059,7 @@
 
   // ---- Last-run badges on canvas cards ---------------------------------------
 
-  // "last: 14 events · 5 unmatched" under each node, from the newest terminal
-  // run that has a summary for it. Applied to the DOM like the run tinting
-  // (renderAllNodes calls back in after a rebuild), so no card re-render.
-  // On a filter node the out/unmatched pair doubles as a selectivity readout.
+  // "last: 14 events" badge from the newest terminal run; DOM-applied, no card re-render.
   function lastRunBadgeText(runs, nodeId) {
     for (var i = 0; i < runs.length; i++) {
       var ports = (runs[i].results || {})[nodeId];
@@ -1150,8 +1081,7 @@
   function applyLastRunBadges() {
     var world = qs("#wfWorld");
     if (!world) return;
-    // state.runs arrives newest-first from the server; keep only terminal runs
-    // of the active blueprint so a mid-run partial summary never shows.
+    // Only terminal runs of the active blueprint, so partial summaries never show.
     var runs = (state.runs || []).filter(function (r) {
       return isTerminal(r.status) && r.blueprintId === state.activeBlueprintId;
     });
@@ -1169,8 +1099,7 @@
 
   // ---- Cross-blueprint history scope ----------------------------------------
 
-  // Fetch the unfiltered run history (the server already lists every blueprint's
-  // runs newest-first, capped at its history limit — no pagination needed).
+  // Unfiltered history; the server caps it newest-first, so no pagination.
   function fetchAllRuns() {
     apiGet("api/runs")
       .then(function (res) {
@@ -1206,8 +1135,7 @@
     });
   }
 
-  // Wire the status-filter chips above the run list (set state.runFilter, toggle
-  // the active chip, re-render). No-op if the markup isn't present.
+  // Status-filter chips above the run list; no-op without the markup.
   function initRunFilter() {
     var host = qs("#wfRunFilter");
     if (!host) return;
@@ -1228,9 +1156,7 @@
 
   var _running = false;
 
-  // Re-gate the Run button from the three inputs that can change independently:
-  // an in-flight run, the load gate, and validation errors. Called by both
-  // setRunningUI and the validation satellite (after every recompute).
+  // Re-gate Run from three independent inputs; the validation satellite calls this too.
   function syncRunButton() {
     var v = state.validation;
     var hasErrors = !!(v && v.errors && v.errors.length);
@@ -1238,8 +1164,7 @@
     var runBtn = qs("#wfRunBtn");
     if (runBtn) {
       runBtn.disabled = blocked;
-      // Custom [data-tooltip] (not native title) so it doesn't double up with the
-      // singleton tooltip; the message is contextual (error vs ready state).
+      // [data-tooltip], not native title, so the singleton tooltip doesn't double up.
       runBtn.setAttribute(
         "data-tooltip",
         hasErrors
@@ -1256,8 +1181,7 @@
     if (runToItem) {
       runToItem.disabled = blocked || !one;
     }
-    // The sample-window test additionally needs that node to be a detector —
-    // it works by bounding the detector's unwired timeRange input.
+    // Sample-window test needs a detector: it bounds the detector's unwired timeRange input.
     var sampleItem = qs("#wfRunSampleItem");
     if (sampleItem) {
       var selNode =
@@ -1277,14 +1201,9 @@
   }
 
   // ---- Discover externally-started runs (trigger-launched) ------------------
-  // A run can appear without this client starting it — the directory watcher
-  // auto-launches one when a new video lands. The run panel otherwise only
-  // refreshes on blueprint-open, so such runs would never surface live. A low-
-  // frequency poll picks them up; refreshRuns() then reattaches + streams the
-  // live one. Gated to idle so it never tears down a stream we're already on.
+  // Trigger-launched runs would never surface live without it.
 
-  // True if the run list for the active blueprint differs from what we hold
-  // (a new run id, or a status change) — only then is a full refresh worth it.
+  // True when the active blueprint's run list gained an id or changed a status.
   function runsChanged(latest) {
     var cur = state.runs || [];
     if (latest.length !== cur.length) return true;
@@ -1324,8 +1243,7 @@
     }
   }
 
-  // Pause/resume the live streams when the tab is hidden (the poller already
-  // self-pauses; the EventSource is reopened on return if work is in flight).
+  // Hidden tab closes streams; on return, reopen them if work is in flight.
   function onVisibility() {
     if (document.hidden) {
       stopStream();

@@ -623,7 +623,7 @@ def whisper_probe(monkeypatch, tmp_path):
     monkeypatch.setattr(
         video_mod,
         "probe_video_properties",
-        lambda _p: {"audio_codec": "aac", "audio_tracks": [{"index": 0}]},
+        lambda _p: {"audio_tracks": [{"index": 0}]},
     )
     import numpy as np
 

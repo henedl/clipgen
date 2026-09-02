@@ -9,7 +9,7 @@
  */
 
 // ---- Color conversion ----
-// HSV here uses OpenCV-style ranges to match screenspace_primitives.py: h 0–180, s/v 0–255.
+// OpenCV HSV ranges (h 0–180, s/v 0–255), matching screenspace_primitives.py.
 
 function rgbToHsv(r, g, b) {
   var rn = r / 255, gn = g / 255, bn = b / 255;
@@ -38,10 +38,7 @@ function hsvToRgb(h, s, v) {
   return { r: Math.round((r1 + m) * 255), g: Math.round((g1 + m) * 255), b: Math.round((b1 + m) * 255) };
 }
 
-// hexToRgb / rgbToHex live in utils.js (loaded first); screenspace reaches them
-// via the scope chain. rgbToHsv / hsvToRgb stay here — they use OpenCV-style
-// ranges (h 0–180, s/v 0–255) to match screenspace_primitives.py, unlike any
-// utils.js math.
+// hexToRgb / rgbToHex are utils.js globals; the HSV pair stays here for the OpenCV ranges.
 
 // ---- Form input builders ----
 
@@ -51,9 +48,7 @@ function rangeInput(id, min, max, value, step) {
   inp.id = id;
   inp.min = min;
   inp.max = max;
-  // Set step BEFORE value: a range input snaps its value to the current step,
-  // and step defaults to 1 until assigned — so a fractional value set first
-  // (e.g. 0.7 with step 1) rounds to a whole step (→ 1.0) and sticks.
+  // Step before value: a range input snaps value to its step, which defaults to 1.
   if (step) inp.step = step;
   inp.value = value;
   return inp;
@@ -81,8 +76,7 @@ function textInput(id, placeholder) {
 
 // ---- Canvas ----
 
-// Size a canvas's backing store to its CSS box × devicePixelRatio. Returns the
-// device-pixel { w, h, dpr } so callers can scale their drawing context.
+// Backing store = CSS box × devicePixelRatio. Returns device-pixel { w, h, dpr }.
 function sizeCanvasToDisplay(canvas) {
   var rect = canvas.getBoundingClientRect();
   var dpr = window.devicePixelRatio || 1;
@@ -97,8 +91,7 @@ function sizeCanvasToDisplay(canvas) {
 
 // ---- Geometry ----
 
-// Normalize a drawn rectangle (two corner points, any order) to a
-// top-left-origin { x, y, w, h } box.
+// Two corners in any order → top-left { x, y, w, h }.
 function normalizeRect(x1, y1, x2, y2) {
   return {
     x: Math.min(x1, x2),
@@ -110,8 +103,7 @@ function normalizeRect(x1, y1, x2, y2) {
 
 // ---- Formatting ----
 
-// One-line summary of a multitool step's distinguishing parameter(s), shown on
-// step chips and restored-task rows (e.g. "H120° S200 V255 · presence", "≥80%").
+// One-line step summary for step chips and restored-task rows, e.g. "H120° S200 V255 · presence".
 function formatMultitoolStepParams(step) {
   if (!step) return "";
   var t = step.type;
@@ -138,8 +130,7 @@ function formatMultitoolStepParams(step) {
   return "";
 }
 
-// Readout for a color tool's presence min-area control: percentage plus an
-// approximate pixel count when the analysed region's area is known.
+// Min-area readout: percentage plus approximate pixel count when the region area is known.
 function _formatMinAreaReadout(pct, area) {
   if (!(pct > 0)) return "Any presence (no minimum size)";
   var txt = pct + "%";
@@ -151,7 +142,7 @@ function _formatMinAreaReadout(pct, area) {
 }
 
 // ---- Shaped-region (lasso / magic wand) geometry ----
-// Points are [x, y] pairs. Pure math over arrays — no state, no DOM.
+// Points are [x, y] pairs; no DOM.
 
 // Axis-aligned bounding box of a point list.
 function polygonBounds(points) {
@@ -189,9 +180,7 @@ function pointInPolygon(x, y, points) {
   return inside;
 }
 
-// Douglas-Peucker polyline simplification (iterative, stack-based).
-// Keeps endpoints; drops points whose perpendicular distance to the local
-// chord is below epsilon. Used to keep lasso/wand polygons compact.
+// Douglas-Peucker (iterative): keeps endpoints, drops points within epsilon of the chord.
 function simplifyPolygon(points, epsilon) {
   if (points.length < 3 || epsilon <= 0) return points.slice();
   var keep = new Array(points.length);
@@ -218,9 +207,7 @@ function simplifyPolygon(points, epsilon) {
   return out;
 }
 
-// Scanline flood fill over ImageData bytes from a seed pixel, bounded by a
-// per-channel RGB tolerance against the seed color. Returns a Uint8Array
-// (1 = filled) of length w*h, or null when the seed is out of bounds.
+// Scanline flood fill within a per-channel RGB tolerance; returns a w*h Uint8Array or null.
 function floodFillMask(data, w, h, sx, sy, tolerance) {
   sx = Math.round(sx); sy = Math.round(sy);
   if (sx < 0 || sy < 0 || sx >= w || sy >= h) return null;
@@ -258,9 +245,7 @@ function floodFillMask(data, w, h, sx, sy, tolerance) {
   return mask;
 }
 
-// Bounds / area / total-vertex-count over a LIST of contours ([[x, y], …][]).
-// Saved shaped regions store their points this way (one list per contour) so
-// multi-part shapes — merge and shift-add results — stay a single region.
+// Over a list of contours; saved shaped regions store one list per part.
 function contoursBounds(contours) {
   var all = [];
   for (var i = 0; i < contours.length; i++) all = all.concat(contours[i]);
@@ -279,10 +264,7 @@ function contoursTotalPoints(contours) {
   return n;
 }
 
-// Rasterize absolute canvas-pixel shapes into a Uint8Array (1 = filled) of
-// length w*h via an offscreen canvas. Each shape is {rect: {x,y,w,h}} or
-// {contours: [[x, y], …][]}. Contours are filled one path at a time (union
-// semantics, mirroring the per-contour cv2.fillPoly in Python).
+// Rasterize {rect} / {contours} shapes into a w*h Uint8Array; per-contour fill mirrors cv2.fillPoly.
 function rasterizeShapesMask(shapes, w, h) {
   var cv = document.createElement("canvas");
   cv.width = w;
@@ -312,8 +294,7 @@ function rasterizeShapesMask(shapes, w, h) {
   return mask;
 }
 
-// Boolean-combine two same-sized masks in place on `base` (Photoshop
-// selection semantics: shift = add, alt = subtract, shift+alt = intersect).
+// Combine masks in place on `base` (shift = add, alt = subtract, shift+alt = intersect).
 function combineShapeMasks(base, other, op) {
   for (var i = 0; i < base.length; i++) {
     if (op === "add") {
@@ -327,10 +308,7 @@ function combineShapeMasks(base, other, op) {
   return base;
 }
 
-// Extract the outer contour of every connected component in a binary mask
-// (4-connected labeling + Moore trace per component). Components whose
-// polygon area falls below minArea are dropped as rasterization specks.
-// Interior holes stay ignored — same precedent as traceMaskContour.
+// Outer contour per connected component (4-connected label + Moore trace); drops specks under minArea.
 function maskToContours(mask, w, h, minArea) {
   var visited = new Uint8Array(w * h);
   var contours = [];
@@ -359,9 +337,7 @@ function maskToContours(mask, w, h, minArea) {
   return contours;
 }
 
-// Simplify each contour with Douglas-Peucker, growing epsilon until the
-// total vertex count fits maxTotal (server cap is 400). Contours that
-// degenerate below 3 points are dropped.
+// Douglas-Peucker each contour, growing epsilon until under maxTotal (server cap 400).
 function simplifyContours(contours, epsilon, maxTotal) {
   var out = contours.map(function (c) { return simplifyPolygon(c, epsilon); });
   var eps = epsilon;
@@ -372,10 +348,7 @@ function simplifyContours(contours, epsilon, maxTotal) {
   return out.filter(function (c) { return c.length >= 3; });
 }
 
-// If the contour list is a single axis-aligned quad (within `tol` px), return
-// its {x,y,w,h} rect so boolean edits that end rectangular save as plain
-// rects. Collinear vertices are collapsed first (a traced rect edge can keep
-// its mid-edge start point). Returns null for genuinely shaped results.
+// Single axis-aligned quad (within tol) → {x,y,w,h} so rectangular results save as rects.
 function contoursToAxisRect(contours, tol) {
   if (contours.length !== 1) return null;
   var pts = contours[0];
@@ -396,9 +369,7 @@ function contoursToAxisRect(contours, tol) {
   return { x: Math.round(bounds.x), y: Math.round(bounds.y), w: Math.round(bounds.w), h: Math.round(bounds.h) };
 }
 
-// Moore-neighbor boundary trace of a binary mask (Uint8Array, 1 = filled).
-// Returns the outer contour as [x, y] pairs (interior holes are ignored —
-// the polygon fill closes them, which is acceptable for region masks).
+// Moore-neighbor trace of the outer contour; holes are ignored (the fill closes them).
 function traceMaskContour(mask, w, h) {
   var startX = -1, startY = -1;
   for (var i = 0; i < mask.length; i++) {

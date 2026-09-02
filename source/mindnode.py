@@ -55,8 +55,7 @@ import utils
 CONTENTS_FILENAME = "contents.xml"
 PREVIEW_RELPATH = "QuickLook/Preview.jpg"
 
-# Node titles are stored as an HTML fragment carrying MindNode's own font and
-# color styling, e.g. "<p style='color: rgba(…); font: 20px "Helvetica"; …'>P01</p>".
+# Titles are HTML fragments styled by MindNode, e.g. "<p style='…'>P01</p>".
 _BR_RE = re.compile(r"<br\s*/?>", re.IGNORECASE)
 _PARA_BREAK_RE = re.compile(r"</p>\s*<p[^>]*>", re.IGNORECASE)
 _TAG_RE = re.compile(r"<[^>]+>")
@@ -157,13 +156,7 @@ def load_document(path: str | Path) -> list[dict[str, Any]]:
         OSError,
         plistlib.InvalidFileException,
         ValueError,
-        # A .mindnode saved in XML rather than binary plist format (and then
-        # truncated, e.g. by a sync client) raises ExpatError, which derives
-        # from Exception — not from any of the above. Without it the error
-        # escapes this function's documented ValueError contract and every
-        # caller's `except ValueError`, surfacing as a 500 with a stack trace
-        # instead of "Could not read …". The binary path is already fine:
-        # _BinaryPlistParser normalizes to InvalidFileException.
+        # A truncated XML-format .mindnode raises ExpatError, which is not a ValueError.
         expat.ExpatError,
     ) as exc:
         raise ValueError(f"Could not read {contents}: {exc}") from exc

@@ -39,19 +39,9 @@
     _currentParticipantHasTranscript = TS._currentParticipantHasTranscript;
 
   // ---- Thinking-agent plumbing (shared poll factory) ----
-  //
-  // summary / citations / friction poll the same generic /api/agent/<key>/
-  // endpoints, differing only in URL base, cadence and result hooks, so one
-  // _makeAgentPoll scaffold drives all three. Adding an agent is a descriptor
-  // entry plus render hooks — no new poll/stop plumbing. Summary is richest (SSE
-  // token stream, citation chaining, inline edit); that rides in its hooks.
+  // A new agent is one descriptor plus hooks.
 
-  // Hard cap on agent polls (citations + friction). Long LLM runs on big
-  // transcripts once outlived a shorter timeout, so the result landed in the
-  // manifest after we'd given up and only surfaced on a full reload. Five
-  // minutes covers realistic completion; the server's `generating: false`
-  // stops the poll earlier when the agent finishes or fails sooner. Summary has
-  // no cap — its SSE stream (or 1.2s fallback poll) runs until done.
+  // Cap for citations + friction polls; long LLM runs outlived shorter caps. Summary streams uncapped.
   var _AGENT_POLL_TIMEOUT = 300000;
 
   var AGENT_DESCRIPTORS = {
@@ -64,16 +54,14 @@
       getResult: function (d) { return d.summary; },
       onResult: function (pid, d) { _onSummaryResult(pid, d); },
       onGenerating: function (pid, d) {
-        // Still generating — stream in whatever tokens have arrived. Rebuild the
-        // generating box if a re-render dropped it, then push the partial text.
+        // Rebuild the generating box if a re-render dropped it, then push partial text.
         if (!qs("#summaryStream")) {
           renderSummaryGenerating(d.started_at ? d.started_at * 1000 : undefined);
         }
         if (d.partial) _updateSummaryStream(d.partial);
       },
       onEmpty: function () { renderSummaryEmpty(); },
-      // Participant switch: just stop — don't paint an empty box into the panel,
-      // which now belongs to a different participant.
+      // Participant switch: stop silently; the panel now belongs to another participant.
       onStale: function () {},
     },
     citations: {
@@ -89,16 +77,9 @@
         renderCitations();
       },
       onEmpty: function () {
-        // Cancel clears the flag (via _clearCitationsStatus) but cannot recall a
-        // GET already on the wire, so that response still lands here — stay
-        // silent, a deliberate abort is not a failure.
+        // Cancel cleared the flag but a GET was already in flight; not a failure.
         if (!state.citationsGenerating) return;
-        // Otherwise the run is genuinely over with nothing to show: the route
-        // 404s (which apiGet rejects) once it ends without persisting — after
-        // find_citations' failure return, the server-unavailable path. Say so
-        // instead of just dropping "Finding sources…". The cause is a
-        // suggestion, not a claim: a transport blip lands here too, and the fix
-        // is the same. Participant switch and poll timeout go to onStale.
+        // Run ended without persisting (route 404s). Say so; the cause is a suggestion.
         state.citationsGenerating = false;
         _renderCitationsNote("Couldn't find sources. Check that the AI server is running, then re-run citations.");
       },
@@ -110,10 +91,7 @@
       interval: 3000,
       timeout: _AGENT_POLL_TIMEOUT,
       _poller: null,
-      // The deterministic placeholder (no persisted LLM run) is a display fallback,
-      // not a completed agent result — exclude it here so a run that ends without
-      // persisting (cancel/exception/None) falls through to onEmpty instead of being
-      // treated as "done". onEmpty still surfaces those programmatic scores.
+      // The deterministic placeholder is not a finished run; let it fall through to onEmpty.
       getResult: function (d) { return d.friction && !d.friction.deterministic ? d.friction : null; },
       onResult: function (pid, d) { _setFrictionData(d.friction); },
       onEmpty: function (pid, d) {
@@ -125,11 +103,7 @@
     },
   };
 
-  // The one poll scaffold. The version/participant staleness guard + optional
-  // timeout are identical across agents; per-result behavior is the descriptor's
-  // hooks. runImmediately:false so the first poll waits one interval (the
-  // initial render already painted the box). createPoller auto-pauses on hidden
-  // tabs and the endpoints are cheap in-memory reads.
+  // runImmediately:false — the initial render already painted the box. Hooks carry per-agent behavior.
   function _makeAgentPoll(desc) {
     return function (pid) {
       _stopAgentPoll(desc);
@@ -160,18 +134,13 @@
         }).catch(function (err) {
           if (ver !== state.participantReqVer) return;
           if (err && err.status === 404) {
-            // The endpoint 404s once the run is over with nothing persisted
-            // (find_citations' failure return, AI server down) — the genuine
-            // empty case. It carries the reason when the run actually failed.
+            // 404: run ended with nothing persisted. serverMessage carries the failure reason.
             if (err.serverMessage) reportAgentError(pid, desc.key, err.serverMessage);
             _stopAgentPoll(desc);
             desc.onEmpty(pid);
             return;
           }
-          // Transient transport blip or server hiccup mid-run: keep the poll
-          // armed and the rendered panel untouched — one failed GET must not
-          // wipe a five-minute LLM run. Only a streak gives up, and via
-          // onStale so the painted state survives.
+          // Transient failure: keep polling and the panel intact. Only a streak gives up, via onStale.
           desc._failStreak = (desc._failStreak || 0) + 1;
           if (desc._failStreak >= 3) {
             _stopAgentPoll(desc);
@@ -183,9 +152,7 @@
     };
   }
 
-  // Timer-only teardown (mirrors the old per-agent _stop*Poll): does NOT reset
-  // ETA trackers — render*Status / render*Generating reset-then-seed, so resetting here
-  // would wipe the seed when a poll restarts.
+  // Timer-only. Resetting ETA trackers here would wipe the seed render*Generating just set.
   function _stopAgentPoll(desc) {
     if (desc._poller) {
       desc._poller.stop();
@@ -198,43 +165,23 @@
   var _startFrictionPoll = _makeAgentPoll(AGENT_DESCRIPTORS.friction);
 
   // ---- AI Summary ----
-  //
-  // Two cooperating pollers from _makeAgentPoll above: summary's runs while the
-  // backend generates and stops once one lands; citations' runs after the summary
-  // arrives, since citations depend on it. Both have _stop*Poll() helpers, and
-  // either also stops when `state.selectedParticipant` no longer matches the
-  // participant the poll started for.
+  // Summary polls while generating; citations poll once the summary lands.
 
-  // SSE token stream: the primary live-update transport while a summary
-  // generates — pushes each token as the model emits it (true word-by-word).
-  // The summary poll (AGENT_DESCRIPTORS.summary._poller) is the fallback used
-  // when EventSource is unsupported or the stream drops mid-run.
+  // SSE token stream is the primary transport; the summary poll is the fallback.
   var _summaryStream = null;
-  // Which participant's summary is currently painted in the panel. Drives the
-  // clear-on-switch in loadSummary; deliberately NOT reset by clearSummary
-  // itself (a cleared panel plus a skipped re-clear is still a cleared panel).
+  // Painted participant. Drives clear-on-switch below; clearSummary itself never resets it.
   var _summaryPaintedPid = null;
 
   function loadSummary(pid) {
     var ver = state.participantReqVer;
 
-    // On a real participant switch, blank the previous summary before
-    // fetching: the catch below deliberately leaves painted panes alone on
-    // transient failures, which is only safe when what is painted belongs to
-    // *this* participant — otherwise a failed switch kept the previous
-    // participant's summary on screen under the new selection. Tracked by
-    // painted pid, not selectedParticipant, so same-participant refetches
-    // (tab refocus, mid-run re-arm) never blank a live panel.
+    // Blank only on a real switch: the catch below keeps painted panes on transient failures.
     if (_summaryPaintedPid !== pid) {
       clearSummary();
       _summaryPaintedPid = pid;
     }
 
-    // The analysis panel must be visible whenever we surface agent state for the
-    // selected, transcribed participant. renderSummaryGenerating/renderSummary
-    // (and the friction equivalents) don't toggle #summarySection themselves, so
-    // a summary that registers *after* the transcript finalized would otherwise
-    // paint its "Generating…" box into a hidden panel — visible only on reload.
+    // Reveal the panel here: render* never toggles #summarySection, so post-finalize runs would paint hidden.
     if (pid === state.selectedParticipant && _currentParticipantHasTranscript()) {
       _setAnalysisPanelVisible(true);
     }
@@ -254,22 +201,14 @@
       }
     }).catch(function (err) {
       if (ver !== state.participantReqVer) return;
-      // 404 = genuinely no summary — show the empty-state CTA. Any other
-      // failure is a transport blip (e.g. a refocus reload racing a server
-      // restart): leave whatever is painted alone rather than blanking a
-      // possibly-live panel.
+      // Only a 404 blanks the panel; a transport blip leaves painted state alone.
       if (err && err.status === 404) renderSummaryEmpty();
     });
   }
 
-  // Summary landed (via initial load OR the fallback poll's onResult hook):
-  // render it, then attach citations — still generating (surface the status and
-  // poll), or already stored (fetch them). Shared so the loader and the poll
-  // stay in lockstep (the summary poll's descriptor onResult delegates here).
+  // Summary landed: render, then attach citations (poll if generating, else fetch stored).
   function _onSummaryResult(pid, data) {
-    // Clear any citation state carried over from a previous participant before
-    // rendering — renderSummary() reapplies state.summaryCitations, so stale
-    // superscripts would otherwise leak onto this summary.
+    // Drop the previous participant's citations first; renderSummary reapplies state.summaryCitations.
     state.summaryCitations = null;
     state.citationsGenerating = false;
     renderSummary(data.summary);
@@ -290,34 +229,22 @@
     }
   }
 
-  // The summary response carries citations' *status* but not their payload (the
-  // generic agent GET returns only its own manifest field, and inlining the
-  // dependents would put the whole friction blob on the 1.2s summary poll). So
-  // a settled load has to ask for them separately, or every loadSummary —
-  // participant switch, tab refocus, post-cancel re-sync — would render the
-  // summary with its superscripts permanently stripped.
+  // The summary GET carries citations' status, not their payload; fetch them separately.
   function _loadStoredCitations(pid) {
     var ver = state.participantReqVer;
     apiGet(AGENT_DESCRIPTORS.citations.urlBase + "/" + pid).then(function (data) {
       if (ver !== state.participantReqVer || state.selectedParticipant !== pid) return;
-      // A run may have started while this GET was in flight (Regenerate, or the
-      // chain reaching citations). Restoring the old result now would replace
-      // the live "Finding sources…" line — renderCitations() removes it — with
-      // superscripts the run is about to supersede.
+      // A run may have started meanwhile; don't replace its live status with stale superscripts.
       if (state.citationsGenerating) return;
       if (!data.ok || !data.citations) return;
       state.summaryCitations = data.citations;
       renderCitations();
     }).catch(function () {
-      // 404 = citations never ran (or are disabled). Not a failed run, so stay
-      // quiet — the poll's onEmpty owns the "a run just ended empty" message.
+      // 404 = citations never ran. The poll's onEmpty owns the run-ended-empty message.
     });
   }
 
-  // Open the SSE token stream for a generating summary. Falls back to the GET
-  // poll if EventSource is unavailable or the stream drops. onMessage carries
-  // either {partial} (text so far) or {done} (run finished → render the
-  // finalized summary via loadSummary, which also kicks the citations chain).
+  // SSE token stream; falls back to the GET poll. {done} re-runs loadSummary.
   function _startSummaryStream(pid) {
     _stopSummaryPoll(); // clear any prior poller/stream before (re)starting
     var ver = state.participantReqVer;
@@ -359,32 +286,22 @@
     }
   }
 
-  // The stream is closed on participant switch, cancel, completion and
-  // visibilitychange, but a bfcache-suspended page would otherwise keep the
-  // EventSource connection open — the one page-scope resource here with no
-  // pagehide teardown.
+  // bfcache would keep the EventSource open; the other teardown sites never fire on pagehide.
   window.addEventListener("pagehide", _stopSummaryStream);
 
-  // Stops all live summary updates — the poller AND the SSE stream — so every
-  // existing teardown site (participant switch, clear, cancel, completion)
-  // covers both transports without needing to know which one is active.
+  // Stops both transports so teardown sites need not know which is active.
   function _stopSummaryPoll() {
     _stopAgentPoll(AGENT_DESCRIPTORS.summary);
     _stopSummaryStream();
   }
 
-  // startedAtMs (optional): server-recorded run start in epoch ms. Seeds the
-  // elapsed clock so navigating away and back resumes from the true elapsed
-  // time instead of zero; omit it for a just-clicked manual run (starts now).
+  // startedAtMs: server run start (epoch ms) seeds the elapsed clock; omit for manual runs.
   function renderSummaryGenerating(startedAtMs) {
     var content = qs("#summaryContent");
-    // #summaryStream is a separate node so streamed partial text can be updated
-    // by later polls (via _updateSummaryStream) without disturbing the elapsed
-    // clock / Cancel wiring below, which is built once here.
+    // #summaryStream is separate so partial text updates leave the clock / Cancel wiring alone.
     content.innerHTML =
       '<div class="summary-stream" id="summaryStream"></div>' +
-      // The shimmer goes on its own span: .cg-shimmer's transparent text fill
-      // inherits, so on the <p> it would erase the clock and the Cancel label.
+      // Own span: .cg-shimmer's transparent text fill would erase the clock and Cancel.
       '<p class="summary-generating"><span class="cg-shimmer">Generating summary\u2026</span>' +
       '<span class="agent-elapsed" id="summaryElapsed"></span>' +
       '<button type="button" class="agent-cancel-btn" id="summaryCancel">Cancel</button></p>';
@@ -400,16 +317,11 @@
     _summaryEtaTracker.start(startedAtMs || undefined);
     _updateAgentElapsed("summaryElapsed", _summaryEtaTracker);
     _txEtaTicker.ensure();
-    // Summary is (re)generating → its dependents' gate is momentarily unmet;
-    // refresh the friction header so Re-run disables now and re-enables in
-    // renderSummary() once the summary lands.
+    // Friction's dependency is unmet while the summary regenerates; refresh so Re-run disables.
     _renderFrictionHeader();
   }
 
-  // Push streamed partial summary text into the #summaryStream node built by
-  // renderSummaryGenerating, without touching the elapsed clock / Cancel footer.
-  // Plain textContent (CSS white-space: pre-wrap handles newlines); citation
-  // anchors are added only when the finished summary lands via renderSummary.
+  // Plain textContent into #summaryStream; citation anchors arrive with renderSummary.
   function _updateSummaryStream(text) {
     var stream = qs("#summaryStream");
     if (stream) stream.textContent = text;
@@ -430,11 +342,7 @@
     _updateSummaryEmptyHint();
   }
 
-  // "No summary yet." plus a Run button that silently does nothing is the most
-  // common first contact with the AI features, and it never said why. Fill in
-  // the reason when there is one. Fire-and-forget: the empty state is already
-  // on screen and correct without it, so a slow or failed /api/models must
-  // never delay the render or throw.
+  // Explain why Run would do nothing. Fire-and-forget: a slow /api/models must never delay or throw.
   function _updateSummaryEmptyHint() {
     var hintEl = qs("#summaryEmptyHint");
     if (!hintEl) return;
@@ -444,8 +352,7 @@
       // A stopped server is not worth a hint: running the summary starts it.
       var status = clipgenLlmStatus(data && data.llm);
       if (status.state !== "missing") return;
-      // Running the summary raises the install dialog, so the shortest true
-      // instruction here is "just run it".
+      // Running the summary raises the install dialog, so say just that.
       var extra = status.canInstall
         ? " clipgen can download it for you when you run the summary."
         : (status.hint.length ? " " + status.hint[0] : "");
@@ -461,13 +368,7 @@
     var content = qs("#summaryContent");
     var lines = text.split("\n");
 
-    // Claims in document order, one block per run of same-kind lines. This walk
-    // must match thinking_agents._split_summary_sentences exactly: it is the
-    // backend's claim numbering, and data-cite-index is how renderCitations
-    // finds the claim a ref belongs to. A sticky "we're in bullets now" flag
-    // used to send prose written *after* the list into the <ul>, which both
-    // rendered it as a list item and slid every later citation onto the wrong
-    // sentence.
+    // Must match thinking_agents._split_summary_sentences exactly: data-cite-index is the backend's claim numbering.
     var blocks = [];
     for (var i = 0; i < lines.length; i++) {
       var line = lines[i].trim();
@@ -478,8 +379,7 @@
         blocks.push({ kind: kind, items: [] });
       }
       var items = blocks[blocks.length - 1].items;
-      // Models emit **bold** / `code` emphasis; render it instead of showing
-      // literal asterisks (same helper as the Overview report).
+      // Render **bold** / `code` instead of literal asterisks (same helper as Overview).
       if (isBullet) {
         items.push(clipgenRenderInlineMarkdown(line.substring(2).trim()));
       } else {
@@ -526,10 +426,7 @@
     if (state.summaryCitations) {
       renderCitations();
     }
-    // The friction Re-run button is gated on the summary dependency. The summary
-    // just landed (dep now met), so refresh the friction header even when friction
-    // data already exists — loadFriction is skipped in that case, so otherwise the
-    // Re-run button stays disabled/unclickable until a page reload.
+    // Summary landed, so the friction dependency is met; refresh even when loadFriction is skipped.
     _renderFrictionHeader();
   }
 
@@ -587,9 +484,7 @@
 
   // ---- Citation rendering (Pass 2) ----
 
-  // Citations cleanup shared by the poll's onEmpty/onStale hooks, the cancel
-  // path, and the regenerate error path: drop the generating flag and remove
-  // the "Finding sources…" status line from the summary panel.
+  // Shared by onEmpty/onStale, cancel and regenerate-error: drop the flag and status line.
   function _clearCitationsStatus() {
     state.citationsGenerating = false;
     var status = qs("#summaryContent .citations-status");
@@ -633,11 +528,7 @@
       }
     }
 
-    // Rendering nothing is itself a result: say so, rather than leaving the
-    // panel looking like citations never ran. dataRefs separates "the model
-    // found no supporting segments" from "it found some, but renderSummary's
-    // sentence split didn't line up with the backend's" \u2014 the two splits are
-    // independent implementations, and that mismatch is otherwise silent.
+    // Nothing rendered is a result. dataRefs > 0 means the two sentence splits disagreed.
     if (refNum === 1) {
       _renderCitationsNote(dataRefs === 0
         ? "No supporting segments found for this summary."
@@ -645,9 +536,7 @@
     }
   }
 
-  // Terminal one-line status in the summary panel (nothing found / run failed).
-  // Shares .citations-status with the in-flight "Finding sources\u2026" line, minus
-  // its elapsed clock and Cancel button.
+  // Terminal status line; shares .citations-status with the in-flight line, minus clock and Cancel.
   function _renderCitationsNote(text) {
     var existing = qs("#summaryContent .citations-status");
     if (existing) existing.remove();
@@ -657,8 +546,7 @@
     qs("#summaryContent").appendChild(p);
   }
 
-  // startedAtMs (optional): server-recorded run start in epoch ms \u2014 seeds the
-  // elapsed clock so it survives navigation; omit for a just-clicked manual run.
+  // startedAtMs: server run start (epoch ms) seeds the elapsed clock; omit for manual runs.
   function renderCitationsStatus(startedAtMs) {
     // Remove any existing status
     var existing = qs("#summaryContent .citations-status");
@@ -666,8 +554,7 @@
 
     var p = document.createElement("p");
     p.className = "citations-status";
-    // Own span so the shimmer's transparent fill doesn't inherit onto the
-    // elapsed clock and the Cancel button appended below.
+    // Own span: the shimmer's transparent fill would blank the clock and Cancel.
     var label = document.createElement("span");
     label.className = "cg-shimmer";
     label.textContent = "Finding sources\u2026";
@@ -686,10 +573,7 @@
     });
     p.appendChild(cancel);
     qs("#summaryContent").appendChild(p);
-    // Reset before seeding so a re-run adopts the new (server) start instead of
-    // the idempotent tracker clinging to a prior run's start. Teardown
-    // (_stopCitationsPoll) is timer-only — mirroring summary/friction — so the
-    // _startCitationsPoll() that follows this call can't wipe this seed.
+    // Reset before seeding so a re-run adopts the new start; _stopCitationsPoll is timer-only.
     _citationsEtaTracker.reset();
     _citationsEtaTracker.start(startedAtMs || undefined);
     _updateAgentElapsed("citationsElapsed", _citationsEtaTracker);
@@ -703,8 +587,7 @@
   function _stopCitationsRun() {
     var pid = state.selectedParticipant;
     if (!pid) return;
-    // Citations run after the summary exists, so keep the summary visible and
-    // only remove the "Finding sources…" status line.
+    // Keep the summary visible; only remove the status line.
     _stopCitationsPoll();
     _clearCitationsStatus();
     apiPost(AGENT_DESCRIPTORS.citations.urlBase + "/" + pid + "/stop", {}).then(function () {
@@ -741,11 +624,7 @@
     _stopSummaryPoll();
     _stopCitationsPoll();
     state.citationsGenerating = false;
-    // Regenerate runs summary → citations as a chain, so summary may have
-    // already finished and citations started by the time Cancel is clicked
-    // (3s poll gap). Stop both — each call is a no-op if that pass isn't
-    // running. Re-sync only after both stops are acknowledged, otherwise the
-    // follow-up GET can still see citations in-flight and restart its poll.
+    // The chain may already be on citations: stop both, then re-sync only after both acknowledge.
     Promise.all([
       apiPost(AGENT_DESCRIPTORS.summary.urlBase + "/" + pid + "/stop", {}),
       apiPost(AGENT_DESCRIPTORS.citations.urlBase + "/" + pid + "/stop", {}),
@@ -845,13 +724,7 @@
   }
 
   // ---- Friction detection ----
-  //
-  // Programmatic scores + LLM moments land together in the manifest's `friction`
-  // field. The tab is a CONTROL SURFACE over #segmentList, not a results list: a
-  // mode switch, score histogram and category chips filter the transcript below
-  // (tinting it, or isolating to the matches), and the moments are a jump strip
-  // whose rationales render as inline callouts under the segments they quote.
-  // Everything downstream reads one derived map — see _recomputeFrictionMatches.
+  // A control surface over #segmentList; everything reads one derived map (_recomputeFrictionMatches).
 
   function _currentParticipant() {
     var pid = state.selectedParticipant;
@@ -864,10 +737,7 @@
   function _frictionDepMet() {
     var p = _currentParticipant();
     if (!p) return false;
-    // Trust the client-side summary too: renderSummary sets state.summaryText for
-    // the selected participant the moment a summary lands, before /api/participants
-    // catches up to summary === "done". Without this the Re-run gate lags a poll
-    // (or never updates until reload) after a summary regenerate completes.
+    // state.summaryText lands before /api/participants catches up, so trust it too.
     if (state.summaryText) return true;
     if (p.has_summary) return true;
     return !!(p.agents && p.agents.summary === "done");
@@ -879,9 +749,7 @@
       if (cats[i].key === key) return cats[i].label;
     }
     if (key === "other") return "Other";
-    // A category the model invented. Show its own wording rather than dropping
-    // it — the evidence table groups these under Other, but the jump chip and
-    // the callout should still say what the model actually called it.
+    // A model-invented category: show its own wording (the evidence table groups it under Other).
     if (!key) return "—";
     return key.charAt(0).toUpperCase() + key.slice(1).replace(/_/g, " ");
   }
@@ -902,21 +770,11 @@
 
   function loadFriction(pid) {
     var ver = state.participantReqVer;
-    // Reveal the analysis panel for the selected, transcribed participant (see
-    // loadSummary) so a friction run that registers after finalize is visible.
+    // Reveal the panel (see loadSummary) so a post-finalize friction run is visible.
     if (pid === state.selectedParticipant && _currentParticipantHasTranscript()) {
       _setAnalysisPanelVisible(true);
     }
-    // Blank only when the participant actually changed. A same-participant
-    // refetch — tab refocus, the mid-run re-arm in transcripts.js, a re-select —
-    // must keep the programmatic scores on screen: they come from the
-    // deterministic scorer and owe nothing to the LLM. Wiping them here is what
-    // blanked the histogram, chips, tinting and timeline band for a whole run.
-    // On a real switch, clear the DOM too (clearFriction), not just the state:
-    // the fetch's catch below deliberately leaves painted panes alone on
-    // transient failures, which is only safe when what is painted belongs to
-    // *this* participant — otherwise a failed switch kept the previous
-    // participant's histogram and chips on screen.
+    // Blank DOM and state only on a real switch: same-participant refetches must keep programmatic scores.
     if (state.frictionPid !== pid) {
       clearFriction();
     }
@@ -927,9 +785,7 @@
       if (data.ok && data.friction) {
         _setFrictionData(data.friction);
       } else if (data.generating) {
-        // Regenerate pops the stored result, so mid-run the server answers with
-        // the deterministic scores alongside `generating` — adopt them before
-        // flipping the flag, or this branch shows the empty "Analyzing…" box.
+        // Mid-run the server sends deterministic scores alongside `generating`; adopt them before flipping the flag.
         if (data.friction) _setFrictionData(data.friction);
         state.frictionGenerating = true;
         state.frictionStartedAt = data.started_at ? data.started_at * 1000 : null;
@@ -941,8 +797,7 @@
       }
     }).catch(function (err) {
       if (ver !== state.participantReqVer) return;
-      // Same contract as loadSummary: only a 404 (no result exists) may blank
-      // the panel; a transient failure leaves the painted state alone.
+      // Same contract as loadSummary: only a 404 blanks the panel.
       if (err && err.status === 404) renderFrictionEmpty();
     });
   }
@@ -959,8 +814,7 @@
     state.frictionBySegId = byId;
     renderFriction();
     updateFrictionStaleDot();
-    // renderFriction's applyFrictionDecorations already re-decorated the existing
-    // rows in place, so no segment-list rebuild is needed — only the canvas band.
+    // renderFriction already re-decorated rows in place; only the canvas band needs redrawing.
     renderTimeline();
   }
 
@@ -985,8 +839,7 @@
     var rerun = qs("#frictionRerun");
     var cancel = qs("#frictionCancel");
     if (state.frictionGenerating) {
-      // Own span for the shimmer — its transparent fill inherits, so on
-      // statusEl it would also blank the elapsed clock appended below.
+      // Own span: the shimmer's transparent fill would blank the elapsed clock too.
       statusEl.textContent = "";
       var label = document.createElement("span");
       label.className = "cg-shimmer";
@@ -1007,9 +860,7 @@
     _frictionEtaTracker.reset();
     cancel.classList.add("hidden");
     rerun.classList.remove("hidden");
-    // The deterministic-only placeholder has no AI result yet, so it reads "Run",
-    // not "Re-run". Write the label span, not the button: the button also holds
-    // the .ai-agent-badge, which a textContent write would delete.
+    // Deterministic-only reads "Run". Write the label span: textContent on the button deletes .ai-agent-badge.
     var isDeterministic = !!(state.frictionData && state.frictionData.deterministic);
     rerun.querySelector(".agent-run-label").textContent =
       state.frictionData && !isDeterministic ? "Re-run friction" : "Run friction analysis";
@@ -1025,9 +876,7 @@
       var fd = state.frictionData;
       var llmFailed = fd.llm_ok === false;
       if (isDeterministic) {
-        // depMet distinguishes "no summary yet" (run Summary, which auto-chains
-        // friction) from "summary done, friction not run" (the friction button is
-        // enabled) so the copy points at the step the user can actually take.
+        // depMet picks the step the user can take: run Summary, or run friction.
         statusEl.textContent = depMet
           ? "Programmatic scores shown. Run friction analysis for AI-refined moments."
           : "Programmatic scores shown. Run Summary for AI-refined moments.";
@@ -1040,9 +889,7 @@
         statusEl.textContent = "Stale: segments edited since last run" +
           (fd.model ? " · " + fd.model : "");
       } else if (!(fd.moments && fd.moments.length)) {
-        // A completed run that surfaced nothing. Without this the header reads
-        // like any successful run and the only hint is the jump strip's one
-        // italic line, well below the fold of the eye.
+        // A completed run that found nothing; otherwise the header reads like any success.
         statusEl.textContent = "No friction moments found · computed " +
           _friendlyTimeAgo(fd.computed_at) + (fd.model ? " · " + fd.model : "");
       } else {
@@ -1071,12 +918,10 @@
       var banner = qs("#frictionStaleBanner");
       if (banner) {
         var fd = state.frictionData;
-        // Show the banner only for edit-staleness, not for an LLM failure (which
-        // the header already explains with its own re-run guidance).
+        // Banner only for edit-staleness; the header already explains LLM failure.
         banner.classList.toggle("hidden", !(fd.stale && fd.llm_ok !== false));
       }
-      // Bins change only when the data does; the marker, chips, strip and the
-      // transcript decorations all follow from applyFrictionDecorations.
+      // Bins change only with the data; everything else follows from applyFrictionDecorations.
       renderFrictionHistogram();
       applyFrictionDecorations();
     } else {
@@ -1098,11 +943,7 @@
   }
 
   function renderFrictionGenerating() {
-    // Keep the programmatic scores on screen while the agent runs. They come
-    // from the deterministic scorer, are already computed, and are independent
-    // of the LLM — blanking the pane costs the user the histogram, chips and
-    // transcript tinting for the whole run, and the agent only ever *adds*
-    // moments on top. The standalone box is for when there is nothing yet.
+    // Keep programmatic scores on screen during the run; the agent only adds moments.
     var hasData = !!state.frictionData;
     qs("#frictionContent").classList.toggle("hidden", !hasData);
     qs("#frictionEmpty").classList.add("hidden");
@@ -1160,16 +1001,12 @@
     renderFriction();
   }
 
-  // Two filters, one per evidence source: the keyword scorer's segment
-  // categories and the agent's moment categories are labelled independently, so
-  // one shared dict meant hiding a category on one side silently hid it on the
-  // other. The moment side also carries the "other" bucket.
+  // Two filters, one per source; one shared dict hid categories on both sides.
   function _ensureFrictionFilter() {
     var keys = _frictionCatKeys();
     var prog = state.frictionCategoryFilter || {};
     var ai = state.frictionMomentFilter || {};
-    // Fill in rather than replace: a persisted filter from an older category set
-    // keeps whatever the user chose and picks up new categories enabled.
+    // Fill in, don't replace: persisted filters keep user choices and pick up new categories.
     for (var i = 0; i < keys.length; i++) {
       if (prog[keys[i]] === undefined) prog[keys[i]] = true;
       if (ai[keys[i]] === undefined) ai[keys[i]] = true;
@@ -1179,26 +1016,13 @@
     state.frictionMomentFilter = ai;
   }
 
-  // Both ends of the score band are user-controlled (the histogram's two
-  // handles), so every score test goes through here rather than comparing
-  // against a lone threshold.
+  // Both bounds are user-controlled, so every score test goes through here.
   function _frictionScoreInBand(score) {
     return score >= state.frictionMin && score <= state.frictionMax;
   }
 
   // ---- The one derived filter product ----
-  //
-  // (threshold, category filter, friction data, segments) -> the three fields every
-  // consumer reads: state.frictionMatchBySegId, state.frictionVisibleMoments and
-  // state.frictionCitedBySegId. Segment tints, isolate hiding, the timeline density
-  // band, "Mark all matching", the counter and the isolate-aware keyboard nav all
-  // read these, so the pane and the transcript can never disagree.
-  //
-  // A segment matches when its score clears the threshold and one of its
-  // categories is enabled, OR when a visible moment cites it. The second clause
-  // isn't redundant: segment scores come from the regex scorer while moment scores
-  // are the model's, so a moment can clear the threshold while the line it quotes
-  // scores 0 — without it, isolate mode would hide the very row the strip seeks to.
+  // Every consumer reads these; pane and transcript agree.
   function _recomputeFrictionMatches() {
     _ensureFrictionFilter();
     var fd = state.frictionData;
@@ -1209,8 +1033,7 @@
     for (i = 0; i < segs.length; i++) {
       var frow = segs[i];
       var score = frow.score || 0;
-      // score <= 0 is excluded outright so a lower bound of 0 still means "every
-      // segment the scorer flagged", not "every segment in the transcript".
+      // Exclude score <= 0 so a lower bound of 0 still means "flagged segments only".
       if (score <= 0 || !_frictionScoreInBand(score)) continue;
       var cats = frow.categories || [];
       for (j = 0; j < cats.length; j++) {
@@ -1219,8 +1042,7 @@
     }
     state.frictionMatchBySegId = matches;
 
-    // Resolve moments to segment indices exactly once, so the jump strip's
-    // numbering and the set of inline callouts can't drift apart.
+    // Resolve moment indices once so strip numbering and callouts never drift apart.
     var visible = [];
     var cited = {};
     var unsourced = 0;
@@ -1228,8 +1050,7 @@
     for (i = 0; i < all.length; i++) {
       if (!_frictionMomentMatches(all[i])) continue;
       var idxs = _momentSegmentIndices(all[i]);
-      // Unsourced moment: nothing to quote or seek to. Counted, not just
-      // dropped, so the empty strip can name this cause instead of the filter.
+      // Unsourced moment: counted so the empty strip can name the cause.
       if (idxs.length === 0) { unsourced++; continue; }
       visible.push({ moment: all[i], idxs: idxs });
       for (j = 0; j < idxs.length; j++) {
@@ -1241,13 +1062,7 @@
     state.frictionCitedBySegId = cited;
     state.frictionUnsourcedMoments = unsourced;
 
-    // What the timeline density band draws: the union of both sources, keyed to
-    // the strongest evidence on each line. Built here rather than at the band so
-    // the canvas can never disagree with the pane about what is flagged. An
-    // AI-only line scores 0 with the keyword scorer, so reading the keyword map
-    // alone left the moments the jump strip is built around off the band
-    // entirely; the two scales differ, but the band's alpha only ever meant
-    // "how strong is the evidence here".
+    // Band = union of both sources; without AI-only lines, isolate would hide cited rows.
     var band = {};
     for (var id in matches) {
       if (Object.prototype.hasOwnProperty.call(matches, id)) band[id] = matches[id];
@@ -1263,11 +1078,7 @@
     state.frictionBandBySegId = band;
   }
 
-  // The single entry point for "the filter changed": recompute, then reflect it
-  // everywhere. Called by the hub from renderSegments (before the scroll restore)
-  // and by every control in the pane. Cheap enough to run per animation frame
-  // during a threshold drag — it only writes classes and inline custom
-  // properties, and never rebuilds the segment list.
+  // The one entry point for filter changes. Per-frame cheap: writes classes only, never rebuilds rows.
   function applyFrictionDecorations() {
     _recomputeFrictionMatches();
     renderFrictionEvidence();
@@ -1277,12 +1088,7 @@
   }
 
   // ---- "Why was this selected" ----
-  //
-  // The scores are opaque on their own, so every friction hover surface — a
-  // histogram bin, a hot segment row, the timeline density band — answers the
-  // same question with the same words: what the segment scored, which categories
-  // fired, the phrases that matched, and the line itself. One builder, so the
-  // three can't end up explaining the same segment differently.
+  // One builder so bin, row and band hovers agree.
 
   var _FRICTION_TOOLTIP_SEGMENTS = 4; // per histogram bin, before "+N more"
 
@@ -1323,8 +1129,7 @@
       clipgenPluralUnit(rows.length, "segment", "segments");
     if (!rows.length) return head;
     var lines = [head];
-    // Resolve text only for the handful shown — a busy bin can hold hundreds of
-    // rows and _segmentIndexById is a linear scan.
+    // Resolve text only for the handful shown.
     for (var i = 0; i < rows.length && i < _FRICTION_TOOLTIP_SEGMENTS; i++) {
       var idx = _segmentIndexById(rows[i].id);
       var seg = idx >= 0 ? state.segments[idx] : null;
@@ -1352,9 +1157,7 @@
     var scored = 0;
     for (i = 0; i < segs.length; i++) {
       var s = Number(segs[i].score) || 0;
-      // Only scored segments are binned. score_segments emits a row for every
-      // segment and most score exactly 0, so including them makes bin 0 a spike
-      // that flattens every other bin against the 6% floor.
+      // Only scored segments are binned; most score exactly 0 and would spike bin 0.
       if (s <= 0) continue;
       if (s > 1) s = 1;
       scored++;
@@ -1371,8 +1174,7 @@
       fill.style.height = pct.toFixed(1) + "%";
       bar.appendChild(fill);
       (function (lo, hi) {
-        // Built lazily on hover, not captured here: the histogram can be rendered
-        // before the transcript lands, and the explanation needs segment text.
+        // Built lazily on hover: the transcript text may not have landed yet.
         attachHoverTooltip(bar, function () { return _frictionBinTooltip(lo, hi); },
           { multiline: true });
       })(i / _FRICTION_HIST_BINS, (i + 1) / _FRICTION_HIST_BINS);
@@ -1403,9 +1205,7 @@
     return s;
   }
 
-  // Handle positions, per-bar dimming and the bound readouts. Split from
-  // renderFrictionHistogram so a drag never wipes the track's innerHTML
-  // mid-gesture (which would drop the pointer capture the drag depends on).
+  // Split from renderFrictionHistogram: rewriting innerHTML mid-drag would drop the pointer capture.
   function _updateFrictionBounds(activeBound) {
     var host = qs("#frictionHistogram");
     if (!host) return;
@@ -1425,9 +1225,7 @@
       bars[i].classList.toggle("is-outside", barHi <= lo || barLo >= hi);
     }
 
-    // Labels sit under their own handle. When the two bounds nearly coincide the
-    // labels would overlap, so nudge them apart — the positions stay indicative,
-    // and the numbers stay readable, which is the point of the readout.
+    // Nudge near-coincident labels apart so both numbers stay readable.
     var loPct = lo * 100;
     var hiPct = hi * 100;
     if (hiPct - loPct < 8) {
@@ -1460,8 +1258,7 @@
 
     function commit(v) {
       if (v === null || !grabbed) return;
-      // Bounds clamp against each other rather than swapping: dragging one end
-      // past the other collapses the band instead of silently inverting it.
+      // Bounds clamp against each other; dragging past collapses the band, never inverts it.
       if (grabbed === "min") v = Math.min(v, state.frictionMax);
       else v = Math.max(v, state.frictionMin);
       var key = grabbed === "min" ? "frictionMin" : "frictionMax";
@@ -1475,20 +1272,11 @@
       renderTimeline();
     }
 
-    // Pointer capture keeps the gesture on the track while the pointer wanders
-    // off it, so nothing is bound at document scope and there is nothing to tear
-    // down on pagehide. The handlers gate on `grabbed`, not on hasPointerCapture:
-    // capture is a nicety some engines refuse (and WKWebView hosts this app in
-    // the desktop bundle), and a drag that silently stops tracking is worse than
-    // one that merely stops following the pointer past the edges. A move with no
-    // button held means we missed the pointerup, so the gesture self-heals.
+    // Capture is optional (WKWebView may refuse), so gate on `grabbed`; buttons===0 heals a missed pointerup.
     host.addEventListener("pointerdown", function (e) {
       var v = scoreAt(e.clientX);
       if (v === null) return;
-      // A press outside the band always grabs the bound on that side, so it
-      // widens toward the press. Nearest-handle only applies inside. Without the
-      // outside case, a band dragged shut (min === max) would be unrecoverable:
-      // every press would tie, ties would pick min, and min can never exceed max.
+      // Outside the band, grab that side: a collapsed band (min === max) must stay recoverable.
       if (v > state.frictionMax) grabbed = "max";
       else if (v < state.frictionMin) grabbed = "min";
       else grabbed = Math.abs(v - state.frictionMin) <= Math.abs(v - state.frictionMax) ? "min" : "max";
@@ -1511,8 +1299,7 @@
       commit(pending);
       grabbed = null;
       _updateFrictionBounds(null);
-      // Persist once per gesture, not per frame — the stored UI state is a
-      // parse/stringify of the whole page blob.
+      // Persist once per gesture; the stored UI state re-serializes the whole page blob.
       setStoredUIStateField("transcripts", "frictionMin", state.frictionMin);
       setStoredUIStateField("transcripts", "frictionMax", state.frictionMax);
     }
@@ -1521,21 +1308,9 @@
   }
 
   // ---- Evidence table ----
-  //
-  // Two independent systems produce findings and a single chip row could only
-  // count one: the keyword scorer labels SEGMENTS from regex hits, while the agent
-  // labels MOMENTS with a category of its own choosing, never reconciled against
-  // what the scorer found on the line it quotes. A category could read
-  // "Confusion 0" while a Confusion moment sat in the jump strip — and a 0-count
-  // chip was inert, so that was the one category you could not filter by.
-  //
-  // So the table counts the two apart: a row per category, a cell per source.
-  // Counts are computed here rather than read from stats.by_category, which counts
-  // marker hits (not segments) and ignores the score band, so it would never move
-  // with the histogram.
+  // Keyword scorer labels segments, the agent labels moments; count them apart.
   var FRICTION_SOURCES = ["prog", "ai"];
-  // Where a model category that is not one of the six lands. The jump chip and
-  // the callout still show the model's own wording; only the row groups them.
+  // Bucket for model categories outside the six; chips and callouts keep the model's wording.
   var FRICTION_OTHER = "other";
 
   function _frictionCatKeys() {
@@ -1543,15 +1318,13 @@
     return cats.map(function (c) { return c.key; });
   }
 
-  // The model is free to emit any string (thinking_agents.py only lowercases
-  // and underscores it), so bucket anything unrecognized rather than letting it
-  // fall through every filter and every row.
+  // The model may emit any string; bucket unknowns so they don't escape every filter.
   function _frictionMomentCategory(m) {
     var raw = (m && m.category) || "";
     return _frictionCatKeys().indexOf(raw) === -1 ? FRICTION_OTHER : raw;
   }
 
-  // Counts inside the current score band — what each cell displays.
+  // Counted here, not from stats.by_category: that counts marker hits and ignores the band.
   function _frictionEvidenceCounts() {
     var prog = {};
     var ai = {};
@@ -1572,11 +1345,7 @@
     return { prog: prog, ai: ai };
   }
 
-  // Which rows exist at all, ignoring the band and the filters. Deliberately
-  // band-independent: rows appearing and vanishing mid-drag would make the
-  // control block jump under the pointer, and a cell whose count the band has
-  // driven to 0 must stay clickable — gating inertness on the banded count is
-  // exactly the bug this table replaces.
+  // Band-independent on purpose: rows must not jump mid-drag, and banded-to-0 cells stay clickable.
   function _frictionEvidenceRows() {
     var seen = {};
     var segs = (state.frictionData && state.frictionData.segments) || [];
@@ -1648,9 +1417,7 @@
     },
   };
 
-  // One row per source, one column per category: the two sources are the thing
-  // being compared, so they read better as adjacent rows than as two columns
-  // scanned down. Categories head the columns.
+  // Sources as rows, categories as columns: the sources are what's compared.
   function _buildFrictionEvidenceRow(source, cats) {
     var row = el("div", "friction-ev-row");
     row.setAttribute("data-src", source);
@@ -1670,8 +1437,7 @@
     for (var i = 0; i < cats.length; i++) {
       var label = _frictionCatLabel(cats[i]);
       var col = el("span", "friction-ev-col", label);
-      // The header truncates on a narrow pane, so the full name has to survive
-      // somewhere — and "Self-correction" is the first to go.
+      // The header truncates on narrow panes; the tooltip keeps the full name.
       col.setAttribute("data-tooltip", label);
       head.appendChild(col);
     }
@@ -1684,8 +1450,7 @@
     _ensureFrictionFilter();
     var rows = _frictionEvidenceRows();
     var cats = rows.map(function (r) { return r.key; });
-    // Rebuild only when the category set itself changed; a threshold drag then
-    // just rewrites counts and state classes per animation frame.
+    // Rebuild only when the category set changes; drags just rewrite counts and classes.
     var signature = cats.join(",");
     if (host.getAttribute("data-cats") !== signature) {
       host.setAttribute("data-cats", signature);
@@ -1712,9 +1477,7 @@
       var key = cell.getAttribute("data-cat");
       var source = cell.getAttribute("data-src");
       var totals = byKey[key] || { prog: 0, ai: 0 };
-      // Inert only when this source has no finding of this kind at all — not
-      // merely when the band has hidden them, or the band would lock the user
-      // out of the control that widens it.
+      // Inert only with no findings at all; a banded-to-0 cell must stay clickable.
       var everyAny = totals[source] > 0;
       var n = (counts[source][key] || 0);
       var on = _frictionSourceFilter(source)[key] !== false;
@@ -1736,9 +1499,7 @@
     return !(f && f[_frictionMomentCategory(m)] === false);
   }
 
-  // id->index map, rebuilt when the segments array is replaced. The linear
-  // scan ran per cited id per moment inside the per-frame threshold-drag
-  // recompute; the map makes that a dict hit.
+  // id->index map, rebuilt when segments are replaced; the per-frame drag recompute needs dict hits.
   var _segIndexMap = null;
   var _segIndexMapFor = null;
 
@@ -1780,16 +1541,11 @@
   }
 
   // ---- Moment jump strip ----
-  //
-  // Moments are navigation, not content: one chip per moment, one line, always.
-  // The evidence they used to carry as a blockquote is the transcript itself, and
-  // their rationale renders as a .friction-callout under the quoted passage.
+  // Moments are navigation: one chip each; rationales become callouts.
 
   function _frictionJumpEmptyText() {
     var fd = state.frictionData;
-    // The pane now stays up during a run (renderFrictionGenerating), so the
-    // strip has to speak for the in-flight case too — otherwise it advertises
-    // the Run button that is currently mid-run.
+    // The pane stays up mid-run, so the strip must cover the in-flight case.
     if (state.frictionGenerating) return "Analyzing friction…";
     if (!fd) return "No moments detected.";
     if (fd.deterministic) {
@@ -1799,9 +1555,7 @@
     }
     if (fd.llm_ok === false) return "Moment detection failed. Re-run with a downloaded AI model.";
     if (!(fd.moments && fd.moments.length)) return "No friction moments found in this transcript.";
-    // Moments exist but none reached the strip. Either the filter excluded them
-    // all, or they cite segments that are gone — different causes, different
-    // fixes, so don't blame the filter for both.
+    // Moments exist but none reached the strip: filter, or cited segments gone. Different fixes.
     if (state.frictionUnsourcedMoments) {
       return "Moments found, but the segments they cite are no longer in the transcript. Re-run friction.";
     }
@@ -1853,8 +1607,7 @@
     if (i >= moments.length) i = 0;
     state.frictionMomentIndex = i;
     renderFrictionJumpStrip();
-    // Seek to the FIRST cited segment so the reader lands at the start of the
-    // quoted passage and reads down into the callout that closes it.
+    // Seek to the FIRST cited segment; the callout closes the passage below.
     _seekToSegmentIndex(moments[i].idxs[0]);
   }
 
@@ -1882,14 +1635,11 @@
     return box;
   }
 
-  // Tints, isolate hiding, inline callouts and the counter. The ONLY place
-  // friction touches #segmentList — renderSegments deliberately emits no friction
-  // markup, so the full-rebuild path and this update path cannot diverge.
+  // The ONLY place friction touches #segmentList; renderSegments emits no friction markup.
   function _decorateSegmentList() {
     var list = qs("#segmentList");
     if (!list) return;
-    // renderPartialSegments appends by ordinal while a transcript streams in; a
-    // callout inserted mid-list would corrupt that fast path.
+    // renderPartialSegments appends by ordinal while streaming; a mid-list callout would break it.
     if (state.streamingParticipant) return;
 
     var stale = list.querySelectorAll(".friction-callout");
@@ -1906,10 +1656,7 @@
       var seg = state.segments[i];
       var score = seg ? matches[seg.id] : undefined;
       var isCited = !!(seg && cited[seg.id]);
-      // "Flagged by either source" is the derived union map, not a third
-      // hand-rolled OR. score and isCited stay separate below because they drive
-      // different things: the tint alpha is the keyword score, the left rail is
-      // the citation.
+      // flagged reads the union map; score drives tint alpha, isCited the left rail.
       var flagged = !!seg && band[seg.id] !== undefined;
       if (flagged) matched++;
       var row = rows[i];
@@ -1921,8 +1668,7 @@
         row.style.removeProperty("--seg-friction-alpha");
       }
       row.classList.toggle("segment-cited", on && isCited);
-      // Hidden, never removed: state.cachedSegmentRows is indexed positionally
-      // against state.segments, so removing a row would misalign every consumer.
+      // Hidden, never removed: state.cachedSegmentRows is indexed positionally against state.segments.
       row.classList.toggle("segment-hidden", isolate && !flagged);
     }
 
@@ -1963,8 +1709,7 @@
   function _frictionMarkAll() {
     var fd = state.frictionData;
     if (!fd || !fd.segments) return;
-    // Same predicate as the tints, the band and the counter — read the shared map
-    // rather than re-deriving "matching" a second time here.
+    // Read the shared map rather than re-deriving "matching" here.
     _recomputeFrictionMatches();
     var matches = state.frictionMatchBySegId;
     var groups = {};
@@ -1978,8 +1723,7 @@
     fd.segments.forEach(function (frow) {
       if (matches[frow.id] === undefined) return;
       var primary = _primaryCategory(frow);
-      // The row matched on some enabled category; prefer the dominant one, but
-      // never label a group with a category the user filtered out.
+      // Prefer the dominant category, but never one the user filtered out.
       if (!primary || state.frictionCategoryFilter[primary] === false) {
         primary = null;
         var cats = frow.categories || [];
@@ -1990,10 +1734,7 @@
       if (!primary) return;
       claim(frow.id, primary);
     });
-    // Segments only the agent flagged. They score 0 with the keyword scorer, so
-    // frictionMatchBySegId never holds them — and this action used to skip the
-    // very lines the jump strip exists to surface. Marked under the moment's
-    // own category, and never twice (the keyword pass claims a line first).
+    // AI-only lines are absent from the match map; claim them under the moment's category.
     var visible = state.frictionVisibleMoments || [];
     visible.forEach(function (entry) {
       var cat = _frictionMomentCategory(entry.moment);
@@ -2038,11 +1779,7 @@
   }
 
   // ---- Friction mode (Off / Highlight / Isolate) ----
-  //
-  // Replaces the old player-bar heatmap button. "Highlight" is what that toggle
-  // did (tint hot segments + draw the timeline density band); "Isolate" adds
-  // hiding every row that doesn't match the filter, turning the transcript into
-  // the result list. The control lives with the filters it belongs to.
+  // Highlight tints; Isolate also hides non-matches.
   var FRICTION_MODES = [
     { value: "off", icon: "no-symbol", title: "Friction off" },
     { value: "highlight", icon: "fire", title: "Highlight matching segments in the transcript" },
@@ -2094,14 +1831,7 @@
     _setFrictionMode(next);
   }
 
-  // Friction tooltip on hot segments (reuses the shared #trTooltip element).
-  // state.frictionTooltipShown lets the video satellite's hideTimelineTooltip
-  // yield while a friction tooltip owns #trTooltip (mirror of
-  // _hideFrictionTooltip's TS.hasTimelineHover() guard). The segment-list
-  // mousemove that calls _showFrictionTooltip — and its coalescing _segTooltipRaf
-  // — live in the hub's segment-list delegation, not here.
-  // Visible moments quoting this segment. Reads the already-resolved indices so
-  // the hover can never name a moment the jump strip has filtered out.
+  // Friction tooltips share #trTooltip; state.frictionTooltipShown lets the video satellite's hideTimelineTooltip yield.
   function _visibleMomentsCiting(seg) {
     var out = [];
     if (!seg) return out;
@@ -2119,9 +1849,7 @@
     var tip = qs("#trTooltip");
     if (!tip) return;
     tip.textContent = "";
-    // The band now draws AI-cited lines too, and those score 0 with the keyword
-    // scorer — without the moments folded in, hovering one of those stripes read
-    // "score 0.00" with no categories, i.e. as if the stripe were a bug.
+    // Fold in moments: AI-cited lines score 0 with keywords and would read as a bug.
     var moments = _visibleMomentsCiting(seg);
     var cats = frow.categories || [];
     if (cats.length || moments.length) {
@@ -2136,9 +1864,7 @@
       });
       tip.appendChild(badges);
     }
-    // The line itself, so the hover answers "why is this flagged" without
-    // needing to look back at the transcript (it is the whole point on the
-    // timeline band, where there is no text nearby at all).
+    // Quote the line: on the timeline band there is no text nearby.
     var quote = _frictionQuote(seg, 90);
     if (quote) {
       tip.appendChild(el("span", "tr-tooltip-friction-quote", quote));
@@ -2151,8 +1877,7 @@
       tip.appendChild(el("span", "tr-tooltip-friction-markers", "matched: " + shown));
       tip.appendChild(document.createElement("br"));
     }
-    // Name the source of each score rather than printing a bare number: they
-    // are on different scales (marker density vs the model's own confidence).
+    // Name each score's source; keyword density and model confidence are different scales.
     var scoreParts = [];
     if ((frow.score || 0) > 0) scoreParts.push("keyword " + frow.score.toFixed(2));
     for (var mi = 0; mi < moments.length; mi++) {
@@ -2181,13 +1906,7 @@
   }
 
   // ---- Published back to the hub ----
-  // Boot wires initPanelTabs/initSummaryActions/initFriction/initFrictionMode;
-  // selectParticipant + the poller + the visibility/focus handlers drive
-  // load*/clear*/stop*/_restoreActiveTab; renderSegments calls
-  // applyFrictionDecorations; the command palette calls cycleFrictionMode; the
-  // segment-list hover calls the friction tooltips; the poller asks
-  // isSummaryPolling. loadFriction is also reached by the pills satellite's
-  // friction run/stop rows.
+  // Reached by boot, selectParticipant, the poller, renderSegments, pills.
   TS.loadSummary = loadSummary;
   TS.loadFriction = loadFriction;
   TS.clearAnalysisPanel = clearAnalysisPanel;
@@ -2206,8 +1925,7 @@
   TS._frictionDepMet = _frictionDepMet;
   TS._showFrictionTooltip = _showFrictionTooltip;
   TS._hideFrictionTooltip = _hideFrictionTooltip;
-  // True while a summary is being live-tracked by EITHER transport, so the hub's
-  // grace-window re-arm doesn't restart the stream out from under itself.
+  // True for either transport, so the hub's re-arm never restarts a live stream.
   TS.isSummaryPolling = function () {
     return !!(AGENT_DESCRIPTORS.summary._poller || _summaryStream);
   };

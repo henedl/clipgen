@@ -36,15 +36,10 @@
 
   var _timelineHitRects = [];
   var _cachedTimelineRect = null;
-  // CSS-pixel size of the timeline canvas, refreshed by sizeTimelineCanvas.
-  // Every draw runs in these units; the backing store is dpr times larger.
+  // CSS-pixel canvas size (set by sizeTimelineCanvas); the backing store is dpr× larger.
   var _timelineCss = { w: 0, h: 0, dpr: 1 };
 
-  // Status ticks no longer carry result lists; results live in the per-task
-  // cache (state.taskResults), filled by _syncTaskResults in the tasks satellite.
-  // Returns the cached array, or null when this task's results aren't loaded yet
-  // (mirrors the old `task.result` absent-check; a renderTimeline fires once the
-  // tail lands).
+  // Cached results from state.taskResults (filled by _syncTaskResults), or null until loaded.
   function _taskResults(task) {
     var r = state.taskResults[task.id];
     return Array.isArray(r) ? r : null;
@@ -66,9 +61,7 @@
     }
     var canvas = qs("#timelineCanvas");
     sizeTimelineCanvas();
-    // The observer catches every layout shift the window never hears about (the
-    // info panel collapsing, the right-pane tab restoring). The window listener
-    // stays for what it cannot see: a dpr change, and the overlay's stale rect.
+    // The observer sees layout shifts the window never reports; the window listener covers dpr changes.
     var onWindowResize = function () {
       invalidateOverlayRect();
       sizeTimelineCanvas();
@@ -229,10 +222,7 @@
     state.timelineOffset = clamp(state.timelineOffset, 0, Math.max(0, dur - visLen));
   }
 
-  // Backing store = CSS box x dpr. Both canvases are width:100%, so a stale
-  // measurement stretches the ruler text horizontally until the next resize --
-  // and the layout keeps moving after DOMContentLoaded (the info panel
-  // collapses, the stored right-pane tab restores). Hence the ResizeObserver.
+  // Stale sizing stretches the ruler text, so this reruns on every ResizeObserver callback.
   function sizeTimelineCanvas() {
     var canvas = qs("#timelineCanvas");
     _cachedTimelineRect = null;
@@ -255,12 +245,7 @@
     return state.timelineOffset + frac * visLen;
   }
 
-  // In/out markers — shared by the toolbar buttons and the i/o hotkeys.
-  //
-  // Persisted per participant in sessionStorage so leaving Screenspace and
-  // coming back (every TopNav tab is a full page load, i.e. a fresh `state`)
-  // doesn't silently drop a range the user set. Per-tab, not localStorage: the
-  // markers describe the clip you're working on right now, not a preference.
+  // In/out markers, kept per participant in sessionStorage: TopNav tabs are full page loads.
   var MARKERS_STORAGE_KEY = "ss_markers";
 
   function _readStoredMarkers() {
@@ -291,8 +276,7 @@
     state.outMarker = outTs;
   }
 
-  // Drop markers past the end of the participant's video — a stale one would
-  // reach the scan as an out-of-range start_seconds/end_seconds.
+  // Drop markers past the video end; a stale one reaches the scan as out-of-range seconds.
   function clampMarkersToDuration(duration) {
     if (!(duration > 0)) return;
     var changed = false;
@@ -386,9 +370,7 @@
       format: formatDuration,
     });
 
-    // In/Out marker shading — scrim "outside" the active range against the
-    // timeline's surfaceAlt background. fg works in both themes (fg is white in
-    // dark → lightens, dark in light → darkens; both differentiate the range).
+    // Scrim outside the in/out range; fg lightens in dark theme and darkens in light.
     if (state.inMarker !== null || state.outMarker !== null) {
       ctx.fillStyle = hexToRgba(tc.fg, 0.12);
       if (state.inMarker !== null) {
@@ -412,8 +394,7 @@
       }
     }
 
-    // Optional amplitude band: per-task-type event-density curves above the
-    // result markers. Drawn before markers so markers stay on top visually.
+    // Optional amplitude band: event density per task type, drawn under the markers.
     var ampOn = state.amplitudeGraphEnabled;
     var AMP_BAND_H = 22;
     var AMP_BAND_GAP = 2;
@@ -429,8 +410,7 @@
         if (!ampRes || task.status === "cancelled") return;
         if (task.participant && task.participant !== state.selectedParticipant) return;
         if (task.type === "timelapse") return;
-        // Boundaries are orientation scaffolding, not events — keep them out of
-        // the event-density amplitude band (they render as flags above the timeline).
+        // Boundaries are orientation scaffolding, not events; they render as flags instead.
         if (task.type === "boundary") return;
         if (!seriesByType[task.type]) {
           seriesByType[task.type] = { key: task.type, color: taskTypeColor(task.type), timestamps: [] };
@@ -490,8 +470,7 @@
       } else if (task.type === "timelapse") {
         // No timeline markers for timelapse
       } else if (task.type === "boundary") {
-        // Boundaries are orientation scaffolding, not findings — rendered as
-        // flags above the timeline (renderBoundaryFlags), not in-band ticks.
+        // Boundaries render as flags above the timeline (renderBoundaryFlags), not ticks.
       } else {
         // Point markers (change, similarity, text, numbers, template, flow, scene, running color)
         ctx.lineWidth = 1.5;
@@ -523,9 +502,7 @@
       }
     });
 
-    // Calibration pin ticks: small downward triangles just above the result
-    // band, colored by polarity (green = positive, red = negative). The hovered
-    // pin (cross-highlight from the tray) gets a fuller glyph.
+    // Pin ticks above the result band, colored by polarity; hovered pin drawn fuller.
     if (state.pins && state.pins.length) {
       var bodyStyle = getComputedStyle(document.body);
       var pinColors = {
@@ -562,9 +539,7 @@
     renderPlayhead();
   }
 
-  // Boundary events render as flag glyphs in #boundaryFlagRail, planted on top
-  // of the timeline (outside the result band) — they are orientation
-  // scaffolding, not clip candidates. Rebuilt on every pan/zoom/resize/focus.
+  // Boundary flags in #boundaryFlagRail, above the result band; rebuilt on every pan/zoom/resize/focus.
   function renderBoundaryFlags(visStart, visLen, w, excludedByTask, focused) {
     var rail = qs("#boundaryFlagRail");
     if (!rail) return;
@@ -590,10 +565,7 @@
         flag.style.left = x + "px";
         flag.style.color = color;
         flag.appendChild(el("span", "boundary-flag-icon"));
-        // Per-flag hover/click: the rail itself is pointer-events:none, so each
-        // flag (pointer-events:auto) owns its own listeners — leaving a flag into
-        // empty rail space (or off-page) reliably fires its mouseleave. Hover only
-        // redraws the playhead overlay, never the rail, so the element persists.
+        // The rail is pointer-events:none, so each flag owns its listeners and mouseleave fires reliably.
         wireBoundaryFlag(flag, task, r, ts);
         frag.appendChild(flag);
       });
@@ -637,9 +609,7 @@
     var visLen = dur / state.timelineZoom;
     var visStart = state.timelineOffset;
 
-    // Transient locator: faint hairline under the hovered boundary flag. Drawn on
-    // the playhead overlay (not the timeline canvas) so hovering never rebuilds the
-    // flag rail — keeping each flag's mouseleave reliable.
+    // Hairline under the hovered boundary flag, drawn here so hovering never rebuilds the flag rail.
     if (state.hoveredBoundaryTs !== null && state.hoveredBoundaryTs !== undefined) {
       var hbx = ((state.hoveredBoundaryTs - visStart) / visLen) * w;
       if (hbx >= 0 && hbx <= w) {

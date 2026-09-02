@@ -30,8 +30,8 @@ Per-module roles are tabulated in agents/ARCHITECTURE.md.
 # ruff: noqa: F401
 # Deepest-first re-export so ``screenspace.NAME`` resolves from the new modules.
 
-# Public surface: a test monkeypatches ``screenspace.utils.warning_print``, and
-# since ``utils`` is a singleton module the patch reaches every sibling too.
+# Public: a test monkeypatches ``screenspace.utils.warning_print``, reaching
+# every sibling.
 import utils
 
 from screenspace_primitives import (
@@ -95,9 +95,7 @@ from screenspace_ocr import (
     run_calibration_ocr,
 )
 
-# Re-exporting only rebinds on the facade; it does NOT propagate to siblings that
-# imported the name (e.g. ``screenspace_scans._probe_video_meta``). Tests must
-# patch the owning module, not the facade.
+# Re-exports rebind only the facade; tests must patch the owning module.
 from screenspace_frames import (
     _ffmpeg_pipe_frames,
     _probe_video_meta,

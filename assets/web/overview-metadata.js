@@ -18,8 +18,7 @@
   var clusterIntakeEvents;
   var clusterTranscriptMarks;
   var ROW_FUNCTIONS;
-  // CLIPGEN_CONFIG.severity and severityRank are read directly from utils.js
-  // (CLIPGEN_CONFIG.severity / severityRank) and need no per-module alias.
+  // CLIPGEN_CONFIG.severity and severityRank come straight from utils.js; no alias needed.
 
   var mdState = {
     active: false,
@@ -38,10 +37,7 @@
   var _searchDocBound = false;
   var SEARCH_DEBOUNCE_MS = 200;
 
-  // Screenspace clustering window for the Metadata tab's headline counts.
-  // Matches the 5s used by the tab's own Cross-Stream Collisions clustering
-  // (and the ±5s point-cluster padding in intake-cluster.js), so the "N
-  // clusters" KPI and the collision section refer to the same clustering.
+  // Must match the Cross-Stream Collisions window and intake-cluster.js's ±5s padding.
   var SS_CLUSTER_THRESHOLD_SEC = 5;
 
   // --- Helpers ---
@@ -82,9 +78,7 @@
     for (var i = 0; i < state.intakeEvents.length; i++) {
       var ev = state.intakeEvents[i];
       if (ev.excluded) continue;
-      // Navigational (boundary) events are orientation scaffolding, not
-      // findings — keep them out of coverage / event-type / convergence stats.
-      // They're tallied separately by getBoundaryCounts().
+      // Boundary events are orientation, not findings; getBoundaryCounts() tallies them.
       if (ev.navigational) continue;
       if (participants.length && participants.indexOf(ev.participant) === -1) continue;
       events.push(ev);
@@ -115,10 +109,7 @@
 
   // --- Computation engine ---
 
-  // Map intake clusters to the event-like shape the compute functions consume,
-  // so cluster counts flow through unchanged: count -> cluster count,
-  // mean_duration -> cluster span, mean_confidence -> confidence_avg. Lets the
-  // clustered-vs-raw toggle swap the input list without branching each loop.
+  // Reshape clusters to the event shape so the raw/clustered toggle only swaps inputs.
   function clustersToEventLike(clusters) {
     var out = [];
     for (var i = 0; i < clusters.length; i++) {
@@ -163,9 +154,7 @@
     return cov;
   }
 
-  // Group Screenspace events by event_type. First pass builds a per-key
-  // accumulator (counts, sums, min/max, per-participant subgroups); second
-  // pass converts each accumulator into the row shape the UI consumes.
+  // Two passes: accumulate per event_type, then convert to UI rows.
   function computeEventTypeStats(events, participants) {
     var groups = {};
     for (var i = 0; i < events.length; i++) {
@@ -227,10 +216,7 @@
     return result;
   }
 
-  // Group Transcript marks by category. Same two-pass shape as
-  // computeEventTypeStats above. Marks may arrive with `time_in/time_out`
-  // (from the transcripts API) or `start/end` (from the studio queue
-  // shape); the fallback covers both.
+  // Same two-pass shape as computeEventTypeStats; marks carry time_in/time_out or start/end.
   function computeTranscriptCategoryStats(marks, participants) {
     var groups = {};
     for (var i = 0; i < marks.length; i++) {
@@ -520,8 +506,7 @@
     }
 
     function countPairCollisions(listA, listB, w) {
-      // For each interval in A, check if any in B overlaps within ±w
-      // Returns { aHits, bHits } — count of items in A/B that have at least one match
+      // Returns { aHits, bHits }: items in A/B with an overlap within ±w.
       var aHit = 0, bHitSet = {};
       for (var i = 0; i < listA.length; i++) {
         var a = listA[i];
@@ -594,10 +579,7 @@
       if (!isRowEmpty(allRows[i], activeP)) rows.push(allRows[i]);
     }
 
-    // Clustered mode (default ON): collapse dense Screenspace runs into
-    // time-adjacent blocks so their counts don't overshadow the sheet/transcript
-    // streams. Normalized clusters flow through the count functions unchanged;
-    // collisions keep raw events (they cluster internally already).
+    // Clustered mode collapses dense Screenspace runs; collisions keep raw events (they cluster internally).
     var clusterMode = state.metadataClusterScreenspace !== false;
     var ssStatEvents = clusterMode
       ? clustersToEventLike(clusterIntakeEvents(events, SS_CLUSTER_THRESHOLD_SEC))
@@ -615,8 +597,7 @@
       transcriptCategoryStats: computeTranscriptCategoryStats(marks, activeP),
       observationStats: computeObservationStats(rows, activeP),
       severityDist: computeSeverityDistribution(rows),
-      // Marks carry the same `.severity` string field as sheet rows, so the sheet
-      // distribution helper works unchanged for transcript-mark severities.
+      // Marks carry .severity like sheet rows, so the same helper works.
       trSeverityDist: computeSeverityDistribution(marks),
       categoryBreakdown: computeCategoryBreakdown(rows, activeP),
       sessionSummary: computeSessionSummary(activeP, rows, ssStatEvents, marks, boundaryCounts),
@@ -657,10 +638,7 @@
     var expander = renderDetailsExpander(cache);
     panel.appendChild(expander);
 
-    // The header (and its search box) is rebuilt on every render, so an active
-    // query would otherwise sit in the input with a stale/empty dropdown. The
-    // panel is already in the live DOM here, so re-running repopulates the
-    // dropdown + count against the freshly-built index.
+    // The header rebuild emptied the dropdown; rerun the active query against the new index.
     var activeQuery = (mdState.searchQuery || "").trim();
     if (activeQuery.length >= 2) runSearch(activeQuery);
   }
@@ -727,13 +705,9 @@
     return wrap;
   }
 
-  // --- Search (Transcripts-style dropdown, jump-to-result) ---
+  // --- Search ---
   //
-  // Client-side only — everything is already in mdState.cache. buildSearchIndex
-  // stamps a stable `_searchId` on each cache entry so its rendered row is
-  // locatable whatever the table sort order; participants have no cache object and
-  // are found by coverage-cell text instead. Searchable fields: type, category,
-  // description and participant.
+  // Client-side. _searchId locates rows whatever the sort; participants match by coverage-cell text.
 
   function buildSearchIndex(cache) {
     var index = [];
@@ -832,8 +806,7 @@
     results.id = "mdSearchResults";
     wrap.appendChild(results);
 
-    // Bind the click-outside dismiss once (module-scoped element lookup keeps it
-    // valid across header re-renders; avoids stacking document listeners).
+    // Bind once; the module-scoped lookup survives header re-renders.
     if (!_searchDocBound) {
       _searchDocBound = true;
       document.addEventListener("click", function (e) {
@@ -845,8 +818,7 @@
   }
 
   function onSearchInput(input) {
-    // Track the raw value on every keystroke (not just when the debounce fires),
-    // so a header/panel rebuild mid-type restores the in-progress text faithfully.
+    // Store every keystroke so a mid-type rebuild restores the text.
     mdState.searchQuery = input.value;
     clearTimeout(_searchTimer);
     var q = input.value.trim();
@@ -1038,9 +1010,7 @@
     }
     panel.appendChild(banner);
 
-    // Check task status. Only queued/running mean work is in flight \u2014
-    // finished-but-unhappy states (failed / cancelled / paused) linger in the
-    // manifest and must not claim an analysis is still running.
+    // Only queued/running is in flight; failed/cancelled/paused linger in the manifest.
     apiGet("../screenspace/api/tasks").then(function (data) {
       var running = false;
       if (data.tasks) {
@@ -1055,9 +1025,7 @@
 
   // --- KPI strip ---
   //
-  // Five KPIs: Participants, Sheet observations, Screenspace events,
-  // Transcript moments, Project duration. Each fed a SparkBars
-  // sized by the corresponding participant counts in cache.coverage.
+  // Five KPIs, each with SparkBars sized by cache.coverage participant counts.
 
   function _coverageSeries(cache, key) {
     var out = [];
@@ -1723,9 +1691,7 @@
 
       if (!compact) {
         var countsText = d.sheet_timestamps + " / " + d.ss_events + " / " + d.tr_marks;
-        // ⚑ scene boundaries — orientation scaffolding, shown apart from the
-        // sheet/screenspace/transcript findings counts. Column kept stable
-        // across rows so participants line up when any have boundaries.
+        // ⚑ boundaries sit apart from findings; the column stays stable so rows align.
         if (hasBoundaries) countsText += "  ⚑" + d.boundaries;
         var counts = el("span", "md-sm-counts", countsText);
         counts.title = (cache.clusterMode
@@ -1775,9 +1741,7 @@
 
   // --- Drill-down helpers ---
   //
-  // On Studio these jumped to the intake tabs with filters pre-applied; those
-  // tabs stayed in Studio, so drill-downs are now plain navigation (no filter
-  // carry-over — Studio has no deep-link support yet).
+  // Plain navigation; Studio has no deep-link filters yet.
 
   function drillDownEventType(eventType) {
     void eventType;
@@ -1824,11 +1788,7 @@
 
   function csvEscape(val) {
     var s = String(val == null ? "" : val);
-    // Defang spreadsheet formula triggers — Excel/Numbers/Sheets evaluate any
-    // cell beginning with =/+/-/@/tab/CR. User-authored fields (observation,
-    // category, severity) flow into these CSVs, so the leading sigil is the
-    // attacker's only entrypoint. Prefixing with a single quote neutralises
-    // the formula while displaying intuitively.
+    // Spreadsheets evaluate cells starting with =+-@/tab/CR; a leading quote defangs them.
     if (/^[=+\-@\t\r]/.test(s)) s = "'" + s;
     if (s.indexOf(",") >= 0 || s.indexOf('"') >= 0 || s.indexOf("\n") >= 0) {
       return '"' + s.replace(/"/g, '""') + '"';
@@ -1917,9 +1877,7 @@
 
   // --- Staleness detection ---
 
-  // Staleness compares against the hub's data version, which only advances
-  // when OV.refreshData() actually refetched — so "data has changed" can
-  // never be a length-heuristic false positive.
+  // dataVersion only advances on a real refetch, so staleness is never a false positive.
   function takeSnapshot() {
     mdState._snapshot = { version: state.dataVersion };
   }
@@ -1931,9 +1889,7 @@
       mdState._snapshot.version !== state.dataVersion);
   }
 
-  // The freshness banner's Refresh button: on this page the data never changes
-  // without a hub refetch, so recomputing alone would be a no-op — pull fresh
-  // data first, then rebuild.
+  // Data only changes via a hub refetch, so pull first, then rebuild.
   function refetchAndRefresh() {
     window.ClipgenOverview.refreshData().then(function () {
       mdState._snapshot = null;
@@ -1951,8 +1907,7 @@
     });
     renderAll(mdState.cache);
     takeSnapshot();
-    // takeSnapshot just moved us to the current version, so this clears any
-    // paint activate() put on the subheader Refresh before rebuilding.
+    // Clears any stale paint activate() put on the subheader Refresh.
     checkStaleness();
   }
 
@@ -1999,8 +1954,7 @@
       checkStaleness();
     }
     if (mdState.baselines === null) {
-      // First activation: the hub's memoized ensureData() supplies all
-      // streams + the baselines used for clock-time correction.
+      // First activation: ensureData() supplies streams plus clock-correction baselines.
       window.ClipgenOverview.ensureData().then(function () {
         mdState.baselines = state.convergenceBaselines || {};
         refresh();

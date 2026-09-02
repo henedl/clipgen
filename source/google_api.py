@@ -81,9 +81,7 @@ def get_worksheet(
     """
     import gspread
 
-    # Both round-trips below bypass _call_with_api_retry, so they are profiled
-    # here directly. A Sheets counter that silently omits some calls
-    # under-reports, which is worse than not having one.
+    # Both round-trips bypass _call_with_api_retry, so profile them here; the Sheets counter must be complete.
     with profiling.span("sheets.worksheets"):
         worksheet_titles = [ws.title for ws in spreadsheet.worksheets()]
 

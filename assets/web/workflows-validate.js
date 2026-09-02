@@ -59,12 +59,9 @@
     return value === undefined || value === null || value === "";
   }
 
-  // Per-node issues: {errors:[msg…], warnings:[msg…]}. Single source of truth for
-  // both the node-card cue (workflows-nodes.js) and the panel rows.
+  // Per-node {errors, warnings}; shared by the node-card cue and panel rows.
   function nodeIssues(node) {
-    // A muted node never runs, so it can't block the run — report no issues.
-    // Sticky notes are annotations, not executable nodes: same deal (kills the
-    // orphan/no-input warnings a port-less card would otherwise collect).
+    // Muted nodes and sticky notes never run, so they report no issues.
     if (node.disabled || node.type === "note") {
       return { errors: [], warnings: [] };
     }
@@ -72,14 +69,11 @@
     var errors = [];
     var warnings = [];
 
-    // error — a node whose type is no longer in the catalog (removed/renamed,
-    // or imported from a different build) can never execute. Without this the
-    // fallback spec above validates clean and the graph fails only at run time.
+    // A type missing from the catalog can never execute; catalogType's fallback hides that.
     if (!state.catalogById[node.type]) {
       errors.push("Unknown node type “" + node.type + "”");
     }
-    // error — multitool chains detectors per frame; fewer than two steps has
-    // nothing to chain and the executor bails to empty events.
+    // error — multitool needs two steps to chain; fewer yields empty events.
     if (node.type === "multitool") {
       var mtSteps = (node.params || {}).steps;
       if (!Array.isArray(mtSteps) || mtSteps.length < 2) {
@@ -100,8 +94,7 @@
         errors.push("Set “" + (spec.label || spec.name) + "”");
       }
     });
-    // error — the Detect node's active detector has its own (swapped-in) params;
-    // check their required flags against the hidden ss_<detector> spec node.
+    // error — the Detect node's active detector params live on the hidden ss_<detector> spec.
     if (node.type === "detect") {
       var det = (node.params || {}).detector;
       var specNode = det && state.catalogById && state.catalogById["ss_" + det];
@@ -114,8 +107,7 @@
 
     // warning — heatmap style needs a matching upstream detector.
     if (node.type === "heatmap") {
-      // The heatmap style names map 1:1 to the ss_<style> detector that produces
-      // the matching raw_results (template→ss_template, …) — derive it directly.
+      // Style names map 1:1 to the ss_<style> detector producing the raw_results.
       var want = "ss_" + ((node.params || {}).style || "change");
       var up = upstreamType(node.id, "events");
       if (up && up !== want && up !== "multitool") {
@@ -126,9 +118,7 @@
     if (node.type === "gate" && !inputWired(node.id, "value")) {
       warnings.push("Gate has no scalar source");
     }
-    // warning — a Video Source with an empty participant array has nothing to run
-    // (the multi-select stores [] when every box is unchecked). Not a hard error:
-    // the run/batch simply produces no clips for it.
+    // warning — [] means every participant box is unchecked; the run yields nothing.
     if (
       node.type === "video_source" &&
       Array.isArray((node.params || {}).participant) &&
@@ -136,11 +126,7 @@
     ) {
       warnings.push("No participants selected");
     }
-    // error — a filter predicate that would silently drop every item:
-    // an ordering comparison on a text field (the backend returns False per
-    // item), or a numeric field compared against a non-numeric value (the
-    // float() coerce fails). Field numeric-ness comes from the field spec's
-    // numericChoices, so this stays in lockstep with the backend's table.
+    // error — predicates that drop every item: ordering on text, non-numbers vs numeric fields.
     if (node.type.indexOf("filter_") === 0) {
       var fpSpecs = type.params || [];
       var fpParams = node.params || {};
@@ -182,10 +168,7 @@
       }).length;
       if (wired < 2) warnings.push("Merge needs 2+ inputs to combine");
     } else {
-      // warning — a node with data input ports but none wired runs but produces
-      // nothing (e.g. make_clips / gate_collection, whose inputs are all optional so the
-      // required-input check above never fires). Suppressed when the clearer
-      // "not connected" orphan message below will fire instead.
+      // warning — data inputs exist but none wired; skipped when the orphan warning fires.
       var dataInputs = (type.inputs || []).filter(function (p) {
         return p.type !== "control";
       });
@@ -204,10 +187,7 @@
     return { errors: errors, warnings: warnings };
   }
 
-  // Kahn cycle check, ported from workflows.topo_order. Control edges are real
-  // dependencies, so they count; edges to unknown nodes are ignored (a stale wire
-  // never blocks). Returns the ids of the nodes Kahn couldn't place — the cycle
-  // members plus anything locked behind them — empty when the graph is acyclic.
+  // Kahn's algorithm, ported from workflows.topo_order; returns the ids it could not place.
   function cycleNodeIds() {
     var nodes = state.nodes || [];
     var ids = {};
@@ -254,11 +234,7 @@
 
   // ---- Dry-run preview (what would execute) ----
 
-  // Estimate the set of nodes a Run (or "Run to here" with targetNodeId) would
-  // execute: everything minus sticky notes, muted nodes, and nodes whose
-  // *required* data inputs are fed only by skipped producers (a JS mirror of the
-  // runner's _should_skip, minus gate evaluation — gates resolve at run time, so
-  // gated branches count as running). Bounded relaxation keeps it cycle-safe.
+  // Nodes a Run (or "Run to here") would execute; mirrors the runner's _should_skip minus gates.
   function computeWouldRun(targetNodeId) {
     var nodes = (state.nodes || []).filter(function (n) {
       return n.type !== "note";
@@ -302,8 +278,7 @@
     nodes.forEach(function (n) {
       if (!skip[n.id]) would[n.id] = true;
     });
-    // "Run to here": intersect with the target's ancestors (inclusive) — a JS
-    // port of the runner's _ancestors_inclusive reverse walk.
+    // "Run to here": keep only the target's ancestors (runner's _ancestors_inclusive).
     if (targetNodeId && ids[targetNodeId]) {
       var keep = {};
       var stack = [targetNodeId];
@@ -324,10 +299,7 @@
     return { ids: would, count: Object.keys(would).length, total: nodes.length };
   }
 
-  // Toggle the preview classes on the canvas cards + the "N of M steps" chip.
-  // clearRunPreview removes ONLY its own classes — never the run-* tint set the
-  // runs satellite owns. (A renderAllNodes rebuild drops the preview classes;
-  // re-hovering Run re-applies them, which is fine for a hover-scoped cue.)
+  // Hover cue: preview classes on cards plus the steps chip. Never touches run-* classes.
   function showRunPreview(targetNodeId) {
     if (!state.ready) return;
     var plan = computeWouldRun(targetNodeId);
@@ -345,9 +317,7 @@
         plan.count === plan.total
           ? plan.count + steps
           : plan.count + " of " + plan.total + " steps";
-      // Rough cost signal: how many of the would-run steps are video-duration
-      // bound (decode/transcode the whole recording). A count, not an ETA —
-      // the step total alone weighs a viewer bundle the same as a 2-hour scan.
+      // Count of video-duration-bound steps; a cost hint, not an ETA.
       var heavy = 0;
       (state.nodes || []).forEach(function (n) {
         if (plan.ids[n.id] && isHeavyNodeType(n.type)) heavy += 1;
@@ -392,8 +362,7 @@
   function compute() {
     var errors = [];
     var warnings = [];
-    // Graph-level: a cycle makes the run unschedulable (Kahn never drains).
-    // Name the unplaced nodes and anchor the row on the first so it's clickable.
+    // A cycle blocks scheduling; anchor the row on the first unplaced node.
     var cyc = cycleNodeIds();
     if (cyc.length) {
       var cycLabels = cyc.slice(0, 3).map(function (id) {
@@ -471,8 +440,6 @@
     panel.appendChild(list);
   }
 
-  // Recompute from the live graph, re-render the panel, and re-gate Run. Called
-  // by the hub on every edit (scheduleSave) and on blueprint load (openBlueprint).
   function refreshValidation() {
     state.validation = compute();
     render();

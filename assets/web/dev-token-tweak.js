@@ -14,16 +14,13 @@
 (function () {
   "use strict";
 
-  // Gated by the CLIPGEN_DEV_TOKEN_TWEAK feature flag in utils.js. Flip that
-  // flag to false to disable the widget without removing the script tag.
+  // Set CLIPGEN_DEV_TOKEN_TWEAK false in utils.js to disable without removing the script tag.
   if (typeof window !== "undefined" && window.CLIPGEN_DEV_TOKEN_TWEAK === false) return;
 
   var STORAGE_KEY = "clipgen-token-overrides";
   var COLLAPSED_KEY = "clipgen-token-tweak-collapsed";
 
-  // Token discovery scope — only redesign-tunable categories. Categorical
-  // tokens (severity, content type, task colors, regions, intake categories)
-  // are intentionally excluded.
+  // Redesign-tunable categories only; categorical tokens (severity, content type, regions...) stay out.
   var INCLUDED_PREFIXES = [
     "--space-",
     "--text-",
@@ -110,8 +107,7 @@
     Object.keys(map).forEach(function (name) { applyOverride(name, map[name]); });
   }
 
-  // Apply stored overrides synchronously at script load so that page JS reading
-  // tokens at init time sees the override values.
+  // Apply overrides at script load so page JS reading tokens at init sees them.
   var state = {
     overrides: loadOverrides(),
     tokens: [],
@@ -166,10 +162,7 @@
     return Object.keys(seen).sort();
   }
 
-  // Walk every rule (including nested @media/@supports) and collect every
-  // var(--token-name) reference. Used to flag tokens with no consumers in
-  // the page CSS — those are the redesign-seeded tokens whose Pass-N
-  // migration hasn't landed yet, so tweaking them does nothing visible.
+  // Collect every var(--token) reference (nested @media/@supports included) to flag tokens with no consumers.
   function findReferencedTokens() {
     var referenced = {};
     var sheets = document.styleSheets;
@@ -199,8 +192,7 @@
   }
 
   function getDefaultValue(name) {
-    // Read computed value with this widget's inline override temporarily
-    // removed so we always know the *underlying* token value.
+    // Remove the widget's inline override while reading, to get the underlying value.
     var elt = document.documentElement;
     var inlineSaved = elt.style.getPropertyValue(name);
     var inlinePrioSaved = elt.style.getPropertyPriority(name);
@@ -717,8 +709,7 @@
     if (!document.body) return;
     if (document.getElementById("cgTokenTweak")) return;
     state.tokens = discoverTokens();
-    // Scan reference usage *before* injecting widget styles, so the widget's
-    // own var() references don't count as page-CSS consumers.
+    // Scan before injecting widget styles so its own var() references don't count.
     state.referenced = findReferencedTokens();
     injectStyles();
     state.panel = buildPanel();

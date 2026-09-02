@@ -48,12 +48,9 @@ _HEALTH_TIMEOUT = 5  # seconds for connectivity check
 _GENERATE_TIMEOUT = (
     300  # seconds — generous to allow cold model loading + long transcripts
 )
-# Wall-clock deadline for the entire streaming response. urlopen's timeout only
-# applies to connect + first byte, so a slow trickle can stall a worker
-# indefinitely. This bounds total elapsed time end-to-end.
+# Bounds total elapsed time; urlopen's timeout covers only connect + first byte.
 _GENERATE_DEADLINE = 600  # seconds
-# The router answers 503 while a model instance is still coming up. The gate
-# run only ever saw requests block until ready, so this is cheap insurance.
+# The router answers 503 while a model instance is still loading.
 _LOAD_RETRY_WINDOW = 120  # seconds
 _LOAD_RETRY_INTERVAL = 2.0  # seconds
 _START_POLL_INTERVAL = 0.5  # seconds between health-check polls after starting server
@@ -61,20 +58,15 @@ _START_TIMEOUT = 15  # seconds to wait for server to become available after star
 _CANCEL_WATCHER_POLL = 1.0  # seconds; bounds abort latency during long quiet stretches
 _DOWNLOAD_CHUNK = 1024 * 1024
 _DOWNLOAD_TIMEOUT = 120  # seconds; per-socket-read stall, HF is normally fast
-# Wall-clock backstop for the whole download, same reasoning as
-# _GENERATE_DEADLINE: _DOWNLOAD_TIMEOUT bounds a stall *between* reads, so a
-# server trickling a byte per window never trips it. Generous — a 9B Q4 GGUF
-# is ~6 GB, which is ~55 min on a 15 Mbit line.
+# Whole-download backstop; _DOWNLOAD_TIMEOUT is per read. 6 GB at 15 Mbit ≈ 55 min.
 _DOWNLOAD_DEADLINE = 5400  # seconds
 _HF_API_TIMEOUT = 30  # seconds; the tree listing is a small JSON response
-# Loaded models the router keeps resident before LRU-evicting. Two covers the
-# "friction on its own model while summary stays warm" case without inviting
-# three 9B models into RAM.
+# Resident models before LRU eviction: friction on its own model while summary
+# stays warm.
 _MODELS_MAX = "2"
 
-# Curated Hugging Face refs the Summaries settings offer for download.
-# Same shape as transcripts.WHISPER_MODELS plus a "label": the raw ref is what
-# the download needs, the label is what a non-technical user reads.
+# Download catalog for Settings → Summaries. Same shape as transcripts.WHISPER_MODELS
+# plus "label".
 SUGGESTED_MODELS: list[dict[str, Any]] = [
     {
         "name": "unsloth/Qwen3.5-2B-GGUF:Q4_K_M",
@@ -102,18 +94,14 @@ SUGGESTED_MODELS: list[dict[str, Any]] = [
     },
 ]
 
-# Serializes start_server() calls so two threads hitting connection-refused at
-# the same time don't both spawn a router process.
+# Serializes start_server() so concurrent connection-refused threads spawn one router.
 _start_server_lock = threading.Lock()
 
-# Last generation failure, per thread. Agent runs each own a daemon thread and
-# call generate() on it, so thread-local storage attributes the reason to the
-# right run without a lock or any cross-talk between concurrent agents.
+# Last generation failure, per thread: each agent run owns a daemon thread.
 _thread_state = threading.local()
 
-# The router we spawned, if any — terminated at exit. SIGTERM, never SIGKILL:
-# the router reaps its per-model children only on a clean shutdown (gate
-# scenario 6: a killed router orphans them).
+# Router we spawned, terminated at exit. SIGTERM only: SIGKILL orphans its
+# per-model children.
 _server_proc: subprocess.Popen[bytes] | None = None
 
 
@@ -394,8 +382,7 @@ def is_model_installed(
         return True
     if model_file(model).is_file():
         return True
-    # Not in our dir — an ecosystem cache (llama.cpp, HF hub) may already
-    # hold it; linking it in counts as installed.
+    # An ecosystem cache (llama.cpp, HF hub) may hold it; linking counts as installed.
     return _materialize_external(model)
 
 
@@ -555,11 +542,8 @@ def take_last_error() -> str:
     return message
 
 
-# Models the router refused to load, remembered across runs so the picker can
-# say so before the user waits on another failed run. Ollama-sourced GGUFs are
-# the common case: the fork's conversion diverges from upstream llama.cpp
-# (reordered SSM weights, fused vision/audio towers), and nothing short of
-# attempting a load can tell.
+# Router load refusals, kept across runs for the picker; Ollama-converted GGUFs
+# are typical.
 _FAILURES_FILE = "model_failures.json"
 
 
@@ -680,9 +664,8 @@ def start_server() -> bool:
             if is_available():
                 utils.info_print("AI server started.")
                 return True
-            # The router dying instantly (port already held, broken install)
-            # would otherwise burn the whole timeout with the lock held and
-            # report only a generic "did not start".
+            # An instantly dying router (port held, broken install) must not burn
+            # the whole timeout.
             code = proc.poll()
             if code is not None:
                 _server_proc = None
@@ -794,11 +777,8 @@ def _do_generate(
             try:
                 line = resp.readline()
             except (OSError, ValueError, AttributeError, http.client.HTTPException):
-                # Raised when the watcher shuts down the socket mid-read, or
-                # when we shut it down above on deadline. http.client may
-                # surface this as AttributeError on Python 3.13+ when the
-                # chunked-encoding state machine tries to advance past a
-                # closed fp.
+                # The watcher or the deadline closed the socket; Python 3.13+ may
+                # raise AttributeError here.
                 break
             if not line:
                 break
@@ -856,10 +836,8 @@ def _do_generate(
     if recorded_failure:
         return None
     if not saw_finish:
-        # The stream ended (EOF) without a finish_reason — the server
-        # restarted, the model was unloaded mid-run, or the connection
-        # dropped. The accumulated text is a truncated prefix; returning it
-        # would commit a half-written result as a finished one.
+        # EOF without finish_reason: the text is a truncated prefix, not a finished
+        # result.
         _fail(f"AI stream ended before completion (model: {body.get('model')})")
         return None
     text = "".join(parts).strip()
@@ -927,9 +905,8 @@ def generate(
         "model": model_name(resolved_model),
         "messages": messages,
         "stream": True,
-        # Honored by templates with a think toggle (Qwen); ignored elsewhere.
-        # The default reasoning_format already keeps chain-of-thought out of
-        # delta.content, and _strip_think() upstream is the final backstop.
+        # Honored by think-toggle templates (Qwen); _strip_think() upstream is the
+        # backstop.
         "chat_template_kwargs": {"enable_thinking": False},
     }
 
@@ -938,20 +915,17 @@ def generate(
 
     try:
         text = _generate_with_load_retry(body, cancel_event, on_token)
-        # Only a *successful* call clears. A None means _do_generate already
-        # recorded why (empty answer, truncated stream, deadline), and the
-        # orchestrator turns that reason into the toast the user sees.
+        # Only success clears; None means _do_generate already recorded the reason
+        # for the toast.
         if text is not None:
             _record_failure(resolved_model, "")  # it works now; forget any mark
-            # A load retry can fail once and then succeed; that first reason
-            # must not outlive the call and get pinned on an unrelated result.
+            # A load retry can fail then succeed; drop that first reason.
             take_last_error()
         return text
     except urllib.error.HTTPError as exc:
         detail = _http_error_detail(exc)
-        # llama.cpp's own wording for a model it cannot read. Anything else
-        # (connection, timeout, empty answer) is not the model's fault, so it
-        # must not brand it unusable.
+        # llama.cpp's wording for an unreadable model; other failures must not brand
+        # it unusable.
         if "failed to load" in detail.lower():
             _record_failure(resolved_model, detail)
         _fail(f"AI generate failed: {detail}")
@@ -964,8 +938,7 @@ def generate(
             return None
         # Connection refused — try to start the server and retry once.
         if not start_server():
-            # start_server records the specific reason (not installed, port
-            # held, startup timeout); this only covers a silent False.
+            # start_server records specific reasons; this covers a silent False.
             if not getattr(_thread_state, "last_error", ""):
                 _fail("The AI server is not running and would not start.")
             return None

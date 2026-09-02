@@ -207,8 +207,7 @@
     var fresh = buildPillOptions(p, s);
     fresh.setAttribute("data-pid", pid);
     floating.parentNode.replaceChild(fresh, floating);
-    // The pane is position:fixed and placed by inline left/top, which the fresh
-    // node does not carry — without this it paints in the viewport corner.
+    // Fixed-position pane: the fresh node lacks the inline left/top.
     var wrap = _findPillWrap(pid);
     if (wrap) _positionPillOptions(fresh, wrap);
     // The swap discards the painted cursor while pillOptionsCursor stays set.
