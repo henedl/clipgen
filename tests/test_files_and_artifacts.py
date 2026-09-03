@@ -474,3 +474,22 @@ def test_no_baseline_row_means_relative_timestamps_only():
     # Without a baseline row, times remain absolute clock values
     assert prepared_p01["times"] == [("09:13:00", "09:14:00")]
     assert prepared_p02["times"] == [("09:20:00", "09:21:00")]
+
+
+def test_prepare_clip_selects_segments_before_baseline_conversion(make_clip):
+    """Keyword indexes count the cell's tokens; conversion may drop earlier pairs."""
+    clip = make_clip(value="09:00:00-09:05:00 09:10:00-09:15:00 !key")
+    clip["timestamp_baseline"] = "09:08:00"
+    clip["selected_segment_indexes"] = [1]
+
+    prepared = files.prepare_clip(clip)
+
+    assert prepared["times"] == [("0:02:00", "0:07:00")]
+
+
+def test_safe_truncate_counts_utf8_bytes():
+    """Filesystems cap names in bytes; CJK text must back off further."""
+    cjk = files.safe_truncate("\u4f60" * 200, 255)
+    assert cjk
+    assert len(cjk.encode("utf-8")) <= 255
+    assert len(files.safe_truncate("a" * 300, 255)) == 255

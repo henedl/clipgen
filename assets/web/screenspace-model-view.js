@@ -241,7 +241,13 @@
 
   // Preview target: last run-region toggled on, else the active chip. Multitool/boundary hide the picker.
   function _previewRegionRef() {
-    if (state.activeWorkflow !== "multitool" && state.activeWorkflow !== "boundary") {
+    if (state.activeWorkflow === "multitool") {
+      var first = (state.multitoolSteps || [])[0];
+      if (first && first.region_ref) return normalizeRegionRef(first.region_ref);
+      if (first && first.region && state.regions[first.region]) return activeRegionRef(first.region);
+      return null;
+    }
+    if (state.activeWorkflow !== "boundary") {
       for (var i = state.runRegions.length - 1; i >= 0; i--) {
         var ref = normalizeRegionRef(state.runRegions[i]);
         if (!ref) continue;
@@ -365,41 +371,44 @@
     );
   }
 
-  function _collectPreviewParams(tool) {
+  function _collectPreviewParams(tool, sfx) {
+    sfx = sfx || "";
     var out = {};
     if (tool === "color") {
-      var c = SS.getColorHiddenInputs();
-      if (c) {
+      var c = sfx
+        ? { h: qs("#paramColorH" + sfx), s: qs("#paramColorS" + sfx), v: qs("#paramColorV" + sfx) }
+        : SS.getColorHiddenInputs();
+      if (c && c.h && c.s && c.v) {
         out.h = c.h.value; out.s = c.s.value; out.v = c.v.value;
       }
     } else if (tool === "change") {
-      var n = qs("#paramChangeNoise");
+      var n = qs("#paramChangeNoise" + sfx);
       if (n) out.noise = n.value;
     } else if (tool === "flow") {
-      var m = qs("#paramFlowMag");
+      var m = qs("#paramFlowMag" + sfx);
       if (m) out.magnitude = m.value;
     } else if (tool === "text") {
-      var tp = qs("#paramTextOcrPreprocess");
+      var tp = qs("#paramTextOcrPreprocess" + sfx);
       if (tp && tp.checked) out.ocr_preprocess = "1";
     } else if (tool === "numbers") {
-      var np = qs("#paramNumOcrPreprocess");
+      var np = qs("#paramNumOcrPreprocess" + sfx);
       if (np && np.checked) out.ocr_preprocess = "1";
     } else if (tool === "shape") {
-      var st = qs("#paramShapeThresh");
+      var st = qs("#paramShapeThresh" + sfx);
       if (st) out.threshold = st.value;
-      var smin = qs("#paramShapeScaleMin");
+      var smin = qs("#paramShapeScaleMin" + sfx);
       if (smin) out.scale_min = (parseFloat(smin.value) || 0) / 100;
-      var smax = qs("#paramShapeScaleMax");
+      var smax = qs("#paramShapeScaleMax" + sfx);
       if (smax) out.scale_max = (parseFloat(smax.value) || 0) / 100;
-      var sst = qs("#paramShapeSteps");
+      var sst = qs("#paramShapeSteps" + sfx);
       if (sst) out.scale_steps = sst.value;
-      var slink = qs("#paramShapeLinkAxes");
+      var slink = qs("#paramShapeLinkAxes" + sfx);
       if (slink && !slink.checked) {
-        var symin = qs("#paramShapeScaleYMin");
+        var symin = qs("#paramShapeScaleYMin" + sfx);
         if (symin) out.scale_y_min = (parseFloat(symin.value) || 0) / 100;
-        var symax = qs("#paramShapeScaleYMax");
+        var symax = qs("#paramShapeScaleYMax" + sfx);
         if (symax) out.scale_y_max = (parseFloat(symax.value) || 0) / 100;
-        var systeps = qs("#paramShapeStepsY");
+        var systeps = qs("#paramShapeStepsY" + sfx);
         if (systeps) out.scale_y_steps = systeps.value;
       }
     } else if (tool === "attention") {
@@ -411,7 +420,7 @@
         center_bias: "paramAttnCenterBias",
       };
       Object.keys(attnIds).forEach(function (key) {
-        var input = qs("#" + attnIds[key]);
+        var input = qs("#" + attnIds[key] + sfx);
         if (input) out[key] = input.value;
       });
     }
@@ -433,6 +442,18 @@
     }
 
     var tool = state.activeWorkflow;
+    var sfx = "";
+    if (tool === "multitool") {
+      // The server previews a plain tool; send the first step as that tool.
+      var firstStep = (state.multitoolSteps || [])[0];
+      if (!firstStep || !firstStep.type) {
+        meta.textContent = "Add a step to see its preview.";
+        img.removeAttribute("src");
+        return;
+      }
+      tool = firstStep.type;
+      sfx = "_mt0";
+    }
     var regionStr = _normalizedRegionString();
     var hasRegion = _hasActiveOrPendingRegion();
 
@@ -456,7 +477,7 @@
       }
     }
 
-    var params = _collectPreviewParams(tool);
+    var params = _collectPreviewParams(tool, sfx);
     var qsParts = ["tool=" + encodeURIComponent(tool)];
     if (regionStr) qsParts.push("region=" + regionStr);
     var maskStr = _regionMaskString();
@@ -520,6 +541,7 @@
       img.src = u;
       meta.classList.remove("cg-shimmer");
       var metaText = MODEL_VIEW_META[tool] || "";
+      if (sfx) metaText = "First step (" + tool + "). " + metaText;
       if (!hasRegion) {
         metaText = (metaText ? metaText + " " : "") + "(Full frame — no region selected.)";
       } else if (_maskFallbackActive()) {

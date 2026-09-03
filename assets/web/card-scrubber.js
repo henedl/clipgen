@@ -8,7 +8,6 @@
 (function () {
   // ---- Module-scope state (shared across all attached cards) ----
 
-  var _spriteRaf = 0;
   var _audioCtx = null;
   // Decoded-audio cache, LRU by total seconds: one 180 s Composer bar is ~35 MB decoded.
   var _AUDIO_CACHE_MAX_SECONDS = 600;
@@ -313,11 +312,15 @@
     mediaEl.style.backgroundSize = (sd.cols * 100) + "% " + (sd.rows * 100) + "%";
     mediaEl.style.backgroundPosition = framePosition(restFrame);
 
+    var pendingX = 0;
+    var spriteRaf = 0;
     function onMove(e) {
-      var clientX = e.clientX;
-      if (_spriteRaf) return;
-      _spriteRaf = requestAnimationFrame(function () {
-        _spriteRaf = 0;
+      // Keep the newest sample; the frame callback reads it.
+      pendingX = e.clientX;
+      if (spriteRaf) return;
+      spriteRaf = requestAnimationFrame(function () {
+        spriteRaf = 0;
+        var clientX = pendingX;
         var rect = mediaEl.getBoundingClientRect();
         var frac = (clientX - rect.left) / rect.width;
         var frameIndex = Math.floor(frac * sd.frameCount);

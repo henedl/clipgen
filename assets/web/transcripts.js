@@ -1677,7 +1677,7 @@
       // No loaded row; reload so the new mark still appears.
       apiPost("api/marks", { segment_ids: [segmentId], category: state.lastMarkCategory }).then(function (data) {
         if (data.ok && state.selectedParticipant) loadTranscript(state.selectedParticipant);
-      });
+      }).catch(toastError("Could not add mark"));
       return;
     }
     // Optimistic: fill the dot now, reconcile the real id on success, revert on failure.
@@ -1722,7 +1722,7 @@
         };
         _bumpStreamingMarksVersion();
       }
-    });
+    }).catch(toastError("Could not add mark"));
   }
 
   function removeMark(markId) {
@@ -1741,7 +1741,7 @@
           }
           pollTaskStatus();
         }
-      });
+      }).catch(toastError("Could not remove mark"));
       return;
     }
     // Optimistic: clear the dot now, restore on failure.
@@ -1749,7 +1749,7 @@
     if (!found) {
       apiDelete("api/marks/" + markId).then(function (data) {
         if (data.ok && state.selectedParticipant) loadTranscript(state.selectedParticipant);
-      });
+      }).catch(toastError("Could not remove mark"));
       return;
     }
     var prevMarks = found.seg.marks;
@@ -1790,7 +1790,7 @@
           }
           pollTaskStatus();
         }
-      });
+      }).catch(toastError("Could not change category"));
       return;
     }
     // Optimistic: recolor the dot now, restore on failure.
@@ -1798,7 +1798,7 @@
     if (!found) {
       apiPut("api/marks/" + markId, { category: category }).then(function (data) {
         if (data.ok && state.selectedParticipant) loadTranscript(state.selectedParticipant);
-      });
+      }).catch(toastError("Could not change category"));
       return;
     }
     var prevCategory = found.mark.category;
@@ -1857,7 +1857,7 @@
           }
           pollTaskStatus();
         }
-      });
+      }).catch(toastError("Could not change severity"));
       return;
     }
     // Loaded: optimistic repaint, restore on failure (mirrors updateMarkCategory).
@@ -1865,7 +1865,7 @@
     if (!found) {
       apiPut("api/marks/" + markId, { severity: sev }).then(function (data) {
         if (data.ok && state.selectedParticipant) loadTranscript(state.selectedParticipant);
-      });
+      }).catch(toastError("Could not change severity"));
       return;
     }
     var prevSeverity = found.mark.severity;

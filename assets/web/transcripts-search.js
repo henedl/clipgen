@@ -41,7 +41,7 @@
         showToast("Marked " + clipgenPluralUnit(data.marks.length, "segment", "segments"));
         if (state.selectedParticipant) loadTranscript(state.selectedParticipant);
       }
-    });
+    }).catch(toastError("Could not mark results"));
   }
 
   function initSearch() {

@@ -1005,9 +1005,9 @@ def run_ffmpeg(
             [f"Video file: '{input_file}'"],
         )
         return False
-    if duration < 0:
+    if duration <= 0:
         utils.error_print(
-            "Negative duration calculated for video clip. Skipping.",
+            "Clip has no length. Skipping.",
             [
                 f"Start: {start_pos}, End: {end_pos}, Duration: {duration}s",
                 "The end timestamp must be after the start timestamp.",
@@ -1048,7 +1048,7 @@ def run_ffmpeg(
             yn = utils.read_user_input(
                 f"The generated video will be {duration}s ({duration // 60}m {duration % 60}s), over 10 minutes long. Generate anyway? [y/n]\n>> "
             )
-            if yn != "y":
+            if yn.strip().lower() != "y":
                 return False
 
     utils.verbose_print(f"Cutting {input_file} from {start_pos} to {end_pos}.")
@@ -3507,10 +3507,10 @@ def _parallel_extract_gifs(
         ts_str = utils.seconds_to_timestamp(ts)
         ts_safe = ts_str.replace(":", "_")
         filename = f"gallery_{ts_safe}{ext}"
-        output_path = files.get_unique_filename(filename, file_format=ext)
         gif_dur = min(gif_duration_seconds, duration - ts)
         if gif_dur <= 0:
             break
+        output_path = files.get_unique_filename(filename, file_format=ext)
         tasks.append((input_file, output_path, ts_str, gif_dur, float(ts)))
 
     if not tasks:
@@ -3649,9 +3649,9 @@ def generate_interval_captures(
         ts_str = utils.seconds_to_timestamp(ts)
         ts_safe = ts_str.replace(":", "_")
         filename = f"gallery_{ts_safe}{ext}"
-        output_path = files.get_unique_filename(filename, file_format=ext)
 
         if output_format == "screen":
+            output_path = files.get_unique_filename(filename, file_format=ext)
             ok = extract_screenshot(
                 input_file, output_path, ts_str, cancel_flag=cancel_flag
             )
@@ -3660,6 +3660,8 @@ def generate_interval_captures(
             gif_dur = min(gif_duration_seconds, duration - ts)
             if gif_dur <= 0:
                 break
+            # Reserve only once the GIF is known to have length.
+            output_path = files.get_unique_filename(filename, file_format=ext)
             ok = extract_gif(
                 input_file, output_path, ts_str, gif_dur, cancel_flag=cancel_flag
             )

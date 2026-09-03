@@ -227,7 +227,8 @@
 
   function recallStashItem(cfg, stash) {
     if (cfg.isLocked()) return;
-    state[cfg.queueKey] = stash.items.slice();
+    // Deep copy: the trim pop-over edits queue items in place.
+    state[cfg.queueKey] = JSON.parse(JSON.stringify(stash.items));
     cfg.renderQueue();
     var q = state[cfg.queueKey];
     for (var i = 0; i < q.length; i++) {

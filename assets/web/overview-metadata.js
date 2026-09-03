@@ -1043,7 +1043,7 @@
     var m = Math.floor((sec - h * 3600) / 60);
     var s = sec - h * 3600 - m * 60;
     var pad = function (n) { return n < 10 ? "0" + n : "" + n; };
-    if (h > 0) return h + ":" + pad(m);
+    if (h > 0) return h + ":" + pad(m) + ":" + pad(s);
     return m + ":" + pad(s);
   }
 

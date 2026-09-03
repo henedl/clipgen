@@ -69,12 +69,14 @@ def browsers_root() -> Path:
     override = os.environ.get("PLAYWRIGHT_BROWSERS_PATH")
     if override:
         return Path(override).expanduser()
+    # The developer's real home: tests/conftest.py sandboxes Path.home().
+    home = Path(os.path.expanduser("~"))
     if sys.platform == "darwin":
-        return Path.home() / "Library" / "Caches" / "ms-playwright"
+        return home / "Library" / "Caches" / "ms-playwright"
     if sys.platform == "win32":
-        base = os.environ.get("LOCALAPPDATA") or str(Path.home() / "AppData" / "Local")
+        base = os.environ.get("LOCALAPPDATA") or str(home / "AppData" / "Local")
         return Path(base) / "ms-playwright"
-    return Path.home() / ".cache" / "ms-playwright"
+    return home / ".cache" / "ms-playwright"
 
 
 def _build_number(name: str) -> int:
