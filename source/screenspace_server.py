@@ -166,22 +166,8 @@ def _parse_mask_points(raw: str) -> list[list[list[float]]]:
 
 FlaskResponse = Response | tuple[Response, int]
 
-_VALID_TASK_TYPES = (
-    "multitool",
-    "color",
-    "change",
-    "similarity",
-    "text",
-    "numbers",
-    "timelapse",
-    "template",
-    "shape",
-    "flow",
-    "scene",
-    "inactivity",
-    "boundary",
-    "attention",
-)
+# Every engine tool is creatable here; tests/test_shared_constants guards the parallel lists.
+_VALID_TASK_TYPES = tuple(screenspace.TOOLS)
 _VALID_STEP_TYPES = (
     "color",
     "change",
