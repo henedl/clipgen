@@ -184,7 +184,7 @@ def test_every_hub_feeds_participants():
 
 
 def test_stay_vs_leave_wording():
-    """"Open … in <there>" navigates; "Jump to … in <here>" selects in place."""
+    """ "Open … in <there>" navigates; "Jump to … in <here>" selects in place."""
     src = PALETTE_JS.read_text(encoding="utf-8")
     assert '"Open " + pids[i] + " in " + dest.label' in src
     assert '"Jump to " + pid + " in " + pageLabel' in src

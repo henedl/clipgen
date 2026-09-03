@@ -2676,6 +2676,175 @@
     });
   }
 
+  // ---- Batch-job modals ----
+  // One NDJSON run per dialog; it outlives a dismissed dialog.
+  function createBatchJobModal(cfg) {
+    var run = null; // { done, failed, total, abort, token? } while streaming, null idle
+    var api;
+
+    function el(suffix) {
+      return qs("#" + cfg.prefix + suffix);
+    }
+    function scopeValue() {
+      return (el("Scope") || {}).value;
+    }
+    function ownedBy(all, pid) {
+      return all.filter(function (item) { return cfg.itemPid(item) === pid; });
+    }
+    function scoped() {
+      var all = cfg.candidates();
+      if (scopeValue() !== "current") return all;
+      return ownedBy(all, state.selectedParticipant);
+    }
+    function targets() {
+      var items = scoped();
+      return cfg.targets ? cfg.targets(items) : items;
+    }
+
+    function renderSummary() {
+      var summaryEl = el("Summary");
+      var confirmBtn = el("Confirm");
+      if (!summaryEl || !confirmBtn) return;
+      if (run) return; // progress block owns the copy while a run streams
+      summaryEl.classList.remove("cg-shimmer");
+      var result = cfg.summary({
+        scoped: scoped(),
+        targets: targets(),
+        scope: scopeValue(),
+        pid: state.selectedParticipant,
+      });
+      summaryEl.textContent = result.text;
+      confirmBtn.disabled = !result.ready;
+    }
+
+    // Option labels carry live counts.
+    function renderScopeOptions() {
+      var sel = el("Scope");
+      if (!sel || sel.options.length < 2) return;
+      var pid = state.selectedParticipant;
+      var all = cfg.candidates();
+      var count = pid ? ownedBy(all, pid).length : 0;
+      var enabled = cfg.currentEnabled ? cfg.currentEnabled(pid, count) : count > 0;
+      sel.options[0].textContent =
+        (pid ? "Current participant (" + pid + ")" : "Current participant") +
+        " — " + clipgenPluralUnit(count, cfg.unit[0], cfg.unit[1]);
+      sel.options[0].disabled = !enabled;
+      sel.options[1].textContent =
+        "All participants — " + clipgenPluralUnit(all.length, cfg.unit[0], cfg.unit[1]);
+      if (!enabled) sel.value = "all";
+    }
+
+    function renderProgress() {
+      var wrap = el("Progress");
+      var fill = el("BarFill");
+      var text = el("ProgressText");
+      var confirmBtn = el("Confirm");
+      var cancelBtn = el("Cancel");
+      if (!wrap || !fill || !text || !confirmBtn || !cancelBtn) return;
+      wrap.classList.toggle("hidden", !run);
+      confirmBtn.classList.toggle("hidden", !!run);
+      cancelBtn.textContent = run ? "Stop" : "Cancel";
+      if (!run) return;
+      var pct = run.total ? Math.round((run.done / run.total) * 100) : 0;
+      fill.style.width = pct + "%";
+      text.textContent =
+        cfg.verb + " " + run.done + "/" + run.total +
+        (run.failed ? " (" + run.failed + " failed)" : "");
+    }
+
+    function open() {
+      var modal = el("Modal");
+      if (!modal) return;
+      modal.classList.remove("hidden");
+      openBlockingModal(modal, { onEscape: close, onBackdropClick: close });
+      renderProgress();
+      // A run in flight owns the dialog's copy; only refresh the pickers when idle.
+      if (run) return;
+      if (cfg.onOpen) {
+        cfg.onOpen(api);
+        return;
+      }
+      renderScopeOptions();
+      renderSummary();
+    }
+
+    function close() {
+      var modal = el("Modal");
+      if (!modal) return;
+      closeBlockingModal(modal);
+      modal.classList.add("hidden");
+    }
+
+    function submit() {
+      if (run) return;
+      var req = cfg.request(targets());
+      if (!req) return;
+      var job = { done: 0, failed: 0, total: req.total, abort: new AbortController() };
+      run = job;
+      var sawDone = false;
+      renderProgress();
+
+      function handleLine(line) {
+        var data;
+        try { data = JSON.parse(line); } catch (_) { return; }
+        if (!data) return;
+        if (data.token) job.token = data.token; // echoed by Stop to scope the cancel
+        if (data.done) sawDone = true;
+        if (cfg.onLine) cfg.onLine(data, job);
+        // Header and trailing sentinel lines have no index; they stay out of the tally.
+        if (typeof data.index !== "number") return;
+        job.done++;
+        if (!data.ok) job.failed++;
+        renderProgress();
+      }
+
+      function finish(message) {
+        run = null;
+        renderProgress();
+        close();
+        showToast(message);
+        if (cfg.afterFinish) cfg.afterFinish(job);
+      }
+
+      apiPostNDJSON(req.url, req.body, { signal: job.abort.signal, onLine: handleLine })
+        .then(function () {
+          // No sentinel means the server died partway; the reader can't tell otherwise.
+          finish(cfg.toast(cfg.expectsDone && !sawDone ? "stopped" : "done", job));
+        })
+        .catch(function (err) {
+          var aborted = err && (err.name === "AbortError" || err.code === 20);
+          finish(cfg.toast(aborted ? "cancelled" : "error", job, err));
+        });
+    }
+
+    function cancel() {
+      if (!run) {
+        close();
+        return;
+      }
+      var request = cfg.cancel(run);
+      apiPost(request.url, request.body).catch(function () {});
+      run.abort.abort();
+    }
+
+    function init() {
+      el("Cancel").addEventListener("click", cancel);
+      el("Confirm").addEventListener("click", submit);
+      el("Scope").addEventListener("change", cfg.onScopeChange || renderSummary);
+      if (cfg.initExtra) cfg.initExtra(api);
+    }
+
+    api = {
+      open: open,
+      close: close,
+      init: init,
+      renderSummary: renderSummary,
+      renderScopeOptions: renderScopeOptions,
+      isRunning: function () { return !!run; },
+    };
+    return api;
+  }
+
   // ---- Clip marked lines ----
   // One clip per mark cluster via Studio's generate-intake.
 
@@ -2683,17 +2852,8 @@
   var CLIP_MARKS_DEFAULT_GAP_SECONDS = 10;
   var CLIP_MARKS_DEFAULT_PAD_SECONDS = 0;
 
-  // { done, failed, total, abort } while streaming, null idle; outlives a dismissed modal.
-  var _clipMarksRun = null;
   // Valid resolved marks, refetched every time the modal opens.
   var _clipMarksMarks = [];
-
-  function _clipMarksScopedMarks() {
-    var scope = (qs("#clipMarksScope") || {}).value;
-    if (scope !== "current") return _clipMarksMarks;
-    var pid = state.selectedParticipant;
-    return _clipMarksMarks.filter(function (m) { return m.participant === pid; });
-  }
 
   function _clipMarksNumber(sel, fallback, min, max) {
     var raw = parseFloat((qs(sel) || {}).value);
@@ -2702,85 +2862,31 @@
   }
 
   // Preview and payload share this, so the shown count is the clip count.
-  function _clipMarksClusters() {
-    var marks = _clipMarksScopedMarks();
+  function _clipMarksClusters(marks) {
     if (!marks.length) return [];
     var gap = _clipMarksNumber("#clipMarksGap", CLIP_MARKS_DEFAULT_GAP_SECONDS, 0, 120);
     return window.ClipgenIntakeCluster.clusterTranscriptMarks(marks, gap);
   }
 
-  function renderClipMarksSummary() {
-    var summaryEl = qs("#clipMarksSummary");
-    var confirmBtn = qs("#clipMarksConfirm");
-    if (!summaryEl || !confirmBtn) return;
-    if (_clipMarksRun) return; // progress block owns the copy while a run streams
-    summaryEl.classList.remove("cg-shimmer"); // the "Loading marks…" fetch landed
-    var marks = _clipMarksScopedMarks();
+  function _clipMarksSummary(ctx) {
+    var marks = ctx.scoped;
     if (!marks.length) {
-      var pid = state.selectedParticipant;
-      var scope = (qs("#clipMarksScope") || {}).value;
-      summaryEl.textContent =
-        scope === "current" && pid
-          ? "No marked lines in " + pid + " yet."
-          : "No marked lines yet — mark a line with M or the gutter dot.";
-      confirmBtn.disabled = true;
-      return;
+      return {
+        ready: false,
+        text: ctx.scope === "current" && ctx.pid
+          ? "No marked lines in " + ctx.pid + " yet."
+          : "No marked lines yet — mark a line with M or the gutter dot.",
+      };
     }
-    var clusters = _clipMarksClusters();
-    summaryEl.textContent =
-      clipgenPluralUnit(marks.length, "marked line", "marked lines") +
-      " → " +
-      clipgenPluralUnit(clusters.length, "clip", "clips");
-    confirmBtn.disabled = false;
+    var clusters = _clipMarksClusters(marks);
+    return {
+      ready: true,
+      text: clipgenPluralUnit(marks.length, "marked line", "marked lines") +
+        " → " + clipgenPluralUnit(clusters.length, "clip", "clips"),
+    };
   }
 
-  // Option labels carry live mark counts.
-  function _renderClipMarksScopeOptions() {
-    var sel = qs("#clipMarksScope");
-    if (!sel || sel.options.length < 2) return;
-    var pid = state.selectedParticipant;
-    var mine = pid
-      ? _clipMarksMarks.filter(function (m) { return m.participant === pid; }).length
-      : 0;
-    sel.options[0].textContent =
-      (pid ? "Current participant (" + pid + ")" : "Current participant") +
-      " — " + clipgenPluralUnit(mine, "mark", "marks");
-    sel.options[0].disabled = !pid;
-    sel.options[1].textContent =
-      "All participants — " + clipgenPluralUnit(_clipMarksMarks.length, "mark", "marks");
-    if (!pid) sel.value = "all";
-  }
-
-  function _renderClipMarksProgress() {
-    var wrap = qs("#clipMarksProgress");
-    var fill = qs("#clipMarksBarFill");
-    var text = qs("#clipMarksProgressText");
-    var confirmBtn = qs("#clipMarksConfirm");
-    var cancelBtn = qs("#clipMarksCancel");
-    if (!wrap || !fill || !text || !confirmBtn || !cancelBtn) return;
-    var run = _clipMarksRun;
-    wrap.classList.toggle("hidden", !run);
-    confirmBtn.classList.toggle("hidden", !!run);
-    cancelBtn.textContent = run ? "Stop" : "Cancel";
-    if (!run) return;
-    var pct = run.total ? Math.round((run.done / run.total) * 100) : 0;
-    fill.style.width = pct + "%";
-    text.textContent =
-      "Clipping… " + run.done + "/" + run.total +
-      (run.failed ? " (" + run.failed + " failed)" : "");
-  }
-
-  function openClipMarksModal() {
-    var modal = qs("#clipMarksModal");
-    if (!modal) return;
-    modal.classList.remove("hidden");
-    openBlockingModal(modal, {
-      onEscape: closeClipMarksModal,
-      onBackdropClick: closeClipMarksModal,
-    });
-    _renderClipMarksProgress();
-    // A run in flight owns the dialog's copy; only refresh the pickers when idle.
-    if (_clipMarksRun) return;
+  function _clipMarksOnOpen(api) {
     qs("#clipMarksSummary").classList.add("cg-shimmer");
     qs("#clipMarksSummary").textContent = "Loading marks…";
     qs("#clipMarksConfirm").disabled = true;
@@ -2789,8 +2895,8 @@
         _clipMarksMarks = data.ok
           ? (data.marks || []).filter(function (m) { return m.valid; })
           : [];
-        _renderClipMarksScopeOptions();
-        renderClipMarksSummary();
+        api.renderScopeOptions();
+        api.renderSummary();
       })
       .catch(function () {
         qs("#clipMarksSummary").classList.remove("cg-shimmer");
@@ -2798,17 +2904,9 @@
       });
   }
 
-  function closeClipMarksModal() {
-    var modal = qs("#clipMarksModal");
-    if (!modal) return;
-    closeBlockingModal(modal);
-    modal.classList.add("hidden");
-  }
-
-  function submitClipMarks() {
-    if (_clipMarksRun) return;
-    var clusters = _clipMarksClusters();
-    if (!clusters.length) return;
+  function _clipMarksRequest(targets) {
+    var clusters = _clipMarksClusters(targets);
+    if (!clusters.length) return null;
     var pad = _clipMarksNumber("#clipMarksPad", CLIP_MARKS_DEFAULT_PAD_SECONDS, 0, 10);
     // Only the start needs clamping; ffmpeg stops at EOF.
     var items = clusters.map(function (c) {
@@ -2824,68 +2922,45 @@
         label: c.label || "",
       };
     });
-
-    var run = { done: 0, failed: 0, total: items.length, abort: new AbortController() };
-    _clipMarksRun = run;
-    _renderClipMarksProgress();
-
-    function handleLine(line) {
-      var data;
-      try { data = JSON.parse(line); } catch (_) { return; }
-      // The trailing {"cancelled": true} line has no index and stays out of the tally.
-      if (!data || typeof data.index !== "number") return;
-      run.done++;
-      if (!data.ok) run.failed++;
-      _renderClipMarksProgress();
-    }
-
-    function finish(message) {
-      _clipMarksRun = null;
-      _renderClipMarksProgress();
-      closeClipMarksModal();
-      showToast(message);
-    }
-
-    apiPostNDJSON(
-      "../studio/api/generate-intake",
-      { items: items, format: "clip" },
-      { signal: run.abort.signal, onLine: handleLine }
-    )
-      .then(function () {
-        var made = run.done - run.failed;
-        finish(
-          run.failed
-            ? clipgenPluralUnit(made, "clip", "clips") + " generated, " + run.failed + " failed"
-            : clipgenPluralUnit(made, "clip", "clips") + " generated — open Studio to review"
-        );
-      })
-      .catch(function (err) {
-        var aborted = err && (err.name === "AbortError" || err.code === 20);
-        finish(aborted ? "Clip generation cancelled" : "Clip generation failed: " + (err && err.message));
-      });
+    return {
+      url: "../studio/api/generate-intake",
+      body: { items: items, format: "clip" },
+      total: items.length,
+    };
   }
 
-  function onClipMarksCancel() {
-    if (!_clipMarksRun) {
-      closeClipMarksModal();
-      return;
-    }
-    apiPost("../studio/api/generate-intake/cancel", {}).catch(function () {});
-    _clipMarksRun.abort.abort();
+  function _clipMarksToast(kind, job, err) {
+    if (kind === "cancelled") return "Clip generation cancelled";
+    if (kind === "error") return "Clip generation failed: " + (err && err.message);
+    var made = job.done - job.failed;
+    return job.failed
+      ? clipgenPluralUnit(made, "clip", "clips") + " generated, " + job.failed + " failed"
+      : clipgenPluralUnit(made, "clip", "clips") + " generated — open Studio to review";
   }
 
-  function initClipMarksModal() {
-    qs("#clipMarksCancel").addEventListener("click", onClipMarksCancel);
-    qs("#clipMarksConfirm").addEventListener("click", submitClipMarks);
-    qs("#clipMarksScope").addEventListener("change", renderClipMarksSummary);
-    qs("#clipMarksGap").addEventListener("input", renderClipMarksSummary);
-  }
+  var clipMarks = createBatchJobModal({
+    prefix: "clipMarks",
+    verb: "Clipping…",
+    unit: ["mark", "marks"],
+    candidates: function () { return _clipMarksMarks; },
+    itemPid: function (m) { return m.participant; },
+    currentEnabled: function (pid) { return !!pid; },
+    summary: _clipMarksSummary,
+    onOpen: _clipMarksOnOpen,
+    request: _clipMarksRequest,
+    toast: _clipMarksToast,
+    cancel: function () {
+      return { url: "../studio/api/generate-intake/cancel", body: {} };
+    },
+    initExtra: function (api) {
+      qs("#clipMarksGap").addEventListener("input", api.renderSummary);
+    },
+  });
+  var openClipMarksModal = clipMarks.open;
+  var initClipMarksModal = clipMarks.init;
 
   // ---- Embed subtitles ----
   // Soft-mux transcripts into video copies; twin of Clip Marked Lines.
-
-  // { done, failed, total, abort } while streaming, null idle; outlives a dismissed modal.
-  var _embedSubsRun = null;
 
   // Multi-part participants are filtered client-side; the server would refuse them anyway.
   function _embedSubsCandidates() {
@@ -2899,13 +2974,6 @@
 
   function _embedSubsIsMultiPart(p) {
     return !!(p.video_paths && p.video_paths.length > 1);
-  }
-
-  function _embedSubsScoped() {
-    var all = _embedSubsCandidates();
-    if ((qs("#embedSubsScope") || {}).value !== "current") return all;
-    var pid = state.selectedParticipant;
-    return all.filter(function (p) { return p.id === pid; });
   }
 
   // Container extension of a participant's first source file, lowercased.
@@ -2925,8 +2993,8 @@
     return supported.indexOf(_embedSubsExt(p)) === -1;
   }
 
-  function _embedSubsTargets() {
-    return _embedSubsScoped().filter(function (p) {
+  function _embedSubsTargets(scoped) {
+    return scoped.filter(function (p) {
       return !_embedSubsIsMultiPart(p) && !_embedSubsIsUnsupported(p);
     });
   }
@@ -2939,13 +3007,9 @@
     });
   }
 
-  function renderEmbedSubsSummary() {
-    var summaryEl = qs("#embedSubsSummary");
-    var confirmBtn = qs("#embedSubsConfirm");
-    if (!summaryEl || !confirmBtn) return;
-    if (_embedSubsRun) return; // progress block owns the copy while a run streams
-    var targets = _embedSubsTargets();
-    var scoped = _embedSubsScoped();
+  function _embedSubsSummary(ctx) {
+    var targets = ctx.targets;
+    var scoped = ctx.scoped;
     var skipped = scoped.filter(_embedSubsIsMultiPart);
     var unsupported = scoped.filter(function (p) {
       return !_embedSubsIsMultiPart(p) && _embedSubsIsUnsupported(p);
@@ -2960,29 +3024,28 @@
         _embedSubsExt(unsupported[0]) + ").";
     }
     if (!targets.length) {
-      var scope = (qs("#embedSubsScope") || {}).value;
+      var text;
       // Name the real blocker; only "no transcript" is fixed by transcribing.
       if (unsupported.length && !skipped.length) {
-        summaryEl.textContent =
+        text =
           (unsupported.length === 1
             ? unsupported[0].id + "'s recording is " + _embedSubsExt(unsupported[0])
             : "These recordings are in a container") +
           ", which cannot carry an embedded subtitle track. Supported: " +
           (_embedSubsContainers().supported || []).join(", ") + ".";
       } else if (skipped.length) {
-        summaryEl.textContent =
+        text =
           (skipped.length === 1
             ? skipped[0].id + "'s transcript spans several video files"
             : "Every transcript here spans several video files") +
           ", which cannot be muxed back into one subtitled copy.";
       } else {
-        summaryEl.textContent =
-          scope === "current" && state.selectedParticipant
-            ? "No transcript for " + state.selectedParticipant + " yet."
+        text =
+          ctx.scope === "current" && ctx.pid
+            ? "No transcript for " + ctx.pid + " yet."
             : "No transcripts yet — transcribe a video first.";
       }
-      confirmBtn.disabled = true;
-      return;
+      return { ready: false, text: text };
     }
     // Only when unticked; ticked agrees with the mp4 muxer anyway.
     var stuckOn = (qs("#embedSubsDefault") || {}).checked
@@ -2992,160 +3055,72 @@
       ? " " + (stuckOn.length === targets.length ? "The track" : stuckOn.length + " of these")
         + " will still be on by default — .mp4/.mov cannot carry a subtitle track that is off."
       : "";
-    summaryEl.textContent =
-      clipgenPluralUnit(targets.length, "transcript", "transcripts") +
-      " → " +
-      clipgenPluralUnit(targets.length, "subtitled video", "subtitled videos") +
-      "." + skipNote + stuckNote;
-    confirmBtn.disabled = false;
+    return {
+      ready: true,
+      text: clipgenPluralUnit(targets.length, "transcript", "transcripts") +
+        " → " +
+        clipgenPluralUnit(targets.length, "subtitled video", "subtitled videos") +
+        "." + skipNote + stuckNote,
+    };
   }
 
-  // Option labels carry live counts (mirrors the clip-marks picker).
-  function _renderEmbedSubsScopeOptions() {
-    var sel = qs("#embedSubsScope");
-    if (!sel || sel.options.length < 2) return;
-    var pid = state.selectedParticipant;
-    var all = _embedSubsCandidates();
-    var mine = pid
-      ? all.filter(function (p) { return p.id === pid; }).length
-      : 0;
-    sel.options[0].textContent =
-      (pid ? "Current participant (" + pid + ")" : "Current participant") +
-      " — " + clipgenPluralUnit(mine, "transcript", "transcripts");
-    sel.options[0].disabled = !mine;
-    sel.options[1].textContent =
-      "All participants — " + clipgenPluralUnit(all.length, "transcript", "transcripts");
-    if (!mine) sel.value = "all";
-  }
-
-  function _renderEmbedSubsProgress() {
-    var wrap = qs("#embedSubsProgress");
-    var fill = qs("#embedSubsBarFill");
-    var text = qs("#embedSubsProgressText");
-    var confirmBtn = qs("#embedSubsConfirm");
-    var cancelBtn = qs("#embedSubsCancel");
-    if (!wrap || !fill || !text || !confirmBtn || !cancelBtn) return;
-    var run = _embedSubsRun;
-    wrap.classList.toggle("hidden", !run);
-    confirmBtn.classList.toggle("hidden", !!run);
-    cancelBtn.textContent = run ? "Stop" : "Cancel";
-    if (!run) return;
-    var pct = run.total ? Math.round((run.done / run.total) * 100) : 0;
-    fill.style.width = pct + "%";
-    text.textContent =
-      "Embedding… " + run.done + "/" + run.total +
-      (run.failed ? " (" + run.failed + " failed)" : "");
-  }
-
-  function openEmbedSubsModal() {
-    var modal = qs("#embedSubsModal");
-    if (!modal) return;
-    modal.classList.remove("hidden");
-    openBlockingModal(modal, {
-      onEscape: closeEmbedSubsModal,
-      onBackdropClick: closeEmbedSubsModal,
-    });
-    _renderEmbedSubsProgress();
-    // A run in flight owns the dialog's copy; only refresh the pickers when idle.
-    if (_embedSubsRun) return;
-    _renderEmbedSubsScopeOptions();
-    renderEmbedSubsSummary();
-  }
-
-  function closeEmbedSubsModal() {
-    var modal = qs("#embedSubsModal");
-    if (!modal) return;
-    closeBlockingModal(modal);
-    modal.classList.add("hidden");
-  }
-
-  function submitEmbedSubs() {
-    if (_embedSubsRun) return;
-    var targets = _embedSubsTargets();
-    if (!targets.length) return;
+  function _embedSubsRequest(targets) {
     var pids = targets.map(function (p) { return p.id; });
-    var defaultTrack = !!(qs("#embedSubsDefault") || {}).checked;
-
-    var run = { done: 0, failed: 0, total: pids.length, abort: new AbortController() };
-    _embedSubsRun = run;
-    _renderEmbedSubsProgress();
-    var outputDir = "";
-
-    var sawDone = false;
-
-    function handleLine(line) {
-      var data;
-      try { data = JSON.parse(line); } catch (_) { return; }
-      if (!data) return;
-      // Header and trailing sentinel lines have no index; they stay out of the tally.
-      if (data.output_dir) outputDir = data.output_dir;
-      if (data.token) run.token = data.token; // echoed by Stop to scope the cancel
-      if (data.done) sawDone = true;
-      if (typeof data.index !== "number") return;
-      run.done++;
-      if (!data.ok) run.failed++;
-      _renderEmbedSubsProgress();
-    }
-
-    function finish(message) {
-      _embedSubsRun = null;
-      _renderEmbedSubsProgress();
-      closeEmbedSubsModal();
-      showToast(message);
-    }
-
-    apiPostNDJSON(
-      "api/embed-subtitles",
-      { participants: pids, default_track: defaultTrack },
-      { signal: run.abort.signal, onLine: handleLine }
-    )
-      .then(function () {
-        var made = run.done - run.failed;
-        var where = outputDir ? " to " + outputDir : "";
-        // No sentinel means the server died partway; the reader can't tell otherwise.
-        if (!sawDone) {
-          finish(
-            "Subtitle embedding stopped early — " +
-              clipgenPluralUnit(made, "video was", "videos were") + " written" + where +
-              " of " + run.total + ". Check the clipgen log."
-          );
-          return;
-        }
-        finish(
-          run.failed
-            ? clipgenPluralUnit(made, "subtitled video", "subtitled videos") + " written" + where + ", " + run.failed + " failed"
-            : clipgenPluralUnit(made, "subtitled video", "subtitled videos") + " written" + where
-        );
-      })
-      .catch(function (err) {
-        var aborted = err && (err.name === "AbortError" || err.code === 20);
-        finish(aborted ? "Subtitle embedding cancelled" : "Subtitle embedding failed: " + (err && err.message));
-      });
+    if (!pids.length) return null;
+    return {
+      url: "api/embed-subtitles",
+      body: { participants: pids, default_track: !!(qs("#embedSubsDefault") || {}).checked },
+      total: pids.length,
+    };
   }
 
-  function onEmbedSubsCancel() {
-    if (!_embedSubsRun) {
-      closeEmbedSubsModal();
-      return;
-    }
-    // The server stops between files; the abort just drops our end.
-    apiPost("api/embed-subtitles/cancel", { token: _embedSubsRun.token || null }).catch(function () {});
-    _embedSubsRun.abort.abort();
+  function _embedSubsOnLine(data, job) {
+    if (data.output_dir) job.outputDir = data.output_dir;
   }
 
-  function initEmbedSubsModal() {
-    qs("#embedSubsCancel").addEventListener("click", onEmbedSubsCancel);
-    qs("#embedSubsConfirm").addEventListener("click", submitEmbedSubs);
-    qs("#embedSubsScope").addEventListener("change", renderEmbedSubsSummary);
+  function _embedSubsToast(kind, job, err) {
+    if (kind === "cancelled") return "Subtitle embedding cancelled";
+    if (kind === "error") return "Subtitle embedding failed: " + (err && err.message);
+    var made = job.done - job.failed;
+    var where = job.outputDir ? " to " + job.outputDir : "";
+    if (kind === "stopped") {
+      return "Subtitle embedding stopped early — " +
+        clipgenPluralUnit(made, "video was", "videos were") + " written" + where +
+        " of " + job.total + ". Check the clipgen log.";
+    }
+    return job.failed
+      ? clipgenPluralUnit(made, "subtitled video", "subtitled videos") + " written" + where + ", " + job.failed + " failed"
+      : clipgenPluralUnit(made, "subtitled video", "subtitled videos") + " written" + where;
+  }
+
+  function _embedSubsInitExtra(api) {
     // The checkbox decides whether the .mp4 caveat shows.
-    qs("#embedSubsDefault").addEventListener("change", renderEmbedSubsSummary);
+    qs("#embedSubsDefault").addEventListener("change", api.renderSummary);
   }
+
+  var embedSubs = createBatchJobModal({
+    prefix: "embedSubs",
+    verb: "Embedding…",
+    unit: ["transcript", "transcripts"],
+    candidates: _embedSubsCandidates,
+    itemPid: function (p) { return p.id; },
+    targets: _embedSubsTargets,
+    summary: _embedSubsSummary,
+    request: _embedSubsRequest,
+    onLine: _embedSubsOnLine,
+    expectsDone: true,
+    toast: _embedSubsToast,
+    // The server stops between files; the abort just drops our end.
+    cancel: function (job) {
+      return { url: "api/embed-subtitles/cancel", body: { token: job.token || null } };
+    },
+    initExtra: _embedSubsInitExtra,
+  });
+  var openEmbedSubsModal = embedSubs.open;
+  var initEmbedSubsModal = embedSubs.init;
 
   // ---- Normalize audio ----
   // Loudnorm videos in place, keeping .orig like remux.
-
-  // { done, failed, total, abort } while streaming, null idle; outlives a dismissed modal.
-  var _normAudioRun = null;
 
   // pid -> parts with a kept .orig. Only fully-kept participants are excluded.
   var _normAudioKept = {};
@@ -3164,13 +3139,6 @@
     return out;
   }
 
-  function _normAudioScoped() {
-    var all = _normAudioCandidates();
-    if ((qs("#normAudioScope") || {}).value !== "current") return all;
-    var pid = state.selectedParticipant;
-    return all.filter(function (p) { return p.id === pid; });
-  }
-
   function _normAudioKeptCount(p) {
     return _normAudioKept[p.id] || 0;
   }
@@ -3180,8 +3148,8 @@
     return _normAudioKeptCount(p) >= parts;
   }
 
-  function _normAudioTargets() {
-    return _normAudioScoped().filter(function (p) {
+  function _normAudioTargets(scoped) {
+    return scoped.filter(function (p) {
       return !_normAudioIsFullyKept(p);
     });
   }
@@ -3211,14 +3179,10 @@
     return picked;
   }
 
-  function renderNormAudioSummary() {
-    var summaryEl = qs("#normAudioSummary");
-    var confirmBtn = qs("#normAudioConfirm");
-    if (!summaryEl || !confirmBtn) return;
-    if (_normAudioRun) return; // progress block owns the copy while a run streams
-    var scope = (qs("#normAudioScope") || {}).value;
-    var scoped = _normAudioScoped();
-    var targets = _normAudioTargets();
+  function _normAudioSummary(ctx) {
+    var scope = ctx.scope;
+    var scoped = ctx.scoped;
+    var targets = ctx.targets;
     var fullyKept = scoped.filter(_normAudioIsFullyKept);
     var resuming = targets.filter(function (p) { return _normAudioKeptCount(p) > 0; });
     var keptNote = fullyKept.length
@@ -3234,54 +3198,34 @@
         " — already-rewritten parts are skipped.";
     }
     if (!targets.length) {
-      summaryEl.textContent = fullyKept.length
-        ? "Nothing to normalize —" + keptNote
-        : scope === "current" && state.selectedParticipant
-          ? "No source video for " + state.selectedParticipant + "."
-          : "No source videos yet.";
-      confirmBtn.disabled = true;
-      return;
+      return {
+        ready: false,
+        text: fullyKept.length
+          ? "Nothing to normalize —" + keptNote
+          : scope === "current" && ctx.pid
+            ? "No source video for " + ctx.pid + "."
+            : "No source videos yet.",
+      };
     }
     if (scope === "current" && _normAudioTrackPid && !_normAudioTrackInfo) {
-      summaryEl.textContent = "Checking audio tracks…";
-      confirmBtn.disabled = true;
-      return;
+      return { ready: false, text: "Checking audio tracks…" };
     }
     var spec = _normAudioTracksSpec();
     if (Object.prototype.toString.call(spec) === "[object Array]" && !spec.length) {
-      summaryEl.textContent = "Select at least one track to normalize." + keptNote;
-      confirmBtn.disabled = true;
-      return;
+      return { ready: false, text: "Select at least one track to normalize." + keptNote };
     }
     var files = _normAudioFileCount(targets);
     var trackNote =
       scope === "current" && _normAudioTrackInfo && _normAudioTrackInfo.count === 1
         ? " (1 audio track)"
         : "";
-    summaryEl.textContent =
-      clipgenPluralUnit(files, "video", "videos") + trackNote +
-      " → rewritten in place; " +
-      (files === 1 ? "the original is" : "originals are") +
-      " kept beside " + (files === 1 ? "it" : "them") + "." + keptNote;
-    confirmBtn.disabled = false;
-  }
-
-  // Option labels carry live counts (mirrors the embed picker).
-  function _renderNormAudioScopeOptions() {
-    var sel = qs("#normAudioScope");
-    if (!sel || sel.options.length < 2) return;
-    var pid = state.selectedParticipant;
-    var all = _normAudioCandidates();
-    var mine = pid
-      ? all.filter(function (p) { return p.id === pid; }).length
-      : 0;
-    sel.options[0].textContent =
-      (pid ? "Current participant (" + pid + ")" : "Current participant") +
-      " — " + clipgenPluralUnit(mine, "video", "videos");
-    sel.options[0].disabled = !mine;
-    sel.options[1].textContent =
-      "All participants — " + clipgenPluralUnit(all.length, "video", "videos");
-    if (!mine) sel.value = "all";
+    return {
+      ready: true,
+      text: clipgenPluralUnit(files, "video", "videos") + trackNote +
+        " → rewritten in place; " +
+        (files === 1 ? "the original is" : "originals are") +
+        " kept beside " + (files === 1 ? "it" : "them") + "." + keptNote,
+    };
   }
 
   // Mode select for scope=all; per-track checkboxes for a multi-track current participant.
@@ -3300,7 +3244,7 @@
       modeLabel.classList.toggle("hidden", scope === "current");
       list.classList.add("hidden");
       list.innerHTML = "";
-      renderNormAudioSummary();
+      normAudio.renderSummary();
       return;
     }
     modeLabel.classList.add("hidden");
@@ -3308,7 +3252,7 @@
     list.innerHTML = "";
     _normAudioTrackPid = pid;
     _normAudioTrackInfo = null;
-    renderNormAudioSummary(); // "Checking audio tracks…" while the probe runs
+    normAudio.renderSummary(); // "Checking audio tracks…" while the probe runs
     _trFetchAudioInfo(pid, p.video_version).then(function (info) {
       // A scope flip or participant change while the probe ran owns the field.
       if (_normAudioTrackPid !== pid) return;
@@ -3333,157 +3277,95 @@
         }
         list.classList.remove("hidden");
       }
-      renderNormAudioSummary();
+      normAudio.renderSummary();
     });
   }
 
-  function _renderNormAudioProgress() {
-    var wrap = qs("#normAudioProgress");
-    var fill = qs("#normAudioBarFill");
-    var text = qs("#normAudioProgressText");
-    var confirmBtn = qs("#normAudioConfirm");
-    var cancelBtn = qs("#normAudioCancel");
-    if (!wrap || !fill || !text || !confirmBtn || !cancelBtn) return;
-    var run = _normAudioRun;
-    wrap.classList.toggle("hidden", !run);
-    confirmBtn.classList.toggle("hidden", !!run);
-    cancelBtn.textContent = run ? "Stop" : "Cancel";
-    if (!run) return;
-    var pct = run.total ? Math.round((run.done / run.total) * 100) : 0;
-    fill.style.width = pct + "%";
-    text.textContent =
-      "Normalizing… " + run.done + "/" + run.total +
-      (run.failed ? " (" + run.failed + " failed)" : "");
-  }
-
-  function openNormalizeAudioModal() {
-    var modal = qs("#normAudioModal");
-    if (!modal) return;
-    modal.classList.remove("hidden");
-    openBlockingModal(modal, {
-      onEscape: closeNormalizeAudioModal,
-      onBackdropClick: closeNormalizeAudioModal,
-    });
-    _renderNormAudioProgress();
-    // A run in flight owns the dialog's copy; only refresh the pickers when idle.
-    if (_normAudioRun) return;
+  function _normAudioOnOpen(api) {
     _normAudioKept = {};
-    _renderNormAudioScopeOptions();
+    api.renderScopeOptions();
     _renderNormAudioTrackField();
     // Kept-original state lives on disk; remux/status re-probes on every call.
     apiGet("api/remux/status")
       .then(function (data) {
-        if (!data || !data.ok || _normAudioRun) return;
+        if (!data || !data.ok || api.isRunning()) return;
         var kept = data.kept || {};
         var map = {};
         for (var pid in kept) {
           if (kept[pid] && kept[pid].length) map[pid] = kept[pid].length;
         }
         _normAudioKept = map;
-        renderNormAudioSummary();
+        api.renderSummary();
       })
       .catch(function () {});
   }
 
-  function closeNormalizeAudioModal() {
-    var modal = qs("#normAudioModal");
-    if (!modal) return;
-    closeBlockingModal(modal);
-    modal.classList.add("hidden");
-  }
-
-  function submitNormalizeAudio() {
-    if (_normAudioRun) return;
-    var targets = _normAudioTargets();
-    if (!targets.length) return;
+  function _normAudioRequest(targets) {
     var pids = targets.map(function (p) { return p.id; });
-    var spec = _normAudioTracksSpec();
-
-    var run = {
-      done: 0,
-      failed: 0,
-      changed: 0,
+    if (!pids.length) return null;
+    return {
+      url: "api/normalize-audio",
+      body: { participants: pids, tracks: _normAudioTracksSpec() },
       total: pids.length,
-      abort: new AbortController(),
     };
-    _normAudioRun = run;
-    _renderNormAudioProgress();
-
-    var sawDone = false;
-
-    function handleLine(line) {
-      var data;
-      try { data = JSON.parse(line); } catch (_) { return; }
-      if (!data) return;
-      // Header and trailing sentinel lines have no index; they stay out of the tally.
-      if (data.token) run.token = data.token; // echoed by Stop to scope the cancel
-      if (data.done) sawDone = true;
-      if (typeof data.index !== "number") return;
-      run.done++;
-      if (!data.ok) run.failed++;
-      // Files swapped; can be non-zero on an ok=false multi-part line.
-      if (typeof data.parts_done === "number") run.changed += data.parts_done;
-      _renderNormAudioProgress();
-    }
-
-    function finish(message) {
-      _normAudioRun = null;
-      _renderNormAudioProgress();
-      closeNormalizeAudioModal();
-      showToast(message);
-      // Swapped files invalidate the <video> stream; reload like media-banner.js, after the toast.
-      if (run.changed > 0) {
-        setTimeout(function () { window.location.reload(); }, 1500);
-      }
-    }
-
-    apiPostNDJSON(
-      "api/normalize-audio",
-      { participants: pids, tracks: spec },
-      { signal: run.abort.signal, onLine: handleLine }
-    )
-      .then(function () {
-        var made = run.done - run.failed;
-        // No sentinel means the server died partway; the reader can't tell otherwise.
-        if (!sawDone) {
-          finish(
-            "Audio normalization stopped early — " +
-              clipgenPluralUnit(made, "video was", "videos were") + " rewritten of " +
-              run.total + ". Check the clipgen log."
-          );
-          return;
-        }
-        finish(
-          run.failed
-            ? clipgenPluralUnit(made, "video", "videos") + " normalized, " + run.failed + " failed"
-            : clipgenPluralUnit(made, "video", "videos") + " normalized; originals kept beside the sources"
-        );
-      })
-      .catch(function (err) {
-        var aborted = err && (err.name === "AbortError" || err.code === 20);
-        finish(aborted ? "Audio normalization cancelled" : "Audio normalization failed: " + (err && err.message));
-      });
   }
 
-  function onNormalizeAudioCancel() {
-    if (!_normAudioRun) {
-      closeNormalizeAudioModal();
-      return;
-    }
-    // Unlike embed, Stop interrupts ffmpeg mid-encode; the abort just drops our end.
-    apiPost("api/normalize-audio/cancel", { token: _normAudioRun.token || null }).catch(function () {});
-    _normAudioRun.abort.abort();
+  function _normAudioOnLine(data, job) {
+    // Files swapped; can be non-zero on an ok=false multi-part line.
+    if (typeof data.parts_done === "number") job.changed = (job.changed || 0) + data.parts_done;
   }
 
-  function initNormalizeAudioModal() {
-    qs("#normAudioCancel").addEventListener("click", onNormalizeAudioCancel);
-    qs("#normAudioConfirm").addEventListener("click", submitNormalizeAudio);
-    // Scope picks the track control; the field re-renders the summary itself.
-    qs("#normAudioScope").addEventListener("change", _renderNormAudioTrackField);
-    qs("#normAudioTrackMode").addEventListener("change", renderNormAudioSummary);
+  function _normAudioAfterFinish(job) {
+    // Swapped files invalidate the <video> stream; reload like media-banner.js, after the toast.
+    if (job.changed > 0) {
+      setTimeout(function () { window.location.reload(); }, 1500);
+    }
+  }
+
+  function _normAudioToast(kind, job, err) {
+    if (kind === "cancelled") return "Audio normalization cancelled";
+    if (kind === "error") return "Audio normalization failed: " + (err && err.message);
+    var made = job.done - job.failed;
+    if (kind === "stopped") {
+      return "Audio normalization stopped early — " +
+        clipgenPluralUnit(made, "video was", "videos were") + " rewritten of " +
+        job.total + ". Check the clipgen log.";
+    }
+    return job.failed
+      ? clipgenPluralUnit(made, "video", "videos") + " normalized, " + job.failed + " failed"
+      : clipgenPluralUnit(made, "video", "videos") + " normalized; originals kept beside the sources";
+  }
+
+  function _normAudioInitExtra(api) {
+    qs("#normAudioTrackMode").addEventListener("change", api.renderSummary);
     // Delegated: the checkbox rows are rebuilt per participant.
-    qs("#normAudioTrackList").addEventListener("change", renderNormAudioSummary);
+    qs("#normAudioTrackList").addEventListener("change", api.renderSummary);
   }
+
+  var normAudio = createBatchJobModal({
+    prefix: "normAudio",
+    verb: "Normalizing…",
+    unit: ["video", "videos"],
+    candidates: _normAudioCandidates,
+    itemPid: function (p) { return p.id; },
+    targets: _normAudioTargets,
+    summary: _normAudioSummary,
+    onOpen: _normAudioOnOpen,
+    request: _normAudioRequest,
+    onLine: _normAudioOnLine,
+    expectsDone: true,
+    toast: _normAudioToast,
+    // Unlike embed, Stop interrupts ffmpeg mid-encode; the abort just drops our end.
+    cancel: function (job) {
+      return { url: "api/normalize-audio/cancel", body: { token: job.token || null } };
+    },
+    afterFinish: _normAudioAfterFinish,
+    // Scope picks the track control; the field re-renders the summary itself.
+    onScopeChange: _renderNormAudioTrackField,
+    initExtra: _normAudioInitExtra,
+  });
+  var openNormalizeAudioModal = normAudio.open;
+  var initNormalizeAudioModal = normAudio.init;
 
   // ---- Boot ----
 
