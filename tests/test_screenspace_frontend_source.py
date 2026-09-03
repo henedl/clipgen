@@ -203,3 +203,17 @@ def test_sample_editor_uses_blocking_modal_and_is_es5():
     assert "openBlockingModal(" in SAMPLE_EDITOR_JS
     assert "closeBlockingModal(" in SAMPLE_EDITOR_JS
     assert_es5(SAMPLE_EDITOR_JS, "screenspace-sample-editor.js")
+
+
+def test_results_tab_count_element_exists():
+    """Five writes target #resultCount; without the span they went nowhere."""
+    assert 'qs("#resultCount")' in read("screenspace-results.js")
+    assert 'id="resultCount"' in read("screenspace.html")
+
+
+def test_model_view_previews_first_multitool_step():
+    """The server previews plain tools; multitool must send its first step."""
+    body = MODEL_VIEW_JS[MODEL_VIEW_JS.index("function _doRefreshModelView") :]
+    assert "(state.multitoolSteps || [])[0]" in body
+    assert 'sfx = "_mt0"' in body
+    assert "_collectPreviewParams(tool, sfx)" in body

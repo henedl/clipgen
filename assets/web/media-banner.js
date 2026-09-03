@@ -148,16 +148,21 @@
       .then(function (data) {
         if (!_host) return;
         var job = (data.jobs || {})[_host.participant];
-        if (!job || job.state === "running") {
+        if (job && job.state === "running") {
           render({
             mode: "running",
             text: "Remuxing " + _host.participant + "…",
-            progress: job ? job.progress : 0,
+            progress: job.progress,
           });
           _pollTimer = setTimeout(poll, POLL_MS);
           return;
         }
         stopPolling();
+        if (!job) {
+          // Another page finished or discarded it; show the on-disk state.
+          refresh();
+          return;
+        }
         if (job.state === "error") {
           renderError(job.error);
           return;

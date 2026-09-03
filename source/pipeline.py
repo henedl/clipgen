@@ -1169,14 +1169,16 @@ def process_clips(
                 max_duration=max_duration,
             )
 
-        def _cut_error(idx: int, exc: Exception) -> tuple[int, list[tuple[str, int]]]:
+        def _cut_error(
+            idx: int, exc: Exception
+        ) -> tuple[int, list[tuple[str, int]], bool]:
             clip, _ = prepared[idx]
             desc = (clip.get("desc") or "")[: config.PROGRESS_DESCRIPTION_LENGTH]
             utils.error_print(
                 f"Clip failed: [{clip.get('participant', '')}] {desc}",
                 [str(exc)],
             )
-            return (0, [])
+            return _EMPTY_RESULT
 
         progress = utils.create_progress_bar()
         if progress:
@@ -1943,8 +1945,8 @@ def _regenerate_single_artifact(
             if video.run_ffmpeg(
                 input_file=part_path,
                 output_file=tmp,
-                start_pos=utils.seconds_to_timestamp(int(part.get("localStart", 0))),
-                end_pos=utils.seconds_to_timestamp(int(part.get("localEnd", 0))),
+                start_pos=utils.seconds_to_timestamp(round(part.get("localStart", 0))),
+                end_pos=utils.seconds_to_timestamp(round(part.get("localEnd", 0))),
                 reencode=config.REENCODING,
             ):
                 temp_paths.append(tmp)
@@ -1978,8 +1980,9 @@ def _regenerate_single_artifact(
 
     local_start = artifact.get("localStart", artifact.get("start", 0))
     local_end = artifact.get("localEnd", artifact.get("end", 0))
-    start_ts = utils.seconds_to_timestamp(int(local_start))
-    end_ts = utils.seconds_to_timestamp(int(local_end))
+    # Round like _local_timestamp so regeneration reproduces the original cut.
+    start_ts = utils.seconds_to_timestamp(round(local_start))
+    end_ts = utils.seconds_to_timestamp(round(local_end))
 
     if artifact_type == "clip":
         ok = video.run_ffmpeg(
@@ -2002,8 +2005,9 @@ def _regenerate_single_artifact(
             timestamp=start_ts,
         )
     elif artifact_type == "gif":
+        # The span is the clip's, not the GIF's; the GIF stays capped like generation.
         duration = max(
-            int(local_end - local_start), config.DEFAULT_GIF_DURATION_SECONDS
+            1, min(int(local_end - local_start), config.DEFAULT_GIF_DURATION_SECONDS)
         )
         return video.extract_gif(
             input_file=source_path,

@@ -18,7 +18,9 @@ _unique_high_water_lock = threading.Lock()
 
 
 def safe_truncate(text: str, max_chars: int) -> str:
-    """Truncate to ``max_chars`` code points, then drop trailing combining marks.
+    """Truncate to ``max_chars`` UTF-8 bytes, then drop trailing combining marks.
+
+    Filesystems cap names in bytes, so multi-byte scripts back off further.
 
     Plain ``text[:n]`` can split a grapheme cluster (e.g. emoji + skin-tone
     modifier, or letter + combining accent), leaving an orphan combining
@@ -28,6 +30,8 @@ def safe_truncate(text: str, max_chars: int) -> str:
     if max_chars <= 0:
         return ""
     truncated = text[:max_chars]
+    while truncated and len(truncated.encode("utf-8")) > max_chars:
+        truncated = truncated[:-1]
     # Trim trailing combining marks / joiners that would render orphaned.
     while truncated and (
         unicodedata.category(truncated[-1]) in ("Mn", "Mc", "Me")
@@ -454,17 +458,18 @@ def prepare_clip(clip: ClipRecord) -> ClipRecord:
         key: sorted(indexes) for key, indexes in segment_annotations.items()
     }
     clip["times"] = utils.parse_timestamps(cleaned_cell_value, cell_ref=cell_ref)
-    timestamp_baseline = clip.get("timestamp_baseline")
-    if timestamp_baseline:
-        clip["times"] = utils.convert_clock_pairs_to_relative(
-            clip["times"], timestamp_baseline, cell_ref=cell_ref
-        )
+    # Select before the baseline conversion: it drops pairs and shifts indexes.
     selected_segment_indexes = clip.get("selected_segment_indexes")
     if selected_segment_indexes is not None:
         selected_set = set(selected_segment_indexes)
         clip["times"] = [
             pair for index, pair in enumerate(clip["times"]) if index in selected_set
         ]
+    timestamp_baseline = clip.get("timestamp_baseline")
+    if timestamp_baseline:
+        clip["times"] = utils.convert_clock_pairs_to_relative(
+            clip["times"], timestamp_baseline, cell_ref=cell_ref
+        )
     if config.DEBUGGING:
         config.debug_ic(clip["times"])
 

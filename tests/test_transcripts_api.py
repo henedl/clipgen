@@ -3784,3 +3784,10 @@ def test_invalidate_dependents_matches_on_agent_keys(monkeypatch):
     entry = {"theme_analysis": "old", "digest_result": "derived"}
     transcripts_server._invalidate_dependents(entry, fake_agents[0])
     assert "digest_result" not in entry
+
+
+def test_corrections_add_rejects_non_string_fields(tr_client):
+    resp = tr_client.post(
+        "/transcripts/api/corrections", json={"from": None, "to": "x"}
+    )
+    assert resp.status_code == 400

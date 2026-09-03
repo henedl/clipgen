@@ -510,3 +510,16 @@ def test_overlay_scene_edges_thicken_with_region() -> None:
         f"larger region edges should be substantially denser due to dilation "
         f"(small={small_density:.3f}, large={large_density:.3f})"
     )
+
+
+def test_boundary_previews_the_phash_grid(
+    synthetic_frame: np.ndarray, region: dict[str, int]
+) -> None:
+    """Boundary is a valid task type; it shows the same bits pHash compares."""
+    boundary = screenspace_preview.build_preview(
+        synthetic_frame, None, region, "boundary", {}
+    )
+    inactivity = screenspace_preview.build_preview(
+        synthetic_frame, None, region, "inactivity", {}
+    )
+    assert np.array_equal(boundary, inactivity)

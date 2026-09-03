@@ -609,7 +609,9 @@ def _merged_runs() -> dict[str, dict[str, Any]]:
     merged: dict[str, dict[str, Any]] = {}
     with _manifest_lock:
         for record in _manifest.get("runs", []):
-            merged[record.get("id")] = copy.deepcopy(record)
+            rid = record.get("id")
+            if rid:
+                merged[rid] = copy.deepcopy(record)
     with _runs_lock:
         live = list(_runs.items())
     for run_id, runner in live:
@@ -1182,9 +1184,10 @@ def _poll_transcript_completions() -> None:
     Transcribe nodes never write the transcripts manifest, so a triggered graph
     can't re-fire itself.
     """
-    markers = _transcript_markers()
     fire: list[str] = []
     with _watch_lock:
+        # Under the lock: an arming _seed_watch_seen also rebinds the cache.
+        markers = _transcript_markers()
         for pid, stamp in markers.items():
             if _watch_transcript_baseline.get(pid) != stamp:
                 _watch_transcript_baseline[pid] = stamp
@@ -1195,9 +1198,9 @@ def _poll_transcript_completions() -> None:
 
 def _poll_scan_completions() -> None:
     """Fire once per newly-completed Screenspace task (keyed by task id)."""
-    markers = _scan_markers()
     fire: list[str] = []
     with _watch_lock:
+        markers = _scan_markers()
         for task_id, pid in markers.items():
             if task_id not in _watch_scan_seen:
                 _watch_scan_seen.add(task_id)

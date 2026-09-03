@@ -248,7 +248,7 @@
           renderResults();
           renderTimeline();
           showToast("Excluded " + clipgenPluralUnit(idsToExclude.length, "event", "events"));
-        });
+        }).catch(toastError("Could not exclude events"));
       }
 
       // loadAndShowResults alone fills taskEvents; a streamed task may have none yet, so fetch here.
@@ -614,7 +614,7 @@
       state.resultsLazyObserver.disconnect();
       state.resultsLazyObserver = null;
     }
-    var countEl = qs("#resultCount") || { textContent: "" };
+    var countEl = qs("#resultCount");
     var actionsEl = qs("#resultsActions");
     var results = state.selectedTaskResults;
     var task = state.selectedTaskId ? findTask(state.selectedTaskId) : null;
@@ -706,7 +706,7 @@
             } else {
               showToast(data.error || "Failed to re-queue task");
             }
-          });
+          }).catch(toastError("Could not queue task"));
         });
       })(task);
       fastLabel.appendChild(rerunBtn);

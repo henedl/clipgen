@@ -163,20 +163,9 @@ def _build_card_frame(
     if not use_image_background and not allow_color_fallback:
         return None
 
-    try:
-        with tempfile.NamedTemporaryFile(suffix=config.FILEFORMAT, delete=False) as tmp:
-            card_path = tmp.name
-    except OSError as error:
-        utils.warning_print(
-            f"Could not create temporary file for {label}.",
-            [str(error)],
-        )
-        return None
-
     if config.DEBUGGING:
         utils.debug_print(
-            f"Debugging enabled, would generate {label} '{card_path}' "
-            f"at resolution {resolution}."
+            f"Debugging enabled, would generate {label} at resolution {resolution}."
         )
         return None
 
@@ -184,6 +173,16 @@ def _build_card_frame(
         utils.warning_print(
             f"Invalid resolution string '{resolution}' for {label}.",
             ["Expected format 'WIDTHxHEIGHT' (e.g. '1280x720')."],
+        )
+        return None
+
+    try:
+        with tempfile.NamedTemporaryFile(suffix=config.FILEFORMAT, delete=False) as tmp:
+            card_path = tmp.name
+    except OSError as error:
+        utils.warning_print(
+            f"Could not create temporary file for {label}.",
+            [str(error)],
         )
         return None
 
@@ -279,6 +278,7 @@ def _build_card_frame(
         return None
 
     if not video.verify_output_file(card_path, f"{label.capitalize()} generation"):
+        Path(card_path).unlink(missing_ok=True)
         return None
     return card_path
 

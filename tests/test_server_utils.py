@@ -167,3 +167,19 @@ def test_opt_number_missing_returns_default():
 def test_opt_number_parses_and_falls_back():
     assert server_utils.opt_number({"x": "1.5"}, "x") == 1.5
     assert server_utils.opt_number({"x": "nope"}, "x", 7.0) == 7.0
+
+
+def test_sse_notify_without_key_wakes_every_client():
+    import queue
+
+    notify, _stream, clients = server_utils.make_sse_channel()
+    qa: queue.Queue = queue.Queue(maxsize=4)
+    qb: queue.Queue = queue.Queue(maxsize=4)
+    clients.append(("a", qa))
+    clients.append(("b", qb))
+
+    notify("a")
+    assert qa.qsize() == 1 and qb.qsize() == 0
+
+    notify()
+    assert qa.qsize() == 2 and qb.qsize() == 1

@@ -59,6 +59,7 @@ import sys
 import threading
 import time
 import traceback
+import uuid
 import webbrowser
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -149,6 +150,8 @@ _busy_slots: dict[str, bool] = {
     "timeline_viewer": False,
     "gallery": False,
 }
+# Claim token per slot; a stale release must not drop a successor's claim.
+_busy_owners: dict[str, str | None] = {slot: None for slot in _busy_slots}
 # Intake has no busy slot (it runs alongside generate); sheet swaps still check this.
 _intake_active = 0
 # Serializes stash load → mutate → save across concurrent CRUD requests.
@@ -267,18 +270,20 @@ _sprite_cache = _MediaCache(_SPRITE_CACHE_MAX)
 _audio_cache = _MediaCache(_AUDIO_CACHE_MAX)
 
 
-def _try_claim_busy(slot: str) -> bool:
+def _try_claim_busy(slot: str) -> str | None:
     """Atomically reserve the single-job slot for *slot*.
 
-    Valid slots: the ``_busy_slots`` keys. Returns True on success (caller must
-    call ``_release_busy`` when done) or False if another request is already
-    holding the slot (or the slot name is unknown).
+    Valid slots: the ``_busy_slots`` keys. Returns the claim token on success
+    (pass it to ``_release_busy`` when done) or None if another request is
+    already holding the slot (or the slot name is unknown).
     """
     with _busy_lock:
         if slot not in _busy_slots or _busy_slots[slot]:
-            return False
+            return None
         _busy_slots[slot] = True
-        return True
+        token = uuid.uuid4().hex
+        _busy_owners[slot] = token
+        return token
 
 
 def _parse_titlecard_request(
@@ -344,11 +349,15 @@ def _append_generated_reel(reel: dict[str, Any]) -> None:
         _generated_reels.append(reel)
 
 
-def _release_busy(slot: str) -> None:
-    """Release the single-job slot for *slot* (unknown slots are a no-op)."""
+def _release_busy(slot: str, token: str | None = None) -> None:
+    """Release *slot* if *token* still owns it; ``None`` releases unconditionally."""
     with _busy_lock:
-        if slot in _busy_slots:
-            _busy_slots[slot] = False
+        if slot not in _busy_slots:
+            return
+        if token is not None and _busy_owners[slot] != token:
+            return
+        _busy_slots[slot] = False
+        _busy_owners[slot] = None
 
 
 def _reset_reel_job_state(endpoint: str) -> None:
@@ -1061,8 +1070,13 @@ def _process_intake_item(
             )
             transcript_text = item_text
             if not transcript_text and mark_ids:
-                # Fallback: look up segment text by id from the manifest.
-                wanted = set(mark_ids)
+                # Fallback: marks name segments; join those segments' text.
+                mark_set = set(mark_ids)
+                wanted = {
+                    m.get("segment_id")
+                    for m in transcripts_server._manifest.get("marks", []) or []
+                    if isinstance(m, dict) and m.get("id") in mark_set
+                }
                 parts: list[str] = []
                 for seg in src_entry.get("segments", []) or []:
                     if seg.get("id") in wanted:
@@ -1347,6 +1361,7 @@ def _stream_reel_job(
     work: Callable[[Callable[[dict[str, Any]], None]], None],
     *,
     slot: str = "reel",
+    token: str | None = None,
     on_cleanup: Callable[[], None] | None = None,
 ) -> Iterator[str]:
     """Run a reel build on a worker thread and stream its events as NDJSON.
@@ -1380,13 +1395,13 @@ def _stream_reel_job(
             if on_cleanup is not None:
                 on_cleanup()
             event_queue.put(sentinel)
-            _release_busy(slot)
+            _release_busy(slot, token)
 
     try:
         threading.Thread(target=worker, daemon=True).start()
     except BaseException:
         # Worker never ran, so its finally won't release the slot.
-        _release_busy(slot)
+        _release_busy(slot, token)
         raise
 
     while True:
@@ -1402,6 +1417,7 @@ def _stream_process_reel(
     *,
     titlecards_enabled: bool | None = None,
     titlecard_duration_seconds: int | None = None,
+    token: str | None = None,
 ) -> Iterator[str]:
     """Run pipeline.process_reel on a worker thread and yield its progress events
     as NDJSON lines, finishing with a final result/error line."""
@@ -1427,7 +1443,7 @@ def _stream_process_reel(
         _save_manifest_quiet()
         emit_event({"ok": True, "generated": generated, "reels": reel_records})
 
-    yield from _stream_reel_job(work)
+    yield from _stream_reel_job(work, token=token)
 
 
 def _apply_time_overrides(clips: list[Any], overrides: dict[str, Any]) -> None:
@@ -1496,14 +1512,15 @@ def api_generate() -> FlaskResponse:
     if output_format not in ("clip", "screen", "gif"):
         return err(f"Invalid format: {output_format}")
 
-    if not _try_claim_busy("generate"):
+    token = _try_claim_busy("generate")
+    if token is None:
         return err("A clip generation is already in progress", 409)
 
     try:
         cell_input = ", ".join(cell_strings)
         cell_specs = spreadsheet.parse_cell_specifications(cell_input)
         if not cell_specs:
-            _release_busy("generate")
+            _release_busy("generate", token)
             return err("Could not parse cell specifications")
 
         clips = spreadsheet.generate_list(
@@ -1515,7 +1532,7 @@ def api_generate() -> FlaskResponse:
         )
         _apply_time_overrides(clips, overrides)
     except Exception as e:
-        _release_busy("generate")
+        _release_busy("generate", token)
         return err(str(e), 500)
 
     # Count progress per segment, not per cell; the pipeline's later prepare_clip
@@ -1722,13 +1739,16 @@ def api_generate() -> FlaskResponse:
             # process_clips skipped the purge.
             titlecards.clear_endcard_cache()
             _save_manifest_quiet()
-            _release_busy("generate")
+            _release_busy("generate", token)
 
-    return Response(
+    response = Response(
         profiled_stream(stream_with_busy_release()),
         mimetype="application/x-ndjson",
         headers={"X-Accel-Buffering": "no"},
     )
+    # Covers an unstarted generator; the token makes the double release safe.
+    response.call_on_close(lambda: _release_busy("generate", token))
+    return response
 
 
 @studio_bp.route("/api/highlights-preview", methods=["POST"])
@@ -1805,13 +1825,15 @@ def api_reel() -> FlaskResponse:
         except (ValueError, TypeError):
             pass
 
-    if not _try_claim_busy("reel"):
+    token = _try_claim_busy("reel")
+    if token is None:
         return err("A reel build is already in progress", 409)
 
+    # The worker owns the busy slot once started; until then every exit path
+    # releases it.
+    started = {"worker": False}
+
     def stream() -> Any:
-        # The worker owns the busy slot once started; until then every exit path
-        # releases it.
-        worker_started = False
         try:
             with _override_config(**highlights_overrides):
                 reel_input = ", ".join(cell_strings)
@@ -1897,24 +1919,30 @@ def api_reel() -> FlaskResponse:
                 _reel_cancel_event.clear()
                 _reset_reel_job_state("reel")
                 cancel_flag = _reel_cancel_event.is_set
-                worker_started = True
+                started["worker"] = True
                 yield from _stream_process_reel(
                     clips,
                     cancel_flag,
                     titlecards_enabled=titlecards_enabled,
                     titlecard_duration_seconds=titlecard_duration_seconds,
+                    token=token,
                 )
         except Exception as e:
             yield json.dumps({"ok": False, "error": str(e)}) + "\n"
         finally:
-            if not worker_started:
-                _release_busy("reel")
+            if not started["worker"]:
+                _release_busy("reel", token)
 
-    return Response(
+    response = Response(
         profiled_stream(stream()),
         mimetype="application/x-ndjson",
         headers={"X-Accel-Buffering": "no"},
     )
+    # An unstarted generator never runs its finally; a running worker keeps the slot.
+    response.call_on_close(
+        lambda: None if started["worker"] else _release_busy("reel", token)
+    )
+    return response
 
 
 @studio_bp.route("/api/viewer", methods=["POST"])
@@ -2776,7 +2804,8 @@ def api_reel_direct() -> FlaskResponse:
     if not segments:
         return err("No segments specified")
 
-    if not _try_claim_busy("reel"):
+    token = _try_claim_busy("reel")
+    if token is None:
         return err("A reel build is already in progress", 409)
 
     _reel_cancel_event.clear()
@@ -2787,7 +2816,11 @@ def api_reel_direct() -> FlaskResponse:
         titlecards_enabled, titlecard_duration_seconds
     )
 
+    # Once the generator runs, _stream_reel_job's worker owns the slot.
+    started = {"stream": False}
+
     def stream() -> Iterator[str]:
+        started["stream"] = True
         # Hoisted so cleanup() can purge it even after a mid-build failure.
         temp_clips: list[str] = []
 
@@ -2984,13 +3017,17 @@ def api_reel_direct() -> FlaskResponse:
                 except OSError:
                     pass
 
-        yield from _stream_reel_job(work, on_cleanup=cleanup)
+        yield from _stream_reel_job(work, token=token, on_cleanup=cleanup)
 
-    return Response(
+    response = Response(
         profiled_stream(stream()),
         mimetype="application/x-ndjson",
         headers={"X-Accel-Buffering": "no"},
     )
+    response.call_on_close(
+        lambda: None if started["stream"] else _release_busy("reel", token)
+    )
+    return response
 
 
 @studio_bp.route("/api/job-status", methods=["GET"])

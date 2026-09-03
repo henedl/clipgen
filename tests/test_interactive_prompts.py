@@ -6,6 +6,7 @@ routes user input through utils.read_user_input(). These tests drive each
 prompt with scripted input sequences and assert on the resolved selection.
 """
 
+from pathlib import Path
 from types import SimpleNamespace
 
 import google_api
@@ -393,3 +394,36 @@ def test_browse_spreadsheet_selector_no_clips(monkeypatch):
         _browse_sheet(), process_fn=lambda clips, fmt: calls.append(1) or (0, [])
     )
     assert calls == []
+
+
+def test_prompt_batch_confirm_accepts_uppercase(monkeypatch):
+    _scripted(monkeypatch, ["Y"])
+    assert interactive.prompt_batch_confirm(_ctx()) is True
+
+
+def test_reellate_user_filename_lands_in_output_dir(monkeypatch, tmp_path):
+    """A typed reel name is reserved in the output dir, not the process CWD."""
+    import app
+    import config
+    import files
+    import video
+
+    monkeypatch.setattr(config, "OUTPUT_DIR", str(tmp_path), raising=False)
+    monkeypatch.setattr(files, "discover_clips", lambda: ["a.mp4", "b.mp4"])
+    monkeypatch.setattr(utils, "use_progress", lambda: False)
+    _scripted(monkeypatch, ["A + B", "y", "myreel"])
+    seen = {}
+
+    def concat(_clips, output_file, **_kwargs):
+        seen["output"] = output_file
+        return True
+
+    monkeypatch.setattr(video, "concatenate_clips", concat)
+
+    ok, output_file = app._run_reellate_mode_interactive()
+
+    assert ok is True
+    assert output_file is not None
+    assert output_file == seen["output"]
+    assert Path(output_file).parent == tmp_path
+    assert Path(output_file).name == "myreel.mp4"

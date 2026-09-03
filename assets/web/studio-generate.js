@@ -276,6 +276,8 @@
           event_ids: itm.event_ids || [],
           source: itm.source || "screenspace",
           mark_ids: itm.mark_ids || [],
+          text: itm.text || "",
+          label: itm.label || "",
         };
       });
 

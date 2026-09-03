@@ -1378,3 +1378,80 @@ def test_completion_message_reports_aborted_reel(monkeypatch, capsys):
 
     app._print_completion_message(1, "clip", is_reel=True)
     assert "created 1 reel" in capsys.readouterr().out
+
+
+def test_process_clips_parallel_survives_one_failing_clip(monkeypatch, make_clip):
+    """A clip that raises is reported and skipped; the batch still completes."""
+    clips = [make_clip(row=i, col=2) for i in range(3, 7)]
+    monkeypatch.setattr(
+        pipeline.files,
+        "prepare_clip",
+        lambda clip: _prepared_clip(clip, [("00:10", "00:20")]),
+    )
+    monkeypatch.setattr(pipeline.Path, "is_file", lambda self: True)
+    monkeypatch.setattr(pipeline.utils, "create_progress_bar", lambda: None)
+    monkeypatch.setattr(config, "CLIP_PARALLEL_WORKERS", 4)
+    monkeypatch.setattr(
+        pipeline.files,
+        "get_unique_filename",
+        lambda template, file_format=None: f"{template}{file_format or ''}",
+    )
+
+    import threading
+
+    calls = {"n": 0}
+    lock = threading.Lock()
+
+    def run_ffmpeg(*_args, **_kwargs):
+        with lock:
+            calls["n"] += 1
+            first = calls["n"] == 1
+        if first:
+            raise RuntimeError("boom")
+        return True
+
+    monkeypatch.setattr(pipeline.video, "run_ffmpeg", run_ffmpeg)
+
+    count, _artifacts = pipeline.process_clips(clips, output_format="clip")
+    assert count == 3
+
+
+def test_regenerate_gif_artifact_keeps_default_gif_length(monkeypatch, tmp_path):
+    """The stored span is the clip's; the GIF stays capped like generation."""
+    monkeypatch.setattr(config, "INPUT_DIR", str(tmp_path), raising=False)
+    monkeypatch.setattr(config, "OUTPUT_DIR", str(tmp_path), raising=False)
+    (tmp_path / "study_P01.mp4").write_text("v")
+    extract_gif = Mock(return_value=True)
+    monkeypatch.setattr(pipeline.video, "extract_gif", extract_gif)
+
+    artifact = {
+        "type": "gif",
+        "file": "clip.gif",
+        "sourceVideo": "study_P01.mp4",
+        "localStart": 0.0,
+        "localEnd": 60.0,
+    }
+    assert pipeline._regenerate_single_artifact(artifact, set()) is True
+    _, kwargs = extract_gif.call_args
+    assert kwargs["duration_seconds"] == config.DEFAULT_GIF_DURATION_SECONDS
+
+
+def test_regenerate_artifact_rounds_fractional_local_times(monkeypatch, tmp_path):
+    """Rounding matches the original cut; truncation drifted by up to a second."""
+    monkeypatch.setattr(config, "INPUT_DIR", str(tmp_path), raising=False)
+    monkeypatch.setattr(config, "OUTPUT_DIR", str(tmp_path), raising=False)
+    (tmp_path / "study_P01.mp4").write_text("v")
+    run_ffmpeg = Mock(return_value=True)
+    monkeypatch.setattr(pipeline.video, "run_ffmpeg", run_ffmpeg)
+
+    artifact = {
+        "type": "clip",
+        "file": "clip.mp4",
+        "sourceVideo": "study_P01.mp4",
+        "localStart": 10.6,
+        "localEnd": 20.4,
+    }
+    assert pipeline._regenerate_single_artifact(artifact, set()) is True
+    _, kwargs = run_ffmpeg.call_args
+    assert kwargs["start_pos"] == "0:11"
+    assert kwargs["end_pos"] == "0:20"

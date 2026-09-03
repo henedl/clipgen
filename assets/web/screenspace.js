@@ -1850,7 +1850,7 @@
       // Pills stash out (jump + wiggle + dissolve), then the stash card lands.
       if (chips.length && window.ClipgenMotion) ClipgenMotion.animateOutAll(chips, "stash").then(commit);
       else commit();
-    });
+    }).catch(toastError("Could not create stash"));
   }
 
   function dismissStash(stashId) {
@@ -1861,7 +1861,7 @@
       renderRunRegionPicker();
       renderStashCards();
       showToast("Stash dismissed");
-    });
+    }).catch(toastError("Could not delete stash"));
   }
 
   function restoreStash(stashId) {
@@ -1876,7 +1876,7 @@
       updateRunButton();
       renderStashCards();
       showToast("Regions restored");
-    });
+    }).catch(toastError("Could not restore stash"));
   }
 
   function copyRegionToStash(name, stashId) {
@@ -1909,7 +1909,7 @@
         }
       }
       renderRunRegionPicker();
-    });
+    }).catch(toastError("Could not rename stash"));
   }
 
   function renderStashCards() {

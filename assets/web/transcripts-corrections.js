@@ -84,7 +84,7 @@
       if (!data.ok) return;
       state.corrections = data.corrections;
       renderCorrections();
-    });
+    }).catch(toastError("Could not load corrections"));
   }
 
   function renderCorrections() {
@@ -155,7 +155,7 @@
       if (!data.ok) return;
       state.knownTerms = data.terms;
       renderKnownTerms();
-    });
+    }).catch(toastError("Could not load known terms"));
   }
 
   function renderKnownTerms() {
@@ -263,7 +263,7 @@
           clipgenPluralUnit(data.terms, "term", "terms") +
           "."
         : "Reuse one house glossary across studies.";
-    });
+    }).catch(toastError("Could not load dictionary"));
   }
 
   function saveGlobalDictionary() {

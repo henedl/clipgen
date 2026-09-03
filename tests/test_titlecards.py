@@ -1,3 +1,4 @@
+import os
 import subprocess
 
 
@@ -877,3 +878,36 @@ def test_pipeline_wraps_clip_without_forcing_source_resolution(monkeypatch, make
         ("out1.mp4", None),
         ("out2.mp4", None),
     ]
+
+
+def test_build_titlecard_frame_validates_before_creating_a_temp_file(
+    monkeypatch, make_clip
+):
+    def boom(*_args, **_kwargs):
+        raise AssertionError("temp file created before validation")
+
+    monkeypatch.setattr(titlecards.tempfile, "NamedTemporaryFile", boom)
+    monkeypatch.setattr(titlecards.Path, "is_file", lambda self: True)
+
+    assert titlecards.build_titlecard_frame(make_clip(), "1280") is None
+
+
+def test_build_titlecard_frame_removes_card_when_verify_fails(monkeypatch, make_clip):
+    seen = {}
+
+    def fake_verify(path, *_args, **_kwargs):
+        seen["path"] = path
+        return False
+
+    monkeypatch.setattr(
+        video,
+        "run_ffmpeg_process",
+        lambda cmd, **_k: subprocess.CompletedProcess(
+            args=cmd, returncode=0, stderr=""
+        ),
+    )
+    monkeypatch.setattr(video, "verify_output_file", fake_verify)
+    monkeypatch.setattr(titlecards.Path, "is_file", lambda self: True)
+
+    assert titlecards.build_titlecard_frame(make_clip(), "1280x720") is None
+    assert not os.path.exists(seen["path"])
