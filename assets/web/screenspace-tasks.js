@@ -598,6 +598,7 @@
     // Rebuild multitool steps first; step._initial lets _mtRender* set values at creation.
     if (task.type === "multitool") {
       var mtParams = task.parameters || {};
+      state.multitoolFocus = 0;
       state.multitoolSteps = (mtParams.steps || []).map(function (s) {
         var step = { type: s.type, collapsed: true };
         step.logic = (s.logic || "AND").toUpperCase();

@@ -34,6 +34,13 @@
     refTimeChip = SS.refTimeChip,
     refreshCalibration = SS.refreshCalibration;
 
+  // Model-view satellite loads first; late-bound so its focus state stays there.
+  function refreshModelView(opts) { return SS.refreshModelView && SS.refreshModelView(opts); }
+  function focusedStepIdx() {
+    var n = state.multitoolSteps.length;
+    return n ? Math.min(Math.max(state.multitoolFocus || 0, 0), n - 1) : 0;
+  }
+
   // ---- Multitool step list (drag reorder + drop-to-import from task queue) ----
 
   var MULTITOOL_ALLOWED_TYPES = [
@@ -83,6 +90,7 @@
         state.multitoolSteps[capturedIdx].region_ref = ref ? regionRefPayload(ref) : null;
         // Region drives the color presence min-area pixel estimate.
         _updateMinAreaReadout("_mt" + capturedIdx);
+        refreshModelView({ debounce: true });
       });
     })(idx);
     regionCtrl.appendChild(regionSel);
@@ -278,6 +286,7 @@
           step._upload = null;
           renderInfo();
           refreshCalibration({ debounce: true });
+          refreshModelView({ debounce: true });
         });
         info.appendChild(clearBtn);
       } else if (step._refTs !== undefined) {
@@ -297,6 +306,7 @@
       step._upload = null;
       renderInfo();
       refreshCalibration({ debounce: true });
+      refreshModelView({ debounce: true });
     });
     ctrl.appendChild(capBtn);
 
@@ -313,6 +323,7 @@
         step._refTs = undefined;
         renderInfo();
         refreshCalibration({ debounce: true });
+        refreshModelView({ debounce: true });
         showToast("Template loaded");
       };
       reader.readAsDataURL(file);
@@ -460,6 +471,7 @@
       state.multitoolSteps[idx]._refTs = state.currentTimestamp;
       renderCell();
       refreshCalibration({ debounce: true });
+      refreshModelView({ debounce: true });
     });
     c.appendChild(capBtn);
     c.appendChild(cell);
@@ -588,6 +600,8 @@
 
   function renderMultitoolParams(container) {
     var stepsDiv = el("div", "multitool-steps");
+    var focusIdx = focusedStepIdx();
+    state.multitoolFocus = focusIdx;
     state.multitoolSteps.forEach(function (step, idx) {
       if (idx > 0) {
         var opRow = el("div", "multitool-operator-row");
@@ -694,7 +708,7 @@
         opRow.appendChild(offWrap);
         stepsDiv.appendChild(opRow);
       }
-      var card = el("div", "multitool-step");
+      var card = el("div", "multitool-step" + (idx === focusIdx ? " is-selected" : ""));
       card.dataset.stepIdx = String(idx);
       var header = el("div", "multitool-step-header");
 
@@ -719,11 +733,18 @@
         removeBtn.addEventListener("click", function (e) {
           e.stopPropagation();
           snapshotMultitoolStepValues();
+          var focus = focusedStepIdx();
           state.multitoolSteps.splice(capturedIdx, 1);
+          if (capturedIdx < focus) state.multitoolFocus = focus - 1;
           renderWorkflowParams();
           updateRunButton();
         });
       })(idx);
+      var chevron = el("button", "multitool-step-chevron");
+      chevron.type = "button";
+      chevron.title = step.collapsed ? "Expand step" : "Collapse step";
+      chevron.appendChild(iconSpan("chevron-down"));
+      header.appendChild(chevron);
       header.appendChild(removeBtn);
       card.appendChild(header);
 
@@ -731,14 +752,44 @@
       renderMultitoolStepBody(body, step.type, idx);
       card.appendChild(body);
 
-      header.addEventListener("click", function (e) {
-        if (e.target.closest(".multitool-step-drag-handle") || e.target.closest(".multitool-step-remove")) return;
-        step.collapsed = !step.collapsed;
-        body.classList.toggle("collapsed", step.collapsed);
+      function setCollapsed(collapsed) {
+        step.collapsed = collapsed;
+        body.classList.toggle("collapsed", collapsed);
+        card.classList.toggle("is-collapsed", collapsed);
+        chevron.title = collapsed ? "Expand step" : "Collapse step";
+      }
+      card.classList.toggle("is-collapsed", !!step.collapsed);
+      chevron.addEventListener("click", function (e) {
+        e.stopPropagation();
+        setCollapsed(!step.collapsed);
       });
+      // Header click focuses the step (model view + calibration follow); the chevron folds it.
+      (function (capturedIdx) {
+        header.addEventListener("click", function (e) {
+          if (e.target.closest(".multitool-step-drag-handle") || e.target.closest(".multitool-step-remove")) return;
+          if (step.collapsed) setCollapsed(false);
+          selectStep(capturedIdx);
+        });
+      })(idx);
 
       stepsDiv.appendChild(card);
     });
+
+    // Compare against shared state: the pipette focuses steps from outside this closure.
+    function selectStep(idx) {
+      if (idx === focusedStepIdx()) return;
+      SS.setMultitoolFocus(idx);
+    }
+
+    // Per-step rows skip the hub's addParamRow, so this is their preview-refresh path.
+    function onStepEdit(e) {
+      var card = e.target.closest(".multitool-step");
+      if (!card) return;
+      selectStep(parseInt(card.dataset.stepIdx, 10) || 0);
+      refreshModelView({ debounce: true });
+    }
+    stepsDiv.addEventListener("input", onStepEdit);
+    stepsDiv.addEventListener("change", onStepEdit);
 
     if (state.multitoolSteps.length === 0) {
       // Empty flex containers are 0px tall and never receive dragover; give
@@ -822,6 +873,7 @@
         }
         snapshotMultitoolStepValues();
         state.multitoolSteps.push(step);
+        state.multitoolFocus = state.multitoolSteps.length - 1;
         renderWorkflowParams();
         showToast("Imported " + task.type + " task as step");
         return;
@@ -836,6 +888,11 @@
       snapshotMultitoolStepValues();
       var moved = state.multitoolSteps.splice(fromIdx, 1)[0];
       state.multitoolSteps.splice(toIdx, 0, moved);
+      // Focus rides the step, not the slot.
+      var focus = focusedStepIdx();
+      if (fromIdx === focus) state.multitoolFocus = toIdx;
+      else if (fromIdx < focus && toIdx >= focus) state.multitoolFocus = focus - 1;
+      else if (fromIdx > focus && toIdx <= focus) state.multitoolFocus = focus + 1;
       renderWorkflowParams();
     });
 
@@ -856,6 +913,7 @@
       var chosen = sel.value;
       snapshotMultitoolStepValues();
       state.multitoolSteps.push({ type: chosen, collapsed: false, logic: "AND" });
+      state.multitoolFocus = state.multitoolSteps.length - 1;
       renderWorkflowParams();
       updateRunButton();
     });

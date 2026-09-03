@@ -224,6 +224,7 @@
     templateOverlayPos: null,
     draggingTemplate: null,
     multitoolSteps: [],
+    multitoolFocus: 0,
     hoveredResultSceneName: null,
     hoveredBoundaryTs: null,
     videoPlaying: false,
@@ -3481,6 +3482,8 @@
       // Every multitool mutation lands here; task-import and reorder paths skip
       // updateRunButton.
       updateRunButton();
+      _updateOverlayUi();
+      refreshModelView();
       updateCalibrationVisibility();
       // Multitool returns early, so mirror the bottom-of-function calibration reset here.
       state.calibrationResult = null;
@@ -4502,7 +4505,7 @@
           _blinkStart = Date.now();
           state.overlayBlinkActive = true;
           var curTs = Number(state.currentTimestamp || 0).toFixed(3);
-          if (!state.overlayImage || state.overlayImageTimestamp !== curTs || state.overlayImageTool !== state.activeWorkflow) {
+          if (!state.overlayImage || state.overlayImageTimestamp !== curTs || state.overlayImageTool !== SS._previewToolKey()) {
             refreshModelView();
           }
           renderOverlay();

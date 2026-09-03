@@ -1988,11 +1988,25 @@ html[data-theme="light"] .ss-cat-chip.active[data-active-type="numbers"],
   -webkit-mask-image: url("/screenspace/icons/adjustments-horizontal.svg");
 }
 
-.preview-section-hint {
+/* Which tool (and multitool step) the model view shows. */
+.preview-section-focus {
   margin-left: auto;
+  font-weight: 400;
+  color: var(--color-text);
+}
+
+.preview-section-focus:empty {
+  display: none;
+}
+
+.preview-section-hint {
   font-weight: 400;
   opacity: 0.7;
   font-style: italic;
+}
+
+.preview-section-focus:empty + .preview-section-hint {
+  margin-left: auto;
 }
 
 /* Shown in place of the strips when the participant has no pinned frames. */
@@ -2158,6 +2172,20 @@ html[data-theme="light"] .ss-cat-chip.active[data-active-type="numbers"],
   display: flex;
   align-items: center;
   gap: var(--space-1);
+}
+
+/* Multitool: the focused step's track reads full-strength, the rest recede. */
+.cal-strips.has-focus .cal-track {
+  opacity: 0.6;
+  transition: opacity var(--duration-fast);
+}
+
+.cal-strips.has-focus .cal-track.is-focus {
+  opacity: 1;
+}
+
+.cal-track.is-focus .cal-track-label {
+  color: var(--color-text);
 }
 
 .cal-track-logic {
@@ -2369,6 +2397,27 @@ html[data-theme="light"] .ss-cat-chip.active[data-active-type="numbers"],
   background: var(--bg-hover);
 }
 
+/* The focused step: model view and calibration follow it. */
+.multitool-step.is-selected {
+  border-color: var(--color-accent);
+}
+
+.multitool-step.is-selected .multitool-step-header {
+  background: var(--bg-hover);
+}
+
+.multitool-step-chevron .ss-icon {
+  transition: transform var(--duration-fast);
+}
+
+.multitool-step.is-collapsed .multitool-step-chevron .ss-icon {
+  transform: rotate(-90deg);
+}
+
+.multitool-step-chevron + .multitool-step-remove {
+  margin-left: 0;
+}
+
 .multitool-step-num {
   font-weight: 600;
   color: var(--color-text-dim);
@@ -2382,7 +2431,8 @@ html[data-theme="light"] .ss-cat-chip.active[data-active-type="numbers"],
   gap: var(--space-1);
 }
 
-.multitool-step-remove {
+.multitool-step-remove,
+.multitool-step-chevron {
   margin-left: auto;
   background: none;
   border: none;
@@ -2394,7 +2444,8 @@ html[data-theme="light"] .ss-cat-chip.active[data-active-type="numbers"],
   align-items: center;
 }
 
-.multitool-step-remove:hover {
+.multitool-step-remove:hover,
+.multitool-step-chevron:hover {
   color: var(--color-text);
   background: var(--bg-hover);
 }
