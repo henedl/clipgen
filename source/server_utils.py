@@ -8,7 +8,8 @@ same numeric-arg parse-and-validate block dozens of times. Collapsed here:
 - :class:`ApiError` + :func:`json_endpoint` let a handler ``raise`` a uniform
   4xx instead of threading an ``err(...)`` tuple back through every guard.
 - :func:`parse_number_arg` parses + bound-checks one numeric value;
-  :func:`opt_number` is its lenient fall-back-don't-fail sibling.
+  :func:`opt_number` is its lenient fall-back-don't-fail sibling;
+  :func:`require_json_body` is the JSON-object guard.
 - :func:`find_by_id` / :func:`remove_by_id` are the manifest-collection CRUD
   lookups (stashes, blueprints, cuts, annotations).
 - :func:`make_debounced_persist` builds the manifest-write debounce.
@@ -34,7 +35,7 @@ from collections import OrderedDict
 from collections.abc import Callable
 from functools import wraps
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from flask import Response, jsonify, request
 
@@ -118,6 +119,14 @@ def parse_number_arg(
     if max_ is not None and value > max_:
         raise ApiError(f"{name} must be <= {max_}")
     return int(value) if int_only else value
+
+
+def require_json_body(message: str = "JSON body required") -> dict[str, Any]:
+    """The request's JSON object; ``ApiError`` (400) when absent, empty, or not an object."""
+    data = request.get_json(silent=True)
+    if not data or not isinstance(data, dict):
+        raise ApiError(message)
+    return cast(dict[str, Any], data)
 
 
 def opt_number(args: Any, name: str, default: float | None = None) -> float | None:

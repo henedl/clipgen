@@ -80,11 +80,13 @@ from server_utils import (
     err,
     err_no_video,
     find_by_id,
+    json_endpoint,
     make_debounced_persist,
     make_participant_cache,
     ndjson_response,
     ok,
     profiled_stream,
+    require_json_body,
 )
 
 FlaskResponse = Response | tuple[Response, int]
@@ -497,11 +499,10 @@ def api_transcript(participant: str) -> FlaskResponse:
 
 
 @transcripts_bp.route("/api/transcript/<participant>/segment", methods=["PUT"])
+@json_endpoint
 def api_edit_segment(participant: str) -> FlaskResponse:
     """Edit a segment's text. Creates a correction entry automatically."""
-    data = request.get_json(silent=True)
-    if not data:
-        return err("Missing JSON body")
+    data = require_json_body("Missing JSON body")
 
     segment_id = data.get("segment_id", "")
     text_raw = data.get("text", "")
@@ -1351,11 +1352,10 @@ def api_corrections_list() -> FlaskResponse:
 
 
 @transcripts_bp.route("/api/corrections", methods=["POST"])
+@json_endpoint
 def api_corrections_add() -> FlaskResponse:
     """Add a manual correction."""
-    data = request.get_json(silent=True)
-    if not data:
-        return err("Missing JSON body")
+    data = require_json_body("Missing JSON body")
 
     from_text = data.get("from", "").strip()
     to_text = data.get("to", "").strip()
@@ -1433,11 +1433,10 @@ def api_known_terms_list() -> FlaskResponse:
 
 
 @transcripts_bp.route("/api/known-terms", methods=["POST"])
+@json_endpoint
 def api_known_terms_add() -> FlaskResponse:
     """Add a known term."""
-    data = request.get_json(silent=True)
-    if not data:
-        return err("Missing JSON body")
+    data = require_json_body("Missing JSON body")
 
     term = str(data.get("term", "")).strip()
     if not term:
@@ -1761,11 +1760,10 @@ def api_intake_poll() -> FlaskResponse:
 
 
 @transcripts_bp.route("/api/marks", methods=["POST"])
+@json_endpoint
 def api_marks_add() -> FlaskResponse:
     """Create marks for one or more segments."""
-    data = request.get_json(silent=True)
-    if not data:
-        return err("Missing JSON body")
+    data = require_json_body("Missing JSON body")
 
     segment_ids = data.get("segment_ids", [])
     if not segment_ids:
@@ -1810,11 +1808,10 @@ def api_marks_add() -> FlaskResponse:
 
 
 @transcripts_bp.route("/api/marks/<mark_id>", methods=["PUT"])
+@json_endpoint
 def api_marks_update(mark_id: str) -> FlaskResponse:
     """Update a mark's category or label."""
-    data = request.get_json(silent=True)
-    if not data:
-        return err("Missing JSON body")
+    data = require_json_body("Missing JSON body")
 
     with _manifest_lock:
         marks = _manifest.get("marks", [])
@@ -2124,11 +2121,10 @@ def api_llm_start() -> FlaskResponse:
 
 
 @transcripts_bp.route("/api/transcribe", methods=["POST"])
+@json_endpoint
 def api_transcribe() -> FlaskResponse:
     """Enqueue participant(s) for background transcription."""
-    data = request.get_json(silent=True)
-    if not data:
-        return err("Missing JSON body")
+    data = require_json_body("Missing JSON body")
 
     participant_ids = data.get("participants", [])
     force = data.get("force", False)

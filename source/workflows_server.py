@@ -33,7 +33,15 @@ import config
 import profiling
 import utils
 import workflows
-from server_utils import err, find_by_id, make_sse_channel, ok, remove_by_id
+from server_utils import (
+    err,
+    find_by_id,
+    json_endpoint,
+    make_sse_channel,
+    ok,
+    remove_by_id,
+    require_json_body,
+)
 
 # ---- Module state (initialized by _init_workflows_state) ----
 
@@ -181,11 +189,10 @@ def api_blueprints_create() -> Any:
 
 
 @workflows_bp.route("/api/blueprints/<bp_id>", methods=["PUT"])
+@json_endpoint
 def api_blueprints_update(bp_id: str) -> Any:
     """Update a blueprint's name/nodes/edges/viewport (the debounced autosave)."""
-    data = request.get_json(silent=True)
-    if not data:
-        return err("JSON body required")
+    data = require_json_body()
     with _manifest_lock:
         blueprints = _manifest.get("blueprints", [])
         blueprint = find_by_id(blueprints, bp_id)
@@ -301,13 +308,12 @@ def api_stashes_create() -> Any:
 
 
 @workflows_bp.route("/api/stashes/<stash_id>", methods=["PUT"])
+@json_endpoint
 def api_stashes_update(stash_id: str) -> Any:
     """Rename a user stash. Built-in recipes are read-only (403)."""
     if any(s["id"] == stash_id for s in workflows.BUILTIN_STASHES):
         return err("Built-in recipes are read-only", 403)
-    data = request.get_json(silent=True)
-    if not data:
-        return err("JSON body required")
+    data = require_json_body()
     with _manifest_lock:
         stashes = _manifest.get("stashes", [])
         stash = find_by_id(stashes, stash_id)

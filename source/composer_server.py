@@ -66,7 +66,9 @@ from server_utils import (
     err,
     err_no_video,
     find_by_id,
+    json_endpoint,
     ok,
+    parse_number_arg,
     remove_by_id,
 )
 import itertools
@@ -240,16 +242,14 @@ def _clamp_span(participant: str, start: float, end: float) -> tuple[float, floa
 
 
 @composer_bp.route("/api/cuts", methods=["POST"])
+@json_endpoint
 def api_cut_create() -> Any:
     data = request.get_json(silent=True) or {}
     participant = str(data.get("participant", "")).strip()
     if not participant:
         return err("participant is required")
-    try:
-        start = float(data.get("start", 0))
-        end = float(data.get("end", 0))
-    except (TypeError, ValueError):
-        return err("start/end must be numbers")
+    start = parse_number_arg(data.get("start", 0), "start")
+    end = parse_number_arg(data.get("end", 0), "end")
     if end <= start:
         return err("end must be after start")
     start, end = _clamp_span(participant, start, end)
@@ -268,6 +268,7 @@ def api_cut_create() -> Any:
 
 
 @composer_bp.route("/api/cuts/<cut_id>", methods=["PATCH"])
+@json_endpoint
 def api_cut_update(cut_id: str) -> Any:
     data = request.get_json(silent=True) or {}
     # Clamp outside the lock: _clamp_span may ffprobe on a cold cache (see
@@ -279,13 +280,10 @@ def api_cut_update(cut_id: str) -> Any:
         start = cut["start"]
         end = cut["end"]
         participant = cut["participant"]
-    try:
-        if data.get("start") is not None:
-            start = float(data["start"])
-        if data.get("end") is not None:
-            end = float(data["end"])
-    except (TypeError, ValueError):
-        return err("start/end must be numbers")
+    if data.get("start") is not None:
+        start = parse_number_arg(data["start"], "start")
+    if data.get("end") is not None:
+        end = parse_number_arg(data["end"], "end")
     if end <= start:
         return err("end must be after start")
     start, end = _clamp_span(participant, start, end)
@@ -1105,14 +1103,12 @@ def api_export_cancel() -> Any:
 
 
 @composer_bp.route("/api/export/screenshot", methods=["POST"])
+@json_endpoint
 def api_export_screenshot() -> Any:
     """Annotated screenshot at one timestamp (PIL composite; no ffmpeg filter)."""
     data = request.get_json(silent=True) or {}
     participant = str(data.get("participant", "")).strip()
-    try:
-        at_time = float(data.get("time", 0))
-    except (TypeError, ValueError):
-        return err("time must be a number")
+    at_time = parse_number_arg(data.get("time", 0), "time")
     parts = _find_participant_parts(participant)
     if not parts:
         return err_no_video(participant)
@@ -1155,11 +1151,8 @@ def api_export_screenshot() -> Any:
 def _run_overlay_export(data: dict[str, Any], *, gif: bool) -> Any:
     """Shared burn/GIF export: validate span, render windows, run ffmpeg."""
     participant = str(data.get("participant", "")).strip()
-    try:
-        start = float(data.get("start", 0))
-        end = float(data.get("end", 0))
-    except (TypeError, ValueError):
-        return err("start/end must be numbers")
+    start = parse_number_arg(data.get("start", 0), "start")
+    end = parse_number_arg(data.get("end", 0), "end")
     if end <= start:
         return err("end must be after start")
     parts = _find_participant_parts(participant)

@@ -91,6 +91,7 @@ from server_utils import (
     opt_number,
     parse_number_arg,
     remove_by_id,
+    require_json_body,
 )
 
 # Per-tool optional float overrides api_preview reads straight into params.
@@ -769,9 +770,7 @@ def api_calibrate() -> FlaskResponse:
     per pin (multitool entries also carry ``steps`` and a chain ``passed``). This
     is per-frame only — temporal params (consecutive/interval) are not validated.
     """
-    data = request.get_json(silent=True)
-    if not data:
-        return err("JSON body required")
+    data = require_json_body()
 
     tool = (data.get("tool") or "").strip()
     if not _calibratable_tool(tool):
@@ -1056,6 +1055,7 @@ def _participant_video_duration(participant_id: str) -> float | None:
 
 
 @screenspace_bp.route("/api/video/frame/<participant>/<timestamp>")
+@json_endpoint
 def api_video_frame(participant: str, timestamp: str) -> FlaskResponse:
     """Extract and return a single JPEG frame at the given timestamp.
 
@@ -1067,10 +1067,7 @@ def api_video_frame(participant: str, timestamp: str) -> FlaskResponse:
     browser HTTP cache invalidates on the same boundary, enabling the long
     ``immutable`` ``Cache-Control`` below.
     """
-    try:
-        ts = float(timestamp)
-    except (ValueError, TypeError):
-        return err("Invalid timestamp")
+    ts = parse_number_arg(timestamp, "timestamp")
 
     # Map the global time into the owning sub-video; single-video is unchanged.
     mapped = _map_participant_time(participant, ts)
@@ -1164,6 +1161,7 @@ def api_heatmap_sprite(filename: str) -> FlaskResponse:
 
 
 @screenspace_bp.route("/api/preview/<participant>/<timestamp>", methods=["GET", "POST"])
+@json_endpoint
 def api_preview(participant: str, timestamp: str) -> FlaskResponse:
     """Render what the selected tool's CV pipeline sees at ``timestamp``.
 
@@ -1192,10 +1190,7 @@ def api_preview(participant: str, timestamp: str) -> FlaskResponse:
     """
     import screenspace_preview
 
-    try:
-        ts = float(timestamp)
-    except (ValueError, TypeError):
-        return err("Invalid timestamp")
+    ts = parse_number_arg(timestamp, "timestamp")
 
     video_path = _find_participant_video(participant)
     if video_path is None:
@@ -1663,11 +1658,10 @@ def api_regions_list() -> FlaskResponse:
 
 
 @screenspace_bp.route("/api/regions", methods=["POST"])
+@json_endpoint
 def api_regions_create() -> FlaskResponse:
     """Create or update a named region."""
-    data = request.get_json(silent=True)
-    if not data:
-        return err("JSON body required")
+    data = require_json_body()
 
     name = data.get("name", "").strip()
     if not name:
@@ -1694,6 +1688,7 @@ def api_regions_create() -> FlaskResponse:
         error = _validate_region_points(points, shape, canvas_w, canvas_h)
         if error:
             return err(error)
+        assert isinstance(points, list)  # _validate_region_points rejected the rest
         points = [
             [
                 [
@@ -1801,11 +1796,10 @@ def api_stashes_create() -> FlaskResponse:
 
 
 @screenspace_bp.route("/api/stashes/<stash_id>", methods=["PUT"])
+@json_endpoint
 def api_stashes_update(stash_id: str) -> FlaskResponse:
     """Update a stash (rename)."""
-    data = request.get_json(silent=True)
-    if not data:
-        return err("JSON body required")
+    data = require_json_body()
 
     name = data.get("name", "").strip()
     with _manifest_lock:
@@ -1842,15 +1836,14 @@ def api_stashes_restore(stash_id: str) -> FlaskResponse:
 
 
 @screenspace_bp.route("/api/stashes/<stash_id>/regions", methods=["POST"])
+@json_endpoint
 def api_stashes_add_region(stash_id: str) -> FlaskResponse:
     """Copy one active region into an existing stash (active set unchanged).
 
     If the stash already holds a region with that name, the active definition
     overwrites it (last-write-wins, matching api_regions_create's upsert).
     """
-    data = request.get_json(silent=True)
-    if not data:
-        return err("JSON body required")
+    data = require_json_body()
     name = data.get("name", "").strip()
     if not name:
         return err("Region name is required")
@@ -2250,9 +2243,7 @@ def api_tasks_create() -> FlaskResponse:
     if not _worker:
         return err("Worker not initialized", 500)
 
-    data = request.get_json(silent=True)
-    if not data:
-        return err("JSON body required")
+    data = require_json_body()
 
     # Boundary/Attention are full-frame by contract; force it before validation so stored
     # region fields agree.

@@ -136,6 +136,25 @@ def test_json_endpoint_does_not_swallow_other_exceptions(app):
         handler()
 
 
+# ---- require_json_body ----
+
+
+def test_require_json_body_returns_the_object(app):
+    with app.test_request_context(json={"a": 1}):
+        assert server_utils.require_json_body() == {"a": 1}
+
+
+@pytest.mark.parametrize("body", [None, {}, [1, 2]])
+def test_require_json_body_rejects_missing_empty_or_non_object(app, body):
+    with (
+        app.test_request_context(json=body),
+        pytest.raises(server_utils.ApiError) as ei,
+    ):
+        server_utils.require_json_body("Missing JSON body")
+    assert ei.value.code == 400
+    assert ei.value.message == "Missing JSON body"
+
+
 def test_find_by_id_returns_first_match():
     items = [{"id": "a", "n": 1}, {"id": "b", "n": 2}, {"id": "b", "n": 3}]
     assert server_utils.find_by_id(items, "b") == {"id": "b", "n": 2}
