@@ -28,7 +28,7 @@ _ICONS = WEB.parent / "icons"
 _CSS = read("transcripts.css")
 _HTML = read("transcripts.html")
 # The page script is a hub (transcripts.js) plus feature satellites
-# (transcripts-{corrections,search,video,pills,agents}.js); the friction/summary
+# (transcripts-{corrections,search,video,pills,agents,batch}.js); the friction/summary
 # element IDs live in the agents satellite, so read all of them together.
 _JS = concat_js("transcripts")
 
