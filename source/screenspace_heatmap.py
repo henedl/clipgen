@@ -131,6 +131,25 @@ def _grid_accumulator(
     return accumulator
 
 
+def _render_grid_heatmap(
+    results: list[dict[str, Any]],
+    width: int,
+    height: int,
+    output_path: str,
+    kind: str,
+    layers: GridLayers | None,
+) -> str | None:
+    """Accumulate one grid *kind*, colorize, resize to the target, write PNG."""
+    accumulator = _grid_accumulator(results, kind, layers)
+    if accumulator.max() == 0:
+        return None
+    heatmap = _colorize_accumulator(accumulator, accumulator.max())
+    heatmap = cv2.resize(heatmap, (width, height), interpolation=cv2.INTER_LINEAR)
+    if not _write_png(output_path, heatmap):
+        return None
+    return output_path
+
+
 def generate_flow_heatmap(
     results: list[dict[str, Any]],
     region_width: int,
@@ -146,18 +165,9 @@ def generate_flow_heatmap(
     *layers* is an optional prebuilt :func:`build_grid_layers` result covering
     every result; folding it is equivalent to the replay below and skips it.
     """
-    accumulator = _grid_accumulator(results, "flow", layers)
-
-    if accumulator.max() == 0:
-        return None
-
-    heatmap = _colorize_accumulator(accumulator, accumulator.max())
-    heatmap = cv2.resize(
-        heatmap, (region_width, region_height), interpolation=cv2.INTER_LINEAR
+    return _render_grid_heatmap(
+        results, region_width, region_height, output_path, "flow", layers
     )
-    if not _write_png(output_path, heatmap):
-        return None
-    return output_path
 
 
 def generate_change_heatmap(
@@ -175,18 +185,9 @@ def generate_change_heatmap(
     *layers* is an optional prebuilt :func:`build_grid_layers` result covering
     every result; folding it is equivalent to the replay below and skips it.
     """
-    accumulator = _grid_accumulator(results, "change", layers)
-
-    if accumulator.max() == 0:
-        return None
-
-    heatmap = _colorize_accumulator(accumulator, accumulator.max())
-    heatmap = cv2.resize(
-        heatmap, (region_width, region_height), interpolation=cv2.INTER_LINEAR
+    return _render_grid_heatmap(
+        results, region_width, region_height, output_path, "change", layers
     )
-    if not _write_png(output_path, heatmap):
-        return None
-    return output_path
 
 
 def generate_attention_heatmap(
@@ -205,18 +206,9 @@ def generate_attention_heatmap(
     *layers* is an optional prebuilt :func:`build_grid_layers` result covering
     every result; folding it is equivalent to the replay below and skips it.
     """
-    accumulator = _grid_accumulator(results, "attention", layers)
-
-    if accumulator.max() == 0:
-        return None
-
-    heatmap = _colorize_accumulator(accumulator, accumulator.max())
-    heatmap = cv2.resize(
-        heatmap, (frame_width, frame_height), interpolation=cv2.INTER_LINEAR
+    return _render_grid_heatmap(
+        results, frame_width, frame_height, output_path, "attention", layers
     )
-    if not _write_png(output_path, heatmap):
-        return None
-    return output_path
 
 
 def _accumulate_heatmap_result(

@@ -610,24 +610,6 @@ def blur_gray(region: np.ndarray) -> np.ndarray:
     return cv2.cvtColor(cv2.GaussianBlur(region, (k, k), 0), cv2.COLOR_BGR2GRAY)
 
 
-def _frame_diff_mask(
-    region_a: np.ndarray,
-    region_b: np.ndarray,
-    noise_threshold: int = 0,
-) -> np.ndarray:
-    """Blur, grayscale, absdiff, threshold and morph-open two same-sized BGR regions.
-
-    Returns the binary change mask; callers derive a change ratio from it or
-    downsample it to a grid (the Change heatmap). Single source of truth for the
-    frame-diff computation shared by ``compute_frame_diff``, ``ChangeTool`` and
-    ``scan_changes`` — the per-frame callers go through the ``_gray`` variants
-    with a carried-forward ``blur_gray`` result instead of this pairwise form.
-    """
-    return _frame_diff_mask_gray(
-        blur_gray(region_a), blur_gray(region_b), noise_threshold
-    )
-
-
 def _frame_diff_mask_gray(
     a_gray: np.ndarray,
     b_gray: np.ndarray,
@@ -915,6 +897,13 @@ def _match_corr_window(
     return result, xa, ya
 
 
+def _neutralize_nonfinite(result: np.ndarray) -> np.ndarray:
+    """Flat windows normalize by ~0 std; treat NaN/inf correlations as -1."""
+    if not np.all(np.isfinite(result)):
+        return np.where(np.isfinite(result), result, -1.0)
+    return result
+
+
 def _template_frame_gray(frame: np.ndarray) -> np.ndarray:
     """Blur and grayscale a frame for template correlation."""
     k = config.SCREENSPACE_BLUR_KERNEL
@@ -946,8 +935,7 @@ def _template_correlation_map(
     result = cv2.matchTemplate(
         frame_gray, tmpl_gray, cv2.TM_CCOEFF_NORMED, mask=gray_mask
     )
-    if not np.all(np.isfinite(result)):
-        result = np.where(np.isfinite(result), result, -1.0)
+    result = _neutralize_nonfinite(result)
     return result
 
 
@@ -964,8 +952,7 @@ def _template_corr_window(
     if packed is None:
         return None
     result, x_offset, y_offset = packed
-    if not np.all(np.isfinite(result)):
-        result = np.where(np.isfinite(result), result, -1.0)
+    result = _neutralize_nonfinite(result)
     return result, x_offset, y_offset
 
 
@@ -1352,8 +1339,7 @@ def _match_shape_scales(
         result, x_offset, y_offset = packed
         tw, th = entry["w"], entry["h"]
         # Flat windows normalize by ~0 std; neutralize like template matching.
-        if not np.all(np.isfinite(result)):
-            result = np.where(np.isfinite(result), result, -1.0)
+        result = _neutralize_nonfinite(result)
         np.clip(result, -1.0, 1.0, out=result)
         if result.size:
             best_peak = max(best_peak, float(result.max()))

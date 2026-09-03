@@ -1251,19 +1251,14 @@ def filter_segments(
 # ---------------------------------------------------------------------------
 
 
-def _format_timestamp(seconds: float, fmt: Literal["display", "srt", "vtt"]) -> str:
-    """Format a seconds value for transcript output.
+def _format_timestamp(seconds: float, fmt: Literal["srt", "vtt"]) -> str:
+    """Cue timestamp: ``srt`` is HH:MM:SS,mmm; ``vtt`` is [HH:]MM:SS.mmm.
 
-    ``display`` is M:SS / H:MM:SS for Markdown. ``srt`` is HH:MM:SS,mmm.
-    ``vtt`` is MM:SS.mmm or HH:MM:SS.mmm.
+    Markdown display times use :func:`utils.seconds_to_timestamp`.
     """
     total = int(seconds)
     h, remainder = divmod(total, 3600)
     m, s = divmod(remainder, 60)
-    if fmt == "display":
-        if h > 0:
-            return f"{h}:{m:02d}:{s:02d}"
-        return f"{m}:{s:02d}"
     ms = int((seconds - total) * 1000)
     if fmt == "srt":
         return f"{h:02d}:{m:02d}:{s:02d},{ms:03d}"
@@ -1291,8 +1286,8 @@ def _format_markdown(result: TranscriptResult) -> str:
         "",
     ]
     for seg in result["segments"]:
-        start = _format_timestamp(seg["start"], "display")
-        end = _format_timestamp(seg["end"], "display")
+        start = utils.seconds_to_timestamp(seg["start"])
+        end = utils.seconds_to_timestamp(seg["end"])
         lines.append(f"**[{start} - {end}]**")
         lines.append(seg["text"])
         lines.append("")
@@ -1323,12 +1318,10 @@ def _format_vtt(result: TranscriptResult) -> str:
 # Write / read transcript files
 # ---------------------------------------------------------------------------
 
-_FORMAT_EXT = {"md": ".md", "srt": ".srt", "vtt": ".vtt"}
-
 
 def get_transcript_extension(fmt: str | None = None) -> str:
     """Return the file extension for the given transcript format."""
-    return _FORMAT_EXT.get(fmt or config.TRANSCRIBE_FORMAT, ".md")
+    return _FORMATS.get(fmt or config.TRANSCRIBE_FORMAT, _FORMATS["md"])[0]
 
 
 def write_transcript(
@@ -1342,8 +1335,7 @@ def write_transcript(
     Returns True on success, False on failure.
     """
     fmt = fmt or config.TRANSCRIBE_FORMAT
-    formatters = {"md": _format_markdown, "srt": _format_srt, "vtt": _format_vtt}
-    formatter = formatters.get(fmt, _format_markdown)
+    formatter = _FORMATS.get(fmt, _FORMATS["md"])[1]
 
     try:
         text = formatter(result)
@@ -1371,11 +1363,8 @@ def read_transcript(filepath: str) -> TranscriptResult | None:
         return None
 
     ext = path.suffix.lower()
-    if ext == ".srt":
-        return _parse_srt(text, filepath)
-    if ext == ".vtt":
-        return _parse_vtt(text, filepath)
-    return _parse_markdown(text, filepath)
+    parser = next((p for e, _, p in _FORMATS.values() if e == ext), _parse_markdown)
+    return parser(text, filepath)
 
 
 # ---------------------------------------------------------------------------
@@ -1424,34 +1413,33 @@ def _md_time_to_seconds(ts: str) -> float | None:
     return utils.timestamp_to_seconds(ts)
 
 
-def _parse_srt(text: str, filepath: str) -> TranscriptResult:
-    segments: list[TranscriptSegment] = []
-    for match in _SRT_BLOCK.finditer(text):
-        segments.append(
-            TranscriptSegment(
-                start=_srt_time_to_seconds(match.group(2)),
-                end=_srt_time_to_seconds(match.group(3)),
-                text=match.group(4).strip(),
-            )
+def _parse_cues(
+    pattern: re.Pattern[str],
+    to_seconds: Callable[[str], float],
+    first_group: int,
+    text: str,
+    filepath: str,
+) -> TranscriptResult:
+    """Cue blocks matched by *pattern*: start, end, text in consecutive groups."""
+    segments = [
+        TranscriptSegment(
+            start=to_seconds(match.group(first_group)),
+            end=to_seconds(match.group(first_group + 1)),
+            text=match.group(first_group + 2).strip(),
         )
+        for match in pattern.finditer(text)
+    ]
     return TranscriptResult(
         segments=segments, language="", source_file=filepath, model=""
     )
+
+
+def _parse_srt(text: str, filepath: str) -> TranscriptResult:
+    return _parse_cues(_SRT_BLOCK, _srt_time_to_seconds, 2, text, filepath)
 
 
 def _parse_vtt(text: str, filepath: str) -> TranscriptResult:
-    segments: list[TranscriptSegment] = []
-    for match in _VTT_CUE.finditer(text):
-        segments.append(
-            TranscriptSegment(
-                start=_vtt_time_to_seconds(match.group(1)),
-                end=_vtt_time_to_seconds(match.group(2)),
-                text=match.group(3).strip(),
-            )
-        )
-    return TranscriptResult(
-        segments=segments, language="", source_file=filepath, model=""
-    )
+    return _parse_cues(_VTT_CUE, _vtt_time_to_seconds, 1, text, filepath)
 
 
 def _parse_markdown(text: str, filepath: str) -> TranscriptResult:
@@ -1486,6 +1474,14 @@ def _parse_markdown(text: str, filepath: str) -> TranscriptResult:
     return TranscriptResult(
         segments=segments, language=language, source_file=filepath, model=model
     )
+
+
+# Transcript format → (file extension, writer, reader). ``md`` is the default.
+_FORMATS: dict[str, tuple[str, Callable[..., str], Callable[..., TranscriptResult]]] = {
+    "md": (".md", _format_markdown, _parse_markdown),
+    "srt": (".srt", _format_srt, _parse_srt),
+    "vtt": (".vtt", _format_vtt, _parse_vtt),
+}
 
 
 # ---------------------------------------------------------------------------

@@ -758,11 +758,6 @@
     bookmark:   { label: "Bookmark",   token: "--cat-bookmark" },
   };
 
-  function trIntakeCategoryColor(key) {
-    var entry = TR_INTAKE_CATEGORIES[key] || TR_INTAKE_CATEGORIES.bookmark;
-    return getCSSVar(entry.token, "");
-  }
-
   function _syncMarkCategoriesFromSettings(settings) {
     if (!settings) return;
     for (var i = 0; i < settings.length; i++) {

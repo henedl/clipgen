@@ -236,10 +236,6 @@
     }
   }
 
-  function recallStash(stash) {
-    recallStashItem(REEL_STASH, stash);
-  }
-
   function deleteStash(stashId, endpoint, stateArray, renderFn) {
     apiPost(endpoint, { action: "delete", id: stashId })
       .then(function (data) {
@@ -318,10 +314,6 @@
 
   function stashCurrentArtifacts() {
     stashCurrent(ARTIFACT_STASH);
-  }
-
-  function recallArtifactStash(stash) {
-    recallStashItem(ARTIFACT_STASH, stash);
   }
 
   // ---- Stash drag-reveal ----

@@ -35,15 +35,7 @@ _WORD = re.compile(r"\w+")
 # Unreferenced as of the frontend-cleanup pass. Each is a genuine deletion
 # candidate, tracked in the plan's drawdown step rather than removed here so this
 # commit stays test-only. Shrink this set; never grow it.
-KNOWN_DEAD: frozenset[str] = frozenset(
-    {
-        "pointInPolygon",  # screenspace-utils.js
-        "recallArtifactStash",  # studio-stash.js
-        "recallStash",  # studio-stash.js
-        "stopDiscover",  # workflows-runs.js
-        "trIntakeCategoryColor",  # studio-intake.js
-    }
-)
+KNOWN_DEAD: frozenset[str] = frozenset()
 
 
 def _consumer_text() -> str:

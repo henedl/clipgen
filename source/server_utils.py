@@ -418,6 +418,15 @@ def _profiled_rule(prefix: str) -> str:
     return f"{prefix} {rule}"
 
 
+def ndjson_response(body: Any) -> Response:
+    """Streaming NDJSON response with proxy buffering off; *body* is profiled."""
+    return Response(
+        profiled_stream(body),
+        mimetype="application/x-ndjson",
+        headers={"X-Accel-Buffering": "no"},
+    )
+
+
 def profiled_stream(body: Any) -> Any:
     """Wrap a streaming response body so its wall time lands under ``stream <rule>``.
 

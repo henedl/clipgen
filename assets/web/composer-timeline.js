@@ -17,7 +17,6 @@
 
   var RULER_H = 18;
   var STEP_TRACK_H = 8; // minor/major tick strip just under the timestamps
-  var CUT_TRACK_H = 26; // the single cuts track, directly under the ruler
   var LANE_GAP = 3;
   var ROW_H = 15;       // one marker sub-row (14px bar + 1px gap)
   var THUMB_ROW_H = 42; // marker sub-row with thumbnail strips (41px bar + 1px gap)

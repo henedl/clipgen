@@ -162,13 +162,13 @@ def _participant_parts(video_paths: list[str]) -> list[dict[str, Any]] | None:
 
 def _participant_duration(participant: str) -> float | None:
     """Total stitched duration for a participant, or None when unknown."""
-    for p in files.resolve_participant_videos(_sheet_context):
-        if p["id"] == participant and p.get("has_video"):
-            parts = _participant_parts(p["video_paths"])
-            if parts is None:
-                return None
-            return float(sum(part["duration"] for part in parts))
-    return None
+    p = files.find_participant_record(_sheet_context, participant)
+    if not p or not p.get("has_video"):
+        return None
+    parts = _participant_parts(p["video_paths"])
+    if parts is None:
+        return None
+    return float(sum(part["duration"] for part in parts))
 
 
 @composer_bp.route("/api/participants")
@@ -1017,16 +1017,7 @@ def _build_overlay_command(
     *encoder* selects the H.264 encoder for video output (see
     ``video.resolve_video_encoder``); gif output has none to pick.
     """
-    cmd = [
-        "ffmpeg",
-        "-y",
-        "-loglevel",
-        config.FFMPEG_LOGLEVEL,
-        "-ss",
-        f"{max(0.0, local_start):.3f}",
-        "-i",
-        input_path,
-    ]
+    cmd = video.ffmpeg_cmd("-ss", f"{max(0.0, local_start):.3f}", "-i", input_path)
     for png_path, _, _ in overlay_specs:
         cmd += ["-loop", "1", "-i", png_path]
     chain = []
@@ -1124,7 +1115,7 @@ def api_export_screenshot() -> Any:
         return err("time must be a number")
     parts = _find_participant_parts(participant)
     if not parts:
-        return err(f"No video for {participant}", 404)
+        return err_no_video(participant)
     part = _part_for_time(parts, at_time)
     frame = video.extract_frame_at_timestamp(part["path"], at_time - part["offset"])
     if frame is None:
@@ -1173,7 +1164,7 @@ def _run_overlay_export(data: dict[str, Any], *, gif: bool) -> Any:
         return err("end must be after start")
     parts = _find_participant_parts(participant)
     if not parts:
-        return err(f"No video for {participant}", 404)
+        return err_no_video(participant)
     annotations = _annotations_in_span(participant, start, end)
     if not annotations:
         return err("No annotations in this span — use Generate for plain clips.")

@@ -48,10 +48,6 @@ def _empty_result() -> TranscriptResult:
 @pytest.mark.parametrize(
     "fmt,seconds,expected",
     [
-        ("display", 0.0, "0:00"),
-        ("display", 5.0, "0:05"),
-        ("display", 125.0, "2:05"),
-        ("display", 3661.5, "1:01:01"),
         ("srt", 0.0, "00:00:00,000"),
         ("srt", 12.5, "00:00:12,500"),
         ("srt", 3661.5, "01:01:01,500"),
@@ -62,6 +58,15 @@ def _empty_result() -> TranscriptResult:
 )
 def test_format_timestamp(fmt, seconds, expected):
     assert transcripts._format_timestamp(seconds, fmt) == expected
+
+
+@pytest.mark.parametrize(
+    "seconds,expected",
+    [(0.0, "0:00"), (5.0, "0:05"), (125.0, "2:05"), (3661.5, "1:01:01")],
+)
+def test_markdown_display_times_use_utils(seconds, expected):
+    """Markdown transcripts share the sheet's H:MM:SS / M:SS formatter."""
+    assert utils.seconds_to_timestamp(seconds) == expected
 
 
 # ---------------------------------------------------------------------------

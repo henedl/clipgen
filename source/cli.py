@@ -1357,7 +1357,7 @@ def _resolve_chronologic_output_file(
     """Build the output filename for chronologic reel mode."""
     if not args.chronologic:
         return None
-    participant_id = utils.normalize_participant_id(args.chronologic).strip()
+    participant_id = utils.normalize_participant_id(args.chronologic)
     study_name = clips_list[0].get("study", "").strip() if clips_list else ""
     if study_name and participant_id:
         return files.get_unique_filename(
@@ -1460,7 +1460,7 @@ def _run_pre_transcribe(worksheet: Any, args: Any) -> None:
     else:
         target_ids = []
         for raw_id in requested_ids:
-            pid = utils.normalize_participant_id(raw_id).strip()
+            pid = utils.normalize_participant_id(raw_id)
             if pid in available:
                 target_ids.append(pid)
             else:
@@ -3083,7 +3083,7 @@ def _select_transcript_targets(
         return list(source_transcripts.keys())
     targets: list[str] = []
     for raw_id in requested:
-        pid = utils.normalize_participant_id(raw_id).strip()
+        pid = utils.normalize_participant_id(raw_id)
         if pid in source_transcripts:
             targets.append(pid)
         else:

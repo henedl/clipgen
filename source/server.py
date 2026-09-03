@@ -95,11 +95,13 @@ from server_utils import (
     MediaCache,
     clip_media_response,
     err,
+    find_by_id,
     json_endpoint,
     mtime_or_zero,
+    ndjson_response,
     ok,
     parse_number_arg,
-    profiled_stream,
+    remove_by_id,
 )
 from datetime import UTC
 
@@ -1724,11 +1726,7 @@ def api_generate() -> FlaskResponse:
             _save_manifest_quiet()
             _release_busy("generate")
 
-    return Response(
-        profiled_stream(stream_with_busy_release()),
-        mimetype="application/x-ndjson",
-        headers={"X-Accel-Buffering": "no"},
-    )
+    return ndjson_response(stream_with_busy_release())
 
 
 @studio_bp.route("/api/highlights-preview", methods=["POST"])
@@ -1910,11 +1908,7 @@ def api_reel() -> FlaskResponse:
             if not worker_started:
                 _release_busy("reel")
 
-    return Response(
-        profiled_stream(stream()),
-        mimetype="application/x-ndjson",
-        headers={"X-Accel-Buffering": "no"},
-    )
+    return ndjson_response(stream())
 
 
 @studio_bp.route("/api/viewer", methods=["POST"])
@@ -2220,24 +2214,6 @@ def api_manifest() -> FlaskResponse:
         return err(str(e), 500)
 
 
-@studio_bp.route("/api/regenerate", methods=["POST"])
-def api_regenerate() -> FlaskResponse:
-    try:
-        artifacts, reels = viewer.load_manifest_both()
-        if not artifacts and not reels:
-            return err("No manifest found on disk. Export a manifest first.")
-
-        media_count = sum(1 for a in artifacts if a.get("type") != "transcript")
-        reel_count = len(reels)
-        total = media_count + reel_count
-
-        regenerated = pipeline.regenerate_from_manifest(artifacts, reels=reels)
-        return ok(regenerated=regenerated, total=total)
-
-    except Exception as e:
-        return err(str(e), 500)
-
-
 def _handle_stash_crud(load_fn: Any, save_fn: Any, id_prefix: str) -> FlaskResponse:
     """Shared create/update/delete logic for stash endpoints."""
     import uuid
@@ -2274,25 +2250,23 @@ def _handle_stash_crud(load_fn: Any, save_fn: Any, id_prefix: str) -> FlaskRespo
             stash_id = data.get("id")
             if not stash_id:
                 return err("No stash ID")
-            for s in stashes:
-                if s["id"] == stash_id:
-                    name = data.get("name")
-                    if name is not None:
-                        s["name"] = name
-                    save_fn(stashes)
-                    return ok(stash=s)
-            return err("Stash not found", 404)
+            stash = find_by_id(stashes, stash_id)
+            if stash is None:
+                return err("Stash not found", 404)
+            name = data.get("name")
+            if name is not None:
+                stash["name"] = name
+            save_fn(stashes)
+            return ok(stash=stash)
 
         if action == "delete":
             stash_id = data.get("id")
             if not stash_id:
                 return err("No stash ID")
-            for i, s in enumerate(stashes):
-                if s["id"] == stash_id:
-                    stashes.pop(i)
-                    save_fn(stashes)
-                    return ok()
-            return err("Stash not found", 404)
+            if remove_by_id(stashes, stash_id) is None:
+                return err("Stash not found", 404)
+            save_fn(stashes)
+            return ok()
 
         return err(f"Unknown action: {action}")
 
@@ -2754,11 +2728,7 @@ def api_generate_intake() -> FlaskResponse:
             _save_manifest_quiet()
             _mark_intake_active(False)
 
-    return Response(
-        profiled_stream(stream()),
-        mimetype="application/x-ndjson",
-        headers={"X-Accel-Buffering": "no"},
-    )
+    return ndjson_response(stream())
 
 
 @studio_bp.route("/api/reel-direct", methods=["POST"])
@@ -2986,11 +2956,7 @@ def api_reel_direct() -> FlaskResponse:
 
         yield from _stream_reel_job(work, on_cleanup=cleanup)
 
-    return Response(
-        profiled_stream(stream()),
-        mimetype="application/x-ndjson",
-        headers={"X-Accel-Buffering": "no"},
-    )
+    return ndjson_response(stream())
 
 
 @studio_bp.route("/api/job-status", methods=["GET"])
@@ -4290,22 +4256,6 @@ def build_combined_app(
 
     # ---- Shared settings (available from any page) ----
 
-    @combined.route("/api/settings", methods=["GET"])
-    def combined_settings_get() -> FlaskResponse:
-        return ok(
-            settings=_settings_records(),
-            path=str(_studio_settings_path()),
-            desktop=utils.GUI_LAUNCH,
-        )
-
-    @combined.route("/api/settings", methods=["PUT"])
-    def combined_settings_put() -> FlaskResponse:
-        data = request.get_json(silent=True) or {}
-        applied, error = _apply_settings_payload(data)
-        if error is not None:
-            return err(error)
-        return ok(applied=applied)
-
     @combined.route("/api/settings/reveal", methods=["POST"])
     def combined_settings_reveal() -> FlaskResponse:
         """Show the settings file in the OS file browser.
@@ -4344,51 +4294,55 @@ def build_combined_app(
             return err("Could not open the folder")
         return ok(path=str(path))
 
-    # ---- Titlecard / endcard background picker (shared settings modal) ----
-    combined.add_url_rule(
-        "/api/titlecards", "combined_titlecards_list", api_titlecards_list
-    )
-    combined.add_url_rule(
-        "/api/titlecards/default/<kind>",
-        "combined_titlecard_default",
-        api_titlecard_default,
-    )
-    combined.add_url_rule(
-        "/api/titlecards/image/<path:name>",
-        "combined_titlecard_image",
-        api_titlecard_image,
-    )
-    combined.add_url_rule(
-        "/api/titlecards/upload",
-        "combined_titlecard_upload",
-        api_titlecard_upload,
-        methods=["POST"],
-    )
-    combined.add_url_rule(
-        "/api/titlecards/image/<path:name>",
-        "combined_titlecard_delete",
-        api_titlecard_delete,
-        methods=["DELETE"],
-    )
-
-    # Every page opens the settings modal, so mount at root; rules live on transcripts_bp.
-    combined.add_url_rule(
-        "/api/models/llm/<name>",
-        "combined_llm_delete",
-        transcripts_server.api_llm_delete,
-        methods=["DELETE"],
-    )
-    combined.add_url_rule(
-        "/api/models/llm/download",
-        "combined_llm_download",
-        transcripts_server.api_llm_download,
-        methods=["POST"],
-    )
-    combined.add_url_rule(
-        "/api/models/llm/download-status",
-        "combined_llm_download_status",
-        transcripts_server.api_llm_download_status,
-    )
+    # ---- Studio routes every page needs (settings modal), re-mounted at root ----
+    for rule, endpoint, view, methods in (
+        ("/api/settings", "combined_settings_get", api_settings_get, ["GET"]),
+        ("/api/settings", "combined_settings_put", api_settings_put, ["PUT"]),
+        ("/api/titlecards", "combined_titlecards_list", api_titlecards_list, ["GET"]),
+        (
+            "/api/titlecards/default/<kind>",
+            "combined_titlecard_default",
+            api_titlecard_default,
+            ["GET"],
+        ),
+        (
+            "/api/titlecards/image/<path:name>",
+            "combined_titlecard_image",
+            api_titlecard_image,
+            ["GET"],
+        ),
+        (
+            "/api/titlecards/upload",
+            "combined_titlecard_upload",
+            api_titlecard_upload,
+            ["POST"],
+        ),
+        (
+            "/api/titlecards/image/<path:name>",
+            "combined_titlecard_delete",
+            api_titlecard_delete,
+            ["DELETE"],
+        ),
+        (
+            "/api/models/llm/<name>",
+            "combined_llm_delete",
+            transcripts_server.api_llm_delete,
+            ["DELETE"],
+        ),
+        (
+            "/api/models/llm/download",
+            "combined_llm_download",
+            transcripts_server.api_llm_download,
+            ["POST"],
+        ),
+        (
+            "/api/models/llm/download-status",
+            "combined_llm_download_status",
+            transcripts_server.api_llm_download_status,
+            ["GET"],
+        ),
+    ):
+        combined.add_url_rule(rule, endpoint, view, methods=methods)
 
     # ---- Model discovery ----
 

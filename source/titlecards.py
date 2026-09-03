@@ -244,11 +244,7 @@ def _build_card_frame(
             "90000",
         ]
 
-    ffmpeg_command = [
-        "ffmpeg",
-        "-y",
-        "-loglevel",
-        config.FFMPEG_LOGLEVEL,
+    ffmpeg_command = video.ffmpeg_cmd(
         *video_input,
         *audio_input,
         "-vf",
@@ -258,7 +254,7 @@ def _build_card_frame(
         *audio_out_args,
         *output_trim,
         card_path,
-    ]
+    )
 
     utils.debug_print(f"ffmpeg {label} command: {' '.join(ffmpeg_command)}")
     ffmpeg_result = video.run_ffmpeg_process(
@@ -716,17 +712,13 @@ def wrap_clip_with_cards(
         ) as out_tmp:
             output_temp_path = out_tmp.name
 
-        ffmpeg_command: list[str] = [
-            "ffmpeg",
-            "-y",
-            "-loglevel",
-            config.FFMPEG_LOGLEVEL,
+        ffmpeg_command = video.ffmpeg_cmd(
             *input_args,
             "-filter_complex",
             filter_complex,
             *map_args,
             *_x264_video_args(),
-        ]
+        )
         if has_clip_audio:
             ffmpeg_command.extend(["-c:a", "aac"])
         ffmpeg_command.append(output_temp_path)

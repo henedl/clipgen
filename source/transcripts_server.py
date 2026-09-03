@@ -79,8 +79,10 @@ import video
 from server_utils import (
     err,
     err_no_video,
+    find_by_id,
     make_debounced_persist,
     make_participant_cache,
+    ndjson_response,
     ok,
     profiled_stream,
 )
@@ -833,11 +835,7 @@ def api_embed_subtitles() -> FlaskResponse:
             # Also runs on client disconnect, so a closed tab cannot wedge the slot.
             _release_embed_slot(embed_token)
 
-    response = Response(
-        profiled_stream(stream()),
-        mimetype="application/x-ndjson",
-        headers={"X-Accel-Buffering": "no"},
-    )
+    response = ndjson_response(stream())
     # An unstarted generator never runs its finally; the token makes this double
     # release harmless.
     response.call_on_close(lambda: _release_embed_slot(embed_token))
@@ -1068,11 +1066,7 @@ def api_normalize_audio() -> FlaskResponse:
             # Also runs on client disconnect, so a closed tab cannot wedge the slot.
             _release_normalize_slot(normalize_token)
 
-    response = Response(
-        profiled_stream(stream()),
-        mimetype="application/x-ndjson",
-        headers={"X-Accel-Buffering": "no"},
-    )
+    response = ndjson_response(stream())
     # Covers a generator torn down before it starts (see the embed route).
     response.call_on_close(lambda: _release_normalize_slot(normalize_token))
     return response
@@ -1824,11 +1818,7 @@ def api_marks_update(mark_id: str) -> FlaskResponse:
 
     with _manifest_lock:
         marks = _manifest.get("marks", [])
-        target = None
-        for m in marks:
-            if m.get("id") == mark_id:
-                target = m
-                break
+        target = find_by_id(marks, mark_id)
         if not target:
             return err("Mark not found", 404)
 

@@ -272,7 +272,7 @@ def get_participant_list(
     participants = []
     for j in range(id_cell.col, id_cell.col + num_participants):
         if j < len(header_row):
-            participant_id = utils.normalize_participant_id(header_row[j]).strip()
+            participant_id = utils.normalize_participant_id(header_row[j])
             if participant_id:
                 participants.append(participant_id)
     return participants
@@ -517,7 +517,7 @@ def find_participant_column(
     """
     normalized_target = utils.normalize_participant_id(participant_id).lower()
     for col_idx in range(id_cell.col, len(header_row)):
-        header_value = utils.normalize_participant_id(header_row[col_idx]).strip()
+        header_value = utils.normalize_participant_id(header_row[col_idx])
         if header_value.lower() == normalized_target:
             return col_idx
     return None
