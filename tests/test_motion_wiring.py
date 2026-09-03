@@ -265,13 +265,19 @@ def test_modal_animation_helpers_are_shared_in_utils():
 
 
 def test_every_modal_uses_the_shared_helpers():
+    # openPopModal / closePopModal wrap the pair; pages may call either layer.
+    utils = (_WEB / "utils.js").read_text(encoding="utf-8")
+    assert "var openPopModal = function (overlayEl, cardEl, opts)" in utils
+    assert "popModalIn(overlayEl, cardEl);" in utils
+    assert "popModalOut(overlayEl, cardEl, function () {" in utils
     for page, overlay, card in _MODAL_SURFACES:
         src = (_WEB / page).read_text(encoding="utf-8")
         assert re.search(
-            r"popModalIn\([^,]+, qs\(\"" + re.escape(card) + r'"\)', src
+            r"(popModalIn|openPopModal)\([^,]+, qs\(\"" + re.escape(card) + r'"\)', src
         ), f"{page} {overlay} should reveal through popModalIn()"
         assert re.search(
-            r"popModalOut\([^,]+, qs\(\"" + re.escape(card) + r'"\)', src
+            r"(popModalOut|closePopModal)\([^,]+, qs\(\"" + re.escape(card) + r'"\)',
+            src,
         ), f"{page} {overlay} should dismiss through popModalOut()"
 
 
@@ -342,9 +348,19 @@ def test_composer_log_traps_focus_like_studio():
     # It was the one modal without a trap: Tab walked out into the timeline
     # behind the veil and Escape fell through to the page's back-out cascade.
     composer = (_WEB / "composer.js").read_text(encoding="utf-8")
-    assert "openBlockingModal(overlay, {" in composer
-    assert "closeBlockingModal(overlay)" in composer
-    assert 'document.body.classList.add("modal-open")' in composer
+    utils = (_WEB / "utils.js").read_text(encoding="utf-8")
+    # Trap and topnav gate come from openPopModal's opts (utils.js).
+    assert (
+        'openPopModal(qs("#logOverlay"), qs(".log-panel"), { modalOpen: true, onEscape: closeLog })'
+        in composer
+    )
+    assert (
+        'closePopModal(qs("#logOverlay"), qs(".log-panel"), { modalOpen: true })'
+        in composer
+    )
+    assert "openBlockingModal(overlayEl, {" in utils
+    assert "closeBlockingModal(overlayEl)" in utils
+    assert 'if (opts.modalOpen) document.body.classList.add("modal-open");' in utils
     # With the trap owning Escape, a cascade branch for the log would be dead code.
     assert "logOverlayVisible" not in composer
 
