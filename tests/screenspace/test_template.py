@@ -147,13 +147,14 @@ def _assert_same_boxes(got, want, score_tolerance):
     assert [(row["x"], row["y"], row["w"], row["h"]) for row in got] == [
         (row["x"], row["y"], row["w"], row["h"]) for row in want
     ]
-    assert (
-        max(
+    drift = max(
+        (
             abs(got_row["score"] - want_row["score"])
             for got_row, want_row in zip(got, want, strict=True)
-        )
-        < score_tolerance
+        ),
+        default=0.0,
     )
+    assert drift < score_tolerance
 
 
 class TestCorrelationRoi:
