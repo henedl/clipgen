@@ -1696,6 +1696,34 @@ var closePopModal = function (overlayEl, cardEl, opts, commit) {
   });
 };
 
+// Object-URL cache (URL | "loading" | "error"); setBlob mints so every path revokes.
+var createBlobCache = function () {
+  var store = {};
+  function revoke(key) {
+    var url = store[key];
+    if (url && url !== "error" && url !== "loading") {
+      try { URL.revokeObjectURL(url); } catch (_) {}
+    }
+    delete store[key];
+  }
+  window.addEventListener("pagehide", function () {
+    Object.keys(store).forEach(revoke);
+  });
+  return {
+    get: function (key) { return store[key]; },
+    mark: function (key, sentinel) {
+      revoke(key);
+      store[key] = sentinel;
+    },
+    setBlob: function (key, blob) {
+      revoke(key);
+      var url = URL.createObjectURL(blob);
+      store[key] = url;
+      return url;
+    },
+  };
+};
+
 // ---- Mark categories ----
 // Fallback mirroring config.MARK_CATEGORIES (tests/test_shared_constants.py); setMarkCategories() mutates it in place.
 

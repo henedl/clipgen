@@ -4276,20 +4276,7 @@
   var _ssThumbQueue = [];
   var _ssThumbActive = 0;
   var _SS_THUMB_MAX = 3;
-  var _ssThumbCache = {}; // url -> objectURL | "error"
-
-  // Revoke on pagehide or every lazily loaded thumb stays pinned (mirrors viewer.js).
-  window.addEventListener("pagehide", function () {
-    Object.keys(_ssThumbCache).forEach(function (key) {
-      var url = _ssThumbCache[key];
-      if (url && url !== "error" && url !== "loading") {
-        try {
-          URL.revokeObjectURL(url);
-        } catch (_) {}
-      }
-      delete _ssThumbCache[key];
-    });
-  });
+  var _ssThumbCache = createBlobCache(); // url -> objectURL | "error"
 
   function ssThumbUrl(participant, timestamp) {
     return "../screenspace/api/video/frame/" + encodeURIComponent(participant) + "/" + timestamp + "?w=200";
@@ -4306,16 +4293,11 @@
       (function (entry) {
         apiGetBlob(entry.url)
           .then(function (blob) {
-            var objUrl = URL.createObjectURL(blob);
-            var prev = _ssThumbCache[entry.url];
-            if (prev && prev !== "error" && prev !== "loading") {
-              try { URL.revokeObjectURL(prev); } catch (_) {}
-            }
-            _ssThumbCache[entry.url] = objUrl;
+            var objUrl = _ssThumbCache.setBlob(entry.url, blob);
             if (entry.img.parentNode) entry.img.src = objUrl;
           })
           .catch(function () {
-            _ssThumbCache[entry.url] = "error";
+            _ssThumbCache.mark(entry.url, "error");
             if (!entry.img.parentNode) return;
             // Custom onError (e.g. stash-folder icon) beats the queue-card fallback.
             if (entry.onError) { entry.onError(entry); return; }
@@ -4333,7 +4315,7 @@
 
   function ssEnqueueThumb(img, cardEl, thumbEl, participant, timestamp) {
     var url = ssThumbUrl(participant, timestamp);
-    var cached = _ssThumbCache[url];
+    var cached = _ssThumbCache.get(url);
     if (cached && cached !== "error") { img.src = cached; return; }
     if (cached === "error") {
       img.remove();
@@ -4348,7 +4330,7 @@
   // Enqueue with a custom error handler; shares ssEnqueueThumb's throttle and cache.
   function ssEnqueueThumbCustom(img, participant, timestamp, onError) {
     var url = ssThumbUrl(participant, timestamp);
-    var cached = _ssThumbCache[url];
+    var cached = _ssThumbCache.get(url);
     if (cached && cached !== "error") { img.src = cached; return; }
     if (cached === "error") { if (onError) onError({ img: img }); return; }
     _ssThumbQueue.push({ img: img, url: url, onError: onError });

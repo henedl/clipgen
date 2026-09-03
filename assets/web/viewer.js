@@ -31,17 +31,8 @@
   var _thumbActive = 0;
   var THUMB_CONCURRENCY = 3;
   var _thumbObserver = null;
-  var _thumbCache = {};
-  var _filmstripCache = {};
-
-  window.addEventListener("pagehide", function () {
-    [_thumbCache, _filmstripCache].forEach(function (cache) {
-      Object.keys(cache).forEach(function (id) {
-        try { URL.revokeObjectURL(cache[id]); } catch (_) {}
-        delete cache[id];
-      });
-    });
-  });
+  var _thumbCache = createBlobCache();
+  var _filmstripCache = createBlobCache();
 
   var _filmstripEnabled = false;
   var _filmstripObserver = null;
@@ -227,11 +218,7 @@
         ctx.drawImage(video, 0, 0, 320, 180);
         canvas.toBlob(function (blob) {
           if (!blob) { mediaEl.classList.remove("thumb-pending"); finish(); return; }
-          var url = URL.createObjectURL(blob);
-          if (_thumbCache[artifact.id]) {
-            try { URL.revokeObjectURL(_thumbCache[artifact.id]); } catch (_) {}
-          }
-          _thumbCache[artifact.id] = url;
+          var url = _thumbCache.setBlob(artifact.id, blob);
           var img = document.createElement("img");
           img.decoding = "async";
           img.src = url;
@@ -378,10 +365,10 @@
       if (!a || a.type !== "clip") return;
       var media = card.querySelector(".artifact-media");
       if (!media || media.querySelector("img")) return;
-      if (_thumbCache[a.id]) {
+      if (_thumbCache.get(a.id)) {
         var img = document.createElement("img");
         img.decoding = "async";
-        img.src = _thumbCache[a.id];
+        img.src = _thumbCache.get(a.id);
         img.alt = a.description || "";
         media.classList.remove("thumb-pending");
         media.classList.add("thumb-loaded");
@@ -458,8 +445,8 @@
         m.classList.add("filmstrip-thumb");
         if (hasSev) m.classList.add("filmstrip-sev-border");
       } else if (a.type === "clip") {
-        if (_filmstripCache[a.id]) {
-          m.style.backgroundImage = "url(" + _filmstripCache[a.id] + ")";
+        if (_filmstripCache.get(a.id)) {
+          m.style.backgroundImage = "url(" + _filmstripCache.get(a.id) + ")";
           m.classList.add("filmstrip-thumb");
           if (hasSev) m.classList.add("filmstrip-sev-border");
         } else {
@@ -565,11 +552,7 @@
           video.onseeked = null;
           canvas.toBlob(function (blob) {
             if (!blob) { markerEl.classList.remove("filmstrip-loading"); finish(); return; }
-            var url = URL.createObjectURL(blob);
-            if (_filmstripCache[artifact.id]) {
-              try { URL.revokeObjectURL(_filmstripCache[artifact.id]); } catch (_) {}
-            }
-            _filmstripCache[artifact.id] = url;
+            var url = _filmstripCache.setBlob(artifact.id, blob);
             if (_filmstripEnabled && markerEl.classList.contains("filmstrip-loading")) {
               markerEl.style.backgroundImage = "url(" + url + ")";
               markerEl.classList.remove("filmstrip-loading");
@@ -600,9 +583,9 @@
   function processFilmstripThumbQueue() {
     while (_filmstripThumbActive < FILMSTRIP_CONCURRENCY && _filmstripThumbQueue.length) {
       var item = _filmstripThumbQueue.shift();
-      if (_filmstripCache[item.artifact.id]) {
+      if (_filmstripCache.get(item.artifact.id)) {
         if (_filmstripEnabled && item.el.classList.contains("filmstrip-loading")) {
-          item.el.style.backgroundImage = "url(" + _filmstripCache[item.artifact.id] + ")";
+          item.el.style.backgroundImage = "url(" + _filmstripCache.get(item.artifact.id) + ")";
           item.el.classList.remove("filmstrip-loading");
           item.el.classList.add("filmstrip-thumb");
         }
@@ -1469,10 +1452,10 @@
         img.loading = "lazy";
         media.appendChild(img);
       } else if (a.type === "clip") {
-        if (_thumbCache[a.id]) {
+        if (_thumbCache.get(a.id)) {
           var cimg = document.createElement("img");
           cimg.decoding = "async";
-          cimg.src = _thumbCache[a.id];
+          cimg.src = _thumbCache.get(a.id);
           cimg.alt = a.description || "";
           media.classList.add("thumb-loaded");
           media.appendChild(cimg);
