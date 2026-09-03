@@ -317,9 +317,26 @@
     beforeOpenCallbacks.push(cb);
   }
 
+  // Build quick actions now, on export-status flips, and (opt-in) on open.
+  function installQuickActions(build, opts) {
+    opts = opts || {};
+    var exportActions = window.ClipgenExportActions;
+    function rebuild() {
+      setQuickActions(build());
+    }
+    rebuild();
+    if (exportActions) exportActions.refreshExportStatus(rebuild);
+    onBeforeOpen(function () {
+      if (opts.rebuildOnOpen) rebuild();
+      if (exportActions) exportActions.refreshExportStatus(rebuild);
+    });
+    return rebuild;
+  }
+
   window.ClipgenTopNav = {
     setQuickActions: setQuickActions,
     getQuickActions: getQuickActions,
+    installQuickActions: installQuickActions,
     onReady: onReady,
     onBeforeOpen: onBeforeOpen,
   };

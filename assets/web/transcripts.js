@@ -33,7 +33,6 @@
     searchResults: null,
     activeSegmentIndex: -1,
     editingTextEl: null,
-    pollPoller: null,
     lastMarkCategory: "bookmark",
     streamingParticipant: null,
     ssEvents: [],
@@ -2041,21 +2040,18 @@
   // ---- Task polling ----
   // Whisper jobs only; summary/citations have their own pollers (see file header).
 
+  // First poll after POLL_INTERVAL, not immediately.
+  var _taskPoller = createManagedPoller(pollTaskStatus, POLL_INTERVAL, {
+    runImmediately: false,
+    label: "transcripts.tasks",
+  });
+
   function startPolling() {
-    if (state.pollPoller) return;
-    // First poll after POLL_INTERVAL, not immediately.
-    state.pollPoller = createPoller(pollTaskStatus, POLL_INTERVAL, {
-      runImmediately: false,
-      label: "transcripts.tasks",
-    });
-    state.pollPoller.start();
+    _taskPoller.start();
   }
 
   function stopPolling() {
-    if (state.pollPoller) {
-      state.pollPoller.stop();
-      state.pollPoller = null;
-    }
+    _taskPoller.stop();
   }
 
   // Keyed by task id, not participant: old completed tasks linger and would suppress new runs.
@@ -3529,11 +3525,12 @@
     _rebuildTopNavActions();
   }
 
+  // Rebuilt on open so Transcribe All re-counts against in-flight tasks.
   function initTopNavActions() {
     if (!window.ClipgenTopNav) return;
-    function rebuild() {
+    _rebuildTopNavActions = window.ClipgenTopNav.installQuickActions(function () {
       var pending = _untranscribedParticipants().length;
-      window.ClipgenTopNav.setQuickActions([
+      return [
         {
           icon: "microphone",
           label: "Transcribe All",
@@ -3565,16 +3562,8 @@
           title: "Cut a clip for every manually marked line",
         },
         window.ClipgenExportActions.exportQuickAction(),
-      ]);
-    }
-    _rebuildTopNavActions = rebuild;
-    rebuild();
-    window.ClipgenExportActions.refreshExportStatus(rebuild);
-    // Rebuild on open so Transcribe All re-counts against in-flight tasks.
-    window.ClipgenTopNav.onBeforeOpen(function () {
-      rebuild();
-      window.ClipgenExportActions.refreshExportStatus(rebuild);
-    });
+      ];
+    }, { rebuildOnOpen: true });
   }
 
   // Palette commands beyond the auto-ingested quick actions; provider runs per open.

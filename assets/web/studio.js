@@ -111,24 +111,10 @@
       source === "composer" || source === "mindnode";
   }
 
-  var ROW_FUNCTIONS = {
-    Count: function (row, participants) {
-      var total = 0;
-      for (var j = 0; j < participants.length; j++) {
-        var c = row.cells[participants[j]];
-        if (c && c.valid) total += parseClipTimestamps(c.value, participants[j]).length;
-      }
-      return total;
-    },
-    Unique: function (row, participants) {
-      var count = 0;
-      for (var j = 0; j < participants.length; j++) {
-        var c = row.cells[participants[j]];
-        if (c && c.valid) count++;
-      }
-      return count;
-    },
-  };
+  var _xref = createSheetXrefHelpers(function () { return state; });
+  var parseClipTimestamps = _xref.parseClipTimestamps,
+    ROW_FUNCTIONS = _xref.ROW_FUNCTIONS,
+    findOverlappingData = _xref.findOverlappingData;
 
   // ---- Helpers ----
 
@@ -280,55 +266,6 @@
     if (th) th.classList.add("header-highlight");
     var td = qs('#sheetGrid tbody td[data-select-row="' + row + '"]');
     if (td) td.classList.add("header-highlight");
-  }
-
-  function parseClipTimestamps(raw, participantId) {
-    var DEFAULT_DUR = CLIPGEN_CONFIG.defaultDuration;
-    var baselineSeconds = 0;
-    if (participantId && state.convergenceBaselines) {
-      baselineSeconds = state.convergenceBaselines[participantId] || 0;
-    }
-    return parseClipSegmentsForCell(raw, baselineSeconds, DEFAULT_DUR);
-  }
-
-  // Overlapping data from sibling sources for one participant + time range.
-  function findOverlappingData(participant, start, end) {
-    var result = { transcriptSnippets: [], screenspaceEvents: [], sheetObservations: [] };
-
-    // Projection: consumers expect `text` already resolved (text || label).
-    for (var i = 0; i < state.trIntakeClusters.length; i++) {
-      var tc = state.trIntakeClusters[i];
-      if (tc.participant === participant && tc.start < end && tc.end > start) {
-        result.transcriptSnippets.push({ text: tc.text || tc.label || "", category: tc.category, start: tc.start, end: tc.end });
-      }
-    }
-
-    // Pass the cluster through; consumers read only detector / event_type.
-    for (var j = 0; j < state.intakeClusters.length; j++) {
-      var sc = state.intakeClusters[j];
-      if (sc.participant === participant && sc.start < end && sc.end > start) {
-        result.screenspaceEvents.push(sc);
-      }
-    }
-
-    // Sheet observations — pass through the row directly.
-    if (state.sheetData && state.sheetData.rows) {
-      for (var k = 0; k < state.sheetData.rows.length; k++) {
-        var row = state.sheetData.rows[k];
-        var cell = row.cells[participant];
-        if (!cell || !cell.valid) continue;
-        var segs = parseClipTimestamps(cell.value, participant);
-        for (var s = 0; s < segs.length; s++) {
-          var segEnd = segs[s].startSeconds + segs[s].duration;
-          if (segs[s].startSeconds < end && segEnd > start) {
-            result.sheetObservations.push(row);
-            break;
-          }
-        }
-      }
-    }
-
-    return result;
   }
 
   // Cached: --radius is static on :root, and setCardDragImage is on the dragstart hot path.
@@ -4508,8 +4445,8 @@
 
   function initTopNavActions() {
     if (!window.ClipgenTopNav) return;
-    function rebuild() {
-      window.ClipgenTopNav.setQuickActions([
+    window.ClipgenTopNav.installQuickActions(function () {
+      return [
         {
           icon: "eye",
           label: "Build Viewer",
@@ -4529,12 +4466,7 @@
           title: "Build a gallery viewer of screenshots or GIFs sampled from one participant's source video",
         },
         window.ClipgenExportActions.exportQuickAction(),
-      ]);
-    }
-    rebuild();
-    window.ClipgenExportActions.refreshExportStatus(rebuild);
-    window.ClipgenTopNav.onBeforeOpen(function () {
-      window.ClipgenExportActions.refreshExportStatus(rebuild);
+      ];
     });
   }
 

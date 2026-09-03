@@ -891,12 +891,7 @@
 
   // --- Data Freshness ---
 
-  function checkStaleness() {
-    if (!cvState._snapshot || !cvState.active) return;
-    // The subheader Refresh carries the signal for every tab.
-    window.ClipgenOverview.setRefreshStale(
-      cvState._snapshot.version !== getState().dataVersion);
-  }
+  var checkStaleness = window.ClipgenOverview.createStalenessTracker(cvState).check;
 
   // --- Selection ---
 
@@ -1548,11 +1543,6 @@
   }
 
   function init() {
-    document.addEventListener("visibilitychange", function () {
-      if (!document.hidden && cvState.active) {
-        checkStaleness();
-      }
-    });
 
     document.addEventListener("mousemove", _cvOnDocMouseMove);
     document.addEventListener("mouseup", _cvOnDocMouseUp);

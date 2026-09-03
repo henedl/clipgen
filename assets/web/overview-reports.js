@@ -1023,14 +1023,9 @@
 
   // ---- Staleness (hub dataVersion contract) ----
 
-  function takeSnapshot() {
-    rpState._snapshot = { version: state.dataVersion };
-  }
-
-  function checkStaleness() {
-    if (!rpState._snapshot || !rpState.active) return;
-    window.ClipgenOverview.setRefreshStale(rpState._snapshot.version !== state.dataVersion);
-  }
+  var _staleness = window.ClipgenOverview.createStalenessTracker(rpState);
+  var takeSnapshot = _staleness.take;
+  var checkStaleness = _staleness.check;
 
   // ---- Lifecycle ----
 
@@ -1063,10 +1058,6 @@
   function resize() {
     // Flow layout only — nothing measures the viewport.
   }
-
-  document.addEventListener("visibilitychange", function () {
-    if (!document.hidden && rpState.active) checkStaleness();
-  });
 
   window.addEventListener("pagehide", function () {
     stopReportPoll();

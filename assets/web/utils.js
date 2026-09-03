@@ -629,6 +629,83 @@ var formatTime = function (sec, options) {
   return m + ":" + sStr;
 };
 
+// Sheet cross-reference helpers bound to a hub's state (Studio and Overview).
+var createSheetXrefHelpers = function (getState) {
+  function parseClipTimestamps(raw, participantId) {
+    var state = getState();
+    var baselineSeconds = 0;
+    if (participantId && state.convergenceBaselines) {
+      baselineSeconds = state.convergenceBaselines[participantId] || 0;
+    }
+    return parseClipSegmentsForCell(raw, baselineSeconds, CLIPGEN_CONFIG.defaultDuration);
+  }
+
+  var ROW_FUNCTIONS = {
+    Count: function (row, participants) {
+      var total = 0;
+      for (var j = 0; j < participants.length; j++) {
+        var c = row.cells[participants[j]];
+        if (c && c.valid) total += parseClipTimestamps(c.value, participants[j]).length;
+      }
+      return total;
+    },
+    Unique: function (row, participants) {
+      var count = 0;
+      for (var j = 0; j < participants.length; j++) {
+        var c = row.cells[participants[j]];
+        if (c && c.valid) count++;
+      }
+      return count;
+    },
+  };
+
+  // Overlapping data from sibling sources for one participant + time range.
+  function findOverlappingData(participant, start, end) {
+    var state = getState();
+    var result = { transcriptSnippets: [], screenspaceEvents: [], sheetObservations: [] };
+
+    // Projection: consumers expect `text` already resolved (text || label).
+    for (var i = 0; i < state.trIntakeClusters.length; i++) {
+      var tc = state.trIntakeClusters[i];
+      if (tc.participant === participant && tc.start < end && tc.end > start) {
+        result.transcriptSnippets.push({ text: tc.text || tc.label || "", category: tc.category, start: tc.start, end: tc.end });
+      }
+    }
+
+    // Pass the cluster through; consumers read only detector / event_type.
+    for (var j = 0; j < state.intakeClusters.length; j++) {
+      var sc = state.intakeClusters[j];
+      if (sc.participant === participant && sc.start < end && sc.end > start) {
+        result.screenspaceEvents.push(sc);
+      }
+    }
+
+    if (state.sheetData && state.sheetData.rows) {
+      for (var k = 0; k < state.sheetData.rows.length; k++) {
+        var row = state.sheetData.rows[k];
+        var cell = row.cells[participant];
+        if (!cell || !cell.valid) continue;
+        var segs = parseClipTimestamps(cell.value, participant);
+        for (var s = 0; s < segs.length; s++) {
+          var segEnd = segs[s].startSeconds + segs[s].duration;
+          if (segs[s].startSeconds < end && segEnd > start) {
+            result.sheetObservations.push(row);
+            break;
+          }
+        }
+      }
+    }
+
+    return result;
+  }
+
+  return {
+    parseClipTimestamps: parseClipTimestamps,
+    ROW_FUNCTIONS: ROW_FUNCTIONS,
+    findOverlappingData: findOverlappingData,
+  };
+};
+
 // Rounds rather than floors; use for durations (clip length, ruler ticks).
 var formatDuration = function (sec) {
   if (sec == null || isNaN(sec)) return "--:--";
@@ -1267,6 +1344,23 @@ var createPoller = function (fn, intervalMs, opts) {
       safeFn();
       timer = setInterval(safeFn, intervalMs);
       return Promise.resolve();
+    },
+  };
+};
+
+// Lazily-built createPoller behind an idempotent start/stop pair.
+var createManagedPoller = function (fn, intervalMs, opts) {
+  var poller = null;
+  return {
+    start: function () {
+      if (poller) return;
+      poller = createPoller(fn, intervalMs, opts);
+      poller.start();
+    },
+    stop: function () {
+      if (!poller) return;
+      poller.stop();
+      poller = null;
     },
   };
 };

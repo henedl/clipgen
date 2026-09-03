@@ -390,3 +390,23 @@ function traceMaskContour(mask, w, h) {
   }
   return contour;
 }
+
+// Display label for a tool type: "color" → "Color".
+function toolLabel(type) {
+  return type ? type.charAt(0).toUpperCase() + type.slice(1) : "";
+}
+
+// ---- Task-status predicates shared by the queue, results and timeline ----
+
+function isTaskActive(task) {
+  return task.status === "queued" || task.status === "running" || task.status === "paused";
+}
+
+function isTaskFinished(task) {
+  return task.status === "completed" || task.status === "failed";
+}
+
+// Restore-to-workflow reads the task's stored inputs; a queued task has none yet.
+function isTaskRestorable(task) {
+  return task.status === "completed" || task.status === "paused" || task.status === "running";
+}

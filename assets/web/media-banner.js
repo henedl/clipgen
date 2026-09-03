@@ -17,8 +17,7 @@
 
   // One banner per page; the pages only ever show one participant at a time.
   var _host = null; // { el, participant }
-  var _pollTimer = 0;
-  var _polling = false;
+  var _poller = null;
 
   // A remux or restore swaps the streaming file; reload. Pages persist the selected participant.
   function reloadAfterFileSwap() {
@@ -126,25 +125,21 @@
   // ---- Polling ----
 
   function stopPolling() {
-    if (_pollTimer) clearTimeout(_pollTimer);
-    _pollTimer = 0;
-    _polling = false;
+    if (!_poller) return;
+    _poller.stop();
+    _poller = null;
   }
 
+  // createPoller skips hidden tabs itself; the job continues server-side.
   function startPolling() {
-    if (_polling) return;
-    _polling = true;
-    poll();
+    if (_poller) return;
+    _poller = createPoller(poll, POLL_MS, { label: "media-banner.remux" });
+    _poller.start();
   }
 
   function poll() {
-    if (!_polling || !_host) return;
-    // Never poll a hidden tab; the job continues server-side.
-    if (document.hidden) {
-      _pollTimer = setTimeout(poll, POLL_MS);
-      return;
-    }
-    apiGet("api/remux/status")
+    if (!_host) return;
+    return apiGet("api/remux/status")
       .then(function (data) {
         if (!_host) return;
         var job = (data.jobs || {})[_host.participant];
@@ -154,7 +149,6 @@
             text: "Remuxing " + _host.participant + "…",
             progress: job ? job.progress : 0,
           });
-          _pollTimer = setTimeout(poll, POLL_MS);
           return;
         }
         stopPolling();
@@ -166,8 +160,7 @@
         reloadAfterFileSwap();
       })
       .catch(function () {
-        // A transient poll failure is not a job failure; try again next tick.
-        _pollTimer = setTimeout(poll, POLL_MS);
+        // A transient poll failure is not a job failure; the next tick retries.
       });
   }
 

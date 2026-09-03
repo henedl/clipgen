@@ -191,7 +191,6 @@
     // strip, so toggles live here.
     heatmapPlaying: {},
     suppressCalibrationRefresh: false,
-    poller: null,
     eventSource: null,
     sseFellBack: false,
     queuePaused: false,
@@ -2444,10 +2443,6 @@
   var _catNavBuilt = false;
   var _catOutsideBound = false;
 
-  function _toolLabel(type) {
-    return type ? type.charAt(0).toUpperCase() + type.slice(1) : "";
-  }
-
   // Category glyph; mask set inline since no .ss-task-icon--<type> class exists.
   function buildCatIcon(name) {
     if (!name) return null;
@@ -2557,7 +2552,7 @@
           }
           var icon = buildTypeIcon(type);
           if (icon) item.appendChild(icon);
-          item.appendChild(el("span", "ss-cat-item-label", _toolLabel(type)));
+          item.appendChild(el("span", "ss-cat-item-label", toolLabel(type)));
           item.addEventListener("click", function (e) {
             e.stopPropagation();
             closeCatMenus(null);
@@ -2612,7 +2607,7 @@
       }
       if (isActive) {
         chip.setAttribute("data-active-type", active);
-        if (text) text.textContent = _toolLabel(active);
+        if (text) text.textContent = toolLabel(active);
       } else {
         chip.removeAttribute("data-active-type");
         if (text) text.textContent = cat;
@@ -4864,22 +4859,15 @@
     };
   }
 
+  // Rebuilt on every open so the boundary item tracks participants.
   function initTopNavActions() {
     if (!window.ClipgenTopNav) return;
-    function rebuild() {
-      window.ClipgenTopNav.setQuickActions([
+    window.ClipgenTopNav.installQuickActions(function () {
+      return [
         detectBoundariesQuickAction(),
         window.ClipgenExportActions.exportQuickAction(),
-      ]);
-    }
-    rebuild();
-    window.ClipgenExportActions.refreshExportStatus(rebuild);
-    window.ClipgenTopNav.onBeforeOpen(function () {
-      // Rebuild on every open so the boundary item tracks participants;
-      // refreshExportStatus rebuilds on flag flips.
-      rebuild();
-      window.ClipgenExportActions.refreshExportStatus(rebuild);
-    });
+      ];
+    }, { rebuildOnOpen: true });
   }
 
   // Command palette additions: Run plus per-participant jumps; the provider re-runs on
@@ -4956,7 +4944,7 @@
         cat.tools.forEach(function (type) {
           cmds.push({
             id: "screenspace:tool-" + type,
-            title: "Switch to " + _toolLabel(type) + " tool",
+            title: "Switch to " + toolLabel(type) + " tool",
             icon: TOOL_ICON_NAMES[type] || "cube",
             keywords: "tool detector select analysis " + cat.label.toLowerCase() + " " + type,
             section: "Tools",

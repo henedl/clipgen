@@ -1878,16 +1878,9 @@
   // --- Staleness detection ---
 
   // dataVersion only advances on a real refetch, so staleness is never a false positive.
-  function takeSnapshot() {
-    mdState._snapshot = { version: state.dataVersion };
-  }
-
-  function checkStaleness() {
-    if (!mdState._snapshot || !mdState.active) return;
-    // The subheader Refresh carries the signal for every tab.
-    window.ClipgenOverview.setRefreshStale(
-      mdState._snapshot.version !== state.dataVersion);
-  }
+  var _staleness = window.ClipgenOverview.createStalenessTracker(mdState);
+  var takeSnapshot = _staleness.take;
+  var checkStaleness = _staleness.check;
 
   // Data only changes via a hub refetch, so pull first, then rebuild.
   function refetchAndRefresh() {
@@ -1974,13 +1967,6 @@
     if (mdState.cache) renderAll(mdState.cache);
   }
 
-  // --- Visibility change ---
-
-  document.addEventListener("visibilitychange", function () {
-    if (!document.hidden && mdState.active) {
-      checkStaleness();
-    }
-  });
 
   // --- Hub exports (OV namespace) ---
   window.ClipgenOverview.metadataActivate = activate;

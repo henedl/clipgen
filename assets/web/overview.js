@@ -42,72 +42,11 @@
   };
   OV.state = state;
 
-  // ---- Shared helpers (lifted from studio.js; bind this page's state) ----
-
-  function parseClipTimestamps(raw, participantId) {
-    var DEFAULT_DUR = CLIPGEN_CONFIG.defaultDuration;
-    var baselineSeconds = 0;
-    if (participantId && state.convergenceBaselines) {
-      baselineSeconds = state.convergenceBaselines[participantId] || 0;
-    }
-    return parseClipSegmentsForCell(raw, baselineSeconds, DEFAULT_DUR);
-  }
-
-  var ROW_FUNCTIONS = {
-    Count: function (row, participants) {
-      var total = 0;
-      for (var j = 0; j < participants.length; j++) {
-        var c = row.cells[participants[j]];
-        if (c && c.valid) total += parseClipTimestamps(c.value, participants[j]).length;
-      }
-      return total;
-    },
-    Unique: function (row, participants) {
-      var count = 0;
-      for (var j = 0; j < participants.length; j++) {
-        var c = row.cells[participants[j]];
-        if (c && c.valid) count++;
-      }
-      return count;
-    },
-  };
-
-  // Overlapping data from other sources for a participant + time range (Convergence detail rows).
-  function findOverlappingData(participant, start, end) {
-    var result = { transcriptSnippets: [], screenspaceEvents: [], sheetObservations: [] };
-
-    for (var i = 0; i < state.trIntakeClusters.length; i++) {
-      var tc = state.trIntakeClusters[i];
-      if (tc.participant === participant && tc.start < end && tc.end > start) {
-        result.transcriptSnippets.push({ text: tc.text || tc.label || "", category: tc.category, start: tc.start, end: tc.end });
-      }
-    }
-
-    for (var j = 0; j < state.intakeClusters.length; j++) {
-      var sc = state.intakeClusters[j];
-      if (sc.participant === participant && sc.start < end && sc.end > start) {
-        result.screenspaceEvents.push(sc);
-      }
-    }
-
-    if (state.sheetData && state.sheetData.rows) {
-      for (var k = 0; k < state.sheetData.rows.length; k++) {
-        var row = state.sheetData.rows[k];
-        var cell = row.cells[participant];
-        if (!cell || !cell.valid) continue;
-        var segs = parseClipTimestamps(cell.value, participant);
-        for (var s = 0; s < segs.length; s++) {
-          var segEnd = segs[s].startSeconds + segs[s].duration;
-          if (segs[s].startSeconds < end && segEnd > start) {
-            result.sheetObservations.push(row);
-            break;
-          }
-        }
-      }
-    }
-
-    return result;
-  }
+  // ---- Shared sheet helpers (utils.js), bound to this page's state ----
+  var _xref = createSheetXrefHelpers(function () { return state; });
+  var parseClipTimestamps = _xref.parseClipTimestamps,
+    ROW_FUNCTIONS = _xref.ROW_FUNCTIONS,
+    findOverlappingData = _xref.findOverlappingData;
 
   OV.parseClipTimestamps = parseClipTimestamps;
   OV.ROW_FUNCTIONS = ROW_FUNCTIONS;
@@ -196,6 +135,22 @@
   }
 
   OV.setRefreshStale = setRefreshStale;
+
+  // Per-tab staleness: snapshot dataVersion at render; flag Refresh once it moves.
+  function createStalenessTracker(tabState) {
+    function take() {
+      tabState._snapshot = { version: state.dataVersion };
+    }
+    function check() {
+      if (!tabState._snapshot || !tabState.active) return;
+      setRefreshStale(tabState._snapshot.version !== state.dataVersion);
+    }
+    document.addEventListener("visibilitychange", function () {
+      if (!document.hidden && tabState.active) check();
+    });
+    return { take: take, check: check };
+  }
+  OV.createStalenessTracker = createStalenessTracker;
 
   // ---- Tabs ----
 
