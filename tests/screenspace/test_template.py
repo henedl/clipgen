@@ -142,6 +142,20 @@ class TestNmsEquivalence:
             assert got == want
 
 
+def _assert_same_boxes(got, want, score_tolerance):
+    """Boxes match exactly; scores only to the platform's matchTemplate ulp drift."""
+    assert [(row["x"], row["y"], row["w"], row["h"]) for row in got] == [
+        (row["x"], row["y"], row["w"], row["h"]) for row in want
+    ]
+    assert (
+        max(
+            abs(got_row["score"] - want_row["score"])
+            for got_row, want_row in zip(got, want, strict=True)
+        )
+        < score_tolerance
+    )
+
+
 class TestCorrelationRoi:
     def test_unmasked_matches_full_map(self, monkeypatch):
         monkeypatch.setattr(config, "SCREENSPACE_BLUR_KERNEL", 1)
@@ -170,7 +184,7 @@ class TestCorrelationRoi:
             got = screenspace_primitives._match_template_prepared(
                 frame, prepared, 0.9, 0.3, window=window
             )
-            assert got == want
+            _assert_same_boxes(got, want, 1e-5)
 
     def test_uint8_drift_is_bounded(self):
         rng = np.random.RandomState(85)
@@ -188,16 +202,7 @@ class TestCorrelationRoi:
         got = screenspace_primitives._match_template_prepared(
             frame, prepared, 0.1, 0.3, window=window
         )
-        assert [(row["x"], row["y"], row["w"], row["h"]) for row in got] == [
-            (row["x"], row["y"], row["w"], row["h"]) for row in want
-        ]
-        assert (
-            max(
-                abs(got_row["score"] - want_row["score"])
-                for got_row, want_row in zip(got, want, strict=True)
-            )
-            < 5e-5
-        )
+        _assert_same_boxes(got, want, 5e-5)
 
     def test_roi_values_track_full_map(self):
         # Crop width picks the SIMD path: ulp-close to the full map, same peak.
