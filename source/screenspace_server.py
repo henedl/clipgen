@@ -240,8 +240,7 @@ _participant_timeline_lock = threading.Lock()
 # Values are (mtime_ns, info) so a stale file is re-probed automatically.
 _video_metadata_cache: dict[str, tuple[int, dict[str, Any]]] = {}
 _video_metadata_cache_lock = threading.Lock()
-# Bounded LRUs; every key carries ``mtime_ns`` so a re-encoded source is a new entry.
-# JPEG bytes for the frame route.
+# Bounded LRUs keyed on ``mtime_ns``, so a re-encoded source is a new entry.
 _frame_cache = MediaCache(256, stat_prefix="screenspace.frame_cache")
 # BGR frames for calibration/preview, which re-run on every parameter nudge.
 _decoded_frame_cache = MediaCache(

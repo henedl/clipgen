@@ -15,6 +15,8 @@ same numeric-arg parse-and-validate block dozens of times. Collapsed here:
 - :func:`make_debounced_persist` builds the manifest-write debounce.
 - :func:`make_participant_cache` builds the mtime-guarded participant cache
   (Transcripts + Screenspace).
+- :class:`JobSlot` + :func:`ndjson_batch_response` run one cancellable batch
+  at a time and stream it as NDJSON (subtitle embed, audio normalize).
 - :func:`make_sse_channel` builds one SSE pub/sub channel (bounded per-client
   queue + coalesce-on-overflow + keepalive + cleanup).
 - :class:`MediaCache` + :func:`parse_clip_window` + :func:`clip_media_response`
@@ -28,11 +30,13 @@ modules, so these helpers must not live there.
 
 from __future__ import annotations
 
+import json
 import math
 import queue
 import threading
+import uuid
 from collections import OrderedDict
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from functools import wraps
 from pathlib import Path
 from typing import Any, cast
@@ -218,6 +222,83 @@ class MediaCache:
         with self._lock:
             self._store.clear()
             self._inflight.clear()
+
+
+class JobSlot:
+    """One in-flight run at a time, with a token-scoped release and cancel.
+
+    ``claim()`` is an atomic check-and-set. Its token is echoed to the client so
+    a late cancel cannot stop a successor run; ``release(token)`` is a no-op
+    unless that token still owns the slot (``None`` releases unconditionally —
+    tests and teardown), which makes the stream's ``finally`` plus the
+    response's ``call_on_close`` a harmless double release.
+    """
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self.busy = False
+        self.owner: str | None = None
+        self.cancel_event = threading.Event()
+
+    def claim(self) -> str | None:
+        with self._lock:
+            if self.busy:
+                return None
+            self.busy = True
+            self.owner = uuid.uuid4().hex
+            self.cancel_event.clear()
+            return self.owner
+
+    def release(self, token: str | None = None) -> None:
+        with self._lock:
+            if token is not None and self.owner != token:
+                return
+            self.busy = False
+            self.owner = None
+
+    def cancel(self, token: Any) -> None:
+        """Set the cancel event only if *token* owns the running slot."""
+        with self._lock:
+            if self.busy and token == self.owner:
+                self.cancel_event.set()
+
+
+def ndjson_batch_response(
+    slot: JobSlot,
+    token: str,
+    total: int,
+    run_one: Callable[[int], dict[str, Any]],
+    header: dict[str, Any] | None = None,
+) -> Response:
+    """Stream one NDJSON line per item under *slot*, then release it.
+
+    Lines: ``{"total", "token", **header}``; ``{"index", ...run_one(i)}`` per
+    item, stopping between items once the slot's cancel event is set (then
+    ``{"cancelled": true}``); the terminal ``{"done": true}`` sentinel, whose
+    absence tells the client the stream was truncated.
+    """
+    cancelled = slot.cancel_event.is_set
+
+    def stream() -> Iterator[str]:
+        try:
+            yield json.dumps({"total": total, "token": token, **(header or {})}) + "\n"
+            for idx in range(total):
+                if cancelled():
+                    break
+                outcome = run_one(idx)
+                outcome["index"] = idx
+                yield json.dumps(outcome) + "\n"
+            if cancelled():
+                yield json.dumps({"cancelled": True}) + "\n"
+            yield json.dumps({"done": True}) + "\n"
+        finally:
+            # Also runs on client disconnect, so a closed tab cannot wedge the slot.
+            slot.release(token)
+
+    response = ndjson_response(stream())
+    # An unstarted generator never runs its finally; the token makes this harmless.
+    response.call_on_close(lambda: slot.release(token))
+    return response
 
 
 def mtime_or_zero(path: str | Path) -> float:
