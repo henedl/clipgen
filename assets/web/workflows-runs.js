@@ -1236,13 +1236,6 @@
     _discoverPoller.start();
   }
 
-  function stopDiscover() {
-    if (_discoverPoller) {
-      _discoverPoller.stop();
-      _discoverPoller = null;
-    }
-  }
-
   // Hidden tab closes streams; on return, reopen them if work is in flight.
   function onVisibility() {
     if (document.hidden) {

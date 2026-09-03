@@ -469,8 +469,7 @@ def _shape_best_corr(
         if entry["h"] > fh or entry["w"] > fw:
             continue
         result = cv2.matchTemplate(frame_edges, entry["edges"], cv2.TM_CCOEFF_NORMED)
-        if not np.all(np.isfinite(result)):
-            result = np.where(np.isfinite(result), result, -1.0)
+        result = screenspace_primitives._neutralize_nonfinite(result)
         if window is not None:
             result = screenspace_primitives._mask_corr_outside_window(
                 result, entry["w"], entry["h"], window

@@ -25,6 +25,7 @@ import transcripts
 import utils
 import video
 import viewer
+from cli_args import parse_arguments
 from utils import ClipRecord
 
 
@@ -39,823 +40,6 @@ class CliModeArgs(NamedTuple):
 
 
 # ---- Argument parsing ----
-
-
-class _LicensesAction(argparse.Action):
-    """Print the bundled third-party license notice and exit.
-
-    Not `action="version"`: that action takes a *static* string, so the notice
-    would be read on every single run just to build the parser. This one reads
-    the ~78 KB file only when the flag is actually passed.
-    """
-
-    def __init__(
-        self,
-        option_strings: list[str],
-        dest: str = argparse.SUPPRESS,
-        default: str = argparse.SUPPRESS,
-        help: str | None = None,
-    ) -> None:
-        super().__init__(
-            option_strings=option_strings,
-            dest=dest,
-            default=default,
-            nargs=0,
-            help=help,
-        )
-
-    def __call__(
-        self,
-        parser: argparse.ArgumentParser,
-        namespace: argparse.Namespace,
-        values: Any,
-        option_string: str | None = None,
-    ) -> None:
-        text = utils.get_licenses_text()
-        if text is None:
-            parser.exit(1, "THIRD-PARTY-LICENSES is missing from this installation.\n")
-        # Bare print: standard_print() is verbosity-gated and Rich re-wraps verbatim
-        # license text.
-        print(text)
-        parser.exit()
-
-
-def parse_arguments() -> argparse.Namespace:
-    """Parse command-line arguments for non-interactive mode.
-
-    At most one selection-mode flag (-b, -l, -r, -C, -c, -p, -k, -S, -M, -R, -T) may be
-    given; if none is given, the program runs in interactive mode (see --help groups for
-    all options: output format, transcription, paths, viewer/manifest, run flags).
-
-    Returns:
-        argparse.Namespace with mode flags/values, spreadsheet, yes, verbose, screen, gif,
-        transcribe, transcript_format, pre_transcribe, viewer, manifest, timeline_viewer,
-        input, output, titlecards, and related attributes.
-    """
-    parser = argparse.ArgumentParser(
-        description=(
-            f"clipgen v{utils.get_version()} - Video clip generator from Google Sheets "
-            "or local Excel timestamps. "
-            "Interactive-only flows (e.g. browse, reellate) have no separate CLI flags; "
-            "run without a selection-mode flag to use them."
-        ),
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
-Examples:
-  python clipgen.py                        Interactive mode (default)
-  python clipgen.py -b                     Batch mode - generate all clips
-  python clipgen.py -C "Observations"      Category mode - rows with category "Observations"
-  python clipgen.py -C "Observations,Onboarding"
-                                           Category mode - multiple categories
-  python clipgen.py -l 5                   Single line mode - line 5
-  python clipgen.py -l 1+4+5               Multi-line mode - lines 1, 4, and 5
-  python clipgen.py -l 1,4,5               Multi-line mode (comma separator)
-  python clipgen.py -r 1-10                Range mode - lines 1 through 10
-  python clipgen.py -c "P01.11"            Cell mode - single cell (participant P01, row 11)
-  python clipgen.py -c "P01.11 + P03.11"   Cell mode - multiple cells
-  python clipgen.py -p P01                 Participant mode - all clips for participant P01
-  python clipgen.py -p "P01,P03"           Participant mode - all clips for P01 and P03
-  python clipgen.py -k                     Keyword mode - only key-marked clips/timestamps
-  python clipgen.py -S "Critical,High"     Severity mode - Critical and High severity clips
-  python clipgen.py -S "-4,-3"             Severity mode - using numeric values
-  python clipgen.py -M "5, P01.11, 13-16"  Mixed mode - combine selectors for individual outputs
-  python clipgen.py -b -s "Study Name"     Batch mode with specific spreadsheet
-  python clipgen.py -s excel               Use the only .xlsx in cwd (fails if 0 or many)
-  python clipgen.py -s ./notes.xlsx        Batch with local Excel workbook
-  python clipgen.py -l 5 --no-input        Line mode, non-interactive (no prompts)
-  python clipgen.py -b -v                  Batch mode with verbose output
-  python clipgen.py -R "11, 13-16, P01, \\"Observations\\""  Reel mode - one combined video
-  python clipgen.py -T P01                 Chronologic mode - chronological reel for participant P01
-  python clipgen.py -b --screen            Batch mode screenshots (.png)
-  python clipgen.py -l 5 --gif             Line mode GIF output (.gif)
-  python clipgen.py --timeline-viewer      Generate per-participant timeline viewer
-  python clipgen.py -b --transcribe        Batch with Markdown transcripts per clip
-  python clipgen.py -b --transcribe --transcript-format vtt
-  python clipgen.py -b --viewer --manifest Timeline viewer + manifest after batch run
-  python clipgen.py --viewer               Regenerate clips_viewer.html from saved manifest
-  python clipgen.py --regenerate            Regenerate all media artifacts from saved manifest
-  python clipgen.py --studio                  Launch Studio web interface
-  python clipgen.py --studio -s "My Study"   Studio with specific spreadsheet
-  python clipgen.py -b -i ./videos -o ./out   Custom input/output directories
-  python clipgen.py -b --titlecards        Enable titlecards for this run
-  python clipgen.py -b --no-titlecards     Disable titlecards for this run
-
-Note: Non-interactive mode (using -b, -l, -r, -C, -c, -p, -k, -S, -M, -R, or -T) is silent by default,
-      only showing errors and the final summary. Use -v for full output.
-""",
-    )
-
-    selection = parser.add_argument_group("selection mode (choose at most one)")
-    mode_group = selection.add_mutually_exclusive_group()
-    mode_group.add_argument(
-        "-b",
-        "--batch",
-        action="store_true",
-        help="Batch mode: generate all possible clips",
-    )
-    mode_group.add_argument(
-        "-l",
-        "--lines",
-        type=str,
-        metavar="LINES",
-        help="Line mode: specify line numbers separated by + or , (e.g., 1+4+5 or 1,4,5)",
-    )
-    mode_group.add_argument(
-        "-r",
-        "--range",
-        type=str,
-        metavar="RANGE",
-        help="Range mode: specify start-end line range (e.g., 1-10)",
-    )
-    mode_group.add_argument(
-        "-C",
-        "--category",
-        type=str,
-        metavar="CATEGORIES",
-        help='Category mode: specify one or more category names (comma- or plus-separated, e.g., "Observations,Onboarding")',
-    )
-    mode_group.add_argument(
-        "-c",
-        "--cell",
-        type=str,
-        metavar="CELLS",
-        help="Cell mode: specify cells as participant.row (e.g., P01.11 or P01.11 + P03.11)",
-    )
-    mode_group.add_argument(
-        "-p",
-        "--participant",
-        type=str,
-        metavar="ID",
-        help="Participant mode: generate all clips for one or more participants (e.g., P01 or P01,P03)",
-    )
-    mode_group.add_argument(
-        "-k",
-        "--keyword",
-        nargs="?",
-        const=True,
-        default=False,
-        metavar="ANNOTATIONS",
-        help='Keyword mode: generate only annotated clips. Optionally specify annotation types (e.g., "key,bug")',
-    )
-    mode_group.add_argument(
-        "-S",
-        "--severity",
-        type=str,
-        metavar="SEVERITIES",
-        help='Severity mode: filter by severity levels (e.g., "Critical,High" or "-4,-3")',
-    )
-    mode_group.add_argument(
-        "-M",
-        "--mixed",
-        type=str,
-        metavar="SELECTORS",
-        help='Mixed mode: combine selectors (e.g. "5, P01.11, 13-16") for individual clips/screenshots/GIFs',
-    )
-    mode_group.add_argument(
-        "-R",
-        "--reel",
-        type=str,
-        metavar="SELECTORS",
-        help='Reel mode: combine selectors (e.g. "11, 13-16, P01, \\"Observations\\"") into one video',
-    )
-    mode_group.add_argument(
-        "-T",
-        "--chronologic",
-        type=str,
-        metavar="PARTICIPANT",
-        help="Chronologic mode: chronological reel for one participant (e.g., P01)",
-    )
-    mode_group.add_argument(
-        "-H",
-        "--highlights",
-        nargs="?",
-        const="highlights",
-        type=str,
-        metavar="DURATION",
-        help="Highlights reel: auto-select best clips within time budget (default 180s). Optionally specify duration in seconds.",
-    )
-
-    output_fmt = parser.add_argument_group("output format (choose at most one)")
-    format_group = output_fmt.add_mutually_exclusive_group()
-    format_group.add_argument(
-        "--screen",
-        action="store_true",
-        help="Output screenshots (.png) instead of video clips",
-    )
-    format_group.add_argument(
-        "--gif", action="store_true", help="Output animated GIFs instead of video clips"
-    )
-
-    transcription = parser.add_argument_group("transcription")
-    transcription.add_argument(
-        "--transcribe",
-        action="store_true",
-        help="Generate transcript files alongside artifacts",
-    )
-    transcription.add_argument(
-        "--transcript-format",
-        type=str,
-        choices=["md", "srt", "vtt"],
-        metavar="FMT",
-        help="Transcript format: md (default), srt, or vtt",
-    )
-    transcription.add_argument(
-        "--pre-transcribe",
-        nargs="*",
-        metavar="ID",
-        default=None,
-        help="Pre-transcribe source videos. No IDs = all participants. Specify IDs to transcribe specific participants (e.g., P01 P03).",
-    )
-    transcription.add_argument(
-        "--whisper-model",
-        type=str,
-        choices=["tiny", "base", "small", "medium", "large-v3"],
-        metavar="MODEL",
-        help="Whisper model for transcription: tiny, base, small, medium, large-v3 (default: base)",
-    )
-    transcription.add_argument(
-        "--no-whisper-vad",
-        action="store_true",
-        help="Disable Silero VAD pre-filter (transcribe full audio including long silence)",
-    )
-    transcription.add_argument(
-        "--whisper-hallucination-silence",
-        type=float,
-        metavar="SEC",
-        help="Enable hallucination silence skip when SEC > 0 (seconds; slower, uses word timestamps)",
-    )
-    transcription.add_argument(
-        "--summarize",
-        nargs="*",
-        metavar="ID",
-        default=None,
-        help="Run the summary thinking agent over already-transcribed participants. "
-        "No IDs = all transcribed. Existing summaries are kept unless --no-input is passed.",
-    )
-    transcription.add_argument(
-        "--citations",
-        nargs="*",
-        metavar="ID",
-        default=None,
-        help="Run the citation thinking agent over participants that already have a summary. "
-        "No IDs = all eligible. Existing citations are kept unless --no-input is passed.",
-    )
-    transcription.add_argument(
-        "--friction",
-        nargs="*",
-        metavar="ID",
-        default=None,
-        help="Run the friction thinking agent over participants that already have a summary. "
-        "No IDs = all eligible. Existing friction results are kept unless --no-input is passed.",
-    )
-
-    ai_opts = parser.add_argument_group("AI models")
-    ai_opts.add_argument(
-        "--llm-model",
-        type=str,
-        metavar="MODEL",
-        help="AI model for transcript summaries, citations, and friction (HF ref or downloaded name)",
-    )
-
-    paths = parser.add_argument_group("spreadsheet & directories")
-    paths.add_argument(
-        "-s",
-        "--spreadsheet",
-        type=str,
-        metavar="SOURCE",
-        help=(
-            "Google Sheet title, numeric index from your account list, full spreadsheet URL, "
-            f"path to a local .xlsx file, or keyword {config.COMMAND_EXCEL!r} to use the "
-            "only .xlsx in the current directory (errors if there are zero or multiple files)"
-        ),
-    )
-    paths.add_argument(
-        "-i",
-        "--input",
-        type=str,
-        metavar="DIR",
-        help="Input directory where source videos are located (defaults to current working directory when unset)",
-    )
-    paths.add_argument(
-        "-o",
-        "--output",
-        type=str,
-        metavar="DIR",
-        help="Output directory where generated artifacts will be written (defaults to current working directory when unset)",
-    )
-
-    viewer_manifest = parser.add_argument_group("viewer & manifest")
-    viewer_manifest.add_argument(
-        "--viewer",
-        action="store_true",
-        help="Generate a timeline HTML viewer file (clips_viewer.html). With a mode flag, creates viewer from that run's artifacts. Alone, regenerates from saved manifest.",
-    )
-    viewer_manifest.add_argument(
-        "--manifest",
-        action="store_true",
-        help="Write artifact metadata to a cumulative manifest JSON file alongside generated clips",
-    )
-    viewer_manifest.add_argument(
-        "--export",
-        action="store_true",
-        help="Export analysis-ready JSON+CSV from manifests in the output directory (Screenspace events, Transcripts). Skips manifests that aren't present.",
-    )
-    viewer_manifest.add_argument(
-        "--timeline-viewer",
-        action="store_true",
-        help="Batch-export all clips and generate a per-participant timeline HTML viewer",
-    )
-    viewer_manifest.add_argument(
-        "--regenerate",
-        action="store_true",
-        help="Regenerate all media artifacts from saved manifest (no spreadsheet needed)",
-    )
-    viewer_manifest.add_argument(
-        "--studio",
-        action="store_true",
-        help="Launch the Studio web interface for interactive artifact generation and reel building",
-    )
-    viewer_manifest.add_argument(
-        "--screenspace",
-        action="store_true",
-        help="Launch the Screenspace analysis interface for video frame analysis",
-    )
-    viewer_manifest.add_argument(
-        "--transcripts",
-        action="store_true",
-        help="Launch the Transcript workspace for viewing, editing, and managing transcriptions",
-    )
-    viewer_manifest.add_argument(
-        "--workflows",
-        action="store_true",
-        help="Launch the Workflows node-canvas for chaining clip, Screenspace, and transcript actions",
-    )
-    viewer_manifest.add_argument(
-        "--composer",
-        action="store_true",
-        help="Launch the Composer timeline for cutting source videos and reviewing markers",
-    )
-    viewer_manifest.add_argument(
-        "--overview",
-        action="store_true",
-        help="Launch the Overview frontend (Metadata, Convergence, and the 3D similarity Map)",
-    )
-    viewer_manifest.add_argument(
-        "--desktop",
-        action="store_true",
-        help="Open the web frontend in a native window instead of a browser (implies --studio when no frontend is given)",
-    )
-    viewer_manifest.add_argument(
-        "--browser",
-        action="store_true",
-        help="Force the web frontend into the default browser, even for a double-clicked bundle",
-    )
-    viewer_manifest.add_argument(
-        "--gallery",
-        type=str,
-        nargs="?",
-        const="",
-        metavar="VIDEO",
-        help="Generate a gallery viewer with interval screenshots/GIFs from a video file",
-    )
-    viewer_manifest.add_argument(
-        "--interval",
-        type=int,
-        metavar="SECONDS",
-        help=f"Capture interval in seconds for gallery mode (default: {config.GALLERY_INTERVAL_SECONDS})",
-    )
-    viewer_manifest.add_argument(
-        "--bundle",
-        action="store_true",
-        help="Embed gallery images as base64 data URIs in the HTML (makes it fully self-contained)",
-    )
-
-    screenspace_cli = parser.add_argument_group("screenspace cli")
-    ss_modes = screenspace_cli.add_mutually_exclusive_group()
-    ss_modes.add_argument(
-        "--ss-task",
-        nargs="+",
-        metavar="TYPE PARTICIPANT [REGION]",
-        default=None,
-        help=(
-            "Run a Screenspace analysis task headlessly. "
-            "TYPE is one of color, change, similarity, text, numbers, timelapse, "
-            "template, shape, flow, inactivity, scene, attention. REGION is optional "
-            "and must "
-            "already "
-            "exist in the active manifest or in a stash (use --ss-list-regions / "
-            "--ss-list-stashes); omit it (or pass 'full_frame') to scan the whole frame."
-        ),
-    )
-    ss_modes.add_argument(
-        "--ss-run-task",
-        type=str,
-        default=None,
-        metavar="TASK_ID",
-        help=(
-            "Re-run a saved Screenspace task from the manifest by id, re-extracting "
-            "reference frames from the source video. The only headless path for "
-            "multitool tasks (build the chain in --screenspace, then run it here). "
-            "Find ids with --ss-list-tasks."
-        ),
-    )
-    ss_modes.add_argument(
-        "--ss-list-regions",
-        action="store_true",
-        help="List active Screenspace regions from the manifest and exit.",
-    )
-    ss_modes.add_argument(
-        "--ss-list-stashes",
-        action="store_true",
-        help="List Screenspace region stashes and exit.",
-    )
-    ss_modes.add_argument(
-        "--ss-list-tasks",
-        nargs="?",
-        const="",
-        default=None,
-        metavar="STATUS",
-        help=(
-            "List Screenspace tasks from the manifest. Optional STATUS filter: "
-            "queued, running, completed, failed, cancelled, paused."
-        ),
-    )
-
-    screenspace_cli.add_argument(
-        "--ss-target-color",
-        type=str,
-        metavar="HEX",
-        help="Target colour as #RRGGBB hex (color tool).",
-    )
-    screenspace_cli.add_argument(
-        "--ss-tolerance",
-        type=str,
-        metavar="H,S,V",
-        help="HSV tolerance triple as comma-separated ints (color tool).",
-    )
-    screenspace_cli.add_argument(
-        "--ss-color-mode",
-        type=str,
-        choices=("average", "presence"),
-        default="average",
-        help=(
-            "Color tool match mode: 'average' (region average) or 'presence' "
-            "(target color appears anywhere in the region). Default: average."
-        ),
-    )
-    screenspace_cli.add_argument(
-        "--ss-min-area",
-        type=float,
-        metavar="PERCENT",
-        help=(
-            "Minimum matching-pixel area as a percent (0-100) for "
-            "--ss-color-mode presence. Default fires on any matching pixel."
-        ),
-    )
-    screenspace_cli.add_argument(
-        "--ss-threshold",
-        type=float,
-        metavar="FLOAT",
-        help="Match threshold (color, change, similarity, template, shape, flow, inactivity).",
-    )
-    screenspace_cli.add_argument(
-        "--ss-reference-timestamp",
-        type=float,
-        metavar="SECONDS",
-        help="Reference frame timestamp (similarity, template, shape).",
-    )
-    screenspace_cli.add_argument(
-        "--ss-scale-min",
-        type=float,
-        metavar="FLOAT",
-        help="Shape scale ladder minimum (default from config).",
-    )
-    screenspace_cli.add_argument(
-        "--ss-scale-max",
-        type=float,
-        metavar="FLOAT",
-        help="Shape scale ladder maximum (default from config).",
-    )
-    screenspace_cli.add_argument(
-        "--ss-scale-steps",
-        type=int,
-        metavar="INT",
-        help="Shape scale ladder rungs (default from config).",
-    )
-    screenspace_cli.add_argument(
-        "--ss-scale-y-min",
-        type=float,
-        metavar="FLOAT",
-        help="Shape vertical scale ladder minimum (unlinks the axes).",
-    )
-    screenspace_cli.add_argument(
-        "--ss-scale-y-max",
-        type=float,
-        metavar="FLOAT",
-        help="Shape vertical scale ladder maximum (unlinks the axes).",
-    )
-    screenspace_cli.add_argument(
-        "--ss-scale-y-steps",
-        type=int,
-        metavar="INT",
-        help="Shape vertical scale ladder rungs.",
-    )
-    screenspace_cli.add_argument(
-        "--ss-scene-ref",
-        action="append",
-        metavar="NAME:TIMESTAMP[:THRESHOLD]",
-        help=(
-            "Reference scene for the scene tool, repeatable. TIMESTAMP is in seconds; "
-            "NAME must not contain ':'. Optional per-scene THRESHOLD (0-1) overrides "
-            "--ss-threshold. Example: --ss-scene-ref menu:12.5 --ss-scene-ref game:30:0.8"
-        ),
-    )
-    screenspace_cli.add_argument(
-        "--ss-text",
-        type=str,
-        metavar="STR",
-        help="Search string (text tool).",
-    )
-    screenspace_cli.add_argument(
-        "--ss-fuzzy-threshold",
-        type=float,
-        metavar="FLOAT",
-        help=f"OCR fuzzy-match threshold for the text tool (default: {config.SCREENSPACE_OCR_FUZZY_THRESHOLD}).",
-    )
-    screenspace_cli.add_argument(
-        "--ss-operator",
-        type=str,
-        choices=["eq", "gt", "lt", "gte", "lte", "range"],
-        metavar="OP",
-        help="Numeric comparison operator (numbers tool).",
-    )
-    screenspace_cli.add_argument(
-        "--ss-target-value",
-        type=float,
-        metavar="FLOAT",
-        help="Target numeric value (numbers tool, non-range operators).",
-    )
-    screenspace_cli.add_argument(
-        "--ss-range-min",
-        type=float,
-        metavar="FLOAT",
-        help="Range minimum (numbers tool, range operator).",
-    )
-    screenspace_cli.add_argument(
-        "--ss-range-max",
-        type=float,
-        metavar="FLOAT",
-        help="Range maximum (numbers tool, range operator).",
-    )
-    screenspace_cli.add_argument(
-        "--ss-speedup",
-        type=float,
-        metavar="FACTOR",
-        help="Speed-up factor (timelapse tool).",
-    )
-    screenspace_cli.add_argument(
-        "--ss-output-format",
-        type=str,
-        choices=["mp4", "gif"],
-        metavar="FMT",
-        help="Output format (timelapse tool).",
-    )
-    screenspace_cli.add_argument(
-        "--ss-start",
-        type=float,
-        metavar="SECONDS",
-        help="Start time in seconds (timelapse and other range-aware tools).",
-    )
-    screenspace_cli.add_argument(
-        "--ss-end",
-        type=float,
-        metavar="SECONDS",
-        help="End time in seconds (timelapse and other range-aware tools).",
-    )
-    screenspace_cli.add_argument(
-        "--ss-interval",
-        type=float,
-        metavar="SECONDS",
-        help=f"Frame sampling interval (default: {config.SCREENSPACE_DEFAULT_INTERVAL}).",
-    )
-    screenspace_cli.add_argument(
-        "--ss-event-label",
-        type=str,
-        metavar="STR",
-        help="Override the auto-generated event label written to the manifest.",
-    )
-
-    event_clips = parser.add_argument_group("event-driven clips")
-    event_clips.add_argument(
-        "--ss-clips",
-        action="store_true",
-        help=(
-            "Cut clips from existing Screenspace events (reads the manifest). "
-            "Filter with --ss-clips-detector / --ss-clips-region / --ss-clips-participant / "
-            "--ss-clips-min-confidence / --ss-clips-event-type. Cluster nearby events with "
-            "--cluster-gap and pad with --clip-pre / --clip-post."
-        ),
-    )
-    event_clips.add_argument(
-        "--transcript-clips",
-        action="store_true",
-        help=(
-            "Cut clips from transcript segments or marks (reads the manifest). "
-            "Filter with --transcript-clips-participant / --transcript-clips-mark / "
-            "--transcript-clips-text. Cluster nearby segments with --cluster-gap."
-        ),
-    )
-    event_clips.add_argument(
-        "--ss-clips-detector",
-        type=str,
-        metavar="TYPE",
-        help="Comma-separated detector types to include (e.g. 'change,color').",
-    )
-    event_clips.add_argument(
-        "--ss-clips-region",
-        type=str,
-        metavar="NAME",
-        help="Comma-separated region names to include.",
-    )
-    event_clips.add_argument(
-        "--ss-clips-participant",
-        type=str,
-        metavar="ID",
-        help="Comma-separated participant IDs to include (--ss-clips).",
-    )
-    event_clips.add_argument(
-        "--ss-clips-min-confidence",
-        type=float,
-        metavar="FLOAT",
-        help="Minimum event confidence (0.0-1.0).",
-    )
-    event_clips.add_argument(
-        "--ss-clips-event-type",
-        type=str,
-        metavar="STR",
-        help="Substring match against event_type (case-insensitive).",
-    )
-    event_clips.add_argument(
-        "--transcript-clips-participant",
-        type=str,
-        metavar="ID",
-        help="Comma-separated participant IDs to include (--transcript-clips).",
-    )
-    event_clips.add_argument(
-        "--transcript-clips-mark",
-        type=str,
-        metavar="CATEGORY",
-        help=(
-            "Comma-separated mark categories. When set, only segments with at least "
-            "one matching mark are included."
-        ),
-    )
-    event_clips.add_argument(
-        "--transcript-clips-text",
-        type=str,
-        metavar="STR",
-        help="Substring match against segment text (case-insensitive).",
-    )
-    event_clips.add_argument(
-        "--transcript-mark",
-        type=str,
-        metavar="TERM",
-        help=(
-            "Batch-mark transcript segments whose text contains TERM "
-            "(case-insensitive substring, like the Transcripts UI search box). "
-            "Quote multi-word terms. Requires --transcript-mark-category. "
-            "Filter with --transcript-mark-participant. Optionally tag created "
-            "marks with --transcript-mark-label."
-        ),
-    )
-    event_clips.add_argument(
-        "--transcript-mark-category",
-        type=str,
-        metavar="CATEGORY",
-        help=(
-            "Mark category to apply (e.g. 'pain_point', 'insight'). "
-            "Must be a key in config.MARK_CATEGORIES."
-        ),
-    )
-    event_clips.add_argument(
-        "--transcript-mark-participant",
-        type=str,
-        metavar="ID",
-        help="Comma-separated participant IDs to include (--transcript-mark). Omit to mark all.",
-    )
-    event_clips.add_argument(
-        "--transcript-mark-label",
-        type=str,
-        metavar="TEXT",
-        help="Optional label written onto every created or updated mark.",
-    )
-    event_clips.add_argument(
-        "--cluster-gap",
-        type=float,
-        default=5.0,
-        metavar="SECONDS",
-        help="Cluster events whose gap is <= SECONDS into one clip (default: 5.0; 0 disables).",
-    )
-    event_clips.add_argument(
-        "--clip-pre",
-        type=float,
-        default=5.0,
-        metavar="SECONDS",
-        help="Pad each cluster's start by SECONDS (default: 5.0).",
-    )
-    event_clips.add_argument(
-        "--clip-post",
-        type=float,
-        default=5.0,
-        metavar="SECONDS",
-        help="Pad each cluster's end by SECONDS (default: 5.0).",
-    )
-    event_clips.add_argument(
-        "--max-clip-duration",
-        type=float,
-        default=0.0,
-        metavar="SECONDS",
-        help="If > 0, cap each clip's duration; longer clusters are split (default: 0 = no cap).",
-    )
-
-    run_opts = parser.add_argument_group("run options")
-    run_opts.add_argument(
-        "--no-input",
-        dest="no_input",
-        action="store_true",
-        help="Non-interactive mode: skip confirmation prompts and fail fast on prompts that would block on stdin (for programmatic use)",
-    )
-    run_opts.add_argument(
-        "-v",
-        "--verbose",
-        action="store_true",
-        help="Increase verbosity (-v = verbose output; default is quiet in CLI, standard in interactive mode)",
-    )
-    run_opts.add_argument(
-        "--profile",
-        action="store_true",
-        help="Collect and print performance timings (grep 'profile |'; "
-        "see agents/skills/profile/SKILL.md)",
-    )
-    run_opts.add_argument(
-        "--profile-deep",
-        metavar="LABEL",
-        default=None,
-        help="cProfile the spans whose profile label contains LABEL (implies "
-        "--profile); prints a per-label function breakdown at exit",
-    )
-    run_opts.add_argument(
-        "--settings",
-        action="store_true",
-        help="Open the interactive settings editor before running "
-        "(changes apply to this run only; incompatible with --no-input)",
-    )
-    run_opts.add_argument(
-        "--version",
-        action="version",
-        version=utils.get_version(),
-        help="Print the clipgen version and exit",
-    )
-    run_opts.add_argument(
-        "--licenses",
-        action=_LicensesAction,
-        help="Print third-party license notices for the bundled software and exit",
-    )
-
-    titlecards_grp = parser.add_argument_group("title cards (choose at most one)")
-    titlecard_group = titlecards_grp.add_mutually_exclusive_group()
-    titlecard_group.add_argument(
-        "--titlecards",
-        dest="titlecards",
-        action="store_true",
-        help="Enable titlecards for generated video clips for this run",
-    )
-    titlecard_group.add_argument(
-        "--no-titlecards",
-        dest="titlecards",
-        action="store_false",
-        help="Disable titlecards for generated video clips for this run",
-    )
-
-    parser.set_defaults(titlecards=None)
-
-    filmstrip_grp = parser.add_argument_group("filmstrip (choose at most one)")
-    filmstrip_group = filmstrip_grp.add_mutually_exclusive_group()
-    filmstrip_group.add_argument(
-        "--filmstrip",
-        dest="filmstrip",
-        action="store_true",
-        help="Enable filmstrip thumbnail mode on timeline markers in the HTML viewer",
-    )
-    filmstrip_group.add_argument(
-        "--no-filmstrip",
-        dest="filmstrip",
-        action="store_false",
-        help="Disable filmstrip thumbnail mode on timeline markers in the HTML viewer",
-    )
-    parser.set_defaults(filmstrip=None)
-
-    return parser.parse_args()
 
 
 def parse_cli_mode_args(args: Any) -> CliModeArgs:
@@ -1357,7 +541,7 @@ def _resolve_chronologic_output_file(
     """Build the output filename for chronologic reel mode."""
     if not args.chronologic:
         return None
-    participant_id = utils.normalize_participant_id(args.chronologic).strip()
+    participant_id = utils.normalize_participant_id(args.chronologic)
     study_name = clips_list[0].get("study", "").strip() if clips_list else ""
     if study_name and participant_id:
         return files.get_unique_filename(
@@ -1460,7 +644,7 @@ def _run_pre_transcribe(worksheet: Any, args: Any) -> None:
     else:
         target_ids = []
         for raw_id in requested_ids:
-            pid = utils.normalize_participant_id(raw_id).strip()
+            pid = utils.normalize_participant_id(raw_id)
             if pid in available:
                 target_ids.append(pid)
             else:
@@ -1672,7 +856,7 @@ def _ss_build_params(
     ``similarity`` and ``template`` extracts the reference frame at
     ``--ss-reference-timestamp`` via *frame_at* (which maps a global timestamp
     into the owning sub-video for multi-video participants; mirrors the
-    server-side path in screenspace_server._extract_task_media).
+    server-side path in screenspace_server._extract_tool_media).
     """
     import screenspace
 
@@ -2134,28 +1318,8 @@ def _ss_run_and_persist_task(task: dict[str, Any], manifest: dict[str, Any]) -> 
     utils.info_print(f"Running {task_type} on {participant} (region: {region_name})...")
 
     final_task: dict[str, Any] | None = None
-    progress_bar = utils.create_progress_bar()
     try:
-        if progress_bar:
-            with progress_bar:
-                ptask = progress_bar.add_task(f"{task_type} (queued)", total=100)
-                while True:
-                    current = worker.get_task(task_id)
-                    if current is None:
-                        break
-                    status = current.get("status", "")
-                    pct = int(float(current.get("progress", 0.0)) * 100)
-                    progress_bar.update(
-                        ptask,
-                        completed=pct,
-                        description=f"{task_type} ({status})",
-                    )
-                    if status in ("completed", "failed", "cancelled"):
-                        final_task = current
-                        progress_bar.update(ptask, completed=100)
-                        break
-                    time.sleep(0.25)
-        else:
+        with utils.progress_scope(f"{task_type} (queued)", 100) as ps:
             last_progress = -1.0
             while True:
                 current = worker.get_task(task_id)
@@ -2163,11 +1327,17 @@ def _ss_run_and_persist_task(task: dict[str, Any], manifest: dict[str, Any]) -> 
                     break
                 status = current.get("status", "")
                 progress = float(current.get("progress", 0.0))
-                if progress - last_progress > 0.05:
+                if ps.live:
+                    ps.update(
+                        completed=int(progress * 100),
+                        description=f"{task_type} ({status})",
+                    )
+                elif progress - last_progress > 0.05:
                     utils.info_print(f"  {status}: {int(progress * 100)}%")
                     last_progress = progress
                 if status in ("completed", "failed", "cancelled"):
                     final_task = current
+                    ps.update(completed=100)
                     break
                 time.sleep(0.25)
     finally:
@@ -2220,7 +1390,7 @@ def _ss_extract_scene_frames(
 ) -> list[dict[str, Any]]:
     """Build reference_scenes (with cropped frames) from saved scene_references.
 
-    Mirrors the scene path of screenspace_server._extract_task_media. *frame_at*
+    Mirrors the scene path of screenspace_server._extract_tool_media. *frame_at*
     maps a global timestamp into the owning sub-video for multi-video
     participants. Raises ValueError when a frame cannot be read.
     """
@@ -2276,7 +1446,7 @@ def _ss_rehydrate_task_media(
 ) -> None:
     """Re-extract reference frames/templates/scenes into a saved task's parameters.
 
-    Mirrors screenspace_server._extract_task_media and _prepare_multitool_steps so a
+    Mirrors screenspace_server._extract_tool_media and _prepare_multitool_steps so a
     manifest task (whose binary frame data was stripped on save) can be re-run.
     *frame_at* maps a global reference timestamp into the owning sub-video for
     multi-video participants. Mutates ``parameters`` in place; raises ValueError
@@ -3083,7 +2253,7 @@ def _select_transcript_targets(
         return list(source_transcripts.keys())
     targets: list[str] = []
     for raw_id in requested:
-        pid = utils.normalize_participant_id(raw_id).strip()
+        pid = utils.normalize_participant_id(raw_id)
         if pid in source_transcripts:
             targets.append(pid)
         else:
@@ -3094,21 +2264,96 @@ def _select_transcript_targets(
     return targets
 
 
-def _run_summarize(args: argparse.Namespace) -> None:
-    """Run the summary thinking agent over already-transcribed participants."""
+class _AgentPass(NamedTuple):
+    """CLI wording for one thinking-agent pass; the registry supplies the rest."""
+
+    key: str  # thinking_agents.AGENTS key
+    args_attr: str  # argparse attribute holding the participant list
+    no_targets: str
+    start: str  # "{pid}" template
+    not_produced: str  # "{pid}" template
+    tally: str  # "{done}" / "{skipped}" template
+    report: Callable[[str, Any], None]  # per-participant success line
+
+
+# Flag that produces each agent's manifest field, for the prerequisite hint.
+_AGENT_FLAGS = {
+    "summary": "--summarize",
+    "citations": "--citations",
+    "friction": "--friction",
+}
+
+
+def _report_summary(pid: str, result: Any) -> None:
+    utils.info_print(f"  {pid}: summary stored ({len(result)} chars).")
+
+
+def _report_citations(pid: str, result: Any) -> None:
+    total_refs = sum(len(c.get("refs") or []) for c in result)
+    utils.info_print(f"  {pid}: {len(result)} claim(s), {total_refs} ref(s) stored.")
+
+
+def _report_friction(pid: str, result: Any) -> None:
+    moment_count = len(result.get("moments") or [])
+    if result.get("llm_ok"):
+        utils.info_print(f"  {pid}: {moment_count} friction moment(s) stored.")
+    else:
+        utils.warning_print(
+            f"  {pid}: programmatic scores stored, but LLM moment detection "
+            "failed (AI server unavailable?)."
+        )
+
+
+_SUMMARY_PASS = _AgentPass(
+    key="summary",
+    args_attr="summarize",
+    no_targets="No transcribed participants to summarize.",
+    start="Summarizing {pid}...",
+    not_produced="{pid}: summary not produced (transcript too short or AI server unavailable).",
+    tally="Summary complete: {done} summarized, {skipped} skipped.",
+    report=_report_summary,
+)
+_CITATIONS_PASS = _AgentPass(
+    key="citations",
+    args_attr="citations",
+    no_targets="No transcribed participants for citation generation.",
+    start="Finding citations for {pid}...",
+    not_produced="{pid}: no citations produced (AI server unavailable or empty summary).",
+    tally="Citations complete: {done} processed, {skipped} skipped.",
+    report=_report_citations,
+)
+_FRICTION_PASS = _AgentPass(
+    key="friction",
+    args_attr="friction",
+    no_targets="No transcribed participants for friction analysis.",
+    start="Scoring friction for {pid}...",
+    not_produced="{pid}: friction not produced (missing transcript or summary).",
+    tally="Friction complete: {done} processed, {skipped} skipped.",
+    report=_report_friction,
+)
+
+
+def _run_thinking_agent(args: argparse.Namespace, spec: _AgentPass) -> None:
+    """Run one registry agent over the selected transcripts, storing its field."""
     import thinking_agents
+
+    agent = thinking_agents.get_agent(spec.key)
+    assert agent is not None  # registered in thinking_agents.AGENTS
+    field = agent["manifest_field"]
 
     manifest = transcripts.load_transcripts_manifest()
     source_transcripts = manifest["source_transcripts"]
     corrections = manifest["corrections"]
     marks = manifest.get("marks")
 
-    targets = _select_transcript_targets(args.summarize, source_transcripts)
+    targets = _select_transcript_targets(
+        getattr(args, spec.args_attr), source_transcripts
+    )
     if not targets:
-        utils.error_print("No transcribed participants to summarize.")
+        utils.error_print(spec.no_targets)
         return
 
-    summarized = 0
+    done = 0
     skipped = 0
     for pid in targets:
         entry = source_transcripts.get(pid)
@@ -3116,137 +2361,43 @@ def _run_summarize(args: argparse.Namespace) -> None:
             utils.warning_print(f"{pid}: no transcript entry; skipping.")
             skipped += 1
             continue
-        if entry.get("summary") and not args.no_input:
-            utils.info_print(
-                f"{pid}: summary already present; skip (--no-input to overwrite)."
-            )
-            skipped += 1
-            continue
-        utils.info_print(f"Summarizing {pid}...")
-        summary = thinking_agents.summarize_transcript(entry.get("segments") or [])
-        if not summary:
+        missing = next((dep for dep in agent["depends_on"] if not entry.get(dep)), None)
+        if missing:
             utils.warning_print(
-                f"{pid}: summary not produced (transcript too short or AI server unavailable)."
+                f"{pid}: no {missing} yet; run {_AGENT_FLAGS[missing]} first."
             )
             skipped += 1
             continue
-        entry["summary"] = summary
+        if entry.get(field) and not args.no_input:
+            utils.info_print(
+                f"{pid}: {field} already present; skip (--no-input to overwrite)."
+            )
+            skipped += 1
+            continue
+        utils.info_print(spec.start.format(pid=pid))
+        result = agent["run"](entry, None)
+        if not result:
+            utils.warning_print(spec.not_produced.format(pid=pid))
+            skipped += 1
+            continue
+        entry[field] = result
         transcripts.save_transcripts_manifest(source_transcripts, corrections, marks)
-        utils.info_print(f"  {pid}: summary stored ({len(summary)} chars).")
-        summarized += 1
+        spec.report(pid, result)
+        done += 1
 
-    utils.info_print(f"Summary complete: {summarized} summarized, {skipped} skipped.")
+    utils.info_print(spec.tally.format(done=done, skipped=skipped))
+
+
+def _run_summarize(args: argparse.Namespace) -> None:
+    _run_thinking_agent(args, _SUMMARY_PASS)
 
 
 def _run_citations(args: argparse.Namespace) -> None:
-    """Run the citation thinking agent over participants with summaries."""
-    import thinking_agents
-
-    manifest = transcripts.load_transcripts_manifest()
-    source_transcripts = manifest["source_transcripts"]
-    corrections = manifest["corrections"]
-    marks = manifest.get("marks")
-
-    targets = _select_transcript_targets(args.citations, source_transcripts)
-    if not targets:
-        utils.error_print("No transcribed participants for citation generation.")
-        return
-
-    cited = 0
-    skipped = 0
-    for pid in targets:
-        entry = source_transcripts.get(pid)
-        if not entry:
-            utils.warning_print(f"{pid}: no transcript entry; skipping.")
-            skipped += 1
-            continue
-        if not entry.get("summary"):
-            utils.warning_print(f"{pid}: no summary yet; run --summarize first.")
-            skipped += 1
-            continue
-        if entry.get("citations") and not args.no_input:
-            utils.info_print(
-                f"{pid}: citations already present; skip (--no-input to overwrite)."
-            )
-            skipped += 1
-            continue
-        utils.info_print(f"Finding citations for {pid}...")
-        citations = thinking_agents.find_citations(
-            entry["summary"], entry.get("segments") or []
-        )
-        if not citations:
-            utils.warning_print(
-                f"{pid}: no citations produced (AI server unavailable or empty summary)."
-            )
-            skipped += 1
-            continue
-        entry["citations"] = citations
-        transcripts.save_transcripts_manifest(source_transcripts, corrections, marks)
-        total_refs = sum(len(c.get("refs") or []) for c in citations)
-        utils.info_print(
-            f"  {pid}: {len(citations)} claim(s), {total_refs} ref(s) stored."
-        )
-        cited += 1
-
-    utils.info_print(f"Citations complete: {cited} processed, {skipped} skipped.")
+    _run_thinking_agent(args, _CITATIONS_PASS)
 
 
 def _run_friction_agent(args: argparse.Namespace) -> None:
-    """Run the friction thinking agent over participants with summaries."""
-    import thinking_agents
-
-    manifest = transcripts.load_transcripts_manifest()
-    source_transcripts = manifest["source_transcripts"]
-    corrections = manifest["corrections"]
-    marks = manifest.get("marks")
-
-    targets = _select_transcript_targets(args.friction, source_transcripts)
-    if not targets:
-        utils.error_print("No transcribed participants for friction analysis.")
-        return
-
-    agent = thinking_agents.get_agent("friction")
-    assert agent is not None  # registered in thinking_agents.AGENTS
-
-    processed = 0
-    skipped = 0
-    for pid in targets:
-        entry = source_transcripts.get(pid)
-        if not entry:
-            utils.warning_print(f"{pid}: no transcript entry; skipping.")
-            skipped += 1
-            continue
-        if not entry.get("summary"):
-            utils.warning_print(f"{pid}: no summary yet; run --summarize first.")
-            skipped += 1
-            continue
-        if entry.get("friction") and not args.no_input:
-            utils.info_print(
-                f"{pid}: friction already present; skip (--no-input to overwrite)."
-            )
-            skipped += 1
-            continue
-        utils.info_print(f"Scoring friction for {pid}...")
-        result = agent["run"](entry, None)
-        if not result:
-            utils.warning_print(
-                f"{pid}: friction not produced (missing transcript or summary)."
-            )
-            skipped += 1
-            continue
-        entry["friction"] = result
-        transcripts.save_transcripts_manifest(source_transcripts, corrections, marks)
-        moment_count = len(result.get("moments") or [])
-        if result.get("llm_ok"):
-            utils.info_print(f"  {pid}: {moment_count} friction moment(s) stored.")
-        else:
-            utils.warning_print(
-                f"  {pid}: programmatic scores stored, but LLM moment detection "
-                "failed (AI server unavailable?)."
-            )
-        processed += 1
-
-    utils.info_print(f"Friction complete: {processed} processed, {skipped} skipped.")
+    _run_thinking_agent(args, _FRICTION_PASS)
 
 
 def _run_timeline_viewer_mode(worksheet: Any, args: Any) -> None:
@@ -3415,6 +2566,8 @@ _SELECTION_ATTRS = (
 )
 
 _BASE_SELECTOR_ATTRS = _SELECTION_ATTRS + ("screen", "gif", "viewer", "regenerate")
+# Headless CLI modes additionally conflict with --highlights.
+_CLI_SELECTOR_ATTRS = _BASE_SELECTOR_ATTRS + ("highlights",)
 
 
 class _ModeSpec(NamedTuple):
@@ -3426,193 +2579,186 @@ class _ModeSpec(NamedTuple):
     """
 
     key: str  # attribute on args (also returned in result dict)
-    truthy: Callable[[Any], bool]  # how to detect this mode is active
     error: str
     hint: str
-    selector_attrs: tuple[str, ...] = _BASE_SELECTOR_ATTRS
-    implies_cli_mode: bool = False  # headless CLI mode (vs. web/standalone dispatch)
+    is_value: bool = (
+        False  # flag carries a value: active when not None, else when truthy
+    )
+    selector_attrs: tuple[str, ...] = _CLI_SELECTOR_ATTRS
+    implies_cli_mode: bool = True  # headless CLI mode (vs. web/standalone dispatch)
+    dispatch: Callable[[Any], None] | None = None  # spreadsheet-free runner, if any
+
+    def active(self, args: Any) -> bool:
+        value = getattr(args, self.key, None)
+        return value is not None if self.is_value else bool(value)
 
 
 _EXCLUSIVE_MODES: tuple[_ModeSpec, ...] = (
     _ModeSpec(
         key="timeline_viewer",
-        truthy=lambda a: bool(getattr(a, "timeline_viewer", False)),
         error="--timeline-viewer cannot be combined with mode, format, or --viewer/--regenerate flags.",
         hint="Only -s (spreadsheet) and -v (verbose) may be used alongside --timeline-viewer.",
-        implies_cli_mode=True,
+        selector_attrs=_BASE_SELECTOR_ATTRS,
     ),
     _ModeSpec(
         key="studio",
-        truthy=lambda a: bool(getattr(a, "studio", False)),
         error="--studio cannot be combined with mode, format, or --viewer/--regenerate flags.",
         hint="Only -s (spreadsheet), -i/-o (directories), and -v (verbose) may be used alongside --studio.",
+        selector_attrs=_BASE_SELECTOR_ATTRS,
+        implies_cli_mode=False,
     ),
     _ModeSpec(
         key="screenspace",
-        truthy=lambda a: bool(getattr(a, "screenspace", False)),
         error="--screenspace cannot be combined with mode, format, or --viewer/--regenerate/--studio flags.",
         hint="Only -s (spreadsheet), -i/-o (directories), and -v (verbose) may be used alongside --screenspace.",
+        selector_attrs=_BASE_SELECTOR_ATTRS,
+        implies_cli_mode=False,
     ),
     _ModeSpec(
         key="transcripts",
-        truthy=lambda a: bool(getattr(a, "transcripts", False)),
         error="--transcripts cannot be combined with mode, format, or --viewer/--regenerate/--studio/--screenspace flags.",
         hint="Only -s (spreadsheet), -i/-o (directories), and -v (verbose) may be used alongside --transcripts.",
+        selector_attrs=_BASE_SELECTOR_ATTRS,
+        implies_cli_mode=False,
     ),
     _ModeSpec(
         key="workflows",
-        truthy=lambda a: bool(getattr(a, "workflows", False)),
         error="--workflows cannot be combined with mode, format, or other web/CLI mode flags.",
         hint="Only -s (spreadsheet), -i/-o (directories), and -v (verbose) may be used alongside --workflows.",
+        selector_attrs=_BASE_SELECTOR_ATTRS,
+        implies_cli_mode=False,
     ),
     _ModeSpec(
         key="composer",
-        truthy=lambda a: bool(getattr(a, "composer", False)),
         error="--composer cannot be combined with mode, format, or other web/CLI mode flags.",
         hint="Only -s (spreadsheet), -i/-o (directories), and -v (verbose) may be used alongside --composer.",
+        selector_attrs=_BASE_SELECTOR_ATTRS,
+        implies_cli_mode=False,
     ),
     _ModeSpec(
         key="overview",
-        truthy=lambda a: bool(getattr(a, "overview", False)),
         error="--overview cannot be combined with mode, format, or other web/CLI mode flags.",
         hint="Only -s (spreadsheet), -i/-o (directories), and -v (verbose) may be used alongside --overview.",
+        selector_attrs=_BASE_SELECTOR_ATTRS,
+        implies_cli_mode=False,
     ),
     _ModeSpec(
         key="gallery",
-        # `gallery` carries an optional VIDEO arg, so use `is not None` to detect it.
-        truthy=lambda a: getattr(a, "gallery", None) is not None,
+        # `gallery` carries an optional VIDEO arg, so presence means active.
         error="--gallery cannot be combined with selection modes, --viewer, --regenerate, --studio, or --timeline-viewer.",
         hint="Only --gif, --interval, --bundle, -i/-o (directories), and -v (verbose) may be used alongside --gallery.",
         # Gallery permits --screen and --gif as output-format toggles.
         selector_attrs=tuple(
             a for a in _BASE_SELECTOR_ATTRS if a not in ("screen", "gif")
         ),
+        is_value=True,
+        implies_cli_mode=False,
     ),
     _ModeSpec(
         key="pre_transcribe",
-        truthy=lambda a: getattr(a, "pre_transcribe", None) is not None,
         error="--pre-transcribe cannot be combined with mode, format, or --studio/--screenspace/--transcripts flags.",
         hint="Only -s (spreadsheet), -i/-o (directories), and -v (verbose) may be used alongside --pre-transcribe.",
         # pre-transcribe additionally conflicts with --highlights.
-        selector_attrs=_BASE_SELECTOR_ATTRS + ("highlights",),
-        implies_cli_mode=True,
+        is_value=True,
     ),
     _ModeSpec(
         key="export",
-        truthy=lambda a: bool(getattr(a, "export", False)),
         error="--export cannot be combined with mode, format, or other standalone flags.",
         hint="Use --export with -i/-o (directories) and -v (verbose) only.",
-        selector_attrs=_BASE_SELECTOR_ATTRS + ("highlights",),
-        implies_cli_mode=True,
     ),
     _ModeSpec(
         key="ss_task",
-        truthy=lambda a: getattr(a, "ss_task", None) is not None,
         error="--ss-task cannot be combined with mode, format, or other standalone flags.",
         hint="Use --ss-task with -i/-o (directories) and -v (verbose) only.",
-        selector_attrs=_BASE_SELECTOR_ATTRS + ("highlights",),
-        implies_cli_mode=True,
+        is_value=True,
+        dispatch=_run_ss_task,
     ),
     _ModeSpec(
         key="ss_run_task",
-        truthy=lambda a: getattr(a, "ss_run_task", None) is not None,
         error="--ss-run-task cannot be combined with mode, format, or other standalone flags.",
         hint="Use --ss-run-task with -i/-o (directories) and -v (verbose) only.",
-        selector_attrs=_BASE_SELECTOR_ATTRS + ("highlights",),
-        implies_cli_mode=True,
+        is_value=True,
+        dispatch=_run_ss_rerun_task,
     ),
     _ModeSpec(
         key="ss_list_regions",
-        truthy=lambda a: bool(getattr(a, "ss_list_regions", False)),
         error="--ss-list-regions cannot be combined with other modes.",
         hint="Use --ss-list-regions on its own (with -i/-o for directories).",
-        selector_attrs=_BASE_SELECTOR_ATTRS + ("highlights",),
-        implies_cli_mode=True,
+        dispatch=_run_ss_list_regions,
     ),
     _ModeSpec(
         key="ss_list_stashes",
-        truthy=lambda a: bool(getattr(a, "ss_list_stashes", False)),
         error="--ss-list-stashes cannot be combined with other modes.",
         hint="Use --ss-list-stashes on its own (with -i/-o for directories).",
-        selector_attrs=_BASE_SELECTOR_ATTRS + ("highlights",),
-        implies_cli_mode=True,
+        dispatch=_run_ss_list_stashes,
     ),
     _ModeSpec(
         key="ss_list_tasks",
-        truthy=lambda a: getattr(a, "ss_list_tasks", None) is not None,
         error="--ss-list-tasks cannot be combined with other modes.",
         hint="Use --ss-list-tasks on its own (with -i/-o for directories).",
-        selector_attrs=_BASE_SELECTOR_ATTRS + ("highlights",),
-        implies_cli_mode=True,
+        is_value=True,
+        dispatch=_run_ss_list_tasks,
     ),
     _ModeSpec(
         key="summarize",
-        truthy=lambda a: getattr(a, "summarize", None) is not None,
         error="--summarize cannot be combined with mode, format, or other standalone flags.",
         hint="Use --summarize with -i/-o (directories), -v (verbose), and --llm-model.",
-        selector_attrs=_BASE_SELECTOR_ATTRS + ("highlights",),
-        implies_cli_mode=True,
+        is_value=True,
+        dispatch=_run_summarize,
     ),
     _ModeSpec(
         key="citations",
-        truthy=lambda a: getattr(a, "citations", None) is not None,
         error="--citations cannot be combined with mode, format, or other standalone flags.",
         hint="Use --citations with -i/-o (directories), -v (verbose), and --llm-model.",
-        selector_attrs=_BASE_SELECTOR_ATTRS + ("highlights",),
-        implies_cli_mode=True,
+        is_value=True,
+        dispatch=_run_citations,
     ),
     _ModeSpec(
         key="friction",
-        truthy=lambda a: getattr(a, "friction", None) is not None,
         error="--friction cannot be combined with mode, format, or other standalone flags.",
         hint="Use --friction with -i/-o (directories), -v (verbose), and --llm-model.",
-        selector_attrs=_BASE_SELECTOR_ATTRS + ("highlights",),
-        implies_cli_mode=True,
+        is_value=True,
+        dispatch=_run_friction_agent,
     ),
     _ModeSpec(
         key="ss_clips",
-        truthy=lambda a: bool(getattr(a, "ss_clips", False)),
         error="--ss-clips cannot be combined with mode, format, or other standalone flags.",
         hint=(
             "Use --ss-clips with -i/-o (directories), -v (verbose), "
             "--cluster-gap / --clip-pre / --clip-post / --max-clip-duration, "
             "and --ss-clips-* filters."
         ),
-        selector_attrs=_BASE_SELECTOR_ATTRS + ("highlights",),
-        implies_cli_mode=True,
+        dispatch=_run_ss_clips,
     ),
     _ModeSpec(
         key="transcript_clips",
-        truthy=lambda a: bool(getattr(a, "transcript_clips", False)),
         error="--transcript-clips cannot be combined with mode, format, or other standalone flags.",
         hint=(
             "Use --transcript-clips with -i/-o (directories), -v (verbose), "
             "--cluster-gap / --clip-pre / --clip-post / --max-clip-duration, "
             "and --transcript-clips-* filters."
         ),
-        selector_attrs=_BASE_SELECTOR_ATTRS + ("highlights",),
-        implies_cli_mode=True,
+        dispatch=_run_transcript_clips,
     ),
     _ModeSpec(
         key="transcript_mark",
-        truthy=lambda a: getattr(a, "transcript_mark", None) is not None,
         error="--transcript-mark cannot be combined with mode, format, or other standalone flags.",
         hint=(
             "Use --transcript-mark with -i/-o (directories), -v (verbose), "
             "--transcript-mark-category, and optional "
             "--transcript-mark-participant / --transcript-mark-label."
         ),
-        selector_attrs=_BASE_SELECTOR_ATTRS + ("highlights",),
-        implies_cli_mode=True,
+        is_value=True,
+        dispatch=_run_transcript_mark,
     ),
     _ModeSpec(
         key="regenerate",
-        truthy=lambda a: bool(getattr(a, "regenerate", False)),
         error="--regenerate cannot be combined with mode, format, or other standalone flags.",
         hint="Use --regenerate with -i/-o (directories) and -v (verbose) only.",
         # Exclude self from selector_attrs to avoid a false self-conflict.
         selector_attrs=tuple(a for a in _BASE_SELECTOR_ATTRS if a != "regenerate")
         + ("highlights",),
+        implies_cli_mode=False,
     ),
 )
 
@@ -3623,7 +2769,7 @@ def _validate_mode_conflicts(args: Any) -> dict[str, Any]:
     Returns a dict keyed by mode name. Boolean for each mode plus
     ``"gallery_arg"`` (the optional VIDEO argument from --gallery).
     """
-    active = {spec.key: spec.truthy(args) for spec in _EXCLUSIVE_MODES}
+    active = {spec.key: spec.active(args) for spec in _EXCLUSIVE_MODES}
     for spec in _EXCLUSIVE_MODES:
         if not active[spec.key]:
             continue
@@ -3854,44 +3000,11 @@ def _dispatch_standalone_mode(
 
         sys.exit(data_export.run_cli_export())
 
-    # Standalone Screenspace CLI tasks (no UI)
-    if getattr(args, "ss_list_regions", False):
-        _run_ss_list_regions(args)
-        return True
-    if getattr(args, "ss_list_stashes", False):
-        _run_ss_list_stashes(args)
-        return True
-    if getattr(args, "ss_list_tasks", None) is not None:
-        _run_ss_list_tasks(args)
-        return True
-    if getattr(args, "ss_task", None) is not None:
-        _run_ss_task(args)
-        return True
-    if getattr(args, "ss_run_task", None) is not None:
-        _run_ss_rerun_task(args)
-        return True
-
-    # Standalone event-driven clip cutters
-    if getattr(args, "ss_clips", False):
-        _run_ss_clips(args)
-        return True
-    if getattr(args, "transcript_clips", False):
-        _run_transcript_clips(args)
-        return True
-    if getattr(args, "transcript_mark", None) is not None:
-        _run_transcript_mark(args)
-        return True
-
-    # Standalone thinking-agent CLI passes
-    if getattr(args, "summarize", None) is not None:
-        _run_summarize(args)
-        return True
-    if getattr(args, "citations", None) is not None:
-        _run_citations(args)
-        return True
-    if getattr(args, "friction", None) is not None:
-        _run_friction_agent(args)
-        return True
+    # Spreadsheet-free CLI runners declare themselves on _EXCLUSIVE_MODES.
+    for spec in _EXCLUSIVE_MODES:
+        if spec.dispatch is not None and spec.active(args):
+            spec.dispatch(args)
+            return True
 
     # Standalone web frontend, no spreadsheet; the Start overlay picks one in-app.
     web_mode = _resolve_web_mode(args)

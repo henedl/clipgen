@@ -27,7 +27,6 @@ from utils import ClipRecord
 
 # Live progress bar; nested prompts (fuzzy match) pause and resume it.
 _active_progress = None
-_active_secondary_task = None
 
 
 def _resolve_titlecard_options(
@@ -738,6 +737,12 @@ def _parallel_map_ordered(
     return future_to_idx
 
 
+def _clip_progress_label(clip: ClipRecord) -> str:
+    """Progress-bar description: ``[P01] first words of the observation...``."""
+    desc = (clip.get("desc") or "")[: config.PROGRESS_DESCRIPTION_LENGTH]
+    return f"[{clip.get('participant', '')}] {desc}..."
+
+
 def _run_clip_pipeline(
     clips_list: list[Any],
     *,
@@ -813,32 +818,16 @@ def _run_clip_pipeline(
         )
         return []
 
+    global _active_progress
     if use_parallel:
         results: list[Any] = [None] * total_clips
-        progress = utils.create_progress_bar()
-        if progress:
-            global _active_progress, _active_secondary_task
-            _active_progress = progress
-            with progress:
-                task = progress.add_task(task_label, total=total_clips)
+        with utils.progress_scope(task_label, total_clips) as ps:
+            _active_progress = ps.progress
 
-                def _on_done() -> None:
-                    progress.update(task, advance=1)
-                    _notify_clip_done()
+            def _on_done() -> None:
+                ps.update(advance=1)
+                _notify_clip_done()
 
-                future_to_idx = _parallel_map_ordered(
-                    clips_list,
-                    wrapped_process,
-                    workers=workers,
-                    results=results,
-                    on_error=_clip_error,
-                    cancel_flag=cancel_flag,
-                    on_done=_on_done,
-                )
-                _drain_ran_futures(future_to_idx, results)
-            _active_progress = None
-            _active_secondary_task = None
-        else:
             future_to_idx = _parallel_map_ordered(
                 clips_list,
                 wrapped_process,
@@ -846,47 +835,31 @@ def _run_clip_pipeline(
                 results=results,
                 on_error=_clip_error,
                 cancel_flag=cancel_flag,
-                on_done=_notify_clip_done,
+                on_done=_on_done,
             )
             _drain_ran_futures(future_to_idx, results)
+        _active_progress = None
     else:
         results = []
-        progress = utils.create_progress_bar()
-        if progress:
-            _active_progress = progress
-            with progress:
-                task = progress.add_task(task_label, total=total_clips)
-                if secondary_task_label:
-                    _active_secondary_task = progress.add_task(
-                        secondary_task_label, total=total_clips
-                    )
-                for clip in clips_list:
-                    if cancel_flag and cancel_flag():
-                        break
-                    desc_preview = (clip.get("desc") or "")[
-                        : config.PROGRESS_DESCRIPTION_LENGTH
-                    ]
-                    participant = clip.get("participant", "")
-                    progress.update(
-                        task, description=f"[{participant}] {desc_preview}..."
-                    )
-                    results.append(wrapped_process(clip))
-                    progress.update(task, advance=1)
-                    _notify_clip_done()
-            _active_progress = None
-            _active_secondary_task = None
-        else:
+        with utils.progress_scope(task_label, total_clips) as ps:
+            _active_progress = ps.progress
+            if secondary_task_label:
+                ps.add_task(secondary_task_label, total_clips)
             for index, clip in enumerate(clips_list, start=1):
                 if cancel_flag and cancel_flag():
                     break
-                if (
+                if ps.live:
+                    ps.update(description=_clip_progress_label(clip))
+                elif (
                     show_fallback_counter
                     and getattr(config, "VERBOSITY", config.STANDARD) >= config.VERBOSE
                     and total_clips > 1
                 ):
                     utils.verbose_print(f"Processing clip {index} of {total_clips}...")
                 results.append(wrapped_process(clip))
+                ps.update(advance=1)
                 _notify_clip_done()
+        _active_progress = None
 
     if missing_videos:
         utils.standard_print(f"* Missing source video files: {len(missing_videos)}")
@@ -1098,26 +1071,8 @@ def process_clips(
     skipped_no_video = 0
 
     global _active_progress
-    progress = utils.create_progress_bar()
-    if progress:
-        _active_progress = progress
-        with progress:
-            prep_task = progress.add_task("Preparing clips", total=len(clips_list))
-            for clip in clips_list:
-                if cancel_flag and cancel_flag():
-                    break
-                clip, base_video = _prepare_and_check_clip(
-                    clip, missing_videos, fuzzy_matches
-                )
-                if not clip["times"]:
-                    skipped_no_times += 1
-                elif base_video is None:
-                    skipped_no_video += len(clip["times"])
-                else:
-                    prepared.append((clip, base_video))
-                progress.update(prep_task, advance=1)
-        _active_progress = None
-    else:
+    with utils.progress_scope("Preparing clips", len(clips_list)) as ps:
+        _active_progress = ps.progress
         for clip in clips_list:
             if cancel_flag and cancel_flag():
                 break
@@ -1130,6 +1085,8 @@ def process_clips(
                 skipped_no_video += len(clip["times"])
             else:
                 prepared.append((clip, base_video))
+            ps.update(advance=1)
+    _active_progress = None
 
     if not prepared:
         utils.warning_print(
@@ -1148,52 +1105,36 @@ def process_clips(
         prepared
     )
 
+    def _cut(
+        pair: tuple[ClipRecord, str],
+    ) -> tuple[int, list[tuple[str, int]], bool]:
+        clip, base_video = pair
+        return _process_single_clip_segments(
+            clip,
+            base_video,
+            missing_videos,
+            output_format=output_format,
+            collect_paths=True,
+            include_severity=include_severity,
+            cancel_flag=cancel_flag,
+            titlecards_enabled=titlecards_enabled,
+            titlecard_duration_seconds=titlecard_duration_seconds,
+            pad_pre=pad_pre,
+            pad_post=pad_post,
+            max_duration=max_duration,
+        )
+
+    def _cut_error(idx: int, exc: Exception) -> tuple[int, list[tuple[str, int]], bool]:
+        clip, _ = prepared[idx]
+        desc = (clip.get("desc") or "")[: config.PROGRESS_DESCRIPTION_LENGTH]
+        utils.error_print(
+            f"Clip failed: [{clip.get('participant', '')}] {desc}",
+            [str(exc)],
+        )
+        return _EMPTY_RESULT
+
     if use_parallel:
-
-        def _cut(
-            pair: tuple[ClipRecord, str],
-        ) -> tuple[int, list[tuple[str, int]], bool]:
-            clip, base_video = pair
-            return _process_single_clip_segments(
-                clip,
-                base_video,
-                missing_videos,
-                output_format=output_format,
-                collect_paths=True,
-                include_severity=include_severity,
-                cancel_flag=cancel_flag,
-                titlecards_enabled=titlecards_enabled,
-                titlecard_duration_seconds=titlecard_duration_seconds,
-                pad_pre=pad_pre,
-                pad_post=pad_post,
-                max_duration=max_duration,
-            )
-
-        def _cut_error(
-            idx: int, exc: Exception
-        ) -> tuple[int, list[tuple[str, int]], bool]:
-            clip, _ = prepared[idx]
-            desc = (clip.get("desc") or "")[: config.PROGRESS_DESCRIPTION_LENGTH]
-            utils.error_print(
-                f"Clip failed: [{clip.get('participant', '')}] {desc}",
-                [str(exc)],
-            )
-            return _EMPTY_RESULT
-
-        progress = utils.create_progress_bar()
-        if progress:
-            with progress:
-                cut_task = progress.add_task("Processing clips", total=len(prepared))
-                _parallel_map_ordered(
-                    prepared,
-                    _cut,
-                    workers=workers,
-                    results=results,
-                    on_error=_cut_error,
-                    cancel_flag=cancel_flag,
-                    on_done=lambda: progress.update(cut_task, advance=1),
-                )
-        else:
+        with utils.progress_scope("Processing clips", len(prepared)) as ps:
             _parallel_map_ordered(
                 prepared,
                 _cut,
@@ -1201,64 +1142,25 @@ def process_clips(
                 results=results,
                 on_error=_cut_error,
                 cancel_flag=cancel_flag,
+                on_done=lambda: ps.update(advance=1),
             )
     else:
         # Sequential execution (workers=1 or single clip)
-        progress = utils.create_progress_bar()
-        if progress:
-            with progress:
-                cut_task = progress.add_task("Processing clips", total=len(prepared))
-                for idx, (clip, base_video) in enumerate(prepared):
-                    if cancel_flag and cancel_flag():
-                        break
-                    desc_preview = (clip.get("desc") or "")[
-                        : config.PROGRESS_DESCRIPTION_LENGTH
-                    ]
-                    participant = clip.get("participant", "")
-                    progress.update(
-                        cut_task,
-                        description=f"[{participant}] {desc_preview}...",
-                    )
-                    results[idx] = _process_single_clip_segments(
-                        clip,
-                        base_video,
-                        missing_videos,
-                        output_format=output_format,
-                        collect_paths=True,
-                        include_severity=include_severity,
-                        cancel_flag=cancel_flag,
-                        titlecards_enabled=titlecards_enabled,
-                        titlecard_duration_seconds=titlecard_duration_seconds,
-                        pad_pre=pad_pre,
-                        pad_post=pad_post,
-                        max_duration=max_duration,
-                    )
-                    progress.update(cut_task, advance=1)
-        else:
+        with utils.progress_scope("Processing clips", len(prepared)) as ps:
             for idx, (clip, base_video) in enumerate(prepared):
                 if cancel_flag and cancel_flag():
                     break
-                if (
+                if ps.live:
+                    ps.update(description=_clip_progress_label(clip))
+                elif (
                     getattr(config, "VERBOSITY", config.STANDARD) >= config.VERBOSE
                     and len(prepared) > 1
                 ):
                     utils.verbose_print(
                         f"Processing clip {idx + 1} of {len(prepared)}..."
                     )
-                results[idx] = _process_single_clip_segments(
-                    clip,
-                    base_video,
-                    missing_videos,
-                    output_format=output_format,
-                    collect_paths=True,
-                    include_severity=include_severity,
-                    cancel_flag=cancel_flag,
-                    titlecards_enabled=titlecards_enabled,
-                    titlecard_duration_seconds=titlecard_duration_seconds,
-                    pad_pre=pad_pre,
-                    pad_post=pad_post,
-                    max_duration=max_duration,
-                )
+                results[idx] = _cut((clip, base_video))
+                ps.update(advance=1)
 
     # -- Phase 3: Build artifacts and transcribe (sequential) ------------------
     outputs_generated = 0
@@ -1308,32 +1210,9 @@ def process_clips(
             if results[idx][1]
         ]
         if transcribe_items:
-            progress = utils.create_progress_bar()
-            if progress:
-                with progress:
-                    t_task = progress.add_task(
-                        "Transcribing", total=len(transcribe_items)
-                    )
-                    for clip, base_video, segment_details in transcribe_items:
-                        desc_preview = (clip.get("desc") or "")[
-                            : config.PROGRESS_DESCRIPTION_LENGTH
-                        ]
-                        participant = clip.get("participant", "")
-                        progress.update(
-                            t_task,
-                            description=f"[{participant}] {desc_preview}...",
-                        )
-                        _transcribe_segments(
-                            clip,
-                            base_video,
-                            segment_details,
-                            all_artifacts,
-                            transcript_cache,
-                            transcripts_manifest,
-                        )
-                        progress.update(t_task, advance=1)
-            else:
+            with utils.progress_scope("Transcribing", len(transcribe_items)) as ps:
                 for clip, base_video, segment_details in transcribe_items:
+                    ps.update(description=_clip_progress_label(clip))
                     _transcribe_segments(
                         clip,
                         base_video,
@@ -1342,6 +1221,7 @@ def process_clips(
                         transcript_cache,
                         transcripts_manifest,
                     )
+                    ps.update(advance=1)
 
     if missing_videos:
         utils.standard_print(f"* Missing source video files: {len(missing_videos)}")
@@ -1881,13 +1761,8 @@ def regenerate_from_manifest(
             task=task,
         )
 
-    progress = utils.create_progress_bar()
-    if progress:
-        with progress:
-            task = progress.add_task("Regenerating", total=total)
-            generated = _run(progress, task)
-    else:
-        generated = _run(None, None)
+    with utils.progress_scope("Regenerating", total) as ps:
+        generated = _run(ps.progress, ps.task)
 
     if missing_videos:
         utils.standard_print(f"* Missing source video files: {len(missing_videos)}")

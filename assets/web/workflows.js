@@ -994,34 +994,15 @@
     window.ClipgenCommandPalette.setParticipants(function () {
       return (state.context && state.context.participants) || [];
     });
+    var palette = window.ClipgenCommandPalette;
     function buttonCommand(id, title, icon, keywords, elId) {
-      return {
-        id: id,
-        title: title,
-        icon: icon,
-        keywords: keywords,
-        section: "Workflows",
-        enabled: function () {
-          var btn = qs("#" + elId);
-          return !!btn && !btn.disabled;
-        },
-        run: function () { qs("#" + elId).click(); },
-      };
+      return palette.buttonCommand("Workflows", id, title, icon, keywords, elId);
     }
     // Click the matching data-filter chip so initRunFilter owns the state change.
     function runFilterCommand(filter, title, icon) {
-      return {
-        id: "workflows:runs-" + filter,
-        title: title,
-        icon: icon,
-        keywords: "run history filter status " + filter,
-        section: "Workflows",
-        visible: function () { return !!qs("#wfRunFilter"); },
-        run: function () {
-          var btn = qs('#wfRunFilter .wf-run-filter-btn[data-filter="' + filter + '"]');
-          if (btn) btn.click();
-        },
-      };
+      return palette.selectorCommand("Workflows", "workflows:runs-" + filter, title, icon,
+        "run history filter status " + filter,
+        '#wfRunFilter .wf-run-filter-btn[data-filter="' + filter + '"]');
     }
     window.ClipgenCommandPalette.register("workflows", function () {
       var stopBtn = qs("#wfStopBtn");

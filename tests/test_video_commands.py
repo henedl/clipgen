@@ -1262,7 +1262,7 @@ def test_check_vp9_support_detects_encoder(monkeypatch):
 
 def test_extract_gif_rejects_webm_when_vp9_unsupported(monkeypatch):
     monkeypatch.setattr(video, "check_vp9_support", lambda: False)
-    monkeypatch.setattr(video, "_vp9_missing_warned", False)
+    monkeypatch.setattr(video, "_encoder_missing_warned", {})
 
     called = {"run": False}
 
@@ -1341,7 +1341,7 @@ def test_extract_gif_uses_vp9_for_webm_output(monkeypatch):
 
 def test_extract_gif_rejects_webp_when_unsupported(monkeypatch):
     monkeypatch.setattr(video, "check_webp_support", lambda: False)
-    monkeypatch.setattr(video, "_webp_missing_warned", False)
+    monkeypatch.setattr(video, "_encoder_missing_warned", {})
 
     called = {"run": False}
 

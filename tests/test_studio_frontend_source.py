@@ -22,7 +22,7 @@ def test_studio_selection_requires_valid_timestamp_cells():
 
 
 def test_studio_parse_clip_timestamps_no_zero_fallback():
-    src = _studio_js()
+    src = (_WEB / "utils.js").read_text()
     start = src.index("function parseClipTimestamps")
     end = src.index("\n  }\n", start)
     body = src[start:end]

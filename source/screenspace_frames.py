@@ -447,12 +447,7 @@ def build_timelapse_command(
     filters.append(f"setpts=PTS/{speedup_factor}")
     vf = ",".join(filters)
 
-    cmd = [
-        "ffmpeg",
-        "-y",
-        "-loglevel",
-        config.FFMPEG_LOGLEVEL,
-    ]
+    cmd = video.ffmpeg_cmd()
 
     if start_seconds > 0:
         cmd += ["-ss", str(start_seconds)]

@@ -1331,7 +1331,7 @@ def test_embed_subtitles_truncated_stream_has_no_done_sentinel(
     with pytest.raises(RuntimeError, match="mux blew up"):
         resp.get_data()
     # The slot must still be free — the generator's finally runs on teardown.
-    assert transcripts_server._embed_busy is False
+    assert transcripts_server._embed_slot.busy is False
 
 
 def test_embed_subtitles_cancel_stops_before_the_next_file(
@@ -1355,7 +1355,7 @@ def test_embed_subtitles_cancel_stops_before_the_next_file(
     def cancelling_mux(input_video, srt_path, output_video, **kwargs):
         Path(output_video).write_bytes(b"\x00")
         # Stand in for the user hitting Stop while the first file is muxing.
-        transcripts_server._embed_cancel_event.set()
+        transcripts_server._embed_slot.cancel_event.set()
         return True
 
     monkeypatch.setattr(transcripts_server.video, "mux_subtitles", cancelling_mux)
@@ -1370,12 +1370,12 @@ def test_embed_subtitles_cancel_stops_before_the_next_file(
     assert lines[-1] == {"done": True}
     assert not any(ln.get("participant") == "P02" for ln in lines)
     # The slot is released even on the cancel path, so the next run can claim it.
-    assert transcripts_server._embed_busy is False
+    assert transcripts_server._embed_slot.busy is False
 
 
 def test_embed_subtitles_409_while_a_run_holds_the_slot(tr_client, monkeypatch):
     """A second tab gets 409 rather than sharing the first run's cancel event."""
-    monkeypatch.setattr(transcripts_server, "_embed_busy", True)
+    monkeypatch.setattr(transcripts_server._embed_slot, "busy", True)
     resp = tr_client.post(
         "/transcripts/api/embed-subtitles", json={"participants": ["P01"]}
     )
@@ -1387,8 +1387,8 @@ def test_embed_slot_is_freed_when_the_stream_is_never_consumed(tr_client, monkey
     """Closing a generator that was never *started* runs no body at all — not
     its finally — so a response discarded before the first read would have left
     the slot held and every later embed answering 409 until restart."""
-    monkeypatch.setattr(transcripts_server, "_embed_busy", False)
-    monkeypatch.setattr(transcripts_server, "_embed_owner", None)
+    monkeypatch.setattr(transcripts_server._embed_slot, "busy", False)
+    monkeypatch.setattr(transcripts_server._embed_slot, "owner", None)
 
     resp = tr_client.post(
         "/transcripts/api/embed-subtitles", json={"participants": ["P01"]}
@@ -1397,37 +1397,37 @@ def test_embed_slot_is_freed_when_the_stream_is_never_consumed(tr_client, monkey
     # Tear the response down without ever pulling a line from the body.
     resp.close()
 
-    assert transcripts_server._embed_busy is False
-    assert transcripts_server._embed_owner is None
+    assert transcripts_server._embed_slot.busy is False
+    assert transcripts_server._embed_slot.owner is None
 
 
 def test_embed_slot_release_is_scoped_to_its_own_run(monkeypatch):
     """The release is attempted twice per run (the generator's finally and the
     response's call_on_close). An ungated release would let the late one clear
     a successor's claim — the 863edf8f pattern."""
-    monkeypatch.setattr(transcripts_server, "_embed_busy", False)
-    monkeypatch.setattr(transcripts_server, "_embed_owner", None)
+    monkeypatch.setattr(transcripts_server._embed_slot, "busy", False)
+    monkeypatch.setattr(transcripts_server._embed_slot, "owner", None)
 
-    first = transcripts_server._claim_embed_slot()
+    first = transcripts_server._embed_slot.claim()
     assert first is not None
-    transcripts_server._release_embed_slot(first)
+    transcripts_server._embed_slot.release(first)
 
-    second = transcripts_server._claim_embed_slot()
+    second = transcripts_server._embed_slot.claim()
     assert second is not None and second != first
 
     # The first run's straggler release must not free the second run's slot.
-    transcripts_server._release_embed_slot(first)
-    assert transcripts_server._embed_busy is True
-    assert transcripts_server._claim_embed_slot() is None
+    transcripts_server._embed_slot.release(first)
+    assert transcripts_server._embed_slot.busy is True
+    assert transcripts_server._embed_slot.claim() is None
 
-    transcripts_server._release_embed_slot(second)
-    assert transcripts_server._embed_busy is False
+    transcripts_server._embed_slot.release(second)
+    assert transcripts_server._embed_slot.busy is False
 
 
 def test_embed_subtitles_cancel_route_is_token_scoped(tr_client):
     """Cancel only takes effect with the in-flight run's token: a late cancel
     POST from a stopped run must not cancel its successor."""
-    token = transcripts_server._claim_embed_slot()
+    token = transcripts_server._embed_slot.claim()
     assert token is not None
     try:
         # Wrong (stale) token: ignored.
@@ -1435,16 +1435,16 @@ def test_embed_subtitles_cancel_route_is_token_scoped(tr_client):
             "/transcripts/api/embed-subtitles/cancel", json={"token": "stale"}
         )
         assert resp.status_code == 200
-        assert not transcripts_server._embed_cancel_event.is_set()
+        assert not transcripts_server._embed_slot.cancel_event.is_set()
         # Matching token: cancels.
         resp = tr_client.post(
             "/transcripts/api/embed-subtitles/cancel", json={"token": token}
         )
         assert resp.status_code == 200
-        assert transcripts_server._embed_cancel_event.is_set()
+        assert transcripts_server._embed_slot.cancel_event.is_set()
     finally:
-        transcripts_server._embed_cancel_event.clear()
-        transcripts_server._release_embed_slot()
+        transcripts_server._embed_slot.cancel_event.clear()
+        transcripts_server._embed_slot.release()
 
 
 # ---- Normalize audio ----
@@ -1824,7 +1824,7 @@ def test_normalize_audio_cancel_stops_before_the_next_participant(
 
     def cancelling_normalize(path, indices, **_kwargs):
         # Stand in for the user hitting Stop while the first file rewrites.
-        transcripts_server._normalize_cancel_event.set()
+        transcripts_server._normalize_slot.cancel_event.set()
         return True, "Audio normalized."
 
     monkeypatch.setattr(
@@ -1841,11 +1841,11 @@ def test_normalize_audio_cancel_stops_before_the_next_participant(
     assert lines[-1] == {"done": True}
     assert not any(ln.get("participant") == "P02" for ln in lines)
     # The slot is released even on the cancel path, so the next run can claim it.
-    assert transcripts_server._normalize_busy is False
+    assert transcripts_server._normalize_slot.busy is False
 
 
 def test_normalize_audio_409_while_a_run_holds_the_slot(tr_client, monkeypatch):
-    monkeypatch.setattr(transcripts_server, "_normalize_busy", True)
+    monkeypatch.setattr(transcripts_server._normalize_slot, "busy", True)
     resp = tr_client.post(
         "/transcripts/api/normalize-audio", json={"participants": ["P01"]}
     )
@@ -1856,8 +1856,8 @@ def test_normalize_audio_409_while_a_run_holds_the_slot(tr_client, monkeypatch):
 def test_normalize_slot_is_freed_when_the_stream_is_never_consumed(
     tr_client, monkeypatch
 ):
-    monkeypatch.setattr(transcripts_server, "_normalize_busy", False)
-    monkeypatch.setattr(transcripts_server, "_normalize_owner", None)
+    monkeypatch.setattr(transcripts_server._normalize_slot, "busy", False)
+    monkeypatch.setattr(transcripts_server._normalize_slot, "owner", None)
 
     resp = tr_client.post(
         "/transcripts/api/normalize-audio", json={"participants": ["P01"]}
@@ -1866,48 +1866,48 @@ def test_normalize_slot_is_freed_when_the_stream_is_never_consumed(
     # Tear the response down without ever pulling a line from the body.
     resp.close()
 
-    assert transcripts_server._normalize_busy is False
-    assert transcripts_server._normalize_owner is None
+    assert transcripts_server._normalize_slot.busy is False
+    assert transcripts_server._normalize_slot.owner is None
 
 
 def test_normalize_slot_release_is_scoped_to_its_own_run(monkeypatch):
-    monkeypatch.setattr(transcripts_server, "_normalize_busy", False)
-    monkeypatch.setattr(transcripts_server, "_normalize_owner", None)
+    monkeypatch.setattr(transcripts_server._normalize_slot, "busy", False)
+    monkeypatch.setattr(transcripts_server._normalize_slot, "owner", None)
 
-    first = transcripts_server._claim_normalize_slot()
+    first = transcripts_server._normalize_slot.claim()
     assert first is not None
-    transcripts_server._release_normalize_slot(first)
+    transcripts_server._normalize_slot.release(first)
 
-    second = transcripts_server._claim_normalize_slot()
+    second = transcripts_server._normalize_slot.claim()
     assert second is not None and second != first
 
     # The first run's straggler release must not free the second run's slot.
-    transcripts_server._release_normalize_slot(first)
-    assert transcripts_server._normalize_busy is True
-    assert transcripts_server._claim_normalize_slot() is None
+    transcripts_server._normalize_slot.release(first)
+    assert transcripts_server._normalize_slot.busy is True
+    assert transcripts_server._normalize_slot.claim() is None
 
-    transcripts_server._release_normalize_slot(second)
-    assert transcripts_server._normalize_busy is False
+    transcripts_server._normalize_slot.release(second)
+    assert transcripts_server._normalize_slot.busy is False
 
 
 def test_normalize_audio_cancel_route_is_token_scoped(tr_client):
     """Token-scoped like the embed cancel: see that test for the rationale."""
-    token = transcripts_server._claim_normalize_slot()
+    token = transcripts_server._normalize_slot.claim()
     assert token is not None
     try:
         resp = tr_client.post(
             "/transcripts/api/normalize-audio/cancel", json={"token": "stale"}
         )
         assert resp.status_code == 200
-        assert not transcripts_server._normalize_cancel_event.is_set()
+        assert not transcripts_server._normalize_slot.cancel_event.is_set()
         resp = tr_client.post(
             "/transcripts/api/normalize-audio/cancel", json={"token": token}
         )
         assert resp.status_code == 200
-        assert transcripts_server._normalize_cancel_event.is_set()
+        assert transcripts_server._normalize_slot.cancel_event.is_set()
     finally:
-        transcripts_server._normalize_cancel_event.clear()
-        transcripts_server._release_normalize_slot()
+        transcripts_server._normalize_slot.cancel_event.clear()
+        transcripts_server._normalize_slot.release()
 
 
 # ---- Friction endpoints ----

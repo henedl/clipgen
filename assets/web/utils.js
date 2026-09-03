@@ -634,6 +634,83 @@ var formatTime = function (sec, options) {
   return m + ":" + sStr;
 };
 
+// Sheet cross-reference helpers bound to a hub's state (Studio and Overview).
+var createSheetXrefHelpers = function (getState) {
+  function parseClipTimestamps(raw, participantId) {
+    var state = getState();
+    var baselineSeconds = 0;
+    if (participantId && state.convergenceBaselines) {
+      baselineSeconds = state.convergenceBaselines[participantId] || 0;
+    }
+    return parseClipSegmentsForCell(raw, baselineSeconds, CLIPGEN_CONFIG.defaultDuration);
+  }
+
+  var ROW_FUNCTIONS = {
+    Count: function (row, participants) {
+      var total = 0;
+      for (var j = 0; j < participants.length; j++) {
+        var c = row.cells[participants[j]];
+        if (c && c.valid) total += parseClipTimestamps(c.value, participants[j]).length;
+      }
+      return total;
+    },
+    Unique: function (row, participants) {
+      var count = 0;
+      for (var j = 0; j < participants.length; j++) {
+        var c = row.cells[participants[j]];
+        if (c && c.valid) count++;
+      }
+      return count;
+    },
+  };
+
+  // Overlapping data from sibling sources for one participant + time range.
+  function findOverlappingData(participant, start, end) {
+    var state = getState();
+    var result = { transcriptSnippets: [], screenspaceEvents: [], sheetObservations: [] };
+
+    // Projection: consumers expect `text` already resolved (text || label).
+    for (var i = 0; i < state.trIntakeClusters.length; i++) {
+      var tc = state.trIntakeClusters[i];
+      if (tc.participant === participant && tc.start < end && tc.end > start) {
+        result.transcriptSnippets.push({ text: tc.text || tc.label || "", category: tc.category, start: tc.start, end: tc.end });
+      }
+    }
+
+    // Pass the cluster through; consumers read only detector / event_type.
+    for (var j = 0; j < state.intakeClusters.length; j++) {
+      var sc = state.intakeClusters[j];
+      if (sc.participant === participant && sc.start < end && sc.end > start) {
+        result.screenspaceEvents.push(sc);
+      }
+    }
+
+    if (state.sheetData && state.sheetData.rows) {
+      for (var k = 0; k < state.sheetData.rows.length; k++) {
+        var row = state.sheetData.rows[k];
+        var cell = row.cells[participant];
+        if (!cell || !cell.valid) continue;
+        var segs = parseClipTimestamps(cell.value, participant);
+        for (var s = 0; s < segs.length; s++) {
+          var segEnd = segs[s].startSeconds + segs[s].duration;
+          if (segs[s].startSeconds < end && segEnd > start) {
+            result.sheetObservations.push(row);
+            break;
+          }
+        }
+      }
+    }
+
+    return result;
+  }
+
+  return {
+    parseClipTimestamps: parseClipTimestamps,
+    ROW_FUNCTIONS: ROW_FUNCTIONS,
+    findOverlappingData: findOverlappingData,
+  };
+};
+
 // Rounds rather than floors; use for durations (clip length, ruler ticks).
 var formatDuration = function (sec) {
   if (sec == null || isNaN(sec)) return "--:--";
@@ -1276,6 +1353,23 @@ var createPoller = function (fn, intervalMs, opts) {
   };
 };
 
+// Lazily-built createPoller behind an idempotent start/stop pair.
+var createManagedPoller = function (fn, intervalMs, opts) {
+  var poller = null;
+  return {
+    start: function () {
+      if (poller) return;
+      poller = createPoller(fn, intervalMs, opts);
+      poller.start();
+    },
+    stop: function () {
+      if (!poller) return;
+      poller.stop();
+      poller = null;
+    },
+  };
+};
+
 // ---- SSE stream ----
 // Closes itself before onError so the caller's polling fallback can start.
 var createSSEStream = function (url, opts) {
@@ -1579,6 +1673,60 @@ var popModalOut = function (overlayEl, cardEl, commit) {
   // The veil outlasts the card, so wait on it; reduced motion disables its transition.
   if (veiled && !ClipgenMotion.isReduced()) setTimeout(done, _cgVeilMs(overlayEl));
   else cardExit.then(done);
+};
+
+// Pop a modal open; traps focus when `onEscape` is given.
+var openPopModal = function (overlayEl, cardEl, opts) {
+  opts = opts || {};
+  popModalIn(overlayEl, cardEl);
+  if (opts.modalOpen) document.body.classList.add("modal-open");
+  if (opts.onEscape) {
+    openBlockingModal(overlayEl, {
+      onEscape: opts.onEscape,
+      trapFocus: true,
+      restoreFocus: true,
+    });
+  }
+};
+
+// Reverse of openPopModal; `commit` runs with the visual hide.
+var closePopModal = function (overlayEl, cardEl, opts, commit) {
+  opts = opts || {};
+  if (opts.releaseTrapNow) closeBlockingModal(overlayEl);
+  popModalOut(overlayEl, cardEl, function () {
+    if (!opts.releaseTrapNow) closeBlockingModal(overlayEl);
+    overlayEl.classList.add("hidden");
+    if (opts.modalOpen) document.body.classList.remove("modal-open");
+    if (commit) commit();
+  });
+};
+
+// Object-URL cache (URL | "loading" | "error"); setBlob mints so every path revokes.
+var createBlobCache = function () {
+  var store = {};
+  function revoke(key) {
+    var url = store[key];
+    if (url && url !== "error" && url !== "loading") {
+      try { URL.revokeObjectURL(url); } catch (_) {}
+    }
+    delete store[key];
+  }
+  window.addEventListener("pagehide", function () {
+    Object.keys(store).forEach(revoke);
+  });
+  return {
+    get: function (key) { return store[key]; },
+    mark: function (key, sentinel) {
+      revoke(key);
+      store[key] = sentinel;
+    },
+    setBlob: function (key, blob) {
+      revoke(key);
+      var url = URL.createObjectURL(blob);
+      store[key] = url;
+      return url;
+    },
+  };
 };
 
 // ---- Mark categories ----
@@ -2253,41 +2401,38 @@ var clipgenInstallPausedFrameOverlay = function (video) {
 };
 
 
-// ---- Bottom-panel drag-to-resize divider ----
+// ---- Drag-to-resize handles ----
 
-// #panelDivider drag + dblclick for Studio and Screenspace; page specifics arrive as cfg callbacks.
-function initPanelDivider(cfg) {
-  var handle = document.querySelector("#panelDivider");
+// rAF-throttled mouse/touch drag along `axis`; cfg.onStart() may return false to refuse.
+function initDragHandle(handle, axis, cfg) {
   if (!handle) return;
   var dragging = false;
-  var startY = 0;
-  var startHeight = 0;
-  var minH = 0;
-  var maxH = 0;
+  var start = 0;
   var rafPending = false;
 
+  function coord(e) {
+    var touch = e.touches && e.touches[0];
+    if (axis === "x") return e.clientX || (touch && touch.clientX) || 0;
+    return e.clientY || (touch && touch.clientY) || 0;
+  }
+
   function onDown(e) {
-    if (cfg.isCollapsed()) return;
+    if (cfg.onStart && cfg.onStart() === false) return;
     e.preventDefault();
+    if (cfg.stopPropagation) e.stopPropagation();
     dragging = true;
-    startY = e.clientY || (e.touches && e.touches[0].clientY) || 0;
-    startHeight = cfg.getHeight();
-    var bounds = cfg.getBounds();
-    minH = bounds.min;
-    maxH = bounds.max;
+    start = coord(e);
     handle.classList.add("active");
-    if (cfg.onDragStart) cfg.onDragStart();
-    document.body.style.cursor = "row-resize";
+    document.body.style.cursor = cfg.cursor || (axis === "x" ? "col-resize" : "row-resize");
     document.body.style.userSelect = "none";
   }
 
   function onMove(e) {
     if (!dragging || rafPending) return;
     rafPending = true;
-    var clientY = e.clientY || (e.touches && e.touches[0].clientY) || 0;
+    var now = coord(e);
     requestAnimationFrame(function () {
-      var delta = startY - clientY;
-      cfg.setHeight(Math.max(minH, Math.min(maxH, startHeight + delta)));
+      cfg.onDelta(now - start);
       rafPending = false;
     });
   }
@@ -2296,10 +2441,9 @@ function initPanelDivider(cfg) {
     if (!dragging) return;
     dragging = false;
     handle.classList.remove("active");
-    if (cfg.onDragEnd) cfg.onDragEnd();
     document.body.style.cursor = "";
     document.body.style.userSelect = "";
-    if (cfg.persist) cfg.persist();
+    if (cfg.onEnd) cfg.onEnd();
   }
 
   handle.addEventListener("mousedown", onDown);
@@ -2309,8 +2453,35 @@ function initPanelDivider(cfg) {
   document.addEventListener("mouseup", onUp);
   document.addEventListener("touchend", onUp);
 
-  handle.addEventListener("dblclick", function (e) {
-    e.preventDefault();
-    cfg.onToggle();
+  if (cfg.onToggle) {
+    handle.addEventListener("dblclick", function (e) {
+      e.preventDefault();
+      if (cfg.stopPropagation) e.stopPropagation();
+      cfg.onToggle();
+    });
+  }
+}
+
+// #panelDivider drag + dblclick for Studio and Screenspace; page specifics arrive as cfg callbacks.
+function initPanelDivider(cfg) {
+  var startHeight = 0;
+  var bounds = { min: 0, max: 0 };
+  initDragHandle(document.querySelector("#panelDivider"), "y", {
+    onStart: function () {
+      if (cfg.isCollapsed()) return false;
+      startHeight = cfg.getHeight();
+      bounds = cfg.getBounds();
+      if (cfg.onDragStart) cfg.onDragStart();
+      return true;
+    },
+    // Dragging up (negative delta) grows the bottom panel.
+    onDelta: function (delta) {
+      cfg.setHeight(Math.max(bounds.min, Math.min(bounds.max, startHeight - delta)));
+    },
+    onEnd: function () {
+      if (cfg.onDragEnd) cfg.onDragEnd();
+      if (cfg.persist) cfg.persist();
+    },
+    onToggle: cfg.onToggle,
   });
 }

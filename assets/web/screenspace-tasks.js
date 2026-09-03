@@ -81,26 +81,9 @@
     });
   }
 
-  var TOOL_LABELS = {
-    multitool: "Multitool",
-    color: "Color",
-    change: "Change",
-    similarity: "Similarity",
-    text: "Text",
-    numbers: "Numbers",
-    timelapse: "Timelapse",
-    template: "Template",
-    shape: "Shape",
-    flow: "Flow",
-    scene: "Scene",
-    inactivity: "Inactivity",
-    boundary: "Boundary",
-    attention: "Attention",
-  };
-
   function selectableTasks() {
     return state.tasks.filter(function (t) {
-      return t.status === "completed" || t.status === "paused" || t.status === "running";
+      return isTaskRestorable(t);
     });
   }
 
@@ -139,13 +122,13 @@
       var sameType = state.tasks
         .filter(function (t) {
           return t.type === task.type &&
-            (t.status === "completed" || t.status === "paused" || t.status === "running");
+            isTaskRestorable(t);
         });
       var idx = -1;
       for (var i = 0; i < sameType.length; i++) {
         if (sameType[i].id === task.id) { idx = i; break; }
       }
-      label = (TOOL_LABELS[task.type] || task.type) + " " + (idx >= 0 ? idx + 1 : 1);
+      label = toolLabel(task.type) + " " + (idx >= 0 ? idx + 1 : 1);
     }
     var participant = task.participant || "";
     crumbEl.textContent = ": " + label + (participant ? " \u00b7 " + participant : "");
@@ -170,7 +153,7 @@
         var badge = el("span", "rp-switcher-item-badge");
         badge.style.background = taskTypeColor(t.type);
         item.appendChild(badge);
-        var label = (t.parameters || {}).event_label || t.name || TOOL_LABELS[t.type] || t.type;
+        var label = (t.parameters || {}).event_label || t.name || toolLabel(t.type);
         var primary = el("span", null, label + " \u00b7 " + (t.participant || ""));
         item.appendChild(primary);
         if (t.region) {
@@ -286,7 +269,7 @@
 
       // Select completed/paused/running task to view results; click again to deselect
       task = findTask(taskId);
-      if (task && (task.status === "completed" || task.status === "paused" || task.status === "running")) {
+      if (task && isTaskRestorable(task)) {
         if (state.selectedTaskId === taskId) {
           state.resultsRequestVersion += 1;
           state.selectedTaskId = null;
@@ -337,7 +320,7 @@
       if (!card) { e.preventDefault(); return; }
       var task = findTask(card.dataset.taskId);
       if (!task) { e.preventDefault(); return; }
-      var allowed = task.status === "queued" || task.status === "completed" || task.status === "failed";
+      var allowed = task.status === "queued" || isTaskFinished(task);
       if (!allowed) { e.preventDefault(); return; }
       card.classList.add("dragging");
       e.dataTransfer.setData("text/plain", card.dataset.taskId);
@@ -372,7 +355,7 @@
       var finishedCount = 0;
       for (var i = 0; i < cards.length; i++) {
         var t = findTask(cards[i].dataset.taskId);
-        if (t && (t.status === "completed" || t.status === "failed")) finishedCount++;
+        if (t && isTaskFinished(t)) finishedCount++;
         else break;
       }
 
@@ -380,7 +363,7 @@
       var draggingCard = taskListEl.querySelector(".task-card.dragging");
       var draggingTask = draggingCard ? findTask(draggingCard.dataset.taskId) : null;
       var isQueuedDrag = draggingTask && draggingTask.status === "queued";
-      var isFinishedDrag = draggingTask && (draggingTask.status === "completed" || draggingTask.status === "failed");
+      var isFinishedDrag = draggingTask && isTaskFinished(draggingTask);
 
       // Queued tasks can't go above finished tasks
       if (isQueuedDrag && insertIdx < finishedCount) return;
@@ -448,7 +431,7 @@
         // Reorder finished tasks visually via created_at swapping
         var finishedTasks = [];
         state.tasks.forEach(function (t) {
-          if (t.status === "completed" || t.status === "failed") finishedTasks.push(t);
+          if (isTaskFinished(t)) finishedTasks.push(t);
         });
         var fromIdx2 = -1;
         for (var j = 0; j < finishedTasks.length; j++) {
@@ -488,7 +471,7 @@
       var t = findTask(cards[i].dataset.taskId);
       if (!t) continue;
       if (t.status === "queued") queued.push(mid);
-      else if (t.status === "completed" || t.status === "failed") finished.push(mid);
+      else if (isTaskFinished(t)) finished.push(mid);
     }
     _taskDragCache = { all: all, queued: queued, finished: finished };
   }
@@ -878,7 +861,7 @@
       if (task.id === state.selectedTaskId) card.classList.add("selected");
 
       // Drag handle for reorderable tasks (completed, failed, queued)
-      var isDraggable = task.status === "queued" || task.status === "completed" || task.status === "failed";
+      var isDraggable = task.status === "queued" || isTaskFinished(task);
       if (isDraggable) {
         var handle = el("span", "task-card-drag-handle");
         handle.appendChild(iconSpan("bars-2"));
@@ -1226,26 +1209,23 @@
 
   // ---- Polling (fallback) ----
 
+  // createPoller handles hidden tabs itself; runImmediately false matches the old setInterval.
+  var _taskPoller = createManagedPoller(pollTasks, POLL_INTERVAL, {
+    runImmediately: false,
+    label: "screenspace.tasks",
+  });
+
   function startPolling() {
-    if (state.poller) return;
-    // createPoller handles hidden tabs itself; runImmediately false matches the old setInterval.
-    state.poller = createPoller(pollTasks, POLL_INTERVAL, {
-      runImmediately: false,
-      label: "screenspace.tasks",
-    });
-    state.poller.start();
+    _taskPoller.start();
   }
 
   function stopPolling() {
-    if (state.poller) {
-      state.poller.stop();
-      state.poller = null;
-    }
+    _taskPoller.stop();
   }
 
   function pollTasks() {
     var hasActive = state.tasks.some(function (t) {
-      return t.status === "queued" || t.status === "running" || t.status === "paused";
+      return isTaskActive(t);
     });
     if (!hasActive) {
       stopPolling();
@@ -1285,7 +1265,7 @@
       return;
     }
     var hasActive = state.tasks.some(function (t) {
-      return t.status === "queued" || t.status === "running" || t.status === "paused";
+      return isTaskActive(t);
     });
     if (hasActive) startSSE();
     ensureEtaTicker();

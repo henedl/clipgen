@@ -50,7 +50,17 @@ def _ffprobe_check_output(cmd: list[str]) -> str:
         return subprocess.check_output(cmd, encoding="utf-8")
 
 
-def _ffmpeg_cmd(*args: str) -> list[str]:
+def _report_ffmpeg_missing() -> None:
+    utils.error_print(
+        "ffmpeg is not installed or not found in system PATH.",
+        [
+            "Please install ffmpeg and ensure it's in your PATH.",
+            "Download from: https://www.ffmpeg.org/download.html",
+        ],
+    )
+
+
+def ffmpeg_cmd(*args: str) -> list[str]:
     """Standard ffmpeg argv prefix (``-y -loglevel ...``) plus *args.
 
     A function rather than a constant: ``config.FFMPEG_LOGLEVEL`` must be read
@@ -285,10 +295,10 @@ def _probe_ffmpeg_listing(listing_arg: str, target_tokens: set[str]) -> bool:
 
 
 _webp_support_cache: bool | None = None
-_webp_missing_warned: bool = False
 _drawtext_support_cache: bool | None = None
 _vp9_support_cache: bool | None = None
-_vp9_missing_warned: bool = False
+# Encoder-missing errors print once per session, keyed by output format.
+_encoder_missing_warned: dict[str, bool] = {}
 _videotoolbox_support_cache: bool | None = None
 _hw_encoder_warned: bool = False
 # Session-sticky: one hardware-encode failure disables it for the run; tests reset it.
@@ -469,35 +479,28 @@ def run_ffmpeg_encode(
     return run_ffmpeg_process(build_command("libx264"), **kwargs)
 
 
-def _warn_webp_unavailable_once(output_file: str) -> None:
-    """Print a single clear error per session when WebP is requested but unsupported."""
-    global _webp_missing_warned
-    if _webp_missing_warned:
-        return
-    _webp_missing_warned = True
-    utils.error_print(
+_ENCODER_MISSING = {
+    "webp": (
         "WebP output requested but ffmpeg has no libwebp encoder.",
-        [
-            f"Tried to write: '{output_file}'",
-            "Install an ffmpeg build with libwebp, or change SCREENSHOT_FORMAT/GIF_FORMAT back to .png/.jpg/.gif.",
-            "Skipping all WebP outputs for this run.",
-        ],
-    )
-
-
-def _warn_vp9_unavailable_once(output_file: str) -> None:
-    """Print a single clear error per session when WebM/VP9 is requested but unsupported."""
-    global _vp9_missing_warned
-    if _vp9_missing_warned:
-        return
-    _vp9_missing_warned = True
-    utils.error_print(
+        "Install an ffmpeg build with libwebp, or change SCREENSHOT_FORMAT/GIF_FORMAT back to .png/.jpg/.gif.",
+        "Skipping all WebP outputs for this run.",
+    ),
+    "vp9": (
         "WebM output requested but ffmpeg has no libvpx-vp9 encoder.",
-        [
-            f"Tried to write: '{output_file}'",
-            "Install an ffmpeg build with libvpx, or change GIF_FORMAT back to .gif/.webp.",
-            "Skipping all WebM outputs for this run.",
-        ],
+        "Install an ffmpeg build with libvpx, or change GIF_FORMAT back to .gif/.webp.",
+        "Skipping all WebM outputs for this run.",
+    ),
+}
+
+
+def _warn_encoder_missing_once(kind: str, output_file: str) -> None:
+    """Print one clear error per session when an encoder is unavailable."""
+    if _encoder_missing_warned.get(kind):
+        return
+    _encoder_missing_warned[kind] = True
+    headline, install_hint, skip_note = _ENCODER_MISSING[kind]
+    utils.error_print(
+        headline, [f"Tried to write: '{output_file}'", install_hint, skip_note]
     )
 
 
@@ -562,13 +565,7 @@ def run_ffmpeg_process(
             ffmpeg_command, encoding="utf-8", capture_output=True, check=False
         )
     except FileNotFoundError:
-        utils.error_print(
-            "ffmpeg is not installed or not found in system PATH.",
-            [
-                "Please install ffmpeg and ensure it's in your PATH.",
-                "Download from: https://www.ffmpeg.org/download.html",
-            ],
-        )
+        _report_ffmpeg_missing()
         return None
     except OSError as error:
         utils.error_print(
@@ -610,13 +607,7 @@ def _run_ffmpeg_with_progress(
             stderr=subprocess.PIPE,
         )
     except FileNotFoundError:
-        utils.error_print(
-            "ffmpeg is not installed or not found in system PATH.",
-            [
-                "Please install ffmpeg and ensure it's in your PATH.",
-                "Download from: https://www.ffmpeg.org/download.html",
-            ],
-        )
+        _report_ffmpeg_missing()
         return None
     except OSError as error:
         utils.error_print(
@@ -803,7 +794,7 @@ def build_ffmpeg_cut_command(
     Returns:
         argv list for subprocess (e.g. ['ffmpeg', '-y', ...])
     """
-    base = _ffmpeg_cmd(
+    base = ffmpeg_cmd(
         "-ss",
         start_pos,
         "-i",
@@ -906,7 +897,7 @@ def mux_subtitles(
         )
         return False
 
-    ffmpeg_command = _ffmpeg_cmd(
+    ffmpeg_command = ffmpeg_cmd(
         "-i",
         input_video,
         "-i",
@@ -1118,7 +1109,7 @@ def extract_screenshot(
     if config.DEBUGGING:
         config.debug_ic(input_file, output_file, timestamp)
     if output_file.lower().endswith(".webp") and not check_webp_support():
-        _warn_webp_unavailable_once(output_file)
+        _warn_encoder_missing_once("webp", output_file)
         return False
     if not Path(input_file).is_file():
         utils.error_print(
@@ -1147,7 +1138,7 @@ def extract_screenshot(
         )
         return False
 
-    ffmpeg_command = _ffmpeg_cmd(
+    ffmpeg_command = ffmpeg_cmd(
         "-ss",
         timestamp,
         "-i",
@@ -1204,7 +1195,7 @@ def extract_thumbnail_bytes(
         max(0.0, start_seconds),
         container_start=_container_start_seconds(input_file),
     )
-    cmd = _ffmpeg_cmd(
+    cmd = ffmpeg_cmd(
         *pre,
         "-i",
         input_file,
@@ -1258,7 +1249,7 @@ def extract_sprite_sheet_bytes(
 
     frame_count = max(1, cols * rows)
     duration = max(0.1, duration_seconds)
-    cmd = _ffmpeg_cmd(
+    cmd = ffmpeg_cmd(
         "-ss",
         str(max(0.0, start_seconds)),
         "-t",
@@ -1298,7 +1289,7 @@ def _extract_sprite_sheet_seek(
     times = [start + (i + 0.5) * step for i in range(frame_count)]
 
     def grab(ts: float) -> bytes | None:
-        cmd = _ffmpeg_cmd(
+        cmd = ffmpeg_cmd(
             "-ss",
             str(ts),
             "-i",
@@ -1379,7 +1370,7 @@ def extract_audio_segment_bytes(
     duration = max(0.05, duration_seconds)
     tmp_fd, tmp_path = tempfile.mkstemp(suffix=".wav")
     os.close(tmp_fd)
-    cmd = _ffmpeg_cmd(
+    cmd = ffmpeg_cmd(
         "-ss",
         str(max(0.0, start_seconds)),
         "-t",
@@ -1437,10 +1428,10 @@ def extract_gif(
     if config.DEBUGGING:
         config.debug_ic(input_file, output_file, timestamp, duration_seconds)
     if output_file.lower().endswith(".webp") and not check_webp_support():
-        _warn_webp_unavailable_once(output_file)
+        _warn_encoder_missing_once("webp", output_file)
         return False
     if output_file.lower().endswith(".webm") and not check_vp9_support():
-        _warn_vp9_unavailable_once(output_file)
+        _warn_encoder_missing_once("vp9", output_file)
         return False
     if not Path(input_file).is_file():
         utils.error_print(
@@ -1497,7 +1488,7 @@ def extract_gif(
     is_webm = out_lower.endswith(".webm")
     is_webp = out_lower.endswith(".webp")
 
-    ffmpeg_command = _ffmpeg_cmd(
+    ffmpeg_command = ffmpeg_cmd(
         "-ss",
         timestamp,
         "-t",
@@ -2430,7 +2421,7 @@ def remux_to_faststart(
         # Extensionless: glob('*.mp4') matches dotfiles, so hiding alone leaks it. -f
         # supplies the format.
         tmp = src.parent / f".{src.stem}.remux.{os.getpid()}.{threading.get_ident()}"
-        command = _ffmpeg_cmd(
+        command = ffmpeg_cmd(
             "-i",
             str(src),
             # Every stream: recordings often carry mic + system audio; default mapping
@@ -2571,7 +2562,7 @@ def build_normalize_audio_command(
     ``-filter:a:N`` is only legal on re-encoded streams, which ``-c:a:N aac``
     guarantees). Caller runs subprocess.
     """
-    command = _ffmpeg_cmd("-i", input_file, "-map", "0", "-c", "copy")
+    command = ffmpeg_cmd("-i", input_file, "-map", "0", "-c", "copy")
     for index in audio_indices:
         command += [
             f"-c:a:{index}",
@@ -2909,7 +2900,7 @@ def compress_to_size(
 
     try:
         null_output = "/dev/null" if os.name != "nt" else "NUL"
-        pass1_command = _ffmpeg_cmd(
+        pass1_command = ffmpeg_cmd(
             "-i",
             filepath,
             "-c:v",
@@ -2954,7 +2945,7 @@ def compress_to_size(
             )
             return False
 
-        pass2_command = _ffmpeg_cmd(
+        pass2_command = ffmpeg_cmd(
             "-i",
             filepath,
             "-c:v",
@@ -3230,7 +3221,7 @@ def _concatenate_filter_complex(
     )
 
     def build_command(encoder: str) -> list[str]:
-        ffmpeg_command = _ffmpeg_cmd()
+        ffmpeg_command = ffmpeg_cmd()
         for path in clip_paths:
             ffmpeg_command.extend(["-i", str(Path(path).resolve())])
         ffmpeg_command.extend(["-filter_complex", filter_str])
@@ -3288,7 +3279,7 @@ def _concatenate_demuxer(
     """Concatenate clips using concat demuxer (fast path for matching properties)."""
     with _concat_list_file(clip_paths) as concat_list_file:
         try:
-            ffmpeg_command = _ffmpeg_cmd(
+            ffmpeg_command = ffmpeg_cmd(
                 "-f",
                 "concat",
                 "-safe",
@@ -3317,7 +3308,7 @@ def _concatenate_demuxer(
                 )
 
                 def build_reencode(encoder: str) -> list[str]:
-                    return _ffmpeg_cmd(
+                    return ffmpeg_cmd(
                         "-f",
                         "concat",
                         "-safe",
@@ -3383,7 +3374,7 @@ def concat_copy(
     """
     with _concat_list_file(clip_paths) as concat_list_file:
         try:
-            ffmpeg_command = _ffmpeg_cmd(
+            ffmpeg_command = ffmpeg_cmd(
                 "-f",
                 "concat",
                 "-safe",
@@ -3426,14 +3417,14 @@ def _batch_extract_screenshots(
     """
     ext = config.SCREENSHOT_FORMAT
     if ext.lower() == ".webp" and not check_webp_support():
-        _warn_webp_unavailable_once(f"frame_*{ext}")
+        _warn_encoder_missing_once("webp", f"frame_*{ext}")
         return None
     tmpdir = tempfile.mkdtemp(prefix="clipgen_gallery_")
     try:
         # fps samples from t=0: seek to the grid start so frame i maps to timestamps[i].
         start_offset = timestamps[0] if timestamps else 0
         seek_args = ["-ss", str(start_offset)] if start_offset > 0 else []
-        ffmpeg_command = _ffmpeg_cmd(
+        ffmpeg_command = ffmpeg_cmd(
             *seek_args,
             "-i",
             input_file,

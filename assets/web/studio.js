@@ -111,24 +111,10 @@
       source === "composer" || source === "mindnode";
   }
 
-  var ROW_FUNCTIONS = {
-    Count: function (row, participants) {
-      var total = 0;
-      for (var j = 0; j < participants.length; j++) {
-        var c = row.cells[participants[j]];
-        if (c && c.valid) total += parseClipTimestamps(c.value, participants[j]).length;
-      }
-      return total;
-    },
-    Unique: function (row, participants) {
-      var count = 0;
-      for (var j = 0; j < participants.length; j++) {
-        var c = row.cells[participants[j]];
-        if (c && c.valid) count++;
-      }
-      return count;
-    },
-  };
+  var _xref = createSheetXrefHelpers(function () { return state; });
+  var parseClipTimestamps = _xref.parseClipTimestamps,
+    ROW_FUNCTIONS = _xref.ROW_FUNCTIONS,
+    findOverlappingData = _xref.findOverlappingData;
 
   // ---- Helpers ----
 
@@ -280,55 +266,6 @@
     if (th) th.classList.add("header-highlight");
     var td = qs('#sheetGrid tbody td[data-select-row="' + row + '"]');
     if (td) td.classList.add("header-highlight");
-  }
-
-  function parseClipTimestamps(raw, participantId) {
-    var DEFAULT_DUR = CLIPGEN_CONFIG.defaultDuration;
-    var baselineSeconds = 0;
-    if (participantId && state.convergenceBaselines) {
-      baselineSeconds = state.convergenceBaselines[participantId] || 0;
-    }
-    return parseClipSegmentsForCell(raw, baselineSeconds, DEFAULT_DUR);
-  }
-
-  // Overlapping data from sibling sources for one participant + time range.
-  function findOverlappingData(participant, start, end) {
-    var result = { transcriptSnippets: [], screenspaceEvents: [], sheetObservations: [] };
-
-    // Projection: consumers expect `text` already resolved (text || label).
-    for (var i = 0; i < state.trIntakeClusters.length; i++) {
-      var tc = state.trIntakeClusters[i];
-      if (tc.participant === participant && tc.start < end && tc.end > start) {
-        result.transcriptSnippets.push({ text: tc.text || tc.label || "", category: tc.category, start: tc.start, end: tc.end });
-      }
-    }
-
-    // Pass the cluster through; consumers read only detector / event_type.
-    for (var j = 0; j < state.intakeClusters.length; j++) {
-      var sc = state.intakeClusters[j];
-      if (sc.participant === participant && sc.start < end && sc.end > start) {
-        result.screenspaceEvents.push(sc);
-      }
-    }
-
-    // Sheet observations — pass through the row directly.
-    if (state.sheetData && state.sheetData.rows) {
-      for (var k = 0; k < state.sheetData.rows.length; k++) {
-        var row = state.sheetData.rows[k];
-        var cell = row.cells[participant];
-        if (!cell || !cell.valid) continue;
-        var segs = parseClipTimestamps(cell.value, participant);
-        for (var s = 0; s < segs.length; s++) {
-          var segEnd = segs[s].startSeconds + segs[s].duration;
-          if (segs[s].startSeconds < end && segEnd > start) {
-            result.sheetObservations.push(row);
-            break;
-          }
-        }
-      }
-    }
-
-    return result;
   }
 
   // Cached: --radius is static on :root, and setCardDragImage is on the dragstart hot path.
@@ -3872,8 +3809,7 @@
     if (isAnyStudioJobRunning()) return;
     var overlay = qs("#galleryOverlay");
     if (!overlay) return;
-    popModalIn(overlay, qs(".gallery-card"));
-    openModalTrap(overlay, closeGalleryDialog);
+    openPopModal(overlay, qs(".gallery-card"), { onEscape: closeGalleryDialog });
     var sel = qs("#galleryParticipant");
     if (sel) sel.focus();
   }
@@ -3882,10 +3818,7 @@
     var overlay = qs("#galleryOverlay");
     if (!overlay) return;
     // Trap released now; the visual hide trails the fade.
-    closeModalTrap(overlay);
-    popModalOut(overlay, qs(".gallery-card"), function () {
-      overlay.classList.add("hidden");
-    });
+    closePopModal(overlay, qs(".gallery-card"), { releaseTrapNow: true });
   }
 
   function submitGalleryDialog() {
@@ -3963,29 +3896,12 @@
     // Escape is handled by the modal focus trap opened in openGalleryDialog.
   }
 
-  // ---- Modal focus trap ----
-  // openBlockingModal delegators; Studio never stacks modals, release() is idempotent.
-  function openModalTrap(overlayEl, onEscape) {
-    return openBlockingModal(overlayEl, {
-      onEscape: onEscape,
-      trapFocus: true,
-      restoreFocus: true,
-    });
-  }
-
-  function closeModalTrap(overlayEl) {
-    closeBlockingModal(overlayEl);
-  }
-
-
   // ---- Status overlay ----
 
   var _lastViewerFile = "";
 
   function revealStatusOverlay() {
-    var overlay = qs("#statusOverlay");
-    popModalIn(overlay, qs(".status-card"));
-    openModalTrap(overlay, hideOverlay);
+    openPopModal(qs("#statusOverlay"), qs(".status-card"), { onEscape: hideOverlay });
   }
 
   function showOverlay(message) {
@@ -4023,12 +3939,8 @@
   }
 
   function hideOverlay() {
-    var overlay = qs("#statusOverlay");
     // Release the trap immediately — only the visual hide waits for the fade.
-    closeModalTrap(overlay);
-    popModalOut(overlay, qs(".status-card"), function () {
-      overlay.classList.add("hidden");
-    });
+    closePopModal(qs("#statusOverlay"), qs(".status-card"), { releaseTrapNow: true });
   }
 
   // ---- Build status corner card ----
@@ -4097,9 +4009,8 @@
     _buildEtaTracker.reset();
     var buildEl = qs("#buildStatus");
     // Blank the clock with the hide, not before, so it doesn't vanish mid-fade.
-    popModalOut(buildEl, qs(".build-status-card"), function () {
+    closePopModal(buildEl, qs(".build-status-card"), {}, function () {
       qs("#buildElapsed").textContent = "";
-      buildEl.classList.add("hidden");
     });
   }
 
@@ -4119,13 +4030,10 @@
 
     // Unwind synchronously so onYes() can open another overlay; only the hide trails.
     function cleanup() {
-      closeModalTrap(confirmEl);
       yesBtn.removeEventListener("click", handleYes);
       noBtn.removeEventListener("click", handleNo);
       _confirmCleanup = null;
-      popModalOut(confirmEl, qs(".confirm-card"), function () {
-        confirmEl.classList.add("hidden");
-      });
+      closePopModal(confirmEl, qs(".confirm-card"), { releaseTrapNow: true });
     }
 
     function handleYes() { cleanup(); onYes(); }
@@ -4135,7 +4043,7 @@
     noBtn.addEventListener("click", handleNo);
     _confirmCleanup = cleanup;
     // Escape cancels (same as No / backdrop click).
-    openModalTrap(qs("#confirmOverlay"), handleNo);
+    openBlockingModal(confirmEl, { onEscape: handleNo, trapFocus: true, restoreFocus: true });
   }
 
   function hideConfirm() {
@@ -4143,31 +4051,20 @@
       _confirmCleanup();
       return;
     }
-    var overlay = qs("#confirmOverlay");
-    popModalOut(overlay, qs(".confirm-card"), function () {
-      overlay.classList.add("hidden");
-    });
+    closePopModal(qs("#confirmOverlay"), qs(".confirm-card"), {});
   }
 
   // ---- Artifact log ----
 
   // Same path as the dialogs; the veil is the shared .cg-modal-veil.
   function openLog() {
-    var overlay = qs("#logOverlay");
-    popModalIn(overlay, qs(".log-panel"));
-    document.body.classList.add("modal-open");
-    openModalTrap(overlay, closeLog);
+    openPopModal(qs("#logOverlay"), qs(".log-panel"), { modalOpen: true, onEscape: closeLog });
     renderLog();
   }
 
   function closeLog() {
-    var overlay = qs("#logOverlay");
     // Release the trap with the hide, not before; popModalOut's generation guard makes it safe.
-    popModalOut(overlay, qs(".log-panel"), function () {
-      closeModalTrap(overlay);
-      overlay.classList.add("hidden");
-      document.body.classList.remove("modal-open");
-    });
+    closePopModal(qs("#logOverlay"), qs(".log-panel"), { modalOpen: true });
   }
 
   // Desktop only: a native window has no other way to reach the file.
@@ -4379,20 +4276,7 @@
   var _ssThumbQueue = [];
   var _ssThumbActive = 0;
   var _SS_THUMB_MAX = 3;
-  var _ssThumbCache = {}; // url -> objectURL | "error"
-
-  // Revoke on pagehide or every lazily loaded thumb stays pinned (mirrors viewer.js).
-  window.addEventListener("pagehide", function () {
-    Object.keys(_ssThumbCache).forEach(function (key) {
-      var url = _ssThumbCache[key];
-      if (url && url !== "error" && url !== "loading") {
-        try {
-          URL.revokeObjectURL(url);
-        } catch (_) {}
-      }
-      delete _ssThumbCache[key];
-    });
-  });
+  var _ssThumbCache = createBlobCache(); // url -> objectURL | "error"
 
   function ssThumbUrl(participant, timestamp) {
     return "../screenspace/api/video/frame/" + encodeURIComponent(participant) + "/" + timestamp + "?w=200";
@@ -4409,16 +4293,11 @@
       (function (entry) {
         apiGetBlob(entry.url)
           .then(function (blob) {
-            var objUrl = URL.createObjectURL(blob);
-            var prev = _ssThumbCache[entry.url];
-            if (prev && prev !== "error" && prev !== "loading") {
-              try { URL.revokeObjectURL(prev); } catch (_) {}
-            }
-            _ssThumbCache[entry.url] = objUrl;
+            var objUrl = _ssThumbCache.setBlob(entry.url, blob);
             if (entry.img.parentNode) entry.img.src = objUrl;
           })
           .catch(function () {
-            _ssThumbCache[entry.url] = "error";
+            _ssThumbCache.mark(entry.url, "error");
             if (!entry.img.parentNode) return;
             // Custom onError (e.g. stash-folder icon) beats the queue-card fallback.
             if (entry.onError) { entry.onError(entry); return; }
@@ -4436,7 +4315,7 @@
 
   function ssEnqueueThumb(img, cardEl, thumbEl, participant, timestamp) {
     var url = ssThumbUrl(participant, timestamp);
-    var cached = _ssThumbCache[url];
+    var cached = _ssThumbCache.get(url);
     if (cached && cached !== "error") { img.src = cached; return; }
     if (cached === "error") {
       img.remove();
@@ -4451,7 +4330,7 @@
   // Enqueue with a custom error handler; shares ssEnqueueThumb's throttle and cache.
   function ssEnqueueThumbCustom(img, participant, timestamp, onError) {
     var url = ssThumbUrl(participant, timestamp);
-    var cached = _ssThumbCache[url];
+    var cached = _ssThumbCache.get(url);
     if (cached && cached !== "error") { img.src = cached; return; }
     if (cached === "error") { if (onError) onError({ img: img }); return; }
     _ssThumbQueue.push({ img: img, url: url, onError: onError });
@@ -4508,8 +4387,8 @@
 
   function initTopNavActions() {
     if (!window.ClipgenTopNav) return;
-    function rebuild() {
-      window.ClipgenTopNav.setQuickActions([
+    window.ClipgenTopNav.installQuickActions(function () {
+      return [
         {
           icon: "eye",
           label: "Build Viewer",
@@ -4529,12 +4408,7 @@
           title: "Build a gallery viewer of screenshots or GIFs sampled from one participant's source video",
         },
         window.ClipgenExportActions.exportQuickAction(),
-      ]);
-    }
-    rebuild();
-    window.ClipgenExportActions.refreshExportStatus(rebuild);
-    window.ClipgenTopNav.onBeforeOpen(function () {
-      window.ClipgenExportActions.refreshExportStatus(rebuild);
+      ];
     });
   }
 
@@ -4544,22 +4418,10 @@
     window.ClipgenCommandPalette.setParticipants(function () {
       return (state.sheetData && state.sheetData.participants) || [];
     });
+    var palette = window.ClipgenCommandPalette;
     function tabCommand(tabKey, title, icon) {
-      function tabEl() {
-        return document.querySelector('.preview-tab[data-tab="' + tabKey + '"]');
-      }
-      return {
-        id: "studio:tab-" + tabKey,
-        title: title,
-        icon: icon,
-        keywords: "tab show switch",
-        section: "Studio",
-        visible: function () {
-          var tab = tabEl();
-          return !!tab && !tab.classList.contains("hidden");
-        },
-        run: function () { tabEl().click(); },
-      };
+      return palette.selectorCommand("Studio", "studio:tab-" + tabKey, title, icon,
+        "tab show switch", '.preview-tab[data-tab="' + tabKey + '"]');
     }
     // Mirror the sidebar row's mutate → persist → re-render sequence.
     function applyFilterChange() {
@@ -4582,31 +4444,14 @@
     }
     window.ClipgenCommandPalette.register("studio", function () {
       return [
-        {
-          id: "studio:generate",
-          title: "Generate clips",
-          icon: "play",
-          keywords: "render build artifacts",
-          section: "Studio",
-          enabled: function () {
-            var btn = document.getElementById("generateBtn");
-            return !!btn && !btn.disabled;
-          },
-          run: function () { document.getElementById("generateBtn").click(); },
-        },
+        palette.buttonCommand("Studio", "studio:generate", "Generate clips", "play",
+          "render build artifacts", "generateBtn"),
         tabCommand("sheet", "Show Sheet tab", "table-cells"),
         tabCommand("intake", "Show Screenspace Intake tab", "rectangle-stack"),
         tabCommand("transcript-intake", "Show Transcript Intake tab", "rectangle-stack"),
         tabCommand("composer-intake", "Show Composer Intake tab", "rectangle-stack"),
-        {
-          id: "studio:refresh",
-          title: "Refresh current tab",
-          icon: "arrow-path",
-          keywords: "reload fetch update sheet intake",
-          section: "Studio",
-          visible: function () { return !!document.getElementById("studioRefresh"); },
-          run: function () { document.getElementById("studioRefresh").click(); },
-        },
+        palette.buttonCommand("Studio", "studio:refresh", "Refresh current tab", "arrow-path",
+          "reload fetch update sheet intake", "studioRefresh", "visible"),
         {
           id: "studio:clear-filters",
           title: "Clear all filters",
@@ -4619,24 +4464,10 @@
         viewCommand("all", "Show all rows", "bars-3"),
         viewCommand("highlights", "Highlights only", "funnel"),
         viewCommand("positive", "Positive only", "funnel"),
-        {
-          id: "studio:toggle-sidebar",
-          title: "Toggle filters sidebar",
-          icon: "adjustments-horizontal",
-          keywords: "show hide panel drawer collapse",
-          section: "Studio",
-          visible: function () { return !!document.getElementById("studioSidebarToggle"); },
-          run: function () { document.getElementById("studioSidebarToggle").click(); },
-        },
-        {
-          id: "studio:artifact-log",
-          title: "Open Artifact Log",
-          icon: "list-bullet",
-          keywords: "history builds",
-          section: "Studio",
-          visible: function () { return !!document.getElementById("logBtn"); },
-          run: function () { document.getElementById("logBtn").click(); },
-        },
+        palette.buttonCommand("Studio", "studio:toggle-sidebar", "Toggle filters sidebar",
+          "adjustments-horizontal", "show hide panel drawer collapse", "studioSidebarToggle", "visible"),
+        palette.buttonCommand("Studio", "studio:artifact-log", "Open Artifact Log", "list-bullet",
+          "history builds", "logBtn", "visible"),
       ];
     });
   }

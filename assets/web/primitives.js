@@ -106,17 +106,6 @@
 
   // ---- DensityTimeline: events [{ t: 0..1, count, hue?, label? }], marker 0..1, tickCount (6), durationSec.
 
-  function fmtTick(sec) {
-    var s = Math.max(0, Math.floor(sec));
-    var h = Math.floor(s / 3600);
-    var m = Math.floor((s - h * 3600) / 60);
-    var rs = s - h * 3600 - m * 60;
-    if (h > 0) {
-      return h + ":" + (m < 10 ? "0" + m : m) + ":" + (rs < 10 ? "0" + rs : rs);
-    }
-    return m + ":" + (rs < 10 ? "0" + rs : rs);
-  }
-
   function createDensityTimeline(opts) {
     opts = opts || {};
     var wrap = document.createElement("div");
@@ -137,7 +126,7 @@
       for (var i = 0; i < n; i++) {
         var s = (durationSec || 0) * (i / (n - 1));
         var t = document.createElement("span");
-        t.textContent = fmtTick(s);
+        t.textContent = formatTime(s);
         ticks.appendChild(t);
       }
     }

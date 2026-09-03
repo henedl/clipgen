@@ -1,6 +1,10 @@
 # Backend god-file splits — deferred plan
 
-> **Status: Split 1 (workflows) done, 2026-07-23.** Designed during the 2026-07 backend refactor
+> **Status: Split 1 (workflows) done, 2026-07-23; Split 0 (cli_args) done, 2026-09-03.**
+> Split 0 was not in the original design: `parse_arguments` (~800 lines) referenced exactly one
+> cli-level name, so it moved to `cli_args.py` with a one-line facade import and zero test edits.
+> Current seams for Split 2 are `cli.py` `_SS_VALID_TASK_TYPES`…`_run_ss_rerun_task` and
+> `_SS_CLIPS_CELL_COL`…`_run_transcript_mark` (the line numbers below predate Split 0; re-grep). Designed during the 2026-07 backend refactor
 > pass; the hygiene/consolidation stages of that pass shipped separately (dead config constants,
 > truncation consolidation, `server_utils.make_debounced_persist`). This file holds the three
 > fully-designed god-file splits that were deliberately deferred, plus the items surveyed and

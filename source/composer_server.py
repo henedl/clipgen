@@ -66,7 +66,9 @@ from server_utils import (
     err,
     err_no_video,
     find_by_id,
+    json_endpoint,
     ok,
+    parse_number_arg,
     remove_by_id,
 )
 import itertools
@@ -162,13 +164,13 @@ def _participant_parts(video_paths: list[str]) -> list[dict[str, Any]] | None:
 
 def _participant_duration(participant: str) -> float | None:
     """Total stitched duration for a participant, or None when unknown."""
-    for p in files.resolve_participant_videos(_sheet_context):
-        if p["id"] == participant and p.get("has_video"):
-            parts = _participant_parts(p["video_paths"])
-            if parts is None:
-                return None
-            return float(sum(part["duration"] for part in parts))
-    return None
+    p = files.find_participant_record(_sheet_context, participant)
+    if not p or not p.get("has_video"):
+        return None
+    parts = _participant_parts(p["video_paths"])
+    if parts is None:
+        return None
+    return float(sum(part["duration"] for part in parts))
 
 
 @composer_bp.route("/api/participants")
@@ -240,16 +242,14 @@ def _clamp_span(participant: str, start: float, end: float) -> tuple[float, floa
 
 
 @composer_bp.route("/api/cuts", methods=["POST"])
+@json_endpoint
 def api_cut_create() -> Any:
     data = request.get_json(silent=True) or {}
     participant = str(data.get("participant", "")).strip()
     if not participant:
         return err("participant is required")
-    try:
-        start = float(data.get("start", 0))
-        end = float(data.get("end", 0))
-    except (TypeError, ValueError):
-        return err("start/end must be numbers")
+    start = parse_number_arg(data.get("start", 0), "start")
+    end = parse_number_arg(data.get("end", 0), "end")
     if end <= start:
         return err("end must be after start")
     start, end = _clamp_span(participant, start, end)
@@ -268,6 +268,7 @@ def api_cut_create() -> Any:
 
 
 @composer_bp.route("/api/cuts/<cut_id>", methods=["PATCH"])
+@json_endpoint
 def api_cut_update(cut_id: str) -> Any:
     data = request.get_json(silent=True) or {}
     # Clamp outside the lock: _clamp_span may ffprobe on a cold cache (see
@@ -279,13 +280,10 @@ def api_cut_update(cut_id: str) -> Any:
         start = cut["start"]
         end = cut["end"]
         participant = cut["participant"]
-    try:
-        if data.get("start") is not None:
-            start = float(data["start"])
-        if data.get("end") is not None:
-            end = float(data["end"])
-    except (TypeError, ValueError):
-        return err("start/end must be numbers")
+    if data.get("start") is not None:
+        start = parse_number_arg(data["start"], "start")
+    if data.get("end") is not None:
+        end = parse_number_arg(data["end"], "end")
     if end <= start:
         return err("end must be after start")
     start, end = _clamp_span(participant, start, end)
@@ -1017,16 +1015,7 @@ def _build_overlay_command(
     *encoder* selects the H.264 encoder for video output (see
     ``video.resolve_video_encoder``); gif output has none to pick.
     """
-    cmd = [
-        "ffmpeg",
-        "-y",
-        "-loglevel",
-        config.FFMPEG_LOGLEVEL,
-        "-ss",
-        f"{max(0.0, local_start):.3f}",
-        "-i",
-        input_path,
-    ]
+    cmd = video.ffmpeg_cmd("-ss", f"{max(0.0, local_start):.3f}", "-i", input_path)
     for png_path, _, _ in overlay_specs:
         cmd += ["-loop", "1", "-i", png_path]
     chain = []
@@ -1114,17 +1103,15 @@ def api_export_cancel() -> Any:
 
 
 @composer_bp.route("/api/export/screenshot", methods=["POST"])
+@json_endpoint
 def api_export_screenshot() -> Any:
     """Annotated screenshot at one timestamp (PIL composite; no ffmpeg filter)."""
     data = request.get_json(silent=True) or {}
     participant = str(data.get("participant", "")).strip()
-    try:
-        at_time = float(data.get("time", 0))
-    except (TypeError, ValueError):
-        return err("time must be a number")
+    at_time = parse_number_arg(data.get("time", 0), "time")
     parts = _find_participant_parts(participant)
     if not parts:
-        return err(f"No video for {participant}", 404)
+        return err_no_video(participant)
     part = _part_for_time(parts, at_time)
     frame = video.extract_frame_at_timestamp(part["path"], at_time - part["offset"])
     if frame is None:
@@ -1164,16 +1151,13 @@ def api_export_screenshot() -> Any:
 def _run_overlay_export(data: dict[str, Any], *, gif: bool) -> Any:
     """Shared burn/GIF export: validate span, render windows, run ffmpeg."""
     participant = str(data.get("participant", "")).strip()
-    try:
-        start = float(data.get("start", 0))
-        end = float(data.get("end", 0))
-    except (TypeError, ValueError):
-        return err("start/end must be numbers")
+    start = parse_number_arg(data.get("start", 0), "start")
+    end = parse_number_arg(data.get("end", 0), "end")
     if end <= start:
         return err("end must be after start")
     parts = _find_participant_parts(participant)
     if not parts:
-        return err(f"No video for {participant}", 404)
+        return err_no_video(participant)
     annotations = _annotations_in_span(participant, start, end)
     if not annotations:
         return err("No annotations in this span — use Generate for plain clips.")
@@ -1321,6 +1305,7 @@ def _run_overlay_export(data: dict[str, Any], *, gif: bool) -> Any:
 
 
 @composer_bp.route("/api/export/burn", methods=["POST"])
+@json_endpoint
 def api_export_burn() -> Any:
     """Burn annotations into a video span (seek-first; span-only encode)."""
     if not _export_busy.acquire(blocking=False):
@@ -1332,6 +1317,7 @@ def api_export_burn() -> Any:
 
 
 @composer_bp.route("/api/export/gif", methods=["POST"])
+@json_endpoint
 def api_export_gif() -> Any:
     """Burn annotations into an animated GIF of the span."""
     if not _export_busy.acquire(blocking=False):

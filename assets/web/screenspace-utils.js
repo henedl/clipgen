@@ -166,20 +166,6 @@ function polygonArea(points) {
   return Math.abs(area) / 2;
 }
 
-// Ray-cast point-in-polygon (implicitly closed). Mirrors the Python
-// point_in_mask_points in screenspace_primitives.py.
-function pointInPolygon(x, y, points) {
-  var inside = false;
-  for (var i = 0, j = points.length - 1; i < points.length; j = i++) {
-    var yi = points[i][1], yj = points[j][1];
-    if ((yi > y) !== (yj > y)) {
-      var crossX = (points[j][0] - points[i][0]) * (y - yi) / (yj - yi) + points[i][0];
-      if (x < crossX) inside = !inside;
-    }
-  }
-  return inside;
-}
-
 // Douglas-Peucker (iterative): keeps endpoints, drops points within epsilon of the chord.
 function simplifyPolygon(points, epsilon) {
   if (points.length < 3 || epsilon <= 0) return points.slice();
@@ -403,4 +389,24 @@ function traceMaskContour(mask, w, h) {
     contour.push([cx, cy]);
   }
   return contour;
+}
+
+// Display label for a tool type: "color" → "Color".
+function toolLabel(type) {
+  return type ? type.charAt(0).toUpperCase() + type.slice(1) : "";
+}
+
+// ---- Task-status predicates shared by the queue, results and timeline ----
+
+function isTaskActive(task) {
+  return task.status === "queued" || task.status === "running" || task.status === "paused";
+}
+
+function isTaskFinished(task) {
+  return task.status === "completed" || task.status === "failed";
+}
+
+// Restore-to-workflow reads the task's stored inputs; a queued task has none yet.
+function isTaskRestorable(task) {
+  return task.status === "completed" || task.status === "paused" || task.status === "running";
 }

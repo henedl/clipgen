@@ -338,6 +338,94 @@ def scan_similarity(
     return results
 
 
+def _run_ocr_scan(
+    video_path: str,
+    region: dict[str, Any],
+    interval_seconds: float,
+    *,
+    scorer: Callable[[list[Any], dict[str, Any]], tuple[bool, dict[str, Any]]],
+    params: dict[str, Any],
+    profile_kind: str,
+    ocr_preprocess: bool,
+    require_consecutive: int,
+    languages: list[str] | None,
+    start_seconds: float,
+    end_seconds: float | None,
+    on_progress: Callable[[float], None] | None,
+    cancel_flag: Callable[[], bool] | None,
+    on_result: Callable[[dict[str, Any]], None] | None,
+    fast_opts: dict[str, Any] | None,
+) -> list[dict[str, Any]]:
+    """OCR every sampled frame of *region* and keep the ones *scorer* passes.
+
+    Shared body of :func:`scan_text` and :func:`scan_numbers`: static-frame
+    skipping, the consecutive-hit buffer, and progress/cancel plumbing.
+    """
+    if languages is None:
+        languages = ["en"]
+
+    window = _resolve_scan_window(video_path, start_seconds, end_seconds)
+    if window is None:
+        return []
+    vid_fps, vid_duration, end_seconds, total_range = window
+
+    results: list[dict[str, Any]] = []
+    prev_gray: list[np.ndarray | None] = [None]
+    buf = _ConsecutiveBuffer(require_consecutive)
+    mask_points = region.get("mask_points")
+
+    def _cb(ts: float, pixels: np.ndarray) -> bool | None:
+        if cancel_flag and cancel_flag():
+            return False
+        if _is_static_skip(
+            ts,
+            pixels,
+            prev_gray,
+            buf,
+            results,
+            on_result,
+            on_progress,
+            start_seconds,
+            total_range,
+        ):
+            return None
+        readings = _ocr_region_readings(
+            pixels,
+            languages=languages,
+            preprocess=ocr_preprocess,
+            mask_points=mask_points,
+        )
+        passed, detail = scorer(readings, params)
+        if passed:
+            emitted = buf.push(ts, {"timestamp": ts, **detail})
+            if emitted is not None:
+                results.append(emitted)
+                if on_result:
+                    on_result(emitted)
+        else:
+            buf.reset()
+        if on_progress and total_range > 0:
+            on_progress((ts - start_seconds) / total_range)
+        return None
+
+    scan_video_frames(
+        video_path,
+        region,
+        interval_seconds,
+        _cb,
+        start_seconds=start_seconds,
+        end_seconds=end_seconds,
+        fps=vid_fps,
+        duration=vid_duration,
+        fast_opts=fast_opts,
+        profile_kind=profile_kind,
+    )
+
+    if on_progress:
+        on_progress(1.0)
+    return results
+
+
 def scan_text(
     video_path: str,
     region: dict[str, Any],
@@ -368,76 +456,29 @@ def scan_text(
         ocr_confidence_threshold
     )
     utils.require_optional("rapidocr", "text scan")
-    if languages is None:
-        languages = ["en"]
-
-    window = _resolve_scan_window(video_path, start_seconds, end_seconds)
-    if window is None:
-        return []
-    vid_fps, vid_duration, end_seconds, total_range = window
-
-    results: list[dict[str, Any]] = []
     text_params: dict[str, Any] = {
         "search_string": search_string,
         "fuzzy_threshold": fuzzy_threshold,
         "ocr_confidence_threshold": ocr_confidence_threshold,
         "ocr_normalize": ocr_normalize,
     }
-    prev_gray: list[np.ndarray | None] = [None]
-    buf = _ConsecutiveBuffer(require_consecutive)
-    mask_points = region.get("mask_points")
-
-    def _cb(ts: float, pixels: np.ndarray) -> bool | None:
-        if cancel_flag and cancel_flag():
-            return False
-        if _is_static_skip(
-            ts,
-            pixels,
-            prev_gray,
-            buf,
-            results,
-            on_result,
-            on_progress,
-            start_seconds,
-            total_range,
-        ):
-            return None
-        readings = _ocr_region_readings(
-            pixels,
-            languages=languages,
-            preprocess=ocr_preprocess,
-            mask_points=mask_points,
-        )
-        passed, detail = _score_text_readings(readings, text_params)
-        matched_rd = {"timestamp": ts, **detail} if passed else None
-        if matched_rd is not None:
-            emitted = buf.push(ts, matched_rd)
-            if emitted is not None:
-                results.append(emitted)
-                if on_result:
-                    on_result(emitted)
-        else:
-            buf.reset()
-        if on_progress and total_range > 0:
-            on_progress((ts - start_seconds) / total_range)
-        return None
-
-    scan_video_frames(
+    return _run_ocr_scan(
         video_path,
         region,
         interval_seconds,
-        _cb,
+        scorer=_score_text_readings,
+        params=text_params,
+        profile_kind="text",
+        ocr_preprocess=ocr_preprocess,
+        require_consecutive=require_consecutive,
+        languages=languages,
         start_seconds=start_seconds,
         end_seconds=end_seconds,
-        fps=vid_fps,
-        duration=vid_duration,
+        on_progress=on_progress,
+        cancel_flag=cancel_flag,
+        on_result=on_result,
         fast_opts=fast_opts,
-        profile_kind="text",
     )
-
-    if on_progress:
-        on_progress(1.0)
-    return results
 
 
 def scan_numbers(
@@ -475,16 +516,6 @@ def scan_numbers(
         ocr_confidence_threshold
     )
     utils.require_optional("rapidocr", "numbers scan")
-    if languages is None:
-        languages = ["en"]
-
-    window = _resolve_scan_window(video_path, start_seconds, end_seconds)
-    if window is None:
-        return []
-    vid_fps, vid_duration, end_seconds, total_range = window
-
-    results: list[dict[str, Any]] = []
-    prev_gray: list[np.ndarray | None] = [None]
     numbers_params: dict[str, Any] = {
         "operator": operator,
         "target_value": target_value,
@@ -495,60 +526,23 @@ def scan_numbers(
         # recognition allowlist): decimals and signed values are rejected.
         "integers_only": integers_only,
     }
-    buf = _ConsecutiveBuffer(require_consecutive)
-    mask_points = region.get("mask_points")
-
-    def _cb(ts: float, pixels: np.ndarray) -> bool | None:
-        if cancel_flag and cancel_flag():
-            return False
-        if _is_static_skip(
-            ts,
-            pixels,
-            prev_gray,
-            buf,
-            results,
-            on_result,
-            on_progress,
-            start_seconds,
-            total_range,
-        ):
-            return None
-        readings = _ocr_region_readings(
-            pixels,
-            languages=languages,
-            preprocess=ocr_preprocess,
-            mask_points=mask_points,
-        )
-        passed, detail = _score_numbers_readings(readings, numbers_params)
-        matched_rd = {"timestamp": ts, **detail} if passed else None
-        if matched_rd is not None:
-            emitted = buf.push(ts, matched_rd)
-            if emitted is not None:
-                results.append(emitted)
-                if on_result:
-                    on_result(emitted)
-        else:
-            buf.reset()
-        if on_progress and total_range > 0:
-            on_progress((ts - start_seconds) / total_range)
-        return None
-
-    scan_video_frames(
+    return _run_ocr_scan(
         video_path,
         region,
         interval_seconds,
-        _cb,
+        scorer=_score_numbers_readings,
+        params=numbers_params,
+        profile_kind="numbers",
+        ocr_preprocess=ocr_preprocess,
+        require_consecutive=require_consecutive,
+        languages=languages,
         start_seconds=start_seconds,
         end_seconds=end_seconds,
-        fps=vid_fps,
-        duration=vid_duration,
+        on_progress=on_progress,
+        cancel_flag=cancel_flag,
+        on_result=on_result,
         fast_opts=fast_opts,
-        profile_kind="numbers",
     )
-
-    if on_progress:
-        on_progress(1.0)
-    return results
 
 
 def generate_timelapse(

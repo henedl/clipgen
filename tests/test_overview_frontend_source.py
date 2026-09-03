@@ -58,13 +58,15 @@ def test_staleness_is_version_based_and_running_check_is_strict():
     failed/cancelled/paused tasks must not claim an analysis is in flight."""
     hub = (_WEB / "overview.js").read_text(encoding="utf-8")
     assert "state.dataVersion++" in hub
+    assert "tabState._snapshot = { version: state.dataVersion }" in hub
     md = (_WEB / "overview-metadata.js").read_text(encoding="utf-8")
-    assert "mdState._snapshot = { version: state.dataVersion }" in md
+    assert "createStalenessTracker(mdState)" in md
     assert 's === "queued" || s === "running"' in md
     cv = (_WEB / "overview-convergence.js").read_text(encoding="utf-8")
     assert "cvState._snapshot = { version: state.dataVersion }" in cv
+    assert "createStalenessTracker(cvState)" in cv
     sm = (_WEB / "overview-reports.js").read_text(encoding="utf-8")
-    assert "rpState._snapshot = { version: state.dataVersion }" in sm
+    assert "createStalenessTracker(rpState)" in sm
     for src in (md, cv, sm):
         assert "_snapshot.ss" not in src  # old length-compare heuristic
 

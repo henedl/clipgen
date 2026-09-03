@@ -173,34 +173,27 @@ def _prepend_dedup(items: list[Any], new_item: Any, key: Any = None) -> list[Any
     return [new_item] + deduped[: RECENTS_CAP - 1]
 
 
-def record_recent_input(path: str) -> None:
-    """Record *path* as the last-used input directory."""
+def _record_recent_dir(path: str, last_key: str, recents_key: str) -> None:
+    """Store *path* under *last_key* and at the head of *recents_key*."""
     with _write_lock:
         settings = load_start_settings()
         if not settings.get("persist_enabled", True):
             return
         if not path:
             return
-        settings["last_input"] = path
-        settings["recent_inputs"] = _prepend_dedup(
-            settings.get("recent_inputs", []), path
-        )
+        settings[last_key] = path
+        settings[recents_key] = _prepend_dedup(settings.get(recents_key, []), path)
         save_start_settings(settings)
+
+
+def record_recent_input(path: str) -> None:
+    """Record *path* as the last-used input directory."""
+    _record_recent_dir(path, "last_input", "recent_inputs")
 
 
 def record_recent_output(path: str) -> None:
     """Record *path* as the last-used output directory."""
-    with _write_lock:
-        settings = load_start_settings()
-        if not settings.get("persist_enabled", True):
-            return
-        if not path:
-            return
-        settings["last_output"] = path
-        settings["recent_outputs"] = _prepend_dedup(
-            settings.get("recent_outputs", []), path
-        )
-        save_start_settings(settings)
+    _record_recent_dir(path, "last_output", "recent_outputs")
 
 
 def record_recent_spreadsheet(

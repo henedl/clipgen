@@ -59,7 +59,7 @@ import threading
 import time
 import uuid
 from collections import defaultdict
-from collections.abc import Callable, Iterator
+from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -77,12 +77,17 @@ import transcripts
 import utils
 import video
 from server_utils import (
+    JobSlot,
     err,
     err_no_video,
+    find_by_id,
+    json_endpoint,
     make_debounced_persist,
     make_participant_cache,
+    ndjson_batch_response,
     ok,
     profiled_stream,
+    require_json_body,
 )
 
 FlaskResponse = Response | tuple[Response, int]
@@ -495,11 +500,10 @@ def api_transcript(participant: str) -> FlaskResponse:
 
 
 @transcripts_bp.route("/api/transcript/<participant>/segment", methods=["PUT"])
+@json_endpoint
 def api_edit_segment(participant: str) -> FlaskResponse:
     """Edit a segment's text. Creates a correction entry automatically."""
-    data = request.get_json(silent=True)
-    if not data:
-        return err("Missing JSON body")
+    data = require_json_body("Missing JSON body")
 
     segment_id = data.get("segment_id", "")
     text_raw = data.get("text", "")
@@ -625,38 +629,8 @@ def api_audio_track(participant: str, idx: int) -> FlaskResponse:
     return response
 
 
-# Single embed slot, claimed check-and-set under _embed_lock; the cancel event
-# belongs to exactly one run.
-_embed_cancel_event = threading.Event()
-_embed_lock = threading.Lock()
-_embed_busy = False
-# Run token: the release runs twice per run and must not clear a successor's claim.
-_embed_owner: str | None = None
-
-
-def _claim_embed_slot() -> str | None:
-    """Take the single embed slot, returning its token, or None if held."""
-    global _embed_busy, _embed_owner
-    with _embed_lock:
-        if _embed_busy:
-            return None
-        _embed_busy = True
-        _embed_owner = uuid.uuid4().hex
-        _embed_cancel_event.clear()
-        return _embed_owner
-
-
-def _release_embed_slot(token: str | None = None) -> None:
-    """Free the slot, but only if *token* still owns it.
-
-    ``token=None`` releases unconditionally (tests and teardown).
-    """
-    global _embed_busy, _embed_owner
-    with _embed_lock:
-        if token is not None and _embed_owner != token:
-            return
-        _embed_busy = False
-        _embed_owner = None
+# One embed run at a time; the token scopes cancel and release to that run.
+_embed_slot = JobSlot()
 
 
 def _embed_subtitle_for_participant(
@@ -794,54 +768,23 @@ def api_embed_subtitles() -> FlaskResponse:
         return err("No participants specified")
     default_track = bool(data.get("default_track", True))
 
-    embed_token = _claim_embed_slot()
+    embed_token = _embed_slot.claim()
     if embed_token is None:
         return err("A subtitle embed is already in progress", 409)
 
     output_dir = Path(utils.get_effective_output_dir())
 
-    def stream() -> Iterator[str]:
-        cancel_flag = _embed_cancel_event.is_set
-        try:
-            yield (
-                json.dumps(
-                    {
-                        "total": len(participants),
-                        "output_dir": str(output_dir),
-                        # Echoed in /cancel so a late cancel cannot stop a
-                        # successor run.
-                        "token": embed_token,
-                    }
-                )
-                + "\n"
-            )
-            # Sequential: muxes contend for one disk; ffmpeg cannot be interrupted,
-            # so Stop lands between participants.
-            for idx, pid in enumerate(participants):
-                if cancel_flag():
-                    break
-                outcome = _embed_subtitle_for_participant(
-                    pid, output_dir, default_track=default_track
-                )
-                outcome["index"] = idx
-                yield json.dumps(outcome) + "\n"
-            if cancel_flag():
-                yield json.dumps({"cancelled": True}) + "\n"
-            # Terminal sentinel; a truncated NDJSON stream otherwise reads as complete.
-            yield json.dumps({"done": True}) + "\n"
-        finally:
-            # Also runs on client disconnect, so a closed tab cannot wedge the slot.
-            _release_embed_slot(embed_token)
-
-    response = Response(
-        profiled_stream(stream()),
-        mimetype="application/x-ndjson",
-        headers={"X-Accel-Buffering": "no"},
+    # Sequential: muxes contend for one disk; ffmpeg cannot be interrupted,
+    # so Stop lands between participants.
+    return ndjson_batch_response(
+        _embed_slot,
+        embed_token,
+        len(participants),
+        lambda idx: _embed_subtitle_for_participant(
+            participants[idx], output_dir, default_track=default_track
+        ),
+        header={"output_dir": str(output_dir)},
     )
-    # An unstarted generator never runs its finally; the token makes this double
-    # release harmless.
-    response.call_on_close(lambda: _release_embed_slot(embed_token))
-    return response
 
 
 @transcripts_bp.route("/api/embed-subtitles/cancel", methods=["POST"])
@@ -853,45 +796,12 @@ def api_embed_subtitles_cancel() -> FlaskResponse:
     run 2 immediately) must not cancel the successor.
     """
     data = request.get_json(silent=True) or {}
-    token = data.get("token")
-    with _embed_lock:
-        if _embed_busy and token == _embed_owner:
-            _embed_cancel_event.set()
+    _embed_slot.cancel(data.get("token"))
     return ok()
 
 
-# Single normalize slot, separate from the embed slot: one reads sources, the
-# other rewrites them.
-_normalize_cancel_event = threading.Event()
-_normalize_lock = threading.Lock()
-_normalize_busy = False
-# Token-scoped release, same rationale as _embed_owner.
-_normalize_owner: str | None = None
-
-
-def _claim_normalize_slot() -> str | None:
-    """Take the single normalize slot, returning its token, or None if held."""
-    global _normalize_busy, _normalize_owner
-    with _normalize_lock:
-        if _normalize_busy:
-            return None
-        _normalize_busy = True
-        _normalize_owner = uuid.uuid4().hex
-        _normalize_cancel_event.clear()
-        return _normalize_owner
-
-
-def _release_normalize_slot(token: str | None = None) -> None:
-    """Free the slot, but only if *token* still owns it.
-
-    ``token=None`` releases unconditionally (tests and teardown).
-    """
-    global _normalize_busy, _normalize_owner
-    with _normalize_lock:
-        if token is not None and _normalize_owner != token:
-            return
-        _normalize_busy = False
-        _normalize_owner = None
+# Separate from the embed slot: one reads sources, the other rewrites them.
+_normalize_slot = JobSlot()
 
 
 def _resolve_normalize_indices(
@@ -1041,41 +951,21 @@ def api_normalize_audio() -> FlaskResponse:
     else:
         return err("tracks must be 'auto', 'all', or a list of track indices")
 
-    normalize_token = _claim_normalize_slot()
+    normalize_token = _normalize_slot.claim()
     if normalize_token is None:
         return err("An audio normalization is already in progress", 409)
 
-    def stream() -> Iterator[str]:
-        cancel_flag = _normalize_cancel_event.is_set
-        try:
-            yield (
-                json.dumps({"total": len(participants), "token": normalize_token})
-                + "\n"
-            )
-            # Sequential: each rewrite streams a whole file, so concurrency only
-            # contends for the disk.
-            for idx, pid in enumerate(participants):
-                if cancel_flag():
-                    break
-                outcome = _normalize_audio_for_participant(pid, tracks, cancel_flag)
-                outcome["index"] = idx
-                yield json.dumps(outcome) + "\n"
-            if cancel_flag():
-                yield json.dumps({"cancelled": True}) + "\n"
-            # Terminal sentinel; its absence is the client's truncation signal.
-            yield json.dumps({"done": True}) + "\n"
-        finally:
-            # Also runs on client disconnect, so a closed tab cannot wedge the slot.
-            _release_normalize_slot(normalize_token)
-
-    response = Response(
-        profiled_stream(stream()),
-        mimetype="application/x-ndjson",
-        headers={"X-Accel-Buffering": "no"},
+    # Sequential: each rewrite streams a whole file, so concurrency only
+    # contends for the disk.
+    cancel_flag = _normalize_slot.cancel_event.is_set
+    return ndjson_batch_response(
+        _normalize_slot,
+        normalize_token,
+        len(participants),
+        lambda idx: _normalize_audio_for_participant(
+            participants[idx], tracks, cancel_flag
+        ),
     )
-    # Covers a generator torn down before it starts (see the embed route).
-    response.call_on_close(lambda: _release_normalize_slot(normalize_token))
-    return response
 
 
 @transcripts_bp.route("/api/normalize-audio/cancel", methods=["POST"])
@@ -1085,10 +975,7 @@ def api_normalize_audio_cancel() -> FlaskResponse:
     Token-scoped like the embed cancel above.
     """
     data = request.get_json(silent=True) or {}
-    token = data.get("token")
-    with _normalize_lock:
-        if _normalize_busy and token == _normalize_owner:
-            _normalize_cancel_event.set()
+    _normalize_slot.cancel(data.get("token"))
     return ok()
 
 
@@ -1357,11 +1244,10 @@ def api_corrections_list() -> FlaskResponse:
 
 
 @transcripts_bp.route("/api/corrections", methods=["POST"])
+@json_endpoint
 def api_corrections_add() -> FlaskResponse:
     """Add a manual correction."""
-    data = request.get_json(silent=True)
-    if not data:
-        return err("Missing JSON body")
+    data = require_json_body("Missing JSON body")
 
     from_text = str(data.get("from") or "").strip()
     to_text = str(data.get("to") or "").strip()
@@ -1439,11 +1325,10 @@ def api_known_terms_list() -> FlaskResponse:
 
 
 @transcripts_bp.route("/api/known-terms", methods=["POST"])
+@json_endpoint
 def api_known_terms_add() -> FlaskResponse:
     """Add a known term."""
-    data = request.get_json(silent=True)
-    if not data:
-        return err("Missing JSON body")
+    data = require_json_body("Missing JSON body")
 
     term = str(data.get("term", "")).strip()
     if not term:
@@ -1767,11 +1652,10 @@ def api_intake_poll() -> FlaskResponse:
 
 
 @transcripts_bp.route("/api/marks", methods=["POST"])
+@json_endpoint
 def api_marks_add() -> FlaskResponse:
     """Create marks for one or more segments."""
-    data = request.get_json(silent=True)
-    if not data:
-        return err("Missing JSON body")
+    data = require_json_body("Missing JSON body")
 
     segment_ids = data.get("segment_ids", [])
     if not segment_ids:
@@ -1816,19 +1700,14 @@ def api_marks_add() -> FlaskResponse:
 
 
 @transcripts_bp.route("/api/marks/<mark_id>", methods=["PUT"])
+@json_endpoint
 def api_marks_update(mark_id: str) -> FlaskResponse:
     """Update a mark's category or label."""
-    data = request.get_json(silent=True)
-    if not data:
-        return err("Missing JSON body")
+    data = require_json_body("Missing JSON body")
 
     with _manifest_lock:
         marks = _manifest.get("marks", [])
-        target = None
-        for m in marks:
-            if m.get("id") == mark_id:
-                target = m
-                break
+        target = find_by_id(marks, mark_id)
         if not target:
             return err("Mark not found", 404)
 
@@ -2134,11 +2013,10 @@ def api_llm_start() -> FlaskResponse:
 
 
 @transcripts_bp.route("/api/transcribe", methods=["POST"])
+@json_endpoint
 def api_transcribe() -> FlaskResponse:
     """Enqueue participant(s) for background transcription."""
-    data = request.get_json(silent=True)
-    if not data:
-        return err("Missing JSON body")
+    data = require_json_body("Missing JSON body")
 
     participant_ids = data.get("participants", [])
     force = data.get("force", False)

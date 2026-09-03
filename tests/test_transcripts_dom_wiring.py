@@ -28,7 +28,7 @@ _ICONS = WEB.parent / "icons"
 _CSS = read("transcripts.css")
 _HTML = read("transcripts.html")
 # The page script is a hub (transcripts.js) plus feature satellites
-# (transcripts-{corrections,search,video,pills,agents}.js); the friction/summary
+# (transcripts-{corrections,search,video,pills,agents,batch}.js); the friction/summary
 # element IDs live in the agents satellite, so read all of them together.
 _JS = concat_js("transcripts")
 
@@ -104,9 +104,19 @@ def test_required_ids_present_in_html():
     )
 
 
+def _batch_modal_ids() -> set[str]:
+    """IDs createBatchJobModal builds as prefix + suffix, per instantiated prefix."""
+    start = _JS.index("function createBatchJobModal(")
+    factory = _JS[start : _JS.index("\n  function ", start + 1)]
+    suffixes = set(re.findall(r'el\("(\w+)"\)', factory))
+    prefixes = re.findall(r'prefix: "(\w+)"', _JS)
+    return {p + s for p in prefixes for s in suffixes}
+
+
 def test_required_ids_referenced_in_js():
     # Keeps the guard honest: every ID we require must actually be used by the JS.
-    unused = [i for i in REQUIRED_IDS if i not in _JS]
+    dynamic = _batch_modal_ids()
+    unused = [i for i in REQUIRED_IDS if i not in _JS and i not in dynamic]
     assert not unused, f"REQUIRED_IDS not referenced in transcripts.js: {unused}"
 
 
@@ -425,9 +435,9 @@ def test_clip_marks_previews_and_cuts_from_one_clusterer():
         "clustering belongs in one place (_clipMarksClusters); the summary and "
         "the payload both call it"
     )
-    start = _JS.index("function submitClipMarks(")
+    start = _JS.index("function _clipMarksRequest(")
     body = _JS[start : _JS.index("\n  function ", start + 1)]
-    assert "_clipMarksClusters()" in body
+    assert "_clipMarksClusters(" in body
 
 
 def test_clip_marks_sends_the_text_and_label_studio_drops():
@@ -435,7 +445,7 @@ def test_clip_marks_sends_the_text_and_label_studio_drops():
     truncated text -> category. Studio's queue path omits both, so its clips are
     all named after the category; sending them is the whole reason these clips
     read as anything useful."""
-    start = _JS.index("function submitClipMarks(")
+    start = _JS.index("function _clipMarksRequest(")
     body = _JS[start : _JS.index("\n  function ", start + 1)]
     assert '"../studio/api/generate-intake"' in body
     assert 'source: "transcript"' in body
@@ -447,22 +457,33 @@ def test_clip_marks_pads_the_span_without_going_negative():
     """A mark's segment boundaries sit tight against the speech, so the cut is
     padded — but a mark near t=0 would otherwise ask ffmpeg for a negative
     start."""
-    start = _JS.index("function submitClipMarks(")
+    start = _JS.index("function _clipMarksRequest(")
     body = _JS[start : _JS.index("\n  function ", start + 1)]
     assert "Math.max(0, c.start - pad)" in body, (
         "the padded start must be floored at zero"
     )
 
 
-def test_clip_marks_ignores_the_trailing_cancelled_line():
-    """/api/generate-intake closes a cancelled stream with {"cancelled": true},
-    which has no index. Counting it as a completed item over-reports progress by
-    one (the bug live in overview-reports.js)."""
-    start = _JS.index("function submitClipMarks(")
-    body = _JS[start : _JS.index("\n  function ", start + 1)]
+def _batch_factory() -> str:
+    start = _JS.index("function createBatchJobModal(")
+    return _JS[start : _JS.index("\n  function ", start + 1)]
+
+
+def test_batch_modal_ignores_the_indexless_stream_lines():
+    """Header, {"cancelled": true} and {"done": true} lines carry no index and
+    stay out of the tally — but the per-flow hook must see them first, or the
+    embed run loses its output_dir and both lose the cancel token."""
+    body = _batch_factory()
     assert 'typeof data.index !== "number"' in body, (
         "the NDJSON handler must bail on lines with no index"
     )
+    assert body.index("cfg.onLine(data, job)") < body.index(
+        'typeof data.index !== "number"'
+    )
+    assert "if (data.output_dir) job.outputDir = data.output_dir;" in _JS, (
+        "the embed flow must read the header line's output_dir"
+    )
+    assert _JS.count("createBatchJobModal({") == 3
 
 
 def test_param_modal_classes_are_all_styled():
@@ -477,25 +498,21 @@ def test_param_modal_classes_are_all_styled():
                 assert "." + name in _CSS, f".{name} is used in HTML but never styled"
 
 
-def test_clip_marks_run_outlives_its_dialog():
-    """Escape/backdrop only close the modal; the batch keeps streaming and the
-    quick action must reopen onto live progress. Storing the run inside the open
-    handler (or clearing it on close) would strand a running job with no way to
-    stop it."""
-    assert "var _clipMarksRun = null;" in _JS
-    close_start = _JS.index("function closeClipMarksModal(")
-    close_body = _JS[close_start : _JS.index("\n  function ", close_start + 1)]
-    assert "_clipMarksRun" not in close_body, (
+def test_batch_modal_run_outlives_its_dialog():
+    """Escape mid-run hides the dialog; the stream keeps going and reopening
+    shows live progress instead of resetting the pickers."""
+    body = _batch_factory()
+    assert "var run = null;" in body
+    close_start = body.index("function close(")
+    close_body = body[close_start : body.index("\n    function ", close_start + 1)]
+    assert "run" not in close_body.replace("function close", ""), (
         "closing the dialog must not touch the in-flight run"
     )
-    open_start = _JS.index("function openClipMarksModal(")
-    open_body = _JS[open_start : _JS.index("\n  function ", open_start + 1)]
-    assert "if (_clipMarksRun) return;" in open_body, (
-        "reopening mid-run must show progress, not re-fetch and reset the pickers"
+    open_start = body.index("function open(")
+    open_body = body[open_start : body.index("\n    function ", open_start + 1)]
+    assert "if (run) return;" in open_body, (
+        "reopening mid-run must show progress, not reset the pickers"
     )
-
-
-# ---- Embed Subtitles (merged Quick action -> streaming mux) ----
 
 
 def test_embed_subs_is_one_quick_action():
@@ -508,37 +525,6 @@ def test_embed_subs_is_one_quick_action():
     # The old endpoints are gone too — no caller may resurrect them.
     for route in ("api/embed-subtitle/", "api/embed-all-subtitles"):
         assert route not in _JS, f"{route} was replaced by api/embed-subtitles"
-
-
-def test_embed_subs_run_outlives_its_dialog():
-    """Same contract as the clip-marks run: Escape/backdrop close the dialog
-    while the mux batch keeps streaming, so the run must live outside the open
-    handler or a dismissed dialog strands a job with no way to stop it."""
-    assert "var _embedSubsRun = null;" in _JS
-    close_start = _JS.index("function closeEmbedSubsModal(")
-    close_body = _JS[close_start : _JS.index("\n  function ", close_start + 1)]
-    assert "_embedSubsRun" not in close_body, (
-        "closing the dialog must not touch the in-flight run"
-    )
-    open_start = _JS.index("function openEmbedSubsModal(")
-    open_body = _JS[open_start : _JS.index("\n  function ", open_start + 1)]
-    assert "if (_embedSubsRun) return;" in open_body, (
-        "reopening mid-run must show progress, not reset the pickers"
-    )
-
-
-def test_embed_subs_ignores_the_indexless_stream_lines():
-    """The stream opens with a header line and can close with
-    {"cancelled": true}; neither carries an index. Counting them as completed
-    items over-reports progress."""
-    start = _JS.index("function submitEmbedSubs(")
-    body = _JS[start : _JS.index("\n  function ", start + 1)]
-    assert 'typeof data.index !== "number"' in body, (
-        "the NDJSON handler must bail on lines with no index"
-    )
-    assert "if (data.output_dir) outputDir = data.output_dir;" in body, (
-        "the header line carries the destination the finish toast reports"
-    )
 
 
 def test_embed_subs_warns_the_default_toggle_is_inert_on_mp4():
@@ -554,7 +540,7 @@ def test_embed_subs_warns_the_default_toggle_is_inert_on_mp4():
     assert "/\\.(mp4|m4v|mov)$/i" not in _JS, (
         "the mp4-family list must not be re-hardcoded in JS"
     )
-    start = _JS.index("function renderEmbedSubsSummary(")
+    start = _JS.index("function _embedSubsSummary(")
     body = _JS[start : _JS.index("\n  function ", start + 1)]
     assert "_embedSubsAlwaysDefault(" in body, (
         "the summary must flag targets whose container ignores the toggle"
@@ -575,13 +561,13 @@ def test_embed_subs_filters_containers_the_muxer_cannot_write():
     assert "_embedSubsIsUnsupported(p)" in body, (
         "the target list must drop unsupported containers, not just multi-part"
     )
-    summary = _JS[_JS.index("function renderEmbedSubsSummary(") :]
+    summary = _JS[_JS.index("function _embedSubsSummary(") :]
     summary = summary[: summary.index("\n  function ")]
     assert "unsupported" in summary, (
         "the summary must account for what it dropped, like it does multi-part"
     )
     # The caveat depends on the checkbox, so the checkbox must re-render it.
-    init_start = _JS.index("function initEmbedSubsModal(")
+    init_start = _JS.index("function _embedSubsInitExtra(")
     init_body = _JS[init_start : _JS.index("\n  function ", init_start + 1)]
     assert '"#embedSubsDefault"' in init_body, (
         "toggling the checkbox must re-render the summary that carries the caveat"
@@ -592,7 +578,7 @@ def test_embed_subs_empty_state_distinguishes_multi_part_from_no_transcript():
     """When every scoped participant is multi-part the target list is empty but
     transcripts exist, so the plain empty state ("transcribe a video first")
     would contradict itself — and point at a fix that changes nothing."""
-    start = _JS.index("function renderEmbedSubsSummary(")
+    start = _JS.index("function _embedSubsSummary(")
     body = _JS[start : _JS.index("\n  function ", start + 1)]
     empty_branch = body[body.index("if (!targets.length)") :]
     assert "if (skipped.length)" in empty_branch, (
@@ -652,34 +638,6 @@ def test_norm_audio_quick_action_and_modal_exist():
     assert 'id="normAudioModal"' in _HTML
 
 
-def test_norm_audio_run_outlives_its_dialog():
-    """Same contract as the embed run: Escape/backdrop close the dialog while
-    the rewrite batch keeps streaming, so the run must live outside the open
-    handler or a dismissed dialog strands a job with no way to stop it."""
-    assert "var _normAudioRun = null;" in _JS
-    close_start = _JS.index("function closeNormalizeAudioModal(")
-    close_body = _JS[close_start : _JS.index("\n  function ", close_start + 1)]
-    assert "_normAudioRun" not in close_body, (
-        "closing the dialog must not touch the in-flight run"
-    )
-    open_start = _JS.index("function openNormalizeAudioModal(")
-    open_body = _JS[open_start : _JS.index("\n  function ", open_start + 1)]
-    assert "if (_normAudioRun) return;" in open_body, (
-        "reopening mid-run must show progress, not reset the pickers"
-    )
-
-
-def test_norm_audio_ignores_the_indexless_stream_lines():
-    """The stream opens with a header line and can close with
-    {"cancelled": true}; neither carries an index. Counting them as completed
-    items over-reports progress."""
-    start = _JS.index("function submitNormalizeAudio(")
-    body = _JS[start : _JS.index("\n  function ", start + 1)]
-    assert 'typeof data.index !== "number"' in body, (
-        "the NDJSON handler must bail on lines with no index"
-    )
-
-
 def test_norm_audio_reloads_after_any_swapped_file():
     """A swap pulled a source file out from under the page: the <video> is
     mid-stream on a renamed-away inode and the per-track mixers point at stale
@@ -687,14 +645,15 @@ def test_norm_audio_reloads_after_any_swapped_file():
     reload here leaves the player wedged on the old bytes. The reload must key
     on files swapped (parts_done), not on ok-participants: a multi-part
     participant that failed on part 2 still replaced part 1 on disk."""
-    start = _JS.index("function submitNormalizeAudio(")
+    start = _JS.index("function _normAudioOnLine(")
     body = _JS[start : _JS.index("\n  function ", start + 1)]
-    assert "window.location.reload" in body
     assert 'typeof data.parts_done === "number"' in body, (
         "the handler must tally swapped files off the lines' parts_done"
     )
-    reload_branch = body[body.index("function finish(") :]
-    assert "run.changed > 0" in reload_branch, (
+    start = _JS.index("function _normAudioAfterFinish(")
+    reload_branch = _JS[start : _JS.index("\n  function ", start + 1)]
+    assert "window.location.reload" in reload_branch
+    assert "job.changed > 0" in reload_branch, (
         "a run that swapped nothing must not reload; one that swapped anything "
         "must, even when every participant line was ok=false"
     )
@@ -710,7 +669,7 @@ def test_norm_audio_excludes_only_fully_kept_participants():
     assert "_normAudioIsFullyKept" in body, (
         "targets must drop only fully-rewritten participants before the POST"
     )
-    open_start = _JS.index("function openNormalizeAudioModal(")
+    open_start = _JS.index("function _normAudioOnOpen(")
     open_body = _JS[open_start : _JS.index("\n  function ", open_start + 1)]
     assert '"api/remux/status"' in open_body, (
         "kept-original state lives on disk, not in state.participants"

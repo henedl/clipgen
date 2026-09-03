@@ -8,12 +8,15 @@ same numeric-arg parse-and-validate block dozens of times. Collapsed here:
 - :class:`ApiError` + :func:`json_endpoint` let a handler ``raise`` a uniform
   4xx instead of threading an ``err(...)`` tuple back through every guard.
 - :func:`parse_number_arg` parses + bound-checks one numeric value;
-  :func:`opt_number` is its lenient fall-back-don't-fail sibling.
+  :func:`opt_number` is its lenient fall-back-don't-fail sibling;
+  :func:`require_json_body` is the JSON-object guard.
 - :func:`find_by_id` / :func:`remove_by_id` are the manifest-collection CRUD
   lookups (stashes, blueprints, cuts, annotations).
 - :func:`make_debounced_persist` builds the manifest-write debounce.
 - :func:`make_participant_cache` builds the mtime-guarded participant cache
   (Transcripts + Screenspace).
+- :class:`JobSlot` + :func:`ndjson_batch_response` run one cancellable batch
+  at a time and stream it as NDJSON (subtitle embed, audio normalize).
 - :func:`make_sse_channel` builds one SSE pub/sub channel (bounded per-client
   queue + coalesce-on-overflow + keepalive + cleanup).
 - :class:`MediaCache` + :func:`parse_clip_window` + :func:`clip_media_response`
@@ -27,14 +30,16 @@ modules, so these helpers must not live there.
 
 from __future__ import annotations
 
+import json
 import math
 import queue
 import threading
+import uuid
 from collections import OrderedDict
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from functools import wraps
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from flask import Response, jsonify, request
 
@@ -120,6 +125,14 @@ def parse_number_arg(
     return int(value) if int_only else value
 
 
+def require_json_body(message: str = "JSON body required") -> dict[str, Any]:
+    """The request's JSON object; ``ApiError`` (400) when absent, empty, or not an object."""
+    data = request.get_json(silent=True)
+    if not data or not isinstance(data, dict):
+        raise ApiError(message)
+    return cast(dict[str, Any], data)
+
+
 def opt_number(args: Any, name: str, default: float | None = None) -> float | None:
     """Lenient optional float from a request-args mapping.
 
@@ -150,30 +163,30 @@ def remove_by_id(items: list[dict[str, Any]], id_: Any) -> dict[str, Any] | None
 
 
 class MediaCache:
-    """Bounded-LRU byte cache with single-flight compute.
+    """Bounded-LRU cache with single-flight compute.
 
     Fast path takes the main lock only for the dict get/reorder. On a miss, a
     per-key lock serializes concurrent identical misses so the expensive
-    producer (ffmpeg) runs once, not once per waiting request — the others wake
-    to the freshly cached bytes. The producer runs holding no main lock.
+    producer (ffmpeg, OCR) runs once, not once per waiting request — the others
+    wake to the freshly cached value. The producer runs holding no main lock.
+    *stat_prefix* names the profiling counters (``<prefix>.hit`` / ``.miss``).
     """
 
-    def __init__(self, max_entries: int) -> None:
-        self._store: OrderedDict[tuple, bytes] = OrderedDict()
+    def __init__(self, max_entries: int, stat_prefix: str = "media_cache") -> None:
+        self._store: OrderedDict[tuple, Any] = OrderedDict()
         self._max = max_entries
         self._lock = threading.Lock()
         self._inflight: dict[tuple, threading.Lock] = {}
+        self._stat = stat_prefix
 
-    def get_or_compute(
-        self, key: tuple, compute: Callable[[], bytes | None]
-    ) -> bytes | None:
+    def get_or_compute(self, key: tuple, compute: Callable[[], Any]) -> Any:
         # Fast path: cache hit.
         with self._lock:
             cached = self._store.get(key)
             if cached is not None:
                 self._store.move_to_end(key)
                 if config.PROFILING:
-                    profiling.count("media_cache.hit")
+                    profiling.count(self._stat + ".hit")
                 return cached
             keylock = self._inflight.get(key)
             if keylock is None:
@@ -187,12 +200,12 @@ class MediaCache:
                 if cached is not None:
                     self._store.move_to_end(key)
                     if config.PROFILING:
-                        profiling.count("media_cache.hit")
+                        profiling.count(self._stat + ".hit")
                     return cached
 
             if config.PROFILING:
-                profiling.count("media_cache.miss")
-            with profiling.span("media_cache.compute"):
+                profiling.count(self._stat + ".miss")
+            with profiling.span(self._stat + ".compute"):
                 value = compute()  # expensive; no main lock held
 
             with self._lock:
@@ -209,6 +222,83 @@ class MediaCache:
         with self._lock:
             self._store.clear()
             self._inflight.clear()
+
+
+class JobSlot:
+    """One in-flight run at a time, with a token-scoped release and cancel.
+
+    ``claim()`` is an atomic check-and-set. Its token is echoed to the client so
+    a late cancel cannot stop a successor run; ``release(token)`` is a no-op
+    unless that token still owns the slot (``None`` releases unconditionally —
+    tests and teardown), which makes the stream's ``finally`` plus the
+    response's ``call_on_close`` a harmless double release.
+    """
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self.busy = False
+        self.owner: str | None = None
+        self.cancel_event = threading.Event()
+
+    def claim(self) -> str | None:
+        with self._lock:
+            if self.busy:
+                return None
+            self.busy = True
+            self.owner = uuid.uuid4().hex
+            self.cancel_event.clear()
+            return self.owner
+
+    def release(self, token: str | None = None) -> None:
+        with self._lock:
+            if token is not None and self.owner != token:
+                return
+            self.busy = False
+            self.owner = None
+
+    def cancel(self, token: Any) -> None:
+        """Set the cancel event only if *token* owns the running slot."""
+        with self._lock:
+            if self.busy and token == self.owner:
+                self.cancel_event.set()
+
+
+def ndjson_batch_response(
+    slot: JobSlot,
+    token: str,
+    total: int,
+    run_one: Callable[[int], dict[str, Any]],
+    header: dict[str, Any] | None = None,
+) -> Response:
+    """Stream one NDJSON line per item under *slot*, then release it.
+
+    Lines: ``{"total", "token", **header}``; ``{"index", ...run_one(i)}`` per
+    item, stopping between items once the slot's cancel event is set (then
+    ``{"cancelled": true}``); the terminal ``{"done": true}`` sentinel, whose
+    absence tells the client the stream was truncated.
+    """
+    cancelled = slot.cancel_event.is_set
+
+    def stream() -> Iterator[str]:
+        try:
+            yield json.dumps({"total": total, "token": token, **(header or {})}) + "\n"
+            for idx in range(total):
+                if cancelled():
+                    break
+                outcome = run_one(idx)
+                outcome["index"] = idx
+                yield json.dumps(outcome) + "\n"
+            if cancelled():
+                yield json.dumps({"cancelled": True}) + "\n"
+            yield json.dumps({"done": True}) + "\n"
+        finally:
+            # Also runs on client disconnect, so a closed tab cannot wedge the slot.
+            slot.release(token)
+
+    response = ndjson_response(stream())
+    # An unstarted generator never runs its finally; the token makes this harmless.
+    response.call_on_close(lambda: slot.release(token))
+    return response
 
 
 def mtime_or_zero(path: str | Path) -> float:
@@ -416,6 +506,15 @@ def _profiled_rule(prefix: str) -> str:
     """
     rule = request.url_rule.rule if request.url_rule is not None else "?"
     return f"{prefix} {rule}"
+
+
+def ndjson_response(body: Any) -> Response:
+    """Streaming NDJSON response with proxy buffering off; *body* is profiled."""
+    return Response(
+        profiled_stream(body),
+        mimetype="application/x-ndjson",
+        headers={"X-Accel-Buffering": "no"},
+    )
 
 
 def profiled_stream(body: Any) -> Any:

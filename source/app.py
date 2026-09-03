@@ -505,6 +505,24 @@ def _run_standard_mode(mode: str, worksheet: Any) -> list[ClipRecord] | None:
     return gen_fn(ctx, result)
 
 
+def _record_interactive_artifacts(
+    artifacts: list[dict[str, Any]], worksheet: Any, *, mode: str = "interactive"
+) -> None:
+    """Append this run's artifacts to the session list and persist the manifest."""
+    if not artifacts:
+        return
+    viewer.INTERACTIVE_ARTIFACTS.extend(artifacts)
+    if config.MANIFEST_ENABLED:
+        viewer.save_manifest(
+            viewer.INTERACTIVE_ARTIFACTS,
+            new_reels=viewer.INTERACTIVE_REELS,
+            study=artifacts[0].get("study", ""),
+            worksheet_title=getattr(worksheet, "title", ""),
+            is_excel=_is_excel_worksheet(worksheet),
+            mode=mode,
+        )
+
+
 def _print_run_summary(message: str) -> None:
     """Print a run summary block with newlines and a Summary header."""
     utils.info_print("")
@@ -884,17 +902,7 @@ def _run_format_mode_interactive(worksheet: Any, output_format: str) -> None:
     outputs_generated, artifacts = process_clips(
         clips_list, output_format=output_format, include_severity=(mode == "severity")
     )
-    if artifacts:
-        viewer.INTERACTIVE_ARTIFACTS.extend(artifacts)
-        if config.MANIFEST_ENABLED:
-            viewer.save_manifest(
-                viewer.INTERACTIVE_ARTIFACTS,
-                new_reels=viewer.INTERACTIVE_REELS,
-                study=artifacts[0].get("study", ""),
-                worksheet_title=getattr(worksheet, "title", ""),
-                is_excel=_is_excel_worksheet(worksheet),
-                mode="interactive",
-            )
+    _record_interactive_artifacts(artifacts, worksheet)
     _print_run_summary(
         f"All done, created {outputs_generated} {output_label}!\nFiles are in {utils.get_effective_output_dir()}"
     )
@@ -1071,17 +1079,7 @@ def _dispatch_interactive_mode(
             outputs_generated, artifacts = process_clips(
                 clips_list, output_format=output_format
             )
-            if artifacts:
-                viewer.INTERACTIVE_ARTIFACTS.extend(artifacts)
-                if config.MANIFEST_ENABLED:
-                    viewer.save_manifest(
-                        viewer.INTERACTIVE_ARTIFACTS,
-                        new_reels=viewer.INTERACTIVE_REELS,
-                        study=artifacts[0].get("study", ""),
-                        worksheet_title=getattr(worksheet, "title", ""),
-                        is_excel=_is_excel_worksheet(worksheet),
-                        mode="interactive",
-                    )
+            _record_interactive_artifacts(artifacts, worksheet)
             if not config.REENCODING:
                 _print_reencoding_warning(utils.info_print)
             return (outputs_generated, artifacts)
@@ -1136,16 +1134,7 @@ def _dispatch_interactive_mode(
             _print_reencoding_warning(utils.info_print)
         _print_completion_message(outputs_generated, "clip", is_reel=False)
         if artifacts:
-            viewer.INTERACTIVE_ARTIFACTS.extend(artifacts)
-            if config.MANIFEST_ENABLED:
-                viewer.save_manifest(
-                    viewer.INTERACTIVE_ARTIFACTS,
-                    new_reels=viewer.INTERACTIVE_REELS,
-                    study=artifacts[0].get("study", ""),
-                    worksheet_title=getattr(worksheet, "title", ""),
-                    is_excel=_is_excel_worksheet(worksheet),
-                    mode="timeline-viewer",
-                )
+            _record_interactive_artifacts(artifacts, worksheet, mode="timeline-viewer")
             study = artifacts[0].get("study", "")
             ss_events = viewer.load_screenspace_events_for_viewer()
             data = viewer.finalize_timeline_data(
@@ -1280,17 +1269,7 @@ def run_interactive_mode(worksheet: Any, gspread_client: Any = None) -> None:
                 outputs_generated, artifacts = process_clips(
                     clips_list, include_severity=(resolved_mode == "severity")
                 )
-                if artifacts:
-                    viewer.INTERACTIVE_ARTIFACTS.extend(artifacts)
-                    if config.MANIFEST_ENABLED:
-                        viewer.save_manifest(
-                            viewer.INTERACTIVE_ARTIFACTS,
-                            new_reels=viewer.INTERACTIVE_REELS,
-                            study=artifacts[0].get("study", ""),
-                            worksheet_title=getattr(worksheet, "title", ""),
-                            is_excel=_is_excel_worksheet(worksheet),
-                            mode="interactive",
-                        )
+                _record_interactive_artifacts(artifacts, worksheet)
 
             if not config.REENCODING:
                 _print_reencoding_warning(utils.info_print)

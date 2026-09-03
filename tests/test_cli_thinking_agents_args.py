@@ -142,7 +142,7 @@ def test_summarize_default_runs_all(monkeypatch):
 
     import thinking_agents
 
-    monkeypatch.setattr(thinking_agents, "summarize_transcript", lambda segs: "S")
+    monkeypatch.setattr(thinking_agents, "summarize_transcript", lambda segs, **kw: "S")
 
     args = _agent_args(summarize=[])
     cli._run_summarize(args)
@@ -166,7 +166,7 @@ def test_summarize_specific_ids_only(monkeypatch):
 
     import thinking_agents
 
-    monkeypatch.setattr(thinking_agents, "summarize_transcript", lambda segs: "S")
+    monkeypatch.setattr(thinking_agents, "summarize_transcript", lambda segs, **kw: "S")
 
     args = _agent_args(summarize=["P02"])
     cli._run_summarize(args)
@@ -191,7 +191,9 @@ def test_summarize_skips_existing_without_no_input(monkeypatch, capsys):
 
     import thinking_agents
 
-    monkeypatch.setattr(thinking_agents, "summarize_transcript", lambda segs: "NEW")
+    monkeypatch.setattr(
+        thinking_agents, "summarize_transcript", lambda segs, **kw: "NEW"
+    )
 
     args = _agent_args(summarize=["P01"], no_input=False)
     cli._run_summarize(args)
@@ -216,7 +218,9 @@ def test_summarize_overwrites_with_no_input(monkeypatch):
 
     import thinking_agents
 
-    monkeypatch.setattr(thinking_agents, "summarize_transcript", lambda segs: "NEW")
+    monkeypatch.setattr(
+        thinking_agents, "summarize_transcript", lambda segs, **kw: "NEW"
+    )
 
     args = _agent_args(summarize=["P01"], no_input=True)
     cli._run_summarize(args)
@@ -235,7 +239,9 @@ def test_summarize_handles_none_result(monkeypatch, capsys):
 
     import thinking_agents
 
-    monkeypatch.setattr(thinking_agents, "summarize_transcript", lambda segs: None)
+    monkeypatch.setattr(
+        thinking_agents, "summarize_transcript", lambda segs, **kw: None
+    )
 
     args = _agent_args(summarize=["P01"])
     cli._run_summarize(args)
@@ -262,7 +268,7 @@ def test_citations_requires_summary(monkeypatch, capsys):
     monkeypatch.setattr(
         thinking_agents,
         "find_citations",
-        lambda s, segs: [{"sentence": "x", "refs": []}],
+        lambda s, segs, **kw: [{"sentence": "x", "refs": []}],
     )
 
     args = _agent_args(citations=["P01"])
@@ -292,7 +298,7 @@ def test_citations_writes_refs(monkeypatch):
 
     fake_citations = [{"sentence": "claim", "refs": [{"start": 0, "end": 1}]}]
     monkeypatch.setattr(
-        thinking_agents, "find_citations", lambda s, segs: fake_citations
+        thinking_agents, "find_citations", lambda s, segs, **kw: fake_citations
     )
 
     args = _agent_args(citations=["P01"])
@@ -314,8 +320,10 @@ def _fake_friction_agent(monkeypatch, result):
         calls.append(entry)
         return result
 
+    real = thinking_agents.get_agent("friction")
+    assert real is not None
     monkeypatch.setattr(
-        thinking_agents, "get_agent", lambda key: {"key": key, "run": fake_run}
+        thinking_agents, "get_agent", lambda key: {**real, "key": key, "run": fake_run}
     )
     return calls
 

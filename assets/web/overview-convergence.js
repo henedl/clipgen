@@ -55,24 +55,11 @@
     _snapshot: null,
   };
 
-  var _cvFrameCache = {};
+  var _cvFrameCache = createBlobCache();
   var _cvFramePreviewEl = null;
   var _cvHoverDebounce = null;
   // Bumped per preview show so a slow fetch can't paint over a newer hover.
   var _cvPreviewSeq = 0;
-
-  // Cache keys are unique per participant+timestamp, so revoke on pagehide (mirrors viewer.js _thumbCache).
-  window.addEventListener("pagehide", function () {
-    Object.keys(_cvFrameCache).forEach(function (key) {
-      var url = _cvFrameCache[key];
-      if (url && url !== "error" && url !== "loading") {
-        try {
-          URL.revokeObjectURL(url);
-        } catch (_) {}
-      }
-      delete _cvFrameCache[key];
-    });
-  });
 
   // --- Utilities ---
 
@@ -126,14 +113,14 @@
     var url = cvFrameUrl(event.source, event.participant, event.rawStart);
     var seq = ++_cvPreviewSeq;
 
-    var cached = _cvFrameCache[url];
+    var cached = _cvFrameCache.get(url);
     if (cached && cached !== "error" && cached !== "loading") {
       img.src = cached;
     } else if (cached === "error") {
       cvHideFramePreview();
       return;
     } else if (!cached) {
-      _cvFrameCache[url] = "loading";
+      _cvFrameCache.mark(url, "loading");
       img.src = "";
       fetch(url)
         .then(function (r) {
@@ -141,18 +128,13 @@
           return r.blob();
         })
         .then(function (blob) {
-          var objUrl = URL.createObjectURL(blob);
-          var prev = _cvFrameCache[url];
-          if (prev && prev !== "error" && prev !== "loading") {
-            try { URL.revokeObjectURL(prev); } catch (_) {}
-          }
-          _cvFrameCache[url] = objUrl;
+          var objUrl = _cvFrameCache.setBlob(url, blob);
           if (seq === _cvPreviewSeq && !preview.classList.contains("hidden") && img.parentNode) {
             img.src = objUrl;
           }
         })
         .catch(function () {
-          _cvFrameCache[url] = "error";
+          _cvFrameCache.mark(url, "error");
           if (seq === _cvPreviewSeq) cvHideFramePreview();
         });
     }
@@ -891,12 +873,7 @@
 
   // --- Data Freshness ---
 
-  function checkStaleness() {
-    if (!cvState._snapshot || !cvState.active) return;
-    // The subheader Refresh carries the signal for every tab.
-    window.ClipgenOverview.setRefreshStale(
-      cvState._snapshot.version !== getState().dataVersion);
-  }
+  var checkStaleness = window.ClipgenOverview.createStalenessTracker(cvState).check;
 
   // --- Selection ---
 
@@ -1548,11 +1525,6 @@
   }
 
   function init() {
-    document.addEventListener("visibilitychange", function () {
-      if (!document.hidden && cvState.active) {
-        checkStaleness();
-      }
-    });
 
     document.addEventListener("mousemove", _cvOnDocMouseMove);
     document.addEventListener("mouseup", _cvOnDocMouseUp);

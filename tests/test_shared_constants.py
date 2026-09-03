@@ -11,6 +11,7 @@ from pathlib import Path
 
 import cli
 import config
+import screenspace_server
 import screenspace_tools
 import utils
 import workflows_catalog
@@ -375,6 +376,10 @@ _WORKFLOWS_SEPARATE_NODES = frozenset({"multitool", "timelapse"})
 _WORKFLOWS_UNWIRED: frozenset[str] = frozenset()
 # Timeline viewer has no per-event icon for timelapse (single output file).
 _VIEWER_ICON_SKIP = frozenset({"timelapse"})
+# Server rejects these as Multitool steps: no check_frame, or not yet wired.
+_SERVER_STEP_EXCLUDES = frozenset(
+    {"multitool", "timelapse", "boundary", "attention", "shape", "inactivity"}
+)
 
 
 def _js_object_body(source: str, name: str) -> str:
@@ -411,6 +416,13 @@ def test_detector_registries_stay_aligned():
         f"screenspace_tools.TOOLS and utils.js _DETECTOR_TYPES diverged: "
         f"engine={sorted(engine)} vs js={sorted(js_types)}. "
         f"Add the tool to both (and the other registries this test lists)."
+    )
+
+    assert (
+        set(screenspace_server._VALID_STEP_TYPES) == engine - _SERVER_STEP_EXCLUDES
+    ), (
+        f"screenspace_server._VALID_STEP_TYPES drifted from TOOLS minus "
+        f"{sorted(_SERVER_STEP_EXCLUDES)}: {sorted(screenspace_server._VALID_STEP_TYPES)}."
     )
 
     assert set(cli._SS_VALID_TASK_TYPES) == engine - _CLI_TASK_EXCLUDES, (

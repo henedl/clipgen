@@ -24,6 +24,7 @@ import threading
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
+from collections.abc import Callable
 from typing import Any
 
 from flask import Blueprint, Response, request
@@ -32,7 +33,15 @@ import config
 import profiling
 import utils
 import workflows
-from server_utils import err, find_by_id, make_sse_channel, ok, remove_by_id
+from server_utils import (
+    err,
+    find_by_id,
+    json_endpoint,
+    make_sse_channel,
+    ok,
+    remove_by_id,
+    require_json_body,
+)
 
 # ---- Module state (initialized by _init_workflows_state) ----
 
@@ -180,11 +189,10 @@ def api_blueprints_create() -> Any:
 
 
 @workflows_bp.route("/api/blueprints/<bp_id>", methods=["PUT"])
+@json_endpoint
 def api_blueprints_update(bp_id: str) -> Any:
     """Update a blueprint's name/nodes/edges/viewport (the debounced autosave)."""
-    data = request.get_json(silent=True)
-    if not data:
-        return err("JSON body required")
+    data = require_json_body()
     with _manifest_lock:
         blueprints = _manifest.get("blueprints", [])
         blueprint = find_by_id(blueprints, bp_id)
@@ -300,13 +308,12 @@ def api_stashes_create() -> Any:
 
 
 @workflows_bp.route("/api/stashes/<stash_id>", methods=["PUT"])
+@json_endpoint
 def api_stashes_update(stash_id: str) -> Any:
     """Rename a user stash. Built-in recipes are read-only (403)."""
     if any(s["id"] == stash_id for s in workflows.BUILTIN_STASHES):
         return err("Built-in recipes are read-only", 403)
-    data = request.get_json(silent=True)
-    if not data:
-        return err("JSON body required")
+    data = require_json_body()
     with _manifest_lock:
         stashes = _manifest.get("stashes", [])
         stash = find_by_id(stashes, stash_id)
@@ -533,9 +540,7 @@ def api_run_create() -> Any:
     data = request.get_json(silent=True) or {}
     bp_id = data.get("blueprintId")
     with _manifest_lock:
-        blueprint = next(
-            (b for b in _manifest.get("blueprints", []) if b.get("id") == bp_id), None
-        )
+        blueprint = find_by_id(_manifest.get("blueprints", []), bp_id)
         blueprint = copy.deepcopy(blueprint) if blueprint else None
     if blueprint is None:
         return err("Blueprint not found", 404)
@@ -907,9 +912,7 @@ def api_batch_create() -> Any:
     data = request.get_json(silent=True) or {}
     bp_id = data.get("blueprintId")
     with _manifest_lock:
-        blueprint = next(
-            (b for b in _manifest.get("blueprints", []) if b.get("id") == bp_id), None
-        )
+        blueprint = find_by_id(_manifest.get("blueprints", []), bp_id)
         blueprint = copy.deepcopy(blueprint) if blueprint else None
     if blueprint is None:
         return err("Blueprint not found", 404)
@@ -1021,46 +1024,55 @@ def _trigger_enabled(trigger: Any, trigger_type: str) -> bool:
     )
 
 
-def _transcript_markers() -> dict[str, str]:
-    """``{pid: transcribed_at}`` for every transcribed participant.
-
-    mtime-gated: the (potentially large, all-segments) transcripts section is
-    re-parsed only when the manifest file actually changed — a handful of
-    times per session, not once per poll tick.
-    """
-    global _watch_transcript_cache
+def _mtime_memo(
+    cache: tuple[float, dict[str, str]],
+    section: str,
+    build: Callable[[dict[str, Any]], dict[str, str]],
+) -> tuple[tuple[float, dict[str, str]], dict[str, str]]:
+    """Rebuild a manifest-section marker map only when the file's mtime changed."""
     mtime = utils.manifest_mtime()
-    if mtime == _watch_transcript_cache[0]:
-        return _watch_transcript_cache[1]
+    if mtime == cache[0]:
+        return cache, cache[1]
     markers: dict[str, str] = {}
     if mtime:
-        manifest = utils.load_manifest_section("transcripts", default={}) or {}
+        markers = build(utils.load_manifest_section(section, default={}) or {})
+    return (mtime, markers), markers
+
+
+def _transcript_markers() -> dict[str, str]:
+    """``{pid: transcribed_at}`` for every transcribed participant (mtime-gated)."""
+    global _watch_transcript_cache
+
+    def build(manifest: dict[str, Any]) -> dict[str, str]:
         source = manifest.get("source_transcripts", {}) or {}
-        if isinstance(source, dict):
-            for pid, entry in source.items():
-                if isinstance(entry, dict) and entry.get("transcribed_at"):
-                    markers[str(pid)] = str(entry["transcribed_at"])
-    _watch_transcript_cache = (mtime, markers)
+        if not isinstance(source, dict):
+            return {}
+        return {
+            str(pid): str(entry["transcribed_at"])
+            for pid, entry in source.items()
+            if isinstance(entry, dict) and entry.get("transcribed_at")
+        }
+
+    _watch_transcript_cache, markers = _mtime_memo(
+        _watch_transcript_cache, "transcripts", build
+    )
     return markers
 
 
 def _scan_markers() -> dict[str, str]:
     """``{task_id: participant}`` for every completed Screenspace task (mtime-gated)."""
     global _watch_scan_cache
-    mtime = utils.manifest_mtime()
-    if mtime == _watch_scan_cache[0]:
-        return _watch_scan_cache[1]
-    markers: dict[str, str] = {}
-    if mtime:
-        manifest = utils.load_manifest_section("screenspace", default={}) or {}
-        for task in manifest.get("tasks", []) or []:
-            if (
-                isinstance(task, dict)
-                and task.get("status") == "completed"
-                and task.get("id")
-            ):
-                markers[str(task["id"])] = str(task.get("participant", "") or "")
-    _watch_scan_cache = (mtime, markers)
+
+    def build(manifest: dict[str, Any]) -> dict[str, str]:
+        return {
+            str(task["id"]): str(task.get("participant", "") or "")
+            for task in manifest.get("tasks", []) or []
+            if isinstance(task, dict)
+            and task.get("status") == "completed"
+            and task.get("id")
+        }
+
+    _watch_scan_cache, markers = _mtime_memo(_watch_scan_cache, "screenspace", build)
     return markers
 
 
