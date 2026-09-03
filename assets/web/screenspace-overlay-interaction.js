@@ -637,6 +637,8 @@
           state._mtPipetteStep = -1;
           // Programmatic sets fire no DOM event, so nudge calibration directly (as setTargetColor does).
           refreshCalibration({ debounce: true });
+          if (SS.setMultitoolFocus) SS.setMultitoolFocus(mtIdx);
+          refreshModelView({ debounce: true });
         } else {
           setTargetColor(hsv.h, hsv.s, hsv.v);
         }
