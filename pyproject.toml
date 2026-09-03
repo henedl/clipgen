@@ -49,7 +49,7 @@ packages = []
 # tests/test_packaging.py.
 package-dir = {"" = "source"}
 py-modules = [
-    "app", "changelog", "cli", "composer_server", "config", "data_export",
+    "app", "changelog", "cli", "cli_args", "composer_server", "config", "data_export",
     "desktop", "desktop_chrome", "desktop_menu", "excel_io",
     "files", "friction", "google_api", "interactive", "licenses", "mindnode",
     "llm_client",
@@ -127,12 +127,12 @@ ignore = [
 # utils.py     — the *_print helpers' own plain-terminal fallbacks.
 # profiling.py — profile report output, verbatim table rendering.
 # interactive.py — raw-terminal browse UI (rich fallback branches, key echo).
-# cli.py       — verbatim license text; see the comment at the call site.
+# cli_args.py  — verbatim license text; see the comment at the call site.
 # build/**     — standalone build scripts, no utils import.
 "source/utils.py" = ["T201"]
 "source/profiling.py" = ["T201"]
 "source/interactive.py" = ["T201"]
-"source/cli.py" = ["T201"]
+"source/cli_args.py" = ["T201"]
 "build/**" = ["T201"]
 
 [tool.coverage.run]

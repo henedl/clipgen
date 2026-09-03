@@ -36,7 +36,7 @@ public/test-touched name must be added to the facade's re-export block (see
    - Add the task type to `SS_DETECTOR_COLORS` and `SS_DETECTOR_ICON_PATHS`
    - Timelapse produces a single output file and does NOT need entries here
 
-7. **CLI flag** (`cli.py`)
+7. **CLI flag** (`cli_args.py`)
    - Add `--ss-task {name}` as a valid choice to the screenspace task argparse argument
 
 8. **CLI tests** (`tests/test_cli_screenspace_args.py`)
@@ -49,4 +49,4 @@ public/test-touched name must be added to the facade's re-export block (see
 ## Notes
 
 - Icon for the tool: pick a Heroicon from `assets/icons/` (kebab-case, e.g. `eye.svg`). Use the CSS `mask-image` pattern. See `XREF_BADGES` in `utils.js` for the canonical example.
-- Tool-specific CLI parameters (e.g. `--ss-target-color`, `--ss-threshold`) go in the screenspace args group in `cli.py`.
+- Tool-specific CLI parameters (e.g. `--ss-target-color`, `--ss-threshold`) go in `_add_screenspace_args` in `cli_args.py`.
