@@ -223,6 +223,7 @@
     templateOverlayPos: null,
     draggingTemplate: null,
     multitoolSteps: [],
+    multitoolFocus: 0,
     hoveredResultSceneName: null,
     hoveredBoundaryTs: null,
     videoPlaying: false,
@@ -1849,7 +1850,7 @@
       // Pills stash out (jump + wiggle + dissolve), then the stash card lands.
       if (chips.length && window.ClipgenMotion) ClipgenMotion.animateOutAll(chips, "stash").then(commit);
       else commit();
-    });
+    }).catch(toastError("Could not create stash"));
   }
 
   function dismissStash(stashId) {
@@ -1860,7 +1861,7 @@
       renderRunRegionPicker();
       renderStashCards();
       showToast("Stash dismissed");
-    });
+    }).catch(toastError("Could not delete stash"));
   }
 
   function restoreStash(stashId) {
@@ -1875,7 +1876,7 @@
       updateRunButton();
       renderStashCards();
       showToast("Regions restored");
-    });
+    }).catch(toastError("Could not restore stash"));
   }
 
   function copyRegionToStash(name, stashId) {
@@ -1908,7 +1909,7 @@
         }
       }
       renderRunRegionPicker();
-    });
+    }).catch(toastError("Could not rename stash"));
   }
 
   function renderStashCards() {
@@ -3476,6 +3477,8 @@
       // Every multitool mutation lands here; task-import and reorder paths skip
       // updateRunButton.
       updateRunButton();
+      _updateOverlayUi();
+      refreshModelView();
       updateCalibrationVisibility();
       // Multitool returns early, so mirror the bottom-of-function calibration reset here.
       state.calibrationResult = null;
@@ -4497,7 +4500,7 @@
           _blinkStart = Date.now();
           state.overlayBlinkActive = true;
           var curTs = Number(state.currentTimestamp || 0).toFixed(3);
-          if (!state.overlayImage || state.overlayImageTimestamp !== curTs || state.overlayImageTool !== state.activeWorkflow) {
+          if (!state.overlayImage || state.overlayImageTimestamp !== curTs || state.overlayImageTool !== SS._previewToolKey()) {
             refreshModelView();
           }
           renderOverlay();

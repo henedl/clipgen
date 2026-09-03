@@ -3709,3 +3709,23 @@ def test_media_route_follows_a_mid_session_output_dir_change(
         assert c.get("/screenspace/media/heatmap_ss_abc.png").status_code == 404
         monkeypatch.setattr(config, "OUTPUT_DIR", str(second))
         assert c.get("/screenspace/media/heatmap_ss_abc.png").status_code == 200
+
+
+def test_regions_create_rejects_non_string_name(client):
+    resp = client.post("/screenspace/api/regions", json={"name": 5})
+    assert resp.status_code == 400
+
+
+def test_regions_create_rejects_non_object_body(client):
+    resp = client.post("/screenspace/api/regions", json=[1])
+    assert resp.status_code == 400
+
+
+def test_event_exclude_tolerates_an_id_less_event(client):
+    screenspace_server._manifest["events"] = [
+        {"task_id": "t1"},
+        {"id": "e1", "task_id": "t1", "excluded": False},
+    ]
+    resp = client.put("/screenspace/api/events/e1/exclude")
+    assert resp.status_code == 200
+    assert screenspace_server._manifest["events"][1]["excluded"] is True

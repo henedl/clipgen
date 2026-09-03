@@ -605,7 +605,7 @@ def api_pins_update(pin_id: str) -> FlaskResponse:
                 return err("label must be a string")
             pin["label"] = data["label"].strip()[:_PIN_LABEL_MAX_CHARS]
         _do_persist(drain_events=False)
-    return ok(pin=pin)
+        return ok(pin=copy.deepcopy(pin))
 
 
 @screenspace_bp.route("/api/pins/<pin_id>", methods=["DELETE"])
@@ -1601,7 +1601,7 @@ def api_regions_create() -> FlaskResponse:
     """Create or update a named region."""
     data = require_json_body()
 
-    name = data.get("name", "").strip()
+    name = str(data.get("name") or "").strip()
     if not name:
         return err("Region name is required")
 
@@ -1739,7 +1739,7 @@ def api_stashes_update(stash_id: str) -> FlaskResponse:
     """Update a stash (rename)."""
     data = require_json_body()
 
-    name = data.get("name", "").strip()
+    name = str(data.get("name") or "").strip()
     with _manifest_lock:
         stashes = _manifest.get("stashes", [])
         stash = find_by_id(stashes, stash_id)
@@ -1748,7 +1748,7 @@ def api_stashes_update(stash_id: str) -> FlaskResponse:
         if name:
             stash["name"] = name
         _do_persist(drain_events=False)
-    return ok(stash=stash)
+        return ok(stash=copy.deepcopy(stash))
 
 
 @screenspace_bp.route("/api/stashes/<stash_id>", methods=["DELETE"])
@@ -1782,7 +1782,7 @@ def api_stashes_add_region(stash_id: str) -> FlaskResponse:
     overwrites it (last-write-wins, matching api_regions_create's upsert).
     """
     data = require_json_body()
-    name = data.get("name", "").strip()
+    name = str(data.get("name") or "").strip()
     if not name:
         return err("Region name is required")
 
@@ -1795,8 +1795,7 @@ def api_stashes_add_region(stash_id: str) -> FlaskResponse:
             return err("Stash not found", 404)
         stash.setdefault("regions", {})[name] = copy.deepcopy(regions[name])
         _do_persist(drain_events=False)
-
-    return ok(stash=stash)
+        return ok(stash=copy.deepcopy(stash))
 
 
 # ---- Tasks CRUD ----
@@ -1842,15 +1841,15 @@ def _validate_task_request(
     Returns (task_type, participant, region_name, parameters, all_known_regions,
     requested_region); raises ``ApiError`` (400) on a bad request.
     """
-    task_type = data.get("type", "").strip()
+    task_type = str(data.get("type") or "").strip()
     if task_type not in _VALID_TASK_TYPES:
         raise ApiError(f"type must be one of: {', '.join(_VALID_TASK_TYPES)}")
 
-    participant = data.get("participant", "").strip()
+    participant = str(data.get("participant") or "").strip()
     if not participant:
         raise ApiError("participant is required")
 
-    region_name = data.get("region", "").strip()
+    region_name = str(data.get("region") or "").strip()
     region_ref = data.get("region_ref")
     raw_parameters = data.get("parameters")
     if raw_parameters is None:
@@ -2490,7 +2489,7 @@ def _set_event_excluded(event_id: str, excluded: bool) -> FlaskResponse:
     """Set one event's excluded flag; 404 when the id is unknown."""
     with _manifest_lock:
         for e in _manifest.get("events", []):
-            if e["id"] == event_id:
+            if e.get("id") == event_id:
                 e["excluded"] = excluded
                 _bump_events_version()
                 _do_persist(drain_events=False)
@@ -2507,7 +2506,7 @@ def _bulk_set_excluded(excluded: bool) -> FlaskResponse:
     with _manifest_lock:
         count = 0
         for e in _manifest.get("events", []):
-            if e["id"] in ids:
+            if e.get("id") in ids:
                 e["excluded"] = excluded
                 count += 1
         if count:

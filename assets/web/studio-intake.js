@@ -950,6 +950,8 @@
       desc: cluster.category || "transcript",
       source: "transcript",
       mark_ids: cluster.marks.map(function (m) { return m.id; }),
+      text: cluster.text || "",
+      label: cluster.label || "",
     };
   }
 

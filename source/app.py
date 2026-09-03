@@ -744,15 +744,10 @@ def _run_reel_mode_interactive(
     output_file = utils.read_user_input(
         f"\nOutput filename (Enter for default {default_filename}):\n>> "
     )
-    reel_output_file = None
-    if output_file:
-        reel_output_file = (
-            output_file
-            if output_file.endswith(config.FILEFORMAT)
-            else output_file + config.FILEFORMAT
-        )
-    else:
-        reel_output_file = files.get_unique_filename(default_filename)
+    if output_file and not output_file.endswith(config.FILEFORMAT):
+        output_file += config.FILEFORMAT
+    # Reserve in the output dir either way; process_reel releases it on abort.
+    reel_output_file = files.get_unique_filename(output_file or default_filename)
     return (clips_list, True, reel_output_file)
 
 
@@ -840,10 +835,9 @@ def _run_reellate_mode_interactive() -> tuple[bool, str | None]:
     output_file = utils.read_user_input(
         '\nOutput filename (Enter for default "reel.mp4"):\n>> '
     )
-    if not output_file:
-        output_file = files.get_unique_filename(f"reel{config.FILEFORMAT}")
-    elif not output_file.endswith(config.FILEFORMAT):
-        output_file = output_file + config.FILEFORMAT
+    if output_file and not output_file.endswith(config.FILEFORMAT):
+        output_file += config.FILEFORMAT
+    output_file = files.get_unique_filename(output_file or f"reel{config.FILEFORMAT}")
 
     resolved_clips = [str(utils.resolve_output_path(name)) for name in selected_clips]
 

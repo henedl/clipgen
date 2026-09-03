@@ -614,6 +614,11 @@ var formatTime = function (sec, options) {
   if (sec == null || isNaN(sec) || !isFinite(sec)) return "--:--";
   if (sec < 0) sec = 0;
   var decimals = options.decimals || 0;
+  if (decimals > 0) {
+    // Round first so "59.97" becomes 1:00.0, not 0:60.0.
+    var p = Math.pow(10, decimals);
+    sec = Math.round(sec * p) / p;
+  }
   var totalInt = Math.floor(sec);
   var h = Math.floor(totalInt / 3600);
   var m = Math.floor((totalInt % 3600) / 60);

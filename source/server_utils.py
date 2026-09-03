@@ -530,6 +530,10 @@ def profiled_stream(body: Any) -> Any:
     )
 
 
+# notify() default: wake every client regardless of key.
+_BROADCAST = object()
+
+
 def make_sse_channel(
     *, maxsize: int = 64, keepalive_seconds: float = 15.0
 ) -> tuple[
@@ -542,8 +546,8 @@ def make_sse_channel(
     Collapses the bounded-queue + coalesce-on-overflow + keepalive + cleanup
     boilerplate otherwise duplicated across the run / batch / task SSE endpoints.
 
-    - ``notify(key=None, marker="update")`` wakes every client registered with a
-      matching ``key`` (``key=None`` = broadcast). On a full queue it coalesces:
+    - ``notify(key=_BROADCAST, marker="update")`` wakes every client registered
+      with a matching ``key``; omitting ``key`` wakes every client. On a full queue it coalesces:
       drop one stale entry, re-push ``marker`` (dropped silently if still full).
       The queued token is never inspected by the streamer — it only triggers a
       full payload rebuild — so ``marker``'s value is cosmetic.
@@ -558,10 +562,10 @@ def make_sse_channel(
     clients: list[tuple[Any, queue.Queue[str]]] = []
     lock = threading.Lock()
 
-    def notify(key: Any = None, marker: str = "update") -> None:
+    def notify(key: Any = _BROADCAST, marker: str = "update") -> None:
         with lock:
             for ckey, cq in clients:
-                if ckey != key:
+                if key is not _BROADCAST and ckey != key:
                     continue
                 try:
                     cq.put_nowait(marker)

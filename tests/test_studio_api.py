@@ -2674,6 +2674,7 @@ def test_api_reel_passes_titlecard_options_to_pipeline(client, monkeypatch):
         *,
         titlecards_enabled=None,
         titlecard_duration_seconds=None,
+        token=None,
     ):
         captured["enabled"] = titlecards_enabled
         captured["duration"] = titlecard_duration_seconds
@@ -4751,3 +4752,88 @@ def test_media_route_serves_generated_artifacts(client, tmp_path, monkeypatch):
     monkeypatch.setattr(server.config, "OUTPUT_DIR", str(other))
     assert client.get("/studio/media/moved.mp4").status_code == 200
     assert client.get("/studio/media/Study%20P01%20clip.mp4").status_code == 404
+
+
+def test_api_generate_intake_resolves_mark_ids_to_segment_text(client, monkeypatch):
+    """Marks name segments; the fallback joins those segments' text."""
+    import transcripts_server
+
+    monkeypatch.setattr(
+        server, "_resolve_intake_video_paths", lambda p, s="": ["/fake/video.mp4"]
+    )
+    monkeypatch.setattr("video.run_ffmpeg", lambda *a, **kw: True)
+    monkeypatch.setattr(server, "_save_manifest_quiet", lambda: None)
+    monkeypatch.setattr(
+        transcripts_server,
+        "_manifest",
+        {
+            "source_transcripts": {
+                "P01": {
+                    "transcribed_at": "2026-01-01T00:00:00+00:00",
+                    "segments": [
+                        {"id": "P01:0", "text": "hello there"},
+                        {"id": "P01:1", "text": "not marked"},
+                    ],
+                }
+            },
+            "marks": [{"id": "m_1", "segment_id": "P01:0"}],
+        },
+    )
+
+    items = [
+        {
+            "participant": "P01",
+            "start": 0.0,
+            "end": 5.0,
+            "event_type": "transcript",
+            "event_ids": [],
+            "source": "transcript",
+            "mark_ids": ["m_1"],
+        }
+    ]
+    resp = client.post(
+        "/studio/api/generate-intake", json={"items": items, "format": "clip"}
+    )
+    assert resp.status_code == 200
+    line = json.loads(resp.data.decode().strip().split("\n")[0])
+    assert line["ok"] is True
+    assert line["artifact"]["transcriptText"] == "hello there"
+
+
+def test_api_reel_releases_busy_slot_when_stream_never_starts(
+    studio_app, client, monkeypatch, tmp_path
+):
+    """A response torn down before iteration must not hold the slot forever."""
+    _setup_api_reel(monkeypatch, tmp_path)
+    endpoint = next(
+        rule.endpoint
+        for rule in studio_app.url_map.iter_rules()
+        if rule.rule == "/studio/api/reel" and "POST" in (rule.methods or set())
+    )
+    view = studio_app.view_functions[endpoint]
+
+    with studio_app.test_request_context(
+        "/studio/api/reel", method="POST", json={"cells": ["P01.5"]}
+    ):
+        resp = view()
+        assert server._busy_slots["reel"] is True
+        resp.close()
+
+    assert server._busy_slots["reel"] is False
+
+
+def test_release_busy_ignores_a_stale_token():
+    """A late second release must not drop the next request's claim."""
+    server._release_busy("generate")
+    first = server._try_claim_busy("generate")
+    assert first
+    server._release_busy("generate", first)
+    second = server._try_claim_busy("generate")
+    assert second and second != first
+
+    server._release_busy("generate", first)  # stale: the generator's finally
+    assert server._busy_slots["generate"] is True
+    assert server._try_claim_busy("generate") is None
+
+    server._release_busy("generate", second)
+    assert server._busy_slots["generate"] is False

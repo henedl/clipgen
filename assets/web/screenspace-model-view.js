@@ -49,7 +49,7 @@
     inactivity: "Region and pHash bit grid (white = 1, black = 0).",
     boundary: "Full frame; Auto/Scene/Hybrid use a content fingerprint vs. the current period, pHash compares consecutive samples.",
     attention: "Full frame (\u2264256 px): spectral residual, Lab contrast, frame-diff motion, and the combined center-weighted saliency map.",
-    multitool: "Preview of the first tool step.",
+    multitool: "Preview of the focused tool step.",
   };
 
   function initModelView() {
@@ -70,7 +70,7 @@
         state.overlayEnabled = !!toggle.checked;
         try { sessionStorage.setItem("ss_overlayEnabled", state.overlayEnabled ? "1" : "0"); } catch (_) { /* ignore */ }
         var curTs = Number(state.currentTimestamp || 0).toFixed(3);
-        if (state.overlayEnabled && (!state.overlayImage || state.overlayImageTimestamp !== curTs || state.overlayImageTool !== state.activeWorkflow)) {
+        if (state.overlayEnabled && (!state.overlayImage || state.overlayImageTimestamp !== curTs || state.overlayImageTool !== _previewToolKey())) {
           refreshModelView();
         }
         SS.renderOverlay();
@@ -106,13 +106,56 @@
       .catch(function () { /* leave catalog empty; toggle stays disabled */ });
   }
 
+  // The multitool step the preview follows: clamped state.multitoolFocus, or null when empty.
+  function _focusStep() {
+    var steps = state.multitoolSteps || [];
+    if (!steps.length) return null;
+    var idx = Math.min(Math.max(state.multitoolFocus || 0, 0), steps.length - 1);
+    return { idx: idx, step: steps[idx] };
+  }
+
+  // Identity of what the preview shows; overlay staleness guards compare against it.
+  function _previewToolKey() {
+    if (state.activeWorkflow !== "multitool") return state.activeWorkflow;
+    var f = _focusStep();
+    return f ? "multitool:" + f.idx + ":" + f.step.type : "multitool";
+  }
+
   function _activeOverlayTool() {
     var tool = state.activeWorkflow;
     if (tool === "multitool") {
-      var first = (state.multitoolSteps || [])[0];
-      tool = first && first.type ? first.type : null;
+      var f = _focusStep();
+      tool = f && f.step.type ? f.step.type : null;
     }
     return tool;
+  }
+
+  function _capitalize(s) {
+    return s ? s.charAt(0).toUpperCase() + s.slice(1) : "";
+  }
+
+  // "Color" for plain tools, "Multitool · 2. Change" for the focused step.
+  function _updateFocusLabel() {
+    var label = qs("#modelViewFocus");
+    if (!label) return;
+    var text = _capitalize(state.activeWorkflow || "");
+    if (state.activeWorkflow === "multitool") {
+      var f = _focusStep();
+      if (f) text += " · " + (f.idx + 1) + ". " + _capitalize(f.step.type);
+    }
+    label.textContent = text;
+  }
+
+  // Single writer of the focus; every caller's card highlight stays in sync here.
+  function setMultitoolFocus(idx) {
+    state.multitoolFocus = idx;
+    qsa(".multitool-step").forEach(function (card) {
+      card.classList.toggle("is-selected", parseInt(card.dataset.stepIdx, 10) === idx);
+    });
+    _updateOverlayUi();
+    _updateFocusLabel();
+    refreshModelView();
+    if (SS.calRender) SS.calRender();
   }
 
   function _activeOverlayLayers() {
@@ -241,7 +284,14 @@
 
   // Preview target: last run-region toggled on, else the active chip. Multitool/boundary hide the picker.
   function _previewRegionRef() {
-    if (state.activeWorkflow !== "multitool" && state.activeWorkflow !== "boundary") {
+    if (state.activeWorkflow === "multitool") {
+      var f = _focusStep();
+      var step = f ? f.step : null;
+      if (step && step.region_ref) return normalizeRegionRef(step.region_ref);
+      if (step && step.region && state.regions[step.region]) return activeRegionRef(step.region);
+      return null;
+    }
+    if (state.activeWorkflow !== "boundary") {
       for (var i = state.runRegions.length - 1; i >= 0; i--) {
         var ref = normalizeRegionRef(state.runRegions[i]);
         if (!ref) continue;
@@ -365,41 +415,44 @@
     );
   }
 
-  function _collectPreviewParams(tool) {
+  function _collectPreviewParams(tool, sfx) {
+    sfx = sfx || "";
     var out = {};
     if (tool === "color") {
-      var c = SS.getColorHiddenInputs();
-      if (c) {
+      var c = sfx
+        ? { h: qs("#paramColorH" + sfx), s: qs("#paramColorS" + sfx), v: qs("#paramColorV" + sfx) }
+        : SS.getColorHiddenInputs();
+      if (c && c.h && c.s && c.v) {
         out.h = c.h.value; out.s = c.s.value; out.v = c.v.value;
       }
     } else if (tool === "change") {
-      var n = qs("#paramChangeNoise");
+      var n = qs("#paramChangeNoise" + sfx);
       if (n) out.noise = n.value;
     } else if (tool === "flow") {
-      var m = qs("#paramFlowMag");
+      var m = qs("#paramFlowMag" + sfx);
       if (m) out.magnitude = m.value;
     } else if (tool === "text") {
-      var tp = qs("#paramTextOcrPreprocess");
+      var tp = qs("#paramTextOcrPreprocess" + sfx);
       if (tp && tp.checked) out.ocr_preprocess = "1";
     } else if (tool === "numbers") {
-      var np = qs("#paramNumOcrPreprocess");
+      var np = qs("#paramNumOcrPreprocess" + sfx);
       if (np && np.checked) out.ocr_preprocess = "1";
     } else if (tool === "shape") {
-      var st = qs("#paramShapeThresh");
+      var st = qs("#paramShapeThresh" + sfx);
       if (st) out.threshold = st.value;
-      var smin = qs("#paramShapeScaleMin");
+      var smin = qs("#paramShapeScaleMin" + sfx);
       if (smin) out.scale_min = (parseFloat(smin.value) || 0) / 100;
-      var smax = qs("#paramShapeScaleMax");
+      var smax = qs("#paramShapeScaleMax" + sfx);
       if (smax) out.scale_max = (parseFloat(smax.value) || 0) / 100;
-      var sst = qs("#paramShapeSteps");
+      var sst = qs("#paramShapeSteps" + sfx);
       if (sst) out.scale_steps = sst.value;
-      var slink = qs("#paramShapeLinkAxes");
+      var slink = qs("#paramShapeLinkAxes" + sfx);
       if (slink && !slink.checked) {
-        var symin = qs("#paramShapeScaleYMin");
+        var symin = qs("#paramShapeScaleYMin" + sfx);
         if (symin) out.scale_y_min = (parseFloat(symin.value) || 0) / 100;
-        var symax = qs("#paramShapeScaleYMax");
+        var symax = qs("#paramShapeScaleYMax" + sfx);
         if (symax) out.scale_y_max = (parseFloat(symax.value) || 0) / 100;
-        var systeps = qs("#paramShapeStepsY");
+        var systeps = qs("#paramShapeStepsY" + sfx);
         if (systeps) out.scale_y_steps = systeps.value;
       }
     } else if (tool === "attention") {
@@ -411,7 +464,7 @@
         center_bias: "paramAttnCenterBias",
       };
       Object.keys(attnIds).forEach(function (key) {
-        var input = qs("#" + attnIds[key]);
+        var input = qs("#" + attnIds[key] + sfx);
         if (input) out[key] = input.value;
       });
     }
@@ -423,6 +476,7 @@
     var meta = qs("#modelViewMeta");
     var img = qs("#modelViewImage");
     if (!meta || !img) return;
+    _updateFocusLabel();
     // Clear the shimmer first so every early return starts flat; the fetch branch re-adds it.
     meta.classList.remove("cg-shimmer");
 
@@ -433,16 +487,36 @@
     }
 
     var tool = state.activeWorkflow;
+    var toolKey = _previewToolKey();
+    var sfx = "";
+    var stepIdx = -1;
+    // Reference frame / upload: hub state for plain tools, per-step fields for multitool.
+    var refTs = state.referenceTimestamp;
+    var upload = state.uploadedTemplate;
+    if (tool === "multitool") {
+      // The server previews a plain tool; send the focused step as that tool.
+      var focus = _focusStep();
+      if (!focus || !focus.step.type) {
+        meta.textContent = "Add a step to see its preview.";
+        img.removeAttribute("src");
+        return;
+      }
+      tool = focus.step.type;
+      stepIdx = focus.idx;
+      sfx = "_mt" + stepIdx;
+      refTs = focus.step._refTs;
+      upload = focus.step._upload || null;
+    }
     var regionStr = _normalizedRegionString();
     var hasRegion = _hasActiveOrPendingRegion();
 
     if (tool === "template" || tool === "shape") {
-      var snapRegion = state.capturedRefPreview
-        && state.capturedRefPreview.ts === state.referenceTimestamp
+      var snapRegion = !sfx && state.capturedRefPreview
+        && state.capturedRefPreview.ts === refTs
         && state.capturedRefPreview.region;
-      if (state.uploadedTemplate && state.uploadedTemplate.data) {
+      if (upload && upload.data) {
         // POST with the upload — region optional
-      } else if (state.referenceTimestamp != null) {
+      } else if (refTs != null) {
         // Shape's sample rides its capture region, so a Full-frame run target still previews.
         if (!hasRegion && !snapRegion) {
           meta.textContent = "Select or draw a region to preview the captured reference.";
@@ -456,7 +530,7 @@
       }
     }
 
-    var params = _collectPreviewParams(tool);
+    var params = _collectPreviewParams(tool, sfx);
     var qsParts = ["tool=" + encodeURIComponent(tool)];
     if (regionStr) qsParts.push("region=" + regionStr);
     var maskStr = _regionMaskString();
@@ -471,15 +545,15 @@
       var prevTs = Math.max(0, (state.currentTimestamp || 0) - prevGap);
       qsParts.push("prev=" + prevTs.toFixed(3));
     }
-    if (tool === "similarity" && state.referenceTimestamp != null) {
-      qsParts.push("ref=" + Number(state.referenceTimestamp).toFixed(3));
+    if (tool === "similarity" && refTs != null) {
+      qsParts.push("ref=" + Number(refTs).toFixed(3));
     }
     if (
       (tool === "template" || tool === "shape") &&
-      state.referenceTimestamp != null &&
-      !(state.uploadedTemplate && state.uploadedTemplate.data)
+      refTs != null &&
+      !(upload && upload.data)
     ) {
-      qsParts.push("ref=" + Number(state.referenceTimestamp).toFixed(3));
+      qsParts.push("ref=" + Number(refTs).toFixed(3));
       if (snapRegion) {
         var capRect = (state.previewRegions || state.regions)[snapRegion];
         if (capRect) {
@@ -519,14 +593,19 @@
       img._modelViewObjectUrl = u;
       img.src = u;
       meta.classList.remove("cg-shimmer");
+      meta.textContent = previewMetaText();
+    }
+
+    function previewMetaText() {
       var metaText = MODEL_VIEW_META[tool] || "";
+      if (sfx) metaText = "Step " + (stepIdx + 1) + " · " + _capitalize(tool) + ". " + metaText;
       if (!hasRegion) {
         metaText = (metaText ? metaText + " " : "") + "(Full frame — no region selected.)";
       } else if (_maskFallbackActive()) {
         metaText = (metaText ? metaText + " " : "")
           + "(Shaped region: this tool analyzes the bounding box.)";
       }
-      meta.textContent = metaText;
+      return metaText;
     }
 
     function _refetchOverlayLayer() {
@@ -559,7 +638,7 @@
           state.overlayImage = oi;
           state.overlayImageScope = resolved.scope;
           state.overlayImageTimestamp = ts;
-          state.overlayImageTool = tool;
+          state.overlayImageTool = toolKey;
           SS.renderOverlay();
         };
         oi.src = ou;
@@ -575,12 +654,11 @@
       }
     }
 
-    var useTemplatePost = (tool === "template" || tool === "shape")
-      && state.uploadedTemplate && state.uploadedTemplate.data;
+    var useTemplatePost = (tool === "template" || tool === "shape") && upload && upload.data;
     // Shape uploads ride their own field so the server routes them correctly.
     function uploadPostBody() {
       var body = {};
-      body[tool === "shape" ? "shape_image_data" : "template_image_data"] = state.uploadedTemplate.data;
+      body[tool === "shape" ? "shape_image_data" : "template_image_data"] = upload.data;
       return body;
     }
     if (useTemplatePost) {
@@ -605,7 +683,7 @@
       }
       img.src = tmp.src;
       meta.classList.remove("cg-shimmer");
-      meta.textContent = MODEL_VIEW_META[tool] || "";
+      meta.textContent = previewMetaText();
       _refetchOverlayLayer();
     };
     tmp.onerror = function () {
@@ -618,6 +696,8 @@
   SS.initModelView = initModelView;
   SS.cycleOverlayLayer = cycleOverlayLayer;
   SS.refreshModelView = refreshModelView;
+  SS.setMultitoolFocus = setMultitoolFocus;
+  SS._previewToolKey = _previewToolKey;
   SS._updateOverlayUi = _updateOverlayUi;
   SS._overlayEligibleForActiveTool = _overlayEligibleForActiveTool;
   SS._updateMinAreaReadout = _updateMinAreaReadout;

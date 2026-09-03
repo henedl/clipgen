@@ -413,11 +413,13 @@
     }
 
     var frag = document.createDocumentFragment();
+    stripsEl.classList.toggle("has-focus", tool === "multitool");
     if (tool === "multitool") {
       var stepCount = 0;
       result.pins.forEach(function (e) {
         if (e.steps && e.steps.length > stepCount) stepCount = e.steps.length;
       });
+      var focusIdx = Math.min(Math.max(state.multitoolFocus || 0, 0), stepCount - 1);
       for (var k = 0; k < stepCount; k++) {
         (function (k) {
           var stepType = null, logic = null;
@@ -441,6 +443,7 @@
             label.appendChild(el("span", "cal-track-logic" + (logic === "NOT" ? " is-not" : ""), logic));
           }
           var built = _calBuildTrack(rows, stepType, axis, sliderId, label, !!sliderId);
+          if (k === focusIdx) built.track.classList.add("is-focus");
           frag.appendChild(built.track);
           if (built.note) notes.push((k + 1) + ". " + built.note);
         })(k);

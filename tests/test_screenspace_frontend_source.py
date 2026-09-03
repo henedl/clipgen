@@ -203,3 +203,47 @@ def test_sample_editor_uses_blocking_modal_and_is_es5():
     assert "openBlockingModal(" in SAMPLE_EDITOR_JS
     assert "closeBlockingModal(" in SAMPLE_EDITOR_JS
     assert_es5(SAMPLE_EDITOR_JS, "screenspace-sample-editor.js")
+
+
+def test_results_tab_count_element_exists():
+    """Five writes target #resultCount; without the span they went nowhere."""
+    assert 'qs("#resultCount")' in read("screenspace-results.js")
+    assert 'id="resultCount"' in read("screenspace.html")
+
+
+def test_model_view_previews_focused_multitool_step():
+    """The server previews plain tools; multitool must send the focused step."""
+    body = MODEL_VIEW_JS[MODEL_VIEW_JS.index("function _doRefreshModelView") :]
+    assert "_focusStep()" in body
+    assert 'sfx = "_mt" + stepIdx' in body
+    assert "_collectPreviewParams(tool, sfx)" in body
+    assert "(state.multitoolSteps || [])[0]" not in MODEL_VIEW_JS
+
+
+def test_multitool_branch_refreshes_model_view():
+    """The multitool branch returns early; without its own refresh the preview went stale."""
+    start = SCREENSPACE_JS.index(
+        'if (type === "multitool") {\n      SS.renderMultitoolParams'
+    )
+    body = SCREENSPACE_JS[start : SCREENSPACE_JS.index("return;", start)]
+    assert "refreshModelView();" in body
+    assert "_updateOverlayUi();" in body
+
+
+def test_multitool_step_edits_refresh_model_view():
+    """Step rows skip addParamRow, so the step list needs its own input listener."""
+    js = read("screenspace-multitool-params.js")
+    assert 'stepsDiv.addEventListener("input", onStepEdit)' in js
+    assert 'stepsDiv.addEventListener("change", onStepEdit)' in js
+    assert "SS.setMultitoolFocus(" in js
+
+
+def test_multitool_focus_classes_have_css_rules():
+    for name in (
+        ".multitool-step.is-selected",
+        ".multitool-step-chevron",
+        ".preview-section-focus",
+        ".cal-track.is-focus",
+    ):
+        assert name in SCREENSPACE_CSS, f"{name} is set in JS but never styled"
+    assert 'id="modelViewFocus"' in read("screenspace.html")

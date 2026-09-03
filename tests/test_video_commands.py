@@ -2133,3 +2133,25 @@ def test_probe_video_properties_single_flight(monkeypatch, tmp_path):
     assert len(calls) == 1
     assert all(r == results[0] for r in results) and results[0]["width"] == 1280
     assert not video_mod._probe_inflight  # flight entry released
+
+
+def test_parallel_gifs_reserve_nothing_for_a_tail_past_the_end(monkeypatch, tmp_path):
+    """A timestamp with no room for a GIF must not leave a 0-byte placeholder."""
+    monkeypatch.setattr(config, "OUTPUT_DIR", str(tmp_path), raising=False)
+    monkeypatch.setattr(video, "extract_gif", lambda *_a, **_k: True)
+
+    artifacts = video._parallel_extract_gifs("in.mp4", [0, 10], 10, 3, 10)
+
+    assert artifacts is not None and len(artifacts) == 1
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["gallery_0_00.gif"]
+
+
+def test_run_ffmpeg_rejects_a_zero_length_range(monkeypatch):
+    """ffmpeg -t 0 writes a stub file; a same-start-and-end range is skipped."""
+    captured: list = []
+    _run_ffmpeg_harness(monkeypatch, captured, file_duration=100)
+
+    assert (
+        video.run_ffmpeg("in.mp4", "out.mp4", "01:23", "01:23", reencode=False) is False
+    )
+    assert captured == []

@@ -57,7 +57,8 @@ def build_preview(
         return _preview_flow(frame, prev_frame, region, params)
     if tool == "scene":
         return _preview_scene(frame, region, params)
-    if tool == "inactivity":
+    if tool in ("inactivity", "boundary"):
+        # Boundary compares consecutive pHashes; show the same bit grid.
         return _preview_inactivity(frame, region)
     if tool == "attention":
         return _preview_attention(frame, prev_frame, params)

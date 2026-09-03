@@ -1249,8 +1249,8 @@ def api_corrections_add() -> FlaskResponse:
     """Add a manual correction."""
     data = require_json_body("Missing JSON body")
 
-    from_text = data.get("from", "").strip()
-    to_text = data.get("to", "").strip()
+    from_text = str(data.get("from") or "").strip()
+    to_text = str(data.get("to") or "").strip()
     if not from_text or not to_text:
         return err("'from' and 'to' required")
 
