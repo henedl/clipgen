@@ -12,6 +12,7 @@ import config
 import screenspace
 import screenspace_preview
 import screenspace_server
+import server_utils
 
 
 @pytest.fixture(scope="module")
@@ -1603,19 +1604,15 @@ def test_extract_media_shaped_region_sets_mask(tool, image_key, mask_key):
         "h": 40,
         "mask_points": [[[0.5, 0.0], [1.0, 1.0], [0.0, 1.0]]],
     }
-    error = screenspace_server._extract_tool_media(
-        spec, tool, lambda ts: frame, region_coords
-    )
-    assert error is None
+    screenspace_server._extract_tool_media(spec, tool, lambda ts: frame, region_coords)
     assert spec[image_key].shape[:2] == (40, 40)
     assert spec[mask_key] is not None
     assert spec[mask_key].shape == (40, 40)
     # Rect-only capture regions keep the unmasked path.
     rect_spec: dict[str, Any] = {"reference_timestamp": 0.0}
-    error = screenspace_server._extract_tool_media(
+    screenspace_server._extract_tool_media(
         rect_spec, tool, lambda ts: frame, {"x": 10, "y": 10, "w": 40, "h": 40}
     )
-    assert error is None
     assert mask_key not in rect_spec
 
 
@@ -1626,7 +1623,7 @@ def test_prepare_reference_media_uses_reference_region(
     client, monkeypatch, tool, image_key
 ):
     """The sample is cut from the capture region, not the run region."""
-    from typing import Any, cast
+    from typing import Any
 
     import numpy as np
 
@@ -1656,15 +1653,13 @@ def test_prepare_reference_media_uses_reference_region(
     out = screenspace_server._prepare_task_media(
         tool, "P01", params, {}, {"x": 0, "y": 0, "w": 200, "h": 100}, resolve
     )
-    assert isinstance(out, dict)
-    sample = cast(dict[str, Any], out)[image_key]
+    sample = out[image_key]
     assert isinstance(sample, np.ndarray)
     assert sample.shape[:2] == (30, 40)
 
     # Unknown capture region: a clear 400, not a silent full-frame sample.
-    # (err() builds a Flask response, so give it a request context.)
-    with client.application.test_request_context():
-        bad = screenspace_server._prepare_task_media(
+    with pytest.raises(server_utils.ApiError) as excinfo:
+        screenspace_server._prepare_task_media(
             tool,
             "P01",
             {"reference_timestamp": 0.0, "reference_region": "gone"},
@@ -1672,7 +1667,8 @@ def test_prepare_reference_media_uses_reference_region(
             {"x": 0, "y": 0, "w": 200, "h": 100},
             resolve,
         )
-    assert not isinstance(bad, dict)
+    assert excinfo.value.code == 400
+    assert "reference_region" in excinfo.value.message
 
 
 def test_api_preview_shape_ref_region(client, monkeypatch) -> None:

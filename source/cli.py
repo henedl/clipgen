@@ -856,7 +856,7 @@ def _ss_build_params(
     ``similarity`` and ``template`` extracts the reference frame at
     ``--ss-reference-timestamp`` via *frame_at* (which maps a global timestamp
     into the owning sub-video for multi-video participants; mirrors the
-    server-side path in screenspace_server._extract_task_media).
+    server-side path in screenspace_server._extract_tool_media).
     """
     import screenspace
 
@@ -1390,7 +1390,7 @@ def _ss_extract_scene_frames(
 ) -> list[dict[str, Any]]:
     """Build reference_scenes (with cropped frames) from saved scene_references.
 
-    Mirrors the scene path of screenspace_server._extract_task_media. *frame_at*
+    Mirrors the scene path of screenspace_server._extract_tool_media. *frame_at*
     maps a global timestamp into the owning sub-video for multi-video
     participants. Raises ValueError when a frame cannot be read.
     """
@@ -1446,7 +1446,7 @@ def _ss_rehydrate_task_media(
 ) -> None:
     """Re-extract reference frames/templates/scenes into a saved task's parameters.
 
-    Mirrors screenspace_server._extract_task_media and _prepare_multitool_steps so a
+    Mirrors screenspace_server._extract_tool_media and _prepare_multitool_steps so a
     manifest task (whose binary frame data was stripped on save) can be re-run.
     *frame_at* maps a global reference timestamp into the owning sub-video for
     multi-video participants. Mutates ``parameters`` in place; raises ValueError
