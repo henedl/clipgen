@@ -8,6 +8,22 @@ Notable changes per release. One level-2 heading per version — `## <version> �
 
 `<Tool>` is one of `Core`, `Studio`, `Screenspace`, `Transcripts`, `Workflows`, `Composer`, `Overview`. Write for someone using clipgen, not building it: name the thing by what it is called in the interface, say what changed for them, and leave the internals in the commit. Add a second sentence only when the first leaves an obvious "so what". Lines render as **plain text** in the Start overlay's Recent updates tab — no backticks or markdown inside them, or it shows up literally.
 
+## v0.17.0 — 2026-09-03
+**Screenspace:** Feat: Click a Multitool step to focus it. Model view previews that step's tool, region and reference, and its calibration track is highlighted.
+**Screenspace:** Feat: Template and Shape scans run much faster when the tool has a search region.
+**Screenspace:** Feat: Heatmap GIFs render several times faster, most of all on Attention and Flow scans.
+**Studio:** Feat: Artifact Log rows have a Show on disk button in the desktop app.
+**Studio:** Feat: The quick actions are now called Build Timeline and Build Gallery.
+**Core:** Feat: Clips with title cards build faster, since the card is drawn once instead of once per frame.
+**Core:** Feat: The Start window highlights the version you are running, and Settings, Hotkeys shows larger key caps in denser rows.
+**Core:** Fix: The desktop window takes clicks right after launch instead of needing an app switch first.
+**Core:** Fix: One failing clip no longer stops the rest of a batch.
+**Core:** Fix: Regenerated GIFs keep their set length, and empty timestamp ranges are skipped instead of cut.
+**Core:** Fix: A background action that fails now tells you, rather than looking like it worked.
+**Core:** Fix: Temporary files from gallery and title card builds are cleaned up.
+**Screenspace:** Fix: Multitool and Boundary previews render again, and a template that cannot be matched is reported the same with or without a search region.
+**Transcripts:** Fix: Clipping marked lines picks up the text of every mark.
+
 ## v0.16.13 — 2026-08-28
 **Screenspace:** Feat: Model view and Calibration now live in a Preview tab on the right, open by default so you can see what the tool is matching without hunting in the sidebar.
 **Screenspace:** Feat: Shape has a paint-brush draw mode on the video canvas, separate Width and Height scale labels when axes are unlinked, and an eraser editor on sample thumbnails.
