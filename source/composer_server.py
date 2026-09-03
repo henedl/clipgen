@@ -1305,6 +1305,7 @@ def _run_overlay_export(data: dict[str, Any], *, gif: bool) -> Any:
 
 
 @composer_bp.route("/api/export/burn", methods=["POST"])
+@json_endpoint
 def api_export_burn() -> Any:
     """Burn annotations into a video span (seek-first; span-only encode)."""
     if not _export_busy.acquire(blocking=False):
@@ -1316,6 +1317,7 @@ def api_export_burn() -> Any:
 
 
 @composer_bp.route("/api/export/gif", methods=["POST"])
+@json_endpoint
 def api_export_gif() -> Any:
     """Burn annotations into an animated GIF of the span."""
     if not _export_busy.acquire(blocking=False):

@@ -887,6 +887,18 @@ def test_annotated_burn_within_part_keeps_single_pass_fast_path(
     assert resp["artifact"]["sourceVideo"] == "study_P01-1.mp4"
 
 
+@pytest.mark.parametrize("route", ["burn", "gif"])
+def test_overlay_exports_return_400_on_bad_span(co_client, route):
+    """The shared span parse raises ApiError; the routes must turn it into a 400."""
+    resp = co_client.post(
+        f"/composer/api/export/{route}",
+        json={"participant": "P01", "start": "soon", "end": 5.0},
+    )
+    assert resp.status_code == 400
+    assert resp.get_json() == {"ok": False, "error": "start must be a number"}
+    assert not composer_server._export_busy.locked()
+
+
 def test_annotated_burn_rejects_a_span_that_only_grazes_an_annotation(
     co_client, monkeypatch
 ):
