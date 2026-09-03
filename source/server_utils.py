@@ -159,30 +159,30 @@ def remove_by_id(items: list[dict[str, Any]], id_: Any) -> dict[str, Any] | None
 
 
 class MediaCache:
-    """Bounded-LRU byte cache with single-flight compute.
+    """Bounded-LRU cache with single-flight compute.
 
     Fast path takes the main lock only for the dict get/reorder. On a miss, a
     per-key lock serializes concurrent identical misses so the expensive
-    producer (ffmpeg) runs once, not once per waiting request — the others wake
-    to the freshly cached bytes. The producer runs holding no main lock.
+    producer (ffmpeg, OCR) runs once, not once per waiting request — the others
+    wake to the freshly cached value. The producer runs holding no main lock.
+    *stat_prefix* names the profiling counters (``<prefix>.hit`` / ``.miss``).
     """
 
-    def __init__(self, max_entries: int) -> None:
-        self._store: OrderedDict[tuple, bytes] = OrderedDict()
+    def __init__(self, max_entries: int, stat_prefix: str = "media_cache") -> None:
+        self._store: OrderedDict[tuple, Any] = OrderedDict()
         self._max = max_entries
         self._lock = threading.Lock()
         self._inflight: dict[tuple, threading.Lock] = {}
+        self._stat = stat_prefix
 
-    def get_or_compute(
-        self, key: tuple, compute: Callable[[], bytes | None]
-    ) -> bytes | None:
+    def get_or_compute(self, key: tuple, compute: Callable[[], Any]) -> Any:
         # Fast path: cache hit.
         with self._lock:
             cached = self._store.get(key)
             if cached is not None:
                 self._store.move_to_end(key)
                 if config.PROFILING:
-                    profiling.count("media_cache.hit")
+                    profiling.count(self._stat + ".hit")
                 return cached
             keylock = self._inflight.get(key)
             if keylock is None:
@@ -196,12 +196,12 @@ class MediaCache:
                 if cached is not None:
                     self._store.move_to_end(key)
                     if config.PROFILING:
-                        profiling.count("media_cache.hit")
+                        profiling.count(self._stat + ".hit")
                     return cached
 
             if config.PROFILING:
-                profiling.count("media_cache.miss")
-            with profiling.span("media_cache.compute"):
+                profiling.count(self._stat + ".miss")
+            with profiling.span(self._stat + ".compute"):
                 value = compute()  # expensive; no main lock held
 
             with self._lock:

@@ -1,7 +1,6 @@
 """Tests for Screenspace server API endpoints."""
 
 import os
-from collections import OrderedDict
 
 import numpy as np
 import pytest
@@ -62,8 +61,12 @@ def client(ss_app, tmp_path, monkeypatch):
     # all it needs — there is no module-level snapshot to seed.
     monkeypatch.setattr(screenspace_server, "_worker", screenspace.ScreenspaceWorker())
     # Fresh module-level calibration/preview caches per test (auto-restored).
-    monkeypatch.setattr(screenspace_server, "_decoded_frame_cache", OrderedDict())
-    monkeypatch.setattr(screenspace_server, "_pin_ocr_cache", OrderedDict())
+    monkeypatch.setattr(
+        screenspace_server, "_decoded_frame_cache", server_utils.MediaCache(8)
+    )
+    monkeypatch.setattr(
+        screenspace_server, "_pin_ocr_cache", server_utils.MediaCache(8)
+    )
 
     monkeypatch.setattr(
         screenspace,
@@ -2206,9 +2209,7 @@ def test_video_frame_cache_invalidates_on_mtime_change(client, tmp_path, monkeyp
         "_participants",
         [{"id": "P04", "video_paths": [str(video_file)], "has_video": True}],
     )
-    monkeypatch.setattr(
-        screenspace_server, "_frame_cache", type(screenspace_server._frame_cache)()
-    )
+    monkeypatch.setattr(screenspace_server, "_frame_cache", server_utils.MediaCache(8))
 
     calls = []
 

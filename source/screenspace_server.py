@@ -61,7 +61,6 @@ import math
 import sys
 import threading
 import uuid
-from collections import OrderedDict
 from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
@@ -71,7 +70,6 @@ from flask import Blueprint, Response, jsonify, request, send_file
 
 import config
 import files
-import profiling
 import remux_server
 import screenspace
 import spreadsheet
@@ -242,19 +240,15 @@ _participant_timeline_lock = threading.Lock()
 # Values are (mtime_ns, info) so a stale file is re-probed automatically.
 _video_metadata_cache: dict[str, tuple[int, dict[str, Any]]] = {}
 _video_metadata_cache_lock = threading.Lock()
-# Bounded LRU of JPEG bytes; the key's ``mtime_ns`` makes a re-encoded source a new entry.
-_FRAME_CACHE_MAX = 256
-_frame_cache: "OrderedDict[tuple[str, int, float, int], bytes]" = OrderedDict()
-_frame_cache_lock = threading.Lock()
-
+# Bounded LRUs; every key carries ``mtime_ns`` so a re-encoded source is a new entry.
+# JPEG bytes for the frame route.
+_frame_cache = MediaCache(256, stat_prefix="screenspace.frame_cache")
 # BGR frames for calibration/preview, which re-run on every parameter nudge.
-# ``mtime_ns`` in the key.
-_DECODED_FRAME_CACHE_MAX = max(8, 2 * config.SCREENSPACE_MAX_PINS)
-_decoded_frame_cache: "OrderedDict[tuple[str, int, float], Any]" = OrderedDict()
-_decoded_frame_cache_lock = threading.Lock()
-_PIN_OCR_CACHE_MAX = 64
-_pin_ocr_cache: "OrderedDict[tuple[Any, ...], list[Any]]" = OrderedDict()
-_pin_ocr_cache_lock = threading.Lock()
+_decoded_frame_cache = MediaCache(
+    max(8, 2 * config.SCREENSPACE_MAX_PINS),
+    stat_prefix="screenspace.decoded_frame_cache",
+)
+_pin_ocr_cache = MediaCache(64, stat_prefix="screenspace.pin_ocr_cache")
 
 # Sprite sheets re-tiled from heatmap GIFs on demand, never written to disk; keyed
 # with ``mtime_ns``.
@@ -670,21 +664,9 @@ def _decoded_video_frame(video_path: str, mtime_ns: int, ts: float) -> "Any | No
     extraction fails.
     """
     key = (video_path, mtime_ns, round(ts, 3))
-    with _decoded_frame_cache_lock:
-        cached = _decoded_frame_cache.get(key)
-        if cached is not None:
-            _decoded_frame_cache.move_to_end(key)
-            profiling.count("screenspace.decoded_frame_cache.hit")
-            return cached
-    profiling.count("screenspace.decoded_frame_cache.miss")
-    frame = video.extract_frame_at_timestamp(video_path, ts)
-    if frame is None:
-        return None
-    with _decoded_frame_cache_lock:
-        _decoded_frame_cache[key] = frame
-        while len(_decoded_frame_cache) > _DECODED_FRAME_CACHE_MAX:
-            _decoded_frame_cache.popitem(last=False)
-    return frame
+    return _decoded_frame_cache.get_or_compute(
+        key, lambda: video.extract_frame_at_timestamp(video_path, ts)
+    )
 
 
 def _make_pin_ocr_reader(
@@ -720,19 +702,9 @@ def _make_pin_ocr_reader(
             langs,
             bool(params.get("ocr_preprocess", False)),
         )
-        with _pin_ocr_cache_lock:
-            cached = _pin_ocr_cache.get(key)
-            if cached is not None:
-                _pin_ocr_cache.move_to_end(key)
-                profiling.count("screenspace.pin_ocr_cache.hit")
-                return cached
-        profiling.count("screenspace.pin_ocr_cache.miss")
-        readings = screenspace.run_calibration_ocr(frame, region_coords, params)
-        with _pin_ocr_cache_lock:
-            _pin_ocr_cache[key] = readings
-            while len(_pin_ocr_cache) > _PIN_OCR_CACHE_MAX:
-                _pin_ocr_cache.popitem(last=False)
-        return readings
+        return _pin_ocr_cache.get_or_compute(
+            key, lambda: screenspace.run_calibration_ocr(frame, region_coords, params)
+        )
 
     return _reader
 
@@ -1078,43 +1050,24 @@ def api_video_frame(participant: str, timestamp: str) -> FlaskResponse:
 
     width = request.args.get("w", 0, type=int)
     cache_key = (video_path, mtime_ns, round(local_ts, 3), width)
-    with _frame_cache_lock:
-        cached = _frame_cache.get(cache_key)
-        if cached is not None:
-            # Refresh LRU recency.
-            _frame_cache.move_to_end(cache_key)
-    profiling.count(
-        "screenspace.frame_cache.hit"
-        if cached is not None
-        else "screenspace.frame_cache.miss"
-    )
-    if cached is not None:
-        return Response(
-            cached,
-            mimetype="image/jpeg",
-            headers={"Cache-Control": "public, max-age=86400, immutable"},
-        )
+    failure = "Could not extract frame"
 
-    if width > 0:
-        jpeg_bytes = video.extract_thumbnail_bytes(video_path, local_ts, width=width)
-    else:
+    def _encode() -> bytes | None:
+        nonlocal failure
+        if width > 0:
+            return video.extract_thumbnail_bytes(video_path, local_ts, width=width)
         frame = video.extract_frame_at_timestamp(video_path, local_ts)
         if frame is None:
-            return err("Could not read frame at timestamp")
+            failure = "Could not read frame at timestamp"
+            return None
         import cv2
 
         success, jpeg = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
-        if not success:
-            return err("Could not extract frame")
-        jpeg_bytes = jpeg.tobytes()
+        return jpeg.tobytes() if success else None
 
+    jpeg_bytes = _frame_cache.get_or_compute(cache_key, _encode)
     if jpeg_bytes is None:
-        return err("Could not extract frame")
-
-    with _frame_cache_lock:
-        _frame_cache[cache_key] = jpeg_bytes
-        while len(_frame_cache) > _FRAME_CACHE_MAX:
-            _frame_cache.popitem(last=False)
+        return err(failure)
     return Response(
         jpeg_bytes,
         mimetype="image/jpeg",
