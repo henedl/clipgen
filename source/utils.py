@@ -13,7 +13,7 @@ import subprocess
 import sys
 import threading
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from datetime import datetime
 from numbers import Integral, Real
 from pathlib import Path
@@ -434,6 +434,35 @@ def format_browse_rows_plain(
         lines.append("  ---")
 
     return "\n".join(lines)
+
+
+class ProgressScope:
+    """One progress task, or an inert stand-in when progress bars are off."""
+
+    def __init__(self, progress: Any, task: Any) -> None:
+        self.progress = progress
+        self.task = task
+        self.live = progress is not None
+
+    def update(self, **kwargs: Any) -> None:
+        if self.progress is not None:
+            self.progress.update(self.task, **kwargs)
+
+    def add_task(self, label: str, total: int) -> Any:
+        if self.progress is None:
+            return None
+        return self.progress.add_task(label, total=total)
+
+
+@contextlib.contextmanager
+def progress_scope(label: str, total: int) -> Iterator[ProgressScope]:
+    """Run a block under one progress task; callers never branch on Rich."""
+    progress = create_progress_bar()
+    if progress is None:
+        yield ProgressScope(None, None)
+        return
+    with progress:
+        yield ProgressScope(progress, progress.add_task(label, total=total))
 
 
 def create_progress_bar(description: str = "Processing"):

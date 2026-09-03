@@ -1318,28 +1318,8 @@ def _ss_run_and_persist_task(task: dict[str, Any], manifest: dict[str, Any]) -> 
     utils.info_print(f"Running {task_type} on {participant} (region: {region_name})...")
 
     final_task: dict[str, Any] | None = None
-    progress_bar = utils.create_progress_bar()
     try:
-        if progress_bar:
-            with progress_bar:
-                ptask = progress_bar.add_task(f"{task_type} (queued)", total=100)
-                while True:
-                    current = worker.get_task(task_id)
-                    if current is None:
-                        break
-                    status = current.get("status", "")
-                    pct = int(float(current.get("progress", 0.0)) * 100)
-                    progress_bar.update(
-                        ptask,
-                        completed=pct,
-                        description=f"{task_type} ({status})",
-                    )
-                    if status in ("completed", "failed", "cancelled"):
-                        final_task = current
-                        progress_bar.update(ptask, completed=100)
-                        break
-                    time.sleep(0.25)
-        else:
+        with utils.progress_scope(f"{task_type} (queued)", 100) as ps:
             last_progress = -1.0
             while True:
                 current = worker.get_task(task_id)
@@ -1347,11 +1327,17 @@ def _ss_run_and_persist_task(task: dict[str, Any], manifest: dict[str, Any]) -> 
                     break
                 status = current.get("status", "")
                 progress = float(current.get("progress", 0.0))
-                if progress - last_progress > 0.05:
+                if ps.live:
+                    ps.update(
+                        completed=int(progress * 100),
+                        description=f"{task_type} ({status})",
+                    )
+                elif progress - last_progress > 0.05:
                     utils.info_print(f"  {status}: {int(progress * 100)}%")
                     last_progress = progress
                 if status in ("completed", "failed", "cancelled"):
                     final_task = current
+                    ps.update(completed=100)
                     break
                 time.sleep(0.25)
     finally:

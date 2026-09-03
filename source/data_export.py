@@ -432,8 +432,6 @@ def write_export_bundle() -> list[Path]:
             manifest_cache[section] = parsed if isinstance(parsed, dict) else None
         return manifest_cache[section]
 
-    progress = utils.create_progress_bar()
-
     def _process_surface(
         output_basename: str,
         builder: _SurfaceBuilder,
@@ -461,26 +459,11 @@ def write_export_bundle() -> list[Path]:
             f"Exported {len(records)} record(s) to {json_path.name} and {csv_path.name}"
         )
 
-    if progress:
-        with progress:
-            ptask = progress.add_task("Exporting", total=len(_SURFACES))
-            for (
-                output_basename,
-                builder,
-                section,
-                preferred_cols,
-            ) in _SURFACES:
-                progress.update(ptask, description=f"Exporting {output_basename}")
-                _process_surface(output_basename, builder, section, preferred_cols)
-                progress.update(ptask, advance=1)
-    else:
-        for (
-            output_basename,
-            builder,
-            section,
-            preferred_cols,
-        ) in _SURFACES:
+    with utils.progress_scope("Exporting", len(_SURFACES)) as ps:
+        for output_basename, builder, section, preferred_cols in _SURFACES:
+            ps.update(description=f"Exporting {output_basename}")
             _process_surface(output_basename, builder, section, preferred_cols)
+            ps.update(advance=1)
 
     for line in summaries:
         utils.info_print(line)
