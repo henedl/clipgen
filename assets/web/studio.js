@@ -3809,8 +3809,7 @@
     if (isAnyStudioJobRunning()) return;
     var overlay = qs("#galleryOverlay");
     if (!overlay) return;
-    popModalIn(overlay, qs(".gallery-card"));
-    openModalTrap(overlay, closeGalleryDialog);
+    openPopModal(overlay, qs(".gallery-card"), { onEscape: closeGalleryDialog });
     var sel = qs("#galleryParticipant");
     if (sel) sel.focus();
   }
@@ -3819,10 +3818,7 @@
     var overlay = qs("#galleryOverlay");
     if (!overlay) return;
     // Trap released now; the visual hide trails the fade.
-    closeModalTrap(overlay);
-    popModalOut(overlay, qs(".gallery-card"), function () {
-      overlay.classList.add("hidden");
-    });
+    closePopModal(overlay, qs(".gallery-card"), { releaseTrapNow: true });
   }
 
   function submitGalleryDialog() {
@@ -3900,29 +3896,12 @@
     // Escape is handled by the modal focus trap opened in openGalleryDialog.
   }
 
-  // ---- Modal focus trap ----
-  // openBlockingModal delegators; Studio never stacks modals, release() is idempotent.
-  function openModalTrap(overlayEl, onEscape) {
-    return openBlockingModal(overlayEl, {
-      onEscape: onEscape,
-      trapFocus: true,
-      restoreFocus: true,
-    });
-  }
-
-  function closeModalTrap(overlayEl) {
-    closeBlockingModal(overlayEl);
-  }
-
-
   // ---- Status overlay ----
 
   var _lastViewerFile = "";
 
   function revealStatusOverlay() {
-    var overlay = qs("#statusOverlay");
-    popModalIn(overlay, qs(".status-card"));
-    openModalTrap(overlay, hideOverlay);
+    openPopModal(qs("#statusOverlay"), qs(".status-card"), { onEscape: hideOverlay });
   }
 
   function showOverlay(message) {
@@ -3960,12 +3939,8 @@
   }
 
   function hideOverlay() {
-    var overlay = qs("#statusOverlay");
     // Release the trap immediately — only the visual hide waits for the fade.
-    closeModalTrap(overlay);
-    popModalOut(overlay, qs(".status-card"), function () {
-      overlay.classList.add("hidden");
-    });
+    closePopModal(qs("#statusOverlay"), qs(".status-card"), { releaseTrapNow: true });
   }
 
   // ---- Build status corner card ----
@@ -4034,9 +4009,8 @@
     _buildEtaTracker.reset();
     var buildEl = qs("#buildStatus");
     // Blank the clock with the hide, not before, so it doesn't vanish mid-fade.
-    popModalOut(buildEl, qs(".build-status-card"), function () {
+    closePopModal(buildEl, qs(".build-status-card"), {}, function () {
       qs("#buildElapsed").textContent = "";
-      buildEl.classList.add("hidden");
     });
   }
 
@@ -4056,13 +4030,10 @@
 
     // Unwind synchronously so onYes() can open another overlay; only the hide trails.
     function cleanup() {
-      closeModalTrap(confirmEl);
       yesBtn.removeEventListener("click", handleYes);
       noBtn.removeEventListener("click", handleNo);
       _confirmCleanup = null;
-      popModalOut(confirmEl, qs(".confirm-card"), function () {
-        confirmEl.classList.add("hidden");
-      });
+      closePopModal(confirmEl, qs(".confirm-card"), { releaseTrapNow: true });
     }
 
     function handleYes() { cleanup(); onYes(); }
@@ -4072,7 +4043,7 @@
     noBtn.addEventListener("click", handleNo);
     _confirmCleanup = cleanup;
     // Escape cancels (same as No / backdrop click).
-    openModalTrap(qs("#confirmOverlay"), handleNo);
+    openBlockingModal(confirmEl, { onEscape: handleNo, trapFocus: true, restoreFocus: true });
   }
 
   function hideConfirm() {
@@ -4080,31 +4051,20 @@
       _confirmCleanup();
       return;
     }
-    var overlay = qs("#confirmOverlay");
-    popModalOut(overlay, qs(".confirm-card"), function () {
-      overlay.classList.add("hidden");
-    });
+    closePopModal(qs("#confirmOverlay"), qs(".confirm-card"), {});
   }
 
   // ---- Artifact log ----
 
   // Same path as the dialogs; the veil is the shared .cg-modal-veil.
   function openLog() {
-    var overlay = qs("#logOverlay");
-    popModalIn(overlay, qs(".log-panel"));
-    document.body.classList.add("modal-open");
-    openModalTrap(overlay, closeLog);
+    openPopModal(qs("#logOverlay"), qs(".log-panel"), { modalOpen: true, onEscape: closeLog });
     renderLog();
   }
 
   function closeLog() {
-    var overlay = qs("#logOverlay");
     // Release the trap with the hide, not before; popModalOut's generation guard makes it safe.
-    popModalOut(overlay, qs(".log-panel"), function () {
-      closeModalTrap(overlay);
-      overlay.classList.add("hidden");
-      document.body.classList.remove("modal-open");
-    });
+    closePopModal(qs("#logOverlay"), qs(".log-panel"), { modalOpen: true });
   }
 
   // Desktop only: a native window has no other way to reach the file.
@@ -4476,22 +4436,10 @@
     window.ClipgenCommandPalette.setParticipants(function () {
       return (state.sheetData && state.sheetData.participants) || [];
     });
+    var palette = window.ClipgenCommandPalette;
     function tabCommand(tabKey, title, icon) {
-      function tabEl() {
-        return document.querySelector('.preview-tab[data-tab="' + tabKey + '"]');
-      }
-      return {
-        id: "studio:tab-" + tabKey,
-        title: title,
-        icon: icon,
-        keywords: "tab show switch",
-        section: "Studio",
-        visible: function () {
-          var tab = tabEl();
-          return !!tab && !tab.classList.contains("hidden");
-        },
-        run: function () { tabEl().click(); },
-      };
+      return palette.selectorCommand("Studio", "studio:tab-" + tabKey, title, icon,
+        "tab show switch", '.preview-tab[data-tab="' + tabKey + '"]');
     }
     // Mirror the sidebar row's mutate → persist → re-render sequence.
     function applyFilterChange() {
@@ -4514,31 +4462,14 @@
     }
     window.ClipgenCommandPalette.register("studio", function () {
       return [
-        {
-          id: "studio:generate",
-          title: "Generate clips",
-          icon: "play",
-          keywords: "render build artifacts",
-          section: "Studio",
-          enabled: function () {
-            var btn = document.getElementById("generateBtn");
-            return !!btn && !btn.disabled;
-          },
-          run: function () { document.getElementById("generateBtn").click(); },
-        },
+        palette.buttonCommand("Studio", "studio:generate", "Generate clips", "play",
+          "render build artifacts", "generateBtn"),
         tabCommand("sheet", "Show Sheet tab", "table-cells"),
         tabCommand("intake", "Show Screenspace Intake tab", "rectangle-stack"),
         tabCommand("transcript-intake", "Show Transcript Intake tab", "rectangle-stack"),
         tabCommand("composer-intake", "Show Composer Intake tab", "rectangle-stack"),
-        {
-          id: "studio:refresh",
-          title: "Refresh current tab",
-          icon: "arrow-path",
-          keywords: "reload fetch update sheet intake",
-          section: "Studio",
-          visible: function () { return !!document.getElementById("studioRefresh"); },
-          run: function () { document.getElementById("studioRefresh").click(); },
-        },
+        palette.buttonCommand("Studio", "studio:refresh", "Refresh current tab", "arrow-path",
+          "reload fetch update sheet intake", "studioRefresh", "visible"),
         {
           id: "studio:clear-filters",
           title: "Clear all filters",
@@ -4551,24 +4482,10 @@
         viewCommand("all", "Show all rows", "bars-3"),
         viewCommand("highlights", "Highlights only", "funnel"),
         viewCommand("positive", "Positive only", "funnel"),
-        {
-          id: "studio:toggle-sidebar",
-          title: "Toggle filters sidebar",
-          icon: "adjustments-horizontal",
-          keywords: "show hide panel drawer collapse",
-          section: "Studio",
-          visible: function () { return !!document.getElementById("studioSidebarToggle"); },
-          run: function () { document.getElementById("studioSidebarToggle").click(); },
-        },
-        {
-          id: "studio:artifact-log",
-          title: "Open Artifact Log",
-          icon: "list-bullet",
-          keywords: "history builds",
-          section: "Studio",
-          visible: function () { return !!document.getElementById("logBtn"); },
-          run: function () { document.getElementById("logBtn").click(); },
-        },
+        palette.buttonCommand("Studio", "studio:toggle-sidebar", "Toggle filters sidebar",
+          "adjustments-horizontal", "show hide panel drawer collapse", "studioSidebarToggle", "visible"),
+        palette.buttonCommand("Studio", "studio:artifact-log", "Open Artifact Log", "list-bullet",
+          "history builds", "logBtn", "visible"),
       ];
     });
   }

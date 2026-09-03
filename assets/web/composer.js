@@ -1403,27 +1403,14 @@
   }
 
   function openLog() {
-    var overlay = qs("#logOverlay");
-    popModalIn(overlay, qs(".log-panel"));
-    // Lets the veil composite over the topnav's backdrop-filter (see topnav.css).
-    document.body.classList.add("modal-open");
-    // The trap owns Escape, so the back-out cascade needs no branch for this overlay.
-    openBlockingModal(overlay, {
-      onEscape: closeLog,
-      trapFocus: true,
-      restoreFocus: true,
-    });
+    // modal-open composites the veil over the topnav; the trap owns Escape.
+    openPopModal(qs("#logOverlay"), qs(".log-panel"), { modalOpen: true, onEscape: closeLog });
     renderLog();
   }
 
   function closeLog() {
-    var overlay = qs("#logOverlay");
     // Release trap and topnav gate with the hide, not before: early focus restore looks broken.
-    popModalOut(overlay, qs(".log-panel"), function () {
-      closeBlockingModal(overlay);
-      overlay.classList.add("hidden");
-      document.body.classList.remove("modal-open");
-    });
+    closePopModal(qs("#logOverlay"), qs(".log-panel"), { modalOpen: true });
   }
 
   // ---- Keyboard (shared hotkeys.js registry) ----
@@ -1552,34 +1539,14 @@
   // Composer registers no TopNav quick actions, so this is the page's whole palette.
   function initCommandPalette() {
     if (!window.ClipgenCommandPalette) return;
-    function buttonCommand(id, title, icon, keywords, elId) {
-      return {
-        id: id,
-        title: title,
-        icon: icon,
-        keywords: keywords,
-        section: "Composer",
-        enabled: function () {
-          var btn = qs("#" + elId);
-          return !!btn && !btn.disabled;
-        },
-        run: function () { qs("#" + elId).click(); },
-      };
+    var palette = window.ClipgenCommandPalette;
+    function buttonCommand(id, title, icon, keywords, elId, gate) {
+      return palette.buttonCommand("Composer", id, title, icon, keywords, elId, gate);
     }
     // Click the matching data-tab so initSidebarTabs owns the state change.
     function listTabCommand(dataTab, title, icon) {
-      return {
-        id: "composer:list-" + dataTab,
-        title: title,
-        icon: icon,
-        keywords: "list panel sidebar timeline show " + dataTab,
-        section: "Composer",
-        visible: function () { return !!qs('.co-panel-tab[data-tab="' + dataTab + '"]'); },
-        run: function () {
-          var t = qs('.co-panel-tab[data-tab="' + dataTab + '"]');
-          if (t) t.click();
-        },
-      };
+      return palette.selectorCommand("Composer", "composer:list-" + dataTab, title, icon,
+        "list panel sidebar timeline show " + dataTab, '.co-panel-tab[data-tab="' + dataTab + '"]');
     }
     window.ClipgenCommandPalette.setParticipants(function () {
       return (state.participants || []).map(function (p) { return p.id; });
@@ -1616,31 +1583,15 @@
         listTabCommand("sheet", "Show Sheet list", "table-cells"),
         listTabCommand("screenspace", "Show Screenspace list", "queue-list"),
         listTabCommand("transcript", "Show Transcript list", "queue-list"),
-        {
-          id: "composer:log",
-          title: "Toggle artifact log",
-          icon: "list-bullet",
-          keywords: "history builds panel drawer",
-          section: "Composer",
-          visible: function () { return !!document.getElementById("logBtn"); },
-          run: function () { document.getElementById("logBtn").click(); },
-        },
+        buttonCommand("composer:log", "Toggle artifact log", "list-bullet",
+          "history builds panel drawer", "logBtn", "visible"),
       ];
-      // Selects in place; the palette's built-in provider adds cross-page "Open … in <Page>".
-      (state.participants || []).forEach(function (p) {
-        cmds.push({
-          id: "composer:p:" + p.id,
-          title: "Jump to " + p.id + " in Composer",
-          icon: "user",
-          keywords: "participant select source",
-          section: "Participants",
-          run: function () {
-            qs("#coParticipantSelect").value = p.id;
-            selectParticipant(p.id);
-          },
-        });
-      });
-      return cmds;
+      return cmds.concat(palette.participantJumps("composer:p:", "Composer",
+        "participant select source", (state.participants || []).map(function (p) { return p.id; }),
+        function (pid) {
+          qs("#coParticipantSelect").value = pid;
+          selectParticipant(pid);
+        }));
     });
   }
 

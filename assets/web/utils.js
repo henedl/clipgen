@@ -1670,6 +1670,32 @@ var popModalOut = function (overlayEl, cardEl, commit) {
   else cardExit.then(done);
 };
 
+// Pop a modal open; traps focus when `onEscape` is given.
+var openPopModal = function (overlayEl, cardEl, opts) {
+  opts = opts || {};
+  popModalIn(overlayEl, cardEl);
+  if (opts.modalOpen) document.body.classList.add("modal-open");
+  if (opts.onEscape) {
+    openBlockingModal(overlayEl, {
+      onEscape: opts.onEscape,
+      trapFocus: true,
+      restoreFocus: true,
+    });
+  }
+};
+
+// Reverse of openPopModal; `commit` runs with the visual hide.
+var closePopModal = function (overlayEl, cardEl, opts, commit) {
+  opts = opts || {};
+  if (opts.releaseTrapNow) closeBlockingModal(overlayEl);
+  popModalOut(overlayEl, cardEl, function () {
+    if (!opts.releaseTrapNow) closeBlockingModal(overlayEl);
+    overlayEl.classList.add("hidden");
+    if (opts.modalOpen) document.body.classList.remove("modal-open");
+    if (commit) commit();
+  });
+};
+
 // ---- Mark categories ----
 // Fallback mirroring config.MARK_CATEGORIES (tests/test_shared_constants.py); setMarkCategories() mutates it in place.
 
@@ -2342,41 +2368,38 @@ var clipgenInstallPausedFrameOverlay = function (video) {
 };
 
 
-// ---- Bottom-panel drag-to-resize divider ----
+// ---- Drag-to-resize handles ----
 
-// #panelDivider drag + dblclick for Studio and Screenspace; page specifics arrive as cfg callbacks.
-function initPanelDivider(cfg) {
-  var handle = document.querySelector("#panelDivider");
+// rAF-throttled mouse/touch drag along `axis`; cfg.onStart() may return false to refuse.
+function initDragHandle(handle, axis, cfg) {
   if (!handle) return;
   var dragging = false;
-  var startY = 0;
-  var startHeight = 0;
-  var minH = 0;
-  var maxH = 0;
+  var start = 0;
   var rafPending = false;
 
+  function coord(e) {
+    var touch = e.touches && e.touches[0];
+    if (axis === "x") return e.clientX || (touch && touch.clientX) || 0;
+    return e.clientY || (touch && touch.clientY) || 0;
+  }
+
   function onDown(e) {
-    if (cfg.isCollapsed()) return;
+    if (cfg.onStart && cfg.onStart() === false) return;
     e.preventDefault();
+    if (cfg.stopPropagation) e.stopPropagation();
     dragging = true;
-    startY = e.clientY || (e.touches && e.touches[0].clientY) || 0;
-    startHeight = cfg.getHeight();
-    var bounds = cfg.getBounds();
-    minH = bounds.min;
-    maxH = bounds.max;
+    start = coord(e);
     handle.classList.add("active");
-    if (cfg.onDragStart) cfg.onDragStart();
-    document.body.style.cursor = "row-resize";
+    document.body.style.cursor = cfg.cursor || (axis === "x" ? "col-resize" : "row-resize");
     document.body.style.userSelect = "none";
   }
 
   function onMove(e) {
     if (!dragging || rafPending) return;
     rafPending = true;
-    var clientY = e.clientY || (e.touches && e.touches[0].clientY) || 0;
+    var now = coord(e);
     requestAnimationFrame(function () {
-      var delta = startY - clientY;
-      cfg.setHeight(Math.max(minH, Math.min(maxH, startHeight + delta)));
+      cfg.onDelta(now - start);
       rafPending = false;
     });
   }
@@ -2385,10 +2408,9 @@ function initPanelDivider(cfg) {
     if (!dragging) return;
     dragging = false;
     handle.classList.remove("active");
-    if (cfg.onDragEnd) cfg.onDragEnd();
     document.body.style.cursor = "";
     document.body.style.userSelect = "";
-    if (cfg.persist) cfg.persist();
+    if (cfg.onEnd) cfg.onEnd();
   }
 
   handle.addEventListener("mousedown", onDown);
@@ -2398,8 +2420,35 @@ function initPanelDivider(cfg) {
   document.addEventListener("mouseup", onUp);
   document.addEventListener("touchend", onUp);
 
-  handle.addEventListener("dblclick", function (e) {
-    e.preventDefault();
-    cfg.onToggle();
+  if (cfg.onToggle) {
+    handle.addEventListener("dblclick", function (e) {
+      e.preventDefault();
+      if (cfg.stopPropagation) e.stopPropagation();
+      cfg.onToggle();
+    });
+  }
+}
+
+// #panelDivider drag + dblclick for Studio and Screenspace; page specifics arrive as cfg callbacks.
+function initPanelDivider(cfg) {
+  var startHeight = 0;
+  var bounds = { min: 0, max: 0 };
+  initDragHandle(document.querySelector("#panelDivider"), "y", {
+    onStart: function () {
+      if (cfg.isCollapsed()) return false;
+      startHeight = cfg.getHeight();
+      bounds = cfg.getBounds();
+      if (cfg.onDragStart) cfg.onDragStart();
+      return true;
+    },
+    // Dragging up (negative delta) grows the bottom panel.
+    onDelta: function (delta) {
+      cfg.setHeight(Math.max(bounds.min, Math.min(bounds.max, startHeight - delta)));
+    },
+    onEnd: function () {
+      if (cfg.onDragEnd) cfg.onDragEnd();
+      if (cfg.persist) cfg.persist();
+    },
+    onToggle: cfg.onToggle,
   });
 }

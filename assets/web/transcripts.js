@@ -3569,16 +3569,9 @@
   // Palette commands beyond the auto-ingested quick actions; provider runs per open.
   function initCommandPalette() {
     if (!window.ClipgenCommandPalette) return;
+    var palette = window.ClipgenCommandPalette;
     function clickCommand(id, title, icon, keywords, elId) {
-      return {
-        id: id,
-        title: title,
-        icon: icon,
-        keywords: keywords,
-        section: "Transcripts",
-        visible: function () { return !!document.getElementById(elId); },
-        run: function () { document.getElementById(elId).click(); },
-      };
+      return palette.buttonCommand("Transcripts", id, title, icon, keywords, elId, "visible");
     }
     window.ClipgenCommandPalette.setParticipants(function () {
       return (state.participants || []).map(function (p) { return p.id; });
@@ -3619,18 +3612,9 @@
           run: function () { cycleFrictionMode(); },
         },
       ];
-      // Selects in place; the palette's built-in provider adds cross-page "Open …".
-      (state.participants || []).forEach(function (p) {
-        cmds.push({
-          id: "transcripts:p:" + p.id,
-          title: "Jump to " + p.id + " in Transcripts",
-          icon: "user",
-          keywords: "participant select transcript",
-          section: "Participants",
-          run: function () { selectParticipant(p.id); },
-        });
-      });
-      return cmds;
+      return cmds.concat(palette.participantJumps("transcripts:p:", "Transcripts",
+        "participant select transcript", (state.participants || []).map(function (p) { return p.id; }),
+        selectParticipant));
     });
   }
 

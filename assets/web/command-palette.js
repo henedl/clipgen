@@ -11,7 +11,8 @@
  * tests/test_hotkeys_frontend_source.py's registered-id scan.
  *
  * Exposes exactly one global:
- *   window.ClipgenCommandPalette = { register, setParticipants, open, close, toggle }
+ *   window.ClipgenCommandPalette = { register, setParticipants, open, close, toggle,
+ *                                    buttonCommand, selectorCommand, participantJumps }
  *
  * register(sourceId, providerOrArray) — pages contribute commands. A provider
  * is a function returning an array of commands, called on every open so
@@ -629,11 +630,71 @@
     ]);
   }
 
+  // ---- Command factories shared by every hub's provider ----
+
+  function _visibleEl(el) {
+    return !!el && !el.classList.contains("hidden");
+  }
+
+  // Clicks #elId; gate "enabled" (default) or "visible" decides when it shows.
+  function buttonCommand(section, id, title, icon, keywords, elId, gate) {
+    var cmd = {
+      id: id,
+      title: title,
+      icon: icon,
+      keywords: keywords,
+      section: section,
+      run: function () { document.getElementById(elId).click(); },
+    };
+    if (gate === "visible") {
+      cmd.visible = function () { return _visibleEl(document.getElementById(elId)); };
+    } else {
+      cmd.enabled = function () {
+        var btn = document.getElementById(elId);
+        return !!btn && !btn.disabled;
+      };
+    }
+    return cmd;
+  }
+
+  // Clicks the first `selector` match so its own handler owns the state change.
+  function selectorCommand(section, id, title, icon, keywords, selector) {
+    return {
+      id: id,
+      title: title,
+      icon: icon,
+      keywords: keywords,
+      section: section,
+      visible: function () { return _visibleEl(document.querySelector(selector)); },
+      run: function () {
+        var target = document.querySelector(selector);
+        if (target) target.click();
+      },
+    };
+  }
+
+  // In-place "Jump to <pid>" commands; the built-in provider adds cross-page "Open …".
+  function participantJumps(idPrefix, pageLabel, keywords, ids, onSelect) {
+    return ids.map(function (pid) {
+      return {
+        id: idPrefix + pid,
+        title: "Jump to " + pid + " in " + pageLabel,
+        icon: "user",
+        keywords: keywords,
+        section: "Participants",
+        run: function () { onSelect(pid); },
+      };
+    });
+  }
+
   window.ClipgenCommandPalette = {
     register: register,
     setParticipants: setParticipants,
     open: open,
     close: close,
     toggle: toggle,
+    buttonCommand: buttonCommand,
+    selectorCommand: selectorCommand,
+    participantJumps: participantJumps,
   };
 })();

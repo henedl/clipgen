@@ -184,14 +184,15 @@ def test_every_hub_feeds_participants():
 
 
 def test_stay_vs_leave_wording():
-    """Same-page participant commands say "Jump to … in <Page>" (stays);
-    cross-page ones say "Open … in <Page>" (navigates)."""
+    """"Open … in <there>" navigates; "Jump to … in <here>" selects in place."""
     src = PALETTE_JS.read_text(encoding="utf-8")
     assert '"Open " + pids[i] + " in " + dest.label' in src
-    for hub_js in ("screenspace.js", "transcripts.js", "composer.js"):
-        hub_src = (_WEB / hub_js).read_text(encoding="utf-8")
-        assert re.search(r'"Jump to " \+ p\.id \+ " in \w+"', hub_src), (
-            f"{hub_js} same-page jump lacks the 'in <Page>' suffix"
+    assert '"Jump to " + pid + " in " + pageLabel' in src
+    for page in ("composer", "screenspace", "transcripts"):
+        hub_src = (_WEB / f"{page}.js").read_text(encoding="utf-8")
+        assert "participantJumps(" in hub_src, (
+            f"{page}.js should build its in-place participant commands with "
+            "ClipgenCommandPalette.participantJumps"
         )
 
 

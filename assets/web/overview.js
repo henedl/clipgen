@@ -252,46 +252,21 @@
     window.ClipgenCommandPalette.setParticipants(function () {
       return (state.sheetData && state.sheetData.participants) || [];
     });
+    var palette = window.ClipgenCommandPalette;
     function tabCommand(tabKey, title, icon) {
-      function tabEl() {
-        return qs('.preview-tab[data-tab="' + tabKey + '"]');
-      }
-      return {
-        id: "overview:tab-" + tabKey,
-        title: title,
-        icon: icon,
-        keywords: "tab show switch",
-        section: "Overview",
-        visible: function () { return !!tabEl(); },
-        run: function () { tabEl().click(); },
-      };
+      return palette.selectorCommand("Overview", "overview:tab-" + tabKey, title, icon,
+        "tab show switch", '.preview-tab[data-tab="' + tabKey + '"]');
     }
     window.ClipgenCommandPalette.register("overview", [
       tabCommand("metadata", "Show Metadata tab", "table-cells"),
       tabCommand("convergence", "Show Convergence tab", "arrows-pointing-in"),
       tabCommand("reports", "Show Reports tab", "document-text"),
-      {
-        id: "overview:refresh",
-        title: "Refresh Overview data",
-        icon: "arrow-path",
-        keywords: "reload fetch update",
-        section: "Overview",
-        visible: function () { return !!qs("#ovRefresh"); },
-        run: function () { qs("#ovRefresh").click(); },
-      },
-      {
-        id: "overview:reset-offsets",
-        title: "Reset convergence offsets",
-        icon: "arrow-uturn-left",
-        keywords: "alignment convergence clear restore per-participant",
-        section: "Overview",
-        // The button only exists unhidden on Convergence once offsets are set.
-        visible: function () {
-          var b = qs("#cvResetOffsetsBtn");
-          return !!b && !b.classList.contains("hidden");
-        },
-        run: function () { qs("#cvResetOffsetsBtn").click(); },
-      },
+      palette.buttonCommand("Overview", "overview:refresh", "Refresh Overview data", "arrow-path",
+        "reload fetch update", "ovRefresh", "visible"),
+      // The button only exists unhidden on Convergence once offsets are set.
+      palette.buttonCommand("Overview", "overview:reset-offsets", "Reset convergence offsets",
+        "arrow-uturn-left", "alignment convergence clear restore per-participant",
+        "cvResetOffsetsBtn", "visible"),
     ]);
   }
 

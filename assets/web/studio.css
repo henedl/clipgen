@@ -2392,82 +2392,6 @@ html[data-theme="dark"] .queue-card-error .queue-card-thumb {
   display: none;
 }
 
-.log-panel {
-  background: var(--color-surface);
-  border-radius: var(--radius-lg);
-  border: 1px solid var(--color-panel-border);
-  box-shadow: var(--shadow-xl);
-  width: 520px;
-  max-width: 92vw;
-  max-height: 80vh;
-  display: flex;
-  flex-direction: column;
-}
-
-.log-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: var(--space-4) var(--space-5);
-  border-bottom: 1px solid var(--color-border);
-}
-
-.log-header h3 {
-  font-size: var(--text-md);
-  font-weight: 600;
-}
-
-#logContent {
-  flex: 1;
-  overflow-y: auto;
-  padding: var(--space-3) var(--space-5);
-}
-
-.log-footer {
-  display: flex;
-  align-items: center;
-  padding: var(--space-3) var(--space-5);
-  border-top: 1px solid var(--color-border);
-}
-
-.log-footer span {
-  font-size: var(--text-xs);
-  color: var(--color-text-dim);
-}
-
-.log-empty {
-  text-align: center;
-  color: var(--color-text-dim);
-  font-size: var(--text-sm);
-  padding: var(--space-6) 0;
-}
-
-.log-entry {
-  display: flex;
-  align-items: baseline;
-  gap: var(--space-2);
-  padding: var(--space-2) 0;
-  border-bottom: 1px solid var(--color-border);
-  font-size: var(--text-sm);
-  line-height: 1.4;
-}
-
-.log-entry:last-child {
-  border-bottom: none;
-}
-
-.log-type-badge {
-  flex-shrink: 0;
-  font-size: var(--text-xs);
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.03em;
-  padding: 1px var(--space-2);
-  border-radius: var(--radius);
-  background: var(--color-border);
-  color: var(--color-text-dim);
-}
-
 .log-type-badge[data-type="clip"] {
   background: #dbeafe;
   color: #1e40af;
@@ -2516,22 +2440,6 @@ html[data-theme="dark"] .log-type-badge[data-type="reel"] {
 html[data-theme="dark"] .log-type-badge[data-type="viewer"] {
   background: #164e63;
   color: #a5f3fc;
-}
-
-.log-entry-file {
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-family: var(--font-mono);
-  font-size: var(--text-xs);
-}
-
-.log-entry-meta {
-  flex-shrink: 0;
-  font-size: var(--text-xs);
-  color: var(--color-text-dim);
 }
 
 .log-entry-reveal {

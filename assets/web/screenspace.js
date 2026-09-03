@@ -4741,67 +4741,29 @@
   // ---- Preview resize ----
 
   function initPreviewResize() {
-    var handle = qs("#previewResizeHandle");
     var container = qs("#frameContainer");
-    if (!handle || !container) return;
-    var dragging = false;
-    var startX = 0;
-    var startWidthPx = 0;
-    var parentWidth = 0;
-
+    if (!container) return;
     var MIN_PCT = 30;
     var MAX_PCT = 100;
-
-    function onDown(e) {
-      e.preventDefault();
-      e.stopPropagation();
-      dragging = true;
-      startX = e.clientX || (e.touches && e.touches[0].clientX) || 0;
-      startWidthPx = container.getBoundingClientRect().width;
-      parentWidth = container.parentElement.getBoundingClientRect().width;
-      handle.classList.add("active");
-      document.body.style.cursor = "nwse-resize";
-      document.body.style.userSelect = "none";
-    }
-
-    handle.addEventListener("mousedown", onDown);
-    handle.addEventListener("touchstart", onDown, { passive: false });
-
-    var rafPending = false;
-
-    function onMove(e) {
-      if (!dragging || rafPending) return;
-      rafPending = true;
-      var clientX = e.clientX || (e.touches && e.touches[0].clientX) || 0;
-      requestAnimationFrame(function () {
-        var delta = clientX - startX;
-        var newWidthPx = startWidthPx + delta;
-        var pct = Math.max(MIN_PCT, Math.min(MAX_PCT, (newWidthPx / parentWidth) * 100));
-        state.previewMaxWidth = Math.round(pct);
+    var startWidthPx = 0;
+    var parentWidth = 0;
+    initDragHandle(qs("#previewResizeHandle"), "x", {
+      cursor: "nwse-resize",
+      stopPropagation: true,
+      onStart: function () {
+        startWidthPx = container.getBoundingClientRect().width;
+        parentWidth = container.parentElement.getBoundingClientRect().width;
+        return true;
+      },
+      onDelta: function (delta) {
+        var pct = ((startWidthPx + delta) / parentWidth) * 100;
+        state.previewMaxWidth = Math.round(Math.max(MIN_PCT, Math.min(MAX_PCT, pct)));
         container.style.maxWidth = state.previewMaxWidth + "%";
-        rafPending = false;
-      });
-    }
-
-    document.addEventListener("mousemove", onMove);
-    document.addEventListener("touchmove", onMove, { passive: false });
-
-    function onUp() {
-      if (!dragging) return;
-      dragging = false;
-      handle.classList.remove("active");
-      document.body.style.cursor = "";
-      document.body.style.userSelect = "";
-    }
-
-    document.addEventListener("mouseup", onUp);
-    document.addEventListener("touchend", onUp);
-
-    handle.addEventListener("dblclick", function (e) {
-      e.preventDefault();
-      e.stopPropagation();
-      state.previewMaxWidth = MAX_PCT;
-      container.style.maxWidth = "";
+      },
+      onToggle: function () {
+        state.previewMaxWidth = MAX_PCT;
+        container.style.maxWidth = "";
+      },
     });
   }
 
@@ -4882,19 +4844,10 @@
         var btn = qs(sel);
         if (btn) btn.click();
       }
+      var palette = window.ClipgenCommandPalette;
       var cmds = [
-        {
-          id: "screenspace:run",
-          title: "Run analysis tool",
-          icon: "play",
-          keywords: "scan task queue start",
-          section: "Screenspace",
-          enabled: function () {
-            var btn = qs("#runBtn");
-            return !!btn && !btn.disabled;
-          },
-          run: function () { qs("#runBtn").click(); },
-        },
+        palette.buttonCommand("Screenspace", "screenspace:run", "Run analysis tool", "play",
+          "scan task queue start", "runBtn"),
         {
           id: "screenspace:clear-task-filter",
           title: "Clear task filter",
@@ -4952,23 +4905,13 @@
           });
         });
       });
-      // "Jump to …" selects in place; the built-in provider adds cross-page "Open … in
-      // <Page>".
-      (state.participants || []).forEach(function (p) {
-        cmds.push({
-          id: "screenspace:p:" + p.id,
-          title: "Jump to " + p.id + " in Screenspace",
-          icon: "user",
-          keywords: "participant select video",
-          section: "Participants",
-          run: function () {
-            var sel = qs("#participantSelect");
-            sel.value = p.id;
-            sel.dispatchEvent(new Event("change"));
-          },
-        });
-      });
-      return cmds;
+      return cmds.concat(palette.participantJumps("screenspace:p:", "Screenspace",
+        "participant select video", (state.participants || []).map(function (p) { return p.id; }),
+        function (pid) {
+          var sel = qs("#participantSelect");
+          sel.value = pid;
+          sel.dispatchEvent(new Event("change"));
+        }));
     });
   }
 
