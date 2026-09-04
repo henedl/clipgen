@@ -224,8 +224,13 @@ manifest hides the callback), and diffs runs as JSON:
 ```bash
 uv run python tests/perf/scan_bench.py --save /tmp/base.json     # baseline
 # ...make the change...
-uv run python tests/perf/scan_bench.py --compare /tmp/base.json  # Δcallback %
+uv run python tests/perf/scan_bench.py --compare /tmp/base.json --fail-on 10
 ```
+
+`--duration` rebuilds when the existing fixture's probed length does not match.
+A leftover 120 s `/tmp/ssbench/bench_P01.mp4` would otherwise ignore
+`--duration 15` and poison `--compare`. The harness prints `fixture … Ns` at
+the start of a run so a wrong-length file is visible before the table.
 
 Template and Shape use a seeded top-left 20%-frame region. This keeps their
 reference non-degenerate while measuring bounded correlation instead of a
@@ -254,8 +259,12 @@ parallelism ratio, and the titlecard copy/reencode split, with the same
 
 ```bash
 uv run python tests/perf/clip_bench.py --save /tmp/clipbase.json
-uv run python tests/perf/clip_bench.py --compare /tmp/clipbase.json  # Δclip %
+uv run python tests/perf/clip_bench.py --compare /tmp/clipbase.json --fail-on 10
 ```
+
+`--duration` rebuilds the video *and* the sheet when the existing file's length
+does not match, and timestamps stay inside that length (an MM:SS with SS > 59
+is dropped at parse). Same `fixture … Ns` line as scan_bench.
 
 Live server: launch with `--profile`, then `curl http://127.0.0.1:8089/api/profile`
 (404 without the flag; `?reset=1` snapshots then clears, bracketing a window).

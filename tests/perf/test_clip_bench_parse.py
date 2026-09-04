@@ -38,6 +38,15 @@ def test_summarize_handles_missing_labels():
     assert row["parallelism"] == 0.0
 
 
+def test_clip_cell_range_matches_legacy_windows_on_long_fixture():
+    assert clip_bench.clip_cell_range(0, 120) == "0:02-0:05"
+    assert clip_bench.clip_cell_range(4, 120) == "0:14-0:21"
+
+
+def test_clip_cell_range_clamps_to_short_fixture():
+    assert clip_bench.clip_cell_range(4, 15) == "0:07-0:14"
+
+
 def test_keep_best_prefers_fastest_successful_run():
     ok = clip_bench.summarize(parse_profile(REPORT))
     failed = clip_bench.summarize(parse_profile(""))

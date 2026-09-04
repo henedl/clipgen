@@ -10,12 +10,13 @@ Usage (from the repo root):
 
     uv run python tests/perf/clip_bench.py                     # sweep + table
     uv run python tests/perf/clip_bench.py --save base.json    # snapshot
-    uv run python tests/perf/clip_bench.py --compare base.json # A/B deltas
+    uv run python tests/perf/clip_bench.py --compare base.json --fail-on 10
     uv run python tests/perf/clip_bench.py --scenarios clips --runs 2
 
 Fixtures are built on demand in --input: a 120 s testsrc+sine video named
 `clipbench_P01.mp4` and `clipbench.xlsx` with 30 one-participant rows
-(varied 3-9 s ranges so encodes are not all identical). Each scenario
+(varied 3-9 s ranges so encodes are not all identical). `--duration` rebuilds
+both when the existing video's probed length does not match. Each scenario
 writes to its own wiped output dir so reservations and manifests never
 leak between runs. `--runs N` keeps the fastest run per scenario.
 
@@ -32,14 +33,13 @@ import subprocess
 import sys
 from pathlib import Path
 
-from scan_bench import parse_profile
+from scan_bench import delta_pct, parse_profile, probe_duration, regressions
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
 DATA_ROWS = 30  # sheet rows with timestamps; row 6 is the first
 
-# Scenario -> extra CLI args. All select the same 20 rows (sheet rows 6-25)
-# so clip counts match across scenarios and runs.
+# Same 20 rows (6-25) so clip counts match across scenarios.
 SCENARIOS: dict[str, list[str]] = {
     "clips": ["-r", "6-25", "--no-titlecards"],
     "clips-cards": ["-r", "6-25", "--titlecards"],
@@ -84,11 +84,55 @@ def keep_best(
     return best
 
 
+def clip_cell_range(row: int, duration: int) -> str:
+    """MM:SS window for data row *row* that stays inside *duration* seconds."""
+    start = 2 + (row * 3) % 49
+    end = start + 3 + row % 5
+    last = max(2, min(duration - 1, 57))
+    if end > last:
+        end = last
+        start = max(1, end - (3 + row % 5))
+    if start >= end:
+        start = max(0, end - 1)
+    return f"0:{start:02d}-0:{end:02d}"
+
+
+def _write_clip_sheet(sheet: Path, duration: int) -> None:
+    """Write clipbench.xlsx with timestamps that fit *duration*."""
+    import openpyxl
+
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Observations"
+    ws["A1"] = "clipbench"
+    ws["F2"] = "ID"
+    ws["G2"] = "P01"
+    for col, header in enumerate(
+        ("Count", "Reported", "Severity", "Category", "Observation", "Summary"), 1
+    ):
+        ws.cell(5, col, header)
+    for r in range(DATA_ROWS):
+        ws.cell(6 + r, 3, ("Critical", "Serious", "Moderate", "Minor")[r % 4])
+        ws.cell(6 + r, 4, "Onboarding")
+        ws.cell(6 + r, 5, f"Observation {r}")
+        ws.cell(6 + r, 7, clip_cell_range(r, duration))
+    wb.save(sheet)
+
+
 def ensure_fixtures(input_dir: Path, duration: int) -> Path:
-    """Build the bench video and sheet if they are not already there."""
+    """Build the bench video and sheet, rebuilding if duration does not match."""
     input_dir.mkdir(parents=True, exist_ok=True)
     video = input_dir / "clipbench_P01.mp4"
-    if not video.is_file():
+    sheet = input_dir / "clipbench.xlsx"
+    existing = probe_duration(video) if video.is_file() else None
+    rebuild = existing is None or abs(existing - duration) >= 0.5
+    if rebuild:
+        if video.is_file():
+            was = f"{existing:.0f}s" if existing is not None else "unreadable"
+            print(f"rebuilding {video.name} ({was} → {duration}s)")
+            video.unlink()
+        if sheet.is_file():
+            sheet.unlink()
         subprocess.run(
             [
                 "ffmpeg",
@@ -116,29 +160,8 @@ def ensure_fixtures(input_dir: Path, duration: int) -> Path:
             ],
             check=True,
         )
-    sheet = input_dir / "clipbench.xlsx"
     if not sheet.is_file():
-        import openpyxl
-
-        wb = openpyxl.Workbook()
-        ws = wb.active
-        ws.title = "Observations"
-        ws["A1"] = "clipbench"
-        ws["F2"] = "ID"
-        ws["G2"] = "P01"
-        for col, header in enumerate(
-            ("Count", "Reported", "Severity", "Category", "Observation", "Summary"), 1
-        ):
-            ws.cell(5, col, header)
-        for r in range(DATA_ROWS):
-            # Varied 3-9 s windows so encodes differ; seconds stay <= 57
-            # (an MM:SS with SS > 59 is silently dropped at parse).
-            start = 2 + (r * 3) % 49
-            ws.cell(6 + r, 3, ("Critical", "Serious", "Moderate", "Minor")[r % 4])
-            ws.cell(6 + r, 4, "Onboarding")
-            ws.cell(6 + r, 5, f"Observation {r}")
-            ws.cell(6 + r, 7, f"0:{start:02d}-0:{start + 3 + r % 5:02d}")
-        wb.save(sheet)
+        _write_clip_sheet(sheet, duration)
     return sheet
 
 
@@ -167,6 +190,8 @@ def run_scenario(
         cmd, cwd=REPO_ROOT, capture_output=True, text=True, timeout=1800, check=False
     )
     parsed = parse_profile(proc.stdout + proc.stderr)
+    if proc.returncode:
+        print(f"  ! {scenario}: clipgen exit {proc.returncode}")
     if "pipeline.clip" not in parsed:
         print(f"  ! {scenario}: no pipeline.clip in report (run refused?)")
         tail = "\n".join((proc.stdout + proc.stderr).strip().splitlines()[-5:])
@@ -193,8 +218,14 @@ def print_table(
         if baseline:
             base = baseline.get(scenario)
             if base and base.get("clip_s"):
-                pct = (row["clip_s"] / base["clip_s"] - 1.0) * 100
-                line += f"  {pct:>+7.1f}%"
+                pct = delta_pct(row["clip_s"], base["clip_s"])
+                line += f"  {pct:>+7.1f}%" if pct is not None else "  (no base)"
+                if (
+                    row.get("clips")
+                    and base.get("clips")
+                    and row["clips"] != base["clips"]
+                ):
+                    line += " n≠"
             else:
                 line += "  (no base)"
         print(line)
@@ -211,7 +242,7 @@ def main() -> int:
         "--input",
         default="/tmp/clipbench",
         type=Path,
-        help="fixture dir; video and sheet are built here if missing",
+        help="fixture dir; video and sheet are built or rebuilt here",
     )
     ap.add_argument(
         "--output",
@@ -223,7 +254,7 @@ def main() -> int:
         "--duration",
         default=120,
         type=int,
-        help="fixture length in seconds (only used when building)",
+        help="fixture length in seconds; rebuilds when the existing file differs",
     )
     ap.add_argument(
         "--runs",
@@ -233,7 +264,15 @@ def main() -> int:
     )
     ap.add_argument("--save", type=Path, help="write results JSON here")
     ap.add_argument("--compare", type=Path, help="baseline JSON to diff against")
+    ap.add_argument(
+        "--fail-on",
+        type=float,
+        default=None,
+        help="with --compare, exit 1 if any Δclip %% exceeds this",
+    )
     args = ap.parse_args()
+    if args.fail_on is not None and not args.compare:
+        ap.error("--fail-on requires --compare")
 
     scenarios = [s.strip() for s in args.scenarios.split(",") if s.strip()]
     unknown = [s for s in scenarios if s not in SCENARIOS]
@@ -242,6 +281,13 @@ def main() -> int:
         return 2
     out_root = args.output or (args.input / "bench-out")
     ensure_fixtures(args.input, args.duration)
+    video = args.input / "clipbench_P01.mp4"
+    probed = probe_duration(video)
+    print(
+        f"fixture {video.name}  {probed:.0f}s"
+        if probed is not None
+        else f"fixture {video.name}"
+    )
 
     baseline = None
     if args.compare:
@@ -266,6 +312,7 @@ def main() -> int:
                 {
                     "meta": {
                         "video": str(args.input / "clipbench_P01.mp4"),
+                        "duration": args.duration,
                         "runs": args.runs,
                     },
                     "scenarios": rows,
@@ -274,6 +321,12 @@ def main() -> int:
             )
         )
         print(f"\nsaved -> {args.save}")
+    if args.fail_on is not None and baseline is not None:
+        hit = regressions(rows, baseline, "clip_s", args.fail_on)
+        if hit:
+            for name, pct in hit:
+                print(f"fail-on: {name} {pct:+.1f}% (limit {args.fail_on:g}%)")
+            return 1
     return 0
 
 
