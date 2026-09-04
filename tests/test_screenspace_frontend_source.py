@@ -17,6 +17,7 @@ SCREENSPACE_CSS = read("screenspace.css")
 SCREENSPACE_JS = read("screenspace.js")
 TASKS_JS = read("screenspace-tasks.js")
 MODEL_VIEW_JS = read("screenspace-model-view.js")
+OVERLAY_JS = read("screenspace-overlay.js")
 INTERACTION_JS = read("screenspace-overlay-interaction.js")
 SAMPLE_EDITOR_JS = read("screenspace-sample-editor.js")
 
@@ -218,6 +219,15 @@ def test_model_view_previews_focused_multitool_step():
     assert 'sfx = "_mt" + stepIdx' in body
     assert "_collectPreviewParams(tool, sfx)" in body
     assert "(state.multitoolSteps || [])[0]" not in MODEL_VIEW_JS
+
+
+def test_model_view_overlay_uses_preview_region():
+    """The overlay must use the region that produced its preview image."""
+    assert "state.overlayImageRegion = overlayRegion;" in MODEL_VIEW_JS
+    start = OVERLAY_JS.index("// Model-view overlay")
+    body = OVERLAY_JS[start : OVERLAY_JS.index("ctx.globalAlpha = 1.0;", start)]
+    assert "state.overlayImageTool === SS._previewToolKey()" in body
+    assert "var oRegion = state.overlayImageRegion;" in body
 
 
 def test_multitool_branch_refreshes_model_view():

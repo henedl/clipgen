@@ -88,6 +88,8 @@
           state.overlayImageObjectUrl = null;
         }
         state.overlayImage = null;
+        state.overlayImageScope = null;
+        state.overlayImageRegion = null;
         state.overlayImageTimestamp = null;
         state.overlayImageTool = null;
         refreshModelView();
@@ -155,6 +157,7 @@
     _updateOverlayUi();
     _updateFocusLabel();
     refreshModelView();
+    SS.renderOverlay();
     if (SS.calRender) SS.calRender();
   }
 
@@ -509,6 +512,15 @@
     }
     var regionStr = _normalizedRegionString();
     var hasRegion = _hasActiveOrPendingRegion();
+    var overlayRegion = null;
+    if (hasRegion) {
+      var regionParts = regionStr.split(",").map(Number);
+      overlayRegion = {
+        x: regionParts[0], y: regionParts[1],
+        w: regionParts[2], h: regionParts[3],
+        source_width: 1,
+      };
+    }
 
     if (tool === "template" || tool === "shape") {
       var snapRegion = !sfx && state.capturedRefPreview
@@ -617,6 +629,8 @@
           state.overlayImageObjectUrl = null;
         }
         state.overlayImage = null;
+        state.overlayImageScope = null;
+        state.overlayImageRegion = null;
         state.overlayImageTimestamp = null;
         state.overlayImageTool = null;
         return;
@@ -637,6 +651,7 @@
           if (gen !== _modelViewGen) return;
           state.overlayImage = oi;
           state.overlayImageScope = resolved.scope;
+          state.overlayImageRegion = overlayRegion;
           state.overlayImageTimestamp = ts;
           state.overlayImageTool = toolKey;
           SS.renderOverlay();
