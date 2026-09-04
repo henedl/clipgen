@@ -72,7 +72,7 @@ Source video filenames follow `{study}_{participant}.mp4` (e.g. `mystudy_P01.mp4
 - **Annotations:** `utils.parse_cell_annotations()` strips supported keyphrases (configured in `ANNOTATION_KEYPHRASES`, currently `!key`) before timestamp parsing. Ignored tokens (configured in `IGNORED_TIMESTAMP_TOKENS`, currently `x`) are skipped.
 - **Participant IDs:** Headers must start with `P` (individual) or `G` (group); see `config.PARTICIPANT_PREFIXES`.
 - **User feedback:** Use `utils.error_print()`, `utils.warning_print()`, `utils.verbose_print()`, `utils.info_print()`, never bare `print()` — ruff T201 enforces; the sanctioned raw-print files are carved out in `pyproject.toml`.
-- **Debug:** Set `config.DEBUGGING = True` to enable icecream output, skip ffmpeg execution paths in [video.py](source/video.py), and return stub transcript results in [transcripts.py](source/transcripts.py) without loading a Whisper model.
+- **Debug:** Set `config.DEBUGGING = True` to enable icecream output, skip ffmpeg execution paths in [video.py](source/video.py), and return stub transcript results in [transcripts.py](source/transcripts.py) without loading a Whisper model (the speaker pass in [speakers.py](source/speakers.py) then alternates two labels instead of running the ONNX model).
 - **Keyboard shortcuts:** all web-frontend hotkeys go through the shared registry in `assets/web/hotkeys.js`: pages call `ClipgenHotkeys.register(...)` against the `HOTKEY_CATALOG` literal and hand Escape handling to `registerEscape(fn)`. Never add a bare `document.addEventListener("keydown", ...)` — `tests/test_hotkeys_frontend_source.py` enforces an allowlist. The full conventions (numeral routing, `e.code` mapping, rebind persistence, reserved keys) are in the `hotkeys.js` header comment.
 - **Interactive keywords:** All interactive prompts go through `utils.read_user_input()` (`tests/test_source_conventions.py` bans bare `input()`), which treats first-token commands as:
   - `quit` / `exit` → exit clipgen
@@ -128,5 +128,5 @@ The version lives in [build/VERSION](build/VERSION). Agents bump the patch numbe
 - **Performance** — [agents/PERFORMANCE.md](agents/PERFORMANCE.md). Measure before optimizing: [agents/skills/profile/SKILL.md](agents/skills/profile/SKILL.md) (`--profile`, `/api/profile`, `shot.py --perf`).
 - **Code review** — [agents/CODE-REVIEW.md](agents/CODE-REVIEW.md).
 - **CLI command recipes** — [agents/skills/generate/SKILL.md](agents/skills/generate/SKILL.md).
-- **Pinned binaries** (ffmpeg, llama.cpp, OCR models, PyInstaller) — [agents/skills/bump-pins/SKILL.md](agents/skills/bump-pins/SKILL.md). Pins live in `build/fetch_binaries.py`; `--repin <url>` rewrites one, `--check-urls` probes them all (weekly `pin-health` workflow).
+- **Pinned binaries** (ffmpeg, llama.cpp, OCR models, the speaker model, PyInstaller) — [agents/skills/bump-pins/SKILL.md](agents/skills/bump-pins/SKILL.md). Pins live in `build/fetch_binaries.py`; `--repin <url>` rewrites one, `--check-urls` probes them all (weekly `pin-health` workflow).
 - **Diagnostics** — [agents/skills/debug/SKILL.md](agents/skills/debug/SKILL.md).

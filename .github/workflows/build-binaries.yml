@@ -175,6 +175,8 @@ jobs:
             find dist/clipgen.app -path "*ocr_models/$rec" | grep -q . \
               || { echo "::error::bundle lacks the vendored OCR rec model $rec"; exit 1; }
           done
+          find dist/clipgen.app -path "*speaker_models/speaker_embed.onnx" | grep -q . \
+            || { echo "::error::bundle lacks the vendored speaker model"; exit 1; }
 
       - name: Verify no in-process FFmpeg libraries (macOS)
         if: matrix.os == 'macos-latest'
@@ -269,6 +271,9 @@ jobs:
             if (-not (Test-Path "dist/clipgen/lib/ocr_models/$rec")) {
               throw "bundle lacks the vendored OCR rec model $rec"
             }
+          }
+          if (-not (Test-Path "dist/clipgen/lib/speaker_models/speaker_embed.onnx")) {
+            throw "bundle lacks the vendored speaker model"
           }
 
       - name: Smoke-launch the frozen exe (Windows)

@@ -21,6 +21,10 @@
     agentErrorsSeen: {},
     selectedParticipant: null,
     segments: [],
+    // {enabled, labels, count} from api/transcript; null until loaded.
+    speakers: null,
+    // False when the bundled speaker model is missing; the pill switch disables.
+    speakerModel: true,
     corrections: [],
     knownTerms: [],
     tasks: [],
@@ -328,11 +332,28 @@
     var latest = null;
     for (var i = 0; i < state.tasks.length; i++) {
       var t = state.tasks[i];
-      if (t.participant !== pid) continue;
+      if (t.participant !== pid || _isSpeakerTask(t)) continue;
       // Priority: running > queued > failed > completed/cancelled > stale
       if (!latest) { latest = t; continue; }
       var order = { running: 5, queued: 4, failed: 3, completed: 2, cancelled: 1 };
       if ((order[t.status] || 0) > (order[latest.status] || 0)) latest = t;
+    }
+    return latest;
+  }
+
+  // Diarization rides the same task list; streaming and ETA paths must skip it.
+  function _isSpeakerTask(t) {
+    return !!t && t.kind === "speakers";
+  }
+
+  function _speakerTaskForSelected() {
+    var pid = state.selectedParticipant;
+    if (!pid) return null;
+    var latest = null;
+    for (var i = 0; i < state.tasks.length; i++) {
+      var t = state.tasks[i];
+      if (t.participant !== pid || !_isSpeakerTask(t)) continue;
+      if (!latest || t.created_at > latest.created_at) latest = t;
     }
     return latest;
   }
@@ -374,6 +395,7 @@
   function computeIndicatorState() {
     var pid = state.selectedParticipant;
     var task = _taskForSelectedParticipant();
+    var spk = _speakerTaskForSelected();
     var row = _selectedParticipantRow();
     var cls = "status-indicator--ready";
     var taskLine;
@@ -397,6 +419,15 @@
     } else if (task && task.status === "failed") {
       cls = "status-indicator--error";
       taskLine = pid + ": transcription failed" + (task.error ? " (" + task.error + ")" : "");
+    } else if (spk && spk.status === "running") {
+      cls = "status-indicator--working";
+      taskLine = pid + ": detecting speakers\u2026 " + Math.round((spk.progress || 0) * 100) + "%";
+    } else if (spk && spk.status === "queued") {
+      cls = "status-indicator--working";
+      taskLine = pid + ": speaker detection queued";
+    } else if (spk && spk.status === "failed" && speakersOn()) {
+      cls = "status-indicator--error";
+      taskLine = pid + ": speaker detection failed" + (spk.error ? " (" + spk.error + ")" : "");
     } else if (row && row.has_transcript) {
       taskLine = pid + ": " + (row.segment_count || 0) + " segments";
       if (row.has_stale_artifacts) taskLine += " \u00B7 artifacts outdated";
@@ -647,6 +678,7 @@
       state.participants = data.participants;
       _reportAgentErrors(data.participants);
       state.hasSheet = !!data.has_sheet;
+      state.speakerModel = data.speaker_model !== false;
       state.transcribePrewarm = data.transcribe_prewarm || "queue_open";
       renderPills();
       refreshTopNavActions();
@@ -704,6 +736,7 @@
     _stopCitationsPoll();
     _stopFrictionPoll();
     hideMarkPopover();
+    hideSpeakerPopover();
     state.selectedParticipant = pid;
     setStoredUIStateField("transcripts", "selectedParticipant", pid);
     // Restore transcribe-range markers; loadedmetadata clamps them later.
@@ -801,6 +834,7 @@
 
     var taskForPid = null;
     state.tasks.forEach(function (t) {
+      if (_isSpeakerTask(t)) return;
       if (t.participant === pid && (t.status === "running" || t.status === "queued")) {
         taskForPid = t;
       }
@@ -824,6 +858,7 @@
       });
     } else {
       state.segments = [];
+      state.speakers = null;
       state.streamingParticipant = null;
       renderSegments();
       // Not taskForPid: the pane must match the indicator's pick among duplicate tasks.
@@ -884,16 +919,26 @@
       if (ver !== state.participantReqVer) return;
       if (!data.ok) {
         state.segments = [];
+        state.speakers = null;
         renderSegments();
         renderTimeline();
         return;
       }
       state.segments = data.segments;
+      state.speakers = data.speakers || null;
       state.activeSegmentIndex = -1;
       renderSegments();
       renderTimeline();
     });
   }
+
+  // ---- Speaker delegators; implementation in transcripts-speakers.js ----
+  function speakersOn() { return !!(TS.speakersOn && TS.speakersOn()); }
+  function speakerName() { return TS.speakerName && TS.speakerName.apply(null, arguments); }
+  function speakerChipHtml() { return (TS.speakerChipHtml && TS.speakerChipHtml.apply(null, arguments)) || ""; }
+  function showSpeakerPopover() { return TS.showSpeakerPopover && TS.showSpeakerPopover.apply(null, arguments); }
+  function hideSpeakerPopover() { return TS.hideSpeakerPopover && TS.hideSpeakerPopover(); }
+  function initSpeakers() { return TS.initSpeakers && TS.initSpeakers(); }
 
   // ---- Analysis panel delegators; implementation in transcripts-agents.js ----
   function loadSummary() { return TS.loadSummary && TS.loadSummary.apply(null, arguments); }
@@ -944,6 +989,7 @@
     empty.classList.add("hidden");
 
     var html = "";
+    var spkOn = speakersOn();
     for (var i = 0; i < state.segments.length; i++) {
       var seg = state.segments[i];
       var activeClass = i === state.activeSegmentIndex ? " active" : "";
@@ -993,6 +1039,10 @@
         }
       }
       html += '</span>';
+      if (spkOn) {
+        var prevSpk = i > 0 ? state.segments[i - 1].speaker : null;
+        html += speakerChipHtml(seg.speaker, { repeat: !!seg.speaker && seg.speaker === prevSpk });
+      }
       // Word spans carry data-ws/data-we for the karaoke sweep; count mismatch leaves them untimed.
       var tokens = seg.text.split(/(\s+)/);
       var wordCount = 0;
@@ -1289,6 +1339,7 @@
         start: s.start,
         end: s.end,
         text: s.text,
+        speaker: s.speaker,
         marks: [],
       });
     }
@@ -1340,9 +1391,20 @@
         var src = isStreaming ? (_partialRender.segments || []) : state.segments;
         var segCopy = src[idx];
         if (!segCopy) return;
-        navigator.clipboard.writeText(segCopy.text).then(function () {
+        var copyText = segCopy.text;
+        if (!isStreaming && segCopy.speaker && speakersOn()) {
+          copyText = speakerName(segCopy.speaker) + ": " + copyText;
+        }
+        navigator.clipboard.writeText(copyText).then(function () {
           showToast("Copied to clipboard");
         });
+        return;
+      }
+
+      var spkEl = e.target.closest(".segment-speaker");
+      if (spkEl && row.contains(spkEl) && spkEl.hasAttribute("data-speaker")) {
+        e.stopPropagation();
+        showSpeakerPopover(spkEl, spkEl.getAttribute("data-speaker"), idx);
         return;
       }
 
@@ -2116,7 +2178,7 @@
     var completed = false;
     for (var i = 0; i < state.tasks.length; i++) {
       var t = state.tasks[i];
-      if (t.participant !== pid) continue;
+      if (t.participant !== pid || _isSpeakerTask(t)) continue;
       if (t.status === "running" || t.status === "queued") running = true;
       else if (t.status === "completed") completed = true;
     }
@@ -2137,6 +2199,7 @@
       if (!(data.ok && data.segments && data.segments.length > 0)) return;
       state.streamingParticipant = null;
       state.segments = data.segments;
+      state.speakers = data.speakers || null;
       state.activeSegmentIndex = -1;
       renderSegments();
       renderTimeline();
@@ -2168,6 +2231,7 @@
       var selectedRunningTask = null;
       if (state.selectedParticipant) {
         data.tasks.forEach(function (t) {
+          if (_isSpeakerTask(t)) return;
           if (t.participant === state.selectedParticipant && t.status === "running" && t.partial_count) {
             selectedRunningTask = t;
           }
@@ -2188,17 +2252,20 @@
 
       var hasActive = false;
       var newlyCompleted = [];
+      var newlySpeakers = [];
       data.tasks.forEach(function (t) {
         if (t.status === "queued" || t.status === "running") hasActive = true;
         if (t.status === "completed" && !_refreshedCompletedTaskIds[t.id]) {
-          newlyCompleted.push(t.participant);
+          // Speaker passes reload labels only; they never reset marks or agents.
+          (_isSpeakerTask(t) ? newlySpeakers : newlyCompleted).push(t.participant);
           _refreshedCompletedTaskIds[t.id] = true;
         }
       });
 
       // Refresh on completion, while any agent runs, and through the grace window.
       var needsRefresh =
-        newlyCompleted.length > 0 || _anyAgentActive() || _postCompletionGrace > 0;
+        newlyCompleted.length > 0 || newlySpeakers.length > 0 ||
+        _anyAgentActive() || _postCompletionGrace > 0;
       if (newlyCompleted.length > 0) {
         // Re-arm per completion so a queue keeps extending the window.
         _postCompletionGrace = POST_COMPLETION_GRACE_CYCLES;
@@ -2217,6 +2284,9 @@
             loadTranscript(state.selectedParticipant);
             loadSummary(state.selectedParticipant);
             loadFriction(state.selectedParticipant);
+          } else if (state.selectedParticipant &&
+              newlySpeakers.indexOf(state.selectedParticipant) >= 0) {
+            loadTranscript(state.selectedParticipant);
           } else if (state.selectedParticipant) {
             // Agents may be chaining server-side; surface the running state.
             _rearmSelectedAgentPanels();
@@ -2632,6 +2702,15 @@
       if (state.selectedParticipant) loadTranscript(state.selectedParticipant);
     }
     if (applyCrossRefSetting(applied, settings)) rerenderCrossRefs();
+    var spk = applied && applied.TRANSCRIBE_SPEAKERS !== undefined
+      ? applied.TRANSCRIBE_SPEAKERS
+      : _settingValueFromRecords(settings, "TRANSCRIBE_SPEAKERS");
+    if (spk !== undefined && !!spk !== CLIPGEN_CONFIG.transcribeSpeakers) {
+      CLIPGEN_CONFIG.transcribeSpeakers = !!spk;
+      // Unset pill switches follow the global; the transcript re-reads chip visibility.
+      renderPills();
+      if (state.selectedParticipant) loadTranscript(state.selectedParticipant);
+    }
   }
 
   // Shared by the settings modal and the command palette's cross-ref command.
@@ -2840,6 +2919,7 @@
     initSummaryActions();
     initFriction();
     initFrictionMode();
+    initSpeakers();
     initTranscriptSettings();
     initTopNavActions();
     initCommandPalette();
@@ -2898,7 +2978,10 @@
   TS.showToast = showToast;
   TS.reportAgentError = reportAgentError;
   // Hub helpers the satellites call outward.
-  TS.loadTranscript = loadTranscript; // corrections, search, agents
+  TS.loadTranscript = loadTranscript; // corrections, search, agents, speakers
+  TS.loadParticipants = loadParticipants; // speakers
+  TS.hideMarkPopover = hideMarkPopover; // speakers (one popover at a time)
+  TS._isSpeakerTask = _isSpeakerTask; // video, pills
   TS.findOverlapsForSearch = findOverlapsForSearch; // search
   TS.selectParticipant = selectParticipant; // search, pills
   TS.cycleParticipant = cycleParticipant; // video (Z/X participant cycle)

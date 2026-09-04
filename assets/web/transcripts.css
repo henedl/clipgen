@@ -391,6 +391,8 @@ body {
   font-variant-numeric: tabular-nums;
   color: var(--color-text-dim);
   margin-left: auto;
+  white-space: nowrap;
+  flex-shrink: 0;
 }
 
 /* Transcribe-range marker readout (matches Screenspace's .marker-info, minus
@@ -400,13 +402,7 @@ body {
   font-family: var(--font-mono);
   color: var(--color-text-dim);
   margin-left: var(--space-2);
-}
-
-#setInBtn,
-#setOutBtn,
-#clearMarkersBtn {
-  margin-left: var(--space-1);
-  flex-shrink: 0;
+  white-space: nowrap;
 }
 
 #timelineRow {
@@ -1439,7 +1435,8 @@ body {
   transform: scale(1.1);
 }
 
-.mark-popover-label {
+.mark-popover-label,
+.speaker-popover-input {
   width: 100%;
   height: 26px;
   padding: 0 var(--space-2);
@@ -1453,8 +1450,91 @@ body {
   box-sizing: border-box;
 }
 
-.mark-popover-label:focus {
+.mark-popover-label:focus,
+.speaker-popover-input:focus {
   border-color: var(--color-accent);
+}
+
+/* Speaker popover: rename (global) above, reassign this line below. */
+.speaker-popover {
+  position: fixed;
+  width: 200px;
+  padding: var(--space-2);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.speaker-popover.hidden {
+  display: none;
+}
+
+.speaker-popover-name {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+
+.speaker-popover-reset {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  padding: var(--space-1);
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--color-text-dim);
+  cursor: pointer;
+  transition: color var(--duration-fast), background var(--duration-fast);
+}
+
+.speaker-popover-reset:hover {
+  color: var(--color-text);
+  background: var(--color-surface-alt);
+}
+
+.speaker-popover-reset-icon {
+  display: block;
+  width: var(--icon-size-sm);
+  height: var(--icon-size-sm);
+  background-color: currentColor;
+  mask-image: url(icons/arrow-uturn-left.svg);
+  -webkit-mask-image: url(icons/arrow-uturn-left.svg);
+  mask-size: contain;
+  -webkit-mask-size: contain;
+  mask-repeat: no-repeat;
+  -webkit-mask-repeat: no-repeat;
+}
+
+.speaker-popover-assign-label {
+  color: var(--color-text-dim);
+  font-size: var(--text-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.speaker-popover-assign {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+}
+
+/* Reuses the .segment-speaker chip look; sized to content, clickable. */
+.speaker-popover-chip {
+  flex: 0 0 auto;
+  margin-top: 0;
+  cursor: pointer;
+  font-family: inherit;
+}
+
+.speaker-popover-chip.active {
+  outline: 2px solid var(--spk);
+  outline-offset: 1px;
+}
+
+.speaker-popover-chip--new {
+  --spk: var(--color-text-dim);
+  border-style: dashed;
 }
 
 /* Optional severity selector — mirrors the label input's shell. Options are
@@ -1578,6 +1658,61 @@ body {
   user-select: none;
   position: relative;
 }
+
+/* Speaker chip: second gutter column; --spk comes from the .spk-N ring below. */
+.segment-speaker {
+  flex: 0 0 5rem;
+  min-width: 0;
+  align-self: flex-start;
+  margin-top: var(--space-1);
+  padding: 0 var(--space-1-5);
+  font-size: var(--text-xs);
+  font-weight: 500;
+  line-height: 1.5;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  border-radius: var(--radius-sm);
+  border: 1px solid color-mix(in oklch, var(--spk) 50%, transparent);
+  background: color-mix(in oklch, var(--spk) 18%, transparent);
+  color: var(--spk);
+  cursor: text;
+  user-select: none;
+  transition: opacity var(--duration-fast), background var(--duration-fast);
+}
+
+.segment-speaker--repeat {
+  opacity: 0.45;
+}
+
+.segment-row:hover .segment-speaker--repeat {
+  opacity: 0.8;
+}
+
+.segment-speaker:hover {
+  background: color-mix(in oklch, var(--spk) 30%, transparent);
+}
+
+.segment-speaker--none {
+  visibility: hidden;
+}
+
+.search-result-row .segment-speaker {
+  flex-basis: auto;
+  max-width: 5rem;
+  margin-top: 0;
+  cursor: default;
+}
+
+/* Eight categorical hues shared with Screenspace regions; ids wrap in JS. */
+.spk-1 { --spk: var(--region-color-1); }
+.spk-2 { --spk: var(--region-color-2); }
+.spk-3 { --spk: var(--region-color-3); }
+.spk-4 { --spk: var(--region-color-4); }
+.spk-5 { --spk: var(--region-color-5); }
+.spk-6 { --spk: var(--region-color-6); }
+.spk-7 { --spk: var(--region-color-7); }
+.spk-8 { --spk: var(--region-color-8); }
 
 .segment-xref-badges {
   position: absolute;
@@ -2016,6 +2151,17 @@ body {
   border-radius: var(--radius-sm);
 }
 
+/* Speaker detection in flight; --color-pulse is the working hue. */
+.pill-speakers-badge {
+  display: inline-block;
+  font-size: var(--text-xs);
+  color: var(--color-pulse);
+}
+
+.pill-progress--speakers {
+  background: color-mix(in srgb, var(--color-pulse) 22%, transparent);
+}
+
 /* Bare muted glyph, no border/chip — this is informational (the video simply
    has no sheet column), not a warning about wrong output like the stale badge. */
 .pill-offsheet-badge {
@@ -2064,10 +2210,29 @@ body {
   letter-spacing: 0.05em;
 }
 
-/* Keeps the option rows a consistent width whatever the model/language names
-   are; everything else comes from the `select` base in tokens.css. */
+/* One width for every picker whatever the model/language names are; the closed
+   control ellipsizes, the open list sizes itself. Base look: tokens.css. */
 .pill-options select {
-  min-width: 110px;
+  width: 132px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Native box like .param-modal-checkbox; accent matches the selects. */
+.pill-options-check {
+  width: auto;
+  height: auto;
+  flex: none;
+  margin: 0;
+  accent-color: var(--color-accent);
+  cursor: pointer;
+}
+
+.pill-options-check:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
 }
 
 /* Transcribe-range readout in the Range row (set via the timeline's I/O). */

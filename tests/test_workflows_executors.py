@@ -19,6 +19,7 @@ import screenspace
 import utils
 import video
 import viewer
+import pytest
 import workflows
 
 
@@ -1519,3 +1520,45 @@ def test_data_export_partial_write_failure_rolls_back(tmp_path, monkeypatch):
     # Neither the failed CSV nor the previously-written JSON remains.
     assert not (tmp_path / "export_events_P01.json").exists()
     assert not (tmp_path / "export_events_P01.csv").exists()
+
+
+@pytest.mark.parametrize(
+    ("param", "global_on", "expected"),
+    [
+        ({}, False, False),
+        ({}, True, True),
+        ({"speakers": "on"}, False, True),
+        ({"speakers": "off"}, True, False),
+    ],
+)
+def test_transcribe_runs_speaker_pass_per_param(
+    tmp_path, monkeypatch, param, global_on, expected
+):
+    import config
+    import transcripts
+
+    monkeypatch.setattr(config, "TRANSCRIBE_SPEAKERS", global_on)
+    segs = [{"start": 0.0, "end": 1.0, "text": "hi"}]
+    monkeypatch.setattr(
+        transcripts,
+        "transcribe_video",
+        lambda path, **kw: {
+            "segments": segs,
+            "language": "en",
+            "source_file": path,
+            "model": "base",
+        },
+    )
+    calls: list[list[str]] = []
+
+    def fake_label(paths, segments, audio_index, **kw):
+        calls.append(list(paths))
+        for s in segments:
+            s["speaker"] = "1"
+        return {"enabled": True, "labels": {}, "count": 1}
+
+    monkeypatch.setattr(transcripts, "label_speakers", fake_label)
+    src = {"participant": "P01", "video_paths": [str(tmp_path / "study_P01.mp4")]}
+    out = _run("transcribe", _ctx(tmp_path), {"video": src}, param)
+    assert (len(calls) == 1) is expected
+    assert (out["segments"]["segments"][0].get("speaker") == "1") is expected

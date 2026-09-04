@@ -542,3 +542,19 @@ def test_bundle_writer_events_and_pins_coexist(tmp_path, screenspace_manifest):
         "clipgen_export_screenspace_pins.json",
         "clipgen_export_screenspace_pins.csv",
     }
+
+
+def test_build_transcript_segments_carries_speakers(transcripts_manifest):
+    entry = transcripts_manifest["source_transcripts"]["P01"]
+    entry["segments"][0]["speaker"] = "1"
+    entry["segments"][1]["speaker"] = "2"
+    entry["speakers"] = {"enabled": True, "labels": {"1": "Moderator"}, "count": 2}
+    rows = {
+        r["segment_id"]: r
+        for r in data_export.build_transcript_segments(transcripts_manifest)
+    }
+    assert rows["P01:0"]["speaker"] == "1"
+    assert rows["P01:0"]["speaker_name"] == "Moderator"
+    assert rows["P01:1"]["speaker_name"] == "Speaker 2"
+    assert rows["P02:0"]["speaker"] == ""
+    assert rows["P02:0"]["speaker_name"] == ""

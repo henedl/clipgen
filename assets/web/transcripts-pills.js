@@ -33,7 +33,12 @@
     _refreshAgentStateNow = TS._refreshAgentStateNow,
     _trFetchModels = TS._trFetchModels,
     ensureAgentModelInstalled = TS.ensureAgentModelInstalled,
-    _confirmUncachedWhisperModels = TS._confirmUncachedWhisperModels;
+    _confirmUncachedWhisperModels = TS._confirmUncachedWhisperModels,
+    _isSpeakerTask = TS._isSpeakerTask,
+    speakersEnabledFor = TS.speakersEnabledFor, // speakers satellite (loads before this one)
+    setSpeakersEnabled = TS.setSpeakersEnabled,
+    regenerateSpeakers = TS.regenerateSpeakers,
+    stopSpeakers = TS.stopSpeakers;
 
   // Default icon left, hover icon right; the click always matches the status.
   var PILL_TRIGGER = {
@@ -73,8 +78,26 @@
     return "idle";
   }
 
-  function pillState(p, taskByPid) {
-    var task = taskByPid[p.id];
+  // Latest task per participant, bucketed: tx (transcription) and spk (speakers).
+  function _indexTasks() {
+    var idx = { tx: {}, spk: {} };
+    state.tasks.forEach(function (t) {
+      var bucket = _isSpeakerTask(t) ? idx.spk : idx.tx;
+      if (!bucket[t.participant] || t.created_at > bucket[t.participant].created_at) {
+        bucket[t.participant] = t;
+      }
+    });
+    return idx;
+  }
+
+  function _agentsAttr(s) {
+    return s.agents.transcription + "," + s.agents.summary + "," + s.agents.citations + "," +
+      s.agents.friction + "," + s.agents.speakers;
+  }
+
+  function pillState(p, idx) {
+    var task = idx.tx[p.id];
+    var spkTask = idx.spk[p.id];
     var status = "idle";
     var progress = 0;
     var taskId = null;
@@ -97,11 +120,22 @@
       status = "completed";
       progress = 100;
     }
+    var spkStatus = "idle";
+    var spkProgress = 0;
+    if (spkTask && (spkTask.status === "running" || spkTask.status === "queued")) {
+      spkStatus = spkTask.status;
+      if (spkTask.status === "running") spkProgress = Math.round((spkTask.progress || 0) * 100);
+    } else if (spkTask && spkTask.status === "failed") {
+      spkStatus = "failed";
+    } else if (p.speakers && p.speakers.count > 0) {
+      spkStatus = "done";
+    }
     var agents = {
       transcription: _dotStateTranscription(p, task),
       summary: (p.agents && p.agents.summary) || "idle",
       citations: (p.agents && p.agents.citations) || "idle",
       friction: (p.agents && p.agents.friction) || "idle",
+      speakers: spkStatus,
     };
     return {
       status: status,
@@ -110,6 +144,7 @@
       agents: agents,
       // Running sub-state ("loading_model" / "transcribing") for the dot tooltip.
       phase: task ? task.phase : null,
+      speakers: { status: spkStatus, taskId: spkTask ? spkTask.id : null, progress: spkProgress },
     };
   }
 
@@ -129,12 +164,7 @@
       return;
     }
 
-    var taskByPid = {};
-    state.tasks.forEach(function (t) {
-      if (!taskByPid[t.participant] || t.created_at > taskByPid[t.participant].created_at) {
-        taskByPid[t.participant] = t;
-      }
-    });
+    var idx = _indexTasks();
 
     // In-place patch when structure is unchanged; preserves the open pane.
     var existing = container.querySelectorAll(".pill-wrap[data-pid]");
@@ -142,12 +172,13 @@
       var canPatch = true;
       for (var k = 0; k < state.participants.length; k++) {
         var p0 = state.participants[k];
-        var s0 = pillState(p0, taskByPid);
-        var agentsAttr = s0.agents.transcription + "," + s0.agents.summary + "," + s0.agents.citations + "," + s0.agents.friction;
+        var s0 = pillState(p0, idx);
         if (existing[k].getAttribute("data-pid") !== p0.id ||
             existing[k].getAttribute("data-status") !== s0.status ||
             existing[k].getAttribute("data-active") !== (state.selectedParticipant === p0.id ? "1" : "0") ||
-            existing[k].getAttribute("data-agents") !== agentsAttr ||
+            existing[k].getAttribute("data-agents") !== _agentsAttr(s0) ||
+            // A speaker pass starting or finishing must rebuild the badge and fill.
+            existing[k].getAttribute("data-speakers") !== s0.speakers.status ||
             // Phase feeds the dot tooltip closure; a flip must rebuild.
             existing[k].getAttribute("data-phase") !== (s0.phase || "") ||
             existing[k].getAttribute("data-offsheet") !== offSheetFlag(p0) ||
@@ -160,13 +191,13 @@
         for (k = 0; k < state.participants.length; k++) {
           var wrap = existing[k];
           p0 = state.participants[k];
-          s0 = pillState(p0, taskByPid);
+          s0 = pillState(p0, idx);
           var bar = wrap.querySelector(".pill-progress");
-          if (bar) bar.style.width = s0.progress + "%";
+          if (bar) bar.style.width = _pillFillPercent(s0) + "%";
         }
         // The open pane tracks state the guard cannot see, so refresh here too.
         if (state.pillOptionsOpen !== null) {
-          _refreshPillOptionsContent(state.pillOptionsOpen, taskByPid);
+          _refreshPillOptionsContent(state.pillOptionsOpen, idx);
         }
         return;
       }
@@ -176,7 +207,7 @@
     var openPid = state.pillOptionsOpen;
     var frag = document.createDocumentFragment();
     state.participants.forEach(function (p) {
-      frag.appendChild(buildPillWrap(p, taskByPid));
+      frag.appendChild(buildPillWrap(p, idx));
     });
     container.innerHTML = "";
     container.appendChild(frag);
@@ -186,14 +217,19 @@
       var floating = document.querySelector("body > .pill-options");
       if (newWrap && floating) {
         // Repositions against the rebuilt wrap on its own.
-        _refreshPillOptionsContent(openPid, taskByPid);
+        _refreshPillOptionsContent(openPid, idx);
       } else {
         closePillOptions();
       }
     }
   }
 
-  function _refreshPillOptionsContent(pid, taskByPid) {
+  // A running speaker pass drives the fill; otherwise transcription does.
+  function _pillFillPercent(s) {
+    return s.speakers.status === "running" ? s.speakers.progress : s.progress;
+  }
+
+  function _refreshPillOptionsContent(pid, idx) {
     var floating = document.querySelector("body > .pill-options[data-pid='" + pid + "']");
     if (!floating) return;
     var p = null;
@@ -201,28 +237,65 @@
       if (state.participants[i].id === pid) { p = state.participants[i]; break; }
     }
     if (!p) return;
-    var s = pillState(p, taskByPid);
+    var s = pillState(p, idx);
     // Captured before the swap: a rebuild may add the audio-track row.
     var navId = _pillNavCursorId();
     var fresh = buildPillOptions(p, s);
     fresh.setAttribute("data-pid", pid);
+    var wrap = _findPillWrap(pid);
+    if (_paneShape(fresh) === _paneShape(floating)) {
+      // Same rows: swap only the agent section; selects keep their options.
+      var oldAgents = floating.querySelector(".pill-options-agents");
+      var newAgents = fresh.querySelector(".pill-options-agents");
+      if (oldAgents && newAgents) oldAgents.parentNode.replaceChild(newAgents, oldAgents);
+      _syncPaneRows(floating, fresh);
+      if (wrap) _positionPillOptions(floating, wrap);
+      _pillNavRestoreCursor(navId);
+      return;
+    }
     floating.parentNode.replaceChild(fresh, floating);
     // Fixed-position pane: the fresh node lacks the inline left/top.
-    var wrap = _findPillWrap(pid);
     if (wrap) _positionPillOptions(fresh, wrap);
     // The swap discards the painted cursor while pillOptionsCursor stays set.
     _pillNavRestoreCursor(navId);
   }
 
-  function buildPillWrap(p, taskByPid) {
-    var s = pillState(p, taskByPid);
+  // Row identity of a pane: nav ids in order plus the optional rows present.
+  function _paneShape(pane) {
+    var ids = [];
+    var nodes = pane.querySelectorAll("[data-nav-id]");
+    for (var i = 0; i < nodes.length; i++) ids.push(nodes[i].getAttribute("data-nav-id"));
+    if (pane.querySelector(".pill-options-group")) ids.push("audio-group");
+    if (pane.querySelector(".pill-options-range")) ids.push("range");
+    return ids.join("|");
+  }
+
+  // Copy the poll-driven bits of the top rows without rebuilding them.
+  function _syncPaneRows(live, fresh) {
+    var liveBox = live.querySelector(".pill-options-check");
+    var freshBox = fresh.querySelector(".pill-options-check");
+    if (liveBox && freshBox) {
+      liveBox.checked = freshBox.checked;
+      liveBox.disabled = freshBox.disabled;
+    }
+    var pairs = [".pill-options-range", ".pill-options-hint"];
+    for (var i = 0; i < pairs.length; i++) {
+      var a = live.querySelector(pairs[i]);
+      var b = fresh.querySelector(pairs[i]);
+      if (a && b && a.textContent !== b.textContent) a.textContent = b.textContent;
+    }
+  }
+
+  function buildPillWrap(p, idx) {
+    var s = pillState(p, idx);
     var wrap = document.createElement("div");
     var isActive = state.selectedParticipant === p.id;
     wrap.className = "pill-wrap";
     wrap.setAttribute("data-pid", p.id);
     wrap.setAttribute("data-status", s.status);
     wrap.setAttribute("data-active", isActive ? "1" : "0");
-    wrap.setAttribute("data-agents", s.agents.transcription + "," + s.agents.summary + "," + s.agents.citations + "," + s.agents.friction);
+    wrap.setAttribute("data-agents", _agentsAttr(s));
+    wrap.setAttribute("data-speakers", s.speakers.status);
     wrap.setAttribute("data-phase", s.phase || "");
     wrap.setAttribute("data-offsheet", offSheetFlag(p));
     wrap.setAttribute("data-stale", p.has_stale_artifacts ? "1" : "0");
@@ -294,7 +367,13 @@
     // Progress fill (background layer)
     var prog = document.createElement("div");
     prog.className = "pill-progress";
-    prog.style.width = s.progress + "%";
+    var spkLive = s.speakers.status === "running" || s.speakers.status === "queued";
+    if (spkLive) {
+      classes.push("pill--speakers-" + s.speakers.status);
+      pill.className = classes.join(" ");
+      prog.classList.add("pill-progress--speakers");
+    }
+    prog.style.width = _pillFillPercent(s) + "%";
     pill.appendChild(prog);
 
     // Trigger — status icon doubles as action button (hover swaps the glyph)
@@ -322,6 +401,16 @@
       stale.textContent = "stale";
       stale.setAttribute("data-tooltip", "Artifacts built from an older transcript");
       pill.appendChild(stale);
+    }
+
+    // Speaker pass badge; the trigger stays on transcription.
+    if (spkLive) {
+      var spkBadge = document.createElement("span");
+      spkBadge.className = "pill-speakers-badge cg-shimmer";
+      spkBadge.textContent = "speakers";
+      spkBadge.setAttribute("data-tooltip",
+        s.speakers.status === "running" ? "Detecting speakers…" : "Speaker detection queued");
+      pill.appendChild(spkBadge);
     }
 
     // Chevron for options pane
@@ -460,7 +549,7 @@
         var navId = _pillNavCursorId();
         pane.insertBefore(
           buildAudioTrackRow(p, info, state.pillOverrides[p.id] || {}),
-          pane.querySelector(".pill-options-agents")
+          pane.querySelector(".pill-options-speakers") || pane.querySelector(".pill-options-agents")
         );
         _pillNavRestoreCursor(navId);
       });
@@ -494,10 +583,40 @@
       pane.appendChild(rangeRow);
     }
 
+    pane.appendChild(buildSpeakersRow(p));
+
     // Agent rows with dependency gating; re-running summary cascades to citations server-side.
     pane.appendChild(buildPillAgentsSection(p, s));
 
     return pane;
+  }
+
+  // Per-participant switch; unset follows the global TRANSCRIBE_SPEAKERS.
+  function buildSpeakersRow(p) {
+    var row = document.createElement("div");
+    row.className = "pill-options-row pill-options-speakers";
+    var label = document.createElement("label");
+    label.textContent = "Speakers";
+    label.htmlFor = "pillSpeakers-" + p.id;
+    var box = document.createElement("input");
+    box.type = "checkbox";
+    box.id = label.htmlFor;
+    box.className = "pill-options-check";
+    box.setAttribute("data-nav-id", "speakers");
+    box.checked = speakersEnabledFor(p);
+    if (state.speakerModel === false) {
+      box.disabled = true;
+      row.setAttribute("data-tooltip", "Speaker model is not installed");
+    } else {
+      row.setAttribute("data-tooltip", "Label lines by detected speaker");
+    }
+    box.addEventListener("change", function () {
+      box.disabled = true; // the reload rebuilds the pane
+      setSpeakersEnabled(p.id, box.checked);
+    });
+    row.appendChild(label);
+    row.appendChild(box);
+    return row;
   }
 
   // Track labels can be long and the popover is 220px, so clip here.
@@ -657,6 +776,22 @@
       },
     }));
 
+    // 5. Speakers — only while switched on; needs a finished transcript.
+    if (speakersEnabledFor(p)) {
+      section.appendChild(buildAgentRow({
+        pid: p.id,
+        label: "Speakers",
+        agent: "speakers",
+        depLabel: "transcription",
+        depMet: s.agents.transcription === "done",
+        agentState: s.agents.speakers,
+        hasResult: !!(p.speakers && p.speakers.count > 0),
+        cascadeWarning: false,
+        onStart: function () { regenerateSpeakers(p.id); },
+        onStop: function () { stopSpeakers(p.id); },
+      }));
+    }
+
     return section;
   }
 
@@ -683,7 +818,7 @@
     var btnLabel = document.createElement("span");
     btnLabel.className = "agent-run-label";
     btn.appendChild(btnLabel);
-    // Alt-hold hint: digits 1-4 route to these rows while the dropdown is open.
+    // Alt-hold hint: digits 1-5 route to these rows while the dropdown is open.
     var agentIdx = PILL_AGENT_ORDER.indexOf(opts.agent);
     if (agentIdx >= 0 && agentIdx < 9) {
       btn.setAttribute("data-hotkey", "transcripts.markCategory");
@@ -794,13 +929,7 @@
       if (state.participants[i].id === pid) { p = state.participants[i]; break; }
     }
     if (!p) return;
-    var taskByPid = {};
-    state.tasks.forEach(function (t) {
-      if (!taskByPid[t.participant] || t.created_at > taskByPid[t.participant].created_at) {
-        taskByPid[t.participant] = t;
-      }
-    });
-    var s = pillState(p, taskByPid);
+    var s = pillState(p, _indexTasks());
 
     // Body-mounted so it escapes the pill row's overflow clipping.
     var pane = buildPillOptions(p, s);
@@ -949,8 +1078,8 @@
     return state.pillOptionsOpen !== null;
   }
 
-  // Agent rows in display order; digits 1-4 map onto these.
-  var PILL_AGENT_ORDER = ["transcription", "summary", "citations", "friction"];
+  // Agent rows in display order; digits 1-5 map onto these.
+  var PILL_AGENT_ORDER = ["transcription", "summary", "citations", "friction", "speakers"];
 
   function triggerPillOption(n) {
     if (state.pillOptionsOpen === null) return false;
@@ -970,7 +1099,7 @@
     var pane = document.querySelector("body > .pill-options");
     if (!pane) return [];
     return Array.prototype.slice.call(
-      pane.querySelectorAll(".pill-options-row select, .pill-agent-btn")
+      pane.querySelectorAll(".pill-options-row select, .pill-options-check, .pill-agent-btn")
     );
   }
 
@@ -1032,6 +1161,9 @@
     if (cur && cur.tagName === "SELECT" && cur.options.length) {
       cur.selectedIndex = Math.max(0, Math.min(cur.selectedIndex + dir, cur.options.length - 1));
       cur.dispatchEvent(new Event("change", { bubbles: true }));
+    } else if (cur && cur.type === "checkbox" && !cur.disabled) {
+      // Right = on, Left = off; click() toggles and fires change.
+      if (cur.checked !== (dir > 0)) cur.click();
     }
   }
 
@@ -1040,6 +1172,8 @@
     if (state.pillOptionsCursor < 0 || !controls.length) return;
     var cur = controls[state.pillOptionsCursor];
     if (cur && cur.classList.contains("pill-agent-btn") && !cur.hasAttribute("disabled")) {
+      cur.click();
+    } else if (cur && cur.type === "checkbox" && !cur.disabled) {
       cur.click();
     }
   }

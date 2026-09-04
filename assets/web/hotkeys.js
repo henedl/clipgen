@@ -150,7 +150,7 @@
     { id: "transcripts.setOut",       section: "transcripts", group: "Transcribe range", label: "Set out marker", combos: ["O"] },
     { id: "transcripts.cyclePartPrev",  section: "transcripts", group: "Participants", label: "Previous participant", combos: ["Z"] },
     { id: "transcripts.cyclePartNext",  section: "transcripts", group: "Participants", label: "Next participant", combos: ["X"] },
-    { id: "transcripts.pillMenu",       section: "transcripts", group: "Participants", label: "Open participant options (then 1–4)", combos: ["Shift+O"] },
+    { id: "transcripts.pillMenu",       section: "transcripts", group: "Participants", label: "Open participant options (then 1–5)", combos: ["Shift+O"] },
     { id: "transcripts.pillNav",        section: "transcripts", group: "Participants", label: "Navigate open participant options", combos: ["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"], rebindable: false, displayKeys: "←↑↓→" },
     { id: "transcripts.pillActivate",   section: "transcripts", group: "Participants", label: "Run the focused option", combos: ["Enter"], rebindable: false },
     { id: "transcripts.toggleCaptions", section: "transcripts", group: "Playback", label: "Toggle captions", combos: ["C"] },

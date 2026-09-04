@@ -70,7 +70,7 @@ datas += _rapidocr_datas
 # guarded like ffmpeg below: a build that skipped the fetch must fail here.
 # "ocr_models" matches screenspace_ocr._vendored_rec_model's frozen lookup.
 sys.path.insert(0, str(Path(SPECPATH)))  # noqa: F821
-from fetch_binaries import OCR_MODEL_PINS, PINS  # noqa: E402
+from fetch_binaries import OCR_MODEL_PINS, PINS, SPEAKER_MODEL_PINS  # noqa: E402
 
 _ocr_vendor = Path(SPECPATH) / "vendor" / "ocr"  # noqa: F821
 _ocr_models = [pin["target"] for pin in OCR_MODEL_PINS]
@@ -81,6 +81,17 @@ if _missing_models:
         f"{sorted(_missing_models)}. Run `uv run build/fetch_binaries.py` first."
     )
 datas += [(str(_ocr_vendor / n), "ocr_models") for n in _ocr_models]
+# Vendored speaker-embedding model (fetch_binaries.py SPEAKER_MODEL_PINS).
+# "speaker_models" matches speakers.vendored_model_path's frozen lookup.
+_speaker_vendor = Path(SPECPATH) / "vendor" / "speakers"  # noqa: F821
+_speaker_models = [pin["target"] for pin in SPEAKER_MODEL_PINS]
+_missing_speaker = [n for n in _speaker_models if not (_speaker_vendor / n).is_file()]
+if _missing_speaker:
+    raise SystemExit(
+        f"clipgen.spec: vendored speaker models missing from {_speaker_vendor}: "
+        f"{sorted(_missing_speaker)}. Run `uv run build/fetch_binaries.py` first."
+    )
+datas += [(str(_speaker_vendor / n), "speaker_models") for n in _speaker_models]
 datas += [("../assets", "assets")]
 datas += [("VERSION", ".")]
 datas += [("../CHANGELOG.md", ".")]

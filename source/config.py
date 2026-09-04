@@ -466,6 +466,9 @@ TRANSCRIBE_CONDITION_ON_PREVIOUS_TEXT: bool = (
 )
 # Pre-load faster-whisper in Transcripts UI: off | queue_open | page_load.
 TRANSCRIBE_PREWARM: str = "queue_open"
+# Speaker attribution: label segments by detected speaker after transcription.
+TRANSCRIBE_SPEAKERS: bool = False
+TRANSCRIBE_SPEAKER_MAX: int = 4  # cluster cap, 2..8
 # Mark popover categories, {label, color}. "friction" is one bucket; type lives in each label.
 MARK_CATEGORIES: dict[str, dict[str, str]] = {
     "pain_point": {"label": "Pain Point", "color": "#dc2626"},
@@ -651,6 +654,8 @@ SETTINGS_DESCRIPTIONS: dict[str, str] = {
     "TRANSCRIBE_CONDITION_ON_PREVIOUS_TEXT": "Use prior segment text as context for the next decode; disable to reduce chained hallucinations.",
     "TRANSCRIBE_WORD_TIMESTAMPS": "Per-word timing via alignment. Tightens segment boundaries to the spoken words and enables the word-level playback highlight; adds decode time (roughly 10–30%).",
     "TRANSCRIBE_EDGE_SNAP": "Snap segment boundaries to measured speech energy in the decoded audio, trimming silence overshoot at segment edges. Effectively free.",
+    "TRANSCRIBE_SPEAKERS": "Detect who is speaking and label each transcript line (Speaker 1, Speaker 2, …). Runs the bundled speaker model after transcription; each participant pill can override this.",
+    "TRANSCRIBE_SPEAKER_MAX": "Most speakers to tell apart per session (2–8). The count is detected automatically up to this cap.",
     "MARK_CATEGORIES": "Categories available when marking transcript segments. Each entry has a label and a color swatch.",
     "HOTKEY_OVERRIDES": "Custom keyboard-shortcut bindings, keyed by action id. Click a shortcut to rebind it; an empty value disables the shortcut.",
     "HIGHLIGHTS_REEL_DURATION_SECONDS": "Maximum duration in seconds for the highlights reel time budget.",
@@ -955,6 +960,19 @@ STUDIO_SETTINGS: dict[str, dict[str, Any]] = {
         "tab": "Transcription",
         "group": "Transcription quality",
         "type": "bool",
+    },
+    "TRANSCRIBE_SPEAKERS": {
+        "tab": "Transcription",
+        "group": "Speakers",
+        "type": "bool",
+    },
+    "TRANSCRIBE_SPEAKER_MAX": {
+        "tab": "Transcription",
+        "group": "Speakers",
+        "type": "int",
+        "min": 2,
+        "max": 8,
+        "step": 1,
     },
     "MARK_CATEGORIES": {
         "tab": "Transcription",

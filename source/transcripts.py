@@ -74,6 +74,7 @@ from typing import Any, Literal, NotRequired, TypedDict
 
 import config
 import profiling
+import speakers
 import utils
 
 # ---------------------------------------------------------------------------
@@ -93,6 +94,8 @@ class TranscriptSegment(TypedDict):
     text: str
     # Present only when TRANSCRIBE_WORD_TIMESTAMPS produced per-word timing.
     words: NotRequired[list[TranscriptWord]]
+    # Cluster id "1".."N" from speakers.py; absent until a speaker pass ran.
+    speaker: NotRequired[str]
 
 
 class TranscriptResult(TypedDict):
@@ -100,6 +103,8 @@ class TranscriptResult(TypedDict):
     language: str
     source_file: str
     model: str
+    # User renames by speaker id; formatters fall back to "Speaker N".
+    speaker_labels: NotRequired[dict[str, str]]
 
 
 class ManifestSegment(TypedDict):
@@ -110,6 +115,7 @@ class ManifestSegment(TypedDict):
     end: float
     text: str
     words: NotRequired[list[TranscriptWord]]
+    speaker: NotRequired[str]
 
 
 # Known faster-whisper model variants with approximate download sizes.
@@ -883,6 +889,8 @@ def _shift_segment(segment: TranscriptSegment, offset: float) -> TranscriptSegme
             )
             for w in words
         ]
+    if "speaker" in segment:
+        shifted["speaker"] = segment["speaker"]
     return shifted
 
 
@@ -971,6 +979,32 @@ def transcribe_timeline(
         "source_file": " + ".join(path for path, _d, _c in timeline),
         "model": out_model,
     }
+
+
+def label_speakers(
+    video_paths: list[str],
+    segments: list[Any],
+    audio_index: int | None,
+    *,
+    cancel_flag: Callable[[], bool] | None = None,
+    on_progress: Callable[[float], None] | None = None,
+) -> dict[str, Any] | None:
+    """Speaker-label *segments* in place; returns the manifest ``speakers`` block or None."""
+    import video as video_mod
+
+    if not video_paths or not segments:
+        return None
+    timeline = video_mod.timeline_or_none(video_paths)
+    resolved = _resolve_audio_index(video_paths[0], audio_index)
+    return speakers.diarize_entry(
+        video_paths,
+        segments,
+        resolved,
+        timeline,
+        max_speakers=config.TRANSCRIBE_SPEAKER_MAX,
+        cancel_flag=cancel_flag,
+        on_progress=on_progress,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1100,6 +1134,8 @@ def apply_corrections(
         # Word timings stay; the frontend falls back to row-level highlight on corrected rows.
         if "words" in seg:
             new_seg["words"] = seg["words"]
+        if "speaker" in seg:
+            new_seg["speaker"] = seg["speaker"]
         corrected.append(new_seg)
 
     if total_applied > 0:
@@ -1238,12 +1274,15 @@ def filter_segments(
                     w["end"] = max(w["start"], w["end"])
             shifted.append(new_seg)
         filtered = shifted
-    return TranscriptResult(
+    out = TranscriptResult(
         segments=filtered,
         language=result["language"],
         source_file=result["source_file"],
         model=result["model"],
     )
+    if "speaker_labels" in result:
+        out["speaker_labels"] = result["speaker_labels"]
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -1272,6 +1311,15 @@ def _format_timestamp(seconds: float, fmt: Literal["srt", "vtt"]) -> str:
 # ---------------------------------------------------------------------------
 
 
+def _spoken_text(seg: TranscriptSegment, result: TranscriptResult) -> str:
+    """Segment text with a ``Name: `` prefix when a speaker id is present."""
+    speaker = seg.get("speaker")
+    if not speaker:
+        return seg["text"]
+    name = speakers.speaker_display_name(speaker, result.get("speaker_labels"))
+    return f"{name}: {seg['text']}"
+
+
 def _format_markdown(result: TranscriptResult) -> str:
     source_name = Path(result["source_file"]).name
     lines = [
@@ -1289,7 +1337,7 @@ def _format_markdown(result: TranscriptResult) -> str:
         start = utils.seconds_to_timestamp(seg["start"])
         end = utils.seconds_to_timestamp(seg["end"])
         lines.append(f"**[{start} - {end}]**")
-        lines.append(seg["text"])
+        lines.append(_spoken_text(seg, result))
         lines.append("")
     return "\n".join(lines)
 
@@ -1299,7 +1347,7 @@ def _format_srt(result: TranscriptResult) -> str:
     for i, seg in enumerate(result["segments"], start=1):
         start = _format_timestamp(seg["start"], "srt")
         end = _format_timestamp(seg["end"], "srt")
-        blocks.append(f"{i}\n{start} --> {end}\n{seg['text']}")
+        blocks.append(f"{i}\n{start} --> {end}\n{_spoken_text(seg, result)}")
     return "\n\n".join(blocks) + "\n" if blocks else ""
 
 
@@ -1309,7 +1357,12 @@ def _format_vtt(result: TranscriptResult) -> str:
         start = _format_timestamp(seg["start"], "vtt")
         end = _format_timestamp(seg["end"], "vtt")
         lines.append(f"{start} --> {end}")
-        lines.append(seg["text"])
+        speaker = seg.get("speaker")
+        if speaker:
+            name = speakers.speaker_display_name(speaker, result.get("speaker_labels"))
+            lines.append(f"<v {name}>{seg['text']}")
+        else:
+            lines.append(seg["text"])
         lines.append("")
     return "\n".join(lines)
 
@@ -1351,7 +1404,8 @@ def read_transcript(filepath: str) -> TranscriptResult | None:
     """Parse a transcript file back into a TranscriptResult.
 
     Detects format from file extension (.md, .srt, .vtt).
-    Returns None if the file cannot be read or parsed.
+    Returns None if the file cannot be read or parsed. Lossy on purpose:
+    speaker prefixes stay inside ``text`` and word timings are gone.
     """
     path = Path(filepath)
     if not path.is_file():
@@ -1510,6 +1564,7 @@ def create_transcript_task(
     audio_index: int | None = None,
     start_seconds: float | None = None,
     end_seconds: float | None = None,
+    diarize: bool = False,
 ) -> dict[str, Any]:
     """Create a new transcription task dict ready to enqueue.
 
@@ -1520,12 +1575,15 @@ def create_transcript_task(
     falls back to ``config.TRANSCRIBE_MODEL``, whisper auto-detect, and
     speech-track auto-detection respectively. *start_seconds*/*end_seconds*
     bound the transcription to a global-timeline window (in/out markers); None
-    means unbounded on that side.
+    means unbounded on that side. *diarize* runs the speaker pass after a
+    successful transcription (phase ``diarizing``).
     """
     return {
         "id": f"tr_{uuid.uuid4().hex[:8]}",
+        "kind": "transcribe",
         "participant": participant,
         "video_paths": video_paths,
+        "diarize": diarize,
         "model": model,
         "language": language,
         "audio_index": audio_index,
@@ -1533,6 +1591,41 @@ def create_transcript_task(
         "end_seconds": end_seconds,
         "status": TASK_STATUS_QUEUED,
         # Sub-state of running: "loading_model" (~10s cold, invisible to progress), then "transcribing".
+        "phase": "queued",
+        "progress": 0.0,
+        "partial_segments": [],
+        "result": None,
+        "error": None,
+        "created_at": datetime.now(UTC).isoformat(),
+        "completed_at": None,
+        "_cancelled": False,
+    }
+
+
+def create_speakers_task(
+    participant: str,
+    video_paths: list[str],
+    segments: list[dict[str, Any]],
+    *,
+    audio_index: int | None = None,
+) -> dict[str, Any]:
+    """Task that speaker-labels an existing transcript without re-transcribing.
+
+    *segments* is snapshotted; the server merges labels back by segment id so
+    edits made while the task ran are never clobbered.
+    """
+    return {
+        "id": f"sp_{uuid.uuid4().hex[:8]}",
+        "kind": "speakers",
+        "participant": participant,
+        "video_paths": video_paths,
+        "segments": copy.deepcopy(segments),
+        "audio_index": audio_index,
+        "model": None,
+        "language": None,
+        "start_seconds": None,
+        "end_seconds": None,
+        "status": TASK_STATUS_QUEUED,
         "phase": "queued",
         "progress": 0.0,
         "partial_segments": [],
@@ -1640,7 +1733,11 @@ class TranscriptWorker:
             slim: list[dict[str, Any]] = []
             for t in self._tasks.values():
                 segs = t.get("partial_segments") or []
-                light = {k: v for k, v in t.items() if k != "partial_segments"}
+                light = {
+                    k: v
+                    for k, v in t.items()
+                    if k not in ("partial_segments", "segments")
+                }
                 copied = copy.deepcopy(light)
                 copied["partial_count"] = len(segs)
                 slim.append(copied)
@@ -1704,9 +1801,75 @@ class TranscriptWorker:
                 except Exception as exc:
                     utils.warning_print(f"on_task_complete callback failed: {exc}")
 
+    def _fail(self, task: dict[str, Any], error: str) -> None:
+        with self._lock:
+            task["status"] = TASK_STATUS_FAILED
+            task["error"] = error
+            task["partial_segments"] = []
+            task["completed_at"] = datetime.now(UTC).isoformat()
+
+    def _run_diarize_phase(
+        self, task: dict[str, Any], segments: list[Any], audio_index: int | None
+    ) -> dict[str, Any] | None:
+        """Phase ``diarizing``: label *segments* in place; None on failure."""
+        with self._lock:
+            task["phase"] = "diarizing"
+            task["progress"] = 0.0
+            task["transcribe_started_at"] = datetime.now(UTC).isoformat()
+
+        def _progress(frac: float) -> None:
+            with self._lock:
+                task["progress"] = min(frac, 0.99)
+
+        return label_speakers(
+            task["video_paths"],
+            segments,
+            audio_index,
+            cancel_flag=lambda: bool(task.get("_cancelled")),
+            on_progress=_progress,
+        )
+
+    def _execute_speakers_task(self, task: dict[str, Any]) -> None:
+        """Speaker-label the task's segment snapshot."""
+        segments = task.get("segments") or []
+        if not segments:
+            self._fail(task, "No transcript to label.")
+            return
+        if not config.DEBUGGING and not speakers.is_speaker_model_available():
+            self._fail(task, "Speaker model is not installed.")
+            return
+        try:
+            audio_index = _resolve_audio_index(
+                task["video_paths"][0], task.get("audio_index")
+            )
+            block = self._run_diarize_phase(task, segments, audio_index)
+            # A cancel that landed after the last segment must not complete.
+            if task.get("_cancelled"):
+                raise speakers.DiarizationCancelled
+            if block is None:
+                self._fail(task, "Speaker detection failed.")
+                return
+            with self._lock:
+                task["status"] = TASK_STATUS_COMPLETED
+                task["progress"] = 1.0
+                task["partial_segments"] = []
+                task["result"] = {"segments": segments, "speakers": block}
+                task["completed_at"] = datetime.now(UTC).isoformat()
+        except speakers.DiarizationCancelled:
+            with self._lock:
+                task["status"] = TASK_STATUS_CANCELLED
+                task["partial_segments"] = []
+                task["completed_at"] = datetime.now(UTC).isoformat()
+        except Exception as exc:
+            self._fail(task, str(exc))
+
     def _execute_task(self, task: dict[str, Any]) -> None:
         """Run a single transcription task."""
         import video as video_mod
+
+        if task.get("kind") == "speakers":
+            self._execute_speakers_task(task)
+            return
 
         video_paths = task["video_paths"]
         if not video_paths:
@@ -1851,6 +2014,16 @@ class TranscriptWorker:
                     task["completed_at"] = datetime.now(UTC).isoformat()
                 return
 
+            # A failed speaker pass never fails the transcript; the block carries the error.
+            speakers_block: dict[str, Any] | None = None
+            if task.get("diarize"):
+                speakers_block = self._run_diarize_phase(
+                    task, result["segments"], audio_index
+                )
+                if speakers_block is None:
+                    speakers_block = speakers.speakers_block(0)
+                    speakers_block["error"] = "Speaker detection failed"
+
             with self._lock:
                 task["status"] = TASK_STATUS_COMPLETED
                 task["progress"] = 1.0
@@ -1872,9 +2045,11 @@ class TranscriptWorker:
                     "end_seconds": dispatch_end,
                     "transcribed_at": datetime.now(UTC).isoformat(),
                 }
+                if speakers_block is not None:
+                    task["result"]["speakers"] = speakers_block
                 task["completed_at"] = datetime.now(UTC).isoformat()
 
-        except _TranscriptionCancelled:
+        except (_TranscriptionCancelled, speakers.DiarizationCancelled):
             with self._lock:
                 task["status"] = TASK_STATUS_CANCELLED
                 task["partial_segments"] = []

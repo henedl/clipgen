@@ -6,6 +6,7 @@ I001 import sorting stays ignored in pyproject.toml: order is a contract.
 """
 
 import ast
+import re
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -66,3 +67,11 @@ def test_workflows_catalog_imports_only_config_and_utils() -> None:
     """Heavier deps (files, video) are late-imported inside adapters."""
     project = _module_level_imports("workflows_catalog") & _PROJECT_MODULES
     assert project <= {"config", "utils"}, project
+
+
+def test_speakers_stays_import_light() -> None:
+    """thinking_agents/data_export import it for names; numpy/onnxruntime load lazily."""
+    project = _module_level_imports("speakers") & _PROJECT_MODULES
+    assert project <= {"config", "utils", "profiling"}, project
+    text = (SOURCE / "speakers.py").read_text(encoding="utf-8")
+    assert not re.search(r"^import (numpy|onnxruntime)", text, re.MULTILINE)

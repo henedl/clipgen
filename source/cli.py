@@ -668,7 +668,7 @@ def _run_pre_transcribe(worksheet: Any, args: Any) -> None:
     overrides = spreadsheet.participant_filename_overrides(ctx)
 
     for pid in target_ids:
-        if pid in source_transcripts:
+        if source_transcripts.get(pid, {}).get("segments"):
             utils.info_print(f"Skipping {pid}: already transcribed.")
             skipped += 1
             continue
@@ -720,6 +720,14 @@ def _run_pre_transcribe(worksheet: Any, args: Any) -> None:
             "source_file": result["source_file"],
             "transcribed_at": datetime.now(UTC).isoformat(),
         }
+        if config.TRANSCRIBE_SPEAKERS:
+            block = transcripts.label_speakers(
+                [str(p) for p in source_paths],
+                source_transcripts[pid]["segments"],
+                None,
+            )
+            if block:
+                source_transcripts[pid]["speakers"] = block
         transcribed += 1
 
         transcripts.save_transcripts_manifest(source_transcripts, corrections)
@@ -2819,6 +2827,8 @@ def _apply_config_overrides(args: Any, cli_mode: bool) -> CliModeArgs:
         config.TRANSCRIBE_MODEL = args.whisper_model
     if getattr(args, "no_whisper_vad", False):
         config.TRANSCRIBE_VAD_FILTER = False
+    if getattr(args, "speakers", False):
+        config.TRANSCRIBE_SPEAKERS = True
     if getattr(args, "whisper_hallucination_silence", None) is not None:
         config.TRANSCRIBE_HALLUCINATION_SILENCE_THRESHOLD = (
             args.whisper_hallucination_silence

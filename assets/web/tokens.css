@@ -33,7 +33,7 @@
  * TASK:       --color-task-<tool> — one per Screenspace detector
  * STREAMS:    --stream-* — cross-stream metadata visualisations
  * CATEGORIES: --cat-* — transcript mark categories
- * REGIONS:    --region-color-1..8 — cycled by Screenspace region index
+ * REGIONS:    --region-color-1..8 — cycled by Screenspace region index and Transcripts speaker chips
  * SCROLLBAR:  --scrollbar-* — thumb/track/size for the global scrollbar rule
  * FORM:       --select-caret — the <select> chevron, baked per theme (see below)
  * LAYOUT:     --layout-* | --sidebar-width-* | --bottom-panel-height
