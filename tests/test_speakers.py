@@ -273,3 +273,19 @@ def test_vendored_model_embeds_unit_vectors():
     assert meta.get("sample_rate", "16000") == "16000"
     same = speakers.embed(noise)
     assert float(vec @ same) == pytest.approx(1.0, abs=1e-4)
+
+
+def test_remap_speaker_ids_keeps_old_ids_by_overlap():
+    previous = {"a": "1", "b": "1", "c": "2", "d": "2", "e": "2"}
+    # The fresh run swapped the ids and split one line into a third voice.
+    fresh = {"a": "2", "b": "2", "c": "1", "d": "1", "e": "3"}
+    assert speakers.remap_speaker_ids(previous, fresh) == {"2": "1", "1": "2", "3": "3"}
+
+
+def test_remap_speaker_ids_without_history_is_identity_and_fills_gaps():
+    assert speakers.remap_speaker_ids({}, {"a": "1", "b": "2"}) == {"1": "1", "2": "2"}
+    # Old id 1 vanished; the unmatched fresh id takes the lowest free slot.
+    assert speakers.remap_speaker_ids({"a": "2"}, {"a": "1", "b": "2"}) == {
+        "1": "2",
+        "2": "1",
+    }

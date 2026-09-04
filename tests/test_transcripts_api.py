@@ -3942,7 +3942,7 @@ def test_speakers_regenerate_resets_labels_and_enqueues(
     resp = tr_client.post("/transcripts/api/speakers/P01/regenerate")
     assert resp.status_code == 200
     assert resp.get_json()["task"]["kind"] == "speakers"
-    assert entry["speakers"]["labels"] == {}
+    assert entry["speakers"]["labels"] == {"1": "Mod"}, "renames survive a re-run"
     assert entry["speakers"]["enabled"] is True
     assert len(worker.enqueued) == 1
 
@@ -4189,6 +4189,7 @@ def test_speakers_segment_override_and_new_speaker(tr_client, monkeypatch, tmp_p
     assert resp.status_code == 200
     assert resp.get_json()["speaker"] == "2"
     assert entry["segments"][0]["speaker"] == "2"
+    assert entry["segments"][0]["speaker_manual"] is True
     assert transcripts_server._corrections_version > before
     # count + 1 introduces a new speaker; count + 2 does not exist.
     resp = tr_client.put(
@@ -4230,3 +4231,54 @@ def test_speakers_segment_override_requires_enabled(tr_client, monkeypatch, tmp_
         json={"segment_id": "P01:0", "speaker": "1"},
     )
     assert resp.status_code == 404
+
+
+def test_merge_speakers_task_remaps_ids_and_keeps_manual_lines(monkeypatch):
+    pid = "P01"
+    entry = {
+        "segments": [
+            {"id": "P01:0", "text": "a", "speaker": "1"},
+            {"id": "P01:1", "text": "b", "speaker": "1"},
+            {"id": "P01:2", "text": "c", "speaker": "2"},
+            {"id": "P01:3", "text": "d", "speaker": "2", "speaker_manual": True},
+        ],
+        "speakers": {"enabled": True, "labels": {"1": "Moderator"}, "count": 2},
+    }
+    monkeypatch.setattr(
+        transcripts_server,
+        "_manifest",
+        {"source_transcripts": {pid: entry}, "marks": []},
+        raising=False,
+    )
+    # The fresh run swapped the cluster ids and put the manual line on "1".
+    task = {
+        "id": "sp_again",
+        "kind": "speakers",
+        "participant": pid,
+        "status": transcripts.TASK_STATUS_COMPLETED,
+        "created_at": "9999",
+        "result": {
+            "segments": [
+                {"id": "P01:0", "speaker": "2"},
+                {"id": "P01:1", "speaker": "2"},
+                {"id": "P01:2", "speaker": "1"},
+                {"id": "P01:3", "speaker": "1"},
+            ],
+            "speakers": {"enabled": True, "labels": {}, "count": 2},
+        },
+    }
+    monkeypatch.setattr(
+        transcripts_server,
+        "_worker",
+        cast("transcripts.TranscriptWorker", _CompletedTasksWorker([task])),
+        raising=False,
+    )
+    transcripts_server._merged_task_ids.clear()
+    monkeypatch.setattr(transcripts, "save_transcripts_manifest", lambda *a, **k: None)
+
+    transcripts_server._on_task_complete()
+
+    assert [s["speaker"] for s in entry["segments"]] == ["1", "1", "2", "2"]
+    assert entry["segments"][3]["speaker_manual"] is True
+    assert entry["speakers"]["labels"] == {"1": "Moderator"}
+    assert entry["speakers"]["count"] == 2

@@ -704,6 +704,7 @@ def api_speakers_set(participant: str) -> FlaskResponse:
             _cancel_speakers_tasks(participant)
             for seg in entry.get("segments") or []:
                 seg.pop("speaker", None)
+                seg.pop("speaker_manual", None)
             entry["speakers"] = {"enabled": False}
             _bump_corrections_version()
         summary = _speakers_summary(entry)
@@ -714,7 +715,7 @@ def api_speakers_set(participant: str) -> FlaskResponse:
 @transcripts_bp.route("/api/speakers/<participant>/regenerate", methods=["POST"])
 @json_endpoint
 def api_speakers_regenerate(participant: str) -> FlaskResponse:
-    """Re-run speaker detection; cluster ids are re-minted, so renames reset."""
+    """Re-run speaker detection; the merge maps new ids onto the old ones."""
     if not _speaker_model_ready():
         raise ApiError("Speaker model is not installed", 409)
     with _manifest_lock:
@@ -724,7 +725,7 @@ def api_speakers_regenerate(participant: str) -> FlaskResponse:
         block = entry.get("speakers") or {}
         entry["speakers"] = {
             "enabled": True,
-            "labels": {},
+            "labels": dict(block.get("labels") or {}),
             "count": int(block.get("count") or 0),
         }
         task = _enqueue_speakers_task(participant, entry)
@@ -744,8 +745,8 @@ def api_speakers_stop(participant: str) -> FlaskResponse:
 def api_speakers_segment(participant: str) -> FlaskResponse:
     """Force one line onto a speaker: ``{"segment_id": "P01:3", "speaker": "2"}``.
 
-    ``speaker`` may be ``count + 1`` to introduce a new speaker. A later
-    regenerate re-mints every label, overrides included.
+    ``speaker`` may be ``count + 1`` to introduce a new speaker. The line is
+    flagged ``speaker_manual`` so a later regenerate keeps the choice.
     """
     data = require_json_body("Missing JSON body")
     segment_id = data.get("segment_id")
@@ -769,6 +770,7 @@ def api_speakers_segment(participant: str) -> FlaskResponse:
         if target is None:
             raise ApiError("Unknown segment", 404)
         target["speaker"] = str(int(speaker))
+        target["speaker_manual"] = True
         block["count"] = max(count, int(speaker))
         _bump_corrections_version()
         summary = _speakers_summary(entry)
@@ -2492,17 +2494,7 @@ def _merge_completed_results_locked() -> list[str]:
                 # Labels land by id on the live list; marks and agents stay put.
                 live = src.get(pid)
                 if live and live.get("segments"):
-                    by_id = {
-                        s.get("id"): s.get("speaker")
-                        for s in task["result"]["segments"]
-                    }
-                    for seg in live["segments"]:
-                        label = by_id.get(seg.get("id"))
-                        if label:
-                            seg["speaker"] = label
-                        else:
-                            seg.pop("speaker", None)
-                    live["speakers"] = task["result"]["speakers"]
+                    _apply_speaker_result(live, task["result"])
                     speakers_changed = True
                 _merged_task_ids.add(task["id"])
                 continue
@@ -2528,6 +2520,36 @@ def _merge_completed_results_locked() -> list[str]:
         # Segments were just replaced; invalidate the corrected-segments cache.
         _bump_corrections_version()
     return merged_pids
+
+
+def _apply_speaker_result(live: dict[str, Any], result: dict[str, Any]) -> None:
+    """Write a speaker pass onto the live entry, keeping ids, renames and overrides.
+
+    Fresh cluster ids are remapped onto the previous run's by overlap so a
+    "Moderator" rename still points at the same voice, and lines the user
+    forced (``speaker_manual``) keep their choice.
+    """
+    fresh = {
+        s.get("id"): s.get("speaker") for s in result["segments"] if s.get("speaker")
+    }
+    previous = {
+        s.get("id"): s.get("speaker") for s in live["segments"] if s.get("speaker")
+    }
+    mapping = speakers.remap_speaker_ids(previous, fresh) if previous else {}
+    for seg in live["segments"]:
+        if seg.get("speaker_manual") and seg.get("speaker"):
+            continue
+        label = fresh.get(seg.get("id"))
+        if label:
+            seg["speaker"] = mapping.get(label, label)
+        else:
+            seg.pop("speaker", None)
+    ids = {int(s["speaker"]) for s in live["segments"] if s.get("speaker")}
+    block = dict(result["speakers"])
+    block["count"] = max(ids) if ids else 0
+    old_labels = (live.get("speakers") or {}).get("labels") or {}
+    block["labels"] = {k: v for k, v in old_labels.items() if int(k) in ids}
+    live["speakers"] = block
 
 
 def _do_persist() -> None:

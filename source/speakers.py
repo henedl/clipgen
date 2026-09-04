@@ -93,6 +93,40 @@ def speaker_display_name(speaker: str, labels: dict[str, str] | None) -> str:
     return (labels or {}).get(speaker) or f"Speaker {speaker}"
 
 
+def remap_speaker_ids(
+    previous: dict[str, str], fresh: dict[str, str]
+) -> dict[str, str]:
+    """Map fresh cluster ids onto the previous run's ids by segment overlap.
+
+    Both arguments map segment id to speaker id. Fresh ids are matched
+    greedily, largest overlap first; leftovers take the lowest unused ids.
+    Renames and per-line overrides keyed on the old ids stay meaningful.
+    """
+    overlap: dict[tuple[str, str], int] = {}
+    for seg_id, new_id in fresh.items():
+        old_id = previous.get(seg_id)
+        if old_id:
+            overlap[(new_id, old_id)] = overlap.get((new_id, old_id), 0) + 1
+    mapping: dict[str, str] = {}
+    used: set[str] = set()
+    for (new_id, old_id), _n in sorted(
+        overlap.items(), key=lambda kv: (-kv[1], int(kv[0][0]), int(kv[0][1]))
+    ):
+        if new_id in mapping or old_id in used:
+            continue
+        mapping[new_id] = old_id
+        used.add(old_id)
+    next_id = 1
+    for new_id in sorted(set(fresh.values()), key=int):
+        if new_id in mapping:
+            continue
+        while str(next_id) in used:
+            next_id += 1
+        mapping[new_id] = str(next_id)
+        used.add(str(next_id))
+    return mapping
+
+
 def speakers_block(count: int) -> dict[str, Any]:
     """Fresh manifest ``speakers`` block after a detection run."""
     return {
