@@ -198,6 +198,11 @@ def _add_transcription_args(parser: argparse.ArgumentParser) -> None:
         help="Enable hallucination silence skip when SEC > 0 (seconds; slower, uses word timestamps)",
     )
     transcription.add_argument(
+        "--speakers",
+        action="store_true",
+        help="Label transcript lines by detected speaker (bundled speaker model)",
+    )
+    transcription.add_argument(
         "--summarize",
         nargs="*",
         metavar="ID",

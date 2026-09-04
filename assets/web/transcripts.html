@@ -103,9 +103,6 @@
         <button id="videoFollowBtn" class="player-btn" data-tooltip="Auto-scroll transcript with playback" aria-label="Auto-scroll transcript with playback" aria-pressed="true">
           <span class="player-btn-icon player-icon-follow"></span>
         </button>
-        <button id="setInBtn" class="btn btn-small" data-hotkey="transcripts.setIn" data-tooltip="Limit transcription to start here">Set In</button>
-        <button id="setOutBtn" class="btn btn-small" data-hotkey="transcripts.setOut" data-tooltip="Limit transcription to end here">Set Out</button>
-        <button id="clearMarkersBtn" class="btn btn-small hidden">Clear Markers</button>
         <span id="markerInfo" class="marker-info"></span>
         <span id="videoTime" class="player-time">0:00 / 0:00</span>
       </div>
@@ -405,6 +402,16 @@
     <button class="mark-popover-remove btn btn-small">Remove</button>
   </div>
 
+  <!-- Speaker rename popover (shared, repositioned per chip) -->
+  <div id="speakerPopover" class="speaker-popover cg-menu hidden">
+    <div class="speaker-popover-name">
+      <input class="speaker-popover-input" type="text" placeholder="Speaker name" autocomplete="off" maxlength="40" aria-label="Speaker name">
+      <button type="button" class="speaker-popover-reset" aria-label="Restore default name" data-tooltip="Restore default name"><span class="speaker-popover-reset-icon"></span></button>
+    </div>
+    <div class="speaker-popover-assign-label">This line</div>
+    <div class="speaker-popover-assign"></div>
+  </div>
+
   <div id="trTooltip" class="tr-tooltip hidden"></div>
 
   <div id="toast" class="toast hidden"></div>
@@ -424,6 +431,7 @@
   <script src="intake-cluster.js" defer></script>
   <script src="media-banner.js" defer></script>
   <script src="transcripts.js" defer></script>
+  <script src="transcripts-speakers.js" defer></script>
   <script src="transcripts-corrections.js" defer></script>
   <script src="transcripts-search.js" defer></script>
   <script src="transcripts-video.js" defer></script>

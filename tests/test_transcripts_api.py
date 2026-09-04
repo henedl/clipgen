@@ -410,6 +410,7 @@ def test_transcribe_returns_adoptable_task_records(tr_client, monkeypatch):
     # Same keys the status route serves, so the client can concat the two lists.
     assert set(task) == {
         "id",
+        "kind",
         "participant",
         "status",
         "phase",
@@ -3791,3 +3792,441 @@ def test_corrections_add_rejects_non_string_fields(tr_client):
         "/transcripts/api/corrections", json={"from": None, "to": "x"}
     )
     assert resp.status_code == 400
+
+
+# ---- Speaker attribution -----------------------------------------------------
+
+
+class _SpeakersWorker:
+    """Capture-only worker with the task-list/cancel surface the routes use."""
+
+    is_alive = True
+
+    def __init__(self, tasks=None):
+        self.enqueued: list[dict] = []
+        self.tasks = list(tasks or [])
+        self.cancelled: list[str] = []
+
+    def enqueue(self, task):
+        self.enqueued.append(task)
+        self.tasks.append(task)
+
+    def get_all_tasks(self, include_partials=True):
+        return list(self.tasks)
+
+    def cancel(self, task_id):
+        self.cancelled.append(task_id)
+        return True
+
+
+def _seed_speakers(monkeypatch, tmp_path, entry, worker=None):
+    monkeypatch.setattr(
+        transcripts_server,
+        "_manifest",
+        {"source_transcripts": {"P01": entry}, "corrections": [], "marks": []},
+    )
+    transcripts_server._participants = [
+        {
+            "id": "P01",
+            "video_paths": [str(tmp_path / "study_P01.mp4")],
+            "has_video": True,
+        }
+    ]
+    worker = worker or _SpeakersWorker()
+    transcripts_server._worker = cast("transcripts.TranscriptWorker", worker)
+    monkeypatch.setattr(transcripts, "save_transcripts_manifest", lambda *a, **k: None)
+    monkeypatch.setattr(config, "DEBUGGING", True)
+    return worker
+
+
+def _labelled_entry():
+    return {
+        "segments": [
+            {"id": "P01:0", "start": 0, "end": 1, "text": "a", "speaker": "1"},
+            {"id": "P01:1", "start": 1, "end": 2, "text": "b", "speaker": "2"},
+        ],
+        "speakers": {"enabled": True, "labels": {"1": "Mod"}, "count": 2},
+        "transcribed_at": "2026-01-01T00:00:00+00:00",
+        "audio_index": 0,
+    }
+
+
+def test_speakers_enable_enqueues_task_for_unlabelled_transcript(
+    tr_client, monkeypatch, tmp_path
+):
+    entry = {
+        "segments": [{"id": "P01:0", "start": 0, "end": 1, "text": "a"}],
+        "audio_index": 1,
+    }
+    worker = _seed_speakers(monkeypatch, tmp_path, entry)
+    resp = tr_client.put("/transcripts/api/speakers/P01", json={"enabled": True})
+    assert resp.status_code == 200
+    body = resp.get_json()
+    assert body["speakers"]["enabled"] is True
+    assert body["task"]["kind"] == "speakers"
+    task = worker.enqueued[0]
+    assert task["kind"] == "speakers"
+    assert task["audio_index"] == 1
+    assert task["segments"][0]["id"] == "P01:0"
+    assert entry["speakers"] == {"enabled": True, "labels": {}, "count": 0}
+
+
+def test_speakers_enable_without_segments_persists_choice_only(
+    tr_client, monkeypatch, tmp_path
+):
+    worker = _seed_speakers(monkeypatch, tmp_path, {})
+    resp = tr_client.put("/transcripts/api/speakers/P01", json={"enabled": True})
+    assert resp.status_code == 200
+    assert resp.get_json()["task"] is None
+    assert worker.enqueued == []
+    entry = transcripts_server._manifest["source_transcripts"]["P01"]
+    assert entry["speakers"]["enabled"] is True
+    assert "segments" not in entry
+
+
+def test_speakers_enable_already_labelled_does_not_requeue(
+    tr_client, monkeypatch, tmp_path
+):
+    worker = _seed_speakers(monkeypatch, tmp_path, _labelled_entry())
+    resp = tr_client.put("/transcripts/api/speakers/P01", json={"enabled": True})
+    assert resp.status_code == 200
+    assert worker.enqueued == []
+    assert resp.get_json()["speakers"]["labels"] == {"1": "Mod"}
+
+
+def test_speakers_enable_without_model_is_409(tr_client, monkeypatch, tmp_path):
+    _seed_speakers(monkeypatch, tmp_path, _labelled_entry())
+    monkeypatch.setattr(config, "DEBUGGING", False)
+    import speakers
+
+    monkeypatch.setattr(speakers, "is_speaker_model_available", lambda: False)
+    resp = tr_client.put("/transcripts/api/speakers/P01", json={"enabled": True})
+    assert resp.status_code == 409
+
+
+def test_speakers_rejects_non_bool(tr_client, monkeypatch, tmp_path):
+    _seed_speakers(monkeypatch, tmp_path, _labelled_entry())
+    resp = tr_client.put("/transcripts/api/speakers/P01", json={"enabled": "yes"})
+    assert resp.status_code == 400
+
+
+def test_speakers_disable_strips_labels_and_cancels(tr_client, monkeypatch, tmp_path):
+    entry = _labelled_entry()
+    live = {
+        "id": "sp_live",
+        "kind": "speakers",
+        "participant": "P01",
+        "status": transcripts.TASK_STATUS_RUNNING,
+    }
+    worker = _seed_speakers(monkeypatch, tmp_path, entry, _SpeakersWorker([live]))
+    before = transcripts_server._corrections_version
+    resp = tr_client.put("/transcripts/api/speakers/P01", json={"enabled": False})
+    assert resp.status_code == 200
+    assert resp.get_json()["speakers"] == {
+        "enabled": False,
+        "count": 0,
+        "labels": {},
+        "error": None,
+    }
+    assert all("speaker" not in s for s in entry["segments"])
+    assert entry["speakers"] == {"enabled": False}
+    assert worker.cancelled == ["sp_live"]
+    assert transcripts_server._corrections_version > before
+
+
+def test_speakers_regenerate_resets_labels_and_enqueues(
+    tr_client, monkeypatch, tmp_path
+):
+    entry = _labelled_entry()
+    worker = _seed_speakers(monkeypatch, tmp_path, entry)
+    resp = tr_client.post("/transcripts/api/speakers/P01/regenerate")
+    assert resp.status_code == 200
+    assert resp.get_json()["task"]["kind"] == "speakers"
+    assert entry["speakers"]["labels"] == {}
+    assert entry["speakers"]["enabled"] is True
+    assert len(worker.enqueued) == 1
+
+
+def test_speakers_regenerate_without_transcript_is_404(
+    tr_client, monkeypatch, tmp_path
+):
+    _seed_speakers(monkeypatch, tmp_path, {})
+    assert tr_client.post("/transcripts/api/speakers/P01/regenerate").status_code == 404
+
+
+def test_speakers_stop_cancels_live_tasks(tr_client, monkeypatch, tmp_path):
+    live = {
+        "id": "sp_live",
+        "kind": "speakers",
+        "participant": "P01",
+        "status": transcripts.TASK_STATUS_QUEUED,
+    }
+    done = {
+        "id": "sp_done",
+        "kind": "speakers",
+        "participant": "P01",
+        "status": transcripts.TASK_STATUS_COMPLETED,
+    }
+    worker = _seed_speakers(
+        monkeypatch, tmp_path, _labelled_entry(), _SpeakersWorker([live, done])
+    )
+    resp = tr_client.post("/transcripts/api/speakers/P01/stop")
+    assert resp.get_json()["stopped"] is True
+    assert worker.cancelled == ["sp_live"]
+
+
+def test_speakers_labels_rename_reset_and_validate(tr_client, monkeypatch, tmp_path):
+    entry = _labelled_entry()
+    _seed_speakers(monkeypatch, tmp_path, entry)
+    resp = tr_client.put(
+        "/transcripts/api/speakers/P01/labels", json={"2": "  Participant  ", "1": ""}
+    )
+    assert resp.status_code == 200
+    assert resp.get_json()["speakers"]["labels"] == {"2": "Participant"}
+    assert entry["speakers"]["labels"] == {"2": "Participant"}
+    long = "x" * 100
+    resp = tr_client.put("/transcripts/api/speakers/P01/labels", json={"1": long})
+    assert len(resp.get_json()["speakers"]["labels"]["1"]) == 40
+    assert (
+        tr_client.put(
+            "/transcripts/api/speakers/P01/labels", json={"3": "Nope"}
+        ).status_code
+        == 400
+    )
+    assert (
+        tr_client.put("/transcripts/api/speakers/P01/labels", json={"1": 5}).status_code
+        == 400
+    )
+
+
+def test_speakers_labels_require_enabled(tr_client, monkeypatch, tmp_path):
+    entry = _labelled_entry()
+    entry["speakers"] = {"enabled": False}
+    _seed_speakers(monkeypatch, tmp_path, entry)
+    resp = tr_client.put("/transcripts/api/speakers/P01/labels", json={"1": "Mod"})
+    assert resp.status_code == 404
+
+
+def test_transcript_payload_carries_speakers(tr_client, monkeypatch, tmp_path):
+    _seed_speakers(monkeypatch, tmp_path, _labelled_entry())
+    body = tr_client.get("/transcripts/api/transcript/P01").get_json()
+    assert [s["speaker"] for s in body["segments"]] == ["1", "2"]
+    assert body["speakers"]["labels"] == {"1": "Mod"}
+    assert body["speakers"]["count"] == 2
+    assert body["speakers"]["enabled"] is True
+
+
+def test_participants_payload_carries_speakers_summary(
+    tr_client, monkeypatch, tmp_path
+):
+    _seed_speakers(monkeypatch, tmp_path, _labelled_entry())
+    body = tr_client.get("/transcripts/api/participants").get_json()
+    assert body["speaker_model"] is True
+    p01 = body["participants"][0]
+    assert p01["speakers"]["enabled"] is True
+    assert p01["speakers"]["count"] == 2
+    # An unset participant reports None so the pill can fall back to the global.
+    transcripts_server._manifest["source_transcripts"]["P01"].pop("speakers")
+    body = tr_client.get("/transcripts/api/participants").get_json()
+    assert body["participants"][0]["speakers"]["enabled"] is None
+
+
+def test_vtt_emits_voice_tags(tr_client, monkeypatch, tmp_path):
+    _seed_speakers(monkeypatch, tmp_path, _labelled_entry())
+    text = tr_client.get("/transcripts/api/vtt/P01").get_data(as_text=True)
+    assert "<v Mod>a" in text
+    assert "<v Speaker 2>b" in text
+
+
+def test_search_results_carry_speaker_names(tr_client, monkeypatch, tmp_path):
+    _seed_speakers(monkeypatch, tmp_path, _labelled_entry())
+    body = tr_client.get("/transcripts/api/search?q=a").get_json()
+    hit = body["results"][0]
+    assert hit["speaker"] == "1"
+    assert hit["speaker_name"] == "Mod"
+
+
+def test_transcribe_status_reports_task_kind(tr_client, monkeypatch, tmp_path):
+    live = {
+        "id": "sp_live",
+        "kind": "speakers",
+        "participant": "P01",
+        "status": transcripts.TASK_STATUS_RUNNING,
+        "progress": 0.4,
+        "phase": "diarizing",
+    }
+    _seed_speakers(monkeypatch, tmp_path, _labelled_entry(), _SpeakersWorker([live]))
+    body = tr_client.get("/transcripts/api/transcribe/status").get_json()
+    assert body["tasks"][0]["kind"] == "speakers"
+    assert body["tasks"][0]["phase"] == "diarizing"
+
+
+@pytest.mark.parametrize(
+    ("block", "global_on", "expected"),
+    [
+        (None, False, False),
+        (None, True, True),
+        ({"enabled": True}, False, True),
+        ({"enabled": False}, True, False),
+    ],
+)
+def test_transcribe_resolves_diarize_per_participant(
+    tr_client, monkeypatch, tmp_path, block, global_on, expected
+):
+    entry = {} if block is None else {"speakers": block}
+    worker = _seed_speakers(monkeypatch, tmp_path, entry)
+    monkeypatch.setattr(config, "TRANSCRIBE_SPEAKERS", global_on)
+    monkeypatch.setattr(transcripts, "is_whisper_model_cached", lambda n=None: True)
+    resp = tr_client.post(
+        "/transcripts/api/transcribe", json={"participants": ["P01"], "force": True}
+    )
+    assert resp.status_code == 200
+    assert worker.enqueued[0]["diarize"] is expected
+
+
+def test_transcribe_explicit_opt_in_without_model_is_409(
+    tr_client, monkeypatch, tmp_path
+):
+    _seed_speakers(monkeypatch, tmp_path, {"speakers": {"enabled": True}})
+    monkeypatch.setattr(config, "DEBUGGING", False)
+    import speakers
+
+    monkeypatch.setattr(speakers, "is_speaker_model_available", lambda: False)
+    monkeypatch.setattr(transcripts, "is_whisper_model_cached", lambda n=None: True)
+    resp = tr_client.post(
+        "/transcripts/api/transcribe", json={"participants": ["P01"], "force": True}
+    )
+    assert resp.status_code == 409
+
+
+def test_transcribe_global_default_without_model_silently_skips(
+    tr_client, monkeypatch, tmp_path
+):
+    worker = _seed_speakers(monkeypatch, tmp_path, {})
+    monkeypatch.setattr(config, "DEBUGGING", False)
+    monkeypatch.setattr(config, "TRANSCRIBE_SPEAKERS", True)
+    import speakers
+
+    monkeypatch.setattr(speakers, "is_speaker_model_available", lambda: False)
+    monkeypatch.setattr(transcripts, "is_whisper_model_cached", lambda n=None: True)
+    resp = tr_client.post(
+        "/transcripts/api/transcribe", json={"participants": ["P01"], "force": True}
+    )
+    assert resp.status_code == 200
+    assert worker.enqueued[0]["diarize"] is False
+
+
+def test_merge_speakers_task_copies_labels_by_id_without_agent_reset(monkeypatch):
+    pid = "P01"
+    entry = {
+        "segments": [
+            {"id": "P01:0", "text": "a"},
+            {"id": "P01:1", "text": "b"},
+            {"id": "P01:2", "text": "c"},
+        ],
+        "speakers": {"enabled": True, "labels": {}, "count": 0},
+        "summary": {"paragraph": "keep"},
+        "transcribed_at": "then",
+    }
+    monkeypatch.setattr(
+        transcripts_server,
+        "_manifest",
+        {
+            "source_transcripts": {pid: entry},
+            "marks": [{"segment_id": "P01:1", "created": "0000"}],
+        },
+        raising=False,
+    )
+    task = {
+        "id": "sp_done",
+        "kind": "speakers",
+        "participant": pid,
+        "status": transcripts.TASK_STATUS_COMPLETED,
+        "created_at": "9999",
+        "result": {
+            "segments": [
+                {"id": "P01:0", "text": "a", "speaker": "1"},
+                {"id": "P01:1", "text": "b", "speaker": "2"},
+                {"id": "P01:9", "text": "gone", "speaker": "1"},
+            ],
+            "speakers": {"enabled": True, "labels": {}, "count": 2},
+        },
+    }
+    monkeypatch.setattr(
+        transcripts_server,
+        "_worker",
+        cast("transcripts.TranscriptWorker", _CompletedTasksWorker([task])),
+        raising=False,
+    )
+    transcripts_server._merged_task_ids.clear()
+    chained: list[str] = []
+    monkeypatch.setattr(
+        transcripts_server._orchestrator, "run_chain", lambda p: chained.append(p)
+    )
+    monkeypatch.setattr(transcripts, "save_transcripts_manifest", lambda *a, **k: None)
+    before = transcripts_server._corrections_version
+
+    transcripts_server._on_task_complete()
+
+    assert [s.get("speaker") for s in entry["segments"]] == ["1", "2", None]
+    assert entry["speakers"]["count"] == 2
+    assert entry["summary"] == {"paragraph": "keep"}
+    assert entry["transcribed_at"] == "then"
+    assert transcripts_server._manifest["marks"], "marks must survive a speaker pass"
+    assert chained == []
+    assert transcripts_server._corrections_version > before
+    assert "sp_done" in transcripts_server._merged_task_ids
+
+
+def test_speakers_segment_override_and_new_speaker(tr_client, monkeypatch, tmp_path):
+    entry = _labelled_entry()
+    _seed_speakers(monkeypatch, tmp_path, entry)
+    before = transcripts_server._corrections_version
+    resp = tr_client.put(
+        "/transcripts/api/speakers/P01/segment",
+        json={"segment_id": "P01:0", "speaker": "2"},
+    )
+    assert resp.status_code == 200
+    assert resp.get_json()["speaker"] == "2"
+    assert entry["segments"][0]["speaker"] == "2"
+    assert transcripts_server._corrections_version > before
+    # count + 1 introduces a new speaker; count + 2 does not exist.
+    resp = tr_client.put(
+        "/transcripts/api/speakers/P01/segment",
+        json={"segment_id": "P01:1", "speaker": "3"},
+    )
+    assert resp.status_code == 200
+    assert entry["speakers"]["count"] == 3
+    assert resp.get_json()["speakers"]["count"] == 3
+    assert (
+        tr_client.put(
+            "/transcripts/api/speakers/P01/segment",
+            json={"segment_id": "P01:1", "speaker": "5"},
+        ).status_code
+        == 400
+    )
+    assert (
+        tr_client.put(
+            "/transcripts/api/speakers/P01/segment",
+            json={"segment_id": "P01:9", "speaker": "1"},
+        ).status_code
+        == 404
+    )
+    assert (
+        tr_client.put(
+            "/transcripts/api/speakers/P01/segment",
+            json={"segment_id": "P01:1", "speaker": "x"},
+        ).status_code
+        == 400
+    )
+
+
+def test_speakers_segment_override_requires_enabled(tr_client, monkeypatch, tmp_path):
+    entry = _labelled_entry()
+    entry["speakers"] = {"enabled": False}
+    _seed_speakers(monkeypatch, tmp_path, entry)
+    resp = tr_client.put(
+        "/transcripts/api/speakers/P01/segment",
+        json={"segment_id": "P01:0", "speaker": "1"},
+    )
+    assert resp.status_code == 404

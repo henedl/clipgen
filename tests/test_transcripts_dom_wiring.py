@@ -36,6 +36,7 @@ _JS = concat_js("transcripts")
 # present in transcripts.html. Dynamically-created nodes are intentionally
 # excluded; these are the ones the tabbed analysis panel / friction flow toggle.
 REQUIRED_IDS = [
+    "speakerPopover",
     "summarySection",
     "tabBtnSummary",
     "tabBtnFriction",
@@ -1222,3 +1223,137 @@ def test_summary_claim_numbering_matches_the_backend():
     assert _js_summary_claims(summary) == thinking_agents._split_summary_sentences(
         summary
     )
+
+
+# ---- Speaker attribution ----
+
+
+def _fn_body(src: str, header: str) -> str:
+    start = src.index(header)
+    end = src.find("\n  function ", start + 1)
+    return src[start:] if end < 0 else src[start:end]
+
+
+def test_speaker_tasks_never_drive_transcription_surfaces():
+    """Diarization rides the transcription task list. Every reader that turns a
+    task into a transcribing state must skip kind === "speakers", or the pill
+    flips to "Cancel transcription", the timeline draws a transcribe band, and
+    the streaming view waits for the speaker pass to end."""
+    for header in (
+        "function _taskForSelectedParticipant()",
+        "function _finalizeStreamingIfComplete(",
+        "function _selectedRunningTask()",
+        "function _indexTasks()",
+    ):
+        assert "_isSpeakerTask(" in _fn_body(_JS, header), header
+    poll = _fn_body(_JS, "function pollTaskStatus()")
+    running = poll[
+        poll.index("var selectedRunningTask") : poll.index("if (selectedRunningTask)")
+    ]
+    assert "_isSpeakerTask(" in running
+    assert "newlySpeakers" in poll, "speaker completions must reload labels"
+
+
+def test_speakers_switch_is_keyboard_reachable():
+    """The pane's arrow/Enter navigation only knew selects and agent buttons."""
+    pills = read("transcripts-pills.js")
+    assert ".pill-options-check" in _fn_body(pills, "function pillNavControls()")
+    assert '"checkbox"' in _fn_body(pills, "function pillNavAdjust(")
+    assert '"checkbox"' in _fn_body(pills, "function pillNavActivate()")
+    assert 'setAttribute("data-nav-id", "speakers")' in pills
+
+
+def test_speaker_chip_only_on_final_rows():
+    """Partial (streaming) rows never carry speakers; the chip is a final-render thing."""
+    assert "speakerChipHtml(" in _fn_body(_JS, "function renderSegmentsImpl()")
+    assert "speakerChipHtml(" not in _fn_body(_JS, "function _renderPartialSegmentRow(")
+
+
+def test_speaker_rename_is_delegated_and_routed():
+    hub = read("transcripts.js")
+    assert ".segment-speaker" in _fn_body(
+        hub, "function _ensureSegmentListDelegation()"
+    )
+    sat = read("transcripts-speakers.js")
+    assert 'apiPut("api/speakers/" + pid' in sat
+    assert '"/labels"' in sat
+    assert "TS.showSpeakerPopover = showSpeakerPopover" in sat
+    assert "function showSpeakerPopover() { return TS.showSpeakerPopover" in hub
+    assert "registerEscape(" in sat, "Escape must cancel through the shared registry"
+
+
+def test_speaker_classes_are_styled():
+    for cls in (
+        ".segment-speaker",
+        ".pill-options-check",
+        ".speaker-popover",
+        ".pill-speakers-badge",
+    ):
+        assert cls + " {" in _CSS, f"{cls} is created in JS but never styled"
+    rings = re.findall(r"\.spk-(\d) \{ --spk: var\(--region-color-(\d)\); \}", _CSS)
+    assert [(a, b) for a, b in rings] == [(str(i), str(i)) for i in range(1, 9)]
+
+
+def test_speakers_setting_live_applies():
+    body = _fn_body(_JS, "function _applySettingsSnapshot(")
+    assert "TRANSCRIBE_SPEAKERS" in body
+    assert "transcribeSpeakers" in body
+    assert "renderPills()" in body
+
+
+def test_speakers_satellite_loads_before_its_importers():
+    order = re.findall(r'<script src="(transcripts[^"]*\.js)" defer>', _HTML)
+    assert order.index("transcripts-speakers.js") == order.index("transcripts.js") + 1
+
+
+def test_speaker_popover_offers_reset_and_reassignment():
+    """Rename is global; the reset arrow and the per-line chips must be wired."""
+    sat = read("transcripts-speakers.js")
+    for cls in (
+        ".speaker-popover-reset",
+        ".speaker-popover-assign",
+        ".speaker-popover-chip",
+    ):
+        assert cls in _HTML or cls in sat, f"{cls} is never referenced"
+        assert cls + " {" in _CSS, f"{cls} is never styled"
+    assert '"/segment"' in sat, (
+        "per-line reassignment must PUT api/speakers/<pid>/segment"
+    )
+    assert "arrow-uturn-left.svg" in _CSS, "the reset button is an icon mask, not text"
+    assert "e.preventDefault()" in _fn_body(sat, "function showSpeakerPopover("), (
+        "mousedown on the buttons must not blur the input, or blur commits first"
+    )
+
+
+def test_pill_pane_refresh_patches_in_place_when_shape_is_unchanged():
+    """The poll rebuilds the open pane every 3 s. Replacing the whole node
+    re-fetched the model list ("Loading…" → options) and re-laid the pane each
+    tick, which read as thrash during a run. Same row shape must swap only the
+    agent section."""
+    pills = read("transcripts-pills.js")
+    body = _fn_body(pills, "function _refreshPillOptionsContent(")
+    assert "_paneShape(fresh) === _paneShape(floating)" in body
+    assert ".pill-options-agents" in body, "only the agent buttons are poll-driven"
+    assert "_syncPaneRows(" in body
+
+
+def test_pip_controls_have_no_range_buttons():
+    """Set In / Set Out / Clear Markers crowded the PiP bar until the time
+    readout wrapped; the I/O hotkeys and the pill's Range row cover them."""
+    for old in ("setInBtn", "setOutBtn", "clearMarkersBtn"):
+        assert old not in _HTML, old
+        assert old not in _JS, old
+    assert 'id="markerInfo"' in _HTML
+    assert (
+        "white-space: nowrap"
+        in _CSS[
+            _CSS.index(".player-time {") : _CSS.index("}", _CSS.index(".player-time {"))
+        ]
+    )
+
+
+def test_pill_pickers_share_one_width():
+    block = _CSS[_CSS.index(".pill-options select {") :]
+    block = block[: block.index("}")]
+    assert "width: 132px" in block and "text-overflow: ellipsis" in block
+    assert "min-width: 110px" not in block

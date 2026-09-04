@@ -71,12 +71,14 @@ import files
 import friction
 import llm_client
 import remux_server
+import speakers
 import start_settings
 import thinking_agents
 import transcripts
 import utils
 import video
 from server_utils import (
+    ApiError,
     JobSlot,
     err,
     err_no_video,
@@ -172,6 +174,85 @@ def _step_state_transcription(entry: dict[str, Any]) -> str:
     # Persisted state only; the frontend merges live Whisper status from
     # /api/transcribe/status.
     return "done" if entry.get("segments") else "idle"
+
+
+# ---- Speaker attribution ----
+
+_SPEAKER_LABEL_MAX_LEN = 40
+
+
+def _speakers_summary(entry: dict[str, Any]) -> dict[str, Any]:
+    """Pill/transcript payload; ``enabled`` is None until the participant chose."""
+    block = entry.get("speakers") or {}
+    return {
+        "enabled": block.get("enabled") if "enabled" in block else None,
+        "count": int(block.get("count") or 0),
+        "labels": dict(block.get("labels") or {}),
+        "error": block.get("error"),
+    }
+
+
+def _diarize_wanted(entry: dict[str, Any]) -> bool:
+    """Per-participant choice when set, else ``config.TRANSCRIBE_SPEAKERS``."""
+    block = entry.get("speakers")
+    if isinstance(block, dict) and "enabled" in block:
+        return bool(block["enabled"])
+    return bool(config.TRANSCRIBE_SPEAKERS)
+
+
+def _speaker_model_ready() -> bool:
+    return config.DEBUGGING or speakers.is_speaker_model_available()
+
+
+def _active_speakers_tasks(pid: str) -> list[dict[str, Any]]:
+    """Queued or running speakers-kind tasks for *pid*."""
+    if not _worker:
+        return []
+    live = (transcripts.TASK_STATUS_QUEUED, transcripts.TASK_STATUS_RUNNING)
+    return [
+        t
+        for t in _worker.get_all_tasks(include_partials=False)
+        if t.get("kind") == "speakers"
+        and t["participant"] == pid
+        and t["status"] in live
+    ]
+
+
+def _cancel_speakers_tasks(pid: str) -> bool:
+    cancelled = False
+    for t in _active_speakers_tasks(pid):
+        cancelled = bool(_worker and _worker.cancel(t["id"])) or cancelled
+    return cancelled
+
+
+def _task_info(task: dict[str, Any]) -> dict[str, Any]:
+    """Task as the status poll reports it, so the client adopts it at once."""
+    return {
+        "id": task["id"],
+        "kind": task.get("kind", "transcribe"),
+        "participant": task["participant"],
+        "status": task["status"],
+        "phase": task["phase"],
+        "progress": task["progress"],
+        "error": task["error"],
+        "created_at": task["created_at"],
+        "completed_at": task["completed_at"],
+        "start_seconds": task["start_seconds"],
+        "end_seconds": task["end_seconds"],
+    }
+
+
+def _enqueue_speakers_task(pid: str, entry: dict[str, Any]) -> dict[str, Any] | None:
+    """Replace any live speakers run for *pid*; caller holds _manifest_lock."""
+    _cancel_speakers_tasks(pid)
+    video_paths = _video_paths_for_participant(pid)
+    if not _worker or not video_paths:
+        return None
+    task = transcripts.create_speakers_task(
+        pid, video_paths, entry["segments"], audio_index=entry.get("audio_index")
+    )
+    _worker.enqueue(task)
+    return _task_info(task)
 
 
 def _step_state_agent(pid: str, entry: dict[str, Any], agent_key: str) -> str:
@@ -292,6 +373,7 @@ def api_participants() -> FlaskResponse:
                     "friction": _step_state_agent(pid, entry, "friction"),
                     "report": _step_state_agent(pid, entry, "report"),
                 },
+                "speakers": _speakers_summary(entry),
             }
             if has_transcript:
                 info["language"] = entry.get("language", "")
@@ -364,6 +446,7 @@ def api_participants() -> FlaskResponse:
         participants=result,
         has_sheet=bool(_participant_source and _participant_source["sheet_context"]),
         transcribe_prewarm=_transcribe_prewarm_setting(),
+        speaker_model=_speaker_model_ready(),
         config=utils.get_frontend_config(),
     )
 
@@ -462,6 +545,7 @@ def api_transcript(participant: str) -> FlaskResponse:
         language = entry.get("language", "")
         model = entry.get("model", "")
         transcribed_at = entry.get("transcribed_at", "")
+        speakers_summary = _speakers_summary(entry)
         version_snapshot = _corrections_version
 
     # Apply corrections to get corrected text (memoized per participant)
@@ -487,6 +571,7 @@ def api_transcript(participant: str) -> FlaskResponse:
             "corrected": raw["text"] != corrected["text"],
             "marks": marks_by_seg.get(seg_id, []),
             "words": corrected.get("words", []),
+            "speaker": corrected.get("speaker", ""),
         }
         segments.append(seg)
 
@@ -496,6 +581,7 @@ def api_transcript(participant: str) -> FlaskResponse:
         language=language,
         model=model,
         transcribed_at=transcribed_at,
+        speakers=speakers_summary,
     )
 
 
@@ -562,6 +648,7 @@ def api_vtt(participant: str) -> FlaskResponse:
         language = entry.get("language", "")
         source_file = entry.get("source_file", "")
         model = entry.get("model", "")
+        speaker_labels = dict((entry.get("speakers") or {}).get("labels") or {})
         version_snapshot = _corrections_version
 
     corrected = _corrected_segments(
@@ -575,9 +662,146 @@ def api_vtt(participant: str) -> FlaskResponse:
         language=language,
         source_file=source_file,
         model=model,
+        speaker_labels=speaker_labels,
     )
     vtt_text = transcripts._format_vtt(result)
     return Response(vtt_text, content_type="text/vtt")
+
+
+@transcripts_bp.route("/api/speakers/<participant>", methods=["PUT"])
+@json_endpoint
+def api_speakers_set(participant: str) -> FlaskResponse:
+    """Switch speaker attribution on or off for one participant.
+
+    Enabling a transcribed participant enqueues a ``speakers`` task; disabling
+    strips every label at once. Either way the choice persists on the entry,
+    so a later transcription of a still-untranscribed participant honours it
+    over ``TRANSCRIBE_SPEAKERS``. A participant diarized under the global
+    default ends up with an explicit ``enabled: true`` block; flipping the
+    global off later does not strip it.
+    """
+    data = require_json_body("Missing JSON body")
+    enabled = data.get("enabled")
+    if not isinstance(enabled, bool):
+        raise ApiError("enabled must be true or false")
+    if enabled and not _speaker_model_ready():
+        raise ApiError("Speaker model is not installed", 409)
+    with _manifest_lock:
+        src = _manifest.setdefault("source_transcripts", {})
+        entry = src.setdefault(participant, {})
+        task = None
+        if enabled:
+            block = entry.get("speakers") or {}
+            entry["speakers"] = {
+                "enabled": True,
+                "labels": dict(block.get("labels") or {}),
+                "count": int(block.get("count") or 0),
+            }
+            segs = entry.get("segments") or []
+            if segs and not any(s.get("speaker") for s in segs):
+                task = _enqueue_speakers_task(participant, entry)
+        else:
+            _cancel_speakers_tasks(participant)
+            for seg in entry.get("segments") or []:
+                seg.pop("speaker", None)
+            entry["speakers"] = {"enabled": False}
+            _bump_corrections_version()
+        summary = _speakers_summary(entry)
+    _persist_manifest()
+    return ok(speakers=summary, task=task)
+
+
+@transcripts_bp.route("/api/speakers/<participant>/regenerate", methods=["POST"])
+@json_endpoint
+def api_speakers_regenerate(participant: str) -> FlaskResponse:
+    """Re-run speaker detection; cluster ids are re-minted, so renames reset."""
+    if not _speaker_model_ready():
+        raise ApiError("Speaker model is not installed", 409)
+    with _manifest_lock:
+        entry = _manifest.get("source_transcripts", {}).get(participant)
+        if not entry or not entry.get("segments"):
+            raise ApiError("No transcript for participant", 404)
+        block = entry.get("speakers") or {}
+        entry["speakers"] = {
+            "enabled": True,
+            "labels": {},
+            "count": int(block.get("count") or 0),
+        }
+        task = _enqueue_speakers_task(participant, entry)
+        if task is None:
+            raise ApiError("No video for participant", 404)
+    _persist_manifest()
+    return ok(task=task)
+
+
+@transcripts_bp.route("/api/speakers/<participant>/stop", methods=["POST"])
+def api_speakers_stop(participant: str) -> FlaskResponse:
+    return ok(stopped=_cancel_speakers_tasks(participant))
+
+
+@transcripts_bp.route("/api/speakers/<participant>/segment", methods=["PUT"])
+@json_endpoint
+def api_speakers_segment(participant: str) -> FlaskResponse:
+    """Force one line onto a speaker: ``{"segment_id": "P01:3", "speaker": "2"}``.
+
+    ``speaker`` may be ``count + 1`` to introduce a new speaker. A later
+    regenerate re-mints every label, overrides included.
+    """
+    data = require_json_body("Missing JSON body")
+    segment_id = data.get("segment_id")
+    speaker = data.get("speaker")
+    if not isinstance(segment_id, str) or not segment_id:
+        raise ApiError("segment_id is required")
+    if not (isinstance(speaker, str) and speaker.isdigit() and int(speaker) >= 1):
+        raise ApiError("speaker must be a positive id")
+    with _manifest_lock:
+        entry = _manifest.get("source_transcripts", {}).get(participant)
+        block = (entry or {}).get("speakers")
+        if not entry or not block or not block.get("enabled"):
+            raise ApiError("Speakers are not enabled for participant", 404)
+        count = int(block.get("count") or 0)
+        if int(speaker) > count + 1:
+            raise ApiError(f"Unknown speaker {speaker}")
+        target = next(
+            (s for s in entry.get("segments") or [] if s.get("id") == segment_id),
+            None,
+        )
+        if target is None:
+            raise ApiError("Unknown segment", 404)
+        target["speaker"] = str(int(speaker))
+        block["count"] = max(count, int(speaker))
+        _bump_corrections_version()
+        summary = _speakers_summary(entry)
+    _persist_manifest()
+    return ok(speakers=summary, segment_id=segment_id, speaker=target["speaker"])
+
+
+@transcripts_bp.route("/api/speakers/<participant>/labels", methods=["PUT"])
+@json_endpoint
+def api_speakers_labels(participant: str) -> FlaskResponse:
+    """Rename speakers: ``{"1": "Moderator"}``; an empty string resets one."""
+    data = require_json_body("Missing JSON body")
+    with _manifest_lock:
+        entry = _manifest.get("source_transcripts", {}).get(participant)
+        block = (entry or {}).get("speakers")
+        if not entry or not block or not block.get("enabled"):
+            raise ApiError("Speakers are not enabled for participant", 404)
+        count = int(block.get("count") or 0)
+        labels = dict(block.get("labels") or {})
+        for key, value in data.items():
+            if not (isinstance(key, str) and key.isdigit() and 1 <= int(key) <= count):
+                raise ApiError(f"Unknown speaker {key}")
+            if not isinstance(value, str):
+                raise ApiError("Label must be a string")
+            name = value.strip()[:_SPEAKER_LABEL_MAX_LEN]
+            if name:
+                labels[key] = name
+            else:
+                labels.pop(key, None)
+        block["labels"] = labels
+        summary = _speakers_summary(entry)
+    _persist_manifest()
+    return ok(speakers=summary)
 
 
 # ---- Embed subtitles into video ----
@@ -1778,6 +2002,10 @@ def api_search() -> FlaskResponse:
             for pid, entry in src.items()
             if entry.get("segments")
         }
+        labels_by_pid = {
+            pid: dict((entry.get("speakers") or {}).get("labels") or {})
+            for pid, entry in src.items()
+        }
 
     for pid, raw_segments in segment_snapshots.items():
         corrected = _corrected_segments(
@@ -1789,6 +2017,7 @@ def api_search() -> FlaskResponse:
             n = text_lower.count(query_lower)
             if n > 0:
                 participant_count += n
+                speaker = seg.get("speaker", "")
                 results.append(
                     {
                         "participant": pid,
@@ -1797,6 +2026,14 @@ def api_search() -> FlaskResponse:
                         "end": seg["end"],
                         "text": seg["text"],
                         "count": n,
+                        "speaker": speaker,
+                        "speaker_name": (
+                            speakers.speaker_display_name(
+                                speaker, labels_by_pid.get(pid)
+                            )
+                            if speaker
+                            else ""
+                        ),
                     }
                 )
         if participant_count > 0:
@@ -2083,6 +2320,13 @@ def api_transcribe() -> FlaskResponse:
             ):
                 return err(f"Invalid marker range for {pid}")
             effective_model = model_override or config.TRANSCRIBE_MODEL
+            entry = src.get(pid) or {}
+            diarize = _diarize_wanted(entry)
+            if diarize and not _speaker_model_ready():
+                if "enabled" in (entry.get("speakers") or {}):
+                    return err("Speaker model is not installed", 409)
+                utils.warning_print("Speaker model is not installed; skipping.")
+                diarize = False
             eligible.append(
                 {
                     "participant": p,
@@ -2092,6 +2336,7 @@ def api_transcribe() -> FlaskResponse:
                     "effective_model": effective_model,
                     "start_seconds": window["start_seconds"],
                     "end_seconds": window["end_seconds"],
+                    "diarize": diarize,
                 }
             )
 
@@ -2128,25 +2373,11 @@ def api_transcribe() -> FlaskResponse:
                 audio_index=e["audio_index"],
                 start_seconds=e["start_seconds"],
                 end_seconds=e["end_seconds"],
+                diarize=e["diarize"],
             )
             if _worker:
                 _worker.enqueue(task)
-            # Same shape as /api/transcribe/status entries, so the client adopts
-            # them immediately.
-            enqueued.append(
-                {
-                    "id": task["id"],
-                    "participant": p["id"],
-                    "status": task["status"],
-                    "phase": task["phase"],
-                    "progress": task["progress"],
-                    "error": task["error"],
-                    "created_at": task["created_at"],
-                    "completed_at": task["completed_at"],
-                    "start_seconds": task["start_seconds"],
-                    "end_seconds": task["end_seconds"],
-                }
-            )
+            enqueued.append(_task_info(task))
 
     return ok(tasks=enqueued)
 
@@ -2161,6 +2392,7 @@ def api_transcribe_status() -> FlaskResponse:
         for t in _worker.get_all_tasks(include_partials=False):
             task_info = {
                 "id": t["id"],
+                "kind": t.get("kind", "transcribe"),
                 "participant": t["participant"],
                 "status": t["status"],
                 "progress": t["progress"],
@@ -2245,6 +2477,7 @@ def _merge_completed_results_locked() -> list[str]:
     if not _worker:
         return []
     merged_pids: list[str] = []
+    speakers_changed = False
     # include_partials=False: the merge needs only status/result, and this runs
     # under _manifest_lock.
     for task in _worker.get_all_tasks(include_partials=False):
@@ -2255,6 +2488,24 @@ def _merge_completed_results_locked() -> list[str]:
         ):
             pid = task["participant"]
             src = _manifest.setdefault("source_transcripts", {})
+            if task.get("kind") == "speakers":
+                # Labels land by id on the live list; marks and agents stay put.
+                live = src.get(pid)
+                if live and live.get("segments"):
+                    by_id = {
+                        s.get("id"): s.get("speaker")
+                        for s in task["result"]["segments"]
+                    }
+                    for seg in live["segments"]:
+                        label = by_id.get(seg.get("id"))
+                        if label:
+                            seg["speaker"] = label
+                        else:
+                            seg.pop("speaker", None)
+                    live["speakers"] = task["result"]["speakers"]
+                    speakers_changed = True
+                _merged_task_ids.add(task["id"])
+                continue
             existing = src.get(pid, {})
             if existing.get("segments"):
                 # A re-transcription re-mints the same "{pid}:{index}" ids; drop
@@ -2273,7 +2524,7 @@ def _merge_completed_results_locked() -> list[str]:
     # Queue completion side effects whichever caller merged (a debounced
     # _do_persist can win).
     _pending_chain_pids.extend(merged_pids)
-    if merged_pids:
+    if merged_pids or speakers_changed:
         # Segments were just replaced; invalidate the corrected-segments cache.
         _bump_corrections_version()
     return merged_pids

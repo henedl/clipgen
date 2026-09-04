@@ -140,7 +140,7 @@ def test_vendor_pin_entries_round_trip_through_repin() -> None:
     module = _fetch_binaries_module()
     text = (_ROOT / "build" / "fetch_binaries.py").read_text(encoding="utf-8")
     entries = [a for archives in module.PINS.values() for a in archives]
-    entries += module.OCR_MODEL_PINS
+    entries += module.OCR_MODEL_PINS + module.SPEAKER_MODEL_PINS
     for entry in entries:
         indent = 8 if "members" in entry else 4
         rendered = "".join(module._render_entry(entry, indent))
@@ -267,8 +267,26 @@ def test_ci_verifies_all_vendored_ocr_models() -> None:
     yml = (_ROOT / ".github" / "workflows" / "build-binaries.yml").read_text(
         encoding="utf-8"
     )
-    for pin in _fetch_binaries_module().OCR_MODEL_PINS:
+    module = _fetch_binaries_module()
+    for pin in module.OCR_MODEL_PINS + module.SPEAKER_MODEL_PINS:
         assert pin["target"] in yml, pin["target"]
+
+
+def test_speaker_model_pin_matches_speakers_module() -> None:
+    """One 16 kHz sherpa-onnx export, named as speakers.py looks it up."""
+    import speakers
+
+    pins = _fetch_binaries_module().SPEAKER_MODEL_PINS
+    assert len(pins) == 1
+    pin = pins[0]
+    assert pin["target"] == speakers.MODEL_FILENAME
+    assert pin["url"].startswith(
+        "https://github.com/k2-fsa/sherpa-onnx/releases/download/"
+    )
+    assert pin["url"].endswith("_16k.onnx") or "wespeaker" in pin["url"]
+    assert re.fullmatch(r"[0-9a-f]{64}", pin["sha256"])
+    spec_text = (_ROOT / "build" / "clipgen.spec").read_text(encoding="utf-8")
+    assert '"speaker_models"' in spec_text
 
 
 def test_spec_never_strips_or_packs_on_windows() -> None:

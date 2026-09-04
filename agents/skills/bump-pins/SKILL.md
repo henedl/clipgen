@@ -7,7 +7,7 @@ description: Update the pinned ffmpeg / llama.cpp / OCR-model / PyInstaller vers
 
 Every third-party binary in the desktop bundle is pinned by URL + SHA256 in
 `build/fetch_binaries.py` (`PINS` per platform, `OCR_MODEL_PINS` for the RapidOCR
-recognition models). PyInstaller is pinned once, in the `build` extra of `pyproject.toml`.
+recognition models, `SPEAKER_MODEL_PINS` for the speaker-embedding model). PyInstaller is pinned once, in the `build` extra of `pyproject.toml`.
 Nothing updates these automatically — Dependabot cannot see `fetch_binaries.py` — so a
 bump is a deliberate PR. The weekly `pin-health` workflow only tells you when a pinned
 URL has vanished.
@@ -19,6 +19,7 @@ URL has vanished.
 | llama.cpp (`b…` release, both platforms) | a feature or fix needs a newer build, or ~quarterly alongside a release; re-run the router-mode gate validation | upstream cut a new build (it does, several times a day) |
 | ffmpeg (macOS: Martin Riedl; Windows: gyan.dev) | an upstream point release (8.1.x → 8.2) or a feature gap | — never pin a moving alias (`release-essentials`, `latest`) |
 | RapidOCR models | only together with a `rapidocr` bump in `pyproject.toml`; re-derive URLs + hashes from the new wheel's `default_models.yaml` | on their own |
+| Speaker model (`SPEAKER_MODEL_PINS`) | only if `speakers.py`'s feature contract changes (any 16 kHz wespeaker/3d-speaker sherpa-onnx export fits) | on its own |
 | PyInstaller | with the regular dependency refresh, as its own PR | — |
 
 One pin per `build(deps):` PR. No `build/VERSION` bump.

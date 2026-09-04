@@ -2222,3 +2222,202 @@ class TestApplyCorrectionsBoundaries:
             segs, [{"from": "path", "to": "C:\\Users\\path \\g<0>"}]
         )
         assert result[0]["text"] == "the C:\\Users\\path \\g<0>"
+
+
+# ---- Speaker attribution -----------------------------------------------------
+
+
+class TestSpeakerCarry:
+    def test_shift_segment_keeps_speaker(self):
+        seg = TranscriptSegment(start=1.0, end=2.0, text="hi")
+        seg["speaker"] = "2"
+        shifted = transcripts._shift_segment(seg, 10.0)
+        assert shifted["speaker"] == "2"
+        assert "speaker" not in transcripts._shift_segment(
+            TranscriptSegment(start=1.0, end=2.0, text="hi"), 1.0
+        )
+
+    def test_apply_corrections_keeps_speaker(self):
+        seg = TranscriptSegment(start=0.0, end=1.0, text="teh cat")
+        seg["speaker"] = "1"
+        out = transcripts.apply_corrections(
+            [seg], [{"from": "teh", "to": "the", "case_sensitive": False}]
+        )
+        assert out[0]["text"] == "the cat"
+        assert out[0]["speaker"] == "1"
+
+    def test_filter_segments_keeps_speaker_labels(self):
+        seg = TranscriptSegment(start=1.0, end=2.0, text="hi")
+        seg["speaker"] = "1"
+        result = TranscriptResult(
+            segments=[seg], language="en", source_file="v.mp4", model="base"
+        )
+        result["speaker_labels"] = {"1": "Moderator"}
+        out = transcripts.filter_segments(result, 0.0, 5.0)
+        assert out["speaker_labels"] == {"1": "Moderator"}
+        assert out["segments"][0]["speaker"] == "1"
+
+
+class TestSpeakerFormatting:
+    def _result(self):
+        a = TranscriptSegment(start=0.0, end=1.0, text="Hello")
+        a["speaker"] = "1"
+        b = TranscriptSegment(start=1.0, end=2.0, text="Hi there")
+        b["speaker"] = "2"
+        c = TranscriptSegment(start=2.0, end=3.0, text="Unlabelled")
+        result = TranscriptResult(
+            segments=[a, b, c], language="en", source_file="v.mp4", model="base"
+        )
+        result["speaker_labels"] = {"1": "Moderator"}
+        return result
+
+    def test_markdown_prefixes_names(self):
+        text = transcripts._format_markdown(self._result())
+        assert "Moderator: Hello" in text
+        assert "Speaker 2: Hi there" in text
+        assert "\nUnlabelled\n" in text
+
+    def test_srt_prefixes_names(self):
+        text = transcripts._format_srt(self._result())
+        assert "Moderator: Hello" in text
+        assert "Speaker 2: Hi there" in text
+
+    def test_vtt_uses_voice_tags(self):
+        text = transcripts._format_vtt(self._result())
+        assert "<v Moderator>Hello" in text
+        assert "<v Speaker 2>Hi there" in text
+        assert "\nUnlabelled\n" in text
+
+    def test_no_labels_means_plain_text(self):
+        result = TranscriptResult(
+            segments=[TranscriptSegment(start=0.0, end=1.0, text="Hello")],
+            language="en",
+            source_file="v.mp4",
+            model="base",
+        )
+        assert "Speaker" not in transcripts._format_vtt(result)
+
+
+class TestSpeakerWorkerTasks:
+    def test_speakers_task_shape_and_slim_status(self):
+        task = transcripts.create_speakers_task(
+            "P01", ["/v.mp4"], [{"id": "P01:0", "start": 0, "end": 1, "text": "x"}]
+        )
+        assert task["id"].startswith("sp_")
+        assert task["kind"] == "speakers"
+        assert task["segments"][0]["id"] == "P01:0"
+        worker = transcripts.TranscriptWorker()
+        worker.enqueue(task)
+        slim = worker.get_all_tasks(include_partials=False)[0]
+        assert "segments" not in slim
+        assert slim["kind"] == "speakers"
+
+    def test_transcribe_task_defaults_to_transcribe_kind(self):
+        task = transcripts.create_transcript_task("P01", ["/v.mp4"])
+        assert task["kind"] == "transcribe"
+        assert task["diarize"] is False
+        assert transcripts.create_transcript_task("P01", ["/v.mp4"], diarize=True)[
+            "diarize"
+        ]
+
+    def test_speakers_task_executes_under_debugging(self, monkeypatch):
+        monkeypatch.setattr(config, "DEBUGGING", True)
+        monkeypatch.setattr(transcripts, "_resolve_audio_index", lambda p, r: 0)
+        worker = transcripts.TranscriptWorker()
+        segs = [
+            {"id": f"P01:{i}", "start": i, "end": i + 1, "text": "x"} for i in range(3)
+        ]
+        task = transcripts.create_speakers_task("P01", ["/v.mp4"], segs)
+        worker._execute_task(task)
+        assert task["status"] == transcripts.TASK_STATUS_COMPLETED
+        assert task["result"]["speakers"]["count"] == 2
+        assert [s["speaker"] for s in task["result"]["segments"]] == ["1", "2", "1"]
+        assert task["progress"] == 1.0
+
+    def test_speakers_task_without_segments_fails(self):
+        worker = transcripts.TranscriptWorker()
+        task = transcripts.create_speakers_task("P01", ["/v.mp4"], [])
+        worker._execute_task(task)
+        assert task["status"] == transcripts.TASK_STATUS_FAILED
+        assert "No transcript" in task["error"]
+
+    def test_speakers_task_cancel_marks_cancelled(self, monkeypatch):
+        monkeypatch.setattr(config, "DEBUGGING", False)
+        monkeypatch.setattr(transcripts, "_resolve_audio_index", lambda p, r: 0)
+        import speakers
+
+        monkeypatch.setattr(speakers, "is_speaker_model_available", lambda: True)
+
+        def raise_cancel(*a, **k):
+            raise speakers.DiarizationCancelled
+
+        monkeypatch.setattr(transcripts, "label_speakers", raise_cancel)
+        worker = transcripts.TranscriptWorker()
+        task = transcripts.create_speakers_task(
+            "P01", ["/v.mp4"], [{"id": "P01:0", "start": 0, "end": 1, "text": "x"}]
+        )
+        worker._execute_task(task)
+        assert task["status"] == transcripts.TASK_STATUS_CANCELLED
+
+    def test_diarize_flag_runs_speaker_phase_after_transcription(self, monkeypatch):
+        monkeypatch.setattr(config, "DEBUGGING", True)
+        import video
+
+        monkeypatch.setattr(
+            video,
+            "probe_video_properties",
+            lambda p: {"duration": 10.0, "audio_tracks": [{"label": ""}]},
+        )
+        monkeypatch.setattr(video, "timeline_or_none", lambda paths: None)
+        segs = [
+            TranscriptSegment(start=float(i), end=float(i + 1), text="x")
+            for i in range(2)
+        ]
+        monkeypatch.setattr(
+            transcripts,
+            "transcribe_video",
+            lambda *a, **k: TranscriptResult(
+                segments=segs, language="en", source_file="/v.mp4", model="base"
+            ),
+        )
+        phases: list[str] = []
+        real = transcripts.label_speakers
+
+        def spy(*a, **k):
+            phases.append("diarizing")
+            return real(*a, **k)
+
+        monkeypatch.setattr(transcripts, "label_speakers", spy)
+        worker = transcripts.TranscriptWorker()
+        task = transcripts.create_transcript_task("P01", ["/v.mp4"], diarize=True)
+        worker._execute_task(task)
+        assert task["status"] == transcripts.TASK_STATUS_COMPLETED
+        assert phases == ["diarizing"]
+        assert task["result"]["speakers"]["count"] == 2
+        assert task["result"]["segments"][0]["speaker"] == "1"
+
+    def test_no_diarize_flag_leaves_result_without_speakers(self, monkeypatch):
+        monkeypatch.setattr(config, "DEBUGGING", True)
+        import video
+
+        monkeypatch.setattr(
+            video,
+            "probe_video_properties",
+            lambda p: {"duration": 10.0, "audio_tracks": [{"label": ""}]},
+        )
+        monkeypatch.setattr(video, "timeline_or_none", lambda paths: None)
+        monkeypatch.setattr(
+            transcripts,
+            "transcribe_video",
+            lambda *a, **k: TranscriptResult(
+                segments=[TranscriptSegment(start=0.0, end=1.0, text="x")],
+                language="en",
+                source_file="/v.mp4",
+                model="base",
+            ),
+        )
+        worker = transcripts.TranscriptWorker()
+        task = transcripts.create_transcript_task("P01", ["/v.mp4"])
+        worker._execute_task(task)
+        assert task["status"] == transcripts.TASK_STATUS_COMPLETED
+        assert "speakers" not in task["result"]

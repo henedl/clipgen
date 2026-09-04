@@ -7,7 +7,8 @@ downloads the pinned archives for the host platform, verifies each archive's
 SHA256 against PINS below, extracts ffmpeg + ffprobe into
 build/vendor/<platform>/bin/, and verifies the extracted binaries' SHA256 too.
 It also fetches the pinned RapidOCR recognition models (OCR_MODEL_PINS,
-platform-independent) into build/vendor/ocr/ so the frozen bundle never
+platform-independent) into build/vendor/ocr/ and the speaker-embedding model
+(SPEAKER_MODEL_PINS) into build/vendor/speakers/ so the frozen bundle never
 downloads a model at runtime. The extracted-file hashes double as the
 idempotency check: when the files are already present and hash-clean the
 script exits without downloading. clipgen.spec refuses to build if any of
@@ -36,6 +37,14 @@ Provenance (THIRD-PARTY-LICENSES cites this block):
     ggml-cpu-* per-arch DLLs as the no-Vulkan fallback llama.cpp picks at
     runtime). Release assets are permanent; member hashes were computed from
     the archives at pin time.
+
+  Speaker model: WeSpeaker CAM++ (VoxCeleb, large-margin fine-tune), the
+    ONNX export distributed by k2-fsa/sherpa-onnx under the permanent
+    `speaker-recongition-models` release tag (sic, upstream spelling),
+    Apache-2.0, 29 MB. GitHub publishes no .sha256 for release assets, so
+    the pin trusts the first download. speakers.py computes its own fbank
+    and reads the model's metadata, so a re-pin only needs a 16 kHz
+    wespeaker/3d-speaker export.
 
 Updating the pins: `uv run build/fetch_binaries.py --repin <new-url>` finds
 the entry the URL replaces (same host, same platform), downloads it, checks
@@ -272,6 +281,15 @@ OCR_MODEL_PINS: list[dict] = [
     },
 ]
 
+# Vendored speaker-embedding model; target name matches speakers.MODEL_FILENAME.
+SPEAKER_MODEL_PINS: list[dict] = [
+    {
+        "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/speaker-recongition-models/wespeaker_en_voxceleb_CAM%2B%2B_LM.onnx",
+        "sha256": "e197af7e9d473030cf486b3124149a19bf37014d0e4485e4c70c483b0ec10cb2",
+        "target": "speaker_embed.onnx",
+    },
+]
+
 _CHUNK = 1024 * 1024
 _USER_AGENT = "clipgen-fetch-binaries"
 
@@ -389,29 +407,29 @@ def extract_members(
             print(f"fetch_binaries: extracted {target}")
 
 
-def fetch_ocr_models() -> None:
-    """Fetch the pinned RapidOCR recognition models into build/vendor/ocr/."""
-    vendor_ocr = Path(__file__).resolve().parent / "vendor" / "ocr"
+def fetch_model_pins(pins: list[dict], subdir: str) -> None:
+    """Fetch pinned single-file models into build/vendor/<subdir>/."""
+    vendor_dir = Path(__file__).resolve().parent / "vendor" / subdir
     stale = [
         pin
-        for pin in OCR_MODEL_PINS
-        if not (vendor_ocr / pin["target"]).is_file()
-        or file_sha256(vendor_ocr / pin["target"]) != pin["sha256"]
+        for pin in pins
+        if not (vendor_dir / pin["target"]).is_file()
+        or file_sha256(vendor_dir / pin["target"]) != pin["sha256"]
     ]
     if not stale:
-        print(f"fetch_binaries: {vendor_ocr} is up to date, nothing to do.")
+        print(f"fetch_binaries: {vendor_dir} is up to date, nothing to do.")
         return
-    vendor_ocr.mkdir(parents=True, exist_ok=True)
+    vendor_dir.mkdir(parents=True, exist_ok=True)
     for pin in stale:
         # download_archive hashes plain files too and deletes on mismatch.
-        download_archive(pin["url"], pin["sha256"], vendor_ocr / pin["target"])
-    print(f"fetch_binaries: done — {vendor_ocr} is ready.")
+        download_archive(pin["url"], pin["sha256"], vendor_dir / pin["target"])
+    print(f"fetch_binaries: done — {vendor_dir} is ready.")
 
 
 def all_pinned_urls() -> list[str]:
-    """Every pinned URL: both platforms' archives plus the OCR models."""
+    """Every pinned URL: both platforms' archives plus the models."""
     urls = [a["url"] for archives in PINS.values() for a in archives]
-    return urls + [pin["url"] for pin in OCR_MODEL_PINS]
+    return urls + [pin["url"] for pin in OCR_MODEL_PINS + SPEAKER_MODEL_PINS]
 
 
 def _probe(url: str) -> int:
@@ -478,6 +496,11 @@ def _entry_for(url: str) -> dict:
         for pin in OCR_MODEL_PINS
         if urlsplit(pin["url"]).netloc == host
         and pin["target"].removesuffix("_rec.onnx") in name
+    ]
+    models += [
+        ("speakers", pin)
+        for pin in SPEAKER_MODEL_PINS
+        if urlsplit(pin["url"]).netloc == host and "speaker" in name
     ]
     candidates = archives + models
     if len(candidates) != 1:
@@ -654,7 +677,8 @@ def fetch_vendor() -> None:
             finally:
                 archive_path.unlink(missing_ok=True)
         print(f"fetch_binaries: done — {vendor_bin} is ready.")
-    fetch_ocr_models()
+    fetch_model_pins(OCR_MODEL_PINS, "ocr")
+    fetch_model_pins(SPEAKER_MODEL_PINS, "speakers")
 
 
 if __name__ == "__main__":

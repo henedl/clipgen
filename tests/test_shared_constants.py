@@ -151,6 +151,7 @@ def test_clipgen_config_defaults_match_python():
     assert js_config["composerDoubleClickCuts"] == py_config["composerDoubleClickCuts"]
     assert js_config["crossReferences"] == py_config["crossReferences"]
     assert js_config["mediaContainerWarning"] == py_config["mediaContainerWarning"]
+    assert js_config["transcribeSpeakers"] == py_config["transcribeSpeakers"]
     # The Embed Subtitles dialog filters its target list against these, so JS
     # drifting from video.SUBTITLE_CODEC_BY_CONTAINER means promising output
     # ffmpeg will refuse to write (or hiding one it would have written).
@@ -216,6 +217,7 @@ def test_get_frontend_config_shape():
         "composerDoubleClickCuts",
         "crossReferences",
         "mediaContainerWarning",
+        "transcribeSpeakers",
         "subtitleContainers",
         "hotkeyOverrides",
         "profiling",
@@ -264,6 +266,7 @@ def test_get_frontend_config_shape():
     assert cfg["clipFormat"] == config.FILEFORMAT
     assert cfg["screenshotFormat"] == config.SCREENSHOT_FORMAT
     assert cfg["gifFormat"] == config.GIF_FORMAT
+    assert cfg["transcribeSpeakers"] is config.TRANSCRIBE_SPEAKERS
 
 
 def test_severity_css_class_mapping():

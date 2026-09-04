@@ -484,7 +484,7 @@ class TestAgentRunCallables:
         result = agent["run"](entry, None)
         assert result == [{"sentence": "s", "refs": []}]
         mock_find.assert_called_once_with(
-            entry["summary"], entry["segments"], cancel_event=None
+            entry["summary"], entry["segments"], cancel_event=None, speaker_labels=None
         )
 
     @patch("thinking_agents.find_citations")
