@@ -846,14 +846,19 @@ def _run_reellate_mode_interactive() -> tuple[bool, str | None]:
             resolved_clips, output_file, reencode_on_fail=True
         )
 
-    ok = (
-        utils.run_with_spinner(
-            f"Concatenating {len(selected_clips)} clips into {output_file}...",
-            _concat_reellate,
+    ok = False
+    try:
+        ok = (
+            utils.run_with_spinner(
+                f"Concatenating {len(selected_clips)} clips into {output_file}...",
+                _concat_reellate,
+            )
+            if utils.use_progress()
+            else _concat_reellate()
         )
-        if utils.use_progress()
-        else _concat_reellate()
-    )
+    finally:
+        if not ok:
+            files.release_reservation(output_file)
 
     if ok:
         return (True, output_file)

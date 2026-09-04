@@ -347,6 +347,7 @@
     // Model-view overlay (toggle or held-key blink comparator)
     var overlayActive = (state.overlayEnabled || state.overlayBlinkActive)
       && state.overlayImage
+      && state.overlayImageTool === SS._previewToolKey()
       && _overlayEligibleForActiveTool();
     if (overlayActive) {
       ctx.globalAlpha = state.overlayBlinkActive ? 1.0 : 0.7;
@@ -354,16 +355,14 @@
       if (scope === "frame") {
         ctx.drawImage(state.overlayImage, 0, 0, canvas.width, canvas.height);
       } else {
-        var oRegion = state.pendingRegion
-          ? state.pendingRegion
-          : (state.activeRegion ? state.regions[state.activeRegion] : null);
+        var oRegion = state.overlayImageRegion;
         if (oRegion) {
           var oPx = regionToPixels(oRegion);
           if (oPx && oPx.w && oPx.h) {
             ctx.drawImage(state.overlayImage, oPx.x, oPx.y, oPx.w, oPx.h);
           }
         } else {
-          // No region active — overlay covers the whole frame.
+          // Full-frame previews cover the canvas.
           ctx.drawImage(state.overlayImage, 0, 0, canvas.width, canvas.height);
         }
       }
