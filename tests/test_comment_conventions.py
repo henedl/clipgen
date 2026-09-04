@@ -213,8 +213,6 @@ _TEST_HITS = {p.relative_to(ROOT).as_posix(): _scan(p) for p in _TEST_FILES}
 # Over-limit blocks per tests/ file as of the 2026-09 pass. Ratchets down only.
 _TEST_BASELINE: dict[str, int] = {
     "tests/conftest.py": 1,
-    "tests/perf/clip_bench.py": 2,
-    "tests/perf/scan_bench.py": 1,
     "tests/screenspace/test_attention.py": 11,
     "tests/screenspace/test_change_similarity.py": 4,
     "tests/screenspace/test_inactivity.py": 1,

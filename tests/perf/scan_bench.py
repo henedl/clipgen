@@ -12,18 +12,20 @@ Usage (from the repo root):
 
     uv run python tests/perf/scan_bench.py                     # sweep + table
     uv run python tests/perf/scan_bench.py --save base.json    # snapshot
-    uv run python tests/perf/scan_bench.py --compare base.json # A/B deltas
+    uv run python tests/perf/scan_bench.py --compare base.json --fail-on 10
     uv run python tests/perf/scan_bench.py --tools color,text --runs 2
 
 The fixture video is built on demand (ffmpeg testsrc: constant motion, so
-phash-skip never hides the callback). Each tool writes to its own wiped
-output dir so a cached manifest can never absorb the scan. `--runs N` keeps
-the fastest run per tool (minimum callback seconds), the standard treatment
-for scheduler noise. Template and Shape use a fixed top-left 20% region for
-a non-degenerate reference and bounded search workload. `text` is excluded
-from the default sweep: OCR is an
-order of magnitude slower than every other tool and pins ~0.8 GB of RSS per
-pooled OCR engine (measured 3.3 GB at the default auto pool of 4).
+phash-skip never hides the callback) and rebuilt when `--duration` does not
+match the file already on disk — a leftover 120 s clip would otherwise
+ignore `--duration 15` and poison `--compare`. Each tool writes to its own
+wiped output dir so a cached manifest can never absorb the scan. `--runs N`
+keeps the fastest run per tool (minimum callback seconds), the standard
+treatment for scheduler noise. Template and Shape use a fixed top-left 20%
+region for a non-degenerate reference and bounded search workload. `text` is
+excluded from the default sweep: OCR is an order of magnitude slower than
+every other tool and pins ~0.8 GB of RSS per pooled OCR engine (measured
+3.3 GB at the default auto pool of 4).
 
 The parser (`parse_profile`) is unit-tested in test_scan_bench_parse.py;
 everything else is a thin subprocess driver kept dependency-free on purpose.
@@ -41,9 +43,7 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
-# The canonical flag set per tool — the load-bearing arguments SKILL.md warns
-# about (a tool missing its required flag refuses to build a task and reports
-# only ffprobe.run, which reads as a fast-filter skip).
+# Missing required flags refuse the task and report only ffprobe.run.
 TOOL_FLAGS: dict[str, list[str]] = {
     "color": ["--ss-target-color", "#FF0000", "--ss-tolerance", "20,30,30"],
     "change": ["--ss-threshold", "0.05"],
@@ -68,25 +68,91 @@ BENCH_REGION = {
 }
 REGION_TOOLS = {"template", "shape"}
 
-_PROFILE_RE = re.compile(r"^profile \| (\S+)\s+([\d.]+)s\s+n=(\d+)", re.MULTILINE)
+# Label is padded to 32 chars and may contain spaces (`route /api/foo`).
+_PROFILE_RE = re.compile(r"^profile \| (.+?)\s+([\d.]+)s\s+n=(\d+)(.*)$", re.MULTILINE)
 _RSS_RE = re.compile(r"^profile \| peak_rss\s+([\d.]+)MB", re.MULTILINE)
+_MS_RE = re.compile(r"\b(avg|max|first)=([\d.]+)ms")
+_BYTES_RE = re.compile(r"\bbytes=(\S+)")
+
+
+def _parse_bytes(token: str) -> float:
+    """Invert profiling.format_bytes; one-decimal sizes are approximate."""
+    if token.endswith("MB"):
+        return float(token[:-2]) * 1024 * 1024
+    if token.endswith("KB"):
+        return float(token[:-2]) * 1024
+    if token.endswith("B"):
+        return float(token[:-1])
+    return 0.0
 
 
 def parse_profile(text: str) -> dict[str, dict[str, float]]:
-    """Parse `profile |` report lines into {label: {seconds, n}} (+peak_rss)."""
+    """Parse `profile |` report lines into {label: {seconds, n, ...}} (+peak_rss)."""
     out: dict[str, dict[str, float]] = {}
-    for label, seconds, n in _PROFILE_RE.findall(text):
-        out[label] = {"seconds": float(seconds), "n": int(n)}
+    for label, seconds, n, rest in _PROFILE_RE.findall(text):
+        row: dict[str, float] = {"seconds": float(seconds), "n": int(n)}
+        for key, ms in _MS_RE.findall(rest):
+            row[key] = float(ms) / 1000.0
+        nbytes = _BYTES_RE.search(rest)
+        if nbytes:
+            row["bytes"] = _parse_bytes(nbytes.group(1))
+        out[label] = row
     rss = _RSS_RE.search(text)
     if rss:
         out["peak_rss"] = {"seconds": 0.0, "n": 0, "mb": float(rss.group(1))}
     return out
 
 
+def probe_duration(path: Path) -> float | None:
+    """Seconds of *path*, or None if ffprobe cannot say."""
+    proc = subprocess.run(
+        [
+            "ffprobe",
+            "-v",
+            "error",
+            "-show_entries",
+            "format=duration",
+            "-of",
+            "csv=p=0",
+            str(path),
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    try:
+        return float(proc.stdout.strip())
+    except ValueError:
+        return None
+
+
+def delta_pct(current: float, base: float) -> float | None:
+    """Percent change, or None when *base* is 0."""
+    if not base:
+        return None
+    return (current / base - 1.0) * 100.0
+
+
+def regressions(
+    rows: dict[str, dict[str, float]],
+    baseline: dict[str, dict[str, float]],
+    key: str,
+    limit: float,
+) -> list[tuple[str, float]]:
+    """Names whose *key* rose by more than *limit* percent."""
+    hit: list[tuple[str, float]] = []
+    for name, row in rows.items():
+        pct = delta_pct(row.get(key, 0.0), (baseline.get(name) or {}).get(key, 0.0))
+        if pct is not None and pct > limit:
+            hit.append((name, pct))
+    return hit
+
+
 def summarize(tool: str, profile: dict[str, dict[str, float]]) -> dict[str, float]:
     """Reduce one run's parsed report to the per-tool comparison row."""
     callback = profile.get(f"scan.callback.{tool}", {"seconds": 0.0, "n": 0})
     decode = profile.get("scan.decode_wait", {"seconds": 0.0, "n": 0})
+    filt = profile.get("scan.fast_filter", {"seconds": 0.0, "n": 0})
     heatmap = sum(
         profile.get(label, {}).get("seconds", 0.0)
         for label in ("heatmap.gifs", "heatmap.grid_layers")
@@ -97,6 +163,7 @@ def summarize(tool: str, profile: dict[str, dict[str, float]]) -> dict[str, floa
         "callback_avg_ms": callback["seconds"] / frames * 1000 if frames else 0.0,
         "frames": frames,
         "decode_s": decode["seconds"],
+        "filter_s": filt["seconds"],
         "heatmap_s": heatmap,
         "peak_rss_mb": profile.get("peak_rss", {}).get("mb", 0.0),
     }
@@ -122,10 +189,15 @@ def keep_best(
 
 
 def ensure_fixture(input_dir: Path, duration: int) -> Path:
-    """Build the deterministic benchmark video if it is not already there."""
+    """Build the benchmark video, rebuilding if its length does not match."""
     video = input_dir / "bench_P01.mp4"
-    if video.is_file():
+    existing = probe_duration(video) if video.is_file() else None
+    if existing is not None and abs(existing - duration) < 0.5:
         return video
+    if video.is_file():
+        was = f"{existing:.0f}s" if existing is not None else "unreadable"
+        print(f"rebuilding {video.name} ({was} → {duration}s)")
+        video.unlink()
     input_dir.mkdir(parents=True, exist_ok=True)
     subprocess.run(
         [
@@ -203,6 +275,8 @@ def run_tool(
     )
     output = proc.stdout + proc.stderr
     parsed = parse_profile(output)
+    if proc.returncode:
+        print(f"  ! {tool}: clipgen exit {proc.returncode}")
     if f"scan.callback.{tool}" not in parsed:
         print(f"  ! {tool}: no scan.callback.{tool} in report (task refused?)")
         tail = "\n".join(output.strip().splitlines()[-5:])
@@ -223,19 +297,25 @@ def print_table(
     delta_hdr = "  Δcallback" if baseline else ""
     print(
         f"{'tool':<12}{'callback':>10}{'avg':>9}{'frames':>8}"
-        f"{'decode':>9}{'heatmap':>9}{'rss':>9}{delta_hdr}"
+        f"{'decode':>9}{'filter':>9}{'heatmap':>9}{'rss':>9}{delta_hdr}"
     )
     for tool, row in rows.items():
         line = (
             f"{tool:<12}{row['callback_s']:>9.3f}s{row['callback_avg_ms']:>7.1f}ms"
-            f"{row['frames']:>8d}{row['decode_s']:>8.3f}s{row['heatmap_s']:>8.3f}s"
-            f"{row['peak_rss_mb']:>7.0f}MB"
+            f"{row['frames']:>8d}{row['decode_s']:>8.3f}s{row['filter_s']:>8.3f}s"
+            f"{row['heatmap_s']:>8.3f}s{row['peak_rss_mb']:>7.0f}MB"
         )
         if baseline:
             base = baseline.get(tool)
             if base and base.get("callback_s"):
-                pct = (row["callback_s"] / base["callback_s"] - 1.0) * 100
-                line += f"  {pct:>+8.1f}%"
+                pct = delta_pct(row["callback_s"], base["callback_s"])
+                line += f"  {pct:>+8.1f}%" if pct is not None else "  (no base)"
+                if (
+                    row.get("frames")
+                    and base.get("frames")
+                    and row["frames"] != base["frames"]
+                ):
+                    line += " frames≠"
             else:
                 line += "  (no base)"
         print(line)
@@ -252,7 +332,7 @@ def main() -> int:
         "--input",
         default="/tmp/ssbench",
         type=Path,
-        help="fixture dir; bench_P01.mp4 is built here if missing",
+        help="fixture dir; bench_P01.mp4 is built or rebuilt here",
     )
     ap.add_argument(
         "--output",
@@ -265,7 +345,7 @@ def main() -> int:
         "--duration",
         default=120,
         type=int,
-        help="fixture length in seconds (only used when building)",
+        help="fixture length in seconds; rebuilds when the existing file differs",
     )
     ap.add_argument(
         "--runs",
@@ -276,11 +356,19 @@ def main() -> int:
     ap.add_argument("--save", type=Path, help="write results JSON here")
     ap.add_argument("--compare", type=Path, help="baseline JSON to diff against")
     ap.add_argument(
+        "--fail-on",
+        type=float,
+        default=None,
+        help="with --compare, exit 1 if any Δcallback %% exceeds this",
+    )
+    ap.add_argument(
         "--deep",
         action="store_true",
         help="attach --profile-deep scan.callback.<tool> and print each pstats block",
     )
     args = ap.parse_args()
+    if args.fail_on is not None and not args.compare:
+        ap.error("--fail-on requires --compare")
 
     tools = [t.strip() for t in args.tools.split(",") if t.strip()]
     unknown = [t for t in tools if t not in TOOL_FLAGS]
@@ -288,7 +376,13 @@ def main() -> int:
         print(f"unknown tools: {', '.join(unknown)} (know: {', '.join(TOOL_FLAGS)})")
         return 2
     out_root = args.output or (args.input / "bench-out")
-    ensure_fixture(args.input, args.duration)
+    video = ensure_fixture(args.input, args.duration)
+    probed = probe_duration(video)
+    print(
+        f"fixture {video.name}  {probed:.0f}s  interval={args.interval}"
+        if probed is not None
+        else f"fixture {video.name}  interval={args.interval}"
+    )
 
     baseline = None
     if args.compare:
@@ -318,6 +412,7 @@ def main() -> int:
                     "meta": {
                         "interval": args.interval,
                         "video": str(args.input / "bench_P01.mp4"),
+                        "duration": args.duration,
                         "runs": args.runs,
                     },
                     "tools": rows,
@@ -326,6 +421,12 @@ def main() -> int:
             )
         )
         print(f"\nsaved -> {args.save}")
+    if args.fail_on is not None and baseline is not None:
+        hit = regressions(rows, baseline, "callback_s", args.fail_on)
+        if hit:
+            for name, pct in hit:
+                print(f"fail-on: {name} {pct:+.1f}% (limit {args.fail_on:g}%)")
+            return 1
     return 0
 
 
