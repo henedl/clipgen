@@ -4282,3 +4282,74 @@ def test_merge_speakers_task_remaps_ids_and_keeps_manual_lines(monkeypatch):
     assert entry["segments"][3]["speaker_manual"] is True
     assert entry["speakers"]["labels"] == {"1": "Moderator"}
     assert entry["speakers"]["count"] == 2
+
+
+def test_disable_speakers_is_not_undone_by_a_late_result(
+    tr_client, monkeypatch, tmp_path
+):
+    """A completed-but-unmerged speakers task must not flip the switch back on."""
+    entry = _labelled_entry()
+    late = {
+        "id": "sp_late",
+        "kind": "speakers",
+        "participant": "P01",
+        "status": transcripts.TASK_STATUS_COMPLETED,
+        "created_at": "9999",
+        "result": {
+            "segments": [
+                {"id": "P01:0", "speaker": "1"},
+                {"id": "P01:1", "speaker": "2"},
+            ],
+            "speakers": {"enabled": True, "labels": {}, "count": 2},
+        },
+    }
+    _seed_speakers(monkeypatch, tmp_path, entry, _SpeakersWorker([late]))
+    transcripts_server._merged_task_ids.clear()
+    resp = tr_client.put("/transcripts/api/speakers/P01", json={"enabled": False})
+    assert resp.status_code == 200
+    # The disable path persisted (and so merged) synchronously.
+    assert entry["speakers"] == {"enabled": False}
+    assert all("speaker" not in s for s in entry["segments"])
+    assert "sp_late" in transcripts_server._merged_task_ids
+    # Nor does a later persist replay it.
+    with transcripts_server._manifest_lock:
+        transcripts_server._merge_completed_results_locked()
+    assert entry["speakers"] == {"enabled": False}
+
+
+def test_merge_strips_speakers_from_a_transcription_after_disable(monkeypatch):
+    pid = "P01"
+    entry = {
+        "segments": [{"id": "P01:0", "text": "old"}],
+        "speakers": {"enabled": False},
+    }
+    monkeypatch.setattr(
+        transcripts_server,
+        "_manifest",
+        {"source_transcripts": {pid: entry}, "marks": []},
+        raising=False,
+    )
+    task = {
+        "id": "tr_new",
+        "kind": "transcribe",
+        "participant": pid,
+        "status": transcripts.TASK_STATUS_COMPLETED,
+        "created_at": "9999",
+        "result": {
+            "segments": [{"id": "P01:0", "text": "fresh", "speaker": "1"}],
+            "speakers": {"enabled": True, "labels": {}, "count": 1},
+        },
+    }
+    monkeypatch.setattr(
+        transcripts_server,
+        "_worker",
+        cast("transcripts.TranscriptWorker", _CompletedTasksWorker([task])),
+        raising=False,
+    )
+    transcripts_server._merged_task_ids.clear()
+    with transcripts_server._manifest_lock:
+        transcripts_server._merge_completed_results_locked()
+    merged = transcripts_server._manifest["source_transcripts"][pid]
+    assert merged["segments"][0]["text"] == "fresh"
+    assert "speaker" not in merged["segments"][0]
+    assert merged["speakers"] == {"enabled": False}

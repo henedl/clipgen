@@ -2359,6 +2359,28 @@ class TestSpeakerWorkerTasks:
         worker._execute_task(task)
         assert task["status"] == transcripts.TASK_STATUS_CANCELLED
 
+    def test_speakers_task_cancelled_after_last_segment_does_not_complete(
+        self, monkeypatch
+    ):
+        """A cancel that lands during the final embed must not report completed."""
+        monkeypatch.setattr(config, "DEBUGGING", True)
+        monkeypatch.setattr(transcripts, "_resolve_audio_index", lambda p, r: 0)
+        worker = transcripts.TranscriptWorker()
+        task = transcripts.create_speakers_task(
+            "P01", ["/v.mp4"], [{"id": "P01:0", "start": 0, "end": 1, "text": "x"}]
+        )
+        real = transcripts.label_speakers
+
+        def cancel_late(*a, **k):
+            block = real(*a, **k)
+            task["_cancelled"] = True
+            return block
+
+        monkeypatch.setattr(transcripts, "label_speakers", cancel_late)
+        worker._execute_task(task)
+        assert task["status"] == transcripts.TASK_STATUS_CANCELLED
+        assert task["result"] is None
+
     def test_diarize_flag_runs_speaker_phase_after_transcription(self, monkeypatch):
         monkeypatch.setattr(config, "DEBUGGING", True)
         import video

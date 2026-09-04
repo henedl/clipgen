@@ -200,6 +200,12 @@ def _diarize_wanted(entry: dict[str, Any]) -> bool:
     return bool(config.TRANSCRIBE_SPEAKERS)
 
 
+def _speakers_off(entry: dict[str, Any] | None) -> bool:
+    """True once the participant switched speakers off; late results must not undo it."""
+    block = (entry or {}).get("speakers")
+    return isinstance(block, dict) and block.get("enabled") is False
+
+
 def _speaker_model_ready() -> bool:
     return config.DEBUGGING or speakers.is_speaker_model_available()
 
@@ -2493,12 +2499,17 @@ def _merge_completed_results_locked() -> list[str]:
             if task.get("kind") == "speakers":
                 # Labels land by id on the live list; marks and agents stay put.
                 live = src.get(pid)
-                if live and live.get("segments"):
+                if live and live.get("segments") and not _speakers_off(live):
                     _apply_speaker_result(live, task["result"])
                     speakers_changed = True
                 _merged_task_ids.add(task["id"])
                 continue
             existing = src.get(pid, {})
+            if "speakers" in task["result"] and _speakers_off(existing):
+                # Switched off mid-transcription: the labels arrive unwanted.
+                task["result"].pop("speakers", None)
+                for seg in task["result"].get("segments") or []:
+                    seg.pop("speaker", None)
             if existing.get("segments"):
                 # A re-transcription re-mints the same "{pid}:{index}" ids; drop
                 # marks older than this run.

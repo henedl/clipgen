@@ -1843,6 +1843,9 @@ class TranscriptWorker:
                 task["video_paths"][0], task.get("audio_index")
             )
             block = self._run_diarize_phase(task, segments, audio_index)
+            # A cancel that landed after the last segment must not complete.
+            if task.get("_cancelled"):
+                raise speakers.DiarizationCancelled
             if block is None:
                 self._fail(task, "Speaker detection failed.")
                 return
