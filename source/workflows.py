@@ -316,12 +316,28 @@ def _exec_transcribe(
     if result is None:
         # A None result is a decode/model failure, not an empty transcript.
         raise RuntimeError("Could not transcribe the wired video")
+    if _speakers_wanted(params) and result.get("segments"):
+        block = transcripts.label_speakers(
+            paths, result["segments"], None, cancel_flag=ctx.cancel_flag
+        )
+        if block:
+            result["speaker_labels"] = {}
     transcript_val = dict(result)
     transcript_val["source"] = src
     return {
         "transcript": transcript_val,
         "segments": {"segments": result.get("segments", []), "source": src},
     }
+
+
+def _speakers_wanted(params: dict[str, Any]) -> bool:
+    """Node param ``on``/``off`` wins; ``default`` follows TRANSCRIBE_SPEAKERS."""
+    choice = str(params.get("speakers", "default") or "default")
+    if choice == "on":
+        return True
+    if choice == "off":
+        return False
+    return bool(config.TRANSCRIBE_SPEAKERS)
 
 
 def _exec_find_word(
