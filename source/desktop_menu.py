@@ -59,6 +59,10 @@ _JS_WHATS_NEW = (
     "if (window.ClipgenStartOverlay && window.ClipgenStartOverlay.open)"
     ' window.ClipgenStartOverlay.open("updates");'
 )
+_JS_CHECK_UPDATES = (
+    "if (window.ClipgenStartOverlay && window.ClipgenStartOverlay.checkForUpdates)"
+    " window.ClipgenStartOverlay.checkForUpdates();"
+)
 _JS_CHEATSHEET = (
     "if (window.ClipgenHotkeys && window.ClipgenHotkeys.toggleCheatsheet)"
     " window.ClipgenHotkeys.toggleCheatsheet();"
@@ -125,7 +129,10 @@ def build_menus(get_window: Callable[[], Any]) -> list:
     def js_action(title: str, script: str) -> Any:
         return MenuAction(title, lambda: _run_js(get_window, script))
 
-    app_items = [js_action("Settings…", _JS_OPEN_SETTINGS)]
+    app_items = [
+        js_action("Settings…", _JS_OPEN_SETTINGS),
+        js_action("Check for Updates…", _JS_CHECK_UPDATES),
+    ]
 
     file_items = [
         js_action("New Session…", _JS_NEW_SESSION),

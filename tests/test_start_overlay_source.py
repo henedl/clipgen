@@ -90,6 +90,22 @@ def test_changelog_current_version_classes_have_css():
         assert rule in css, f"{rule} built by start-overlay.js but absent from CSS"
 
 
+def test_update_row_classes_have_css():
+    """buildUpdateRow() paints the self-update row; each class needs a rule."""
+    css = read("start-overlay.css")
+    for rule in (
+        ".about__update",
+        ".about__update-actions",
+        ".so-btn--sm",
+        ".about__progress",
+        ".about__progress-fill",
+        ".about__auto",
+        ".start-tab.has-badge",
+    ):
+        assert rule in css, f"{rule} built by start-overlay.js but absent from CSS"
+    assert ".topnav-icon-btn.has-badge" in read("topnav.css")
+
+
 def test_tab_classes_toggled_by_js_have_css():
     """.is-active / .is-entering / [hidden] do nothing without these rules."""
     css = read("start-overlay.css")

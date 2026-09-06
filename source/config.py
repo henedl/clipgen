@@ -173,6 +173,8 @@ COMPOSER_ANNOTATION_SPAN_SECONDS: float = 10.0  # default visibility span
 COMPOSER_DOUBLE_CLICK_CUTS: bool = True
 # Warn about fragmented MP4s the browser cannot seek and offer the remux. Mirrored to JS.
 MEDIA_CONTAINER_WARNING: bool = True
+# Desktop app asks GitHub Releases for a newer build once per launch. Server-only.
+UPDATE_CHECK_ON_LAUNCH: bool = True
 # Cap on Composer's scrub WAV; the client skips longer spans. Mirrored to JS.
 COMPOSER_SCRUB_MAX_AUDIO_SECONDS: float = 180.0
 # Convergence Browser lanes, in order; mirrored to JS so lane layout and offset keys agree.
@@ -660,6 +662,7 @@ SETTINGS_DESCRIPTIONS: dict[str, str] = {
     "HOTKEY_OVERRIDES": "Custom keyboard-shortcut bindings, keyed by action id. Click a shortcut to rebind it; an empty value disables the shortcut.",
     "HIGHLIGHTS_REEL_DURATION_SECONDS": "Maximum duration in seconds for the highlights reel time budget.",
     "MANIFEST_ENABLED": "Write a manifest JSON file alongside generated artifacts for session tracking.",
+    "UPDATE_CHECK_ON_LAUNCH": "Check GitHub for a newer clipgen release when the desktop app starts. You can always check manually from the Start panel's About tab.",
     "STUDIO_CELL_EXPAND_HOVER": "Expand overflowing timestamp cells on hover in the Sheet Preview.",
     "STUDIO_CARD_SCRUBBER": "Hover a queue card's thumbnail to scrub through frames, hear the clip's audio, and see a waveform overlay.",
     "CROSS_REFERENCES_ENABLED": "Show cross-reference badges linking spreadsheet, Screenspace, transcript, and Composer data across pages.",
@@ -707,6 +710,7 @@ SETTINGS_DESCRIPTIONS: dict[str, str] = {
 # Studio-exposed settings with UI metadata (tab, group, type, constraints).
 STUDIO_SETTINGS: dict[str, dict[str, Any]] = {
     "MANIFEST_ENABLED": {"tab": "General", "group": "Manifest", "type": "bool"},
+    "UPDATE_CHECK_ON_LAUNCH": {"tab": "General", "group": "Updates", "type": "bool"},
     "CLIP_PARALLEL_WORKERS": {
         "tab": "General",
         "group": "Workers",

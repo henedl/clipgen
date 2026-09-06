@@ -164,3 +164,14 @@ def test_pyobjc_is_imported_by_name_not_by_statement():
 def test_desktop_hands_the_menus_to_webview():
     assert "menu=menus" in DESKTOP_SOURCE
     assert "desktop_menu.enhance_menu_bar" in DESKTOP_SOURCE
+
+
+def test_check_for_updates_lives_in_the_app_menu():
+    """The menu snippet leans on start-overlay's checkForUpdates export."""
+    menus = desktop_menu.build_menus(lambda: None)
+    assert [item.title for item in menus[0].items] == [
+        "Settings…",
+        "Check for Updates…",
+    ]
+    assert "checkForUpdates" in desktop_menu._JS_CHECK_UPDATES
+    assert "checkForUpdates: function" in START_OVERLAY_JS

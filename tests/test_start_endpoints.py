@@ -8,6 +8,7 @@ Exercises the routes registered directly on ``combined`` (not on a blueprint):
 * ``POST /api/sessions/record``
 * ``GET  /api/spreadsheets/google``
 * ``POST /api/spreadsheets/google/auth``
+* ``GET  /api/update/status``  ``POST /api/update/{check,download,apply,reveal}``
 
 We build the live app via :func:`server.build_combined_app` and drive it
 through ``test_client``. State globals (``_google_auth``, ``config.INPUT_DIR``,
@@ -1565,3 +1566,84 @@ def test_models_payload_leaves_working_models_unflagged(client, monkeypatch):
     body = client.get("/api/models").get_json()
     entry = next(m for m in body["llm"]["models"] if m["name"] == "tiny")
     assert entry["unusable"] == ""
+
+
+# ---------- /api/update/* ---------------------------------------------------
+
+
+@pytest.fixture
+def updater_state(monkeypatch, tmp_path):
+    import updater
+
+    updater.reset_for_tests()
+    monkeypatch.setattr(start_settings, "config_dir", lambda: tmp_path / "cfg")
+    yield updater
+    updater.reset_for_tests()
+
+
+def test_update_status_is_unsupported_from_source(client, updater_state):
+    body = client.get("/api/update/status").get_json()
+    assert body["ok"] is True
+    assert body["supported"] is False
+    assert body["phase"] == "idle"
+
+
+def test_update_check_skips_the_thread_when_unsupported(
+    client, updater_state, monkeypatch
+):
+    calls = []
+    monkeypatch.setattr(updater_state, "finish_check", lambda **kw: calls.append(kw))
+    body = client.post("/api/update/check", json={"force": True}).get_json()
+    assert body["ok"] is True and body["supported"] is False
+    assert calls == []
+
+
+def test_update_check_runs_on_a_thread_when_supported(
+    client, updater_state, monkeypatch
+):
+    import threading
+
+    done = threading.Event()
+    calls = []
+
+    def fake_finish_check(**kw):
+        calls.append(kw)
+        done.set()
+
+    monkeypatch.setattr(updater_state, "is_supported", lambda: True)
+    monkeypatch.setattr(updater_state, "finish_check", fake_finish_check)
+    body = client.post("/api/update/check", json={"force": True}).get_json()
+    assert body["ok"] is True
+    # The reply already carries the in-flight phase so the page starts polling.
+    assert body["phase"] == "checking"
+    assert done.wait(timeout=5)
+    assert calls == [{"force": True}]
+
+
+def test_update_download_replies_with_the_downloading_phase(
+    client, updater_state, monkeypatch
+):
+    import threading
+
+    done = threading.Event()
+    monkeypatch.setattr(updater_state, "is_supported", lambda: True)
+    monkeypatch.setattr(updater_state, "finish_download", done.set)
+    with updater_state._lock:
+        updater_state._latest = {"tag": "v9.9.9", "url": "", "assets": []}
+        updater_state._status.update(phase="available", asset="x")
+    body = client.post("/api/update/download").get_json()
+    assert body["phase"] == "downloading"
+    assert done.wait(timeout=5)
+
+
+def test_update_download_and_apply_refuse_the_wrong_phase(client, updater_state):
+    assert client.post("/api/update/download").status_code == 409
+    assert client.post("/api/update/apply").status_code == 409
+    assert client.post("/api/update/skip").status_code == 409
+    assert client.post("/api/update/reveal").status_code == 404
+
+
+def test_update_reveal_replies_with_a_full_snapshot(client, updater_state, monkeypatch):
+    monkeypatch.setattr(updater_state, "reveal_download", lambda: True)
+    body = client.post("/api/update/reveal").get_json()
+    assert body["ok"] is True and "phase" in body and "supported" in body

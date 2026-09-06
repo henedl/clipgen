@@ -253,6 +253,13 @@ def test_settings_records_include_llm_model_pickers(client):
     assert by_name["LLM_REPORT_MODEL"]["emptyLabel"]
 
 
+def test_settings_records_include_update_toggle(client):
+    data = client.get("/studio/api/settings").get_json()
+    by_name = {s["name"]: s for s in data["settings"]}
+    assert by_name["UPDATE_CHECK_ON_LAUNCH"]["type"] == "bool"
+    assert by_name["UPDATE_CHECK_ON_LAUNCH"]["group"] == "Updates"
+
+
 def test_settings_records_include_agent_prompts(client):
     data = client.get("/studio/api/settings").get_json()
     by_name = {s["name"]: s for s in data["settings"]}

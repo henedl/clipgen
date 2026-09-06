@@ -17,7 +17,7 @@ clipgen is built for UX researchers — especially games user researchers runnin
 
 ### Desktop app
 
-Download builds from the [Releases page](https://github.com/henedl/clipgen/releases) and follow the bundled `INSTALL.txt`.
+Download builds from the [Releases page](https://github.com/henedl/clipgen/releases) and follow the bundled `INSTALL.txt`. After that the desktop app checks for newer releases on launch and updates itself in place from the Start panel's About tab (toggle in Settings → General → Updates).
 
 The macOS build is unsigned, so Gatekeeper blocks the first launch: right-click the app and choose **Open** once, or run `xattr -dr com.apple.quarantine clipgen.app`. Double-clicking the app opens clipgen in its own desktop window; the same binary is also the full CLI when given arguments.
 
