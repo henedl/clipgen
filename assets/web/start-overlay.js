@@ -2065,7 +2065,8 @@
   }
 
   function applyUpdateSnapshot(u) {
-    if (!u || !u.ok) return;
+    // Only a full snapshot may replace state; a bare {ok:true} would blank the row.
+    if (!u || !u.ok || typeof u.phase !== "string") return;
     state.update = u;
     var busy = u.phase === "checking" || u.phase === "downloading" || u.phase === "applying";
     if (busy) startUpdatePoll(); else stopUpdatePoll();

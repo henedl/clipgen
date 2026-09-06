@@ -4331,7 +4331,7 @@ def build_combined_app(
 
         if not updater.reveal_download():
             return err("No downloaded update to show", 404)
-        return ok()
+        return ok(**updater.status())
 
     @combined.route("/api/licenses")
     def api_licenses() -> Response:

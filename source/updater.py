@@ -30,6 +30,7 @@ dir's ``update.json``; a manual check bypasses it.
 
 from __future__ import annotations
 
+import functools
 import hashlib
 import json
 import os
@@ -90,6 +91,8 @@ _status: dict[str, Any] = {
 }
 # The release the current phase refers to; None until a check succeeds.
 _latest: dict[str, Any] | None = None
+# What the ready download was verified against: name, sha256, size, mtime_ns.
+_verified: dict[str, Any] | None = None
 
 
 # ---- Install shape -----------------------------------------------------------
@@ -270,6 +273,22 @@ def run_check(*, force: bool = False) -> None:
         finish_check(force=force)
 
 
+def _recover(fn: Callable[..., None]) -> Callable[..., None]:
+    """A crashing thread body lands in ``error`` instead of a stuck phase."""
+
+    @functools.wraps(fn)
+    def wrapped(*args: Any, **kwargs: Any) -> None:
+        try:
+            fn(*args, **kwargs)
+        except Exception as exc:
+            utils.warning_print(f"Update step failed: {exc}")
+            with _lock:
+                _status.update(phase="error", error=str(exc) or "Update step failed")
+
+    return wrapped
+
+
+@_recover
 def finish_check(*, force: bool = False) -> None:
     """Thread body behind /api/update/check; moves the phase on from checking."""
     global _latest
@@ -305,13 +324,12 @@ def finish_check(*, force: bool = False) -> None:
         _status["skipped"] = None
         asset = pick_asset(release, shape)
         _latest = release
-        # Read before the reset below: a verified download for this same asset stays ready.
+        # Read before the reset below: an unchanged verified download stays ready.
         already = _status.get("path")
         same_file = (
             asset is not None
-            and _status.get("asset") == asset["name"]
             and bool(already)
-            and Path(str(already)).is_file()
+            and _still_verified(asset, Path(str(already)))
         )
         _status.update(
             version=release["tag"], release_url=release["url"], asset=None, path=None
@@ -330,6 +348,7 @@ def finish_check(*, force: bool = False) -> None:
             return
         existing = _existing_download(asset)
         if existing is not None:
+            _mark_verified(asset, existing)
             _status.update(phase="ready", path=str(existing), total=asset["size"])
             _status["completed"] = asset["size"]
         else:
@@ -358,20 +377,50 @@ def _verify_file(path: Path, asset: dict[str, Any]) -> str | None:
     """Size and sha256 against the release metadata; an error string or None."""
     try:
         size = path.stat().st_size
+        if asset.get("size") and size != asset["size"]:
+            return f"size mismatch ({size} of {asset['size']} bytes)"
+        expected = asset.get("sha256") or ""
+        if not expected:
+            return None
+        digest = hashlib.sha256()
+        with path.open("rb") as handle:
+            while chunk := handle.read(_DOWNLOAD_CHUNK):
+                digest.update(chunk)
     except OSError as exc:
         return str(exc)
-    if asset.get("size") and size != asset["size"]:
-        return f"size mismatch ({size} of {asset['size']} bytes)"
-    expected = asset.get("sha256") or ""
-    if not expected:
-        return None
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        while chunk := handle.read(_DOWNLOAD_CHUNK):
-            digest.update(chunk)
     if digest.hexdigest() != expected:
         return "checksum mismatch"
     return None
+
+
+def _mark_verified(asset: dict[str, Any], path: Path) -> None:
+    """Remember what *path* verified against; caller holds no lock requirement."""
+    global _verified
+    try:
+        stat = path.stat()
+    except OSError:
+        _verified = None
+        return
+    _verified = {
+        "name": asset["name"],
+        "sha256": asset.get("sha256") or "",
+        "size": stat.st_size,
+        "mtime_ns": stat.st_mtime_ns,
+    }
+
+
+def _still_verified(asset: dict[str, Any], path: Path) -> bool:
+    """True when the release digest and the file on disk both match the stamp."""
+    mark = _verified
+    if mark is None or mark["name"] != asset["name"]:
+        return False
+    if mark["sha256"] != (asset.get("sha256") or "") or mark["size"] != asset["size"]:
+        return False
+    try:
+        stat = path.stat()
+    except OSError:
+        return False
+    return stat.st_size == mark["size"] and stat.st_mtime_ns == mark["mtime_ns"]
 
 
 def download_update(
@@ -451,6 +500,7 @@ def run_download() -> None:
         finish_download()
 
 
+@_recover
 def finish_download() -> None:
     """Thread body behind /api/update/download."""
     with _lock:
@@ -470,6 +520,8 @@ def finish_download() -> None:
             _status["total"] = total
 
     path = download_update(asset, on_progress=_progress)
+    if path is not None:
+        _mark_verified(asset, path)
     with _lock:
         if path is None:
             _status.update(phase="error", error="Download failed")
@@ -756,6 +808,7 @@ def run_apply() -> None:
         finish_apply()
 
 
+@_recover
 def finish_apply() -> None:
     """Thread body behind /api/update/apply; quits the app on success."""
     with _lock:
@@ -856,9 +909,10 @@ def status() -> dict[str, Any]:
 
 def reset_for_tests() -> None:
     """Return the module state to its import-time shape."""
-    global _latest
+    global _latest, _verified
     with _lock:
         _latest = None
+        _verified = None
         _status.update(
             phase="idle",
             checked=False,

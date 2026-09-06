@@ -1641,3 +1641,9 @@ def test_update_download_and_apply_refuse_the_wrong_phase(client, updater_state)
     assert client.post("/api/update/apply").status_code == 409
     assert client.post("/api/update/skip").status_code == 409
     assert client.post("/api/update/reveal").status_code == 404
+
+
+def test_update_reveal_replies_with_a_full_snapshot(client, updater_state, monkeypatch):
+    monkeypatch.setattr(updater_state, "reveal_download", lambda: True)
+    body = client.post("/api/update/reveal").get_json()
+    assert body["ok"] is True and "phase" in body and "supported" in body

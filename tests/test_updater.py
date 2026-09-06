@@ -454,6 +454,43 @@ def test_recheck_keeps_a_verified_download_without_rehashing(monkeypatch, tmp_pa
     assert snap["phase"] == "ready" and snap["completed"] == 10
 
 
+def test_recheck_reverifies_when_the_release_digest_changes(monkeypatch, tmp_path):
+    monkeypatch.setattr(updater, "install_shape", lambda: "mac-app")
+    monkeypatch.setattr(utils, "get_version", lambda: "0.1.0")
+    payload = b"d" * 10
+    release = updater._normalize_release(_release_payload())
+    release["assets"][0]["sha256"] = hashlib.sha256(payload).hexdigest()
+    monkeypatch.setattr(updater, "check_latest", lambda *, force: release)
+    updates = tmp_path / "cfg" / "updates"
+    updates.mkdir(parents=True)
+    (updates / "clipgen-v9.9.9-macos.dmg").write_bytes(payload)
+    updater.run_check(force=True)
+    assert updater.status()["phase"] == "ready"
+    # The asset was re-published with different bytes: the stale file is dropped.
+    release["assets"][0]["sha256"] = "f" * 64
+    updater.run_check(force=True)
+    assert updater.status()["phase"] == "available"
+    assert not (updates / "clipgen-v9.9.9-macos.dmg").exists()
+
+
+def test_verify_file_reports_read_errors(tmp_path):
+    asset = {"size": 0, "sha256": "a" * 64}
+    problem = updater._verify_file(tmp_path, asset)  # a directory cannot be read
+    assert problem is not None
+
+
+def test_crashing_worker_lands_in_error(monkeypatch):
+    monkeypatch.setattr(updater, "install_shape", lambda: "mac-app")
+
+    def boom(*, force):
+        raise RuntimeError("disk on fire")
+
+    monkeypatch.setattr(updater, "check_latest", boom)
+    updater.run_check(force=True)
+    snap = updater.status()
+    assert snap["phase"] == "error" and "disk on fire" in snap["error"]
+
+
 def test_status_reports_the_auto_check_setting(monkeypatch):
     monkeypatch.setattr(config, "UPDATE_CHECK_ON_LAUNCH", False)
     assert updater.status()["auto_check"] is False
