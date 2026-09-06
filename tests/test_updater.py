@@ -410,6 +410,50 @@ def test_skip_hides_the_release_until_a_manual_check(monkeypatch):
     assert updater.skip_version() is False
 
 
+def test_launch_check_leaves_an_offered_update_alone(monkeypatch):
+    """Every page load runs a launch check; it must not flip available → checking."""
+    monkeypatch.setattr(updater, "install_shape", lambda: "mac-app")
+    monkeypatch.setattr(utils, "get_version", lambda: "0.1.0")
+    monkeypatch.setattr(
+        updater,
+        "check_latest",
+        lambda *, force: updater._normalize_release(_release_payload()),
+    )
+    updater.run_check(force=True)
+    assert updater.status()["phase"] == "available"
+    assert updater.start_check(force=False) is False
+    assert updater.status()["phase"] == "available"
+    with updater._lock:
+        updater._status["phase"] = "ready"
+    assert updater.start_check(force=False) is False
+    assert updater.start_check(force=True) is True
+
+
+def test_recheck_keeps_a_verified_download_without_rehashing(monkeypatch, tmp_path):
+    monkeypatch.setattr(updater, "install_shape", lambda: "mac-app")
+    monkeypatch.setattr(utils, "get_version", lambda: "0.1.0")
+    payload = b"d" * 10
+    release = updater._normalize_release(_release_payload())
+    release["assets"][0]["sha256"] = hashlib.sha256(payload).hexdigest()
+    monkeypatch.setattr(updater, "check_latest", lambda *, force: release)
+    updates = tmp_path / "cfg" / "updates"
+    updates.mkdir(parents=True)
+    (updates / "clipgen-v9.9.9-macos.dmg").write_bytes(payload)
+    updater.run_check(force=True)
+    snap = updater.status()
+    assert snap["phase"] == "ready" and snap["path"].endswith(
+        "clipgen-v9.9.9-macos.dmg"
+    )
+
+    def no_rehash(path, asset):
+        raise AssertionError("re-hashed a verified download")
+
+    monkeypatch.setattr(updater, "_verify_file", no_rehash)
+    updater.run_check(force=True)
+    snap = updater.status()
+    assert snap["phase"] == "ready" and snap["completed"] == 10
+
+
 def test_status_reports_the_auto_check_setting(monkeypatch):
     monkeypatch.setattr(config, "UPDATE_CHECK_ON_LAUNCH", False)
     assert updater.status()["auto_check"] is False

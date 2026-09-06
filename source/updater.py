@@ -257,6 +257,9 @@ def start_check(*, force: bool = False) -> bool:
     with _lock:
         if _status["phase"] in ("checking", "downloading", "applying"):
             return False
+        # A launch check (every page load) must not disturb an offered update.
+        if not force and _status["phase"] in ("available", "ready"):
+            return False
         _status.update(phase="checking", current=utils.get_version(), error=None)
     return True
 
@@ -302,18 +305,29 @@ def finish_check(*, force: bool = False) -> None:
         _status["skipped"] = None
         asset = pick_asset(release, shape)
         _latest = release
+        # Read before the reset below: a verified download for this same asset stays ready.
+        already = _status.get("path")
+        same_file = (
+            asset is not None
+            and _status.get("asset") == asset["name"]
+            and bool(already)
+            and Path(str(already)).is_file()
+        )
         _status.update(
             version=release["tag"], release_url=release["url"], asset=None, path=None
         )
         if asset is None:
             _status.update(phase="error", error="No download for this platform")
             return
-        already = _status.get("path")
-        if _status["asset"] == asset["name"] and already and Path(already).is_file():
-            # Verified on an earlier check; skip re-hashing the same file.
-            _status.update(phase="ready", total=asset["size"], completed=asset["size"])
-            return
         _status["asset"] = asset["name"]
+        if same_file:
+            _status.update(
+                phase="ready",
+                path=already,
+                total=asset["size"],
+                completed=asset["size"],
+            )
+            return
         existing = _existing_download(asset)
         if existing is not None:
             _status.update(phase="ready", path=str(existing), total=asset["size"])
