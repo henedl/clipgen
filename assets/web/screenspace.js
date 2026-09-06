@@ -234,6 +234,8 @@
     overlayBlinkActive: false,
     overlayImage: null,
     overlayImageObjectUrl: null,
+    overlayImageScope: null,
+    overlayImageRegion: null,
     overlayImageTimestamp: null,
     overlayImageTool: null,
     overlayLayerSpec: {},

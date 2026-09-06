@@ -1295,3 +1295,16 @@ def test_worksheet_factory_excel_needs_no_client(monkeypatch, tmp_path):
     factory = cli._make_worksheet_factory(_base_args(spreadsheet=str(xlsx)))
     assert factory(None) == ("excel-ws", None)
     assert seen["client"] is None
+
+
+def test_speakers_flag_enables_speaker_attribution(monkeypatch):
+    import config
+
+    original = config.TRANSCRIBE_SPEAKERS
+    try:
+        monkeypatch.setattr("sys.argv", ["clipgen.py", "--speakers"])
+        args = cli.parse_arguments()
+        cli._apply_config_overrides(args, cli_mode=True)
+        assert config.TRANSCRIBE_SPEAKERS is True
+    finally:
+        config.TRANSCRIBE_SPEAKERS = original

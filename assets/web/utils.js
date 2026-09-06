@@ -62,6 +62,7 @@ var CLIPGEN_CONFIG = {
   composerDoubleClickCuts: true,
   crossReferences: true,
   mediaContainerWarning: true,
+  transcribeSpeakers: false,
   // Mirrors video.SUBTITLE_CODEC_BY_CONTAINER / SUBTITLE_ALWAYS_DEFAULT_CONTAINERS;
   // the mp4 muxer ignores -disposition:s:0.
   subtitleContainers: {
@@ -157,6 +158,9 @@ var clipgenApplyConfig = function (payload) {
   }
   if (typeof payload.mediaContainerWarning === "boolean") {
     CLIPGEN_CONFIG.mediaContainerWarning = payload.mediaContainerWarning;
+  }
+  if (typeof payload.transcribeSpeakers === "boolean") {
+    CLIPGEN_CONFIG.transcribeSpeakers = payload.transcribeSpeakers;
   }
   if (payload.subtitleContainers && typeof payload.subtitleContainers === "object") {
     CLIPGEN_CONFIG.subtitleContainers = payload.subtitleContainers;

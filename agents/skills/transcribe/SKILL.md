@@ -13,8 +13,11 @@ Options:
 - `--transcript-format md|srt|vtt` (default: `md`)
 - `--no-whisper-vad` — disable Silero VAD (`TRANSCRIBE_VAD_FILTER` is **on by default**; VAD skips long silence on recordings that are mostly quiet, which is the common UX-research case)
 - `--whisper-hallucination-silence SEC` — enable hallucination silence skip when SEC > 0 (enables word timestamps; slower)
+- `--speakers` — label each line by detected speaker (`TRANSCRIBE_SPEAKERS`; bundled WeSpeaker model, no download)
 
 Transcription quality knobs (`TRANSCRIBE_BEAM_SIZE`, `TRANSCRIBE_VAD_FILTER` + its recall-safe tuning `TRANSCRIBE_VAD_THRESHOLD`/`TRANSCRIBE_VAD_SPEECH_PAD_MS`/`TRANSCRIBE_VAD_MIN_SILENCE_MS`, no-speech / log-probability / compression-ratio thresholds, hallucination silence threshold, condition-on-previous-text) live in `config.py` and are exposed in Studio under **Transcription → Transcription quality**. If VAD ever drops real words, lower `TRANSCRIBE_VAD_THRESHOLD` (e.g. `0.2`) or raise `TRANSCRIBE_VAD_SPEECH_PAD_MS` rather than turning VAD off. Set `TRANSCRIBE_HALLUCINATION_SILENCE_THRESHOLD` to `0` to disable silence-based hallucination skip. `TRANSCRIBE_CPU_THREADS` (Studio: **Transcription**) sets CTranslate2 CPU threads; `0` = auto (all cores).
+
+Speakers: `TRANSCRIBE_SPEAKERS` (Studio: **Transcription → Speakers**, off by default) sets the default; each participant pill's **Speakers** switch overrides it and persists on the manifest entry. Switching it on for an already-transcribed participant runs the pass without re-transcribing; the **Speakers** agent row re-runs it (new cluster ids are matched onto the old ones, so renames and per-line fixes survive); switching it off strips every label. Click a chip to rename ("Moderator"; the arrow restores the default) or to move that one line to another speaker (or a new one); names flow into `.md`/`.srt` prefixes, `<v>` VTT voice tags, the summary/citations prompts, search results, and `--export`. `TRANSCRIBE_SPEAKER_MAX` caps the auto-detected count (2–8). The Workflows **Transcribe** node has a matching `speakers` param (default / on / off).
 
 ## Step 2: Generate clips with transcripts
 

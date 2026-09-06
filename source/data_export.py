@@ -27,6 +27,7 @@ from pathlib import Path
 from typing import Any
 
 import config
+import speakers
 import utils
 
 
@@ -246,6 +247,7 @@ def build_transcript_segments(manifest: dict[str, Any]) -> list[dict[str, Any]]:
         model = entry.get("model", "")
         source_file = entry.get("source_file", "")
         transcribed_at = entry.get("transcribed_at", "")
+        speaker_labels = (entry.get("speakers") or {}).get("labels") or {}
         for idx, seg in enumerate(entry.get("segments", []) or []):
             if not isinstance(seg, dict):
                 continue
@@ -265,6 +267,12 @@ def build_transcript_segments(manifest: dict[str, Any]) -> list[dict[str, Any]]:
                     "end": utils.sanitize_floats(end),
                     "duration": utils.sanitize_floats(round(end - start, 4)),
                     "text": seg.get("text", ""),
+                    "speaker": seg.get("speaker", ""),
+                    "speaker_name": (
+                        speakers.speaker_display_name(seg["speaker"], speaker_labels)
+                        if seg.get("speaker")
+                        else ""
+                    ),
                     "language": language,
                     "model": model,
                     "source_file": source_file,

@@ -30,6 +30,7 @@ from typing import Any, TypedDict, cast
 import config
 import friction
 import llm_client
+import speakers
 import utils
 
 
@@ -129,6 +130,7 @@ def summarize_transcript(
     model: str | None = None,
     cancel_event: threading.Event | None = None,
     on_token: Callable[[str], None] | None = None,
+    speaker_labels: dict[str, str] | None = None,
 ) -> str | None:
     """Summarize transcript segments into a paragraph + bullet points.
 
@@ -141,8 +143,9 @@ def summarize_transcript(
     chat template): a reasoning model would otherwise spend its first chunk of
     time in a silent think phase that emits no text — dead air with nothing to
     stream, and pure added latency for a task that doesn't need reasoning.
+    Speaker-labelled segments go in one ``Name: text`` line each.
     """
-    text = " ".join(seg.get("text", "").strip() for seg in segments).strip()
+    text = _transcript_text(segments, speaker_labels)
     if len(text) < _MIN_TEXT_LENGTH:
         return None
 
@@ -176,7 +179,36 @@ def _run_summary(
     on_token: Callable[[str], None] | None = None,
 ) -> str | None:
     segments = entry.get("segments") or []
-    return summarize_transcript(segments, cancel_event=cancel_event, on_token=on_token)
+    return summarize_transcript(
+        segments,
+        cancel_event=cancel_event,
+        on_token=on_token,
+        speaker_labels=_speaker_labels(entry),
+    )
+
+
+def _speaker_labels(entry: dict[str, Any]) -> dict[str, str] | None:
+    block = entry.get("speakers") or {}
+    return block.get("labels") if block.get("enabled") else None
+
+
+def _transcript_text(
+    segments: list[dict[str, Any]], speaker_labels: dict[str, str] | None
+) -> str:
+    """Plain prose, or one ``Name: text`` line per segment once speakers exist."""
+    if not any(seg.get("speaker") for seg in segments):
+        return " ".join(seg.get("text", "").strip() for seg in segments).strip()
+    lines = []
+    for seg in segments:
+        text = seg.get("text", "").strip()
+        if not text:
+            continue
+        speaker = seg.get("speaker")
+        if speaker:
+            name = speakers.speaker_display_name(speaker, speaker_labels)
+            text = f"{name}: {text}"
+        lines.append(text)
+    return "\n".join(lines).strip()
 
 
 # ---------------------------------------------------------------------------
@@ -208,15 +240,21 @@ def _split_summary_sentences(summary: str) -> list[str]:
     return sentences
 
 
-def _format_segment_chunk(segments: list[dict[str, Any]]) -> str:
+def _format_segment_chunk(
+    segments: list[dict[str, Any]], speaker_labels: dict[str, str] | None = None
+) -> str:
     """Format a chunk of segments as ``[M:SS] text`` lines for the prompt."""
     lines: list[str] = []
     for seg in segments:
         start = seg.get("start", 0)
         ts = utils.seconds_to_timestamp(int(start))
         text = seg.get("text", "").strip()
-        if text:
-            lines.append(f"[{ts}] {text}")
+        if not text:
+            continue
+        speaker = seg.get("speaker")
+        if speaker:
+            text = f"{speakers.speaker_display_name(speaker, speaker_labels)}: {text}"
+        lines.append(f"[{ts}] {text}")
     return "\n".join(lines)
 
 
@@ -295,6 +333,7 @@ def find_citations(
     *,
     model: str | None = None,
     cancel_event: threading.Event | None = None,
+    speaker_labels: dict[str, str] | None = None,
 ) -> list[dict[str, Any]] | None:
     """Find supporting transcript segments for each summary sentence.
 
@@ -316,7 +355,8 @@ def find_citations(
 
     claims_text = "\n".join(f"{i + 1}. {s}" for i, s in enumerate(sentences))
     transcript_text = _truncate_middle(
-        _format_segment_chunk(segments), _MAX_CITATION_TRANSCRIPT_CHARS
+        _format_segment_chunk(segments, speaker_labels),
+        _MAX_CITATION_TRANSCRIPT_CHARS,
     )
 
     utils.verbose_print(
@@ -374,7 +414,12 @@ def _run_citations(
     # on_token is ignored: citations parse from the complete response only.
     summary = entry.get("summary") or ""
     segments = entry.get("segments") or []
-    return find_citations(summary, segments, cancel_event=cancel_event)
+    return find_citations(
+        summary,
+        segments,
+        cancel_event=cancel_event,
+        speaker_labels=_speaker_labels(entry),
+    )
 
 
 # ---------------------------------------------------------------------------

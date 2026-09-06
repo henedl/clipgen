@@ -427,3 +427,28 @@ def test_reellate_user_filename_lands_in_output_dir(monkeypatch, tmp_path):
     assert output_file == seen["output"]
     assert Path(output_file).parent == tmp_path
     assert Path(output_file).name == "myreel.mp4"
+
+
+def test_reellate_failure_releases_output(monkeypatch, tmp_path):
+    """A failed concat must not leave its reserved output behind."""
+    import app
+    import config
+    import files
+    import video
+
+    monkeypatch.setattr(config, "OUTPUT_DIR", str(tmp_path), raising=False)
+    monkeypatch.setattr(files, "discover_clips", lambda: ["a.mp4", "b.mp4"])
+    monkeypatch.setattr(utils, "use_progress", lambda: False)
+    _scripted(monkeypatch, ["A + B", "y", "failed-reel"])
+
+    def fail_concat(_clips, output_file, **_kwargs):
+        assert Path(output_file).is_file()
+        return False
+
+    monkeypatch.setattr(video, "concatenate_clips", fail_concat)
+
+    ok, output_file = app._run_reellate_mode_interactive()
+
+    assert ok is False
+    assert output_file is None
+    assert not (tmp_path / "failed-reel.mp4").exists()

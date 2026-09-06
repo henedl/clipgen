@@ -58,7 +58,7 @@ py-modules = [
     "screenspace_manifest", "screenspace_multitool", "screenspace_ocr",
     "screenspace_preview", "screenspace_primitives", "screenspace_scans",
     "screenspace_server", "screenspace_tools", "screenspace_worker", "server",
-    "server_utils", "spreadsheet", "start_settings", "thinking_agents",
+    "server_utils", "speakers", "spreadsheet", "start_settings", "thinking_agents",
     "titlecards", "updater",
     "transcripts", "transcripts_server", "utils", "video", "viewer",
     "workflows", "workflows_catalog", "workflows_runner", "workflows_server",

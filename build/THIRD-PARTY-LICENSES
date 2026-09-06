@@ -39,6 +39,7 @@ pywebview                   6.2.1      BSD-3-Clause
 Pillow                      12.1.1     HPND (MIT-CMU)
 RapidOCR                    3.9.2      Apache-2.0
   PP-OCR models (bundled)     v4/v5      Apache-2.0
+WeSpeaker CAM++ model (bundled) sherpa-onnx export  Apache-2.0
 google-auth                 2.49.1     Apache-2.0
 google-auth-oauthlib        1.3.0      Apache-2.0
 certifi                     2026.2.25  MPL-2.0
@@ -627,8 +628,8 @@ APACHE LICENSE, VERSION 2.0
 ===============================================================================
 
 The following components are licensed under the Apache License, Version 2.0:
-  RapidOCR, the bundled PP-OCR ONNX models, google-auth, google-auth-oauthlib,
-  OpenCV (the C++ library)
+  RapidOCR, the bundled PP-OCR ONNX models, the bundled WeSpeaker CAM++ speaker
+  model, google-auth, google-auth-oauthlib, OpenCV (the C++ library)
 
 Copyright notices:
   RapidOCR: Copyright (c) RapidAI (https://github.com/RapidAI/RapidOCR)
@@ -637,6 +638,10 @@ Copyright notices:
           ship inside the rapidocr wheel, and the latin/japan/korean
           recognition models are fetched at build time from the pinned,
           SHA256-verified URLs in build/fetch_binaries.py OCR_MODEL_PINS)
+  WeSpeaker CAM++ speaker model: Copyright (c) WeNet Open Source Community
+          (https://github.com/wenet-e2e/wespeaker); ONNX export by
+          k2-fsa/sherpa-onnx, fetched at build time from the pinned,
+          SHA256-verified URL in build/fetch_binaries.py SPEAKER_MODEL_PINS
   google-auth: Copyright Google LLC
   google-auth: Copyright Google LLC
   google-auth-oauthlib: Copyright Google LLC

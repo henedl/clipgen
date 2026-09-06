@@ -960,6 +960,7 @@ def _transcribe_segments(
                 language=entry.get("language", ""),
                 source_file=entry.get("source_file", str(base_video)),
                 model=entry.get("model", ""),
+                speaker_labels=dict((entry.get("speakers") or {}).get("labels") or {}),
             )
         else:
             context_keywords = transcripts.get_corrections_keywords(corrections) or None
@@ -979,6 +980,14 @@ def _transcribe_segments(
                     context_keywords=context_keywords,
                     known_terms=known_terms,
                 )
+            fresh = transcript_cache[base_video]
+            if config.TRANSCRIBE_SPEAKERS and fresh and fresh["segments"]:
+                paths = (
+                    [p for p, _d, _c in timeline]
+                    if timeline
+                    else [str(utils.resolve_input_path(base_video))]
+                )
+                transcripts.label_speakers(paths, fresh["segments"], None)
     full_transcript = transcript_cache[base_video]
     if not full_transcript:
         return

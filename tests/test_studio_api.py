@@ -5,6 +5,7 @@ from unittest.mock import Mock
 import pytest
 
 Flask = pytest.importorskip("flask").Flask
+import config
 import server
 import itertools
 
@@ -2768,6 +2769,15 @@ def test_api_settings_includes_transcription_settings(client):
     quality = by_name["TRANSCRIBE_VAD_FILTER"]
     assert quality["group"] == "Transcription quality"
     assert quality["type"] == "bool"
+    speakers = by_name["TRANSCRIBE_SPEAKERS"]
+    assert speakers["group"] == "Speakers"
+    assert speakers["type"] == "bool"
+    assert speakers["value"] is False
+    cap = by_name["TRANSCRIBE_SPEAKER_MAX"]
+    assert cap["group"] == "Speakers"
+    assert (cap["min"], cap["max"], cap["step"]) == (2, 8, 1)
+    for name in ("TRANSCRIBE_SPEAKERS", "TRANSCRIBE_SPEAKER_MAX"):
+        assert name in config.SETTINGS_DESCRIPTIONS
 
 
 def test_api_settings_includes_cli_settings(client):

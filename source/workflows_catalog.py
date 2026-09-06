@@ -257,6 +257,14 @@ NODE_TYPES: dict[str, NodeType] = {
                     "zh",
                 ],
             },
+            {
+                "name": "speakers",
+                "type": "enum",
+                "default": "default",
+                "choices": ["default", "on", "off"],
+                # default follows TRANSCRIBE_SPEAKERS; on/off force it per node.
+                "label": "Speakers",
+            },
         ],
         "requires": ["videoDir"],
     },

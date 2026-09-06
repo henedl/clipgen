@@ -18,6 +18,7 @@
   var TS = window.ClipgenTranscripts;
   var state = TS.state;
   var getMarkForSegment = TS.getMarkForSegment;
+  var _isSpeakerTask = TS._isSpeakerTask;
 
   // Playback-rate stops for the speed button; small steps suit transcript review.
   var VIDEO_SPEEDS = [0.75, 1, 1.25, 1.5, 2];
@@ -204,6 +205,7 @@
     var found = null;
     for (var i = 0; i < state.tasks.length; i++) {
       var t = state.tasks[i];
+      if (_isSpeakerTask(t)) continue;
       if (t.participant === pid && t.status === "running") found = t;
     }
     return found;
@@ -589,16 +591,14 @@
     renderTimeline();
   }
 
+  // Readout only; I/O hotkeys set the range and the pill's Range row clears it.
   function updateMarkerInfo() {
     var info = qs("#markerInfo");
-    var clearBtn = qs("#clearMarkersBtn");
-    if (!info || !clearBtn) return;
+    if (!info) return;
     if (state.inMarker === null && state.outMarker === null) {
       info.textContent = "";
-      clearBtn.classList.add("hidden");
       return;
     }
-    clearBtn.classList.remove("hidden");
     var parts = [];
     if (state.inMarker !== null) parts.push("In: " + formatTime(state.inMarker, { decimals: 1 }));
     if (state.outMarker !== null) parts.push("Out: " + formatTime(state.outMarker, { decimals: 1 }));
@@ -655,6 +655,9 @@
     var cat = (mark && MARK_CATEGORIES[mark.category]) || MARK_CATEGORIES.bookmark || { label: "Mark", color: "#888" };
     var snippet = (seg.text || "").trim().slice(0, 80);
     if ((seg.text || "").length > 80) snippet += "…";
+    if (seg.speaker && TS.speakersOn && TS.speakersOn()) {
+      snippet = TS.speakerName(seg.speaker) + ": " + snippet;
+    }
     var extraCount = (seg.marks && seg.marks.length > 1) ? (seg.marks.length - 1) : 0;
     var label = mark && mark.label ? " · " + mark.label : "";
     tip.textContent = "";
@@ -783,21 +786,6 @@
         if (state.autoFollow) _autoFollowPausedUntil = 0;
         setStoredUIStateField("transcripts", "autoFollow", state.autoFollow);
         updatePlayerButtons();
-      });
-    }
-
-    var setInBtn = qs("#setInBtn");
-    if (setInBtn) setInBtn.addEventListener("click", setInMark);
-    var setOutBtn = qs("#setOutBtn");
-    if (setOutBtn) setOutBtn.addEventListener("click", setOutMark);
-    var clearBtn = qs("#clearMarkersBtn");
-    if (clearBtn) {
-      clearBtn.addEventListener("click", function () {
-        state.inMarker = null;
-        state.outMarker = null;
-        persistMarkers();
-        updateMarkerInfo();
-        renderTimeline();
       });
     }
 
