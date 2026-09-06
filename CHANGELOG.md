@@ -8,6 +8,14 @@ Notable changes per release. One level-2 heading per version — `## <version> �
 
 `<Tool>` is one of `Core`, `Studio`, `Screenspace`, `Transcripts`, `Workflows`, `Composer`, `Overview`. Write for someone using clipgen, not building it: name the thing by what it is called in the interface, say what changed for them, and leave the internals in the commit. Add a second sentence only when the first leaves an obvious "so what". Lines render as **plain text** in the Start overlay's Recent updates tab — no backticks or markdown inside them, or it shows up literally.
 
+## v0.17.1 — 2026-09-04
+**Transcripts:** Feat: Speaker attribution is opt-in under Settings, Transcription, Speakers, and each participant pill can override it. Lines show colored Speaker 1, Speaker 2 chips you can rename or move one line at a time.
+**Transcripts:** Feat: Speaker labels carry through subtitle exports, AI summaries, citations, and transcript search.
+**Workflows:** Feat: The Transcribe node has a Speakers option to label speakers during a workflow run.
+**Core:** Feat: Pass --speakers to label speakers from the command line.
+**Screenspace:** Fix: Multitool preview overlays follow the focused step and hide stale images from other steps.
+**Core:** Fix: A failed reel build releases its output slot so you can try again with the same name.
+
 ## v0.17.0 — 2026-09-03
 **Screenspace:** Feat: Click a Multitool step to focus it. Model view previews that step's tool, region and reference, and its calibration track is highlighted.
 **Screenspace:** Feat: Template and Shape scans run much faster when the tool has a search region.
