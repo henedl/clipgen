@@ -176,6 +176,8 @@
           window.clipgenInitBrandMark();
         }
         state.mounted = true;
+        // A snapshot may have arrived before the tabs existed.
+        syncUpdateBadges();
       })
       .catch(function (err) {
         console.error("Start overlay: failed to mount", err);
@@ -1920,11 +1922,11 @@
       val.appendChild(el("span", "about__title", "clipgen"));
       val.appendChild(el("span", "about__sub", "Generate clips, screenshots, and transcripts from playtest videos."));
     });
-    aboutRow("Version", function (val) {
-      val.classList.add("mono");
-      val.textContent = "v" + (s.version || "0.0.0");
-    });
     var u = state.update;
+    aboutRow("Version", function (val) {
+      val.appendChild(el("span", "mono", "v" + (s.version || "0.0.0")));
+      if (u && u.supported) val.appendChild(buildAutoCheckToggle(u));
+    });
     if (u && u.supported) {
       aboutRow("Update", function (val) { buildUpdateRow(val, u); });
     }
@@ -1990,6 +1992,7 @@
     } else if (phase === "available") {
       line.textContent = u.version + " is available.";
       button("Download", true, function () { updateAction("/api/update/download"); });
+      button("Skip this version", false, function () { updateAction("/api/update/skip"); });
       releaseLink("Release notes");
     } else if (phase === "downloading") {
       line.textContent = "Downloading " + u.version + "… " + formatMegabytes(u.completed) + " of " + formatMegabytes(u.total);
@@ -2007,6 +2010,7 @@
     } else if (phase === "ready") {
       line.textContent = u.version + " is downloaded.";
       button("Restart to update", true, function () { updateAction("/api/update/apply"); });
+      button("Skip this version", false, function () { updateAction("/api/update/skip"); });
       releaseLink("Release notes");
     } else if (phase === "applying") {
       line.textContent = "Installing " + u.version + "… clipgen will restart.";
@@ -2014,6 +2018,10 @@
       line.textContent = u.error || "Update failed.";
       button("Retry", false, function () { checkForUpdates(true); });
       releaseLink("Open Releases page");
+    } else if (u.skipped) {
+      line.textContent = u.skipped + " skipped.";
+      button("Check again", false, function () { checkForUpdates(true); });
+      releaseLink("Release notes");
     } else {
       line.textContent = u.checked ? "You're on the latest version." : "";
       button(u.checked ? "Check again" : "Check for updates", false, function () { checkForUpdates(true); });
@@ -2025,15 +2033,43 @@
     }
   }
 
+  // Beside the version: the UPDATE_CHECK_ON_LAUNCH setting via the shared settings route.
+  function buildAutoCheckToggle(u) {
+    var label = el("label", "persist-check about__auto");
+    var input = document.createElement("input");
+    input.type = "checkbox";
+    input.checked = !!u.auto_check;
+    // Hotkeys treat a focused checkbox as a typing target; keep focus off it.
+    input.tabIndex = -1;
+    input.addEventListener("change", function () {
+      input.blur();
+      apiPut("/api/settings", { settings: { UPDATE_CHECK_ON_LAUNCH: input.checked } })
+        .then(function () { return apiGet("/api/update/status"); })
+        .then(applyUpdateSnapshot)
+        .catch(function () {});
+    });
+    label.appendChild(input);
+    label.appendChild(el("span", null, "Check for updates automatically"));
+    return label;
+  }
+
+  // The Start button's dot says "something is waiting"; the About tab's dot says where.
+  function syncUpdateBadges() {
+    var u = state.update;
+    var pending = !!(u && u.supported && (u.phase === "available" || u.phase === "ready"));
+    if (window.ClipgenTopNav && typeof window.ClipgenTopNav.setStartBadge === "function") {
+      window.ClipgenTopNav.setStartBadge(pending);
+    }
+    var aboutTab = root ? root.querySelector('[data-start-tab="about"]') : null;
+    if (aboutTab) aboutTab.classList.toggle("has-badge", pending);
+  }
+
   function applyUpdateSnapshot(u) {
     if (!u || !u.ok) return;
     state.update = u;
     var busy = u.phase === "checking" || u.phase === "downloading" || u.phase === "applying";
     if (busy) startUpdatePoll(); else stopUpdatePoll();
-    var pending = !!u.supported && (u.phase === "available" || u.phase === "ready");
-    if (window.ClipgenTopNav && typeof window.ClipgenTopNav.setStartBadge === "function") {
-      window.ClipgenTopNav.setStartBadge(pending);
-    }
+    syncUpdateBadges();
     if (state.mounted && state.open && state.startTab === "about") renderAbout();
   }
 

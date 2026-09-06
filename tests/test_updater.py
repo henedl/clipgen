@@ -382,6 +382,39 @@ def test_run_check_reports_a_missing_asset(monkeypatch):
     assert snap["phase"] == "error" and snap["error"] == "No download for this platform"
 
 
+def test_skip_hides_the_release_until_a_manual_check(monkeypatch):
+    monkeypatch.setattr(updater, "install_shape", lambda: "mac-app")
+    monkeypatch.setattr(utils, "get_version", lambda: "0.1.0")
+    monkeypatch.setattr(
+        updater,
+        "check_latest",
+        lambda *, force: updater._normalize_release(_release_payload()),
+    )
+    updater.run_check(force=True)
+    assert updater.status()["phase"] == "available"
+    assert updater.skip_version() is True
+    snap = updater.status()
+    assert snap["phase"] == "idle" and snap["skipped"] == "v9.9.9"
+    assert (
+        start_settings.load_config_json(updater.STATE_FILENAME)["skipped"] == "v9.9.9"
+    )
+    # A launch check keeps it hidden; a manual check forgets the skip.
+    updater.run_check(force=False)
+    assert updater.status()["phase"] == "idle"
+    updater.run_check(force=True)
+    snap = updater.status()
+    assert snap["phase"] == "available" and snap["skipped"] is None
+    assert start_settings.load_config_json(updater.STATE_FILENAME)["skipped"] is None
+    assert updater.skip_version() is True
+    # Nothing to skip once idle.
+    assert updater.skip_version() is False
+
+
+def test_status_reports_the_auto_check_setting(monkeypatch):
+    monkeypatch.setattr(config, "UPDATE_CHECK_ON_LAUNCH", False)
+    assert updater.status()["auto_check"] is False
+
+
 # ---- startup sweep -----------------------------------------------------------
 
 

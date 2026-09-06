@@ -4317,6 +4317,14 @@ def build_combined_app(
         ).start()
         return ok(**updater.status())
 
+    @combined.route("/api/update/skip", methods=["POST"])
+    def api_update_skip() -> FlaskResponse:
+        import updater
+
+        if not updater.skip_version():
+            return err("No update to skip", 409)
+        return ok(**updater.status())
+
     @combined.route("/api/update/reveal", methods=["POST"])
     def api_update_reveal() -> FlaskResponse:
         import updater

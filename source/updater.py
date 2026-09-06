@@ -86,6 +86,7 @@ _status: dict[str, Any] = {
     "total": 0,
     "error": None,
     "last_error": None,
+    "skipped": None,
 }
 # The release the current phase refers to; None until a check succeeds.
 _latest: dict[str, Any] | None = None
@@ -232,10 +233,21 @@ def check_latest(*, force: bool = False) -> dict[str, Any] | None:
         return None
     if not release.get("tag"):
         return None
-    start_settings.save_config_json(
-        STATE_FILENAME, {"last_check": now, "etag": etag, "latest": release}
-    )
+    _save_state(last_check=now, etag=etag, latest=release)
     return release
+
+
+def _save_state(**changes: Any) -> None:
+    """Merge *changes* into update.json; other keys (skipped tag) survive."""
+    state = start_settings.load_config_json(STATE_FILENAME, default={}) or {}
+    state.update(changes)
+    start_settings.save_config_json(STATE_FILENAME, state)
+
+
+def _skipped_tag() -> str | None:
+    state = start_settings.load_config_json(STATE_FILENAME, default={}) or {}
+    tag = state.get("skipped")
+    return str(tag) if tag else None
 
 
 def start_check(*, force: bool = False) -> bool:
@@ -261,6 +273,11 @@ def finish_check(*, force: bool = False) -> None:
     current = utils.get_version()
     release = check_latest(force=force)
     shape = install_shape()
+    skipped = _skipped_tag()
+    if force and skipped:
+        # A manual check means "show me anyway"; the skip is forgotten.
+        _save_state(skipped=None)
+        skipped = None
     with _lock:
         # A skipped or offline launch check must not read as "up to date".
         _status["checked"] = release is not None or force
@@ -276,6 +293,13 @@ def finish_check(*, force: bool = False) -> None:
             _latest = None
             _status.update(phase="idle", version=None, release_url=release["url"])
             return
+        if skipped == release["tag"] and not force:
+            _latest = None
+            _status.update(
+                phase="idle", version=None, release_url=release["url"], skipped=skipped
+            )
+            return
+        _status["skipped"] = None
         asset = pick_asset(release, shape)
         _latest = release
         _status.update(
@@ -735,6 +759,19 @@ def finish_apply() -> None:
     request_quit()
 
 
+def skip_version() -> bool:
+    """Hide the offered release until a newer one or a manual check."""
+    global _latest
+    with _lock:
+        tag = _status.get("version")
+        if _status["phase"] not in ("available", "ready") or not tag:
+            return False
+        _latest = None
+        _status.update(phase="idle", skipped=tag, error=None)
+    _save_state(skipped=tag)
+    return True
+
+
 def request_quit() -> None:
     """Close the desktop window so the process unwinds and exits."""
     import desktop
@@ -760,6 +797,7 @@ def sweep_updates_dir() -> None:
     with _lock:
         _status["supported"] = is_supported()
         _status["current"] = utils.get_version()
+        _status["skipped"] = _skipped_tag()
     log = directory / APPLY_LOG
     try:
         if log.is_file():
@@ -798,6 +836,7 @@ def status() -> dict[str, Any]:
     with _lock:
         snapshot = dict(_status)
     snapshot["supported"] = is_supported()
+    snapshot["auto_check"] = bool(config.UPDATE_CHECK_ON_LAUNCH)
     return snapshot
 
 
@@ -817,4 +856,5 @@ def reset_for_tests() -> None:
             total=0,
             error=None,
             last_error=None,
+            skipped=None,
         )

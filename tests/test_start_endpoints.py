@@ -1639,4 +1639,5 @@ def test_update_download_replies_with_the_downloading_phase(
 def test_update_download_and_apply_refuse_the_wrong_phase(client, updater_state):
     assert client.post("/api/update/download").status_code == 409
     assert client.post("/api/update/apply").status_code == 409
+    assert client.post("/api/update/skip").status_code == 409
     assert client.post("/api/update/reveal").status_code == 404

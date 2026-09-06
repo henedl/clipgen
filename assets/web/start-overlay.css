@@ -626,6 +626,15 @@
   color: var(--fg-muted);
 }
 
+/* "Update available" dot on the About tab; syncUpdateBadges toggles it. */
+.start-overlay .start-tab.has-badge::after {
+  content: "";
+  width: var(--space-1-5);
+  height: var(--space-1-5);
+  border-radius: var(--radius-full);
+  background: var(--accent);
+}
+
 .start-overlay .start-tab.is-active {
   color: var(--fg);
   border-bottom-color: var(--accent);
@@ -1954,6 +1963,11 @@
 
 .start-overlay .about__update {
   color: var(--fg);
+}
+
+.start-overlay .about__auto {
+  margin-top: var(--space-1);
+  font-size: var(--text-xs);
 }
 
 .start-overlay .about__update-actions {
