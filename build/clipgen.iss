@@ -59,6 +59,17 @@ Type: filesandordirs; Name: "{app}\lib\easyocr*"
 Type: filesandordirs; Name: "{app}\lib\torch*"
 Type: filesandordirs; Name: "{app}\lib\av*"
 
+[Run]
+; The in-app updater runs this installer silently with /RELAUNCH=1 and quits;
+; this entry brings the app back. CI's smoke install passes no such switch.
+Filename: "{app}\clipgen.exe"; Flags: nowait; Check: WantRelaunch
+
+[Code]
+function WantRelaunch: Boolean;
+begin
+  Result := ExpandConstant('{param:RELAUNCH|0}') = '1';
+end;
+
 [Icons]
 Name: "{autoprograms}\clipgen"; Filename: "{app}\clipgen.exe"
 Name: "{autodesktop}\clipgen"; Filename: "{app}\clipgen.exe"; Tasks: desktopicon

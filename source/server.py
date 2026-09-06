@@ -4267,6 +4267,64 @@ def build_combined_app(
 
         return ok(entries=changelog.load_entries())
 
+    # ---- Self-update (frozen desktop app only) ----
+
+    @combined.route("/api/update/status")
+    def api_update_status() -> Response:
+        import updater
+
+        return ok(**updater.status())
+
+    @combined.route("/api/update/check", methods=["POST"])
+    def api_update_check() -> FlaskResponse:
+        """Refresh from GitHub on a thread; ``force`` bypasses the cooldown."""
+        import updater
+
+        if not updater.is_supported():
+            return ok(**updater.status())
+        data = request.get_json(silent=True) or {}
+        force = bool(data.get("force"))
+        # The phase flips before the reply so the page's poller sees "checking".
+        if updater.start_check(force=force):
+            threading.Thread(
+                target=updater.finish_check,
+                kwargs={"force": force},
+                daemon=True,
+                name="update-check",
+            ).start()
+        return ok(**updater.status())
+
+    @combined.route("/api/update/download", methods=["POST"])
+    def api_update_download() -> FlaskResponse:
+        import updater
+
+        if not updater.start_download():
+            return err("No update to download", 409)
+        threading.Thread(
+            target=updater.finish_download, daemon=True, name="update-download"
+        ).start()
+        return ok(**updater.status())
+
+    @combined.route("/api/update/apply", methods=["POST"])
+    def api_update_apply() -> FlaskResponse:
+        """Install the downloaded update; the app quits and relaunches."""
+        import updater
+
+        if not updater.start_apply():
+            return err("No downloaded update to install", 409)
+        threading.Thread(
+            target=updater.finish_apply, daemon=True, name="update-apply"
+        ).start()
+        return ok(**updater.status())
+
+    @combined.route("/api/update/reveal", methods=["POST"])
+    def api_update_reveal() -> FlaskResponse:
+        import updater
+
+        if not updater.reveal_download():
+            return err("No downloaded update to show", 404)
+        return ok()
+
     @combined.route("/api/licenses")
     def api_licenses() -> Response:
         # SUMMARY table only; `--licenses` prints the whole ~100 KB notice.

@@ -1950,6 +1950,41 @@
   letter-spacing: 0.04em;
 }
 
+/* ---- Self-update row ------------------------------------------------ */
+
+.start-overlay .about__update {
+  color: var(--fg);
+}
+
+.start-overlay .about__update-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2-5);
+  margin-top: var(--space-1);
+}
+
+.start-overlay .so-btn--sm {
+  height: var(--space-6);
+  padding: 0 var(--space-3);
+  border-radius: var(--radius-md);
+  font-size: var(--text-xs);
+}
+
+.start-overlay .about__progress {
+  height: var(--space-1);
+  margin-top: var(--space-1-5);
+  border-radius: var(--radius-full);
+  background: var(--bg-hover);
+  overflow: hidden;
+}
+
+.start-overlay .about__progress-fill {
+  height: 100%;
+  border-radius: inherit;
+  background: var(--accent);
+  transition: width var(--duration-normal);
+}
+
 /* ---- Third-party attribution ---------------------------------------- */
 
 /* The 10.5px/11.5px sizes below are deliberately raw rather than tokenized:

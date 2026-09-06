@@ -198,6 +198,21 @@ html[data-desktop-chrome="macos"][data-desktop-fullscreen] .topnav-left {
 .topnav-qa-trigger {
   gap: 6px;
 }
+
+/* "Update available" dot; ClipgenTopNav.setStartBadge toggles it. */
+.topnav-icon-btn.has-badge {
+  position: relative;
+}
+.topnav-icon-btn.has-badge::after {
+  content: "";
+  position: absolute;
+  top: var(--space-1);
+  right: var(--space-1);
+  width: var(--space-1-5);
+  height: var(--space-1-5);
+  border-radius: var(--radius-full);
+  background: var(--accent);
+}
 .topnav-qa-trigger.is-open {
   background: var(--bg-active);
   color: var(--fg);

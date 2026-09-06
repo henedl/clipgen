@@ -70,6 +70,9 @@
     startTab: "open",       // right column: 'open' | 'about' | 'updates'
     changelogLoaded: false,
     changelogEntries: [],
+    // Last /api/update/status snapshot; null until the desktop app answers.
+    update: null,
+    updatePoller: null,
     // Fetched once; kept in state because renderAttribution() re-runs on every About activation.
     licensesLoaded: false,
     licenseComponents: [],
@@ -1921,6 +1924,10 @@
       val.classList.add("mono");
       val.textContent = "v" + (s.version || "0.0.0");
     });
+    var u = state.update;
+    if (u && u.supported) {
+      aboutRow("Update", function (val) { buildUpdateRow(val, u); });
+    }
     aboutRow("Author", function (val) {
       val.textContent = s.author || "Henrik Edlund";
     });
@@ -1944,6 +1951,115 @@
       val.appendChild(el("span", "about__pill", s.license || "MIT"));
       val.appendChild(el("span", "about__sub", "© 2017–2026 " + (s.author || "Henrik Edlund")));
     });
+  }
+
+  // ---- Self-update (frozen desktop app only) ----
+
+  function formatMegabytes(bytes) {
+    return Math.round((bytes || 0) / 1048576) + " MB";
+  }
+
+  function updateAction(path) {
+    return apiPost(path, {}).then(applyUpdateSnapshot).catch(function () {});
+  }
+
+  function buildUpdateRow(val, u) {
+    var phase = u.phase;
+    var line = el("div", "about__update");
+    var actions = el("div", "about__update-actions");
+    function button(label, primary, onClick) {
+      var b = document.createElement("button");
+      b.type = "button";
+      b.className = "so-btn so-btn--sm" + (primary ? " so-btn--primary" : "");
+      b.textContent = label;
+      b.addEventListener("click", onClick);
+      actions.appendChild(b);
+    }
+    function releaseLink(label) {
+      if (!u.release_url) return;
+      var link = document.createElement("a");
+      link.className = "about__link";
+      link.href = u.release_url;
+      link.target = "_blank";
+      link.rel = "noopener noreferrer";
+      link.textContent = label;
+      actions.appendChild(link);
+    }
+    if (phase === "checking") {
+      line.textContent = "Checking for updates…";
+    } else if (phase === "available") {
+      line.textContent = u.version + " is available.";
+      button("Download", true, function () { updateAction("/api/update/download"); });
+      releaseLink("Release notes");
+    } else if (phase === "downloading") {
+      line.textContent = "Downloading " + u.version + "… " + formatMegabytes(u.completed) + " of " + formatMegabytes(u.total);
+      var track = el("div", "about__progress");
+      var fill = el("div", "about__progress-fill");
+      fill.style.width = (u.total ? Math.round(100 * u.completed / u.total) : 0) + "%";
+      track.appendChild(fill);
+      val.appendChild(line);
+      val.appendChild(track);
+      return;
+    } else if (phase === "ready" && u.error) {
+      line.textContent = u.error + ". Install " + u.version + " by hand.";
+      button("Show download", false, function () { updateAction("/api/update/reveal"); });
+      releaseLink("Open Releases page");
+    } else if (phase === "ready") {
+      line.textContent = u.version + " is downloaded.";
+      button("Restart to update", true, function () { updateAction("/api/update/apply"); });
+      releaseLink("Release notes");
+    } else if (phase === "applying") {
+      line.textContent = "Installing " + u.version + "… clipgen will restart.";
+    } else if (phase === "error") {
+      line.textContent = u.error || "Update failed.";
+      button("Retry", false, function () { checkForUpdates(true); });
+      releaseLink("Open Releases page");
+    } else {
+      line.textContent = u.checked ? "You're on the latest version." : "";
+      button(u.checked ? "Check again" : "Check for updates", false, function () { checkForUpdates(true); });
+    }
+    val.appendChild(line);
+    if (actions.childNodes.length) val.appendChild(actions);
+    if (u.last_error) {
+      val.appendChild(el("div", "about__sub", "Last update failed: " + u.last_error));
+    }
+  }
+
+  function applyUpdateSnapshot(u) {
+    if (!u || !u.ok) return;
+    state.update = u;
+    var busy = u.phase === "checking" || u.phase === "downloading" || u.phase === "applying";
+    if (busy) startUpdatePoll(); else stopUpdatePoll();
+    var pending = !!u.supported && (u.phase === "available" || u.phase === "ready");
+    if (window.ClipgenTopNav && typeof window.ClipgenTopNav.setStartBadge === "function") {
+      window.ClipgenTopNav.setStartBadge(pending);
+    }
+    if (state.mounted && state.open && state.startTab === "about") renderAbout();
+  }
+
+  function checkForUpdates(force) {
+    return apiPost("/api/update/check", { force: !!force }).then(applyUpdateSnapshot).catch(function () {});
+  }
+
+  function startUpdatePoll() {
+    if (state.updatePoller) return;
+    var misses = 0;
+    state.updatePoller = createPoller(function () {
+      return apiGet("/api/update/status").then(function (u) {
+        misses = 0;
+        applyUpdateSnapshot(u);
+      }).catch(function () {
+        // The server vanishing mid-apply is the restart, not a failure.
+        if (++misses >= 5) stopUpdatePoll();
+      });
+    }, 1000, { runImmediately: false, label: "start.update" });
+    state.updatePoller.start();
+  }
+
+  function stopUpdatePoll() {
+    if (!state.updatePoller) return;
+    state.updatePoller.stop();
+    state.updatePoller = null;
   }
 
   function aboutRow(label, build) {
@@ -2340,6 +2456,8 @@
         state.statusData = s;
         state.sheetLoaded = !!s.sheet_loaded;
         if (shouldAutoOpen(s)) open();
+        // The server decides whether this launch is updatable and honours the cooldown.
+        checkForUpdates(false);
       }).catch(function () { /* offline / dev */ });
     });
 
@@ -2357,6 +2475,11 @@
     open: open,
     close: close,
     isOpen: function () { return state.open; },
+    // macOS "Check for Updates…" menu item: show the About tab and force a check.
+    checkForUpdates: function () {
+      if (state.open) setStartTab("about"); else open("about");
+      checkForUpdates(true);
+    },
   };
 
   if (document.readyState === "loading") {

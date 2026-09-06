@@ -33,6 +33,7 @@ import profiling
 import server
 import server_utils
 import start_settings
+import updater
 import utils
 
 
@@ -97,6 +98,12 @@ def save_file(filename: str, content: str) -> str | None:
     target = Path(result if isinstance(result, str) else result[0])
     target.write_text(content, encoding="utf-8")
     return str(target)
+
+
+def request_quit() -> None:
+    """Close the window; webview.start() then returns and launch_desktop unwinds."""
+    if _window is not None:
+        _window.destroy()
 
 
 def set_window_appearance(theme: str) -> None:
@@ -398,6 +405,7 @@ def launch_desktop(
             menus = []
 
         _hide_own_console()
+        updater.sweep_updates_dir()
         profiling.mark("startup.webview_start")
         webview.start(
             menu=menus,

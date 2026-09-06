@@ -333,7 +333,17 @@
     return rebuild;
   }
 
+  // "Update available" dot on the Start button; start-overlay.js drives it.
+  function setStartBadge(on) {
+    var btn = document.getElementById("startBtn");
+    if (!btn) return;
+    btn.classList.toggle("has-badge", !!on);
+    btn.setAttribute("data-tooltip", on ? "Update available" : "Start panel");
+    btn.setAttribute("aria-label", on ? "Start panel, update available" : "Start panel");
+  }
+
   window.ClipgenTopNav = {
+    setStartBadge: setStartBadge,
     setQuickActions: setQuickActions,
     getQuickActions: getQuickActions,
     installQuickActions: installQuickActions,
