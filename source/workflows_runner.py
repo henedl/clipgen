@@ -672,6 +672,10 @@ class WorkflowRunner:
 
     def run(self) -> None:
         """Execute the DAG in topological order. Safe to call once, on a thread."""
+        if not any("execute" in spec for spec in NODE_TYPES.values()):
+            raise RuntimeError(
+                "Workflow executors are unwired; import workflows before running graphs"
+            )
         with profiling.span("workflows.run"):
             self._run()
 

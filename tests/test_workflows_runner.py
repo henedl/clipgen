@@ -904,3 +904,15 @@ def test_seeded_node_with_no_sidecar_payload_is_not_advertised(tmp_path, monkeyp
     assert runner.node_states["s"]["status"] == "completed"
     assert runner.status == workflows.RUN_STATUS_COMPLETED
     assert runner.snapshot()["nodeStates"]["s"]["hasResult"] is False
+
+
+def test_unwired_executors_fail_loudly(tmp_path, monkeypatch):
+    """Importing the runner without the facade must not fail as a bare KeyError."""
+    stripped = {
+        key: {k: v for k, v in spec.items() if k != "execute"}
+        for key, spec in workflows_runner.NODE_TYPES.items()
+    }
+    monkeypatch.setattr(workflows_runner, "NODE_TYPES", stripped)
+    runner = _runner(tmp_path, [], [])
+    with pytest.raises(RuntimeError, match="import workflows"):
+        runner.run()
