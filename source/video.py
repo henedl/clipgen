@@ -39,15 +39,29 @@ _probe_inflight_guard = threading.Lock()
 _keyframe_gap_cache: dict[tuple[str, int], float | None] = {}
 
 
+FFPROBE_TIMEOUT_SECONDS = 20
+
+
 def _ffprobe_check_output(cmd: list[str]) -> str:
     """Run an ffprobe argv and return stdout text.
 
     Split from ``ffmpeg.run`` so a profile report can tell probe I/O from
     encode/extract work. ``_parallel_probe`` was a measured win with no
     label to re-prove it; this is that label.
+
+    A stalled file (network mount, truncated container) must not pin a
+    request thread, so a timeout surfaces as ``CalledProcessError`` like
+    any other probe failure.
     """
     with profiling.span("ffprobe.run"):
-        return subprocess.check_output(cmd, encoding="utf-8")
+        try:
+            return subprocess.check_output(
+                cmd, encoding="utf-8", timeout=FFPROBE_TIMEOUT_SECONDS
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise subprocess.CalledProcessError(
+                124, cmd, output=exc.output, stderr=exc.stderr
+            ) from exc
 
 
 def _report_ffmpeg_missing() -> None:

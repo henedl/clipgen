@@ -2155,3 +2155,18 @@ def test_run_ffmpeg_rejects_a_zero_length_range(monkeypatch):
         video.run_ffmpeg("in.mp4", "out.mp4", "01:23", "01:23", reencode=False) is False
     )
     assert captured == []
+
+
+class TestFfprobeTimeout:
+    """A stalled ffprobe surfaces as a probe failure, never a hang."""
+
+    def test_timeout_becomes_called_process_error(self, monkeypatch):
+        import subprocess
+
+        def _stall(cmd, **kwargs):
+            assert kwargs["timeout"] == video.FFPROBE_TIMEOUT_SECONDS
+            raise subprocess.TimeoutExpired(cmd, kwargs["timeout"])
+
+        monkeypatch.setattr(subprocess, "check_output", _stall)
+        with pytest.raises(subprocess.CalledProcessError):
+            video._ffprobe_check_output(["ffprobe", "x.mp4"])
