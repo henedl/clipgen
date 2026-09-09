@@ -78,6 +78,7 @@ import transcripts
 import utils
 import video
 from server_utils import (
+    pending,
     ApiError,
     JobSlot,
     err,
@@ -1332,8 +1333,6 @@ def api_agent_get(agent_key: str, participant: str) -> FlaskResponse:
         return jsonify(resp)
     if _orchestrator.is_generating(participant, agent_key):
         resp = {
-            "ok": False,
-            "generating": True,
             "started_at": _orchestrator.started_at(participant, agent_key),
             "partial": _orchestrator.partial_text(participant, agent_key),
         }
@@ -1348,7 +1347,7 @@ def api_agent_get(agent_key: str, participant: str) -> FlaskResponse:
         )
         if deterministic is not None:
             resp["friction"] = deterministic
-        return jsonify(resp)
+        return pending(**resp)
     # Nothing stored, nothing running: report why the last run failed.
     error = _orchestrator.error_for(participant, agent_key)
     deterministic = _deterministic_friction(

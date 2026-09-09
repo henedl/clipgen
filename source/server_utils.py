@@ -4,7 +4,8 @@ Every blueprint returns the same JSON envelope — ``{"ok": True, ...}`` on succ
 ``{"ok": False, "error": msg}`` plus an HTTP status on failure — and repeats the
 same numeric-arg parse-and-validate block dozens of times. Collapsed here:
 
-- :func:`ok` / :func:`err` build either envelope in one call.
+- :func:`ok` / :func:`err` build either envelope in one call;
+  :func:`pending` is the third, "still generating" state at HTTP 200.
 - :class:`ApiError` + :func:`json_endpoint` let a handler ``raise`` a uniform
   4xx instead of threading an ``err(...)`` tuple back through every guard.
 - :func:`parse_number_arg` parses + bound-checks one numeric value;
@@ -55,6 +56,16 @@ def ok(**fields: Any):
 def err(message: str, code: int = 400):
     """Error envelope: ``(jsonify({"ok": False, "error": message}), code)``."""
     return jsonify({"ok": False, "error": message}), code
+
+
+def pending(**fields: Any):
+    """Third envelope state: ``{"ok": False, "generating": True, ...}`` at HTTP 200.
+
+    Polling routes use it for "not ready yet". The client resolves it (2xx) and
+    must branch with ``isPending(data)`` in ``utils.js`` rather than assume
+    success.
+    """
+    return jsonify({"ok": False, "generating": True, **fields})
 
 
 def err_no_video(participant: str, code: int = 404):
