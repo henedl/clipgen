@@ -131,3 +131,67 @@ def test_blueprints_use_the_shared_envelope() -> None:
         for name in _BLUEPRINT_FILES
     }
     assert raw == dict.fromkeys(_BLUEPRINT_FILES, 0), raw
+
+
+_REQUEST_THREAD_FILES = (
+    "server.py",
+    "screenspace_server.py",
+    "transcripts_server.py",
+    "workflows_server.py",
+    "composer_server.py",
+    "overview.py",
+)
+
+
+def _unlocked_config_writes(text: str) -> list[int]:
+    """Lines that write config.* outside a ``with config.SETTINGS_LOCK`` block."""
+    offenders: list[int] = []
+
+    def holds_lock(node: ast.AST) -> bool:
+        return isinstance(node, ast.With) and any(
+            isinstance(item.context_expr, ast.Attribute)
+            and item.context_expr.attr == "SETTINGS_LOCK"
+            for item in node.items
+        )
+
+    def is_config(node: ast.AST) -> bool:
+        return isinstance(node, ast.Name) and node.id == "config"
+
+    def visit(node: ast.AST, guarded: bool) -> None:
+        guarded = guarded or holds_lock(node)
+        if (
+            isinstance(node, ast.Assign)
+            and any(
+                isinstance(t, ast.Attribute) and is_config(t.value)
+                for t in node.targets
+            )
+            and not guarded
+        ):
+            offenders.append(node.lineno)
+        if (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == "setattr"
+            and node.args
+            and is_config(node.args[0])
+            and not guarded
+        ):
+            offenders.append(node.lineno)
+        for child in ast.iter_child_nodes(node):
+            visit(child, guarded)
+
+    visit(ast.parse(text), False)
+    return offenders
+
+
+def test_request_thread_config_writes_hold_the_settings_lock() -> None:
+    """Flask threads mutate config.*; every writer serializes on SETTINGS_LOCK."""
+    bad = {
+        name: _unlocked_config_writes(_SOURCES[name]) for name in _REQUEST_THREAD_FILES
+    }
+    assert not any(bad.values()), {k: v for k, v in bad.items() if v}
+
+
+def test_settings_lock_scan_sees_a_planted_write() -> None:
+    assert _unlocked_config_writes("config.X = 1\nsetattr(config, 'Y', 2)") == [1, 2]
+    assert _unlocked_config_writes("with config.SETTINGS_LOCK:\n    config.X = 1") == []

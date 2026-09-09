@@ -20,6 +20,7 @@ Sections
 """
 
 import importlib
+import threading
 from typing import Any
 
 # ── Core Runtime ─────────────────────────────────────────────────────
@@ -78,6 +79,10 @@ def debug_ic(*args: Any, **kwargs: Any) -> Any:
         _ICECREAM_IC = importlib.import_module("icecream").ic
         _ICECREAM_IC.configureOutput(prefix="! DEBUG ic| ", includeContext=False)
     return _ICECREAM_IC(*args, **kwargs)
+
+
+# Request-thread writers of this module hold it; readers snapshot attributes.
+SETTINGS_LOCK = threading.RLock()
 
 
 # ── Directories ──────────────────────────────────────────────────────

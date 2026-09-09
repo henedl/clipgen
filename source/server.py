@@ -459,14 +459,16 @@ def _generation_busy() -> bool:
 @contextmanager
 def _override_config(**overrides: Any) -> Iterator[None]:
     """Temporarily override config attributes, restoring originals on exit."""
-    saved = {name: getattr(config, name) for name in overrides}
-    for name, value in overrides.items():
-        setattr(config, name, value)
+    with config.SETTINGS_LOCK:
+        saved = {name: getattr(config, name) for name in overrides}
+        for name, value in overrides.items():
+            setattr(config, name, value)
     try:
         yield
     finally:
-        for name, value in saved.items():
-            setattr(config, name, value)
+        with config.SETTINGS_LOCK:
+            for name, value in saved.items():
+                setattr(config, name, value)
 
 
 # ---- Blueprint ----
@@ -1250,14 +1252,15 @@ def _load_studio_settings() -> dict[str, Any]:
     data = start_settings.load_config_json(config.STUDIO_SETTINGS_FILENAME, default={})
 
     applied: dict[str, Any] = {}
-    for name, value in data.items():
-        if name not in config.STUDIO_SETTINGS:
-            continue
-        ok, coerced, _ = _coerce_studio_setting(name, value)
-        if not ok:
-            continue
-        setattr(config, name, coerced)
-        applied[name] = coerced
+    with config.SETTINGS_LOCK:
+        for name, value in data.items():
+            if name not in config.STUDIO_SETTINGS:
+                continue
+            ok, coerced, _ = _coerce_studio_setting(name, value)
+            if not ok:
+                continue
+            setattr(config, name, coerced)
+            applied[name] = coerced
     return applied
 
 
@@ -1277,20 +1280,23 @@ def _revert_unsupported_formats() -> None:
         if str(getattr(config, name)).lower() == ".webp"
     ]
     if webp_names and not video.check_webp_support():
-        for name in webp_names:
-            setattr(config, name, _settings_defaults[name])
+        with config.SETTINGS_LOCK:
+            for name in webp_names:
+                setattr(config, name, _settings_defaults[name])
         utils.warning_print(
             f"{', '.join(webp_names)} set to .webp but ffmpeg lacks libwebp; "
             f"reverting to the default format."
         )
     if config.GIF_FORMAT.lower() == ".webm" and not video.check_vp9_support():
-        config.GIF_FORMAT = _settings_defaults["GIF_FORMAT"]
+        with config.SETTINGS_LOCK:
+            config.GIF_FORMAT = _settings_defaults["GIF_FORMAT"]
         utils.warning_print(
             "GIF_FORMAT set to .webm but ffmpeg lacks libvpx-vp9; "
             "reverting to the default format."
         )
     if config.TITLECARDS_ENABLED and not video.check_drawtext_support():
-        config.TITLECARDS_ENABLED = False
+        with config.SETTINGS_LOCK:
+            config.TITLECARDS_ENABLED = False
         utils.warning_print(
             "Titlecards are enabled but ffmpeg lacks the drawtext filter; "
             "disabling titlecards for this run."
@@ -2353,10 +2359,11 @@ def _apply_settings_payload(data: dict[str, Any]) -> tuple[dict[str, Any], str |
             return {}, f"Invalid reset directive: {reset!r}"
 
         applied: dict[str, Any] = {}
-        for name in target_names:
-            default = copy.deepcopy(_settings_defaults.get(name))
-            setattr(config, name, default)
-            applied[name] = default
+        with config.SETTINGS_LOCK:
+            for name in target_names:
+                default = copy.deepcopy(_settings_defaults.get(name))
+                setattr(config, name, default)
+                applied[name] = default
 
         # Snapshot every setting; _save_studio_settings drops defaults, keeping other
         # overrides intact.
@@ -2405,16 +2412,17 @@ def _apply_settings_payload(data: dict[str, Any]) -> tuple[dict[str, Any], str |
             )
 
     applied: dict[str, Any] = {}
-    for name, value in settings_data.items():
-        if name not in config.STUDIO_SETTINGS:
-            continue
-        ok, coerced, error = _coerce_studio_setting(name, value)
-        if not ok:
-            if error is not None:
-                return {}, error
-            continue
-        setattr(config, name, coerced)
-        applied[name] = coerced
+    with config.SETTINGS_LOCK:
+        for name, value in settings_data.items():
+            if name not in config.STUDIO_SETTINGS:
+                continue
+            ok, coerced, error = _coerce_studio_setting(name, value)
+            if not ok:
+                if error is not None:
+                    return {}, error
+                continue
+            setattr(config, name, coerced)
+            applied[name] = coerced
 
     # Snapshot every setting, not just submitted keys, so a partial PUT keeps other
     # overrides.
@@ -2627,10 +2635,11 @@ def api_titlecard_delete(name: str) -> FlaskResponse:
     except OSError as error:
         return err(str(error), 500)
     reset: dict[str, str] = {}
-    for setting in ("TITLECARD_IMAGE", "ENDCARD_IMAGE"):
-        if getattr(config, setting, "") == safe:
-            setattr(config, setting, "")
-            reset[setting] = ""
+    with config.SETTINGS_LOCK:
+        for setting in ("TITLECARD_IMAGE", "ENDCARD_IMAGE"):
+            if getattr(config, setting, "") == safe:
+                setattr(config, setting, "")
+                reset[setting] = ""
     if reset:
         merged = {n: getattr(config, n) for n in config.STUDIO_SETTINGS}
         _save_studio_settings(merged)
@@ -3341,9 +3350,10 @@ def _seed_filename_overrides(source: dict[str, str] | None) -> None:
         if source
         else {}
     )
-    if overrides == config.FILENAME_OVERRIDES:
-        return  # a needless rebuild costs a seekability probe per participant
-    config.FILENAME_OVERRIDES = overrides
+    with config.SETTINGS_LOCK:
+        if overrides == config.FILENAME_OVERRIDES:
+            return  # a needless rebuild costs a seekability probe per participant
+        config.FILENAME_OVERRIDES = overrides
     _invalidate_participant_caches()
 
 
@@ -3720,7 +3730,8 @@ def api_dirs_post() -> FlaskResponse:
         if not p.is_dir():
             errors["input"] = f"Input directory does not exist: {p}"
         else:
-            config.INPUT_DIR = str(p)
+            with config.SETTINGS_LOCK:
+                config.INPUT_DIR = str(p)
             start_settings.record_recent_input(str(p))
 
     if new_output is not None:
@@ -3730,7 +3741,8 @@ def api_dirs_post() -> FlaskResponse:
         except OSError as exc:
             errors["output"] = f"Could not create output directory: {exc}"
         else:
-            config.OUTPUT_DIR = str(p)
+            with config.SETTINGS_LOCK:
+                config.OUTPUT_DIR = str(p)
             start_settings.record_recent_output(str(p))
 
     if errors:
@@ -4120,7 +4132,8 @@ def api_spreadsheets_open() -> FlaskResponse:
     try:
         _swap_worksheet(new_ws)
     except Exception:
-        config.FILENAME_OVERRIDES = prev_overrides
+        with config.SETTINGS_LOCK:
+            config.FILENAME_OVERRIDES = prev_overrides
         raise
     if _sheet_context is None:
         return err("Could not parse the spreadsheet", 500)
