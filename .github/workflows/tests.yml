@@ -44,7 +44,7 @@ jobs:
             echo "Commit $SHA is a direct push — running checks"
           fi
 
-  smoke-tests:
+  tests:
     needs: [gate]
     if: always() && (needs.gate.outputs.skip != 'true')
     runs-on: ubuntu-latest
