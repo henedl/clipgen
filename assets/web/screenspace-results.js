@@ -426,15 +426,10 @@
     return row;
   }
 
-  // Types with confidence scores; shared by the full render and the append fast path.
-  var CONF_TASK_TYPES = {
-    change: 1, similarity: 1, text: 1, numbers: 1, template: 1, shape: 1,
-    scene: 1, flow: 1, multitool: 1, inactivity: 1, boundary: 1,
-    attention: 1,
-  };
-
+  // Which detectors offer a certainty cutoff comes from the server's tool catalog.
   function taskHasConfidence(task) {
-    return !!(task && CONF_TASK_TYPES[task.type]);
+    var tool = task && state.tools[task.type];
+    return !!(tool && tool.has_confidence);
   }
 
   // Per-detector confidence; null when the detector has none.

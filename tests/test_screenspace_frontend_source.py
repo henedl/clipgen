@@ -257,3 +257,13 @@ def test_multitool_focus_classes_have_css_rules():
     ):
         assert name in SCREENSPACE_CSS, f"{name} is set in JS but never styled"
     assert 'id="modelViewFocus"' in read("screenspace.html")
+
+
+def test_tool_facts_come_from_the_catalog() -> None:
+    """No hand-kept fast-scan or confidence tables; both derive from /api/tools."""
+    hub = read("screenspace.js")
+    results = read("screenspace-results.js")
+    assert "FAST_SCAN_DESCRIPTIONS" not in hub
+    assert "CONF_TASK_TYPES" not in results
+    assert 'apiGet("api/tools")' in hub
+    assert "state.tools[" in hub and "state.tools[" in results

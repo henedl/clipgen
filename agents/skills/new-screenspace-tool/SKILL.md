@@ -12,6 +12,7 @@ public/test-touched name must be added to the facade's re-export block (see
 1. **Analysis engine** (`screenspace_scans.py` + `screenspace_tools.py`)
    - Implement `scan_{name}` following the pattern of existing scans (color, change, similarity, etc.); scans never call each other
    - Add the `AnalysisTool` subclass and register it in the `TOOLS` registry; wire per-frame dispatch in `check_frame_for_tool` / `score_frame_for_tool`
+   - Declare the client facts on the class: `fast_scan_description`, `has_confidence`, and for preview/media handling `preview_float_args` / `preview_args`, `needs_prev_frame` (+ `prev_gap_setting`), `reference` (upload key, image param, mask param) or `reference_region_param`. `screenspace_server.py` reads these; it has no per-tool branches for them
    - Re-export the new public names from `screenspace.py`
    - **Reuse primitives, don't reimplement.** Static-frame skipping, template preparation, resolution scaling and the like already exist in `screenspace_primitives.py`. `scan_scene` grew its own mean-luminance static skip while every sibling used `_frame_is_static()`'s per-pixel absdiff, and silently skipped visually different frames (`d96c77a1`)
 
@@ -26,7 +27,7 @@ public/test-touched name must be added to the facade's re-export block (see
 
 4. **Frontend UI** (`assets/web/screenspace*.js`)
    - Add the tool to the tool selector, and result rendering to `screenspace-results.js`
-   - **Update every parallel registry, not just the selector.** A new tool typically needs entries in the confidence (`hasConf`) map, the category hue map, the task-Edit parameter-restore branch, and the fast-scan description whitelist. One PR's own self-review found three such omissions at once (`7d10862b`); the fast-scan marker leaked onto Boundary because the mode was stamped for every non-timelapse tool instead of consulting the whitelist (`178e7bf8`)
+   - **Update every parallel registry, not just the selector.** Fast-scan support/description and the certainty cutoff come from the `AnalysisTool` ClassVars (`fast_scan_description`, `has_confidence`) through `/api/tools`, so those two need no JS edit. The category hue map and the task-Edit parameter-restore branch are still hand-kept. One PR's own self-review found three such omissions at once (`7d10862b`); the fast-scan marker leaked onto Boundary because the mode was stamped for every non-timelapse tool instead of consulting the whitelist (`178e7bf8`)
    - Any user-editable parameter must live in `state`, not only in the input element — see the "DOM is not the state store" rule in [CODE-REVIEW.md](../../CODE-REVIEW.md); this class was re-fixed four times in Multitool
 
 5. **Model-view preview** (`screenspace_preview.py`), _if the tool gets one_

@@ -127,6 +127,7 @@
 
   var state = {
     participants: [],
+    tools: {}, // per-tool facts from /api/tools (fast scan, confidence)
     // Whether a spreadsheet is loaded at all — gates the off-sheet label suffix.
     hasSheet: false,
     selectedParticipant: null,
@@ -833,23 +834,11 @@
     btn.appendChild(chevron);
   }
 
-  var FAST_SCAN_DESCRIPTIONS = {
-    color: "Lower resolution, skips unchanged frames",
-    change: "Lower resolution, skips unchanged frames",
-    similarity: "Lower resolution, skips unchanged frames",
-    text: "Skips unchanged frames",
-    numbers: "Skips unchanged frames",
-    template: "Downscales template 2\u00D7, skips unchanged frames",
-    shape: "Downscales reference 2\u00D7, skips unchanged frames; thin outlines may vanish",
-    flow: "Lower resolution, skips unchanged frames",
-    scene: "Lower resolution, skips unchanged frames",
-    inactivity: "Lower resolution, skips unchanged frames",
-    multitool: "Skips unchanged frames, widens interval"
-  };
-
-  // Single source of truth for fast-scan support; timelapse and boundary opt out by
-  // omission.
-  function toolSupportsFastScan(type) { return !!FAST_SCAN_DESCRIPTIONS[type]; }
+  // Fast-scan support comes from the server's tool catalog (AnalysisTool ClassVars).
+  function toolSupportsFastScan(type) {
+    var tool = state.tools[type];
+    return !!(tool && tool.supports_fast_scan);
+  }
 
   var PARAM_DESCRIPTIONS = {
     _shared: {
@@ -969,7 +958,8 @@
     attachHoverTooltip(btn, function () {
       var isFast = state.scanMode === "fast";
       var label = isFast ? "Fast scan enabled" : "Enable fast scan";
-      var desc = FAST_SCAN_DESCRIPTIONS[state.activeWorkflow];
+      var tool = state.tools[state.activeWorkflow];
+      var desc = tool && tool.fast_scan_description;
       if (desc) label += "\n" + desc;
       return label;
     }, { align: "center", multiline: true });
@@ -5013,8 +5003,11 @@
       if (!e.target.closest(".run-picker-wrap")) closeRunPicker();
     });
 
-    // Load initial data
-    apiGet("api/participants")
+    // Load initial data; the tool catalog first so the pickers can consult it.
+    apiGet("api/tools")
+      .then(function (data) { if (data.ok) state.tools = data.tools || {}; })
+      .catch(function () {})
+      .then(function () { return apiGet("api/participants"); })
       .then(function (data) {
         if (!data.ok) return;
         if (data.config) clipgenApplyConfig(data.config);

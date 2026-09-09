@@ -92,29 +92,8 @@ from server_utils import (
     require_json_body,
 )
 
+
 # Per-tool optional float overrides api_preview reads straight into params.
-_PREVIEW_FLOAT_ARGS: dict[str, tuple[str, ...]] = {
-    "color": ("h", "s", "v"),
-    "shape": (
-        "threshold",
-        "scale_min",
-        "scale_max",
-        "scale_steps",
-        "scale_y_min",
-        "scale_y_max",
-        "scale_y_steps",
-    ),
-    "attention": (
-        # Saliency overrides so the Model view tunes the scan's math (saliency_kwargs_from_params).
-        "weight_spectral",
-        "weight_contrast",
-        "weight_motion",
-        "weight_face",
-        "center_bias",
-    ),
-}
-
-
 def _preview_ref_rect(
     region_coords: dict[str, Any] | None, frame_w: int, frame_h: int
 ) -> dict[str, Any] | None:
@@ -317,6 +296,12 @@ _refresh_participants, _find_participant_record = make_participant_cache(
 
 def _participant_exists(pid: str) -> bool:
     return _find_participant_record(pid) is not None
+
+
+@screenspace_bp.route("/api/tools")
+def api_tools() -> FlaskResponse:
+    """Per-tool client facts (fast scan, confidence); the pickers derive from this."""
+    return ok(tools=screenspace.tool_catalog())
 
 
 @screenspace_bp.route("/api/participants")
@@ -1098,6 +1083,42 @@ def api_heatmap_sprite(filename: str) -> FlaskResponse:
     )
 
 
+def _preview_reference_params(
+    reference: tuple[str, str, str],
+    params: dict[str, Any],
+    frame_at: Callable[[float], Any],
+    region_coords: dict[str, Any] | None,
+    frame_w: int,
+    frame_h: int,
+) -> str | None:
+    """Fill a reference-image tool's image + mask from an upload or a captured rect."""
+    body_key, image_param, mask_param = reference
+    upload_b64: str | None = None
+    if request.method == "POST":
+        body = request.get_json(silent=True)
+        if isinstance(body, dict):
+            raw = body.get(body_key)
+            if isinstance(raw, str) and raw.strip():
+                upload_b64 = raw.strip()
+    if upload_b64:
+        try:
+            bgr, mask = _template_bgr_and_mask_from_b64(upload_b64)
+        except ValueError:
+            return "Could not decode uploaded image"
+        params[image_param] = bgr
+        if mask is not None:
+            params[mask_param] = mask
+        return None
+    ref_ts = opt_number(request.args, "ref")
+    rect = _preview_ref_rect(region_coords, frame_w, frame_h)
+    if ref_ts is not None and rect is not None and rect.get("w"):
+        ref_frame = frame_at(ref_ts)
+        if ref_frame is not None:
+            params[image_param] = screenspace.extract_region(ref_frame, rect)
+            screenspace.attach_capture_mask(params, image_param, mask_param, rect)
+    return None
+
+
 @screenspace_bp.route("/api/preview/<participant>/<timestamp>", methods=["GET", "POST"])
 @json_endpoint
 def api_preview(participant: str, timestamp: str) -> FlaskResponse:
@@ -1165,12 +1186,14 @@ def api_preview(participant: str, timestamp: str) -> FlaskResponse:
             if mask_points:
                 region_coords["mask_points"] = mask_points
 
-    # Prev frame for temporal-pair tools; attention's motion channel defaults to its own
-    # shorter interval.
+    tool_spec = screenspace.TOOLS.get(tool)
+    # Prev frame for temporal-pair tools; the tool names its own gap setting.
     prev_frame = None
-    if tool in ("change", "flow", "attention"):
+    if tool_spec is not None and tool_spec.needs_prev_frame:
         default_gap = (
-            config.SCREENSPACE_ATTENTION_INTERVAL if tool == "attention" else 1.0
+            float(getattr(config, tool_spec.prev_gap_setting))
+            if tool_spec.prev_gap_setting
+            else 1.0
         )
         prev_raw = opt_number(request.args, "prev")
         prev_ts = prev_raw if prev_raw is not None else max(0.0, ts - default_gap)
@@ -1179,92 +1202,34 @@ def api_preview(participant: str, timestamp: str) -> FlaskResponse:
 
     # Build params dict for the preview (subset of task parameters)
     params: dict[str, Any] = {}
-    for key in _PREVIEW_FLOAT_ARGS.get(tool, ()):
+    for key in tool_spec.preview_float_args if tool_spec else ():
         value = opt_number(request.args, key)
         if value is not None:
             params[key] = value
-    if tool == "change":
-        value = opt_number(request.args, "noise")
-        if value is not None and math.isfinite(value):
-            params["noise_threshold"] = int(value)
-    elif tool == "flow":
-        value = opt_number(request.args, "magnitude")
-        if value is not None:
-            params["magnitude_threshold"] = value
-    elif tool in ("text", "numbers"):
-        raw = (request.args.get("ocr_preprocess") or "").strip().lower()
-        if raw in ("1", "true", "yes", "on"):
-            params["ocr_preprocess"] = True
-    elif tool == "similarity":
+    for arg, param, kind in tool_spec.preview_args if tool_spec else ():
+        if kind == "bool":
+            raw = (request.args.get(arg) or "").strip().lower()
+            if raw in ("1", "true", "yes", "on"):
+                params[param] = True
+            continue
+        value = opt_number(request.args, arg)
+        if value is None or (kind == "int" and not math.isfinite(value)):
+            continue
+        params[param] = int(value) if kind == "int" else value
+    if tool_spec is not None and tool_spec.reference_region_param:
         ref_ts = opt_number(request.args, "ref")
         if ref_ts is not None and region_coords is not None:
             ref_frame = frame_at(ref_ts)
             if ref_frame is not None:
-                import screenspace as _ss
-
-                params["reference_frame"] = _ss.extract_region(ref_frame, region_coords)
-
-    elif tool == "template":
-        import screenspace as _ss_tpl
-
-        upload_b64: str | None = None
-        if request.method == "POST":
-            body = request.get_json(silent=True)
-            if isinstance(body, dict):
-                raw = body.get("template_image_data")
-                if isinstance(raw, str) and raw.strip():
-                    upload_b64 = raw.strip()
-        if upload_b64:
-            try:
-                bgr, mask = _template_bgr_and_mask_from_b64(upload_b64)
-            except ValueError:
-                return err("Could not decode uploaded image")
-            params["template_image"] = bgr
-            if mask is not None:
-                params["template_mask"] = mask
-        else:
-            ref_ts_tpl = opt_number(request.args, "ref")
-            tpl_rect = _preview_ref_rect(region_coords, frame_w, frame_h)
-            if ref_ts_tpl is not None and tpl_rect is not None and tpl_rect.get("w"):
-                ref_frame_tpl = frame_at(ref_ts_tpl)
-                if ref_frame_tpl is not None:
-                    params["template_image"] = _ss_tpl.extract_region(
-                        ref_frame_tpl, tpl_rect
-                    )
-                    screenspace.attach_capture_mask(
-                        params, "template_image", "template_mask", tpl_rect
-                    )
-
-    elif tool == "shape":
-        import screenspace as _ss_shp
-
-        shape_b64: str | None = None
-        if request.method == "POST":
-            body = request.get_json(silent=True)
-            if isinstance(body, dict):
-                raw = body.get("shape_image_data")
-                if isinstance(raw, str) and raw.strip():
-                    shape_b64 = raw.strip()
-        if shape_b64:
-            try:
-                bgr, mask = _template_bgr_and_mask_from_b64(shape_b64)
-            except ValueError:
-                return err("Could not decode uploaded image")
-            params["shape_image"] = bgr
-            if mask is not None:
-                params["shape_mask"] = mask
-        else:
-            ref_ts_shp = opt_number(request.args, "ref")
-            ref_rect = _preview_ref_rect(region_coords, frame_w, frame_h)
-            if ref_ts_shp is not None and ref_rect is not None and ref_rect.get("w"):
-                ref_frame_shp = frame_at(ref_ts_shp)
-                if ref_frame_shp is not None:
-                    params["shape_image"] = _ss_shp.extract_region(
-                        ref_frame_shp, ref_rect
-                    )
-                    screenspace.attach_capture_mask(
-                        params, "shape_image", "shape_mask", ref_rect
-                    )
+                params[tool_spec.reference_region_param] = screenspace.extract_region(
+                    ref_frame, region_coords
+                )
+    if tool_spec is not None and tool_spec.reference is not None:
+        error = _preview_reference_params(
+            tool_spec.reference, params, frame_at, region_coords, frame_w, frame_h
+        )
+        if error:
+            return err(error)
 
     layer = (request.args.get("layer") or "").strip()
     if layer:
@@ -1942,13 +1907,12 @@ def _coerce_tool_spec(spec: dict[str, Any], tool_type: str, context: str = "") -
     Mutates *spec* in place; raises ``ValueError`` on bad input. *context* prefixes
     error messages (e.g. ``"Step 0: "``). Shared by the task-level and per-step paths.
     """
-    if (
-        tool_type == "similarity"
-        or tool_type == "template"
-        and not spec.get("template_image_data")
-        or tool_type == "shape"
-        and not spec.get("shape_image_data")
-    ):
+    tool_spec = screenspace.TOOLS.get(tool_type)
+    needs_reference_ts = tool_spec is not None and (
+        bool(tool_spec.reference_region_param)
+        or (tool_spec.reference is not None and not spec.get(tool_spec.reference[0]))
+    )
+    if needs_reference_ts:
         spec["reference_timestamp"] = _coerce_float(
             spec.get("reference_timestamp"),
             "reference_timestamp",
@@ -2005,51 +1969,35 @@ def _extract_tool_media(
     messages (e.g. ``"Step 0: "``). Raises ``ApiError`` (400) on failure. Shared
     by the task-level and per-step multitool paths.
     """
-    if tool_type == "similarity":
+    tool_spec = screenspace.TOOLS.get(tool_type)
+    if tool_spec is not None and tool_spec.reference_region_param:
         ref_ts = cast(float, spec["reference_timestamp"])
         frame = frame_at(float(ref_ts))
         if frame is None:
             raise ApiError(f"{context}could not read reference frame")
-        spec["reference_frame"] = screenspace.extract_region(frame, region_coords)
+        spec[tool_spec.reference_region_param] = screenspace.extract_region(
+            frame, region_coords
+        )
 
-    elif tool_type == "template":
-        upload_b64 = spec.pop("template_image_data", None)
+    elif tool_spec is not None and tool_spec.reference is not None:
+        body_key, image_param, mask_param = tool_spec.reference
+        upload_b64 = spec.pop(body_key, None)
         if upload_b64:
             try:
                 bgr, mask = _template_bgr_and_mask_from_b64(upload_b64)
             except ValueError:
                 raise ApiError(f"{context}could not decode uploaded image")
-            spec["template_image"] = bgr
+            spec[image_param] = bgr
             if mask is not None:
-                spec["template_mask"] = mask
+                spec[mask_param] = mask
         else:
             ref_ts = cast(float, spec["reference_timestamp"])
             frame = frame_at(float(ref_ts))
             if frame is None:
-                raise ApiError(f"{context}could not read template frame")
-            spec["template_image"] = screenspace.extract_region(frame, region_coords)
+                raise ApiError(f"{context}could not read {tool_type} reference frame")
+            spec[image_param] = screenspace.extract_region(frame, region_coords)
             screenspace.attach_capture_mask(
-                spec, "template_image", "template_mask", region_coords
-            )
-
-    elif tool_type == "shape":
-        upload_b64 = spec.pop("shape_image_data", None)
-        if upload_b64:
-            try:
-                bgr, mask = _template_bgr_and_mask_from_b64(upload_b64)
-            except ValueError:
-                raise ApiError(f"{context}could not decode uploaded image")
-            spec["shape_image"] = bgr
-            if mask is not None:
-                spec["shape_mask"] = mask
-        else:
-            ref_ts = cast(float, spec["reference_timestamp"])
-            frame = frame_at(float(ref_ts))
-            if frame is None:
-                raise ApiError(f"{context}could not read shape reference frame")
-            spec["shape_image"] = screenspace.extract_region(frame, region_coords)
-            screenspace.attach_capture_mask(
-                spec, "shape_image", "shape_mask", region_coords
+                spec, image_param, mask_param, region_coords
             )
 
     elif tool_type == "scene":
