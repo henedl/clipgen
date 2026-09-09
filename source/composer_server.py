@@ -58,6 +58,8 @@ import config
 import files
 import pipeline
 import remux_server
+import manifest as manifest_io
+import server_utils
 import utils
 import video
 from server_utils import (
@@ -108,7 +110,7 @@ _MARKER_SOURCES: tuple[str, ...] = tuple(
 
 composer_bp = Blueprint("composer", __name__)
 
-utils.register_static_routes(
+server_utils.register_static_routes(
     composer_bp,
     "composer.html",
     # Per request: POST /api/dirs moves config.INPUT_DIR mid-session. See transcripts_bp.
@@ -136,7 +138,7 @@ def _empty_manifest() -> dict[str, Any]:
 
 
 def _load_manifest() -> dict[str, Any]:
-    data = utils.load_manifest_section("composer")
+    data = manifest_io.load_manifest_section("composer")
     return data if isinstance(data, dict) else _empty_manifest()
 
 
@@ -151,7 +153,7 @@ def _persist_locked() -> None:
     """Write the composer section (atomic via the manifest store); drop it when
     empty so an untouched Composer launch leaves no junk. Caller must hold
     ``_manifest_lock``."""
-    utils.save_manifest_section(
+    manifest_io.save_manifest_section(
         "composer", None if _is_empty_manifest(_manifest) else _manifest
     )
 

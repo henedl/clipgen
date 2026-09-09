@@ -12,6 +12,7 @@ import time
 import pytest
 
 import config
+import manifest
 import profiling
 
 
@@ -512,15 +513,14 @@ def test_format_bytes_units():
 
 
 def test_manifest_load_and_save_labels(monkeypatch, tmp_path):
-    import utils
 
     monkeypatch.setattr(config, "OUTPUT_DIR", str(tmp_path))
     monkeypatch.setattr(config, "PROFILING", True)
-    utils._reset_manifest_cache()
+    manifest._reset_manifest_cache()
     profiling.reset()
-    utils.save_manifest_section("composer", {"cuts": [1, 2, 3]})
-    utils.save_manifest_section("composer", {"cuts": [1, 2, 3]})  # identical
-    assert utils.load_manifest_section("composer") == {"cuts": [1, 2, 3]}
+    manifest.save_manifest_section("composer", {"cuts": [1, 2, 3]})
+    manifest.save_manifest_section("composer", {"cuts": [1, 2, 3]})  # identical
+    assert manifest.load_manifest_section("composer") == {"cuts": [1, 2, 3]}
     snap = profiling.snapshot()
     assert snap["manifest.save composer"]["count"] == 1
     assert snap["manifest.save composer"]["bytes"] > 0
@@ -531,7 +531,7 @@ def test_manifest_load_and_save_labels(monkeypatch, tmp_path):
         == snap["manifest.save composer"]["bytes"]
     )
     profiling.reset()
-    utils._reset_manifest_cache()
+    manifest._reset_manifest_cache()
 
 
 # ---------- max / tail -------------------------------------------------------

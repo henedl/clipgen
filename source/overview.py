@@ -17,7 +17,8 @@ from flask import Blueprint, request
 from server_utils import err, ok
 
 import config
-import utils
+import manifest
+import server_utils
 
 overview_bp = Blueprint("overview", __name__)
 
@@ -65,7 +66,7 @@ def api_convergence_offsets_get():
 
     Response: {"ok": true, "offsets": {"P01": {"sheet": 12.5, "screenspace": 12.5}}}
     """
-    data = utils.load_manifest_section("convergence", default={})
+    data = manifest.load_manifest_section("convergence", default={})
     raw = data.get("offsets") if isinstance(data, dict) else None
     return ok(offsets=_clean_convergence_offsets(raw))
 
@@ -86,11 +87,11 @@ def api_convergence_offsets_put():
 
     cleaned = _clean_convergence_offsets(raw)
 
-    utils.save_manifest_section(
+    manifest.save_manifest_section(
         "convergence", {"offsets": cleaned} if cleaned else None
     )
 
     return ok(offsets=cleaned)
 
 
-utils.register_static_routes(overview_bp, "overview.html", icons=True)
+server_utils.register_static_routes(overview_bp, "overview.html", icons=True)

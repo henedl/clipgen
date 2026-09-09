@@ -323,7 +323,7 @@ def _read_manifest() -> dict[str, Any]:
 def _write(section: str, payload: dict[str, Any]) -> None:
     """Merge one section into the unified manifest by absolute path.
 
-    Not ``utils.save_manifest_section``: that resolves against
+    Not ``manifest.save_manifest_section``: that resolves against
     ``config.OUTPUT_DIR``, which would make seeding order-dependent on when the
     caller patched config.
     """

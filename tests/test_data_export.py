@@ -9,6 +9,7 @@ import pytest
 
 import config
 import data_export
+import manifest as manifest_io
 import utils
 
 
@@ -371,7 +372,7 @@ def _output_dir(tmp_path, monkeypatch):
 
 
 def _write_manifest(tmp_path: Path, section: str, content: dict) -> None:
-    utils.save_manifest_section(section, content)
+    manifest_io.save_manifest_section(section, content)
 
 
 _EMPTY_SS_MANIFEST = {"regions": {}, "tasks": [], "events": [], "stashes": []}

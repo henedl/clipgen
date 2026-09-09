@@ -28,6 +28,7 @@ from typing import Any
 
 import config
 import speakers
+import manifest as manifest_io
 import utils
 
 
@@ -436,7 +437,7 @@ def write_export_bundle() -> list[Path]:
 
     def _load_manifest(section: str) -> dict[str, Any] | None:
         if section not in manifest_cache:
-            parsed = utils.load_manifest_section(section)
+            parsed = manifest_io.load_manifest_section(section)
             manifest_cache[section] = parsed if isinstance(parsed, dict) else None
         return manifest_cache[section]
 

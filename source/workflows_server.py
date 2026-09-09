@@ -31,6 +31,8 @@ from flask import Blueprint, Response, request
 
 import config
 import profiling
+import manifest as manifest_io
+import server_utils
 import utils
 import workflows
 from server_utils import (
@@ -91,7 +93,7 @@ _watch_stop = threading.Event()  # tests only; production never sets it
 
 workflows_bp = Blueprint("workflows", __name__)
 
-utils.register_static_routes(
+server_utils.register_static_routes(
     workflows_bp,
     "workflows.html",
     # Per request: POST /api/dirs moves config.INPUT_DIR mid-session. See transcripts_bp.
@@ -1030,12 +1032,12 @@ def _mtime_memo(
     build: Callable[[dict[str, Any]], dict[str, str]],
 ) -> tuple[tuple[float, dict[str, str]], dict[str, str]]:
     """Rebuild a manifest-section marker map only when the file's mtime changed."""
-    mtime = utils.manifest_mtime()
+    mtime = manifest_io.manifest_mtime()
     if mtime == cache[0]:
         return cache, cache[1]
     markers: dict[str, str] = {}
     if mtime:
-        markers = build(utils.load_manifest_section(section, default={}) or {})
+        markers = build(manifest_io.load_manifest_section(section, default={}) or {})
     return (mtime, markers), markers
 
 

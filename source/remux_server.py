@@ -12,7 +12,7 @@ the user switches to Transcripts. Jobs are keyed by participant id.
 
 This module owns no blueprint of its own — :func:`register_remux_routes` attaches
 the four routes to whichever blueprint asks, mirroring
-:func:`utils.register_static_routes`.
+:func:`server_utils.register_static_routes`.
 """
 
 from pathlib import Path

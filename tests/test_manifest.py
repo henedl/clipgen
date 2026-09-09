@@ -5,7 +5,7 @@ import time
 from pathlib import Path
 
 import config
-import utils
+import manifest
 import viewer
 
 
@@ -279,30 +279,30 @@ def test_save_manifest_concurrent_writes_keep_every_id(tmp_path, monkeypatch):
 
 def test_store_sections_round_trip_and_sorted(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "OUTPUT_DIR", str(tmp_path))
-    utils.save_manifest_section("zeta", {"n": 1, "s": "multi\nline"})
-    utils.save_manifest_section("alpha", [1, 2])
+    manifest.save_manifest_section("zeta", {"n": 1, "s": "multi\nline"})
+    manifest.save_manifest_section("alpha", [1, 2])
     raw = json.loads((tmp_path / config.MANIFEST_FILENAME).read_text())
     assert list(raw) == ["alpha", "zeta"]
     assert raw["zeta"] == {"n": 1, "s": "multi\nline"}
-    assert utils.load_manifest_section("alpha") == [1, 2]
-    assert utils.load_manifest_section("missing", default="d") == "d"
-    assert utils.manifest_sections() == {"alpha", "zeta"}
+    assert manifest.load_manifest_section("alpha") == [1, 2]
+    assert manifest.load_manifest_section("missing", default="d") == "d"
+    assert manifest.manifest_sections() == {"alpha", "zeta"}
 
 
 def test_store_load_returns_fresh_objects(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "OUTPUT_DIR", str(tmp_path))
-    utils.save_manifest_section("one", {"items": []})
-    utils.load_manifest_section("one")["items"].append("leak")
-    assert utils.load_manifest_section("one") == {"items": []}
+    manifest.save_manifest_section("one", {"items": []})
+    manifest.load_manifest_section("one")["items"].append("leak")
+    assert manifest.load_manifest_section("one") == {"items": []}
 
 
 def test_store_picks_up_external_rewrite(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "OUTPUT_DIR", str(tmp_path))
-    utils.save_manifest_section("one", 1)
+    manifest.save_manifest_section("one", 1)
     path = tmp_path / config.MANIFEST_FILENAME
     path.write_text(json.dumps({"one": 2, "two": 3}))
-    assert utils.load_manifest_section("one") == 2
-    assert utils.manifest_sections() == {"one", "two"}
+    assert manifest.load_manifest_section("one") == 2
+    assert manifest.manifest_sections() == {"one", "two"}
 
 
 def test_store_identical_save_skips_the_write(tmp_path, monkeypatch):
@@ -314,17 +314,17 @@ def test_store_identical_save_skips_the_write(tmp_path, monkeypatch):
     """
     monkeypatch.setattr(config, "OUTPUT_DIR", str(tmp_path))
     path = tmp_path / config.MANIFEST_FILENAME
-    utils.save_manifest_section("one", {"a": 1})
-    utils.save_manifest_section("two", [1, 2])
+    manifest.save_manifest_section("one", {"a": 1})
+    manifest.save_manifest_section("two", [1, 2])
     stamp = path.stat().st_mtime_ns
-    assert utils.save_manifest_section("one", {"a": 1}) == path
+    assert manifest.save_manifest_section("one", {"a": 1}) == path
     assert path.stat().st_mtime_ns == stamp
     # Removing a section that is not stored is equally a no-op.
-    assert utils.save_manifest_section("ghost", None) == path
+    assert manifest.save_manifest_section("ghost", None) == path
     assert path.stat().st_mtime_ns == stamp
     # A real change still writes.
-    utils.save_manifest_section("one", {"a": 2})
-    assert utils.load_manifest_section("one") == {"a": 2}
+    manifest.save_manifest_section("one", {"a": 2})
+    assert manifest.load_manifest_section("one") == {"a": 2}
     assert json.loads(path.read_text())["one"] == {"a": 2}
 
 
@@ -333,12 +333,12 @@ def test_store_reindent_cache_yields_identical_file(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "OUTPUT_DIR", str(tmp_path))
     path = tmp_path / config.MANIFEST_FILENAME
     big = {"rows": [{"i": i, "text": "line\nbreak"} for i in range(50)]}
-    utils.save_manifest_section("big", big)
-    utils.save_manifest_section("small", 1)  # re-indents "big" via the cache
+    manifest.save_manifest_section("big", big)
+    manifest.save_manifest_section("small", 1)  # re-indents "big" via the cache
     warm = path.read_text()
-    utils._reset_manifest_cache()  # cold path: no cached indent texts
-    utils.save_manifest_section("small", 2)
-    utils.save_manifest_section("small", 1)
+    manifest._reset_manifest_cache()  # cold path: no cached indent texts
+    manifest.save_manifest_section("small", 2)
+    manifest.save_manifest_section("small", 1)
     assert path.read_text() == warm
 
 
@@ -347,15 +347,15 @@ def test_store_corrupt_file_reads_as_empty_and_blocks_saves(tmp_path, monkeypatc
     monkeypatch.setattr(config, "OUTPUT_DIR", str(tmp_path))
     path = tmp_path / config.MANIFEST_FILENAME
     path.write_text("not json")
-    assert utils.load_manifest_section("one", default=0) == 0
-    assert utils.manifest_sections() == set()
-    assert utils.save_manifest_section("one", {"a": 1}) is None
-    assert utils.save_manifest_section("one", None) is None
+    assert manifest.load_manifest_section("one", default=0) == 0
+    assert manifest.manifest_sections() == set()
+    assert manifest.save_manifest_section("one", {"a": 1}) is None
+    assert manifest.save_manifest_section("one", None) is None
     assert path.read_text() == "not json"
     # Fixing the file on disk re-enables saves.
     path.write_text(json.dumps({"two": 2}))
-    assert utils.save_manifest_section("one", 1) is not None
-    assert utils.manifest_sections() == {"one", "two"}
+    assert manifest.save_manifest_section("one", 1) is not None
+    assert manifest.manifest_sections() == {"one", "two"}
 
 
 _SOURCE_DIR = str(Path(__file__).resolve().parent.parent / "source")
@@ -368,12 +368,12 @@ def _manifest_writer(out_dir: str, cfg_dir: str, section: str, count: int) -> No
     sys.path.insert(0, _SOURCE_DIR)
     import config as _config
     import start_settings as _start_settings
-    import utils as _utils
+    import manifest as _manifest
 
     setattr(_start_settings, "config_dir", lambda: Path(cfg_dir))  # noqa: B010
     _config.OUTPUT_DIR = out_dir
     for i in range(count):
-        _utils.save_manifest_section(section, {"i": i})
+        _manifest.save_manifest_section(section, {"i": i})
 
 
 def test_concurrent_processes_keep_each_others_sections(tmp_path):

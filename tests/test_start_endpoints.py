@@ -25,6 +25,8 @@ import pytest
 pytest.importorskip("flask")
 
 import config
+import native_dialogs
+import manifest
 import server
 import start_settings
 
@@ -179,11 +181,10 @@ def test_dirs_post_rejects_output_under_file(client, tmp_path):
 
 
 def test_folder_picker_returns_chosen_path(client, monkeypatch):
-    """The route returns whatever utils.open_native_folder_picker returns."""
-    import utils
+    """The route returns whatever native_dialogs.open_native_folder_picker returns."""
 
     monkeypatch.setattr(
-        utils, "open_native_folder_picker", lambda initial="": "/picked"
+        native_dialogs, "open_native_folder_picker", lambda initial="": "/picked"
     )
     resp = client.post(
         "/api/folder-picker",
@@ -195,9 +196,10 @@ def test_folder_picker_returns_chosen_path(client, monkeypatch):
 
 
 def test_folder_picker_returns_null_on_cancel(client, monkeypatch):
-    import utils
 
-    monkeypatch.setattr(utils, "open_native_folder_picker", lambda initial="": None)
+    monkeypatch.setattr(
+        native_dialogs, "open_native_folder_picker", lambda initial="": None
+    )
     resp = client.post(
         "/api/folder-picker",
         data=json.dumps({}),
@@ -1181,7 +1183,7 @@ def test_combined_server_forces_non_interactive(monkeypatch):
 
     monkeypatch.setattr(utils, "NO_INPUT_MODE", False)
     monkeypatch.setattr(utils, "preload_vision_libs_quietly", lambda **kwargs: None)
-    monkeypatch.setattr(utils, "sweep_stale_temp_artifacts", lambda: None)
+    monkeypatch.setattr(manifest, "sweep_stale_temp_artifacts", lambda: None)
     monkeypatch.setattr(server, "build_combined_app", lambda **kwargs: _fake_app)
     monkeypatch.setattr(server, "_SERVER_POLL_INTERVAL", 0.01)
 
@@ -1320,7 +1322,9 @@ def test_settings_reveal_shows_the_file(client, monkeypatch, tmp_path):
     settings_file.write_text("{}", encoding="utf-8")
     shown: list[Path] = []
     monkeypatch.setattr(
-        server.utils, "reveal_in_file_manager", lambda p: shown.append(p) or True
+        server.native_dialogs,
+        "reveal_in_file_manager",
+        lambda p: shown.append(p) or True,
     )
 
     body = client.post("/api/settings/reveal", json={}).get_json()
@@ -1334,7 +1338,9 @@ def test_settings_reveal_falls_back_to_the_folder(client, monkeypatch, tmp_path)
     monkeypatch.setattr(start_settings, "config_dir", lambda: cfg)
     shown: list[Path] = []
     monkeypatch.setattr(
-        server.utils, "reveal_in_file_manager", lambda p: shown.append(p) or True
+        server.native_dialogs,
+        "reveal_in_file_manager",
+        lambda p: shown.append(p) or True,
     )
 
     body = client.post("/api/settings/reveal", json={}).get_json()
@@ -1347,7 +1353,9 @@ def test_settings_reveal_reports_failure(client, monkeypatch, tmp_path):
     """A file browser that would not start is an error, not a silent ok."""
     monkeypatch.setattr(start_settings, "config_dir", lambda: tmp_path)
     (tmp_path / config.STUDIO_SETTINGS_FILENAME).write_text("{}", encoding="utf-8")
-    monkeypatch.setattr(server.utils, "reveal_in_file_manager", lambda p: False)
+    monkeypatch.setattr(
+        server.native_dialogs, "reveal_in_file_manager", lambda p: False
+    )
 
     body = client.post("/api/settings/reveal", json={}).get_json()
     assert body["ok"] is False
@@ -1364,7 +1372,9 @@ def test_reveal_artifact_shows_the_file(client, monkeypatch):
     clip.write_bytes(b"stub")
     shown: list[Path] = []
     monkeypatch.setattr(
-        server.utils, "reveal_in_file_manager", lambda p: shown.append(p) or True
+        server.native_dialogs,
+        "reveal_in_file_manager",
+        lambda p: shown.append(p) or True,
     )
 
     body = client.post(
@@ -1379,7 +1389,7 @@ def test_reveal_artifact_stays_inside_the_output_dir(client, monkeypatch, tmp_pa
     """A path that escapes the output dir is refused before any OS call."""
     outside = tmp_path / "secret.txt"
     outside.write_text("x", encoding="utf-8")
-    monkeypatch.setattr(server.utils, "reveal_in_file_manager", lambda p: True)
+    monkeypatch.setattr(server.native_dialogs, "reveal_in_file_manager", lambda p: True)
 
     for name in ("../secret.txt", str(outside)):
         resp = client.post("/studio/api/reveal-artifact", json={"file": name})
@@ -1389,7 +1399,7 @@ def test_reveal_artifact_stays_inside_the_output_dir(client, monkeypatch, tmp_pa
 
 def test_reveal_artifact_reports_a_missing_file(client, monkeypatch):
     """A row whose file was deleted is a 404, not a blank file-browser call."""
-    monkeypatch.setattr(server.utils, "reveal_in_file_manager", lambda p: True)
+    monkeypatch.setattr(server.native_dialogs, "reveal_in_file_manager", lambda p: True)
 
     resp = client.post("/studio/api/reveal-artifact", json={"file": "gone.mp4"})
     assert resp.status_code == 404
@@ -1415,7 +1425,9 @@ def test_llm_reveal_shows_the_gguf(client, monkeypatch, tmp_path):
     gguf.write_bytes(b"stub")
     shown: list[Path] = []
     monkeypatch.setattr(
-        server.utils, "reveal_in_file_manager", lambda p: shown.append(p) or True
+        server.native_dialogs,
+        "reveal_in_file_manager",
+        lambda p: shown.append(p) or True,
     )
 
     body = client.post("/api/models/llm/reveal", json={"model": "tiny"}).get_json()
@@ -1427,7 +1439,7 @@ def test_llm_reveal_shows_the_gguf(client, monkeypatch, tmp_path):
 def test_llm_reveal_rejects_an_unknown_model(client, monkeypatch, tmp_path):
     """Nothing on disk under that name is a 404, not a blank file-browser call."""
     monkeypatch.setattr(start_settings, "config_dir", lambda: tmp_path)
-    monkeypatch.setattr(server.utils, "reveal_in_file_manager", lambda p: True)
+    monkeypatch.setattr(server.native_dialogs, "reveal_in_file_manager", lambda p: True)
 
     resp = client.post("/api/models/llm/reveal", json={"model": "ghost"})
     assert resp.status_code == 404
@@ -1440,7 +1452,9 @@ def test_llm_reveal_reports_failure(client, monkeypatch, tmp_path):
     models = tmp_path / "models"
     models.mkdir()
     (models / "tiny.gguf").write_bytes(b"stub")
-    monkeypatch.setattr(server.utils, "reveal_in_file_manager", lambda p: False)
+    monkeypatch.setattr(
+        server.native_dialogs, "reveal_in_file_manager", lambda p: False
+    )
 
     body = client.post("/api/models/llm/reveal", json={"model": "tiny"}).get_json()
     assert body["ok"] is False

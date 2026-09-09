@@ -15,6 +15,7 @@ import pytest
 Flask = pytest.importorskip("flask").Flask
 
 import config
+import manifest as manifest_io
 import utils
 import workflows
 import workflows_server
@@ -1552,7 +1553,7 @@ def _arm(client, bp_id, trigger_type):
 
 def _write_transcripts_manifest(entries):
     """Write a minimal transcripts manifest: {pid: transcribed_at}."""
-    utils.save_manifest_section(
+    manifest_io.save_manifest_section(
         "transcripts",
         {
             "source_transcripts": {
@@ -1565,7 +1566,7 @@ def _write_transcripts_manifest(entries):
 
 def _write_screenspace_manifest(tasks):
     """Write a minimal screenspace manifest: [(task_id, participant, status)]."""
-    utils.save_manifest_section(
+    manifest_io.save_manifest_section(
         "screenspace",
         {
             "tasks": [
@@ -1654,14 +1655,14 @@ def test_transcript_markers_mtime_gate_skips_reparse(wf_client, monkeypatch):
     _write_transcripts_manifest({"P01": "2026-07-19T09:00:00+00:00"})
 
     parses = {"n": 0}
-    real_load = utils.load_manifest_section
+    real_load = manifest_io.load_manifest_section
 
     def counting_load(section, **kw):
         if section == "transcripts":
             parses["n"] += 1
         return real_load(section, **kw)
 
-    monkeypatch.setattr(utils, "load_manifest_section", counting_load)
+    monkeypatch.setattr(manifest_io, "load_manifest_section", counting_load)
     workflows_server._watch_poll_once()
     assert parses["n"] >= 1
     # The fired trigger persisted a run, so one more poll may re-read the file;
@@ -1815,7 +1816,7 @@ def test_legacy_trigger_types_load_as_disarmed(wf_client):
     # A Phase-2 manifest can carry {"type": "watch_dir", "enabled": true}; the
     # watcher only fires known TRIGGER_TYPES, so the loader must read unknown
     # types as disarmed — an "armed" toolbar state that never fires is a lie.
-    utils.save_manifest_section(
+    manifest_io.save_manifest_section(
         "workflows",
         {
             "blueprints": [

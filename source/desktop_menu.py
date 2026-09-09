@@ -35,6 +35,7 @@ from typing import Any
 from collections.abc import Callable
 
 import config
+import native_dialogs
 import utils
 
 # Mirrors SURFACES in topnav.js, same order; tests/test_desktop_menu.py checks.
@@ -182,7 +183,7 @@ def _open_folder(path: str) -> None:
     if not path or not Path(path).is_dir():
         utils.warning_print("No folder is configured yet — open a workspace first.")
         return
-    utils.reveal_in_file_manager(Path(path))
+    native_dialogs.reveal_in_file_manager(Path(path))
 
 
 def _open_in_browser(get_window: Callable[[], Any]) -> None:
@@ -208,7 +209,7 @@ def _open_licenses() -> None:
     if path is None:
         utils.warning_print("THIRD-PARTY-LICENSES is not bundled in this build.")
         return
-    utils.reveal_in_file_manager(path)
+    native_dialogs.reveal_in_file_manager(path)
 
 
 def enhance_menu_bar(get_window: Callable[[], Any]) -> None:
