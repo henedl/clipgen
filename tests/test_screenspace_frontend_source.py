@@ -15,6 +15,7 @@ from _frontend_source import assert_es5, read
 CALIBRATION_JS = read("screenspace-calibration.js")
 SCREENSPACE_CSS = read("screenspace.css")
 SCREENSPACE_JS = read("screenspace.js")
+PARAMS_JS = read("screenspace-params.js")
 TASKS_JS = read("screenspace-tasks.js")
 MODEL_VIEW_JS = read("screenspace-model-view.js")
 OVERLAY_JS = read("screenspace-overlay.js")
@@ -93,12 +94,12 @@ def test_multitool_step_ids_are_excluded_from_the_param_store():
     """Step ids are positional (paramSimThresh_mt1), so a remembered value would
     land on a different step after a delete-and-reindex. _paramControls is the
     one gate — snapshot, restore and the reset buttons all go through it."""
-    start = SCREENSPACE_JS.index("function _paramControls(")
-    body = SCREENSPACE_JS[start : SCREENSPACE_JS.index("\n  }", start)]
+    start = PARAMS_JS.index("function _paramControls(")
+    body = PARAMS_JS[start : PARAMS_JS.index("\n  }", start)]
     assert "_MT_STEP_ID.test(" in body, (
         "_paramControls must filter multitool step ids out of the param store"
     )
-    assert re.search(r"var _MT_STEP_ID = /_mt\\d\+\$/;", SCREENSPACE_JS)
+    assert re.search(r"var _MT_STEP_ID = /_mt\\d\+\$/;", PARAMS_JS)
 
 
 def test_task_restore_does_not_inherit_remembered_param_values():
@@ -111,8 +112,8 @@ def test_param_restore_fires_change_as_well_as_input():
     """Listeners that only watch `change` (the numbers operator, which toggles
     the range/target rows) would otherwise leave the UI denying the restored
     value while the scan runs it."""
-    start = SCREENSPACE_JS.index("function _restoreParamValues(")
-    body = SCREENSPACE_JS[start : SCREENSPACE_JS.index("\n  }", start)]
+    start = PARAMS_JS.index("function _restoreParamValues(")
+    body = PARAMS_JS[start : PARAMS_JS.index("\n  }", start)]
     for event in ("input", "change"):
         assert f'new Event("{event}", {{ bubbles: true }})' in body, (
             f"_restoreParamValues must dispatch a bubbling {event} event"
@@ -177,8 +178,8 @@ def test_shape_model_view_has_meta_and_sends_capture_mask():
 def test_shape_axis_labels_relabel_when_unlinked():
     """Unlinked axes relabel the base ladder Width and reveal the Height rows;
     every label variant needs a tooltip key or the hover lookup goes silent."""
-    start = SCREENSPACE_JS.index("function syncAxisRows()")
-    body = SCREENSPACE_JS[start : SCREENSPACE_JS.index("\n    }", start)]
+    start = PARAMS_JS.index("function syncAxisRows()")
+    body = PARAMS_JS[start : PARAMS_JS.index("\n    }", start)]
     assert '"Width scale min"' in body and '"Scale min"' in body
     tips = SCREENSPACE_JS[SCREENSPACE_JS.index("    shape: {") :]
     tips = tips[: tips.index("\n    },")]
@@ -194,8 +195,8 @@ def test_shape_draw_mode_wiring():
     assert esc < SCREENSPACE_JS.index(
         "} else if (state.pendingRegion || state.activeRegion) {"
     )
-    assert 'renderRefCaptureRow(container, "Shape", { draw: true })' in SCREENSPACE_JS
-    assert 'renderRefCaptureRow(container, "Template");' in SCREENSPACE_JS
+    assert 'renderRefCaptureRow(container, "Shape", { draw: true })' in PARAMS_JS
+    assert 'renderRefCaptureRow(container, "Template");' in PARAMS_JS
     assert "SS.cancelShapeDraw = cancelShapeDraw;" in INTERACTION_JS
     assert "if (state.shapeDraw) cancelShapeDraw();" in INTERACTION_JS
 
@@ -232,10 +233,10 @@ def test_model_view_overlay_uses_preview_region():
 
 def test_multitool_branch_refreshes_model_view():
     """The multitool branch returns early; without its own refresh the preview went stale."""
-    start = SCREENSPACE_JS.index(
+    start = PARAMS_JS.index(
         'if (type === "multitool") {\n      SS.renderMultitoolParams'
     )
-    body = SCREENSPACE_JS[start : SCREENSPACE_JS.index("return;", start)]
+    body = PARAMS_JS[start : PARAMS_JS.index("return;", start)]
     assert "refreshModelView();" in body
     assert "_updateOverlayUi();" in body
 

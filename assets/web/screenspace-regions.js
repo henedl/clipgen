@@ -3,7 +3,7 @@
  * Region stashing (stash cards, restore / rename / dismiss, drop targets) and
  * the region-chip drag state machine, carved out of screenspace.js. Loads
  * before screenspace-overlay-interaction.js, which destructures stashRegions
- * at load time; renderRegionChips / updateRegionButtons are therefore reached
+ * at load time; SS.renderRegionChips / SS.updateRegionButtons are therefore reached
  * late-bound through SS. Function bodies are unchanged from the hub.
  */
 (function () {
