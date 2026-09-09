@@ -1516,7 +1516,7 @@ def test_llm_download_routes_are_reachable_from_the_combined_root(client, monkey
     monkeypatch.setattr(
         llm_client, "download_model", lambda model, on_progress=None: True
     )
-    transcripts_server._llm_download_status.clear()
+    transcripts_server._llm_downloads.clear()
 
     body = client.post("/api/models/llm/download", json={"model": "acme/tiny"})
     assert body.get_json()["started"] is True

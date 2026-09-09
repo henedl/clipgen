@@ -78,6 +78,7 @@ import transcripts
 import utils
 import video
 from server_utils import (
+    JobRegistry,
     refused,
     pending,
     ApiError,
@@ -122,8 +123,17 @@ _pending_model_unloads_lock = threading.Lock()
 
 # In-flight GGUF downloads by model value; the UI polls
 # /api/models/llm/download-status.
-_llm_download_status: dict[str, dict[str, Any]] = {}
-_llm_download_lock = threading.Lock()
+_llm_downloads = JobRegistry(
+    fresh=lambda: {
+        "status": "starting",
+        "completed": 0,
+        "total": 0,
+        "done": False,
+        "succeeded": False,
+        "error": None,
+    },
+    running=lambda token: not token["done"],
+)
 
 
 def _schedule_model_unload(model: str) -> None:
@@ -2174,52 +2184,29 @@ def api_llm_download() -> FlaskResponse:
     if not model:
         return err("Missing model")
 
-    with _llm_download_lock:
-        existing = _llm_download_status.get(model)
-        if existing is not None and not existing.get("done"):
-            return ok(already_downloading=True)
-        _llm_download_status[model] = {
-            "status": "starting",
-            "completed": 0,
-            "total": 0,
-            "done": False,
-            "succeeded": False,
-            "error": None,
-        }
+    def _run_download(token: dict[str, Any]) -> None:
+        def _on_progress(chunk: dict[str, Any]) -> None:
+            fields: dict[str, Any] = {}
+            if chunk.get("status"):
+                fields["status"] = chunk["status"]
+            for key in ("total", "completed"):
+                if isinstance(chunk.get(key), (int, float)):
+                    fields[key] = int(chunk[key])
+            _llm_downloads.publish(model, token, **fields)
 
-    def _on_progress(chunk: dict[str, Any]) -> None:
-        with _llm_download_lock:
-            st = _llm_download_status.get(model)
-            if st is None:
-                return
-            status = chunk.get("status")
-            if status:
-                st["status"] = status
-            total = chunk.get("total")
-            completed = chunk.get("completed")
-            if isinstance(total, (int, float)):
-                st["total"] = int(total)
-            if isinstance(completed, (int, float)):
-                st["completed"] = int(completed)
-
-    def _run_download() -> None:
         succeeded = False
         try:
             succeeded = llm_client.download_model(model, on_progress=_on_progress)
         finally:
-            with _llm_download_lock:
-                st = _llm_download_status.get(model)
-                if st is not None:
-                    st["done"] = True
-                    st["succeeded"] = succeeded
-                    if succeeded:
-                        st["status"] = "success"
-                    elif not st.get("error"):
-                        st["error"] = "Download failed"
+            fields = {"done": True, "succeeded": succeeded}
+            if succeeded:
+                fields["status"] = "success"
+            elif not token.get("error"):
+                fields["error"] = "Download failed"
+            _llm_downloads.publish(model, token, **fields)
 
-    threading.Thread(
-        target=_run_download, daemon=True, name=f"llm-download-{model}"
-    ).start()
+    if _llm_downloads.start(model, _run_download, name=f"llm-download-{model}") is None:
+        return ok(already_downloading=True)
     return ok(started=True)
 
 
@@ -2229,9 +2216,7 @@ def api_llm_download_status() -> FlaskResponse:
     model = (request.args.get("model") or "").strip()
     if not model:
         return err("Missing model")
-    with _llm_download_lock:
-        st = _llm_download_status.get(model)
-        snapshot = dict(st) if st is not None else None
+    snapshot = _llm_downloads.get(model)
     if snapshot is None:
         return ok(found=False)
     return ok(found=True, **snapshot)

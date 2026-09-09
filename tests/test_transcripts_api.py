@@ -3180,7 +3180,7 @@ def test_llm_download_starts_and_reports_success(tr_client, monkeypatch):
         return True
 
     monkeypatch.setattr(llm_client, "download_model", _fake_pull)
-    transcripts_server._llm_download_status.clear()
+    transcripts_server._llm_downloads.clear()
 
     resp = tr_client.post(
         "/transcripts/api/models/llm/download", json={"model": "tiny:1b"}
@@ -3210,7 +3210,7 @@ def test_llm_download_reports_failure(tr_client, monkeypatch):
     monkeypatch.setattr(
         llm_client, "download_model", lambda model, on_progress=None: False
     )
-    transcripts_server._llm_download_status.clear()
+    transcripts_server._llm_downloads.clear()
 
     tr_client.post("/transcripts/api/models/llm/download", json={"model": "bad:1b"})
     status = {}

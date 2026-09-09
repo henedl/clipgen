@@ -15,19 +15,19 @@ the four routes to whichever blueprint asks, mirroring
 :func:`utils.register_static_routes`.
 """
 
-import threading
 from pathlib import Path
 from typing import Any
 
 import files
 import video
-from server_utils import ApiError, err, json_endpoint, ok
+from server_utils import ApiError, JobRegistry, err, json_endpoint, ok
 
 
-# pid -> {"state", "progress", "error", "message"}. "state" is one of
-# "running" / "done" / "error".
-_jobs: dict[str, dict[str, Any]] = {}
-_jobs_lock = threading.Lock()
+# pid -> {"state", "progress", "error", "message"}; "state" is running / done / error.
+_jobs = JobRegistry(
+    fresh=lambda: {"state": "running", "progress": 0.0, "error": "", "message": ""},
+    running=lambda token: token["state"] == "running",
+)
 
 
 def _participant_paths(sheet_context_getter: Any, pid: str) -> list[str]:
@@ -89,11 +89,8 @@ def _run_remux(pid: str, paths: list[str], token: dict[str, Any]) -> None:
     messages: list[str] = []
 
     def _publish(**fields: Any) -> None:
-        # Only touch this thread's job; a dead run must not clobber its successor.
-        with _jobs_lock:
-            if _jobs.get(pid) is not token:
-                return
-            token.update(fields)
+        # The registry drops a dead run's writes; they must not clobber a successor.
+        _jobs.publish(pid, token, **fields)
 
     for index, path in enumerate(paths):
         if _already_remuxed(path):
@@ -129,31 +126,18 @@ def register_remux_routes(bp: Any, sheet_context_getter: Any) -> None:
         paths = _participant_paths(sheet_context_getter, pid)
         if not paths:
             raise ApiError(f"No source video found for {pid}.", 404)
-        token: dict[str, Any] = {
-            "state": "running",
-            "progress": 0.0,
-            "error": "",
-            "message": "",
-        }
-        with _jobs_lock:
-            # Check-and-set under one lock: two clicks, one ffmpeg run.
-            existing = _jobs.get(pid)
-            if existing is not None and existing["state"] == "running":
-                return err(f"A remux of {pid} is already running.", 409)
-            _jobs[pid] = token
-        threading.Thread(
-            target=_run_remux,
-            args=(pid, paths, token),
-            daemon=True,
-            name=f"remux-{pid}",
-        ).start()
+        # Check-and-set inside the registry: two clicks, one ffmpeg run.
+        token = _jobs.start(
+            pid, lambda token: _run_remux(pid, paths, token), name=f"remux-{pid}"
+        )
+        if token is None:
+            return err(f"A remux of {pid} is already running.", 409)
         return ok(participant=pid, parts=len(paths))
 
     @bp.route("/api/remux/status")
     @json_endpoint
     def api_remux_status():
-        with _jobs_lock:
-            jobs = {pid: dict(job) for pid, job in _jobs.items()}
+        jobs = _jobs.snapshot()
         kept, unseekable = _media_state(sheet_context_getter)
         return ok(jobs=jobs, kept=kept, unseekable=unseekable)
 
@@ -184,6 +168,5 @@ def _apply_to_parts(sheet_context_getter: Any, pid: str, action: Any):
     if failures and not applied:
         raise ApiError(" ".join(failures))
     # Report partial results as such; a silent half-reverted set misleads the user.
-    with _jobs_lock:
-        _jobs.pop(pid, None)
+    _jobs.pop(pid)
     return ok(applied=applied, warnings=failures)
