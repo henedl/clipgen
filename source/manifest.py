@@ -15,6 +15,7 @@ import os
 import threading
 import time
 from pathlib import Path
+from collections.abc import Callable
 from typing import Any
 
 import config
@@ -201,6 +202,27 @@ def save_manifest_section(section: str, data: Any) -> Path | None:
             nbytes=len(text) if text else 0,
         )
     return written
+
+
+def memo_section(
+    cache: tuple[tuple[int, int] | None, Any],
+    section: str,
+    build: Callable[[dict[str, Any]], Any],
+) -> tuple[tuple[tuple[int, int] | None, Any], Any]:
+    """Rebuild a derived view of *section* only when the file's stamp changed.
+
+    Pollers keep ``cache`` (a ``(stamp, value)`` pair, start with ``(None, x)``)
+    and call this per poll; the parse runs once per on-disk change instead of
+    once per request. Decoded sections are not cached directly on purpose: the
+    deep copy a mutable return would need costs as much as the parse.
+    """
+    stamp = _manifest_stamp(_manifest_path())
+    if stamp == cache[0]:
+        return cache, cache[1]
+    value = (
+        build(load_manifest_section(section, default={}) or {}) if stamp else build({})
+    )
+    return (stamp, value), value
 
 
 def manifest_sections() -> set[str]:

@@ -24,7 +24,6 @@ import threading
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
-from collections.abc import Callable
 from typing import Any
 
 from flask import Blueprint, Response, request
@@ -82,8 +81,8 @@ _watch_pending: dict[str, tuple[int, float]] = {}  # pid -> last-poll (size, mti
 _watch_transcript_baseline: dict[str, str] = {}  # pid -> transcribed_at stamp
 _watch_scan_seen: set[str] = set()  # completed screenspace task ids
 # mtime-gated parse caches so an unchanged manifest is never re-read per poll.
-_watch_transcript_cache: tuple[float, dict[str, str]] = (-1.0, {})
-_watch_scan_cache: tuple[float, dict[str, str]] = (-1.0, {})
+_watch_transcript_cache: tuple[tuple[int, int] | None, dict[str, str]] = (None, {})
+_watch_scan_cache: tuple[tuple[int, int] | None, dict[str, str]] = (None, {})
 _watch_lock = threading.Lock()
 _watch_thread: threading.Thread | None = None
 _watch_stop = threading.Event()  # tests only; production never sets it
@@ -1026,21 +1025,6 @@ def _trigger_enabled(trigger: Any, trigger_type: str) -> bool:
     )
 
 
-def _mtime_memo(
-    cache: tuple[float, dict[str, str]],
-    section: str,
-    build: Callable[[dict[str, Any]], dict[str, str]],
-) -> tuple[tuple[float, dict[str, str]], dict[str, str]]:
-    """Rebuild a manifest-section marker map only when the file's mtime changed."""
-    mtime = manifest_io.manifest_mtime()
-    if mtime == cache[0]:
-        return cache, cache[1]
-    markers: dict[str, str] = {}
-    if mtime:
-        markers = build(manifest_io.load_manifest_section(section, default={}) or {})
-    return (mtime, markers), markers
-
-
 def _transcript_markers() -> dict[str, str]:
     """``{pid: transcribed_at}`` for every transcribed participant (mtime-gated)."""
     global _watch_transcript_cache
@@ -1055,7 +1039,7 @@ def _transcript_markers() -> dict[str, str]:
             if isinstance(entry, dict) and entry.get("transcribed_at")
         }
 
-    _watch_transcript_cache, markers = _mtime_memo(
+    _watch_transcript_cache, markers = manifest_io.memo_section(
         _watch_transcript_cache, "transcripts", build
     )
     return markers
@@ -1074,7 +1058,9 @@ def _scan_markers() -> dict[str, str]:
             and task.get("id")
         }
 
-    _watch_scan_cache, markers = _mtime_memo(_watch_scan_cache, "screenspace", build)
+    _watch_scan_cache, markers = manifest_io.memo_section(
+        _watch_scan_cache, "screenspace", build
+    )
     return markers
 
 
@@ -1101,11 +1087,11 @@ def _seed_watch_seen(trigger_type: str | None = None) -> None:
                     _watch_seen.add(str(entry["id"]))
         if trigger_type in (None, "transcript_complete"):
             # Force a fresh parse (the cached mtime may predate this call).
-            _watch_transcript_cache = (-1.0, {})
+            _watch_transcript_cache = (None, {})
             _watch_transcript_baseline.clear()
             _watch_transcript_baseline.update(_transcript_markers())
         if trigger_type in (None, "scan_event"):
-            _watch_scan_cache = (-1.0, {})
+            _watch_scan_cache = (None, {})
             _watch_scan_seen.clear()
             _watch_scan_seen.update(_scan_markers())
 
