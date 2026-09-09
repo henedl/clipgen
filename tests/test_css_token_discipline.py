@@ -27,7 +27,7 @@ _BASELINE = {
     "screenspace.css": (52, 0, 1, 14),
     "settings-modal.css": (11, 0, 1, 4),
     "start-overlay.css": (165, 9, 34, 10),
-    "studio.css": (52, 5, 9, 50),
+    "studio.css": (52, 5, 9, 28),
     "topnav.css": (25, 0, 0, 7),
     "transcripts.css": (35, 2, 6, 0),
     "viewer.css": (26, 0, 2, 16),

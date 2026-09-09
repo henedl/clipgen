@@ -819,18 +819,18 @@ html[data-theme="light"] .sev-pill.sev-unknown,
 }
 
 /* Positive pill in light mode — match the cell-data-positive override
- * (#16a34a) since the dark-theme positive token (#4ade80) washes out on a
+ * (--success) since the dark-theme positive token (--severity-positive) washes out on a
  * light background. Very-positive uses a slightly darker green so it stays
  * distinct from positive (mirrors the dark-theme differentiation). */
 html[data-theme="light"] .sev-pill.sev-positive,
 .theme-light .sev-pill.sev-positive {
-  color: #16a34a;
-  background: color-mix(in srgb, #16a34a 18%, transparent);
+  color: var(--success);
+  background: color-mix(in srgb, var(--success) 18%, transparent);
 }
 html[data-theme="light"] .sev-pill.sev-very-positive,
 .theme-light .sev-pill.sev-very-positive {
-  color: #15803d;
-  background: color-mix(in srgb, #15803d 18%, transparent);
+  color: var(--success-strong);
+  background: color-mix(in srgb, var(--success-strong) 18%, transparent);
 }
 
 /* Clickable header cells */
@@ -1557,7 +1557,7 @@ body.dragging #sheetMain {
 }
 
 .queue-card-remove:hover {
-  background: #dc2626;
+  background: var(--danger);
 }
 
 .queue-card-remove .cg-icon {
@@ -1566,15 +1566,15 @@ body.dragging #sheetMain {
 }
 
 .queue-card-error {
-  border-color: #dc2626;
-  background: #fef2f2;
+  border-color: var(--danger);
+  background: var(--danger-bg);
 }
 
 .queue-card-error .queue-card-thumb {
   display: flex;
   align-items: center;
   justify-content: center;
-  color: #dc2626;
+  color: var(--danger);
   font-size: var(--text-2xl);
   font-weight: 700;
 }
@@ -1621,11 +1621,11 @@ body.dragging #sheetMain {
 }
 
 html[data-theme="dark"] .queue-card-error {
-  background: #451a1a;
+  background: var(--danger-bg-dark);
 }
 
 html[data-theme="dark"] .queue-card-error .queue-card-thumb {
-  color: #f87171;
+  color: var(--severity-high);
 }
 
 /* Stashed reels */
@@ -2121,13 +2121,13 @@ html[data-theme="dark"] .queue-card-error .queue-card-thumb {
 }
 
 .queue-card-success {
-  border-color: #16a34a;
+  border-color: var(--success);
   background: #f0fdf4;
 }
 
 .queue-card-fail {
-  border-color: #dc2626;
-  background: #fef2f2;
+  border-color: var(--danger);
+  background: var(--danger-bg);
 }
 
 .card-gen-badge {
@@ -2144,11 +2144,11 @@ html[data-theme="dark"] .queue-card-error .queue-card-thumb {
 }
 
 .card-gen-badge-ok {
-  background: #16a34a;
+  background: var(--success);
 }
 
 .card-gen-badge-fail {
-  background: #dc2626;
+  background: var(--danger);
 }
 
 .card-gen-badge .cg-icon {
@@ -2227,7 +2227,7 @@ html[data-theme="dark"] .queue-card-error .queue-card-thumb {
 }
 
 .status-card .error-text {
-  color: #dc2626;
+  color: var(--danger);
 }
 
 .status-actions {
@@ -2273,7 +2273,7 @@ html[data-theme="dark"] .queue-card-error .queue-card-thumb {
 }
 
 .build-status-msg.error-text {
-  color: #dc2626;
+  color: var(--danger);
 }
 
 /* Live elapsed clock in the non-blocking build-status card. */
@@ -2361,12 +2361,12 @@ html[data-theme="dark"] .queue-card-error .queue-card-thumb {
   background: rgba(0, 0, 0, 0.45);
 }
 :root:not([data-theme="light"]) .queue-card-success {
-  border-color: #4ade80;
+  border-color: var(--severity-positive);
   background: #052e16;
 }
 :root:not([data-theme="light"]) .queue-card-fail {
-  border-color: #f87171;
-  background: #451a1a;
+  border-color: var(--severity-high);
+  background: var(--danger-bg-dark);
 }
 :root:not([data-theme="light"]) .stash-card-name-input {
   background: var(--color-surface-alt);
@@ -2774,15 +2774,15 @@ html[data-theme="dark"] .log-panel {
 .queue-card[data-severity="very-positive"] .queue-card-time { color: var(--severity-very-positive); }
 
 /* Light theme — darker greens for the positive buckets (mirrors .sev-pill);
- * the dark-theme green tokens wash out on the light #ffffff card surface. */
+ * the dark-theme green tokens wash out on the light white card surface. */
 html[data-theme="light"] .queue-card[data-severity="positive"] .queue-card-ref,
 html[data-theme="light"] .queue-card[data-severity="positive"] .queue-card-time,
 .theme-light .queue-card[data-severity="positive"] .queue-card-ref,
-.theme-light .queue-card[data-severity="positive"] .queue-card-time { color: #16a34a; }
+.theme-light .queue-card[data-severity="positive"] .queue-card-time { color: var(--success); }
 html[data-theme="light"] .queue-card[data-severity="very-positive"] .queue-card-ref,
 html[data-theme="light"] .queue-card[data-severity="very-positive"] .queue-card-time,
 .theme-light .queue-card[data-severity="very-positive"] .queue-card-ref,
-.theme-light .queue-card[data-severity="very-positive"] .queue-card-time { color: #15803d; }
+.theme-light .queue-card[data-severity="very-positive"] .queue-card-time { color: var(--success-strong); }
 
 .queue-card-text {
   font-size: var(--text-xs);
