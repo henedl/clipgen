@@ -74,7 +74,6 @@ from flask import (
     Flask,
     Response,
     g,
-    jsonify,
     redirect,
     request,
     send_file,
@@ -94,6 +93,7 @@ import utils
 import video
 import viewer
 from server_utils import (
+    refused,
     MediaCache,
     clip_media_response,
     err,
@@ -772,31 +772,25 @@ def api_sheet() -> FlaskResponse:
         # Consumers pair `participants` with `rows` as sheet columns; a mind-map-only
         # session leaves both empty.
         mn = _mindnode_doc or {}
-        return jsonify(
-            {
-                "ok": True,
-                "sheet_loaded": False,
-                "study": str(mn.get("study", "")),
-                "mindnodeParticipants": list(mn.get("participants", [])),
-                **_sheet_common_fields(),
-                "participants": [],
-                "rows": [],
-            }
+        return ok(
+            sheet_loaded=False,
+            study=str(mn.get("study", "")),
+            mindnodeParticipants=list(mn.get("participants", [])),
+            **_sheet_common_fields(),
+            participants=[],
+            rows=[],
         )
 
     ctx = _sheet_context
     sheet_payload = _get_sheet_payload(ctx)
 
-    return jsonify(
-        {
-            "ok": True,
-            "sheet_loaded": True,
-            "study": ctx.study_name,
-            **_sheet_common_fields(),
-            "defaultDuration": config.DEFAULT_DURATION_SECONDS,
-            "participants": sheet_payload["participants"],
-            "rows": sheet_payload["rows"],
-        }
+    return ok(
+        sheet_loaded=True,
+        study=ctx.study_name,
+        **_sheet_common_fields(),
+        defaultDuration=config.DEFAULT_DURATION_SECONDS,
+        participants=sheet_payload["participants"],
+        rows=sheet_payload["rows"],
     )
 
 
@@ -813,7 +807,7 @@ def api_mindnode() -> FlaskResponse:
     with _mindnode_lock:
         doc = _mindnode_doc
     if doc is None:
-        return jsonify({"ok": True, "mindnode_loaded": False, "document": None})
+        return ok(mindnode_loaded=False, document=None)
 
     import mindnode
 
@@ -825,15 +819,9 @@ def api_mindnode() -> FlaskResponse:
     with _mindnode_lock:
         # Re-check under the lock: a close during the unlocked parse must not be undone here.
         if _mindnode_doc is not doc:
-            return jsonify(
-                {
-                    "ok": True,
-                    "mindnode_loaded": _mindnode_doc is not None,
-                    "document": _mindnode_doc,
-                }
-            )
+            return ok(mindnode_loaded=_mindnode_doc is not None, document=_mindnode_doc)
         _mindnode_doc = fresh
-    return jsonify({"ok": True, "mindnode_loaded": True, "document": fresh})
+    return ok(mindnode_loaded=True, document=fresh)
 
 
 @studio_bp.route("/api/sheet/baseline")
@@ -2008,7 +1996,7 @@ def api_timeline_viewer() -> FlaskResponse:
         )
         if _timeline_viewer_cancel_event.is_set():
             _discard_artifact_files(artifacts)
-            return jsonify({"ok": False, "cancelled": True})
+            return refused("cancelled", cancelled=True)
         if not artifacts:
             return err("No artifacts were generated")
 
@@ -2029,7 +2017,7 @@ def api_timeline_viewer() -> FlaskResponse:
         # discard the files.
         if _timeline_viewer_cancel_event.is_set():
             _discard_artifact_files(artifacts)
-            return jsonify({"ok": False, "cancelled": True})
+            return refused("cancelled", cancelled=True)
 
         _extend_generated_artifacts(artifacts)
 
@@ -2135,7 +2123,7 @@ def api_gallery() -> FlaskResponse:
 
         if _gallery_cancel_event.is_set():
             _discard_artifact_files(artifacts)
-            return jsonify({"ok": False, "cancelled": True})
+            return refused("cancelled", cancelled=True)
         if not artifacts:
             return err("No captures generated", 500)
 
@@ -2150,7 +2138,7 @@ def api_gallery() -> FlaskResponse:
         # Last cancel gate: Cancel may land during the duration probe / finalize.
         if _gallery_cancel_event.is_set():
             _discard_artifact_files(artifacts)
-            return jsonify({"ok": False, "cancelled": True})
+            return refused("cancelled", cancelled=True)
         gallery_path = viewer.generate_gallery_viewer(gallery_data)
         if gallery_path:
             return ok(file=str(gallery_path))
@@ -3453,16 +3441,13 @@ def _open_mindnode(id_or_path: str, project_name: str | None) -> FlaskResponse:
         name=project_name,
     )
     _active_project_source = source
-    return jsonify(
-        {
-            "ok": True,
-            "sheet_loaded": _worksheet is not None,
-            "mindnode_loaded": True,
-            "spreadsheet_label": _spreadsheet_label(),
-            "mindnode_label": label,
-            "study": doc["study"],
-            "notes": len(doc["notes"]),
-        }
+    return ok(
+        sheet_loaded=_worksheet is not None,
+        mindnode_loaded=True,
+        spreadsheet_label=_spreadsheet_label(),
+        mindnode_label=label,
+        study=doc["study"],
+        notes=len(doc["notes"]),
     )
 
 
@@ -3631,37 +3616,35 @@ def api_profile() -> FlaskResponse:
 
 def status() -> Response:
     meta = _active_sheet_meta if _worksheet is not None else None
-    return jsonify(
-        {
-            "studio": True,
-            "screenspace": True,
-            "transcripts": True,
-            "workflows": True,
-            "composer": True,
-            "overview": True,
-            "sheet_loaded": _worksheet is not None,
-            "startup_notice": (_startup_notice or {}).get("message", ""),
-            "startup_notice_source": (_startup_notice or {}).get("source_type", ""),
-            # What record_project_session last stored, so the overlay's
-            # current-session key matches its recent-projects key.
-            "active_source": _active_project_source,
-            "mindnode_loaded": _mindnode_doc is not None,
-            "mindnode_label": (_mindnode_doc or {}).get("name", ""),
-            "mindnode_path": (_mindnode_doc or {}).get("path", ""),
-            "spreadsheet_label": _spreadsheet_label(),
-            "spreadsheet_type": (meta or {}).get("type", ""),
-            "spreadsheet_id_or_path": (meta or {}).get("id_or_path", ""),
-            "spreadsheet_worksheet": (meta or {}).get("worksheet", ""),
-            "input_dir": str(utils.get_effective_input_dir()),
-            "output_dir": str(utils.get_effective_output_dir()),
-            "videos_in_input": len(utils.discover_participant_videos()),
-            "version": utils.get_version(),
-            # Native window: pages may offer "show on disk" actions.
-            "desktop": utils.GUI_LAUNCH,
-            "author": "Henrik Edlund",
-            "license": "MIT",
-            "repo_url": config.REPO_URL,
-        }
+    return ok(
+        studio=True,
+        screenspace=True,
+        transcripts=True,
+        workflows=True,
+        composer=True,
+        overview=True,
+        sheet_loaded=_worksheet is not None,
+        startup_notice=(_startup_notice or {}).get("message", ""),
+        startup_notice_source=(_startup_notice or {}).get("source_type", ""),
+        # What record_project_session last stored, so the overlay's
+        # current-session key matches its recent-projects key.
+        active_source=_active_project_source,
+        mindnode_loaded=_mindnode_doc is not None,
+        mindnode_label=(_mindnode_doc or {}).get("name", ""),
+        mindnode_path=(_mindnode_doc or {}).get("path", ""),
+        spreadsheet_label=_spreadsheet_label(),
+        spreadsheet_type=(meta or {}).get("type", ""),
+        spreadsheet_id_or_path=(meta or {}).get("id_or_path", ""),
+        spreadsheet_worksheet=(meta or {}).get("worksheet", ""),
+        input_dir=str(utils.get_effective_input_dir()),
+        output_dir=str(utils.get_effective_output_dir()),
+        videos_in_input=len(utils.discover_participant_videos()),
+        version=utils.get_version(),
+        # Native window: pages may offer "show on disk" actions.
+        desktop=utils.GUI_LAUNCH,
+        author="Henrik Edlund",
+        license="MIT",
+        repo_url=config.REPO_URL,
     )
 
 
@@ -3751,7 +3734,7 @@ def api_dirs_post() -> FlaskResponse:
             start_settings.record_recent_output(str(p))
 
     if errors:
-        return jsonify({"ok": False, "errors": errors}), 400
+        return err("Folder error", 400, errors=errors)
     return api_dirs_get()
 
 
@@ -4085,7 +4068,7 @@ def api_spreadsheets_google_auth() -> FlaskResponse:
             _google_auth.in_flight = False
 
     threading.Thread(target=_run_auth, daemon=True).start()
-    return jsonify({"ok": True, "started": True, "in_flight": True}), 202
+    return ok(started=True, in_flight=True), 202
 
 
 def api_spreadsheets_open() -> FlaskResponse:

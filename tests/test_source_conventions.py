@@ -111,3 +111,23 @@ def test_the_scans_see_planted_violations() -> None:
     assert calls == ["input"]
     assert _DOC_VERSION.search("as of 0.16.11 the")
     assert not _DOC_VERSION.search("bind to 127.0.0.1:8089")
+
+
+_BLUEPRINT_FILES = (
+    "server.py",
+    "screenspace_server.py",
+    "transcripts_server.py",
+    "workflows_server.py",
+    "composer_server.py",
+    "overview.py",
+    "remux_server.py",
+)
+
+
+def test_blueprints_use_the_shared_envelope() -> None:
+    """Routes answer through server_utils ok/err/pending/refused, never raw jsonify."""
+    raw = {
+        name: len(re.findall(r"\bjsonify\(", _SOURCES[name]))
+        for name in _BLUEPRINT_FILES
+    }
+    assert raw == dict.fromkeys(_BLUEPRINT_FILES, 0), raw

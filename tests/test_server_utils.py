@@ -202,3 +202,22 @@ def test_sse_notify_without_key_wakes_every_client():
 
     notify()
     assert qa.qsize() == 2 and qb.qsize() == 1
+
+
+def test_err_carries_extra_fields(app):
+    with app.app_context():
+        resp, code = server_utils.err("Folder error", 400, errors={"input": "x"})
+    assert code == 400
+    assert resp.get_json() == {
+        "ok": False,
+        "error": "Folder error",
+        "errors": {"input": "x"},
+    }
+
+
+def test_pending_and_refused_are_ok_false_at_200(app):
+    with app.app_context():
+        pending = server_utils.pending(partial="…").get_json()
+        refused = server_utils.refused("cancelled", cancelled=True).get_json()
+    assert pending == {"ok": False, "generating": True, "partial": "…"}
+    assert refused == {"ok": False, "reason": "cancelled", "cancelled": True}

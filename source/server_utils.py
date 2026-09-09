@@ -5,7 +5,8 @@ Every blueprint returns the same JSON envelope — ``{"ok": True, ...}`` on succ
 same numeric-arg parse-and-validate block dozens of times. Collapsed here:
 
 - :func:`ok` / :func:`err` build either envelope in one call;
-  :func:`pending` is the third, "still generating" state at HTTP 200.
+  :func:`pending` ("still generating") and :func:`refused` ("declined") are
+  the two ``ok: False`` states served at HTTP 200.
 - :class:`ApiError` + :func:`json_endpoint` let a handler ``raise`` a uniform
   4xx instead of threading an ``err(...)`` tuple back through every guard.
 - :func:`parse_number_arg` parses + bound-checks one numeric value;
@@ -53,9 +54,9 @@ def ok(**fields: Any):
     return jsonify({"ok": True, **fields})
 
 
-def err(message: str, code: int = 400):
-    """Error envelope: ``(jsonify({"ok": False, "error": message}), code)``."""
-    return jsonify({"ok": False, "error": message}), code
+def err(message: str, code: int = 400, **fields: Any):
+    """Error envelope: ``(jsonify({"ok": False, "error": message, **fields}), code)``."""
+    return jsonify({"ok": False, "error": message, **fields}), code
 
 
 def pending(**fields: Any):
@@ -66,6 +67,15 @@ def pending(**fields: Any):
     success.
     """
     return jsonify({"ok": False, "generating": True, **fields})
+
+
+def refused(reason: str, **fields: Any):
+    """Declined at HTTP 200: ``{"ok": False, "reason": reason, ...}``.
+
+    The request was understood and not acted on (cancelled, model not cached).
+    Clients branch on ``reason`` or the extra fields, never on the status.
+    """
+    return jsonify({"ok": False, "reason": reason, **fields})
 
 
 def err_no_video(participant: str, code: int = 404):

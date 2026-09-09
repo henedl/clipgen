@@ -1616,7 +1616,7 @@ def test_api_timeline_viewer_short_circuits_after_cancel(client, monkeypatch):
 
     assert resp.status_code == 200
     data = resp.get_json()
-    assert data == {"ok": False, "cancelled": True}
+    assert data == {"ok": False, "reason": "cancelled", "cancelled": True}
     assert generated_calls == []
 
 
@@ -1655,7 +1655,7 @@ def test_api_gallery_short_circuits_after_cancel(client, monkeypatch, tmp_path):
 
     assert resp.status_code == 200
     data = resp.get_json()
-    assert data == {"ok": False, "cancelled": True}
+    assert data == {"ok": False, "reason": "cancelled", "cancelled": True}
     assert generated_calls == []
 
 
@@ -1705,7 +1705,7 @@ def test_api_timeline_viewer_discards_sheet_clips_on_cancel_during_intake(
         server._timeline_viewer_cancel_event.clear()
 
     assert resp.status_code == 200
-    assert resp.get_json() == {"ok": False, "cancelled": True}
+    assert resp.get_json() == {"ok": False, "reason": "cancelled", "cancelled": True}
     assert generated_calls == []
     assert server._generated_artifacts == []
 
@@ -1752,7 +1752,7 @@ def test_api_gallery_short_circuits_when_cancelled_before_finalize(
         server._gallery_cancel_event.clear()
 
     assert resp.status_code == 200
-    assert resp.get_json() == {"ok": False, "cancelled": True}
+    assert resp.get_json() == {"ok": False, "reason": "cancelled", "cancelled": True}
     assert generated_calls == []
 
 
