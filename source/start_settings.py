@@ -30,6 +30,8 @@ genuinely concurrent: the Start overlay records from Flask request threads while
 """
 
 import json
+from collections.abc import Iterator
+from contextlib import contextmanager
 import os
 import sys
 import threading
@@ -44,6 +46,13 @@ RECENTS_CAP = 12
 
 # Held across load -> mutate -> save; locking the halves separately still interleaves.
 _write_lock = threading.Lock()
+
+
+@contextmanager
+def _settings_lock() -> Iterator[None]:
+    """In-process lock plus the cross-process file lock on start.json."""
+    with _write_lock, utils.file_lock(_settings_path()):
+        yield
 
 
 def config_dir() -> Path:
@@ -175,7 +184,7 @@ def _prepend_dedup(items: list[Any], new_item: Any, key: Any = None) -> list[Any
 
 def _record_recent_dir(path: str, last_key: str, recents_key: str) -> None:
     """Store *path* under *last_key* and at the head of *recents_key*."""
-    with _write_lock:
+    with _settings_lock():
         settings = load_start_settings()
         if not settings.get("persist_enabled", True):
             return
@@ -200,7 +209,7 @@ def record_recent_spreadsheet(
     type_: str, id_or_path: str, label: str, worksheet: str = ""
 ) -> None:
     """Record a spreadsheet selection as last/recent."""
-    with _write_lock:
+    with _settings_lock():
         settings = load_start_settings()
         if not settings.get("persist_enabled", True):
             return
@@ -258,7 +267,7 @@ def record_project_session(
     the CLI-launch and Studio sheet-switch call sites pass nothing, and without
     it every relaunch would silently wipe the label.
     """
-    with _write_lock:
+    with _settings_lock():
         settings = load_start_settings()
         if not settings.get("persist_enabled", True):
             return
@@ -328,7 +337,7 @@ def set_filename_override(
     floor because recents are off would silently resurrect the naming mismatch
     the user just fixed.
     """
-    with _write_lock:
+    with _settings_lock():
         settings = load_start_settings()
         if not type_ or not id_or_path or not participant:
             return {}
@@ -377,7 +386,7 @@ def record_window_geometry(x: int, y: int, width: int, height: int) -> None:
 
     Gated on ``remember_window``, not ``persist_enabled`` — see ``_defaults``.
     """
-    with _write_lock:
+    with _settings_lock():
         settings = load_start_settings()
         if not settings.get("remember_window", True):
             return
@@ -398,7 +407,7 @@ def clear_window_geometry() -> None:
     Ungated by ``persist_enabled``, like ``set_persist_enabled``: an explicit
     reset has to take effect whatever the toggle says.
     """
-    with _write_lock:
+    with _settings_lock():
         settings = load_start_settings()
         settings["window"] = None
         save_start_settings(settings)
@@ -406,7 +415,7 @@ def clear_window_geometry() -> None:
 
 def set_persist_enabled(enabled: bool) -> None:
     """Toggle the persist_enabled flag and save."""
-    with _write_lock:
+    with _settings_lock():
         settings = load_start_settings()
         settings["persist_enabled"] = bool(enabled)
         save_start_settings(settings)
@@ -418,7 +427,7 @@ def set_remember_window(enabled: bool) -> None:
     Turning it off also drops the stored rect, so the next launch opens at the
     default rather than at whatever was last recorded.
     """
-    with _write_lock:
+    with _settings_lock():
         settings = load_start_settings()
         settings["remember_window"] = bool(enabled)
         if not enabled:
