@@ -9,7 +9,7 @@ import json
 import re
 from pathlib import Path
 
-import cli
+import cli_screenspace
 import config
 import screenspace_server
 import screenspace_tools
@@ -431,9 +431,9 @@ def test_detector_registries_stay_aligned():
         f"{sorted(_SERVER_STEP_EXCLUDES)}: {sorted(screenspace_server._VALID_STEP_TYPES)}."
     )
 
-    assert set(cli._SS_VALID_TASK_TYPES) == engine - _CLI_TASK_EXCLUDES, (
-        f"cli._SS_VALID_TASK_TYPES drifted from TOOLS minus {_CLI_TASK_EXCLUDES}. "
-        f"CLI={sorted(cli._SS_VALID_TASK_TYPES)} vs expected="
+    assert set(cli_screenspace._SS_VALID_TASK_TYPES) == engine - _CLI_TASK_EXCLUDES, (
+        f"cli_screenspace._SS_VALID_TASK_TYPES drifted from TOOLS minus {_CLI_TASK_EXCLUDES}. "
+        f"CLI={sorted(cli_screenspace._SS_VALID_TASK_TYPES)} vs expected="
         f"{sorted(engine - _CLI_TASK_EXCLUDES)}."
     )
 

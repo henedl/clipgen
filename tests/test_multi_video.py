@@ -7,6 +7,7 @@ from unittest.mock import Mock
 
 import pytest
 
+import cli_screenspace
 import config
 import files
 import pipeline
@@ -1456,18 +1457,16 @@ def test_screenspace_dispatch_single_video_unchanged(monkeypatch):
 
 
 def test_ss_cli_resolves_all_parts(monkeypatch, tmp_path):
-    import cli
 
     monkeypatch.setattr(config, "INPUT_DIR", str(tmp_path), raising=False)
     (tmp_path / "study_P01-1.mp4").write_text("v1")
     (tmp_path / "study_P01-2.mp4").write_text("v2")
-    paths = cli._ss_resolve_videos_for_participant("P01")
+    paths = cli_screenspace._ss_resolve_videos_for_participant("P01")
     assert [_basename(p) for p in paths] == ["study_P01-1.mp4", "study_P01-2.mp4"]
-    assert cli._ss_resolve_videos_for_participant("PX") == []
+    assert cli_screenspace._ss_resolve_videos_for_participant("PX") == []
 
 
 def test_ss_cli_honours_filename_overrides(monkeypatch, tmp_path):
-    import cli
 
     monkeypatch.setattr(config, "INPUT_DIR", str(tmp_path), raising=False)
     (tmp_path / "study_P01.mp4").write_text("pattern")
@@ -1475,5 +1474,5 @@ def test_ss_cli_honours_filename_overrides(monkeypatch, tmp_path):
     monkeypatch.setattr(
         config, "FILENAME_OVERRIDES", {"P01": "other.mp4"}, raising=False
     )
-    paths = cli._ss_resolve_videos_for_participant("P01")
+    paths = cli_screenspace._ss_resolve_videos_for_participant("P01")
     assert [_basename(p) for p in paths] == ["other.mp4"]

@@ -49,7 +49,7 @@ packages = []
 # tests/test_packaging.py.
 package-dir = {"" = "source"}
 py-modules = [
-    "app", "changelog", "cli", "cli_args", "composer_server", "config", "data_export",
+    "app", "changelog", "cli", "cli_args", "cli_screenspace", "composer_server", "config", "data_export",
     "desktop", "desktop_chrome", "desktop_menu", "excel_io",
     "files", "friction", "google_api", "interactive", "licenses", "mindnode",
     "llm_client", "manifest", "native_dialogs",
