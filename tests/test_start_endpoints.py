@@ -1647,3 +1647,44 @@ def test_update_reveal_replies_with_a_full_snapshot(client, updater_state, monke
     monkeypatch.setattr(updater_state, "reveal_download", lambda: True)
     body = client.post("/api/update/reveal").get_json()
     assert body["ok"] is True and "phase" in body and "supported" in body
+
+
+class TestCrossOriginGuard:
+    """State-changing requests from another origin are refused."""
+
+    def test_foreign_origin_post_is_refused(self, app):
+        client = app.test_client()
+        r = client.post(
+            "/api/dirs",
+            json={"input_dir": "x"},
+            headers={"Origin": "http://evil.example"},
+        )
+        assert r.status_code == 403
+        assert r.get_json()["ok"] is False
+
+    def test_foreign_referer_post_is_refused(self, app):
+        client = app.test_client()
+        r = client.post(
+            "/api/dirs",
+            json={},
+            headers={"Referer": "http://evil.example/page"},
+        )
+        assert r.status_code == 403
+
+    def test_same_origin_post_passes(self, app):
+        client = app.test_client()
+        r = client.post(
+            "/api/dirs",
+            json={},
+            headers={"Origin": "http://localhost"},
+        )
+        assert r.status_code != 403
+
+    def test_headerless_post_passes(self, app):
+        client = app.test_client()
+        assert client.post("/api/dirs", json={}).status_code != 403
+
+    def test_foreign_get_passes(self, app):
+        client = app.test_client()
+        r = client.get("/api/dirs", headers={"Origin": "http://evil.example"})
+        assert r.status_code == 200

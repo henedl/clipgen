@@ -61,6 +61,7 @@ import time
 import traceback
 import uuid
 import webbrowser
+from urllib.parse import urlsplit
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, field
@@ -3471,6 +3472,26 @@ def _profile_request_start() -> None:
         g._prof_t0 = time.perf_counter()
 
 
+_STATE_CHANGING_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
+
+
+def _reject_cross_origin() -> FlaskResponse | None:
+    """before_request hook: refuse state changes from another origin.
+
+    The server binds loopback only, but a page open in any other tab can still
+    fire a simple cross-origin POST at ``127.0.0.1:<port>`` and the browser
+    sends it. Requests without ``Origin``/``Referer`` (curl, the CLI) pass.
+    """
+    if request.method not in _STATE_CHANGING_METHODS:
+        return None
+    source = request.headers.get("Origin") or request.headers.get("Referer")
+    if not source:
+        return None
+    if urlsplit(source).netloc == request.host:
+        return None
+    return err("Cross-origin request refused", 403)
+
+
 def _profile_request_end(response):
     """after_request hook: accumulate per-route wall time under ``route <rule>``.
 
@@ -3620,6 +3641,7 @@ def build_combined_app(
     combined.register_blueprint(overview.overview_bp, url_prefix="/overview")
 
     combined.after_request(_set_cache_headers)
+    combined.before_request(_reject_cross_origin)
     combined.before_request(_profile_request_start)
     combined.after_request(_profile_request_end)
 
