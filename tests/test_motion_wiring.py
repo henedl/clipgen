@@ -85,6 +85,7 @@ def test_motion_wired_at_mutation_sites():
         encoding="utf-8"
     )
     ss_hub = (_WEB / "screenspace.js").read_text(encoding="utf-8")
+    ss_regions = (_WEB / "screenspace-regions.js").read_text(encoding="utf-8")
 
     # Exit animations (stash + delete) are wired in both tools.
     assert 'ClipgenMotion.animateOut(card, "delete")' in studio  # remove one card
@@ -92,12 +93,12 @@ def test_motion_wired_at_mutation_sites():
     assert 'ClipgenMotion.animateOutAll(cards, "stash")' in studio  # stash queue
     assert 'ClipgenMotion.animateOut(chip, "delete")' in ss_overlay  # delete region
     assert 'ClipgenMotion.animateOutAll(chips, "delete")' in ss_overlay  # delete all
-    assert 'ClipgenMotion.animateOutAll(chips, "stash")' in ss_hub  # stash regions
+    assert 'ClipgenMotion.animateOutAll(chips, "stash")' in ss_regions  # stash regions
 
     # Stash-card landing goes through the shared system on both tools; region
     # pills reuse the same entry animation.
     assert 'ClipgenMotion.animateIn(card, "stashLand")' in studio
-    assert 'ClipgenMotion.animateIn(card, "stashLand")' in ss_hub
+    assert 'ClipgenMotion.animateIn(card, "stashLand")' in ss_regions
     assert 'ClipgenMotion.animateIn(chip, "stashLand")' in ss_overlay
 
 
