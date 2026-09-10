@@ -84,7 +84,6 @@ def test_motion_wired_at_mutation_sites():
     ss_overlay = (_WEB / "screenspace-overlay-interaction.js").read_text(
         encoding="utf-8"
     )
-    ss_hub = (_WEB / "screenspace.js").read_text(encoding="utf-8")
     ss_regions = (_WEB / "screenspace-regions.js").read_text(encoding="utf-8")
 
     # Exit animations (stash + delete) are wired in both tools.
