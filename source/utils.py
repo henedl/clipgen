@@ -1278,6 +1278,7 @@ def get_frontend_config() -> dict[str, Any]:
         "composerDoubleClickCuts": config.COMPOSER_DOUBLE_CLICK_CUTS,
         "mediaContainerWarning": config.MEDIA_CONTAINER_WARNING,
         "transcribeSpeakers": config.TRANSCRIBE_SPEAKERS,
+        "speakerLabelMaxLen": config.SPEAKER_LABEL_MAX_LEN,
         "subtitleContainers": _subtitle_container_config(),
         "hotkeyOverrides": dict(config.HOTKEY_OVERRIDES),
         "profiling": config.PROFILING,

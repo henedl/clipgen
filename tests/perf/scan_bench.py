@@ -105,24 +105,24 @@ def parse_profile(text: str) -> dict[str, dict[str, float]]:
 
 def probe_duration(path: Path) -> float | None:
     """Seconds of *path*, or None if ffprobe cannot say."""
-    proc = subprocess.run(
-        [
-            "ffprobe",
-            "-v",
-            "error",
-            "-show_entries",
-            "format=duration",
-            "-of",
-            "csv=p=0",
-            str(path),
-        ],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
     try:
+        proc = subprocess.run(
+            [
+                "ffprobe",
+                "-v",
+                "error",
+                "-show_entries",
+                "format=duration",
+                "-of",
+                "csv=p=0",
+                str(path),
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
         return float(proc.stdout.strip())
-    except ValueError:
+    except (OSError, ValueError):
         return None
 
 
@@ -139,13 +139,33 @@ def regressions(
     key: str,
     limit: float,
 ) -> list[tuple[str, float]]:
-    """Names whose *key* rose by more than *limit* percent."""
+    """Names whose *key* rose by more than *limit* percent.
+
+    A failed run parses to 0, which would read as a 100% speedup; it is
+    reported as ``inf`` instead so ``--fail-on`` never passes a broken build.
+    """
     hit: list[tuple[str, float]] = []
     for name, row in rows.items():
-        pct = delta_pct(row.get(key, 0.0), (baseline.get(name) or {}).get(key, 0.0))
+        base = (baseline.get(name) or {}).get(key, 0.0)
+        current = row.get(key, 0.0)
+        if base and not current:
+            hit.append((name, float("inf")))
+            continue
+        pct = delta_pct(current, base)
         if pct is not None and pct > limit:
             hit.append((name, pct))
     return hit
+
+
+def baseline_rows(
+    ap: argparse.ArgumentParser, path: Path, section: str, duration: int
+) -> dict:
+    """Load a --compare snapshot, refusing one recorded at another fixture length."""
+    snapshot = json.loads(path.read_text())
+    recorded = (snapshot.get("meta") or {}).get("duration")
+    if recorded is not None and recorded != duration:
+        ap.error(f"{path} was recorded at {recorded}s; pass --duration {recorded}")
+    return snapshot[section]
 
 
 def summarize(tool: str, profile: dict[str, dict[str, float]]) -> dict[str, float]:
@@ -386,7 +406,7 @@ def main() -> int:
 
     baseline = None
     if args.compare:
-        baseline = json.loads(args.compare.read_text())["tools"]
+        baseline = baseline_rows(ap, args.compare, "tools", args.duration)
 
     rows: dict[str, dict[str, float]] = {}
     for tool in tools:
@@ -425,7 +445,8 @@ def main() -> int:
         hit = regressions(rows, baseline, "callback_s", args.fail_on)
         if hit:
             for name, pct in hit:
-                print(f"fail-on: {name} {pct:+.1f}% (limit {args.fail_on:g}%)")
+                change = "failed run" if pct == float("inf") else f"{pct:+.1f}%"
+                print(f"fail-on: {name} {change} (limit {args.fail_on:g}%)")
             return 1
     return 0
 

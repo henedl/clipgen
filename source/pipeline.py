@@ -1580,11 +1580,17 @@ def _process_reel(
             on_progress=_on_concat_progress if progress_cb is not None else None,
         )
 
-    ok = (
-        utils.run_with_spinner("Concatenating clips into final reel...", _concat)
-        if utils.use_progress()
-        else _concat()
-    )
+    ok = False
+    try:
+        ok = (
+            utils.run_with_spinner("Concatenating clips into final reel...", _concat)
+            if utils.use_progress()
+            else _concat()
+        )
+    finally:
+        if not ok:
+            # Ctrl-C or an ffmpeg error mid-concat must not leave the placeholder.
+            files.release_reservation(output_file)
 
     # If cancelled during concatenation, clean up output and temp clips
     if cancel_flag and cancel_flag():
@@ -1610,8 +1616,6 @@ def _process_reel(
             )
 
     if not ok:
-        # Output is empty or partial; drop it whoever reserved the name.
-        files.release_reservation(output_file)
         return (0, [])
 
     cards_enabled, card_duration = _resolve_titlecard_options(

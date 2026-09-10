@@ -2381,6 +2381,75 @@ class TestSpeakerWorkerTasks:
         assert task["status"] == transcripts.TASK_STATUS_CANCELLED
         assert task["result"] is None
 
+    def _transcribed(self, monkeypatch):
+        import video
+
+        monkeypatch.setattr(config, "DEBUGGING", True)
+        monkeypatch.setattr(
+            video,
+            "probe_video_properties",
+            lambda p: {"duration": 10.0, "audio_tracks": [{"label": ""}]},
+        )
+        monkeypatch.setattr(video, "timeline_or_none", lambda paths: None)
+        monkeypatch.setattr(
+            transcripts,
+            "transcribe_video",
+            lambda *a, **k: TranscriptResult(
+                segments=[TranscriptSegment(start=0.0, end=1.0, text="x")],
+                language="en",
+                source_file="/v.mp4",
+                model="base",
+            ),
+        )
+
+    def test_stop_during_speaker_phase_keeps_transcript(self, monkeypatch):
+        import speakers
+
+        self._transcribed(monkeypatch)
+
+        def stop(*a, **k):
+            raise speakers.DiarizationCancelled
+
+        monkeypatch.setattr(transcripts, "label_speakers", stop)
+        worker = transcripts.TranscriptWorker()
+        task = transcripts.create_transcript_task("P01", ["/v.mp4"], diarize=True)
+        worker._execute_task(task)
+        assert task["status"] == transcripts.TASK_STATUS_COMPLETED
+        assert task["result"]["segments"][0]["text"] == "x"
+        assert "speaker" not in task["result"]["segments"][0]
+        assert task["result"]["speakers"]["error"] == "Speaker detection stopped"
+
+    def test_crash_in_speaker_phase_keeps_transcript(self, monkeypatch):
+        self._transcribed(monkeypatch)
+
+        def boom(*a, **k):
+            raise RuntimeError("bad onnx")
+
+        monkeypatch.setattr(transcripts, "label_speakers", boom)
+        worker = transcripts.TranscriptWorker()
+        task = transcripts.create_transcript_task("P01", ["/v.mp4"], diarize=True)
+        worker._execute_task(task)
+        assert task["status"] == transcripts.TASK_STATUS_COMPLETED
+        assert task["result"]["speakers"]["count"] == 0
+        assert "bad onnx" in task["result"]["speakers"]["error"]
+
+    def test_speaker_phase_labels_a_copy_then_writes_back(self, monkeypatch):
+        """The worker never mutates the shared dicts outside its lock."""
+        self._transcribed(monkeypatch)
+        seen: list[int] = []
+        real = transcripts.label_speakers
+
+        def spy(paths, segments, *a, **k):
+            seen.append(id(segments[0]))
+            return real(paths, segments, *a, **k)
+
+        monkeypatch.setattr(transcripts, "label_speakers", spy)
+        worker = transcripts.TranscriptWorker()
+        task = transcripts.create_transcript_task("P01", ["/v.mp4"], diarize=True)
+        worker._execute_task(task)
+        assert seen and seen[0] != id(task["result"]["segments"][0])
+        assert task["result"]["segments"][0]["speaker"] == "1"
+
     def test_diarize_flag_runs_speaker_phase_after_transcription(self, monkeypatch):
         monkeypatch.setattr(config, "DEBUGGING", True)
         import video

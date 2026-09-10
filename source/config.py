@@ -471,6 +471,7 @@ TRANSCRIBE_PREWARM: str = "queue_open"
 # Speaker attribution: label segments by detected speaker after transcription.
 TRANSCRIBE_SPEAKERS: bool = False
 TRANSCRIBE_SPEAKER_MAX: int = 4  # cluster cap, 2..8
+SPEAKER_LABEL_MAX_LEN: int = 40  # speaker rename length; mirrored to JS
 # Mark popover categories, {label, color}. "friction" is one bucket; type lives in each label.
 MARK_CATEGORIES: dict[str, dict[str, str]] = {
     "pain_point": {"label": "Pain Point", "color": "#dc2626"},

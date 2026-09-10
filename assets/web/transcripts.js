@@ -409,6 +409,9 @@
     } else if (task && task.status === "running" && task.phase === "loading_model") {
       cls = "status-indicator--working";
       taskLine = pid + ": loading transcription model\u2026";
+    } else if (task && task.status === "running" && task.phase === "diarizing") {
+      cls = "status-indicator--working";
+      taskLine = pid + ": detecting speakers\u2026 " + Math.round((task.progress || 0) * 100) + "%";
     } else if (task && task.status === "running") {
       cls = "status-indicator--working";
       var pct = Math.round((task.progress || 0) * 100);
@@ -887,6 +890,9 @@
     } else if (task && task.status === "running" && task.phase === "loading_model") {
       main.textContent = "Loading transcription model…";
       hint.textContent = "The first transcription after a restart takes a few extra seconds";
+    } else if (task && task.status === "running" && task.phase === "diarizing") {
+      main.textContent = "Detecting speakers…";
+      hint.textContent = "The transcript is done; labels land when the pass finishes";
     } else if (task && task.status === "running") {
       main.textContent = "Starting transcription…";
       hint.textContent = "Lines appear here as they are transcribed";
@@ -1160,7 +1166,8 @@
   // " \u00b7 0:42 \u00b7 ~1:20 left" or "". Keyed by created_at; seeded from transcribe_started_at.
   function _txEtaSuffix(pid, task) {
     if (!pid || !task || task.status !== "running") return "";
-    if (task.phase === "loading_model") return "";
+    // The speaker pass restarts progress at 0; its ETA is not the transcript's.
+    if (task.phase === "loading_model" || task.phase === "diarizing") return "";
     var entry = _txEtaTrackers[pid];
     if (!entry || entry.createdAt !== task.created_at) {
       var t = createEtaTracker();
@@ -1182,6 +1189,9 @@
     var task = _taskForSelectedParticipant();
     // Every footer writer renders through here, so one branch covers cancel.
     if (_cancelPending(task)) return "Cancelling\u2026";
+    if (task && task.phase === "diarizing") {
+      return "Detecting speakers\u2026 " + Math.round((task.progress || 0) * 100) + "%";
+    }
     return "Transcribing\u2026 " + Math.round(progress * 100) + "%" + _txEtaSuffix(pid, task);
   }
 

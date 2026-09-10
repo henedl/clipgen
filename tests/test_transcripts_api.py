@@ -3924,14 +3924,55 @@ def test_speakers_disable_strips_labels_and_cancels(tr_client, monkeypatch, tmp_
     assert resp.status_code == 200
     assert resp.get_json()["speakers"] == {
         "enabled": False,
-        "count": 0,
-        "labels": {},
+        "count": 2,
+        "labels": {"1": "Mod"},
         "error": None,
     }
     assert all("speaker" not in s for s in entry["segments"])
-    assert entry["speakers"] == {"enabled": False}
+    # Renames and the stripped ids survive the off/on round trip.
+    assert entry["speakers"] == {
+        "enabled": False,
+        "labels": {"1": "Mod"},
+        "count": 2,
+        "stash": {"assignments": {"P01:0": "1", "P01:1": "2"}, "manual": []},
+    }
     assert worker.cancelled == ["sp_live"]
     assert transcripts_server._corrections_version > before
+
+
+def test_reenable_remaps_permuted_ids_onto_the_stash(tr_client, monkeypatch, tmp_path):
+    """Off then on: a pass that swaps cluster ids must not move a rename."""
+    entry = _labelled_entry()
+    entry["segments"][1]["speaker_manual"] = True
+    _seed_speakers(monkeypatch, tmp_path, entry)
+    assert (
+        tr_client.put(
+            "/transcripts/api/speakers/P01", json={"enabled": False}
+        ).status_code
+        == 200
+    )
+    assert (
+        tr_client.put(
+            "/transcripts/api/speakers/P01", json={"enabled": True}
+        ).status_code
+        == 200
+    )
+    assert entry["speakers"]["stash"]["manual"] == ["P01:1"]
+    # The second pass numbers the same two voices the other way round.
+    transcripts_server._apply_speaker_result(
+        entry,
+        {
+            "segments": [
+                {"id": "P01:0", "speaker": "2"},
+                {"id": "P01:1", "speaker": "1"},
+            ],
+            "speakers": {"enabled": True, "labels": {}, "count": 2},
+        },
+    )
+    assert [s["speaker"] for s in entry["segments"]] == ["1", "2"]
+    assert entry["segments"][1]["speaker_manual"] is True
+    assert entry["speakers"]["labels"] == {"1": "Mod"}
+    assert "stash" not in entry["speakers"]
 
 
 def test_speakers_regenerate_resets_labels_and_enqueues(
@@ -4159,6 +4200,8 @@ def test_merge_speakers_task_copies_labels_by_id_without_agent_reset(monkeypatch
         raising=False,
     )
     transcripts_server._merged_task_ids.clear()
+    # A leftover transcription pid would pop the agent fields below.
+    monkeypatch.setattr(transcripts_server, "_pending_chain_pids", [])
     chained: list[str] = []
     monkeypatch.setattr(
         transcripts_server._orchestrator, "run_chain", lambda p: chained.append(p)
@@ -4308,13 +4351,13 @@ def test_disable_speakers_is_not_undone_by_a_late_result(
     resp = tr_client.put("/transcripts/api/speakers/P01", json={"enabled": False})
     assert resp.status_code == 200
     # The disable path persisted (and so merged) synchronously.
-    assert entry["speakers"] == {"enabled": False}
+    assert entry["speakers"]["enabled"] is False
     assert all("speaker" not in s for s in entry["segments"])
     assert "sp_late" in transcripts_server._merged_task_ids
     # Nor does a later persist replay it.
     with transcripts_server._manifest_lock:
         transcripts_server._merge_completed_results_locked()
-    assert entry["speakers"] == {"enabled": False}
+    assert entry["speakers"]["enabled"] is False
 
 
 def test_merge_strips_speakers_from_a_transcription_after_disable(monkeypatch):

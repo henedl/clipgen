@@ -178,8 +178,6 @@ def _step_state_transcription(entry: dict[str, Any]) -> str:
 
 # ---- Speaker attribution ----
 
-_SPEAKER_LABEL_MAX_LEN = 40
-
 
 def _speakers_summary(entry: dict[str, Any]) -> dict[str, Any]:
     """Pill/transcript payload; ``enabled`` is None until the participant chose."""
@@ -254,6 +252,8 @@ def _enqueue_speakers_task(pid: str, entry: dict[str, Any]) -> dict[str, Any] | 
     video_paths = _video_paths_for_participant(pid)
     if not _worker or not video_paths:
         return None
+    # Ids are normally minted at save; a snapshot without them would merge by None.
+    transcripts.assign_segment_ids(pid, entry["segments"])
     task = transcripts.create_speakers_task(
         pid, video_paths, entry["segments"], audio_index=entry.get("audio_index")
     )
@@ -694,6 +694,8 @@ def api_speakers_set(participant: str) -> FlaskResponse:
         raise ApiError("Speaker model is not installed", 409)
     with _manifest_lock:
         src = _manifest.setdefault("source_transcripts", {})
+        if participant not in src and not _video_paths_for_participant(participant):
+            raise ApiError("Unknown participant", 404)
         entry = src.setdefault(participant, {})
         task = None
         if enabled:
@@ -703,15 +705,38 @@ def api_speakers_set(participant: str) -> FlaskResponse:
                 "labels": dict(block.get("labels") or {}),
                 "count": int(block.get("count") or 0),
             }
+            if block.get("stash"):
+                entry["speakers"]["stash"] = block["stash"]
             segs = entry.get("segments") or []
             if segs and not any(s.get("speaker") for s in segs):
                 task = _enqueue_speakers_task(participant, entry)
         else:
             _cancel_speakers_tasks(participant)
-            for seg in entry.get("segments") or []:
+            segs = entry.get("segments") or []
+            # The stripped ids anchor the renames when the next pass permutes them.
+            stash = {
+                "assignments": {
+                    s["id"]: s["speaker"]
+                    for s in segs
+                    if s.get("id") and s.get("speaker")
+                },
+                "manual": [
+                    s["id"]
+                    for s in segs
+                    if s.get("id") and s.get("speaker") and s.get("speaker_manual")
+                ],
+            }
+            for seg in segs:
                 seg.pop("speaker", None)
                 seg.pop("speaker_manual", None)
-            entry["speakers"] = {"enabled": False}
+            block = entry.get("speakers") or {}
+            entry["speakers"] = {
+                "enabled": False,
+                "labels": dict(block.get("labels") or {}),
+                "count": int(block.get("count") or 0),
+            }
+            if stash["assignments"]:
+                entry["speakers"]["stash"] = stash
             _bump_corrections_version()
         summary = _speakers_summary(entry)
     _persist_manifest()
@@ -734,6 +759,8 @@ def api_speakers_regenerate(participant: str) -> FlaskResponse:
             "labels": dict(block.get("labels") or {}),
             "count": int(block.get("count") or 0),
         }
+        if block.get("stash"):
+            entry["speakers"]["stash"] = block["stash"]
         task = _enqueue_speakers_task(participant, entry)
         if task is None:
             raise ApiError("No video for participant", 404)
@@ -742,6 +769,7 @@ def api_speakers_regenerate(participant: str) -> FlaskResponse:
 
 
 @transcripts_bp.route("/api/speakers/<participant>/stop", methods=["POST"])
+@json_endpoint
 def api_speakers_stop(participant: str) -> FlaskResponse:
     return ok(stopped=_cancel_speakers_tasks(participant))
 
@@ -801,7 +829,7 @@ def api_speakers_labels(participant: str) -> FlaskResponse:
                 raise ApiError(f"Unknown speaker {key}")
             if not isinstance(value, str):
                 raise ApiError("Label must be a string")
-            name = value.strip()[:_SPEAKER_LABEL_MAX_LEN]
+            name = value.strip()[: config.SPEAKER_LABEL_MAX_LEN]
             if name:
                 labels[key] = name
             else:
@@ -2538,7 +2566,8 @@ def _apply_speaker_result(live: dict[str, Any], result: dict[str, Any]) -> None:
 
     Fresh cluster ids are remapped onto the previous run's by overlap so a
     "Moderator" rename still points at the same voice, and lines the user
-    forced (``speaker_manual``) keep their choice.
+    forced (``speaker_manual``) keep their choice. After an off/on round trip
+    the live list carries no ids; the disable path's ``stash`` stands in.
     """
     fresh = {
         s.get("id"): s.get("speaker") for s in result["segments"] if s.get("speaker")
@@ -2546,11 +2575,21 @@ def _apply_speaker_result(live: dict[str, Any], result: dict[str, Any]) -> None:
     previous = {
         s.get("id"): s.get("speaker") for s in live["segments"] if s.get("speaker")
     }
+    stash = (live.get("speakers") or {}).get("stash") or {}
+    restored_manual: set[str] = set()
+    if not previous and stash.get("assignments"):
+        previous = dict(stash["assignments"])
+        restored_manual = set(stash.get("manual") or [])
     mapping = speakers.remap_speaker_ids(previous, fresh) if previous else {}
     for seg in live["segments"]:
         if seg.get("speaker_manual") and seg.get("speaker"):
             continue
-        label = fresh.get(seg.get("id"))
+        sid = seg.get("id")
+        if sid in restored_manual:
+            seg["speaker"] = previous[sid]
+            seg["speaker_manual"] = True
+            continue
+        label = fresh.get(sid)
         if label:
             seg["speaker"] = mapping.get(label, label)
         else:

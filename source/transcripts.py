@@ -1042,6 +1042,13 @@ def load_transcripts_manifest() -> dict[str, Any]:
     )
 
 
+def assign_segment_ids(participant_id: str, segments: list[Any]) -> None:
+    """Give id-less segments ``"{participant}:{index}"``; existing ids stay."""
+    for idx, seg in enumerate(segments):
+        if not seg.get("id"):
+            seg["id"] = f"{participant_id}:{idx}"
+
+
 def save_transcripts_manifest(
     source_transcripts: dict[str, Any],
     corrections: list[dict[str, Any]],
@@ -1059,9 +1066,7 @@ def save_transcripts_manifest(
     Returns the manifest path on success, or ``None`` on failure.
     """
     for participant_id, entry in source_transcripts.items():
-        for idx, seg in enumerate(entry.get("segments", [])):
-            if not seg.get("id"):
-                seg["id"] = f"{participant_id}:{idx}"
+        assign_segment_ids(participant_id, entry.get("segments", []))
 
     # When marks/known_terms are None, preserve what is already on disk.
     if marks is None or known_terms is None:
@@ -1829,9 +1834,45 @@ class TranscriptWorker:
             on_progress=_progress,
         )
 
+    def _diarize_result(
+        self, task: dict[str, Any], segments: list[Any], audio_index: int | None
+    ) -> dict[str, Any]:
+        """Label a private copy, then write the labels back under the lock.
+
+        Other threads deep-copy these dicts (partial-segment polls), so the
+        pass never touches them outside ``self._lock``. A stop or a crash in
+        the model yields a block carrying ``error``; the transcript survives.
+        """
+        work = copy.deepcopy(segments)
+        error = None
+        try:
+            block = self._run_diarize_phase(task, work, audio_index)
+            if task.get("_cancelled"):
+                raise speakers.DiarizationCancelled
+            if block is None:
+                error = "Speaker detection failed"
+        except speakers.DiarizationCancelled:
+            error = "Speaker detection stopped"
+            block = None
+        except Exception as exc:
+            utils.warning_print(f"Speaker detection failed: {exc}")
+            error = f"Speaker detection failed: {exc}"
+            block = None
+        if block is None:
+            block = speakers.speakers_block(0)
+            block["error"] = error
+            return block
+        with self._lock:
+            for seg, labelled in zip(segments, work):
+                if "speaker" in labelled:
+                    seg["speaker"] = labelled["speaker"]
+                else:
+                    seg.pop("speaker", None)
+        return block
+
     def _execute_speakers_task(self, task: dict[str, Any]) -> None:
-        """Speaker-label the task's segment snapshot."""
-        segments = task.get("segments") or []
+        """Speaker-label a private copy of the task's segment snapshot."""
+        segments = copy.deepcopy(task.get("segments") or [])
         if not segments:
             self._fail(task, "No transcript to label.")
             return
@@ -2014,15 +2055,12 @@ class TranscriptWorker:
                     task["completed_at"] = datetime.now(UTC).isoformat()
                 return
 
-            # A failed speaker pass never fails the transcript; the block carries the error.
+            # A failed or stopped speaker pass never fails the transcript.
             speakers_block: dict[str, Any] | None = None
             if task.get("diarize"):
-                speakers_block = self._run_diarize_phase(
+                speakers_block = self._diarize_result(
                     task, result["segments"], audio_index
                 )
-                if speakers_block is None:
-                    speakers_block = speakers.speakers_block(0)
-                    speakers_block["error"] = "Speaker detection failed"
 
             with self._lock:
                 task["status"] = TASK_STATUS_COMPLETED

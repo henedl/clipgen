@@ -359,6 +359,9 @@ def assign_speakers(
     for idx, seg in enumerate(segments):
         if cancel_flag and cancel_flag():
             raise DiarizationCancelled
+        # Skipped lines count too, or a short-line tail freezes the bar.
+        if on_progress:
+            on_progress(idx / total)
         seg.pop("speaker", None)
         length = float(seg["end"]) - float(seg["start"])
         if length < MIN_EMBED_SECONDS:
@@ -369,8 +372,6 @@ def assign_speakers(
         embedded.append(idx)
         vectors.append(embed(samples))
         durations.append(length)
-        if on_progress:
-            on_progress((idx + 1) / total)
     if not embedded:
         return
     with profiling.span("speakers.cluster"):
@@ -431,7 +432,8 @@ def diarize_entry(
 
     parts = timeline or [(video_paths[0], 0, 0)]
     spans = _part_spans(parts, segments)
-    decoded: dict[int, tuple[float, Any]] = {}
+    # One part's samples at a time; None remembers a failed decode.
+    decoded: dict[int, tuple[float, Any] | None] = {}
 
     def _decode(part_index: int) -> tuple[float, Any] | None:
         if part_index in decoded:
@@ -445,10 +447,8 @@ def diarize_entry(
                 start_seconds=win_start or None,
                 duration_seconds=max(win_end - win_start, MIN_EMBED_SECONDS),
             )
-        if samples is None:
-            return None
         decoded.clear()
-        decoded[part_index] = (win_start, samples)
+        decoded[part_index] = None if samples is None else (win_start, samples)
         return decoded[part_index]
 
     failed = False

@@ -137,6 +137,7 @@ def test_mac_helper_waits_swaps_and_relaunches():
     assert script.startswith("#!/bin/sh")
     assert 'while kill -0 "$PID"' in script
     assert "'/Applications/clip gen.app'" in script
+    assert script.index('rm -rf "$LIVE.old"') < script.index('mv "$LIVE" "$LIVE.old"')
     assert script.index('mv "$LIVE" "$LIVE.old"') < script.index('mv "$STAGED" "$LIVE"')
     assert 'mv "$LIVE.old" "$LIVE"' in script  # rollback
     assert "xattr -dr com.apple.quarantine" in script
@@ -151,6 +152,7 @@ def test_win_helper_waits_renames_and_relaunches():
         Path(r"C:\cfg\apply.log"),
     )
     assert "Wait-Process -Id $target" in script
+    assert script.index("throw 'clipgen did not exit'") < script.index("Rename-Item")
     assert "'D:\\tools\\my clipgen'" in script
     assert "-NewName 'my clipgen.old'" in script
     assert script.index("'my clipgen.old'") < script.index("-NewName 'my clipgen'")
@@ -333,6 +335,40 @@ def test_check_latest_returns_none_offline(monkeypatch):
 
     monkeypatch.setattr(updater.urllib.request, "urlopen", boom)
     assert updater.check_latest(force=True) is None
+    # The failure starts the cooldown, so page loads stop retrying.
+    state = start_settings.load_config_json(updater.STATE_FILENAME)
+    assert state["last_check"] > 0
+    assert updater.check_latest(force=False) is None
+
+
+def test_launch_check_forgets_a_skip_once_installed(monkeypatch):
+    monkeypatch.setattr(updater, "install_shape", lambda: "mac-app")
+    monkeypatch.setattr(utils, "get_version", lambda: "9.9.9")
+    start_settings.save_config_json(updater.STATE_FILENAME, {"skipped": "v9.9.9"})
+    updater.sweep_updates_dir()
+    assert updater.status()["skipped"] == "v9.9.9"
+    monkeypatch.setattr(
+        updater,
+        "check_latest",
+        lambda *, force: updater._normalize_release(_release_payload()),
+    )
+    updater.run_check(force=False)
+    snap = updater.status()
+    assert snap["phase"] == "idle" and snap["skipped"] is None
+    assert start_settings.load_config_json(updater.STATE_FILENAME)["skipped"] is None
+
+
+def test_check_refuses_a_release_without_checksum(monkeypatch):
+    monkeypatch.setattr(updater, "install_shape", lambda: "mac-app")
+    monkeypatch.setattr(utils, "get_version", lambda: "0.1.0")
+    payload = _release_payload()
+    del payload["assets"][0]["digest"]
+    monkeypatch.setattr(
+        updater, "check_latest", lambda *, force: updater._normalize_release(payload)
+    )
+    updater.run_check(force=True)
+    snap = updater.status()
+    assert snap["phase"] == "error" and "checksum" in snap["error"]
 
 
 def test_run_check_moves_to_available_or_idle(monkeypatch):
@@ -511,3 +547,14 @@ def test_sweep_reports_the_helper_log_and_drops_stale_files(monkeypatch, tmp_pat
     updater.sweep_updates_dir()
     assert updater.status()["last_error"] == "could not move the old app aside"
     assert sorted(p.name for p in updates.iterdir()) == ["clipgen-v1.1.0-macos.dmg"]
+
+
+def test_sweep_clears_a_stale_mac_bundle_swap(monkeypatch, tmp_path):
+    root = tmp_path / "Applications" / "clipgen.app"
+    root.mkdir(parents=True)
+    monkeypatch.setattr(updater, "install_shape", lambda: "mac-app")
+    monkeypatch.setattr(updater, "install_root", lambda: root)
+    (root.parent / "clipgen.app.old").mkdir()
+    (root.parent / ".clipgen-update").mkdir()
+    updater.sweep_updates_dir()
+    assert sorted(p.name for p in root.parent.iterdir()) == ["clipgen.app"]
