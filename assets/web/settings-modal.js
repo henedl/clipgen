@@ -179,18 +179,18 @@
     });
   }
 
-  // Downloaded models with show/delete. Deleting a symlinked external model removes only the link.
+  // Recommendation, catalog, then the downloaded models with show/delete.
   function _buildLlmModelsBlock() {
     var wrap = el("div", "settings-llm-models");
-    wrap.appendChild(el("div", "settings-group-label", "Downloaded models"));
-    var list = el("div", "settings-llm-models-list");
-    wrap.appendChild(list);
     wrap.appendChild(el("div", "settings-group-label", "Recommendation"));
     var reco = el("div", "settings-llm-reco");
     wrap.appendChild(reco);
     wrap.appendChild(el("div", "settings-group-label", "Suggested models"));
     var suggestedList = el("div", "settings-llm-models-list");
     wrap.appendChild(suggestedList);
+    wrap.appendChild(el("div", "settings-group-label", "Downloaded models"));
+    var list = el("div", "settings-llm-models-list");
+    wrap.appendChild(list);
 
     function refresh() {
       _fetchModels().then(function (data) {
