@@ -807,7 +807,7 @@ def _stub_overlay_ffmpeg(monkeypatch):
         probed.append(path)
         return {"width": 1280, "height": 720}
 
-    def fake_run(cmd, input_file, output_file, os_error_message, cancel_flag):
+    def fake_run(cmd, input_file, output_file, os_error_message, cancel_flag, kind):
         from pathlib import Path
 
         Path(output_file).write_bytes(b"x")

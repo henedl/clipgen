@@ -12,6 +12,7 @@ Key functions:
   wrap_clip_with_cards(clip, clip_path)   – single-pass prepend+append via one ffmpeg encode
 """
 
+import functools
 import os
 import tempfile
 import threading
@@ -28,6 +29,8 @@ from utils import ClipRecord
 
 _endcard_cache: dict[str, str] = {}
 _endcard_lock = threading.Lock()
+# One build per key: parallel clip workers otherwise all encode the first endcard.
+_endcard_flights: dict[str, threading.Lock] = {}
 
 
 def _x264_video_args() -> list[str]:
@@ -97,17 +100,39 @@ def _body_is_copy_safe(probed: dict | None) -> bool:
     return True
 
 
+# Probed in order; fontconfig's monospace lookup cost 46 ms per card.
+_CARD_FONT_PATHS = (
+    "/System/Library/Fonts/Menlo.ttc",
+    "/System/Library/Fonts/Monaco.ttf",
+    "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf",
+    "/usr/share/fonts/truetype/liberation/LiberationMono-Regular.ttf",
+    "C:/Windows/Fonts/consola.ttf",
+    "C:/Windows/Fonts/cour.ttf",
+)
+
+
+def _escape_drawtext(value: str) -> str:
+    """Escape drawtext metacharacters for a single-quoted option value."""
+    return value.replace("\\", "\\\\").replace(":", "\\:").replace("'", "'\\''")
+
+
+@functools.cache
+def _card_font_option() -> str:
+    """The drawtext font option: a probed fontfile, else fontconfig's monospace."""
+    for path in _CARD_FONT_PATHS:
+        # os.path, not Path.is_file: tests patch the latter to True
+        if os.path.isfile(path):
+            return f"fontfile='{_escape_drawtext(path)}'"
+    return "font=monospace"
+
+
 def _build_drawtext_filter(text: str) -> str:
-    safe_text = (text or "").strip()
-    # Escape drawtext metacharacters
-    safe_text = (
-        safe_text.replace("\\", "\\\\").replace(":", "\\:").replace("'", "'\\''")
-    )
+    safe_text = _escape_drawtext((text or "").strip())
     return (
         f"drawtext=text='{safe_text}'"
         # Static text: expansion off so a literal % can't error the encode
         ":expansion=none"
-        ":font=monospace"
+        f":{_card_font_option()}"
         ":fontcolor=white"
         ":fontsize=min(w\\,h)/16"
         ":x=(w-text_w)/2"
@@ -261,6 +286,7 @@ def _build_card_frame(
         input_file=input_label,
         output_file=card_path,
         os_error_message=f"ffmpeg could not successfully run for {label} generation.",
+        kind="card",
         cancel_flag=cancel_flag,
     )
     if ffmpeg_result is None or ffmpeg_result.returncode != 0:
@@ -411,24 +437,24 @@ def get_or_build_endcard(
         cached = _endcard_cache.get(cache_key)
         if cached and Path(cached).is_file():
             return cached
-    path = build_endcard_frame(
-        resolution,
-        cancel_flag=cancel_flag,
-        card_duration_seconds=duration,
-        match_fps=match_fps,
-        audio_match=audio_match,
-    )
-    if path:
+        flight = _endcard_flights.setdefault(cache_key, threading.Lock())
+    with flight:
+        # Re-check: a waiter finds the first builder's card here
         with _endcard_lock:
-            existing = _endcard_cache.get(cache_key)
-            if existing and Path(existing).is_file():
-                try:
-                    Path(path).unlink()
-                except OSError:
-                    pass
-                return existing
-            _endcard_cache[cache_key] = path
-    return path
+            cached = _endcard_cache.get(cache_key)
+            if cached and Path(cached).is_file():
+                return cached
+        path = build_endcard_frame(
+            resolution,
+            cancel_flag=cancel_flag,
+            card_duration_seconds=duration,
+            match_fps=match_fps,
+            audio_match=audio_match,
+        )
+        if path:
+            with _endcard_lock:
+                _endcard_cache[cache_key] = path
+        return path
 
 
 def clear_endcard_cache() -> None:
@@ -440,6 +466,7 @@ def clear_endcard_cache() -> None:
             except OSError:
                 pass
         _endcard_cache.clear()
+        _endcard_flights.clear()
 
 
 def _input_count(input_args: list[str]) -> int:
@@ -731,6 +758,7 @@ def wrap_clip_with_cards(
             input_file=clip_path,
             output_file=output_temp_path,
             os_error_message="Filter-based concat failed while wrapping clip with cards.",
+            kind="wrap",
             cancel_flag=cancel_flag,
             on_progress=on_progress,
             expected_duration_sec=expected_wrap_duration,

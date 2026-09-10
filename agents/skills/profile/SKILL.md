@@ -22,8 +22,13 @@ Label glossary — backend: `scan.decode_wait` / `scan.fast_filter` / `scan.call
 `profile | scan <tool> <file>:`). `scan.callback` without a suffix is only the
 no-kind fallback; each `scan_*` / multitool pass sets the tool name so a
 workflow of mixed detectors does not lump analysis into one bucket. Callback
-flushes pass `peak=` (largest single frame). `ffmpeg.run` / `ffmpeg.bytes`
-(every encode/extract subprocess) and `ffprobe.run` (duration / props / keyframe
+flushes pass `peak=` (largest single frame). `ffmpeg.run.<kind>` (every
+encode/extract subprocess, split by the caller's job: `cut`, `card`,
+`concat`, `wrap` (the full-clip re-encode fallback when a body is not
+copy-safe), `reel`, `screenshot`, `gif`, `compress`, `mux`, `burn`, `remux`,
+`normalize`; bare `ffmpeg.run` is only the untagged fallback — a carded clip
+is three subprocesses and one bucket could not say which one cost) /
+`ffmpeg.bytes` and `ffprobe.run` (duration / props / keyframe
 probes — the label `_parallel_probe` was measured without). `media_cache.*`,
 `video.*_cache.*`, and `screenspace.*_cache.*` (hit/miss counters; the last
 covers the frame-JPEG, decoded-frame, and pin-OCR LRUs in
@@ -365,7 +370,7 @@ CLIPGEN_UI_CHECK=1 uv run --extra ui python tests/ui/shot.py transcripts \
   `.xlsx` emits `sheets.excel_load` for the openpyxl read; the adapter's
   in-memory `get_all_values` is unlabelled (it is not an API call).
 - `pipeline.clip ÷ pipeline.pool_wall` is **effective parallelism**, the number
-  `CLIP_PARALLEL_WORKERS` is otherwise tuned blind against (`ffmpeg.run` times
+  `CLIP_PARALLEL_WORKERS` is otherwise tuned blind against (`ffmpeg.run.*` times
   each encode but knows nothing about overlap). Both labels are shared by all five
   clip pools — CLI, reel regeneration, and Studio's three — because the knob is
   global. A ratio near 1.0 with several clips queued means the pool is serializing.
@@ -373,7 +378,7 @@ CLIPGEN_UI_CHECK=1 uv run --extra ui python tests/ui/shot.py transcripts \
   `WORKFLOWS_BATCH_WORKERS`. `workflows.node <type>` splits a graph so a slow
   Transcribe node is not mistaken for canvas overhead (`workflows.renderAllNodes`).
 - `ffprobe.run` is probe I/O (duration / props / keyframe gap). It is *not*
-  folded into `ffmpeg.run` — a reel-validation storm is a probe problem, and
+  folded into `ffmpeg.run.*` — a reel-validation storm is a probe problem, and
   `_parallel_probe` cannot be proven if the label does not exist.
 - `titlecard.copy` vs `titlecard.reencode` counts (not durations) tell you which
   wrap path ran; `titlecard.wrap` is the wall including card encodes. A generate
@@ -404,7 +409,7 @@ CLIPGEN_UI_CHECK=1 uv run --extra ui python tests/ui/shot.py transcripts \
   Flask's `after_request` runs on the `Response` object before the WSGI server
   iterates the generator, so `route /studio/api/generate` reports the time to
   *build* the generator (~0.1 ms) no matter how long the clips take. Verified on
-  a real one-clip run: `route` 0.000 s vs `stream` 0.077 s, with `ffmpeg.run`
+  a real one-clip run: `route` 0.000 s vs `stream` 0.077 s, with `ffmpeg.run.cut`
   0.023 s nested inside. The two are separate families on purpose — a drain's
   cost is server-side job execution, not request handling. Persistent SSE
   channels get `sse.open <rule>` as a **count only**: an `EventSource`'s lifetime

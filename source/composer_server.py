@@ -1289,6 +1289,7 @@ def _run_overlay_export(data: dict[str, Any], *, gif: bool) -> Any:
             input_file=overlay_input,
             output_file=out_path,
             os_error_message="Annotated export failed.",
+            kind="burn",
             cancel_flag=_export_cancel.is_set,
         )
     except Exception:

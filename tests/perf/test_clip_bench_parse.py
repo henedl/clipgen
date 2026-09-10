@@ -11,7 +11,9 @@ from scan_bench import parse_profile
 REPORT = """\
 profile | pipeline.clip                       6.702s  n=13  avg=515.5ms  max=823.6ms
 profile | titlecard.wrap                      5.987s  n=13  avg=460.5ms  max=739.8ms
-profile | ffmpeg.run                          5.970s  n=27  avg=221.1ms  max=410.5ms
+profile | ffmpeg.run.card                     3.900s  n=14  avg=278.6ms  max=410.5ms
+profile | ffmpeg.run.concat                   1.220s  n=13  avg=93.8ms  max=120.0ms
+profile | ffmpeg.run.cut                      0.850s  n=13  avg=65.4ms  max=90.0ms
 profile | pipeline.pool_wall                  1.879s  n=1  avg=1879.0ms  max=1879.0ms
 profile | ffprobe.run                         0.543s  n=14  avg=38.8ms  max=41.1ms
 profile | titlecard.copy                      0.000s  n=13
@@ -25,7 +27,10 @@ def test_summarize_reduces_report_to_row():
     assert row["clip_s"] == 6.702
     assert row["pool_wall_s"] == 1.879
     assert 3.5 < row["parallelism"] < 3.6
-    assert row["ffmpeg_n"] == 27
+    assert row["ffmpeg_n"] == 40
+    assert abs(row["ffmpeg_s"] - 5.970) < 1e-9
+    assert row["ffmpeg_kinds"]["card"] == {"s": 3.9, "n": 14}
+    assert set(row["ffmpeg_kinds"]) == {"card", "concat", "cut"}
     assert row["cards_s"] == 5.987
     assert row["cards_copy"] == 13
     assert row["cards_reencode"] == 0

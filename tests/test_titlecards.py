@@ -1,5 +1,6 @@
 import os
 import subprocess
+import time
 
 
 import config
@@ -432,20 +433,21 @@ def test_wrap_clip_with_cards_non_copy_safe_reencodes(monkeypatch, make_clip):
     monkeypatch.setattr(video, "verify_output_file", lambda *_a, **_k: True)
 
     commands = []
-    monkeypatch.setattr(
-        video,
-        "run_ffmpeg_process",
-        lambda cmd, **_k: (
-            commands.append(cmd)
-            or subprocess.CompletedProcess(args=cmd, returncode=0, stderr="")
-        ),
-    )
+    kinds = []
+
+    def fake_run(cmd, **kwargs):
+        commands.append(cmd)
+        kinds.append(kwargs.get("kind"))
+        return subprocess.CompletedProcess(args=cmd, returncode=0, stderr="")
+
+    monkeypatch.setattr(video, "run_ffmpeg_process", fake_run)
     monkeypatch.setattr(titlecards.os, "replace", lambda src, dst: None)
 
     ok, cards_applied = titlecards.wrap_clip_with_cards(clip, "clip.mp4")
     assert ok is True
     assert cards_applied is True
     assert len(commands) == 1
+    assert kinds == ["wrap"]  # not "card": the profile must split the two
     joined = " ".join(commands[0])
     assert "-filter_complex" in joined
     assert "concat=n=3:v=1:a=1" in joined
@@ -911,3 +913,65 @@ def test_build_titlecard_frame_removes_card_when_verify_fails(monkeypatch, make_
 
     assert titlecards.build_titlecard_frame(make_clip(), "1280x720") is None
     assert not os.path.exists(seen["path"])
+
+
+def test_card_font_prefers_a_fontfile_over_fontconfig(monkeypatch, tmp_path):
+    font = tmp_path / "a:b" / "Mono.ttf"
+    font.parent.mkdir()
+    font.write_bytes(b"\0")
+    monkeypatch.setattr(titlecards, "_CARD_FONT_PATHS", (str(font),))
+    titlecards._card_font_option.cache_clear()
+    try:
+        option = titlecards._card_font_option()
+        assert option == f"fontfile='{str(font).replace(':', chr(92) + ':')}'"
+        assert f":{option}:fontcolor" in titlecards._build_drawtext_filter("x")
+    finally:
+        titlecards._card_font_option.cache_clear()
+
+
+def test_card_font_falls_back_to_fontconfig_monospace(monkeypatch):
+    monkeypatch.setattr(titlecards, "_CARD_FONT_PATHS", ("/nonexistent/Mono.ttf",))
+    titlecards._card_font_option.cache_clear()
+    try:
+        assert titlecards._card_font_option() == "font=monospace"
+        assert ":font=monospace:" in titlecards._build_drawtext_filter("x")
+    finally:
+        titlecards._card_font_option.cache_clear()
+
+
+def test_get_or_build_endcard_builds_once_under_parallel_workers(monkeypatch, tmp_path):
+    import threading
+
+    titlecards.clear_endcard_cache()
+    calls = []
+    entered = threading.Event()
+    release = threading.Event()
+
+    def slow_build(resolution, **_kwargs):
+        calls.append(resolution)
+        entered.set()
+        release.wait(timeout=5)
+        card = tmp_path / f"endcard-{len(calls)}.mp4"
+        card.write_bytes(b"\0")
+        return str(card)
+
+    monkeypatch.setattr(titlecards, "build_endcard_frame", slow_build)
+    results: list[str | None] = []
+    threads = [
+        threading.Thread(
+            target=lambda: results.append(titlecards.get_or_build_endcard("1280x720"))
+        )
+        for _ in range(4)
+    ]
+    for t in threads:
+        t.start()
+    assert entered.wait(timeout=5)
+    time.sleep(0.1)  # let the other workers queue on the flight lock
+    release.set()
+    for t in threads:
+        t.join(timeout=10)
+    try:
+        assert len(calls) == 1
+        assert len(set(results)) == 1 and results[0]
+    finally:
+        titlecards.clear_endcard_cache()

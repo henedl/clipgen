@@ -524,7 +524,6 @@ def _warn_encoder_missing_once(kind: str, output_file: str) -> None:
     )
 
 
-@profiling.timed("ffmpeg.run")
 def run_ffmpeg_process(
     ffmpeg_command: list[str],
     *,
@@ -534,6 +533,7 @@ def run_ffmpeg_process(
     cancel_flag: Callable[[], bool] | None = None,
     on_progress: Callable[[float], None] | None = None,
     expected_duration_sec: float | None = None,
+    kind: str = "",
 ) -> subprocess.CompletedProcess[str] | None:
     """Run an ffmpeg subprocess and wrap common OS-level failures.
 
@@ -545,7 +545,34 @@ def run_ffmpeg_process(
     progress (0.0–1.0) as encoding advances. *expected_duration_sec* is the
     **output** (not input) duration in seconds. See screenspace.py
     ``generate_timelapse`` for the canonical pattern.
+
+    *kind* names the caller's job (``cut``, ``card``, ``concat``, ``wrap``,
+    ``reel``, ``screenshot``, ``gif``, ``compress``, ``mux``, ``burn``) and becomes the
+    ``ffmpeg.run.<kind>`` profile label, so a report can tell which of a
+    clip's three subprocesses cost. Bare ``ffmpeg.run`` is the no-kind fallback.
     """
+    with profiling.span(f"ffmpeg.run.{kind}" if kind else "ffmpeg.run"):
+        return _run_ffmpeg_process(
+            ffmpeg_command,
+            input_file=input_file,
+            output_file=output_file,
+            os_error_message=os_error_message,
+            cancel_flag=cancel_flag,
+            on_progress=on_progress,
+            expected_duration_sec=expected_duration_sec,
+        )
+
+
+def _run_ffmpeg_process(
+    ffmpeg_command: list[str],
+    *,
+    input_file: str,
+    output_file: str,
+    os_error_message: str,
+    cancel_flag: Callable[[], bool] | None,
+    on_progress: Callable[[float], None] | None,
+    expected_duration_sec: float | None,
+) -> subprocess.CompletedProcess[str] | None:
     if (
         on_progress is not None
         and expected_duration_sec is not None
@@ -956,6 +983,7 @@ def mux_subtitles(
         input_file=input_video,
         output_file=output_video,
         os_error_message="Failed to mux subtitles into video.",
+        kind="mux",
     )
     return _finalize_ffmpeg_output(
         result,
@@ -1092,6 +1120,7 @@ def run_ffmpeg(
         input_file=input_file,
         output_file=output_file,
         os_error_message="ffmpeg could not successfully run.",
+        kind="cut",
         cancel_flag=cancel_flag,
     )
     # No filesize enforcement here: later wraps/concats re-encode. Callers enforce on
@@ -1182,6 +1211,7 @@ def extract_screenshot(
         input_file=input_file,
         output_file=output_file,
         os_error_message="ffmpeg could not successfully run for screenshot extraction.",
+        kind="screenshot",
         cancel_flag=cancel_flag,
     )
     return _finalize_ffmpeg_output(
@@ -1549,6 +1579,7 @@ def extract_gif(
         input_file=input_file,
         output_file=output_file,
         os_error_message="ffmpeg could not successfully run for GIF extraction.",
+        kind="gif",
         cancel_flag=cancel_flag,
     )
     return _finalize_ffmpeg_output(
@@ -2469,11 +2500,12 @@ def remux_to_faststart(
             str(tmp),
         )
         try:
-            result = _run_ffmpeg_with_progress(
+            result = run_ffmpeg_process(
                 command,
                 input_file=str(src),
                 output_file=str(tmp),
                 os_error_message="Failed to remux the source video.",
+                kind="remux",
                 on_progress=progress,
                 expected_duration_sec=float(before.get("duration") or 0.0) or 1.0,
                 cancel_flag=cancel_flag,
@@ -2683,11 +2715,12 @@ def normalize_audio_inplace(
             config.debug_ic(command)
             return False, "Skipped in DEBUGGING mode."
         try:
-            result = _run_ffmpeg_with_progress(
+            result = run_ffmpeg_process(
                 command,
                 input_file=str(src),
                 output_file=str(tmp),
                 os_error_message="Failed to normalize the source video's audio.",
+                kind="normalize",
                 on_progress=progress,
                 expected_duration_sec=float(before.get("duration") or 0.0) or 1.0,
                 cancel_flag=cancel_flag,
@@ -2965,6 +2998,7 @@ def compress_to_size(
             input_file=filepath,
             output_file=null_output,
             os_error_message="ffmpeg could not successfully run during compression pass 1.",
+            kind="compress",
             cancel_flag=cancel_flag,
             on_progress=pass1_progress,
             expected_duration_sec=float(duration) if duration else None,
@@ -3010,6 +3044,7 @@ def compress_to_size(
             input_file=filepath,
             output_file=compressed_temp_path,
             os_error_message="ffmpeg could not successfully run during compression pass 2.",
+            kind="compress",
             cancel_flag=cancel_flag,
             on_progress=pass2_progress,
             expected_duration_sec=float(duration) if duration else None,
@@ -3284,6 +3319,7 @@ def _concatenate_filter_complex(
             input_file=clip_paths[0],
             output_file=output_file,
             os_error_message="Filter-complex concatenation failed.",
+            kind="reel",
             cancel_flag=cancel_flag,
             on_progress=on_progress,
             expected_duration_sec=expected_duration_sec,
@@ -3338,6 +3374,7 @@ def _concatenate_demuxer(
                 input_file=concat_list_file,
                 output_file=output_file,
                 os_error_message="Concatenation failed.",
+                kind="reel",
                 cancel_flag=cancel_flag,
             )
             if ffmpeg_result is None:
@@ -3368,6 +3405,7 @@ def _concatenate_demuxer(
                     input_file=concat_list_file,
                     output_file=output_file,
                     os_error_message="Concatenation failed during re-encoding fallback.",
+                    kind="reel",
                     cancel_flag=cancel_flag,
                     on_progress=on_progress,
                     expected_duration_sec=expected_duration_sec,
@@ -3432,6 +3470,7 @@ def concat_copy(
                 input_file=concat_list_file,
                 output_file=output_file,
                 os_error_message="Stream-copy concat failed.",
+                kind="concat",
                 cancel_flag=cancel_flag,
                 on_progress=on_progress,
                 expected_duration_sec=expected_duration_sec,
@@ -3491,6 +3530,7 @@ def _batch_extract_screenshots(
             input_file=input_file,
             output_file=os.path.join(tmpdir, f"frame_*{ext}"),
             os_error_message="ffmpeg could not run for batch screenshot extraction.",
+            kind="screenshot",
             cancel_flag=cancel_flag,
         )
         if ffmpeg_result is None or ffmpeg_result.returncode != 0:
