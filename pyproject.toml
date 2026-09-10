@@ -12,7 +12,7 @@ dependencies = [
     "faster-whisper>=1.2.0",
     # 4.14.0.94 floor: the oldest 4.x that publishes an sdist, which the macOS
     # CI leg builds with -DWITH_FFMPEG=OFF to keep GPL FFmpeg out of the DMG
-    # (plans/OPENCV-SELF-COMPILE-PLAN.md). <5 keeps CascadeClassifier and the
+    # (plans/archive/OPENCV-SELF-COMPILE-PLAN.md). <5 keeps CascadeClassifier and the
     # 4.x API this codebase is tested against.
     "opencv-python-headless>=4.14.0.94,<5",
     "numpy>=1.26.0",
@@ -49,7 +49,7 @@ packages = []
 # tests/test_packaging.py.
 package-dir = {"" = "source"}
 py-modules = [
-    "app", "changelog", "cli", "cli_args", "cli_screenspace", "composer_server", "config", "data_export",
+    "app", "changelog", "cli", "cli_args", "cli_event_clips", "cli_screenspace", "composer_server", "config", "data_export",
     "desktop", "desktop_chrome", "desktop_menu", "excel_io",
     "files", "friction", "google_api", "interactive", "licenses", "mindnode",
     "llm_client", "manifest", "native_dialogs",

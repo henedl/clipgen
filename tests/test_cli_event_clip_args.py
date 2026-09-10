@@ -3,6 +3,7 @@
 import pytest
 
 import cli
+import cli_event_clips
 import files
 
 # Reuse the comprehensive Namespace factory from the screenspace test file so that
@@ -188,7 +189,9 @@ _NO_FILTERS = {
     ],
 )
 def test_filter_ss_events(events, filter_overrides, expected_ids):
-    out = cli._filter_screenspace_events(events, **{**_NO_FILTERS, **filter_overrides})
+    out = cli_event_clips._filter_screenspace_events(
+        events, **{**_NO_FILTERS, **filter_overrides}
+    )
     assert [e["id"] for e in out] == expected_ids
 
 
@@ -207,7 +210,7 @@ def test_filter_transcript_segments_by_mark_category():
             {"id": "m2", "segment_id": "P01:1", "category": "action"},
         ],
     }
-    rows = cli._filter_transcript_segments(
+    rows = cli_event_clips._filter_transcript_segments(
         manifest,
         participants=None,
         mark_categories={"insight"},
@@ -232,7 +235,7 @@ def test_filter_transcript_segments_by_text_substr():
         },
         "marks": [],
     }
-    rows = cli._filter_transcript_segments(
+    rows = cli_event_clips._filter_transcript_segments(
         manifest,
         participants=None,
         mark_categories=None,
@@ -251,7 +254,7 @@ def test_build_ss_clusters_groups_by_participant_and_detector():
         _ev(id="c", participant="P02", detector="change", time_in=1.5, time_out=1.5),
         _ev(id="d", participant="P01", detector="color", time_in=1.5, time_out=1.5),
     ]
-    clusters = cli._build_clusters_from_ss_events(
+    clusters = cli_event_clips._build_clusters_from_ss_events(
         events, gap=5.0, pad_pre=0.0, pad_post=0.0, max_duration=0.0
     )
     # P01/change merges (a, b); P01/color stays alone; P02/change stays alone.
@@ -265,7 +268,7 @@ def test_build_ss_clusters_groups_by_participant_and_detector():
 
 def test_build_ss_clusters_applies_padding():
     events = [_ev(id="a", time_in=10.0, time_out=10.0)]
-    clusters = cli._build_clusters_from_ss_events(
+    clusters = cli_event_clips._build_clusters_from_ss_events(
         events, gap=0.0, pad_pre=2.0, pad_post=3.0, max_duration=0.0
     )
     assert len(clusters) == 1
@@ -292,10 +295,10 @@ def test_build_transcript_clusters_groups_by_participant():
         },
         "marks": [],
     }
-    rows = cli._filter_transcript_segments(
+    rows = cli_event_clips._filter_transcript_segments(
         manifest, participants=None, mark_categories=None, text_substr=None
     )
-    clusters = cli._build_clusters_from_transcript_segments(
+    clusters = cli_event_clips._build_clusters_from_transcript_segments(
         rows, manifest, gap=2.0, pad_pre=0.0, pad_post=0.0, max_duration=0.0
     )
     by_pid = {c["participant"]: c for c in clusters}
@@ -400,7 +403,7 @@ def test_run_ss_clips_smoke_dispatches_pipeline(monkeypatch):
     monkeypatch.setattr(viewer, "save_manifest", fake_save)
 
     args = _ss_args(ss_clips=True)
-    cli._run_ss_clips(args)
+    cli_event_clips._run_ss_clips(args)
 
     assert len(captured["clips"]) == 1
     clip = captured["clips"][0]
@@ -420,7 +423,7 @@ def test_run_ss_clips_no_events_warns(monkeypatch, capsys):
         lambda: {"events": [], "regions": {}, "tasks": [], "stashes": []},
     )
     args = _ss_args(ss_clips=True)
-    cli._run_ss_clips(args)
+    cli_event_clips._run_ss_clips(args)
     out = capsys.readouterr().out
     assert "No Screenspace events" in out
 
@@ -459,7 +462,7 @@ def test_run_transcript_clips_smoke_dispatches_pipeline(monkeypatch):
     monkeypatch.setattr(viewer, "save_manifest", fake_save)
 
     args = _ss_args(transcript_clips=True)
-    cli._run_transcript_clips(args)
+    cli_event_clips._run_transcript_clips(args)
 
     assert len(captured["clips"]) == 1
     clip = captured["clips"][0]
@@ -496,7 +499,7 @@ def test_run_transcript_clips_with_mark_filter_uses_mark_category(monkeypatch):
     monkeypatch.setattr(viewer, "save_manifest", lambda *_a, **_k: None)
 
     args = _ss_args(transcript_clips=True, transcript_clips_mark="insight")
-    cli._run_transcript_clips(args)
+    cli_event_clips._run_transcript_clips(args)
 
     assert captured["clips"][0]["category"] == "mark-insight"
 
@@ -574,7 +577,9 @@ def test_transcript_mark_alone_validates():
 @pytest.fixture
 def no_running_server(monkeypatch):
     """Force _run_transcript_mark to take the direct-disk-write path."""
-    monkeypatch.setattr(cli, "_post_marks_to_running_server", lambda *_a, **_k: None)
+    monkeypatch.setattr(
+        cli_event_clips, "_post_marks_to_running_server", lambda *_a, **_k: None
+    )
 
 
 def _mark_manifest():
@@ -642,7 +647,7 @@ def test_run_transcript_mark_creates_marks(
     )
 
     args = _ss_args(**args_overrides)
-    cli._run_transcript_mark(args)
+    cli_event_clips._run_transcript_mark(args)
 
     assert sorted(m["segment_id"] for m in saved["marks"]) == expected_seg_ids
     assert all(m["category"] == "insight" for m in saved["marks"])
@@ -682,7 +687,7 @@ def test_run_transcript_mark_updates_existing_in_place(monkeypatch, no_running_s
         transcript_mark_category="insight",
         transcript_mark_label="new label",
     )
-    cli._run_transcript_mark(args)
+    cli_event_clips._run_transcript_mark(args)
 
     by_seg = {m["segment_id"]: m for m in saved["marks"]}
     # P01:0 matched: updated in place (id preserved), category + label changed.
@@ -716,7 +721,7 @@ def test_run_transcript_mark_invalid_category_does_not_save(
     args = _ss_args(
         transcript_mark="checkout", transcript_mark_category="not_a_category"
     )
-    cli._run_transcript_mark(args)
+    cli_event_clips._run_transcript_mark(args)
 
     assert called["saved"] is False
     out = capsys.readouterr().out
@@ -736,7 +741,7 @@ def test_run_transcript_mark_no_matches_warns(monkeypatch, capsys, no_running_se
     )
 
     args = _ss_args(transcript_mark="zzz", transcript_mark_category="insight")
-    cli._run_transcript_mark(args)
+    cli_event_clips._run_transcript_mark(args)
 
     assert called["saved"] is False
     out = capsys.readouterr().out
@@ -758,7 +763,7 @@ def test_run_transcript_mark_routes_through_running_server(monkeypatch, capsys):
         posted["label"] = label
         return {"ok": True, "marks": [{"segment_id": s} for s in seg_ids]}
 
-    monkeypatch.setattr(cli, "_post_marks_to_running_server", fake_post)
+    monkeypatch.setattr(cli_event_clips, "_post_marks_to_running_server", fake_post)
 
     saved: dict = {"called": False}
     monkeypatch.setattr(
@@ -768,7 +773,7 @@ def test_run_transcript_mark_routes_through_running_server(monkeypatch, capsys):
     )
 
     args = _ss_args(transcript_mark="checkout", transcript_mark_category="insight")
-    cli._run_transcript_mark(args)
+    cli_event_clips._run_transcript_mark(args)
 
     assert sorted(posted["seg_ids"]) == ["P01:0", "P02:0"]
     assert posted["category"] == "insight"
