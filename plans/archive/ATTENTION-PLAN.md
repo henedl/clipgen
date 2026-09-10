@@ -11,7 +11,7 @@ Revives the "Attention-Guided Scrubbing" idea from `plans/archive/CV-PLAN.md`.
 Design decisions (settled 2026-07):
 
 - **Engine: classic CV composite, zero new dependencies.** `cv2.saliency` is
-  unavailable (opencv-python-headless, non-contrib — see `plans/LICENSE-PLAN.md`);
+  unavailable (opencv-python-headless, non-contrib — see `plans/archive/LICENSE-PLAN.md`);
   pysaliency is a benchmark harness and deepgaze needs torch weights. The composite:
   spectral residual (Hou & Zhang 2007, numpy FFT) + Lab center-surround contrast +
   frame-diff motion (+ opt-in Haar faces, `SCREENSPACE_ATTENTION_FACE_CHANNEL`,

@@ -1,8 +1,14 @@
 """Tests for the THIRD-PARTY-LICENSES SUMMARY parser used by the Start overlay."""
 
+import re
+import tomllib
+from pathlib import Path
+
 import pytest
 
 import licenses
+
+_ROOT = Path(__file__).resolve().parent.parent
 
 
 HEADER = """THIRD-PARTY SOFTWARE NOTICES AND LICENSES
@@ -96,6 +102,7 @@ def test_wrapped_license_cell_is_joined_onto_the_row_above(notice):
         ("MIT (macOS only)", "MIT"),
         ("MIT (bindings) + Apache 2.0 (OpenCV)", "MIT"),
         ("MPL-2.0 AND MIT", "MPL-2.0"),
+        ("Apache-2.0 OR BSD-3-Clause", "Apache-2.0"),
         ("HPND (MIT-CMU)", "HPND"),
         ("GPL-3.0-or-later", "GPL-3.0-or-later"),
         ("SIL OFL 1.1", "SIL OFL 1.1"),
@@ -126,10 +133,64 @@ def test_real_notice_lists_every_bundled_asset_class():
         "Heroicons",
         "Octicons",
         "Silero VAD",
+        "WeSpeaker CAM++ (bundled)",
+        "GEOS (in shapely)",
+        "OpenSSL (in cryptography)",
         "Inter (web font)",
         "JetBrains Mono (web font)",
     ):
         assert expected in components, f"{expected} missing from the SUMMARY table"
+
+
+def _real_table_lines() -> list[str]:
+    """The raw SUMMARY table lines, header and divider excluded."""
+    lines = (_ROOT / "build" / "THIRD-PARTY-LICENSES").read_text().splitlines()
+    start = licenses._summary_start(lines)
+    body: list[str] = []
+    for raw in lines[start:]:
+        if licenses._RULE_RE.match(raw.strip()):
+            break
+        if raw.strip() and not raw.strip().startswith("---"):
+            body.append(raw)
+    return body
+
+
+def test_real_notice_drops_no_rows():
+    """A row whose columns touch (one space) parses as two fields and vanishes."""
+    for raw in _real_table_lines():
+        parts = licenses._COLUMN_SPLIT_RE.split(raw.strip())
+        assert len(parts) >= 3 or len(parts) == 1, f"unparseable table line: {raw!r}"
+
+
+# Lock entries that never install: platform markers pin them to no real OS.
+_NEVER_INSTALLED = {"av", "opencv-python", "qtpy"}
+
+
+def _normalize(name: str) -> str:
+    return re.sub(r"[-_.]+", "-", name).lower()
+
+
+def test_every_locked_dependency_is_attributed():
+    """Any package in the runtime dependency closure needs a SUMMARY row.
+
+    Walks uv.lock from the project's own dependencies, ignoring markers so every
+    platform's packages count. Extra rows (fonts, models, executables) are fine;
+    only lock -> table is asserted.
+    """
+    lock = tomllib.loads((_ROOT / "uv.lock").read_text())
+    packages = {pkg["name"]: pkg for pkg in lock["package"]}
+    closure: set[str] = set()
+    stack = [dep["name"] for dep in packages["clipgen"].get("dependencies", [])]
+    while stack:
+        name = stack.pop()
+        if name in closure or name in _NEVER_INSTALLED:
+            continue
+        closure.add(name)
+        stack.extend(dep["name"] for dep in packages[name].get("dependencies", []))
+
+    attributed = {_normalize(row["component"]) for row in licenses.load_components()}
+    missing = sorted(name for name in closure if _normalize(name) not in attributed)
+    assert not missing, f"unattributed in THIRD-PARTY-LICENSES SUMMARY: {missing}"
 
 
 def test_real_notice_groups_follow_file_order():

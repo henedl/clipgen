@@ -20,11 +20,34 @@ CTranslate2                 4.7.1      MIT
 onnxruntime                 1.24.4     MIT
 colorlog                    6.12.0     MIT
 six                         1.17.0     MIT
+annotated-doc               0.0.4      MIT
+anyio                       4.12.1     MIT
+bottle                      0.13.4     MIT
+cffi                        2.0.0      MIT
+charset-normalizer          3.4.6      MIT
+et-xmlfile                  2.0.0      MIT
+executing                   2.2.1      MIT
+filelock                    3.25.2     MIT
+h11                         0.16.0     MIT
+markdown-it-py              4.0.0      MIT
+mdurl                       0.1.2      MIT
+proxy-tools                 0.1.0      MIT
+pyclipper                   1.4.0      MIT
+PyYAML                      6.0.3      MIT
+setuptools                  83.0.0     MIT
+typer                       0.24.1     MIT
+urllib3                     2.7.0      MIT
 Silero VAD                  v6         MIT
 Heroicons                   2.2.0      MIT
 Octicons                    19.32.0    MIT
 pyobjc-core                 12.2.1     MIT (macOS only)
 pyobjc-framework-Cocoa      12.2.1     MIT (macOS only)
+pyobjc-framework-Quartz     12.2.1     MIT (macOS only)
+pyobjc-framework-Security   12.2.1     MIT (macOS only)
+pyobjc-framework-UniformTypeIdentifiers  12.2.1  MIT (macOS only)
+pyobjc-framework-WebKit     12.2.1     MIT (macOS only)
+pythonnet                   3.1.0      MIT (Windows only)
+clr-loader                  0.3.1      MIT (Windows only)
 opencv-python-headless      4.14.0     MIT (bindings) + Apache 2.0 (OpenCV)
   FFmpeg DLL (in cv2)         8.x        LGPL-2.1 (Windows zip only; the macOS
                                          cv2 is self-built without FFmpeg)
@@ -36,12 +59,42 @@ omegaconf                   2.3.1      BSD-3-Clause
 antlr4-python3-runtime      4.9.3      BSD-3-Clause
 NumPy                       2.4.3      BSD-3-Clause
 pywebview                   6.2.1      BSD-3-Clause
-Pillow                      12.1.1     HPND (MIT-CMU)
+blinker                     1.9.0      BSD-3-Clause
+click                       8.3.1      BSD-3-Clause
+itsdangerous                2.2.0      BSD-3-Clause
+colorama                    0.4.6      BSD-3-Clause
+fsspec                      2026.2.0   BSD-3-Clause
+httpcore                    1.0.9      BSD-3-Clause
+httpx                       0.28.1     BSD-3-Clause
+idna                        3.15       BSD-3-Clause
+mpmath                      1.3.0      BSD-3-Clause
+oauthlib                    3.3.1      BSD-3-Clause
+protobuf                    7.34.1     BSD-3-Clause
+pycparser                   3.0        BSD-3-Clause
+sympy                       1.14.0     BSD-3-Clause
+shapely                     2.1.2      BSD-3-Clause
+  GEOS (in shapely)           3.13.1     LGPL-2.1
+Pillow                      12.3.0     HPND (MIT-CMU)
 RapidOCR                    3.9.2      Apache-2.0
   PP-OCR models (bundled)     v4/v5      Apache-2.0
-WeSpeaker CAM++ model (bundled) sherpa-onnx export  Apache-2.0
+WeSpeaker CAM++ (bundled)   sherpa-onnx   Apache-2.0
 google-auth                 2.49.1     Apache-2.0
 google-auth-oauthlib        1.3.0      Apache-2.0
+asttokens                   3.0.1      Apache-2.0
+flatbuffers                 25.12.19   Apache-2.0
+hf-xet                      1.4.2      Apache-2.0
+huggingface-hub             1.7.2      Apache-2.0
+tokenizers                  0.22.2     Apache-2.0
+requests                    2.33.0     Apache-2.0
+cryptography                50.0.0     Apache-2.0 OR BSD-3-Clause
+  OpenSSL (in cryptography)   4.0.1      Apache-2.0
+packaging                   26.0       Apache-2.0 OR BSD-2-Clause
+pyasn1                      0.6.4      BSD-2-Clause
+pyasn1-modules              0.4.2      BSD-2-Clause
+Pygments                    2.20.0     BSD-2-Clause
+shellingham                 1.5.4      ISC
+requests-oauthlib           2.0.0      ISC
+typing-extensions           4.15.0     PSF-2.0
 certifi                     2026.2.25  MPL-2.0
 tqdm                        4.67.3     MPL-2.0 AND MIT
 Inter (web font)            —          SIL OFL 1.1
@@ -57,7 +110,12 @@ The following components are licensed under the MIT License:
   onnxruntime, colorlog, six, opencv-python-headless (Python bindings),
   pyobjc-core, pyobjc-framework-Cocoa, Silero VAD, Heroicons, Octicons,
   llama.cpp (the bundled llama-server executable and its ggml/llama
-  libraries; release b10588 — see build/fetch_binaries.py for provenance)
+  libraries; release b10588 — see build/fetch_binaries.py for provenance),
+  annotated-doc, anyio, bottle, cffi, charset-normalizer, et-xmlfile,
+  executing, filelock, h11, markdown-it-py, mdurl, proxy-tools, pyclipper,
+  PyYAML, setuptools, typer, urllib3, pyobjc-framework-Quartz / -Security /
+  -UniformTypeIdentifiers / -WebKit (macOS only), pythonnet and clr-loader
+  (Windows only)
 
 ---
 
@@ -306,6 +364,169 @@ SOFTWARE.
 
 ---
 
+annotated-doc
+Copyright (c) 2025 Sebastián Ramírez
+
+Licensed under the MIT License (same text as reproduced for gspread above).
+
+---
+
+anyio
+Copyright (c) 2018 Alex Grönholm
+
+Licensed under the MIT License (same text as reproduced for gspread above).
+
+---
+
+bottle
+Copyright (c) 2009-2024, Marcel Hellkamp
+
+Licensed under the MIT License (same text as reproduced for gspread above).
+
+---
+
+cffi
+Copyright (c) Armin Rigo, Maciej Fijalkowski and contributors
+
+Licensed under the MIT License (same text as reproduced for gspread above).
+
+---
+
+charset-normalizer
+Copyright (c) 2025 TAHRI Ahmed R.
+
+Licensed under the MIT License (same text as reproduced for gspread above).
+
+---
+
+et-xmlfile
+Copyright (c) 2010 openpyxl
+
+Licensed under the MIT License (same text as reproduced for gspread above).
+
+---
+
+executing
+Copyright (c) 2019 Alex Hall
+
+Licensed under the MIT License (same text as reproduced for gspread above).
+
+---
+
+filelock
+Copyright (c) 2025 Bernát Gábor and contributors
+
+Licensed under the MIT License (same text as reproduced for gspread above).
+
+---
+
+h11
+Copyright (c) 2016 Nathaniel J. Smith and other contributors
+
+Licensed under the MIT License (same text as reproduced for gspread above).
+
+---
+
+markdown-it-py
+Copyright (c) 2020 ExecutableBookProject
+Port of markdown-it: Copyright (c) 2014 Vitaly Puzrin, Alex Kocharin
+
+Licensed under the MIT License (same text as reproduced for gspread above).
+
+---
+
+mdurl
+Copyright (c) 2015 Vitaly Puzrin, Alex Kocharin
+Copyright (c) 2021 Taneli Hukkinen
+
+Licensed under the MIT License (same text as reproduced for gspread above).
+
+---
+
+proxy-tools
+Copyright (c) Jonathan Tushman
+
+The wheel ships no license file; license per its package metadata
+(https://github.com/jtushman/proxy_tools).
+
+Licensed under the MIT License (same text as reproduced for gspread above).
+
+---
+
+pyclipper
+Copyright (c) 2015 Gregor Ratajc, Lukas Treyer, Maxime Chalton
+
+Wraps Angus Johnson's Clipper library (Boost Software License 1.0).
+
+Licensed under the MIT License (same text as reproduced for gspread above).
+
+---
+
+PyYAML
+Copyright (c) 2017-2021 Ingy döt Net
+Copyright (c) 2006-2016 Kirill Simonov
+
+Licensed under the MIT License (same text as reproduced for gspread above).
+
+---
+
+setuptools
+Copyright (c) Jason R. Coombs and contributors
+
+A runtime dependency of CTranslate2 (pkg_resources), not only a build tool.
+
+Licensed under the MIT License (same text as reproduced for gspread above).
+
+---
+
+typer
+Copyright (c) 2019 Sebastián Ramírez
+
+Licensed under the MIT License (same text as reproduced for gspread above).
+
+---
+
+urllib3
+Copyright (c) 2008-2020 Andrey Petrov and contributors
+
+Licensed under the MIT License (same text as reproduced for gspread above).
+
+---
+
+pyobjc-framework-Quartz, pyobjc-framework-Security,
+pyobjc-framework-UniformTypeIdentifiers, pyobjc-framework-WebKit
+Copyright (c) Ronald Oussoren and contributors
+Copyright 2002, 2003 - Bill Bumgarner, Ronald Oussoren, Steve Majewski,
+Lele Gaifax, et.al.
+
+Bundled in the macOS build only, as dependencies of pywebview's WKWebView
+backend (same terms as pyobjc-core above).
+
+Licensed under the MIT License (same text as reproduced for gspread above).
+
+---
+
+pythonnet
+Copyright (c) 2006-2021 the contributors of the Python.NET project
+
+Bundled in the Windows build only, as the bridge pywebview's WebView2
+backend uses. Not installable on macOS, so the copyright line was read
+from https://github.com/pythonnet/pythonnet.
+
+Licensed under the MIT License (same text as reproduced for gspread above).
+
+---
+
+clr-loader
+Copyright (c) 2019-2026 Benedikt Reinartz
+
+Bundled in the Windows build only (pythonnet's CLR loader). Copyright line
+read from https://github.com/pythonnet/clr-loader.
+
+Licensed under the MIT License (same text as reproduced for gspread above).
+
+---
+
 Heroicons
 Copyright (c) Tailwind Labs, Inc.
 
@@ -370,7 +591,9 @@ BSD-3-CLAUSE LICENSE
 
 The following components are licensed under the BSD 3-Clause License:
   Flask, Werkzeug, Jinja2, MarkupSafe, NumPy, pywebview, omegaconf,
-  antlr4-python3-runtime
+  antlr4-python3-runtime, blinker, click, itsdangerous, colorama, fsspec,
+  httpcore, httpx, idna, mpmath, oauthlib, protobuf, pycparser, sympy,
+  shapely (the GEOS library it bundles is LGPL-2.1; see that section)
 
 ---
 
@@ -622,6 +845,123 @@ Copyright (c) 2012-2022 The ANTLR Project. All rights reserved.
 Licensed under the BSD 3-Clause License (same conditions text as reproduced
 for Flask above; substitute the copyright holder's name in clause 3).
 
+---
+
+blinker
+Copyright 2010 Jason Kirtland
+
+Licensed under the BSD 3-Clause License (same conditions text as reproduced
+for Flask above; substitute the copyright holder's name in clause 3).
+
+---
+
+click
+Copyright 2014 Pallets
+
+Licensed under the BSD 3-Clause License (same conditions text as reproduced
+for Flask above; substitute the copyright holder's name in clause 3).
+
+---
+
+itsdangerous
+Copyright 2011 Pallets
+
+Licensed under the BSD 3-Clause License (same conditions text as reproduced
+for Flask above; substitute the copyright holder's name in clause 3).
+
+---
+
+colorama
+Copyright (c) 2010 Jonathan Hartley
+
+Licensed under the BSD 3-Clause License (same conditions text as reproduced
+for Flask above; substitute the copyright holder's name in clause 3).
+
+---
+
+fsspec
+Copyright (c) 2018, Martin Durant
+
+Licensed under the BSD 3-Clause License (same conditions text as reproduced
+for Flask above; substitute the copyright holder's name in clause 3).
+
+---
+
+httpcore
+Copyright (c) 2020, Encode OSS Ltd.
+
+Licensed under the BSD 3-Clause License (same conditions text as reproduced
+for Flask above; substitute the copyright holder's name in clause 3).
+
+---
+
+httpx
+Copyright (c) 2019, Encode OSS Ltd.
+
+Licensed under the BSD 3-Clause License (same conditions text as reproduced
+for Flask above; substitute the copyright holder's name in clause 3).
+
+---
+
+idna
+Copyright (c) 2013-2026, Kim Davies and contributors
+
+Licensed under the BSD 3-Clause License (same conditions text as reproduced
+for Flask above; substitute the copyright holder's name in clause 3).
+
+---
+
+mpmath
+Copyright (c) 2005-2021 Fredrik Johansson and mpmath contributors
+
+Licensed under the BSD 3-Clause License (same conditions text as reproduced
+for Flask above; substitute the copyright holder's name in clause 3).
+
+---
+
+oauthlib
+Copyright (c) The OAuthlib Community
+
+Licensed under the BSD 3-Clause License (same conditions text as reproduced
+for Flask above; substitute the copyright holder's name in clause 3).
+
+---
+
+protobuf
+Copyright 2008 Google Inc. All rights reserved.
+
+Licensed under the BSD 3-Clause License (same conditions text as reproduced
+for Flask above; substitute the copyright holder's name in clause 3).
+
+---
+
+pycparser
+Copyright (c) 2008-2022, Eli Bendersky
+
+Licensed under the BSD 3-Clause License (same conditions text as reproduced
+for Flask above; substitute the copyright holder's name in clause 3).
+
+---
+
+sympy
+Copyright (c) 2006-2023 SymPy Development Team
+
+Licensed under the BSD 3-Clause License (same conditions text as reproduced
+for Flask above; substitute the copyright holder's name in clause 3).
+
+---
+
+shapely
+Copyright (c) 2007, Sean C. Gillies. 2019, Casper van der Wel.
+2007-2022, Shapely Contributors.
+
+A dependency of RapidOCR (text-box polygon geometry). The wheel bundles the
+GEOS C++ library (libgeos, libgeos_c) under LGPL-2.1; see the LGPL-2.1
+section below for that notice and source pointer.
+
+Licensed under the BSD 3-Clause License (same conditions text as reproduced
+for Flask above; substitute the copyright holder's name in clause 3).
+
 
 ===============================================================================
 APACHE LICENSE, VERSION 2.0
@@ -629,7 +969,10 @@ APACHE LICENSE, VERSION 2.0
 
 The following components are licensed under the Apache License, Version 2.0:
   RapidOCR, the bundled PP-OCR ONNX models, the bundled WeSpeaker CAM++ speaker
-  model, google-auth, google-auth-oauthlib, OpenCV (the C++ library)
+  model, google-auth, google-auth-oauthlib, OpenCV (the C++ library),
+  asttokens, flatbuffers, hf-xet, huggingface-hub, tokenizers, requests,
+  cryptography and packaging (both dual-licensed; Apache-2.0 is the option
+  clipgen relies on), and OpenSSL (statically linked into cryptography)
 
 Copyright notices:
   RapidOCR: Copyright (c) RapidAI (https://github.com/RapidAI/RapidOCR)
@@ -643,8 +986,24 @@ Copyright notices:
           k2-fsa/sherpa-onnx, fetched at build time from the pinned,
           SHA256-verified URL in build/fetch_binaries.py SPEAKER_MODEL_PINS
   google-auth: Copyright Google LLC
-  google-auth: Copyright Google LLC
   google-auth-oauthlib: Copyright Google LLC
+  asttokens: Copyright (c) Dmitry Sagalovskiy, Grist Labs
+  flatbuffers: Copyright (c) Google Inc. (the wheel ships no license file;
+          license per its package metadata, https://github.com/google/flatbuffers)
+  hf-xet: Copyright (c) Hugging Face, Inc.
+  huggingface-hub: Copyright (c) Hugging Face, Inc.
+  tokenizers: Copyright (c) Hugging Face, Inc. (the wheel ships no license
+          file; license per its package metadata,
+          https://github.com/huggingface/tokenizers)
+  requests: Copyright 2019 Kenneth Reitz
+  cryptography: Copyright (c) Individual contributors (The Python Cryptographic
+          Authority). Dual-licensed Apache-2.0 OR BSD-3-Clause.
+  OpenSSL: Copyright (c) The OpenSSL Project Authors. OpenSSL 4.0.1 is
+          statically linked into cryptography's compiled extension
+          (cryptography/hazmat/bindings/_rust); it is unmodified and its
+          source is at https://github.com/openssl/openssl
+  packaging: Copyright (c) Donald Stufft and individual contributors.
+          Dual-licensed Apache-2.0 OR BSD-2-Clause.
   OpenCV: Copyright (C) 2000-2024, Intel Corporation, all rights reserved.
           Copyright (C) 2009-2011, Willow Garage Inc., all rights reserved.
           Copyright (C) 2009-2016, NVIDIA Corporation, all rights reserved.
@@ -832,7 +1191,146 @@ Copyright notices:
 
 
 ===============================================================================
-LGPL-2.1 (FFmpeg DLL bundled in the Windows opencv-python-headless wheel)
+BSD-2-CLAUSE LICENSE
+===============================================================================
+
+The following components are licensed under the BSD 2-Clause License:
+  pyasn1, pyasn1-modules, Pygments (packaging offers it as the alternative to
+  Apache-2.0; see the Apache section)
+
+---
+
+pyasn1, pyasn1-modules
+Copyright (c) 2005-2020, Ilya Etingof
+All rights reserved.
+
+Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions are met:
+
+  * Redistributions of source code must retain the above copyright notice,
+    this list of conditions and the following disclaimer.
+
+  * Redistributions in binary form must reproduce the above copyright notice,
+    this list of conditions and the following disclaimer in the documentation
+    and/or other materials provided with the distribution.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE
+LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
+CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
+SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
+CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
+ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
+POSSIBILITY OF SUCH DAMAGE.
+
+---
+
+Pygments
+Copyright (c) 2006-2022 by the respective authors (see the AUTHORS file in
+https://github.com/pygments/pygments). All rights reserved.
+
+Licensed under the BSD 2-Clause License (same conditions text as reproduced
+for pyasn1 above).
+
+
+===============================================================================
+ISC LICENSE
+===============================================================================
+
+The following components are licensed under the ISC License:
+  shellingham, requests-oauthlib
+
+---
+
+shellingham
+Copyright (c) 2018, Tzu-ping Chung
+
+Permission to use, copy, modify, and distribute this software for any
+purpose with or without fee is hereby granted, provided that the above
+copyright notice and this permission notice appear in all copies.
+
+THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES
+WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF
+MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR
+ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
+WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
+ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
+OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
+
+---
+
+requests-oauthlib
+Copyright (c) 2014 Kenneth Reitz.
+
+Licensed under the ISC License (same text as reproduced for shellingham above).
+
+
+===============================================================================
+PYTHON SOFTWARE FOUNDATION LICENSE 2.0
+===============================================================================
+
+The following components are licensed under the PSF License, Version 2:
+  typing-extensions
+
+---
+
+typing-extensions
+Copyright (c) 2001-2023 Python Software Foundation; All Rights Reserved
+
+PYTHON SOFTWARE FOUNDATION LICENSE VERSION 2
+
+1. This LICENSE AGREEMENT is between the Python Software Foundation
+("PSF"), and the Individual or Organization ("Licensee") accessing and
+otherwise using this software ("Python") in source or binary form and
+its associated documentation.
+
+2. Subject to the terms and conditions of this License Agreement, PSF hereby
+grants Licensee a nonexclusive, royalty-free, world-wide license to reproduce,
+analyze, test, perform and/or display publicly, prepare derivative works,
+distribute, and otherwise use Python alone or in any derivative version,
+provided, however, that PSF's License Agreement and PSF's notice of copyright,
+i.e., "Copyright (c) 2001, 2002, 2003, 2004, 2005, 2006, 2007, 2008, 2009, 2010,
+2011, 2012, 2013, 2014, 2015, 2016, 2017, 2018, 2019, 2020, 2021, 2022, 2023
+Python Software Foundation; All Rights Reserved" are retained in Python alone
+or in any derivative version prepared by Licensee.
+
+3. In the event Licensee prepares a derivative work that is based on
+or incorporates Python or any part thereof, and wants to make
+the derivative work available to others as provided herein, then
+Licensee hereby agrees to include in any such work a brief summary of
+the changes made to Python.
+
+4. PSF is making Python available to Licensee on an "AS IS"
+basis.  PSF MAKES NO REPRESENTATIONS OR WARRANTIES, EXPRESS OR
+IMPLIED.  BY WAY OF EXAMPLE, BUT NOT LIMITATION, PSF MAKES NO AND
+DISCLAIMS ANY REPRESENTATION OR WARRANTY OF MERCHANTABILITY OR FITNESS
+FOR ANY PARTICULAR PURPOSE OR THAT THE USE OF PYTHON WILL NOT
+INFRINGE ANY THIRD PARTY RIGHTS.
+
+5. PSF SHALL NOT BE LIABLE TO LICENSEE OR ANY OTHER USERS OF PYTHON
+FOR ANY INCIDENTAL, SPECIAL, OR CONSEQUENTIAL DAMAGES OR LOSS AS
+A RESULT OF MODIFYING, DISTRIBUTING, OR OTHERWISE USING PYTHON,
+OR ANY DERIVATIVE THEREOF, EVEN IF ADVISED OF THE POSSIBILITY THEREOF.
+
+6. This License Agreement will automatically terminate upon a material
+breach of its terms and conditions.
+
+7. Nothing in this License Agreement shall be deemed to create any
+relationship of agency, partnership, or joint venture between PSF and
+Licensee.  This License Agreement does not grant permission to use PSF
+trademarks or trade name in a trademark sense to endorse or promote
+products or services of Licensee, or any third party.
+
+8. By copying, installing or otherwise using Python, Licensee
+agrees to be bound by the terms and conditions of this License
+Agreement.
+
+
+===============================================================================
+LGPL-2.1 (bundled GEOS library and the Windows cv2 FFmpeg DLL)
 ===============================================================================
 
 The official opencv-python-headless Windows wheel ships a separately compiled
@@ -853,6 +1351,14 @@ platform; video decoding uses the bundled ffmpeg executable via subprocess
 Source code for FFmpeg is available at: https://ffmpeg.org/download.html
 Build configuration for the wrapper DLL and for the opencv-python wheels:
 https://github.com/opencv/opencv-python
+
+GEOS (Geometry Engine, Open Source) ships on every platform: the shapely
+wheel, a dependency of RapidOCR, bundles libgeos and libgeos_c (GEOS 3.13.1)
+as shared libraries beside its extension module (shapely/.dylibs on macOS,
+shapely.libs in the Windows folder). They are unmodified upstream builds,
+loaded dynamically at import, so the LGPL's relinking requirement is met by
+replacing those files. GEOS source code: https://github.com/libgeos/geos
+(the wheel's own copy of the license is shapely's LICENSE_GEOS).
 
 The full text of the GNU Lesser General Public License version 2.1 follows.
 

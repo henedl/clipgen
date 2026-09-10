@@ -482,7 +482,7 @@ def test_license_notice_is_tracked_and_bundled() -> None:
     # accidentally-regenerated notice would still look plausible without them.
     for heading in (
         "GPL-3.0-OR-LATER (bundled ffmpeg and ffprobe executables)",
-        "LGPL-2.1 (FFmpeg DLL bundled in the Windows opencv-python-headless wheel)",
+        "LGPL-2.1 (bundled GEOS library and the Windows cv2 FFmpeg DLL)",
         "MOZILLA PUBLIC LICENSE 2.0",
     ):
         assert heading in text, f"THIRD-PARTY-LICENSES lost its {heading!r} section"
