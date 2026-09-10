@@ -238,7 +238,7 @@ _MODAL_SURFACES = (
     # (page script, overlay id, card class)
     ("studio.js", "#statusOverlay", ".status-card"),
     ("studio.js", "#confirmOverlay", ".confirm-card"),
-    ("studio.js", "#galleryOverlay", ".gallery-card"),
+    ("studio-reel.js", "#galleryOverlay", ".gallery-card"),
     ("studio.js", "#buildStatus", ".build-status-card"),
     ("studio.js", "#logOverlay", ".log-panel"),
     ("composer.js", "#logOverlay", ".log-panel"),
