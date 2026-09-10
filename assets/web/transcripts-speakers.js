@@ -109,8 +109,16 @@
   function _spkOutsideClick(e) {
     var pop = qs("#speakerPopover");
     if (pop && pop.contains(e.target)) return;
+    _commitPendingLabel();
+  }
+
+  // Outside-click and chip-click keep a typed rename; only Escape drops it.
+  function _commitPendingLabel() {
+    var pop = qs("#speakerPopover");
+    var input = pop && pop.querySelector(".speaker-popover-input");
     _spkCancelled = true;
-    hideSpeakerPopover();
+    if (input && _spkOpen) _commitSpeakerLabel(input.value);
+    else hideSpeakerPopover();
   }
 
   // Chips for every known speaker plus one "new" slot; the line's own is marked.
@@ -134,8 +142,7 @@
 
   function _assignThisLine(speaker) {
     var open = _spkOpen;
-    _spkCancelled = true;
-    hideSpeakerPopover();
+    _commitPendingLabel();
     if (!open || open.segIndex === undefined) return;
     var seg = state.segments[open.segIndex];
     if (!seg || !seg.id || seg.speaker === speaker) return;
@@ -159,6 +166,7 @@
     var input = pop.querySelector(".speaker-popover-input");
     var labels = (state.speakers && state.speakers.labels) || {};
     input.value = labels[id] || "";
+    input.maxLength = CLIPGEN_CONFIG.speakerLabelMaxLen;
     input.placeholder = "Speaker " + id;
     _spkOpen = { pid: state.selectedParticipant, id: id, segIndex: segIndex, ver: state.participantReqVer };
     _spkCancelled = false;

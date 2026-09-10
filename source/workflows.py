@@ -317,11 +317,9 @@ def _exec_transcribe(
         # A None result is a decode/model failure, not an empty transcript.
         raise RuntimeError("Could not transcribe the wired video")
     if _speakers_wanted(params) and result.get("segments"):
-        block = transcripts.label_speakers(
+        transcripts.label_speakers(
             paths, result["segments"], None, cancel_flag=ctx.cancel_flag
         )
-        if block:
-            result["speaker_labels"] = {}
     transcript_val = dict(result)
     transcript_val["source"] = src
     return {

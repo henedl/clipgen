@@ -152,6 +152,7 @@ def test_clipgen_config_defaults_match_python():
     assert js_config["crossReferences"] == py_config["crossReferences"]
     assert js_config["mediaContainerWarning"] == py_config["mediaContainerWarning"]
     assert js_config["transcribeSpeakers"] == py_config["transcribeSpeakers"]
+    assert js_config["speakerLabelMaxLen"] == py_config["speakerLabelMaxLen"]
     # The Embed Subtitles dialog filters its target list against these, so JS
     # drifting from video.SUBTITLE_CODEC_BY_CONTAINER means promising output
     # ffmpeg will refuse to write (or hiding one it would have written).
@@ -218,6 +219,7 @@ def test_get_frontend_config_shape():
         "crossReferences",
         "mediaContainerWarning",
         "transcribeSpeakers",
+        "speakerLabelMaxLen",
         "subtitleContainers",
         "hotkeyOverrides",
         "profiling",
@@ -267,6 +269,7 @@ def test_get_frontend_config_shape():
     assert cfg["screenshotFormat"] == config.SCREENSHOT_FORMAT
     assert cfg["gifFormat"] == config.GIF_FORMAT
     assert cfg["transcribeSpeakers"] is config.TRANSCRIBE_SPEAKERS
+    assert cfg["speakerLabelMaxLen"] == config.SPEAKER_LABEL_MAX_LEN
 
 
 def test_severity_css_class_mapping():

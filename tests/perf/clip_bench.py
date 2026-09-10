@@ -33,7 +33,13 @@ import subprocess
 import sys
 from pathlib import Path
 
-from scan_bench import delta_pct, parse_profile, probe_duration, regressions
+from scan_bench import (
+    baseline_rows,
+    delta_pct,
+    parse_profile,
+    probe_duration,
+    regressions,
+)
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
@@ -291,7 +297,7 @@ def main() -> int:
 
     baseline = None
     if args.compare:
-        baseline = json.loads(args.compare.read_text())["scenarios"]
+        baseline = baseline_rows(ap, args.compare, "scenarios", args.duration)
 
     rows: dict[str, dict[str, float]] = {}
     for scenario in scenarios:
@@ -325,7 +331,8 @@ def main() -> int:
         hit = regressions(rows, baseline, "clip_s", args.fail_on)
         if hit:
             for name, pct in hit:
-                print(f"fail-on: {name} {pct:+.1f}% (limit {args.fail_on:g}%)")
+                change = "failed run" if pct == float("inf") else f"{pct:+.1f}%"
+                print(f"fail-on: {name} {change} (limit {args.fail_on:g}%)")
             return 1
     return 0
 

@@ -64,8 +64,8 @@ CHECK_COOLDOWN_SECONDS = 6 * 3600
 STATE_FILENAME = "update.json"
 UPDATES_DIRNAME = "updates"
 APPLY_LOG = "apply.log"
-# Seconds the helper waits for this process to exit before giving up.
-HELPER_WAIT_SECONDS = 60
+# Seconds the helper waits for this process to exit; teardown joins the workers.
+HELPER_WAIT_SECONDS = 300
 
 _REQUEST_TIMEOUT = 10.0
 _DOWNLOAD_TIMEOUT = 30.0
@@ -74,6 +74,8 @@ _DOWNLOAD_DEADLINE = 3600.0
 _VERSION_RE = re.compile(r"^v?(\d+)\.(\d+)\.(\d+)$")
 
 _lock = threading.Lock()
+# Serializes update.json load-modify-save cycles.
+_state_lock = threading.Lock()
 _status: dict[str, Any] = {
     "phase": "idle",
     "supported": False,
@@ -229,12 +231,16 @@ def check_latest(*, force: bool = False) -> dict[str, Any] | None:
     except urllib.error.HTTPError as exc:
         if exc.code != 304 or cached is None:
             utils.warning_print(f"Update check failed: HTTP {exc.code}")
+            # A failure still starts the cooldown; page loads must not retry.
+            _save_state(last_check=now)
             return None
         release = cached
     except (urllib.error.URLError, OSError, ValueError) as exc:
         utils.warning_print(f"Update check failed: {exc}")
+        _save_state(last_check=now)
         return None
     if not release.get("tag"):
+        _save_state(last_check=now)
         return None
     _save_state(last_check=now, etag=etag, latest=release)
     return release
@@ -242,9 +248,10 @@ def check_latest(*, force: bool = False) -> dict[str, Any] | None:
 
 def _save_state(**changes: Any) -> None:
     """Merge *changes* into update.json; other keys (skipped tag) survive."""
-    state = start_settings.load_config_json(STATE_FILENAME, default={}) or {}
-    state.update(changes)
-    start_settings.save_config_json(STATE_FILENAME, state)
+    with _state_lock:
+        state = start_settings.load_config_json(STATE_FILENAME, default={}) or {}
+        state.update(changes)
+        start_settings.save_config_json(STATE_FILENAME, state)
 
 
 def _skipped_tag() -> str | None:
@@ -296,13 +303,14 @@ def finish_check(*, force: bool = False) -> None:
     release = check_latest(force=force)
     shape = install_shape()
     skipped = _skipped_tag()
-    if force and skipped:
-        # A manual check means "show me anyway"; the skip is forgotten.
+    if skipped and (force or not is_newer(skipped, current)):
+        # A manual check means "show me anyway"; an installed skip is spent.
         _save_state(skipped=None)
         skipped = None
     with _lock:
         # A skipped or offline launch check must not read as "up to date".
         _status["checked"] = release is not None or force
+        _status["skipped"] = skipped
         if release is None:
             _latest = None
             _status.update(version=None, release_url=None, asset=None)
@@ -315,27 +323,35 @@ def finish_check(*, force: bool = False) -> None:
             _latest = None
             _status.update(phase="idle", version=None, release_url=release["url"])
             return
-        if skipped == release["tag"] and not force:
+        if skipped == release["tag"]:
             _latest = None
-            _status.update(
-                phase="idle", version=None, release_url=release["url"], skipped=skipped
-            )
+            _status.update(phase="idle", version=None, release_url=release["url"])
             return
         _status["skipped"] = None
-        asset = pick_asset(release, shape)
         _latest = release
         # Read before the reset below: an unchanged verified download stays ready.
         already = _status.get("path")
-        same_file = (
-            asset is not None
-            and bool(already)
-            and _still_verified(asset, Path(str(already)))
-        )
+    # Hashing a stale download runs unlocked so the status poll never waits on it.
+    asset = pick_asset(release, shape)
+    same_file = (
+        asset is not None
+        and bool(already)
+        and _still_verified(asset, Path(str(already)))
+    )
+    existing = None
+    if asset is not None and asset.get("sha256") and not same_file:
+        existing = _existing_download(asset)
+        if existing is not None:
+            _mark_verified(asset, existing)
+    with _lock:
         _status.update(
             version=release["tag"], release_url=release["url"], asset=None, path=None
         )
         if asset is None:
             _status.update(phase="error", error="No download for this platform")
+            return
+        if not asset.get("sha256"):
+            _status.update(phase="error", error="Release publishes no checksum")
             return
         _status["asset"] = asset["name"]
         if same_file:
@@ -345,12 +361,13 @@ def finish_check(*, force: bool = False) -> None:
                 total=asset["size"],
                 completed=asset["size"],
             )
-            return
-        existing = _existing_download(asset)
-        if existing is not None:
-            _mark_verified(asset, existing)
-            _status.update(phase="ready", path=str(existing), total=asset["size"])
-            _status["completed"] = asset["size"]
+        elif existing is not None:
+            _status.update(
+                phase="ready",
+                path=str(existing),
+                total=asset["size"],
+                completed=asset["size"],
+            )
         else:
             _status.update(phase="available", completed=0, total=asset["size"])
 
@@ -381,7 +398,7 @@ def _verify_file(path: Path, asset: dict[str, Any]) -> str | None:
             return f"size mismatch ({size} of {asset['size']} bytes)"
         expected = asset.get("sha256") or ""
         if not expected:
-            return None
+            return "release publishes no checksum"
         digest = hashlib.sha256()
         with path.open("rb") as handle:
             while chunk := handle.read(_DOWNLOAD_CHUNK):
@@ -591,6 +608,8 @@ def render_mac_helper(pid: int, live: Path, staged: Path, log: Path) -> str:
             "  fi",
             "done",
             'xattr -dr com.apple.quarantine "$STAGED" 2>/dev/null',
+            "# A leftover .old would swallow the live bundle as a child of itself.",
+            'rm -rf "$LIVE.old"',
             'if ! mv "$LIVE" "$LIVE.old" 2>>"$LOG"; then',
             '  echo "could not move the old app aside" >>"$LOG"; exit 2',
             "fi",
@@ -627,6 +646,7 @@ def render_win_helper(pid: int, root: Path, staged: Path, log: Path) -> str:
             f"$log = {q(str(log))}",
             "try {",
             f"  Wait-Process -Id $target -Timeout {HELPER_WAIT_SECONDS} -ErrorAction SilentlyContinue",
+            "  if (Get-Process -Id $target -ErrorAction SilentlyContinue) { throw 'clipgen did not exit' }",
             "  $moved = $false",
             "  for ($i = 0; $i -lt 5; $i++) {",
             f"    try {{ Rename-Item -LiteralPath $root -NewName {q(old.name)}; $moved = $true; break }}",
@@ -886,14 +906,11 @@ def sweep_updates_dir() -> None:
         except OSError:
             pass
     root = install_root()
-    if root is None:
+    if root is None or not root.name:
         return
-    leftovers = [root.parent / ".clipgen-update"]
+    leftovers = [root.parent / ".clipgen-update", root.with_name(root.name + ".old")]
     if install_shape() == "win-zip":
-        leftovers += [
-            root.with_name(root.name + ".new"),
-            root.with_name(root.name + ".old"),
-        ]
+        leftovers.append(root.with_name(root.name + ".new"))
     for stale in leftovers:
         shutil.rmtree(stale, ignore_errors=True)
 

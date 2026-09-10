@@ -72,7 +72,7 @@
     changelogEntries: [],
     // Last /api/update/status snapshot; null until the desktop app answers.
     update: null,
-    updatePoller: null,
+    updateNotice: null,   // why the last update action was refused
     // Fetched once; kept in state because renderAttribution() re-runs on every About activation.
     licensesLoaded: false,
     licenseComponents: [],
@@ -1962,7 +1962,16 @@
   }
 
   function updateAction(path) {
-    return apiPost(path, {}).then(applyUpdateSnapshot).catch(function () {});
+    state.updateNotice = null;
+    return apiPost(path, {}).then(applyUpdateSnapshot).catch(_updateRefused);
+  }
+
+  // A refused action means the row is stale: re-sync it and say why.
+  function _updateRefused(e) {
+    state.updateNotice = (e && (e.serverMessage || e.message)) || "Update action failed";
+    return apiGet("/api/update/status").then(applyUpdateSnapshot).catch(function () {
+      if (state.mounted && state.open && state.startTab === "about") renderAbout();
+    });
   }
 
   function buildUpdateRow(val, u) {
@@ -2031,6 +2040,9 @@
     if (u.last_error) {
       val.appendChild(el("div", "about__sub", "Last update failed: " + u.last_error));
     }
+    if (state.updateNotice) {
+      val.appendChild(el("div", "about__sub", state.updateNotice));
+    }
   }
 
   // Beside the version: the UPDATE_CHECK_ON_LAUNCH setting via the shared settings route.
@@ -2075,28 +2087,28 @@
   }
 
   function checkForUpdates(force) {
-    return apiPost("/api/update/check", { force: !!force }).then(applyUpdateSnapshot).catch(function () {});
+    state.updateNotice = null;
+    return apiPost("/api/update/check", { force: !!force }).then(applyUpdateSnapshot).catch(_updateRefused);
   }
 
+  var _updateMisses = 0;
+  var _updatePoller = createManagedPoller(function () {
+    return apiGet("/api/update/status").then(function (u) {
+      _updateMisses = 0;
+      applyUpdateSnapshot(u);
+    }).catch(function () {
+      // The server vanishing mid-apply is the restart, not a failure.
+      if (++_updateMisses >= 5) stopUpdatePoll();
+    });
+  }, 1000, { runImmediately: false, label: "start.update" });
+
   function startUpdatePoll() {
-    if (state.updatePoller) return;
-    var misses = 0;
-    state.updatePoller = createPoller(function () {
-      return apiGet("/api/update/status").then(function (u) {
-        misses = 0;
-        applyUpdateSnapshot(u);
-      }).catch(function () {
-        // The server vanishing mid-apply is the restart, not a failure.
-        if (++misses >= 5) stopUpdatePoll();
-      });
-    }, 1000, { runImmediately: false, label: "start.update" });
-    state.updatePoller.start();
+    _updateMisses = 0;
+    _updatePoller.start();
   }
 
   function stopUpdatePoll() {
-    if (!state.updatePoller) return;
-    state.updatePoller.stop();
-    state.updatePoller = null;
+    _updatePoller.stop();
   }
 
   function aboutRow(label, build) {

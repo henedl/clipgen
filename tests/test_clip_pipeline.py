@@ -1,5 +1,7 @@
 from unittest.mock import Mock
 
+import pytest
+
 import config
 import pipeline
 import viewer
@@ -793,6 +795,31 @@ def test_process_reel_releases_reservation_on_concat_failure(
     assert result == 0
     assert records == []
     assert list(output_dir.iterdir()) == []
+
+
+def test_process_reel_releases_output_when_concat_raises(
+    monkeypatch, make_clip, tmp_path
+):
+    """Ctrl-C mid-concat must not leave the reserved reel placeholder behind."""
+    output_dir = tmp_path / "out"
+    output_dir.mkdir()
+    part_path = output_dir / "part.mp4"
+    part_path.write_bytes(b"clip")
+    monkeypatch.setattr(config, "OUTPUT_DIR", str(output_dir), raising=False)
+    monkeypatch.setattr(
+        pipeline,
+        "_run_clip_pipeline",
+        lambda clips_list, **kwargs: ([([(str(part_path), 0)], [], [], True)], set()),
+    )
+
+    def interrupted(*a, **k):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(pipeline.video, "concatenate_clips", interrupted)
+    monkeypatch.setattr(pipeline.utils, "use_progress", lambda: False)
+    with pytest.raises(KeyboardInterrupt):
+        pipeline.process_reel([make_clip()])
+    assert not [p for p in output_dir.iterdir() if "reel" in p.name]
 
 
 def test_process_reel_releases_caller_reserved_output_when_no_clips(

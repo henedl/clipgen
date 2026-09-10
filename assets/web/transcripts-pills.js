@@ -122,10 +122,18 @@
     }
     var spkStatus = "idle";
     var spkProgress = 0;
+    var spkError = (p.speakers && p.speakers.error) || null;
     if (spkTask && (spkTask.status === "running" || spkTask.status === "queued")) {
       spkStatus = spkTask.status;
       if (spkTask.status === "running") spkProgress = Math.round((spkTask.progress || 0) * 100);
+    } else if (task && task.status === "running" && task.phase === "diarizing") {
+      // The pass embedded in a transcription; it stops with that task.
+      spkStatus = "running";
+      spkProgress = Math.round((task.progress || 0) * 100);
     } else if (spkTask && spkTask.status === "failed") {
+      spkStatus = "failed";
+      spkError = spkTask.error || spkError;
+    } else if (spkError) {
       spkStatus = "failed";
     } else if (p.speakers && p.speakers.count > 0) {
       spkStatus = "done";
@@ -144,7 +152,7 @@
       agents: agents,
       // Running sub-state ("loading_model" / "transcribing") for the dot tooltip.
       phase: task ? task.phase : null,
-      speakers: { status: spkStatus, taskId: spkTask ? spkTask.id : null, progress: spkProgress },
+      speakers: { status: spkStatus, taskId: spkTask ? spkTask.id : null, progress: spkProgress, error: spkError },
     };
   }
 
@@ -785,6 +793,7 @@
         depLabel: "transcription",
         depMet: s.agents.transcription === "done",
         agentState: s.agents.speakers,
+        error: s.speakers.error,
         hasResult: !!(p.speakers && p.speakers.count > 0),
         cascadeWarning: false,
         onStart: function () { regenerateSpeakers(p.id); },
@@ -853,6 +862,7 @@
       btnLabel.textContent = "Run";
     }
     // Fallback wording; the dependency and cascade warnings above keep precedence.
+    if (opts.agentState === "failed" && opts.error) title = opts.error;
     if (!title && opts.aiBadge) title = "Runs a local AI thinking agent";
 
     if (mode === "disabled") btn.setAttribute("disabled", "disabled");
