@@ -147,7 +147,6 @@ def test_hub_and_satellites_publish_canvas_hooks():
         "WF.initWires",
         "WF.renderWires",
         "WF.startWireDrag",
-        "WF.isConnecting",
         "WF.cancelConnect",
         "WF.selectEdge",
         "WF.removeEdge",
@@ -414,7 +413,7 @@ def test_validation_satellite_present_and_wired():
 
     src = _workflows_js()
     # Hub publishes nothing new, but the satellite attaches its interface onto WF.
-    for fn in ("WF.nodeIssues", "WF.graphHasCycle", "WF.refreshValidation"):
+    for fn in ("WF.nodeIssues", "WF.refreshValidation"):
         assert fn in src, fn
     # state.validation lives on the hub; recomputed on every edit (not debounced)
     # and once on blueprint load.

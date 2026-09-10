@@ -18,6 +18,10 @@ _MARKDOWN = slice_between(
     _UTILS, "var clipgenRenderInlineMarkdown = ", "var hexToRgba = "
 )
 _PENDING = slice_between(_UTILS, "var isPending = ", "var _apiJson = ")
+_HIGHLIGHT = slice_between(
+    _UTILS, "var clipgenHighlightMatches = ", "// Escapes, then converts"
+)
+_ESCAPE_STUB = 'var escapeHtml = function (s) { return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;"); };'
 _CLAMP = slice_between(_UTILS, "var clamp = ", "\n\n")
 
 
@@ -41,11 +45,19 @@ def test_format_time_decimals_round_not_floor():
     assert out == ["1:10.0", "1:00.0", "59:59", "1:05"]
 
 
+def test_highlight_matches_raw_text_not_entities():
+    out = _probe(
+        '[clipgenHighlightMatches("A&B", "&", "hl"), clipgenHighlightMatches("A&B", "amp", "hl"), clipgenHighlightMatches("<x>", "", "hl")]',
+        prelude=_ESCAPE_STUB,
+        snippet=_HIGHLIGHT,
+    )
+    assert out == ['A<span class="hl">&amp;</span>B', "A&amp;B", "&lt;x&gt;"]
+
+
 def test_inline_markdown_escapes_before_marking_up():
-    stub = 'var escapeHtml = function (s) { return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;"); };'
     out = _probe(
         '[clipgenRenderInlineMarkdown("<b>x</b> `a<b` **bold** *em* snake_case"), clipgenRenderInlineMarkdown(null)]',
-        prelude=stub,
+        prelude=_ESCAPE_STUB,
         snippet=_MARKDOWN,
     )
     assert (

@@ -258,7 +258,7 @@ def test_single_video_cut_unchanged_and_no_mapping(monkeypatch, make_clip):
     )
 
     generated, _, _ = pipeline._process_single_clip_segments(
-        clip, "study_P01.mp4", set(), output_format="clip", collect_paths=True
+        clip, "study_P01.mp4", output_format="clip", collect_paths=True
     )
 
     assert generated == 1
@@ -277,7 +277,7 @@ def test_multi_video_clip_maps_into_second_video(monkeypatch, make_clip):
     )
 
     generated, _, _ = pipeline._process_single_clip_segments(
-        clip, "video1.mp4", set(), output_format="clip", collect_paths=True
+        clip, "video1.mp4", output_format="clip", collect_paths=True
     )
 
     assert generated == 1
@@ -319,7 +319,7 @@ def test_multi_video_titlecard_wraps_at_clip_resolution(monkeypatch, make_clip):
     monkeypatch.setattr(pipeline.titlecards, "wrap_clip_with_cards", fake_wrap)
 
     generated, _, _ = pipeline._process_single_clip_segments(
-        clip, "video1.mp4", set(), output_format="clip", collect_paths=True
+        clip, "video1.mp4", output_format="clip", collect_paths=True
     )
 
     assert generated == 1
@@ -341,7 +341,7 @@ def test_multi_video_clip_stitches_across_boundary(monkeypatch, make_clip):
     monkeypatch.setattr(pipeline.Path, "unlink", lambda self, **k: None)
 
     generated, _, _ = pipeline._process_single_clip_segments(
-        clip, "video1.mp4", set(), output_format="clip", collect_paths=True
+        clip, "video1.mp4", output_format="clip", collect_paths=True
     )
 
     assert generated == 1
@@ -360,7 +360,7 @@ def test_multi_video_screenshot_uses_start_segment(monkeypatch, make_clip):
     )
 
     pipeline._process_single_clip_segments(
-        clip, "video1.mp4", set(), output_format="screen", collect_paths=True
+        clip, "video1.mp4", output_format="screen", collect_paths=True
     )
 
     _, kwargs = shot.call_args
@@ -378,7 +378,7 @@ def test_multi_video_gif_duration_clamped_to_segment_end(monkeypatch, make_clip)
     )
 
     pipeline._process_single_clip_segments(
-        clip, "video1.mp4", set(), output_format="gif", collect_paths=True
+        clip, "video1.mp4", output_format="gif", collect_paths=True
     )
 
     _, kwargs = gif.call_args

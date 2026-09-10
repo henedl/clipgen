@@ -469,7 +469,6 @@ def cut_global_range(
 def _process_single_clip_segments(
     clip: ClipRecord,
     base_video: str,
-    missing_videos: set[str],
     *,
     filename_prefix: str = "",
     output_format: str = "clip",
@@ -1121,7 +1120,6 @@ def process_clips(
         return _process_single_clip_segments(
             clip,
             base_video,
-            missing_videos,
             output_format=output_format,
             collect_paths=True,
             include_severity=include_severity,
@@ -1451,7 +1449,6 @@ def _process_reel(
         _, segment_paths, cards_applied = _process_single_clip_segments(
             clip,
             base_video,
-            missing_videos,
             filename_prefix="_reel_part_",
             collect_paths=True,
             enforce_size=False,  # parts are concatenated into an uncapped reel
@@ -1886,13 +1883,13 @@ def _regenerate_single_artifact(
         if ok:
             video.enforce_filesize_limit(output_path)
         return ok
-    elif artifact_type == "screen":
+    if artifact_type == "screen":
         return video.extract_screenshot(
             input_file=source_path,
             output_file=output_path,
             timestamp=start_ts,
         )
-    elif artifact_type == "gif":
+    if artifact_type == "gif":
         # The span is the clip's, not the GIF's; the GIF stays capped like generation.
         duration = max(
             1, min(int(local_end - local_start), config.DEFAULT_GIF_DURATION_SECONDS)
@@ -1903,11 +1900,10 @@ def _regenerate_single_artifact(
             timestamp=start_ts,
             duration_seconds=duration,
         )
-    else:
-        utils.warning_print(
-            f"Unknown artifact type '{artifact_type}' for '{artifact.get('file', '?')}', skipping."
-        )
-        return False
+    utils.warning_print(
+        f"Unknown artifact type '{artifact_type}' for '{artifact.get('file', '?')}', skipping."
+    )
+    return False
 
 
 def _regenerate_reel(

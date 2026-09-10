@@ -79,42 +79,26 @@ def config_json_path(filename: str) -> Path:
     return config_dir() / filename
 
 
-def load_config_json(filename: str, *, default: Any = None) -> Any:
-    """Read a JSON file from the config dir, returning *default* if unusable."""
-    path = config_json_path(filename)
+def _read_json_file(path: Path, label: str) -> Any:
+    """Parsed JSON from *path*, or None when missing or unreadable."""
     if not path.is_file():
-        return default
+        return None
     try:
         return json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
-        utils.warning_print(f"Could not read {filename}; using defaults.")
-        return default
-
-
-def _write_json_atomic(path: Path, data: Any, label: str) -> Path | None:
-    """Write *data* to *path* via a .tmp sibling and an atomic replace.
-
-    A crash or full disk mid-write leaves the previous file intact rather than
-    truncated. Returns the path written, or None on failure.
-    """
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-        os.replace(tmp, path)
-        return path
-    except (OSError, TypeError, ValueError) as exc:
-        try:
-            tmp.unlink(missing_ok=True)
-        except OSError:
-            pass
-        utils.warning_print(f"Could not write {label}: {exc}")
+        utils.warning_print(f"Could not read {label}; using defaults.")
         return None
+
+
+def load_config_json(filename: str, *, default: Any = None) -> Any:
+    """Read a JSON file from the config dir, returning *default* if unusable."""
+    data = _read_json_file(config_json_path(filename), filename)
+    return default if data is None else data
 
 
 def save_config_json(filename: str, data: Any) -> Path | None:
     """Write *data* as JSON into the config dir. Returns the path, or None."""
-    return _write_json_atomic(config_json_path(filename), data, filename)
+    return utils.write_json_atomic(config_json_path(filename), data, filename)
 
 
 def remove_config_json(filename: str) -> None:
@@ -150,14 +134,8 @@ def _defaults() -> dict[str, Any]:
 
 def load_start_settings() -> dict[str, Any]:
     """Return the persisted settings, falling back to defaults on missing/corrupt file."""
-    path = _settings_path()
-    if not path.is_file():
-        return _defaults()
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
-        # Warn: filename_overrides here decide which source video gets cut.
-        utils.warning_print(f"Could not read start settings ({exc}); using defaults.")
+    data = _read_json_file(_settings_path(), "start settings")
+    if data is None:
         return _defaults()
     if not isinstance(data, dict):
         utils.warning_print("Start settings file is not a JSON object; using defaults.")
@@ -169,7 +147,7 @@ def load_start_settings() -> dict[str, Any]:
 
 def save_start_settings(settings: dict[str, Any]) -> None:
     """Persist *settings* to the platform config path via atomic replace."""
-    _write_json_atomic(_settings_path(), settings, "start settings")
+    utils.write_json_atomic(_settings_path(), settings, "start settings")
 
 
 def _prepend_dedup(items: list[Any], new_item: Any, key: Any = None) -> list[Any]:

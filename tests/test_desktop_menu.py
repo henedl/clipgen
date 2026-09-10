@@ -73,7 +73,7 @@ def test_go_actions_navigate():
     window = FakeWindow()
     menus = desktop_menu.build_menus(lambda: window)
     go = menus[2]
-    for item, (_, href) in zip(go.items, desktop_menu._SURFACES, strict=True):
+    for item, (_, _href) in zip(go.items, desktop_menu._SURFACES, strict=True):
         item.function()
     assert [f'location.href = "{href}";' for _, href in desktop_menu._SURFACES] == (
         window.scripts
@@ -159,7 +159,7 @@ def test_pyobjc_is_imported_by_name_not_by_statement():
         r"^\s*from PyObjCTools import",
     ):
         assert not re.search(statement, SOURCE, re.MULTILINE), statement
-    assert 'importlib.import_module("AppKit")' in SOURCE
+    assert "utils.import_appkit()" in SOURCE
     assert 'importlib.import_module("PyObjCTools.AppHelper")' in SOURCE
 
 

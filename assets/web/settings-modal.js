@@ -621,21 +621,9 @@
     }
     _setStatus("Saving\u2026", true);
 
-    // Manual fetch, not apiPut: keep data.error from non-2xx responses and r.ok.
-    fetch(_getApiRoot() + "/settings", {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ settings: payload }),
-    })
-      .then(function (r) {
-        return r.json().then(
-          function (j) { return { ok: r.ok, body: j }; },
-          function () { return { ok: r.ok, body: null }; }
-        );
-      })
-      .then(function (res) {
-        var data = res.body;
-        if (!res.ok || !data || !data.ok) {
+    apiPut(_getApiRoot() + "/settings", { settings: payload })
+      .then(function (data) {
+        if (!data || !data.ok) {
           _setStatus(data && data.error ? "Save failed: " + data.error : "Save failed");
           return;
         }
@@ -652,8 +640,8 @@
           }
         }
       })
-      .catch(function () {
-        _setStatus("Save failed");
+      .catch(function (err) {
+        _setStatus(err.serverMessage ? "Save failed: " + err.serverMessage : "Save failed");
       });
   }
 

@@ -32,10 +32,6 @@
   var SNAP_KEY = "clipgenWfSnap";
   var SNAP_TOL = 8; // screen px within which a dragged edge snaps to a neighbor
 
-  function clamp(v, lo, hi) {
-    return v < lo ? lo : v > hi ? hi : v;
-  }
-
   function randomId() {
     return Math.random().toString(36).slice(2, 10);
   }

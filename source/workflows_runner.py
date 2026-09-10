@@ -8,7 +8,6 @@ Reads ``NODE_TYPES[...]["execute"]`` and ``ADAPTERS`` only at call time — afte
 from __future__ import annotations
 
 import copy
-import json
 import os
 import threading
 import time
@@ -78,7 +77,7 @@ def topo_order(nodes: list[dict[str, Any]], edges: list[dict[str, Any]]) -> list
     ids = [n["id"] for n in nodes]
     id_set = set(ids)
     adj: dict[str, list[str]] = {nid: [] for nid in ids}
-    indeg: dict[str, int] = {nid: 0 for nid in ids}
+    indeg: dict[str, int] = dict.fromkeys(ids, 0)
     for edge in edges:
         src, dst = edge.get("from"), edge.get("to")
         # Malformed wire, not stale. The isinstance check also narrows the Optional
@@ -304,22 +303,10 @@ def write_node_sidecar(
         return "empty"
     payload["__type__"] = node_type_id
     path = run_results_dir(output_dir, run_id) / f"{node_id}.json"
-    tmp = path.with_suffix(".json.tmp")
-    try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        tmp.write_text(
-            json.dumps(utils.sanitize_floats(payload), ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
-        os.replace(tmp, path)
-        return "written"
-    except (OSError, TypeError, ValueError) as exc:
-        utils.warning_print(f"workflow sidecar write failed ({node_id}): {exc}")
-        try:
-            tmp.unlink(missing_ok=True)
-        except OSError:
-            pass
-        return "failed"
+    written = utils.write_json_atomic(
+        path, utils.sanitize_floats(payload), f"workflow sidecar ({node_id})"
+    )
+    return "written" if written is not None else "failed"
 
 
 # Collection nodes that pass ``raw_results`` through; the resume planner walks

@@ -381,7 +381,7 @@ def _delta_frames(
     kept = [frames[0]]
     durations = [frame_duration_ms]
     prev = arrays[0]
-    for frame, arr in zip(frames[1:], arrays[1:]):
+    for frame, arr in zip(frames[1:], arrays[1:], strict=True):
         changed = arr != prev
         if not changed.any():
             durations[-1] += frame_duration_ms

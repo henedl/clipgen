@@ -523,7 +523,7 @@ def _build_wrap_filter_and_inputs(
             audio_labels.append(end_a_label)
 
         interleaved: list[str] = []
-        for v_label, a_label in zip(video_labels, audio_labels):
+        for v_label, a_label in zip(video_labels, audio_labels, strict=True):
             interleaved.append(v_label)
             interleaved.append(a_label)
         n = len(video_labels)

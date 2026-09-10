@@ -171,7 +171,7 @@
         if (r.speaker && TS.speakerChipHtml) {
           html += TS.speakerChipHtml(r.speaker, { inert: true, name: r.speaker_name || null });
         }
-        html += '<span class="search-result-text">' + highlightQuery(r.text, state.searchQuery) + '</span>';
+        html += '<span class="search-result-text">' + clipgenHighlightMatches(r.text, state.searchQuery, "search-highlight") + '</span>';
         html += '</div>';
       });
     });
@@ -192,22 +192,6 @@
     }
   }
 
-  function highlightQuery(text, query) {
-    if (!query) return escapeHtml(text);
-    // Match the raw text, escape per piece; matching escaped text split entities
-    // like &amp;.
-    var regex = new RegExp(query.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "gi");
-    var out = "";
-    var last = 0;
-    var m;
-    while ((m = regex.exec(text)) !== null) {
-      out += escapeHtml(text.slice(last, m.index));
-      out += '<span class="search-highlight">' + escapeHtml(m[0]) + "</span>";
-      last = m.index + m[0].length;
-    }
-    out += escapeHtml(text.slice(last));
-    return out;
-  }
 
   function hideSearchResults() {
     qs("#searchResults").classList.add("hidden");

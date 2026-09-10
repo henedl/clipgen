@@ -43,7 +43,7 @@ def test_apply_declines_a_window_without_a_native_handle(monkeypatch):
     # it. Stubbing the accessor also makes the test hermetic: the `native is None`
     # path is now exercised on Linux and macOS alike, rather than passing on Linux
     # only because the import happens to fail first.
-    monkeypatch.setattr(desktop_chrome, "_appkit", lambda: object())
+    monkeypatch.setattr(desktop_chrome.utils, "import_appkit", lambda: object())
 
     class Window:
         native = None
@@ -65,7 +65,7 @@ def test_pyobjc_is_imported_by_name_not_by_statement():
         r"^\s*from PyObjCTools import",
     ):
         assert not re.search(statement, SOURCE, re.MULTILINE), statement
-    assert 'importlib.import_module("AppKit")' in SOURCE
+    assert "utils.import_appkit()" in SOURCE
     assert 'importlib.import_module("PyObjCTools.AppHelper")' in SOURCE
 
 
@@ -451,7 +451,9 @@ def no_key_timer(monkeypatch):
 
 def test_ensure_key_is_a_no_op_off_macos(monkeypatch):
     monkeypatch.setattr(desktop_chrome.sys, "platform", "linux")
-    monkeypatch.setattr(desktop_chrome, "_appkit", lambda: pytest.fail("touched"))
+    monkeypatch.setattr(
+        desktop_chrome.utils, "import_appkit", lambda: pytest.fail("touched")
+    )
     desktop_chrome.ensure_key(object())
 
 

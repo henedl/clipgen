@@ -867,7 +867,7 @@ def test_pipeline_wraps_clip_without_forcing_source_resolution(monkeypatch, make
     monkeypatch.setattr(pipeline.titlecards, "wrap_clip_with_cards", fake_wrap)
 
     generated, _paths, _ = pipeline._process_single_clip_segments(
-        clip, "source.mp4", set(), output_format="clip"
+        clip, "source.mp4", output_format="clip"
     )
 
     assert generated == 2

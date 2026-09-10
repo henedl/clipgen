@@ -97,7 +97,7 @@ def scan_color(
     window = _resolve_scan_window(video_path, start_seconds, end_seconds)
     if window is None:
         return []
-    vid_fps, vid_duration, end_seconds, total_range = window
+    _, vid_duration, end_seconds, total_range = window
 
     matches: list[float] = []
     mask_for = region_masker(region)
@@ -127,7 +127,6 @@ def scan_color(
         _cb,
         start_seconds=start_seconds,
         end_seconds=end_seconds,
-        fps=vid_fps,
         duration=vid_duration,
         fast_opts=fast_opts,
         profile_kind="color",
@@ -167,7 +166,7 @@ def scan_changes(
     window = _resolve_scan_window(video_path, start_seconds, end_seconds)
     if window is None:
         return []
-    vid_fps, vid_duration, end_seconds, total_range = window
+    _, vid_duration, end_seconds, total_range = window
 
     results: list[dict[str, Any]] = []
     # Reuse frame N's blur+gray as frame N+1's previous side.
@@ -224,7 +223,6 @@ def scan_changes(
         _cb,
         start_seconds=start_seconds,
         end_seconds=end_seconds,
-        fps=vid_fps,
         duration=vid_duration,
         fast_opts=fast_opts,
         profile_kind="change",
@@ -262,7 +260,7 @@ def scan_similarity(
     window = _resolve_scan_window(video_path, start_seconds, end_seconds)
     if window is None:
         return []
-    vid_fps, vid_duration, end_seconds, total_range = window
+    _, vid_duration, end_seconds, total_range = window
 
     results: list[dict[str, Any]] = []
     ref_phash = compute_phash(reference_frame)
@@ -326,7 +324,6 @@ def scan_similarity(
         _cb,
         start_seconds=start_seconds,
         end_seconds=end_seconds,
-        fps=vid_fps,
         duration=vid_duration,
         fast_opts=fast_opts,
         profile_kind="similarity",
@@ -367,7 +364,7 @@ def _run_ocr_scan(
     window = _resolve_scan_window(video_path, start_seconds, end_seconds)
     if window is None:
         return []
-    vid_fps, vid_duration, end_seconds, total_range = window
+    _, vid_duration, end_seconds, total_range = window
 
     results: list[dict[str, Any]] = []
     prev_gray: list[np.ndarray | None] = [None]
@@ -415,7 +412,6 @@ def _run_ocr_scan(
         _cb,
         start_seconds=start_seconds,
         end_seconds=end_seconds,
-        fps=vid_fps,
         duration=vid_duration,
         fast_opts=fast_opts,
         profile_kind=profile_kind,
@@ -703,7 +699,7 @@ def scan_template(
     window = _resolve_scan_window(video_path, start_seconds, end_seconds)
     if window is None:
         return []
-    vid_fps, vid_duration, end_seconds, total_range = window
+    _, vid_duration, end_seconds, total_range = window
 
     results: list[dict[str, Any]] = []
 
@@ -811,7 +807,6 @@ def scan_template(
         _cb,
         start_seconds=start_seconds,
         end_seconds=end_seconds,
-        fps=vid_fps,
         duration=vid_duration,
         fast_opts=fast_opts,
         profile_kind="template",
@@ -864,7 +859,7 @@ def scan_shape(
     window = _resolve_scan_window(video_path, start_seconds, end_seconds)
     if window is None:
         return []
-    vid_fps, vid_duration, end_seconds, total_range = window
+    _, vid_duration, end_seconds, total_range = window
 
     results: list[dict[str, Any]] = []
 
@@ -988,7 +983,6 @@ def scan_shape(
             _cb,
             start_seconds=start_seconds,
             end_seconds=end_seconds,
-            fps=vid_fps,
             duration=vid_duration,
             fast_opts=fast_opts,
             profile_kind="shape",
@@ -1029,7 +1023,7 @@ def scan_flow(
     window = _resolve_scan_window(video_path, start_seconds, end_seconds)
     if window is None:
         return []
-    vid_fps, vid_duration, end_seconds, total_range = window
+    _, vid_duration, end_seconds, total_range = window
 
     results: list[dict[str, Any]] = []
     prev_gray: list[np.ndarray | None] = [None]
@@ -1098,7 +1092,6 @@ def scan_flow(
         _cb,
         start_seconds=start_seconds,
         end_seconds=end_seconds,
-        fps=vid_fps,
         duration=vid_duration,
         fast_opts=fast_opts,
         profile_kind="flow",
@@ -1152,7 +1145,7 @@ def scan_scene(
     window = _resolve_scan_window(video_path, start_seconds, end_seconds)
     if window is None:
         return []
-    vid_fps, vid_duration, end_seconds, total_range = window
+    _, vid_duration, end_seconds, total_range = window
 
     results: list[dict[str, Any]] = []
     prev_skip_gray: list[np.ndarray | None] = [None]
@@ -1200,7 +1193,6 @@ def scan_scene(
         _cb,
         start_seconds=start_seconds,
         end_seconds=end_seconds,
-        fps=vid_fps,
         duration=vid_duration,
         fast_opts=fast_opts,
         profile_kind="scene",
@@ -1243,7 +1235,7 @@ def scan_inactivity(
     window = _resolve_scan_window(video_path, start_seconds, end_seconds)
     if window is None:
         return []
-    vid_fps, vid_duration, end_seconds, total_range = window
+    _, vid_duration, end_seconds, total_range = window
 
     results: list[dict[str, Any]] = []
     prev_hash: list[PHash | None] = [None]
@@ -1314,7 +1306,6 @@ def scan_inactivity(
         _cb,
         start_seconds=start_seconds,
         end_seconds=end_seconds,
-        fps=vid_fps,
         duration=vid_duration,
         fast_opts=fast_opts,
         profile_kind="inactivity",
@@ -1559,7 +1550,7 @@ def scan_boundaries(
     window = _resolve_scan_window(video_path, start_seconds, end_seconds)
     if window is None:
         return []
-    vid_fps, vid_duration, end_seconds, total_range = window
+    _, vid_duration, end_seconds, total_range = window
 
     # Downscale at the pipe without phash_skip: this scanner samples every interval itself.
     boundary_opts = dict(fast_opts or {})
@@ -1624,7 +1615,6 @@ def scan_boundaries(
             _cb_phash,
             start_seconds=start_seconds,
             end_seconds=end_seconds,
-            fps=vid_fps,
             duration=vid_duration,
             fast_opts=boundary_opts,
             profile_kind="boundary",
@@ -1717,7 +1707,6 @@ def scan_boundaries(
         _cb_scene,
         start_seconds=start_seconds,
         end_seconds=end_seconds,
-        fps=vid_fps,
         duration=vid_duration,
         fast_opts=boundary_opts,
         profile_kind="boundary",
@@ -1801,7 +1790,7 @@ def scan_attention(
     window = _resolve_scan_window(video_path, start_seconds, end_seconds)
     if window is None:
         return []
-    vid_fps, vid_duration, end_seconds, total_range = window
+    _, vid_duration, end_seconds, total_range = window
 
     # Downsize at the pipe without dropping frames (docstring says why); saliency runs at WORKING_DIM.
     attention_opts = dict(fast_opts or {})
@@ -1907,7 +1896,6 @@ def scan_attention(
         _cb,
         start_seconds=start_seconds,
         end_seconds=end_seconds,
-        fps=vid_fps,
         duration=vid_duration,
         fast_opts=attention_opts,
         profile_kind="attention",

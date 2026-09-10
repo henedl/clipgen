@@ -100,17 +100,24 @@ def _filter_transcript_segments(
 
     rows: list[tuple[str, dict[str, Any], list[dict[str, Any]]]] = []
     sources = manifest.get("source_transcripts") or {}
+    corrections = manifest.get("corrections") or []
     for pid, entry in sources.items():
         if participants and pid not in participants:
             continue
-        for idx, seg in enumerate(entry.get("segments") or []):
-            seg_id = seg.get("id") or f"{pid}:{idx}"
+        raw_segments = entry.get("segments") or []
+        # Match and label on corrected text, like the Transcripts UI.
+        corrected = transcripts.apply_corrections(raw_segments, corrections)
+        for idx, (raw, seg) in enumerate(zip(raw_segments, corrected, strict=True)):
+            seg_id = raw.get("id") or f"{pid}:{idx}"
             attached = marks_by_segment.get(seg_id, [])
             if mark_categories and not attached:
                 continue
             if needle is not None and needle not in str(seg.get("text", "")).lower():
                 continue
-            rows.append((pid, seg, attached))
+            # apply_corrections drops every key but start/end/text; keep the id.
+            row = dict(raw)
+            row["text"] = seg.get("text", "")
+            rows.append((pid, row, attached))
     return rows
 
 
@@ -471,13 +478,13 @@ def _post_marks_to_running_server(
     segment_ids: list[str],
     category: str,
     label: str | None,
-) -> dict[str, Any] | None:
+) -> str:
     """POST marks to a Transcripts server running on localhost.
 
-    Returns the parsed response dict on success, or None when no server is
-    reachable. Routing through the API keeps the server's in-memory manifest in
-    sync — without this, a CLI-only disk write would be silently overwritten the
-    next time the running server persists its (now-stale) state.
+    Returns ``"posted"``, ``"unreachable"`` (no server), or ``"rejected"`` (the
+    server answered but refused). Routing through the API keeps the server's
+    in-memory manifest in sync; a CLI-only disk write would be overwritten the
+    next time the running server persists its stale state.
     """
     import json
     import urllib.error
@@ -495,13 +502,14 @@ def _post_marks_to_running_server(
     )
     try:
         with urllib.request.urlopen(req, timeout=2.0) as resp:
-            body = resp.read().decode("utf-8")
-            data = json.loads(body)
-            if isinstance(data, dict) and data.get("ok"):
-                return data
-            return None
+            data = json.loads(resp.read().decode("utf-8"))
+    except urllib.error.HTTPError:
+        return "rejected"
     except (urllib.error.URLError, OSError, ValueError):
-        return None
+        return "unreachable"
+    if isinstance(data, dict) and data.get("ok"):
+        return "posted"
+    return "rejected"
 
 
 def _run_transcript_mark(args: argparse.Namespace) -> None:
@@ -556,7 +564,7 @@ def _run_transcript_mark(args: argparse.Namespace) -> None:
         if not raw_segments:
             continue
         corrected = transcripts.apply_corrections(raw_segments, corrections)
-        for raw, seg in zip(raw_segments, corrected):
+        for raw, seg in zip(raw_segments, corrected, strict=True):
             if needle in str(seg.get("text", "")).lower():
                 seg_id = raw.get("id") or ""
                 if seg_id:
@@ -570,12 +578,15 @@ def _run_transcript_mark(args: argparse.Namespace) -> None:
     touched_participants = {pid for pid, _ in matching_seg_ids}
     total = len(seg_id_list)
 
-    server_response = _post_marks_to_running_server(seg_id_list, category, label)
-    if server_response is not None:
+    outcome = _post_marks_to_running_server(seg_id_list, category, label)
+    if outcome == "posted":
         utils.info_print(
             f"Marked {total} segment(s) across {len(touched_participants)} participant(s) "
             f"via running Transcripts server."
         )
+        return
+    if outcome == "rejected":
+        utils.error_print("The running Transcripts server rejected the marks.")
         return
 
     existing_by_seg = {m["segment_id"]: m for m in marks if m.get("segment_id")}

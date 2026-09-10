@@ -876,23 +876,16 @@
   function buildSearchRow(rec, query) {
     var row = el("div", "md-search-row");
     var label = el("span", "md-search-row-label");
-    label.innerHTML = mdHighlight(rec.label || "", query);
+    label.innerHTML = clipgenHighlightMatches(rec.label || "", query, "md-search-highlight");
     label.title = rec.label || "";
     row.appendChild(label);
     if (rec.context) {
       var ctx = el("span", "md-search-row-context");
-      ctx.innerHTML = mdHighlight(rec.context, query);
+      ctx.innerHTML = clipgenHighlightMatches(rec.context, query, "md-search-highlight");
       row.appendChild(ctx);
     }
     row.addEventListener("click", function () { jumpToSearchResult(rec); });
     return row;
-  }
-
-  function mdHighlight(text, query) {
-    var escaped = escapeHtml(text);
-    if (!query) return escaped;
-    var re = new RegExp("(" + query.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + ")", "gi");
-    return escaped.replace(re, '<span class="md-search-highlight">$1</span>');
   }
 
   function hideSearchResults() {

@@ -438,13 +438,13 @@ def test_process_single_clip_segments_forwards_cancel_to_video(monkeypatch, make
 
     sentinel = lambda: False
     pipeline._process_single_clip_segments(
-        raw_clip, "src.mp4", set(), output_format="clip", cancel_flag=sentinel
+        raw_clip, "src.mp4", output_format="clip", cancel_flag=sentinel
     )
     pipeline._process_single_clip_segments(
-        raw_clip, "src.mp4", set(), output_format="screen", cancel_flag=sentinel
+        raw_clip, "src.mp4", output_format="screen", cancel_flag=sentinel
     )
     pipeline._process_single_clip_segments(
-        raw_clip, "src.mp4", set(), output_format="gif", cancel_flag=sentinel
+        raw_clip, "src.mp4", output_format="gif", cancel_flag=sentinel
     )
 
     assert captured["clip"] is sentinel
@@ -479,7 +479,6 @@ def test_process_single_clip_segments_unlinks_partial_on_cancel(
     generated, paths, _ = pipeline._process_single_clip_segments(
         raw_clip,
         "src.mp4",
-        set(),
         output_format="clip",
         cancel_flag=lambda: cancel_state["set"],
     )
@@ -597,14 +596,12 @@ def test_reel_part_cut_is_not_size_capped(monkeypatch, make_clip):
 
     # enforce_size=False (reel-part path) → no compression.
     pipeline._process_single_clip_segments(
-        prepared, "src.mp4", set(), collect_paths=True, enforce_size=False
+        prepared, "src.mp4", collect_paths=True, enforce_size=False
     )
     assert enforce.call_count == 0
 
     # enforce_size defaults True (final clip) → compression runs once.
-    pipeline._process_single_clip_segments(
-        prepared, "src.mp4", set(), collect_paths=True
-    )
+    pipeline._process_single_clip_segments(prepared, "src.mp4", collect_paths=True)
     assert enforce.call_count == 1
 
 
@@ -765,7 +762,7 @@ def test_process_single_clip_segments_releases_reservation_on_ffmpeg_failure(
 
     raw_clip = pipeline.files.prepare_clip(make_clip())
     generated, paths, _ = pipeline._process_single_clip_segments(
-        raw_clip, str(input_dir / "study_P01.mp4"), set(), output_format="clip"
+        raw_clip, str(input_dir / "study_P01.mp4"), output_format="clip"
     )
 
     assert generated == 0
@@ -1296,7 +1293,7 @@ def test_run_clip_pipeline_cancel_captures_started_clip_results(monkeypatch):
     assert len(results) == len(ran)
     assert all(r is not None for r in results)
     # Each captured result is the proper (segment_paths, components) tuple shape.
-    for segment_paths, components in results:
+    for segment_paths, _components in results:
         assert isinstance(segment_paths, list)
 
 

@@ -441,10 +441,6 @@
     WF.scheduleSave();
   }
 
-  function isConnecting() {
-    return !!(_connect && _connect.mode === "armed");
-  }
-
   // ---- Selection + removal ----
 
   function selectEdge(id) {
@@ -535,7 +531,6 @@
   WF.renderWires = renderWires;
   WF.clearPortCache = clearPortCache;
   WF.startWireDrag = startWireDrag;
-  WF.isConnecting = isConnecting;
   // Hub-called on blueprint switch; an armed wire must not outlive its source node.
   WF.cancelConnect = endConnect;
   WF.selectEdge = selectEdge;

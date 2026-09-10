@@ -1863,9 +1863,9 @@
     var metaEl = qs("#playerMeta");
     if (metaEl) {
       var parts = [];
-      if (a.participant) parts.push(escHtml(a.participant));
+      if (a.participant) parts.push(escapeHtml(a.participant));
       parts.push(formatTime(a.start) + (a.end != null ? " \u2013 " + formatTime(a.end) : ""));
-      if (a.category) parts.push(escHtml(a.category));
+      if (a.category) parts.push(escapeHtml(a.category));
       metaEl.innerHTML = parts.join("&ensp;\u00B7&ensp;");
     }
   }
@@ -1883,21 +1883,21 @@
     if (!tip) return;
     tip.style.borderLeft = "";
 
-    var html = "<strong>" + escHtml(a.description || "(no description)") + "</strong><br>";
+    var html = "<strong>" + escapeHtml(a.description || "(no description)") + "</strong><br>";
     html += '<span class="tooltip-time">' + formatTime(a.start);
     if (a.end != null) html += " – " + formatTime(a.end);
     html += "</span>";
-    if (a.category) html += "<br>" + escHtml(a.category);
-    if (a.participant) html += " · " + escHtml(a.participant);
+    if (a.category) html += "<br>" + escapeHtml(a.category);
+    if (a.participant) html += " · " + escapeHtml(a.participant);
     if ((a.severity || "").trim()) {
-      html += "<br>" + escHtml(a.severity);
+      html += "<br>" + escapeHtml(a.severity);
     }
     var transcript = (a.transcriptText || "").trim();
     if (transcript) {
       html +=
         '<div class="tooltip-transcript">' +
         '<span class="tooltip-transcript-label">Transcript</span>' +
-        escHtml(transcript) +
+        escapeHtml(transcript) +
         "</div>";
     }
 
@@ -1986,11 +1986,6 @@
     if (tip) tip.classList.add("hidden");
   }
 
-  function escHtml(str) {
-    var div = document.createElement("div");
-    div.textContent = str;
-    return div.innerHTML;
-  }
 
   // ---- Participant timeline viewer ----
 

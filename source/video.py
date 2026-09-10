@@ -4,6 +4,7 @@ import concurrent.futures
 import contextlib
 import hashlib
 import json
+import math
 import os
 import re
 import shutil
@@ -1748,7 +1749,7 @@ def build_source_timeline(paths: list[str]) -> list[tuple[str, int, int]] | None
 
     timeline: list[tuple[str, int, int]] = []
     cumulative = 0
-    for path, duration in zip(paths, durations):
+    for path, duration in zip(paths, durations, strict=True):
         timeline.append((path, duration, cumulative))
         cumulative += duration
     return timeline
@@ -1955,6 +1956,11 @@ def _probe_video_properties_uncached(
         if raw_start not in (None, "N/A", ""):
             fmt_start = max(0.0, float(raw_start))
     except (ValueError, TypeError):
+        fmt_start = 0.0
+    # ffprobe can print nan/inf; neither may reach JSON or round().
+    if not math.isfinite(fmt_duration):
+        fmt_duration = 0.0
+    if not math.isfinite(fmt_start):
         fmt_start = 0.0
     # Fallback: compute from frame count and fps
     if fmt_duration <= 0 and nb_frames > 0 and fps > 0:
@@ -3526,7 +3532,6 @@ def _batch_extract_screenshots(
 def _parallel_extract_gifs(
     input_file: str,
     timestamps: list[int],
-    interval_seconds: int,
     gif_duration_seconds: int,
     duration: int,
     *,
@@ -3667,7 +3672,6 @@ def generate_interval_captures(
         parallel_artifacts = _parallel_extract_gifs(
             input_file,
             timestamps,
-            interval_seconds,
             gif_duration_seconds,
             duration,
             cancel_flag=cancel_flag,

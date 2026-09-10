@@ -228,10 +228,6 @@
       });
   }
 
-  function graphHasCycle() {
-    return cycleNodeIds().length > 0;
-  }
-
   // ---- Dry-run preview (what would execute) ----
 
   // Nodes a Run (or "Run to here") would execute; mirrors the runner's _should_skip minus gates.
@@ -450,7 +446,6 @@
 
   // ---- Satellite interface ----
   WF.nodeIssues = nodeIssues;
-  WF.graphHasCycle = graphHasCycle;
   WF.refreshValidation = refreshValidation;
   // Dry-run preview (hub wires the Run split-button hover to these).
   WF.computeWouldRun = computeWouldRun;
