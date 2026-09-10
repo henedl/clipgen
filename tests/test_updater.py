@@ -341,8 +341,9 @@ def test_check_latest_returns_none_offline(monkeypatch):
     assert updater.check_latest(force=False) is None
 
 
-def test_launch_check_forgets_a_skip_once_installed(monkeypatch):
+def test_launch_check_forgets_a_skip_once_installed(monkeypatch, tmp_path):
     monkeypatch.setattr(updater, "install_shape", lambda: "mac-app")
+    monkeypatch.setattr(updater, "install_root", lambda: tmp_path / "clipgen.app")
     monkeypatch.setattr(utils, "get_version", lambda: "9.9.9")
     start_settings.save_config_json(updater.STATE_FILENAME, {"skipped": "v9.9.9"})
     updater.sweep_updates_dir()

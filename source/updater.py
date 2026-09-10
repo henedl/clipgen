@@ -906,7 +906,7 @@ def sweep_updates_dir() -> None:
         except OSError:
             pass
     root = install_root()
-    if root is None:
+    if root is None or not root.name:
         return
     leftovers = [root.parent / ".clipgen-update", root.with_name(root.name + ".old")]
     if install_shape() == "win-zip":
