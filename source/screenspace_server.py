@@ -66,7 +66,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, cast
 
-from flask import Blueprint, Response, jsonify, request, send_file
+from flask import Blueprint, Response, request, send_file
 
 import config
 import files
@@ -843,7 +843,7 @@ def api_calibrate() -> FlaskResponse:
             entry["status"] = "not_evaluable"
         results.append(entry)
 
-    return jsonify(utils.sanitize_floats({"ok": True, "tool": tool, "pins": results}))
+    return ok(**utils.sanitize_floats({"tool": tool, "pins": results}))
 
 
 # ---- Video frame extraction ----

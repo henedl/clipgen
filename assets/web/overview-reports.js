@@ -622,7 +622,7 @@
       var r = rec();
       if (r && r.agents) r.agents.report = "done";
       renderParticipants();
-    } else if (data && data.generating) {
+    } else if (isPending(data)) {
       rpState.reportGenerating = true;
       rpState.reportPartial = data.partial || "";
       if (!rpState.reportPoll) {

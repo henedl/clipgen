@@ -620,7 +620,7 @@ def test_friction_refetch_keeps_the_programmatic_scores():
         "the switch's fetch failed transiently"
     )
     # Mid-run the server ships the scores alongside the generating flag.
-    gen = body[body.index("data.generating") :]
+    gen = body[body.index("isPending(data)") :]
     assert "if (data.friction) _setFrictionData(data.friction);" in gen, (
         "the generating branch must adopt the deterministic scores the server "
         "sends with it, or it renders the empty 'Analyzing…' box"

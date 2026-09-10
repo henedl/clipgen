@@ -1150,6 +1150,11 @@ var clipgenWheelToHorizontal = function (el) {
 
 // ---- API helpers (always check r.ok) ----
 
+// Third envelope state: {ok:false, generating:true} at HTTP 200 means poll again.
+var isPending = function (data) {
+  return !!(data && data.generating);
+};
+
 // Rejects with the server's envelope error; .status for branching, .serverMessage empty for generic failures.
 var _apiJson = function (r) {
   if (!r.ok) {

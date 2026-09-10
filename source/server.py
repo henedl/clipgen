@@ -74,7 +74,6 @@ from flask import (
     Flask,
     Response,
     g,
-    jsonify,
     redirect,
     request,
     send_file,
@@ -94,6 +93,7 @@ import utils
 import video
 import viewer
 from server_utils import (
+    refused,
     MediaCache,
     clip_media_response,
     err,
@@ -459,14 +459,16 @@ def _generation_busy() -> bool:
 @contextmanager
 def _override_config(**overrides: Any) -> Iterator[None]:
     """Temporarily override config attributes, restoring originals on exit."""
-    saved = {name: getattr(config, name) for name in overrides}
-    for name, value in overrides.items():
-        setattr(config, name, value)
+    with config.SETTINGS_LOCK:
+        saved = {name: getattr(config, name) for name in overrides}
+        for name, value in overrides.items():
+            setattr(config, name, value)
     try:
         yield
     finally:
-        for name, value in saved.items():
-            setattr(config, name, value)
+        with config.SETTINGS_LOCK:
+            for name, value in saved.items():
+                setattr(config, name, value)
 
 
 # ---- Blueprint ----
@@ -772,31 +774,25 @@ def api_sheet() -> FlaskResponse:
         # Consumers pair `participants` with `rows` as sheet columns; a mind-map-only
         # session leaves both empty.
         mn = _mindnode_doc or {}
-        return jsonify(
-            {
-                "ok": True,
-                "sheet_loaded": False,
-                "study": str(mn.get("study", "")),
-                "mindnodeParticipants": list(mn.get("participants", [])),
-                **_sheet_common_fields(),
-                "participants": [],
-                "rows": [],
-            }
+        return ok(
+            sheet_loaded=False,
+            study=str(mn.get("study", "")),
+            mindnodeParticipants=list(mn.get("participants", [])),
+            **_sheet_common_fields(),
+            participants=[],
+            rows=[],
         )
 
     ctx = _sheet_context
     sheet_payload = _get_sheet_payload(ctx)
 
-    return jsonify(
-        {
-            "ok": True,
-            "sheet_loaded": True,
-            "study": ctx.study_name,
-            **_sheet_common_fields(),
-            "defaultDuration": config.DEFAULT_DURATION_SECONDS,
-            "participants": sheet_payload["participants"],
-            "rows": sheet_payload["rows"],
-        }
+    return ok(
+        sheet_loaded=True,
+        study=ctx.study_name,
+        **_sheet_common_fields(),
+        defaultDuration=config.DEFAULT_DURATION_SECONDS,
+        participants=sheet_payload["participants"],
+        rows=sheet_payload["rows"],
     )
 
 
@@ -813,7 +809,7 @@ def api_mindnode() -> FlaskResponse:
     with _mindnode_lock:
         doc = _mindnode_doc
     if doc is None:
-        return jsonify({"ok": True, "mindnode_loaded": False, "document": None})
+        return ok(mindnode_loaded=False, document=None)
 
     import mindnode
 
@@ -825,15 +821,9 @@ def api_mindnode() -> FlaskResponse:
     with _mindnode_lock:
         # Re-check under the lock: a close during the unlocked parse must not be undone here.
         if _mindnode_doc is not doc:
-            return jsonify(
-                {
-                    "ok": True,
-                    "mindnode_loaded": _mindnode_doc is not None,
-                    "document": _mindnode_doc,
-                }
-            )
+            return ok(mindnode_loaded=_mindnode_doc is not None, document=_mindnode_doc)
         _mindnode_doc = fresh
-    return jsonify({"ok": True, "mindnode_loaded": True, "document": fresh})
+    return ok(mindnode_loaded=True, document=fresh)
 
 
 @studio_bp.route("/api/sheet/baseline")
@@ -1262,14 +1252,15 @@ def _load_studio_settings() -> dict[str, Any]:
     data = start_settings.load_config_json(config.STUDIO_SETTINGS_FILENAME, default={})
 
     applied: dict[str, Any] = {}
-    for name, value in data.items():
-        if name not in config.STUDIO_SETTINGS:
-            continue
-        ok, coerced, _ = _coerce_studio_setting(name, value)
-        if not ok:
-            continue
-        setattr(config, name, coerced)
-        applied[name] = coerced
+    with config.SETTINGS_LOCK:
+        for name, value in data.items():
+            if name not in config.STUDIO_SETTINGS:
+                continue
+            ok, coerced, _ = _coerce_studio_setting(name, value)
+            if not ok:
+                continue
+            setattr(config, name, coerced)
+            applied[name] = coerced
     return applied
 
 
@@ -1289,20 +1280,23 @@ def _revert_unsupported_formats() -> None:
         if str(getattr(config, name)).lower() == ".webp"
     ]
     if webp_names and not video.check_webp_support():
-        for name in webp_names:
-            setattr(config, name, _settings_defaults[name])
+        with config.SETTINGS_LOCK:
+            for name in webp_names:
+                setattr(config, name, _settings_defaults[name])
         utils.warning_print(
             f"{', '.join(webp_names)} set to .webp but ffmpeg lacks libwebp; "
             f"reverting to the default format."
         )
     if config.GIF_FORMAT.lower() == ".webm" and not video.check_vp9_support():
-        config.GIF_FORMAT = _settings_defaults["GIF_FORMAT"]
+        with config.SETTINGS_LOCK:
+            config.GIF_FORMAT = _settings_defaults["GIF_FORMAT"]
         utils.warning_print(
             "GIF_FORMAT set to .webm but ffmpeg lacks libvpx-vp9; "
             "reverting to the default format."
         )
     if config.TITLECARDS_ENABLED and not video.check_drawtext_support():
-        config.TITLECARDS_ENABLED = False
+        with config.SETTINGS_LOCK:
+            config.TITLECARDS_ENABLED = False
         utils.warning_print(
             "Titlecards are enabled but ffmpeg lacks the drawtext filter; "
             "disabling titlecards for this run."
@@ -2008,7 +2002,7 @@ def api_timeline_viewer() -> FlaskResponse:
         )
         if _timeline_viewer_cancel_event.is_set():
             _discard_artifact_files(artifacts)
-            return jsonify({"ok": False, "cancelled": True})
+            return refused("cancelled", cancelled=True)
         if not artifacts:
             return err("No artifacts were generated")
 
@@ -2029,7 +2023,7 @@ def api_timeline_viewer() -> FlaskResponse:
         # discard the files.
         if _timeline_viewer_cancel_event.is_set():
             _discard_artifact_files(artifacts)
-            return jsonify({"ok": False, "cancelled": True})
+            return refused("cancelled", cancelled=True)
 
         _extend_generated_artifacts(artifacts)
 
@@ -2135,7 +2129,7 @@ def api_gallery() -> FlaskResponse:
 
         if _gallery_cancel_event.is_set():
             _discard_artifact_files(artifacts)
-            return jsonify({"ok": False, "cancelled": True})
+            return refused("cancelled", cancelled=True)
         if not artifacts:
             return err("No captures generated", 500)
 
@@ -2150,7 +2144,7 @@ def api_gallery() -> FlaskResponse:
         # Last cancel gate: Cancel may land during the duration probe / finalize.
         if _gallery_cancel_event.is_set():
             _discard_artifact_files(artifacts)
-            return jsonify({"ok": False, "cancelled": True})
+            return refused("cancelled", cancelled=True)
         gallery_path = viewer.generate_gallery_viewer(gallery_data)
         if gallery_path:
             return ok(file=str(gallery_path))
@@ -2365,10 +2359,11 @@ def _apply_settings_payload(data: dict[str, Any]) -> tuple[dict[str, Any], str |
             return {}, f"Invalid reset directive: {reset!r}"
 
         applied: dict[str, Any] = {}
-        for name in target_names:
-            default = copy.deepcopy(_settings_defaults.get(name))
-            setattr(config, name, default)
-            applied[name] = default
+        with config.SETTINGS_LOCK:
+            for name in target_names:
+                default = copy.deepcopy(_settings_defaults.get(name))
+                setattr(config, name, default)
+                applied[name] = default
 
         # Snapshot every setting; _save_studio_settings drops defaults, keeping other
         # overrides intact.
@@ -2417,16 +2412,17 @@ def _apply_settings_payload(data: dict[str, Any]) -> tuple[dict[str, Any], str |
             )
 
     applied: dict[str, Any] = {}
-    for name, value in settings_data.items():
-        if name not in config.STUDIO_SETTINGS:
-            continue
-        ok, coerced, error = _coerce_studio_setting(name, value)
-        if not ok:
-            if error is not None:
-                return {}, error
-            continue
-        setattr(config, name, coerced)
-        applied[name] = coerced
+    with config.SETTINGS_LOCK:
+        for name, value in settings_data.items():
+            if name not in config.STUDIO_SETTINGS:
+                continue
+            ok, coerced, error = _coerce_studio_setting(name, value)
+            if not ok:
+                if error is not None:
+                    return {}, error
+                continue
+            setattr(config, name, coerced)
+            applied[name] = coerced
 
     # Snapshot every setting, not just submitted keys, so a partial PUT keeps other
     # overrides.
@@ -2639,10 +2635,11 @@ def api_titlecard_delete(name: str) -> FlaskResponse:
     except OSError as error:
         return err(str(error), 500)
     reset: dict[str, str] = {}
-    for setting in ("TITLECARD_IMAGE", "ENDCARD_IMAGE"):
-        if getattr(config, setting, "") == safe:
-            setattr(config, setting, "")
-            reset[setting] = ""
+    with config.SETTINGS_LOCK:
+        for setting in ("TITLECARD_IMAGE", "ENDCARD_IMAGE"):
+            if getattr(config, setting, "") == safe:
+                setattr(config, setting, "")
+                reset[setting] = ""
     if reset:
         merged = {n: getattr(config, n) for n in config.STUDIO_SETTINGS}
         _save_studio_settings(merged)
@@ -3353,9 +3350,10 @@ def _seed_filename_overrides(source: dict[str, str] | None) -> None:
         if source
         else {}
     )
-    if overrides == config.FILENAME_OVERRIDES:
-        return  # a needless rebuild costs a seekability probe per participant
-    config.FILENAME_OVERRIDES = overrides
+    with config.SETTINGS_LOCK:
+        if overrides == config.FILENAME_OVERRIDES:
+            return  # a needless rebuild costs a seekability probe per participant
+        config.FILENAME_OVERRIDES = overrides
     _invalidate_participant_caches()
 
 
@@ -3453,16 +3451,13 @@ def _open_mindnode(id_or_path: str, project_name: str | None) -> FlaskResponse:
         name=project_name,
     )
     _active_project_source = source
-    return jsonify(
-        {
-            "ok": True,
-            "sheet_loaded": _worksheet is not None,
-            "mindnode_loaded": True,
-            "spreadsheet_label": _spreadsheet_label(),
-            "mindnode_label": label,
-            "study": doc["study"],
-            "notes": len(doc["notes"]),
-        }
+    return ok(
+        sheet_loaded=_worksheet is not None,
+        mindnode_loaded=True,
+        spreadsheet_label=_spreadsheet_label(),
+        mindnode_label=label,
+        study=doc["study"],
+        notes=len(doc["notes"]),
     )
 
 
@@ -3604,822 +3599,833 @@ def _init_combined_state(
     workflows_server._start_watch_thread()
 
 
-def build_combined_app(
-    worksheet: Any = None,
-    default_page: str = "studio",
-    gspread_client: Any = None,
-) -> Flask:
-    """Build the combined Studio + Screenspace + Transcripts + Workflows Flask app.
+# ---- Combined-app routes: Root-level status, profiling, and export routes. ----
 
-    Same setup as :func:`start_combined_server` but stops short of
-    ``app.run`` so tests (and any embedding caller) can hold the live
-    ``Flask`` instance and exercise routes via ``app.test_client()``.
+
+def api_profile() -> FlaskResponse:
+    """Profiling snapshot for agents (``?reset=1`` brackets a window).
+
+    404 when profiling is off so a plain launch exposes nothing — the
+    endpoint mirrors the ``--profile`` opt-in rather than adding its own.
     """
-    import composer_server
-    import overview
-    import screenspace_server
-    import transcripts_server
-    import workflows_server
-
-    combined = Flask(__name__, static_folder=None)
-    # Keep insertion order: drag-to-reorder relies on GET /api/regions echoing
-    # manifest order.
-    assert isinstance(combined.json, DefaultJSONProvider)  # Flask's stock provider
-    combined.json.sort_keys = False
-
-    _init_combined_state(worksheet, gspread_client)
-
-    combined.register_blueprint(studio_bp, url_prefix="/studio")
-    combined.register_blueprint(
-        screenspace_server.screenspace_bp, url_prefix="/screenspace"
+    if not config.PROFILING:
+        return err("profiling is off (launch with --profile)", 404)
+    snap = profiling.snapshot()
+    if request.args.get("reset") == "1":
+        profiling.reset()
+    # peak_rss is not a label (monotonic, unaffected by ?reset=1); live-server
+    # knobs need it here.
+    return ok(
+        profile=snap,
+        peak_rss_mb=profiling.peak_rss_mb(),
+        # Like peak_rss: not a label, records once per process, and
+        # ?reset=1 cannot clear it.
+        startup=profiling.startup_snapshot(),
     )
-    combined.register_blueprint(
-        transcripts_server.transcripts_bp, url_prefix="/transcripts"
+
+
+def status() -> Response:
+    meta = _active_sheet_meta if _worksheet is not None else None
+    return ok(
+        studio=True,
+        screenspace=True,
+        transcripts=True,
+        workflows=True,
+        composer=True,
+        overview=True,
+        sheet_loaded=_worksheet is not None,
+        startup_notice=(_startup_notice or {}).get("message", ""),
+        startup_notice_source=(_startup_notice or {}).get("source_type", ""),
+        # What record_project_session last stored, so the overlay's
+        # current-session key matches its recent-projects key.
+        active_source=_active_project_source,
+        mindnode_loaded=_mindnode_doc is not None,
+        mindnode_label=(_mindnode_doc or {}).get("name", ""),
+        mindnode_path=(_mindnode_doc or {}).get("path", ""),
+        spreadsheet_label=_spreadsheet_label(),
+        spreadsheet_type=(meta or {}).get("type", ""),
+        spreadsheet_id_or_path=(meta or {}).get("id_or_path", ""),
+        spreadsheet_worksheet=(meta or {}).get("worksheet", ""),
+        input_dir=str(utils.get_effective_input_dir()),
+        output_dir=str(utils.get_effective_output_dir()),
+        videos_in_input=len(utils.discover_participant_videos()),
+        version=utils.get_version(),
+        # Native window: pages may offer "show on disk" actions.
+        desktop=utils.GUI_LAUNCH,
+        author="Henrik Edlund",
+        license="MIT",
+        repo_url=config.REPO_URL,
     )
-    combined.register_blueprint(workflows_server.workflows_bp, url_prefix="/workflows")
-    combined.register_blueprint(composer_server.composer_bp, url_prefix="/composer")
-    combined.register_blueprint(overview.overview_bp, url_prefix="/overview")
 
-    combined.after_request(_set_cache_headers)
-    combined.before_request(_reject_cross_origin)
-    combined.before_request(_profile_request_start)
-    combined.after_request(_profile_request_end)
 
-    @combined.route("/")
-    def root():
-        return redirect(f"/{default_page}/")
+def api_export_status() -> Response:
+    """Report which exportable manifest sections are present.
 
-    @combined.route("/api/profile")
-    def api_profile() -> FlaskResponse:
-        """Profiling snapshot for agents (``?reset=1`` brackets a window).
+    Used by the frontend to gate the Export quick action — if no
+    sections exist there is nothing for ``write_export_bundle`` to write.
+    """
+    present = utils.manifest_sections()
+    screenspace = "screenspace" in present
+    transcripts = "transcripts" in present
+    return ok(
+        screenspace=screenspace,
+        transcripts=transcripts,
+        any=screenspace or transcripts,
+    )
 
-        404 when profiling is off so a plain launch exposes nothing — the
-        endpoint mirrors the ``--profile`` opt-in rather than adding its own.
-        """
-        if not config.PROFILING:
-            return err("profiling is off (launch with --profile)", 404)
-        snap = profiling.snapshot()
-        if request.args.get("reset") == "1":
-            profiling.reset()
-        # peak_rss is not a label (monotonic, unaffected by ?reset=1); live-server
-        # knobs need it here.
-        return ok(
-            profile=snap,
-            peak_rss_mb=profiling.peak_rss_mb(),
-            # Like peak_rss: not a label, records once per process, and
-            # ?reset=1 cannot clear it.
-            startup=profiling.startup_snapshot(),
+
+def api_export() -> FlaskResponse:
+    """Write the same JSON+CSV bundle the ``--export`` CLI flag produces."""
+    import data_export
+
+    output_dir = Path(utils.get_effective_output_dir())
+    try:
+        written = data_export.write_export_bundle()
+    except Exception as exc:
+        return err(str(exc), 500)
+    if not written:
+        return err(
+            f"Nothing to export: no Screenspace or Transcript manifest in {output_dir}. "
+            "Run a Screenspace scan or transcribe a video first.",
+            404,
         )
+    return ok(
+        written=[p.name for p in written],
+        output_dir=str(output_dir),
+    )
 
-    @combined.route("/api/status")
-    def status() -> Response:
-        meta = _active_sheet_meta if _worksheet is not None else None
-        return jsonify(
-            {
-                "studio": True,
-                "screenspace": True,
-                "transcripts": True,
-                "workflows": True,
-                "composer": True,
-                "overview": True,
-                "sheet_loaded": _worksheet is not None,
-                "startup_notice": (_startup_notice or {}).get("message", ""),
-                "startup_notice_source": (_startup_notice or {}).get("source_type", ""),
-                # What record_project_session last stored, so the overlay's
-                # current-session key matches its recent-projects key.
-                "active_source": _active_project_source,
-                "mindnode_loaded": _mindnode_doc is not None,
-                "mindnode_label": (_mindnode_doc or {}).get("name", ""),
-                "mindnode_path": (_mindnode_doc or {}).get("path", ""),
-                "spreadsheet_label": _spreadsheet_label(),
-                "spreadsheet_type": (meta or {}).get("type", ""),
-                "spreadsheet_id_or_path": (meta or {}).get("id_or_path", ""),
-                "spreadsheet_worksheet": (meta or {}).get("worksheet", ""),
-                "input_dir": str(utils.get_effective_input_dir()),
-                "output_dir": str(utils.get_effective_output_dir()),
-                "videos_in_input": len(utils.discover_participant_videos()),
-                "version": utils.get_version(),
-                # Native window: pages may offer "show on disk" actions.
-                "desktop": utils.GUI_LAUNCH,
-                "author": "Henrik Edlund",
-                "license": "MIT",
-                "repo_url": config.REPO_URL,
-            }
-        )
 
-    @combined.route("/api/export/status")
-    def api_export_status() -> Response:
-        """Report which exportable manifest sections are present.
+def _register_core_routes(combined: Flask) -> None:
+    """Root-level status, profiling, and export routes."""
+    for rule, view, methods in (
+        ("/api/profile", api_profile, ["GET"]),
+        ("/api/status", status, ["GET"]),
+        ("/api/export/status", api_export_status, ["GET"]),
+        ("/api/export", api_export, ["POST"]),
+    ):
+        combined.add_url_rule(rule, view.__name__, view, methods=methods)
 
-        Used by the frontend to gate the Export quick action — if no
-        sections exist there is nothing for ``write_export_bundle`` to write.
-        """
-        present = utils.manifest_sections()
-        screenspace = "screenspace" in present
-        transcripts = "transcripts" in present
-        return ok(
-            screenspace=screenspace,
-            transcripts=transcripts,
-            any=screenspace or transcripts,
-        )
 
-    @combined.route("/api/export", methods=["POST"])
-    def api_export() -> FlaskResponse:
-        """Write the same JSON+CSV bundle the ``--export`` CLI flag produces."""
-        import data_export
+# ---- Combined-app routes: Start overlay: directories, spreadsheet picker, sessions, About tab. ----
 
-        output_dir = Path(utils.get_effective_output_dir())
-        try:
-            written = data_export.write_export_bundle()
-        except Exception as exc:
-            return err(str(exc), 500)
-        if not written:
-            return err(
-                f"Nothing to export: no Screenspace or Transcript manifest in {output_dir}. "
-                "Run a Screenspace scan or transcribe a video first.",
-                404,
-            )
-        return ok(
-            written=[p.name for p in written],
-            output_dir=str(output_dir),
-        )
 
-    # ---- Start overlay: directories, spreadsheet picker, persistence ----
+def api_dirs_get() -> Response:
+    s = start_settings.load_start_settings()
+    return ok(
+        input=str(utils.get_effective_input_dir()),
+        output=str(utils.get_effective_output_dir()),
+        recent_inputs=s.get("recent_inputs", []),
+        recent_outputs=s.get("recent_outputs", []),
+    )
 
-    @combined.route("/api/dirs", methods=["GET"])
-    def api_dirs_get() -> Response:
-        s = start_settings.load_start_settings()
-        return ok(
-            input=str(utils.get_effective_input_dir()),
-            output=str(utils.get_effective_output_dir()),
-            recent_inputs=s.get("recent_inputs", []),
-            recent_outputs=s.get("recent_outputs", []),
-        )
 
-    @combined.route("/api/dirs", methods=["POST"])
-    def api_dirs_post() -> FlaskResponse:
-        data = request.get_json(silent=True) or {}
-        new_input = data.get("input")
-        new_output = data.get("output")
-        errors: dict[str, str] = {}
+def api_dirs_post() -> FlaskResponse:
+    data = request.get_json(silent=True) or {}
+    new_input = data.get("input")
+    new_output = data.get("output")
+    errors: dict[str, str] = {}
 
-        if new_input is not None:
-            p = Path(str(new_input)).expanduser()
-            if not p.is_dir():
-                errors["input"] = f"Input directory does not exist: {p}"
-            else:
+    if new_input is not None:
+        p = Path(str(new_input)).expanduser()
+        if not p.is_dir():
+            errors["input"] = f"Input directory does not exist: {p}"
+        else:
+            with config.SETTINGS_LOCK:
                 config.INPUT_DIR = str(p)
-                start_settings.record_recent_input(str(p))
+            start_settings.record_recent_input(str(p))
 
-        if new_output is not None:
-            p = Path(str(new_output)).expanduser()
-            try:
-                p.mkdir(parents=True, exist_ok=True)
-            except OSError as exc:
-                errors["output"] = f"Could not create output directory: {exc}"
-            else:
+    if new_output is not None:
+        p = Path(str(new_output)).expanduser()
+        try:
+            p.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            errors["output"] = f"Could not create output directory: {exc}"
+        else:
+            with config.SETTINGS_LOCK:
                 config.OUTPUT_DIR = str(p)
-                start_settings.record_recent_output(str(p))
+            start_settings.record_recent_output(str(p))
 
-        if errors:
-            return jsonify({"ok": False, "errors": errors}), 400
-        return api_dirs_get()
+    if errors:
+        return err("Folder error", 400, errors=errors)
+    return api_dirs_get()
 
-    @combined.route("/api/spreadsheets/excel", methods=["GET"])
-    def api_spreadsheets_excel() -> Response:
-        input_dir = Path(utils.get_effective_input_dir())
-        files_list: list[dict[str, Any]] = []
-        if input_dir.is_dir():
-            for p in sorted(input_dir.glob("*.xlsx")):
-                if p.name.startswith("~$"):
-                    continue
-                try:
-                    modified = p.stat().st_mtime
-                except OSError:
-                    modified = 0.0
-                files_list.append(
-                    {"path": str(p), "name": p.name, "modified": modified}
-                )
-        return ok(input_dir=str(input_dir), files=files_list)
 
-    @combined.route("/api/spreadsheets/mindnode", methods=["GET"])
-    def api_spreadsheets_mindnode() -> Response:
-        """List ``.mindnode`` bundles in the input dir for the Start overlay."""
-        import mindnode
+def api_spreadsheets_excel() -> Response:
+    input_dir = Path(utils.get_effective_input_dir())
+    files_list: list[dict[str, Any]] = []
+    if input_dir.is_dir():
+        for p in sorted(input_dir.glob("*.xlsx")):
+            if p.name.startswith("~$"):
+                continue
+            try:
+                modified = p.stat().st_mtime
+            except OSError:
+                modified = 0.0
+            files_list.append({"path": str(p), "name": p.name, "modified": modified})
+    return ok(input_dir=str(input_dir), files=files_list)
 
-        input_dir = Path(utils.get_effective_input_dir())
-        return ok(input_dir=str(input_dir), files=mindnode.find_documents(input_dir))
 
-    @combined.route("/api/spreadsheets/mindnode/preview", methods=["GET"])
-    def api_spreadsheets_mindnode_preview() -> FlaskResponse:
-        """Summarize a ``.mindnode`` document before it is opened.
+def api_spreadsheets_mindnode() -> Response:
+    """List ``.mindnode`` bundles in the input dir for the Start overlay."""
+    import mindnode
 
-        Read-only counterpart to ``/api/spreadsheets/preview``: parses the
-        bundle without touching module state so the Start overlay can show what
-        the map holds while the user is still choosing. Carries the same
-        editable ``sources`` rows and ``unmatched`` datalist as the spreadsheet
-        preview — a mind map has no Filename row, so an override set here is the
-        *only* way to point a participant at differently-named footage.
-        """
-        import mindnode
+    input_dir = Path(utils.get_effective_input_dir())
+    return ok(input_dir=str(input_dir), files=mindnode.find_documents(input_dir))
 
-        path = (request.args.get("path") or "").strip()
-        input_dir = (request.args.get("input_dir") or "").strip()
-        if not path:
-            return err("Required: path")
-        try:
-            doc = mindnode.parse_document(path)
-        except ValueError as exc:
-            return err(str(exc), 400)
-        base_dir = (
-            Path(input_dir).expanduser()
-            if input_dir
-            else utils.get_effective_input_dir()
-        )
-        rows, unmatched = _preview_source_rows(
-            doc["study"],
-            list(doc["participants"]),
-            {},
-            start_settings.filename_overrides("mindnode", path, ""),
-            base_dir,
-        )
+
+def api_spreadsheets_mindnode_preview() -> FlaskResponse:
+    """Summarize a ``.mindnode`` document before it is opened.
+
+    Read-only counterpart to ``/api/spreadsheets/preview``: parses the
+    bundle without touching module state so the Start overlay can show what
+    the map holds while the user is still choosing. Carries the same
+    editable ``sources`` rows and ``unmatched`` datalist as the spreadsheet
+    preview — a mind map has no Filename row, so an override set here is the
+    *only* way to point a participant at differently-named footage.
+    """
+    import mindnode
+
+    path = (request.args.get("path") or "").strip()
+    input_dir = (request.args.get("input_dir") or "").strip()
+    if not path:
+        return err("Required: path")
+    try:
+        doc = mindnode.parse_document(path)
+    except ValueError as exc:
+        return err(str(exc), 400)
+    base_dir = (
+        Path(input_dir).expanduser() if input_dir else utils.get_effective_input_dir()
+    )
+    rows, unmatched = _preview_source_rows(
+        doc["study"],
+        list(doc["participants"]),
+        {},
+        start_settings.filename_overrides("mindnode", path, ""),
+        base_dir,
+    )
+    return ok(
+        study=doc["study"],
+        roots=doc["roots"],
+        participants=doc["participants"],
+        categories=sorted({n["category"] for n in doc["notes"] if n["category"]}),
+        notes=len(doc["notes"]),
+        with_times=doc["with_times"],
+        without_times=doc["without_times"],
+        has_preview=(Path(path) / mindnode.PREVIEW_RELPATH).is_file(),
+        sources=rows,
+        unmatched=unmatched,
+    )
+
+
+def api_spreadsheets_mindnode_thumb() -> FlaskResponse:
+    """Serve a ``.mindnode`` bundle's own QuickLook render of the map."""
+    import mindnode
+
+    path = (request.args.get("path") or "").strip()
+    thumb = Path(path) / mindnode.PREVIEW_RELPATH if path else None
+    if thumb is None or not thumb.is_file():
+        return err("No preview in this document", 404)
+    return send_file(str(thumb), mimetype="image/jpeg")
+
+
+def api_spreadsheets_google() -> Response:
+    """List the account's spreadsheets for the Start overlay picker.
+
+    Served from the ``_cached_spreadsheet_meta`` TTL cache; ``?refresh=true``
+    (the picker's Refresh button) re-lists from Drive so a spreadsheet created
+    mid-session shows up without waiting out the TTL.
+    """
+    if _google_auth.client is None:
+        import cli as _cli
+
+        # Searched paths and setup link ride the unauthenticated response; windowed
+        # launches have no stdout.
         return ok(
-            study=doc["study"],
-            roots=doc["roots"],
-            participants=doc["participants"],
-            categories=sorted({n["category"] for n in doc["notes"] if n["category"]}),
-            notes=len(doc["notes"]),
-            with_times=doc["with_times"],
-            without_times=doc["without_times"],
-            has_preview=(Path(path) / mindnode.PREVIEW_RELPATH).is_file(),
-            sources=rows,
-            unmatched=unmatched,
+            authenticated=False,
+            auth_in_flight=_google_auth.in_flight,
+            auth_error=_google_auth.error,
+            sheets=[],
+            credentials_filename=_cli.CREDENTIALS_FILENAME,
+            credentials_paths=[str(p) for p in _cli.credentials_search_paths()],
+            credentials_found=str(_cli.resolve_credentials_path() or ""),
+            credentials_guide_url="https://docs.gspread.org/en/latest/oauth2.html",
         )
-
-    @combined.route("/api/spreadsheets/mindnode/thumb", methods=["GET"])
-    def api_spreadsheets_mindnode_thumb() -> FlaskResponse:
-        """Serve a ``.mindnode`` bundle's own QuickLook render of the map."""
-        import mindnode
-
-        path = (request.args.get("path") or "").strip()
-        thumb = Path(path) / mindnode.PREVIEW_RELPATH if path else None
-        if thumb is None or not thumb.is_file():
-            return err("No preview in this document", 404)
-        return send_file(str(thumb), mimetype="image/jpeg")
-
-    @combined.route("/api/spreadsheets/google", methods=["GET"])
-    def api_spreadsheets_google() -> Response:
-        """List the account's spreadsheets for the Start overlay picker.
-
-        Served from the ``_cached_spreadsheet_meta`` TTL cache; ``?refresh=true``
-        (the picker's Refresh button) re-lists from Drive so a spreadsheet created
-        mid-session shows up without waiting out the TTL.
-        """
-        if _google_auth.client is None:
-            import cli as _cli
-
-            # Searched paths and setup link ride the unauthenticated response; windowed
-            # launches have no stdout.
-            return ok(
-                authenticated=False,
-                auth_in_flight=_google_auth.in_flight,
-                auth_error=_google_auth.error,
-                sheets=[],
-                credentials_filename=_cli.CREDENTIALS_FILENAME,
-                credentials_paths=[str(p) for p in _cli.credentials_search_paths()],
-                credentials_found=str(_cli.resolve_credentials_path() or ""),
-                credentials_guide_url="https://docs.gspread.org/en/latest/oauth2.html",
-            )
-        try:
-            metas = _cached_spreadsheet_meta(
-                force=request.args.get("refresh") == "true"
-            )
-        except Exception as exc:
-            return ok(
-                authenticated=True,
-                auth_in_flight=False,
-                auth_error=str(exc),
-                sheets=[],
-            )
-        # id stays the name for open-by-name; modifiedTime (Drive ISO-8601) feeds the
-        # "Edited …" sub-line.
+    try:
+        metas = _cached_spreadsheet_meta(force=request.args.get("refresh") == "true")
+    except Exception as exc:
         return ok(
             authenticated=True,
             auth_in_flight=False,
-            auth_error="",
-            sheets=[
-                {
-                    "name": m["name"],
-                    "id": m["name"],
-                    "modifiedTime": m.get("modifiedTime", ""),
-                }
-                for m in metas
-            ],
+            auth_error=str(exc),
+            sheets=[],
         )
-
-    @combined.route("/api/spreadsheets/worksheets", methods=["GET"])
-    def api_spreadsheets_worksheets() -> Response:
-        """List a spreadsheet's worksheet titles for the Start overlay dropdown.
-
-        Query params: ``type`` ('google'|'excel') and ``id_or_path``. Returns
-        ``{worksheets: [titles…], recommended: "<title>"}``. ``recommended`` is
-        the priority auto-pick the open path would use when no tab is chosen.
-        Fetched once per selection; the client caches by ``type|id_or_path``.
-        """
-        type_ = (request.args.get("type") or "").strip()
-        id_or_path = (request.args.get("id_or_path") or "").strip()
-        if type_ not in ("google", "excel") or not id_or_path:
-            return err("Required: type ('google'|'excel') and id_or_path")
-
-        titles: list[str] = []
-        recommended = ""
-        try:
-            if type_ == "excel":
-                import excel_io
-
-                titles, recommended = excel_io.list_worksheet_titles(id_or_path)
-            else:
-                if _google_auth.client is None:
-                    return err("Not authenticated with Google.")
-                import app as _app
-
-                # A URL needs no Drive listing (see 35a7a606); only name lookups do.
-                doc_list = (
-                    None
-                    if id_or_path.startswith(("http://", "https://"))
-                    else _spreadsheet_names_for(id_or_path)
-                )
-                titles, recommended = _app.list_worksheet_titles(
-                    _google_auth.client, id_or_path, doc_list=doc_list
-                )
-        except Exception as exc:
-            return err(str(exc), 500)
-        return ok(worksheets=titles, recommended=recommended)
-
-    @combined.route("/api/spreadsheets/preview", methods=["GET"])
-    def api_spreadsheets_preview() -> Response:
-        """Preview the source-video filenames a spreadsheet will expect.
-
-        Query params: ``type`` ('google'|'excel'), ``id_or_path``, optional
-        ``worksheet``, and optional ``input_dir`` (the Start overlay's *typed*
-        folder, which is not yet the server's effective input dir). Returns
-        ``{study, worksheet, unmatched, participants: [{id, filenames, found,
-        override, override_value, sheet_value}]}`` — the names
-        ``files.resolve_source_video_paths`` will look for, and whether they are
-        on disk, so a naming mismatch surfaces before the workspace is opened.
-        Each row is editable: see ``/api/spreadsheets/preview/override``.
-
-        Read-only: builds a throwaway :class:`SheetContext` and never calls
-        ``_swap_worksheet``, so the active sheet is untouched.
-
-        Cost: one spreadsheet read (``get_all_values``) per (sheet, worksheet)
-        pair, duplicating the read ``/api/spreadsheets/open`` does moments later.
-        That duplication is deliberate — handing the parsed context off to the
-        open path would mean threading it through ``_swap_worksheet`` /
-        ``_init_studio_state`` (atomic swap, rollback contract) and opening a
-        staleness window between preview and open. The client caches per
-        ``type|id_or_path|worksheet|input_dir`` and must never poll this route.
-        """
-        type_ = (request.args.get("type") or "").strip()
-        id_or_path = (request.args.get("id_or_path") or "").strip()
-        worksheet = (request.args.get("worksheet") or "").strip() or None
-        input_dir = (request.args.get("input_dir") or "").strip()
-        if type_ not in ("google", "excel") or not id_or_path:
-            return err("Required: type ('google'|'excel') and id_or_path")
-        if type_ == "google" and _google_auth.client is None:
-            return err("Not authenticated with Google.")
-
-        try:
-            ws, _label = _open_worksheet_for(type_, id_or_path, worksheet)
-            if ws is None:
-                return err("Could not open spreadsheet", 404)
-            ctx = spreadsheet.build_sheet_context(ws)
-        except Exception as exc:
-            return err(str(exc), 500)
-        if ctx is None:
-            return err(
-                "Could not read participants from this worksheet — check that it "
-                "has ID, Observation and Category headers and P/G participant "
-                "columns."
-            )
-
-        participants = spreadsheet.get_participant_list(
-            ctx.header_row, ctx.id_cell, ctx.num_participants
-        )
-        # Sheet Filename row only; user overrides belong to the previewed identity,
-        # not config.FILENAME_OVERRIDES.
-        sheet_overrides = spreadsheet.participant_filename_overrides(ctx, {})
-        loaded_worksheet = getattr(ws, "title", "") or (worksheet or "")
-        user_overrides = start_settings.filename_overrides(
-            type_, id_or_path, loaded_worksheet
-        )
-        base_dir = (
-            Path(input_dir).expanduser()
-            if input_dir
-            else utils.get_effective_input_dir()
-        )
-        rows, unmatched = _preview_source_rows(
-            ctx.study_name, participants, sheet_overrides, user_overrides, base_dir
-        )
-        return ok(
-            study=ctx.study_name,
-            worksheet=loaded_worksheet,
-            participants=rows,
-            unmatched=unmatched,
-        )
-
-    @combined.route("/api/spreadsheets/preview/override", methods=["POST"])
-    def api_spreadsheets_preview_override() -> FlaskResponse:
-        """Set (or clear) one participant's source-video filename override.
-
-        Body: ``{type, id_or_path, worksheet, participant, filename, study,
-        sheet_value, input_dir}``. An empty *filename* clears the override and
-        the participant falls back to *sheet_value* (the sheet's Filename row)
-        or ``{study}_{participant}.mp4``.
-
-        Deliberately does not re-read the spreadsheet: the preview it belongs to
-        costs a ``get_all_values`` (rate-limited on Google) while re-resolving a
-        path is pure disk work, so *study* and *sheet_value* are echoed back
-        from the preview payload the client already holds. They only affect what
-        this route reports — the authoritative resolution happens against the
-        real sheet when the workspace opens.
-        """
-        data = request.get_json(silent=True) or {}
-        type_ = (data.get("type") or "").strip()
-        id_or_path = (data.get("id_or_path") or "").strip()
-        worksheet = (data.get("worksheet") or "").strip()
-        participant = (data.get("participant") or "").strip()
-        filename = (data.get("filename") or "").strip()
-        study = (data.get("study") or "").strip()
-        sheet_value = (data.get("sheet_value") or "").strip()
-        input_dir = (data.get("input_dir") or "").strip()
-        if type_ not in ("google", "excel", "mindnode") or not id_or_path:
-            return err("Required: type ('google'|'excel'|'mindnode') and id_or_path")
-        if not participant:
-            return err("Required: participant")
-
-        user_overrides = start_settings.set_filename_override(
-            type_, id_or_path, worksheet, participant, filename
-        )
-        # If this source is open, re-seed so the blueprints' cached participant lists
-        # pick it up.
-        active = _active_project_source
-        if (
-            active
-            and active.get("type") == type_
-            and active.get("id_or_path") == id_or_path
-            and (active.get("worksheet") or "") == worksheet
-        ):
-            _seed_filename_overrides(active)
-
-        base_dir = (
-            Path(input_dir).expanduser()
-            if input_dir
-            else utils.get_effective_input_dir()
-        )
-        # Recompute this participant's row only; a one-entry-stale datalist isn't
-        # worth a full preview read.
-        rows, _unmatched = _preview_source_rows(
-            study,
-            [participant],
-            {participant: sheet_value or None},
-            user_overrides,
-            base_dir,
-        )
-        return ok(row=rows[0])
-
-    @combined.route("/api/spreadsheets/google/auth", methods=["POST"])
-    def api_spreadsheets_google_auth() -> FlaskResponse:
-        with _google_auth.lock:
-            if _google_auth.in_flight:
-                return ok(started=False, in_flight=True)
-            if _google_auth.client is not None:
-                return ok(started=False, authenticated=True)
-            _google_auth.in_flight = True
-            _google_auth.error = ""
-
-        def _run_auth() -> None:
-            try:
-                import cli as _cli
-
-                client = _cli.authenticate_google()
-                if client is None:
-                    # Missing credentials.json is a setup step, not a broken file; the
-                    # overlay expands on each.
-                    _google_auth.error = (
-                        "No credentials.json found."
-                        if _cli.resolve_credentials_path() is None
-                        else "Google sign-in failed — credentials.json was found "
-                        "but could not be used."
-                    )
-                else:
-                    _google_auth.client = client
-                    # A different account may have signed in; the previous
-                    # account's spreadsheet listing must not survive.
-                    _invalidate_spreadsheet_meta()
-            except Exception as exc:
-                # Daemon-thread exceptions otherwise vanish; surface to logs
-                # so a misconfigured credentials.json is debuggable.
-                utils.error_print(f"Google auth thread failed: {exc}")
-                _google_auth.error = str(exc)
-            finally:
-                _google_auth.in_flight = False
-
-        threading.Thread(target=_run_auth, daemon=True).start()
-        return jsonify({"ok": True, "started": True, "in_flight": True}), 202
-
-    @combined.route("/api/spreadsheets/open", methods=["POST"])
-    def api_spreadsheets_open() -> FlaskResponse:
-        data = request.get_json(silent=True) or {}
-        type_ = data.get("type", "")
-        id_or_path = (data.get("id_or_path") or "").strip()
-        worksheet = (data.get("worksheet") or "").strip() or None
-        if type_ not in ("google", "excel", "mindnode") or not id_or_path:
-            return err("Required: type ('google'|'excel'|'mindnode') and id_or_path")
-        # None keeps any stored name; only the Start overlay sends project_name.
-        project_name = data.get("project_name")
-        if project_name is not None and not isinstance(project_name, str):
-            return err("project_name must be a string")
-
-        if _generation_busy():
-            return err(
-                "Generation is in progress — wait for it to finish "
-                "before switching spreadsheets.",
-                409,
-            )
-        if type_ == "mindnode":
-            return _open_mindnode(id_or_path, project_name)
-        if type_ == "google" and _google_auth.client is None:
-            return err("Not authenticated with Google — click 'Connect Google' first.")
-
-        new_ws: Any = None
-        label = ""
-        try:
-            new_ws, label = _open_worksheet_for(type_, id_or_path, worksheet)
-        except Exception as exc:
-            return err(str(exc), 500)
-
-        if new_ws is None:
-            return err("Could not open spreadsheet", 404)
-
-        # Record the worksheet actually loaded (after auto-pick) so recents restore
-        # the exact tab.
-        loaded_worksheet = getattr(new_ws, "title", "") or (worksheet or "")
-        source = {
-            "type": type_,
-            "id_or_path": id_or_path,
-            "label": label,
-            "worksheet": loaded_worksheet,
-        }
-        # Seed before the swap: blueprint re-inits resolve participants. Restored if
-        # the swap fails.
-        prev_overrides = config.FILENAME_OVERRIDES
-        _seed_filename_overrides(source)
-        try:
-            _swap_worksheet(new_ws)
-        except Exception:
-            config.FILENAME_OVERRIDES = prev_overrides
-            raise
-        if _sheet_context is None:
-            return err("Could not parse the spreadsheet", 500)
-        start_settings.record_recent_spreadsheet(
-            type_, id_or_path, label, loaded_worksheet
-        )
-        start_settings.record_project_session(
-            str(utils.get_effective_input_dir()),
-            str(utils.get_effective_output_dir()),
-            source,
-            name=project_name,
-        )
-        global _active_sheet_meta, _active_project_source, _startup_notice
-        _active_sheet_meta = dict(source)
-        _active_project_source = source
-        # A sheet is open now — whatever the boot build failed to open is moot.
-        _startup_notice = None
-        return ok(
-            sheet_loaded=True,
-            spreadsheet_label=_spreadsheet_label(),
-        )
-
-    @combined.route("/api/spreadsheets/close", methods=["POST"])
-    def api_spreadsheets_close() -> FlaskResponse:
-        global _active_sheet_meta, _mindnode_doc, _active_project_source
-        if _generation_busy():
-            return err("Generation is in progress — wait for it to finish.", 409)
-        # A mind map is an independent source; close whichever the overlay actually means.
-        if (request.get_json(silent=True) or {}).get("type") == "mindnode":
-            with _mindnode_lock:
-                _mindnode_doc = None
-            # Whatever is still open becomes the session's source again.
-            _active_project_source = _active_sheet_meta
-            _seed_filename_overrides(_active_project_source)
-            return ok(sheet_loaded=_worksheet is not None, mindnode_loaded=False)
-        _swap_worksheet(None)
-        _active_sheet_meta = None
-        _active_project_source = _mindnode_source()
-        _seed_filename_overrides(_active_project_source)
-        return ok(sheet_loaded=False, mindnode_loaded=_mindnode_doc is not None)
-
-    @combined.route("/api/folder-picker", methods=["POST"])
-    def api_folder_picker() -> Response:
-        """Open the host OS's native folder picker and return the chosen path.
-
-        Called by the Start overlay's Browse buttons. Returns
-        ``{ok: True, path: "/…"}`` on confirm, ``{ok: True, path: None}`` when
-        the user cancels or the platform has no dialog available.
-        """
-        data = request.get_json(silent=True) or {}
-        initial = (data.get("initial") or "").strip()
-        path = utils.open_native_folder_picker(initial)
-        return ok(path=path)
-
-    @combined.route("/api/sessions/record", methods=["POST"])
-    def api_sessions_record() -> FlaskResponse:
-        """Record an "Open workspace" session — used by the no-spreadsheet path.
-
-        The Google/Excel paths already record via api_spreadsheets_open after a
-        successful sheet open; this endpoint covers the case where the user
-        clicks "Open workspace" on the "No spreadsheet" tab.
-
-        An omitted ``name`` leaves any stored project name alone; ``""`` clears
-        it. See :func:`start_settings.record_project_session`.
-        """
-        data = request.get_json(silent=True) or {}
-        input_raw = data.get("input")
-        output_raw = data.get("output")
-        if input_raw is not None and not isinstance(input_raw, str):
-            return err("input must be a string")
-        if output_raw is not None and not isinstance(output_raw, str):
-            return err("output must be a string")
-        input_dir = (input_raw or "").strip()
-        output_dir = (output_raw or "").strip()
-
-        name_raw = data.get("name")
-        if name_raw is not None and not isinstance(name_raw, str):
-            return err("name must be a string")
-
-        spreadsheet_payload = data.get("spreadsheet")
-        spreadsheet_dict: dict[str, Any] | None = None
-        if spreadsheet_payload is not None:
-            if not isinstance(spreadsheet_payload, dict):
-                return err("spreadsheet must be an object or null")
-            ss_type = (spreadsheet_payload.get("type") or "").strip()
-            ss_id = (spreadsheet_payload.get("id_or_path") or "").strip()
-            ss_label = (spreadsheet_payload.get("label") or "").strip()
-            if ss_type not in ("google", "excel"):
-                return err("spreadsheet.type must be 'google' or 'excel'")
-            if not ss_id:
-                return err("spreadsheet.id_or_path is required")
-            spreadsheet_dict = {
-                "type": ss_type,
-                "id_or_path": ss_id,
-                "label": ss_label or ss_id,
+    # id stays the name for open-by-name; modifiedTime (Drive ISO-8601) feeds the
+    # "Edited …" sub-line.
+    return ok(
+        authenticated=True,
+        auth_in_flight=False,
+        auth_error="",
+        sheets=[
+            {
+                "name": m["name"],
+                "id": m["name"],
+                "modifiedTime": m.get("modifiedTime", ""),
             }
-        start_settings.record_project_session(
-            input_dir or str(utils.get_effective_input_dir()),
-            output_dir or str(utils.get_effective_output_dir()),
-            spreadsheet_dict,
-            name=name_raw,
-        )
-        return ok()
+            for m in metas
+        ],
+    )
 
-    @combined.route("/api/changelog")
-    def api_changelog() -> Response:
-        import changelog
 
-        return ok(entries=changelog.load_entries())
+def api_spreadsheets_worksheets() -> Response:
+    """List a spreadsheet's worksheet titles for the Start overlay dropdown.
 
-    # ---- Self-update (frozen desktop app only) ----
+    Query params: ``type`` ('google'|'excel') and ``id_or_path``. Returns
+    ``{worksheets: [titles…], recommended: "<title>"}``. ``recommended`` is
+    the priority auto-pick the open path would use when no tab is chosen.
+    Fetched once per selection; the client caches by ``type|id_or_path``.
+    """
+    type_ = (request.args.get("type") or "").strip()
+    id_or_path = (request.args.get("id_or_path") or "").strip()
+    if type_ not in ("google", "excel") or not id_or_path:
+        return err("Required: type ('google'|'excel') and id_or_path")
 
-    @combined.route("/api/update/status")
-    def api_update_status() -> Response:
-        import updater
+    titles: list[str] = []
+    recommended = ""
+    try:
+        if type_ == "excel":
+            import excel_io
 
-        return ok(**updater.status())
+            titles, recommended = excel_io.list_worksheet_titles(id_or_path)
+        else:
+            if _google_auth.client is None:
+                return err("Not authenticated with Google.")
+            import app as _app
 
-    @combined.route("/api/update/check", methods=["POST"])
-    def api_update_check() -> FlaskResponse:
-        """Refresh from GitHub on a thread; ``force`` bypasses the cooldown."""
-        import updater
+            # A URL needs no Drive listing (see 35a7a606); only name lookups do.
+            doc_list = (
+                None
+                if id_or_path.startswith(("http://", "https://"))
+                else _spreadsheet_names_for(id_or_path)
+            )
+            titles, recommended = _app.list_worksheet_titles(
+                _google_auth.client, id_or_path, doc_list=doc_list
+            )
+    except Exception as exc:
+        return err(str(exc), 500)
+    return ok(worksheets=titles, recommended=recommended)
 
-        if not updater.is_supported():
-            return ok(**updater.status())
-        data = request.get_json(silent=True) or {}
-        force = bool(data.get("force"))
-        # The phase flips before the reply so the page's poller sees "checking".
-        if updater.start_check(force=force):
-            threading.Thread(
-                target=updater.finish_check,
-                kwargs={"force": force},
-                daemon=True,
-                name="update-check",
-            ).start()
-        return ok(**updater.status())
 
-    @combined.route("/api/update/download", methods=["POST"])
-    def api_update_download() -> FlaskResponse:
-        import updater
+def api_spreadsheets_preview() -> Response:
+    """Preview the source-video filenames a spreadsheet will expect.
 
-        if not updater.start_download():
-            return err("No update to download", 409)
-        threading.Thread(
-            target=updater.finish_download, daemon=True, name="update-download"
-        ).start()
-        return ok(**updater.status())
+    Query params: ``type`` ('google'|'excel'), ``id_or_path``, optional
+    ``worksheet``, and optional ``input_dir`` (the Start overlay's *typed*
+    folder, which is not yet the server's effective input dir). Returns
+    ``{study, worksheet, unmatched, participants: [{id, filenames, found,
+    override, override_value, sheet_value}]}`` — the names
+    ``files.resolve_source_video_paths`` will look for, and whether they are
+    on disk, so a naming mismatch surfaces before the workspace is opened.
+    Each row is editable: see ``/api/spreadsheets/preview/override``.
 
-    @combined.route("/api/update/apply", methods=["POST"])
-    def api_update_apply() -> FlaskResponse:
-        """Install the downloaded update; the app quits and relaunches."""
-        import updater
+    Read-only: builds a throwaway :class:`SheetContext` and never calls
+    ``_swap_worksheet``, so the active sheet is untouched.
 
-        if not updater.start_apply():
-            return err("No downloaded update to install", 409)
-        threading.Thread(
-            target=updater.finish_apply, daemon=True, name="update-apply"
-        ).start()
-        return ok(**updater.status())
+    Cost: one spreadsheet read (``get_all_values``) per (sheet, worksheet)
+    pair, duplicating the read ``/api/spreadsheets/open`` does moments later.
+    That duplication is deliberate — handing the parsed context off to the
+    open path would mean threading it through ``_swap_worksheet`` /
+    ``_init_studio_state`` (atomic swap, rollback contract) and opening a
+    staleness window between preview and open. The client caches per
+    ``type|id_or_path|worksheet|input_dir`` and must never poll this route.
+    """
+    type_ = (request.args.get("type") or "").strip()
+    id_or_path = (request.args.get("id_or_path") or "").strip()
+    worksheet = (request.args.get("worksheet") or "").strip() or None
+    input_dir = (request.args.get("input_dir") or "").strip()
+    if type_ not in ("google", "excel") or not id_or_path:
+        return err("Required: type ('google'|'excel') and id_or_path")
+    if type_ == "google" and _google_auth.client is None:
+        return err("Not authenticated with Google.")
 
-    @combined.route("/api/update/skip", methods=["POST"])
-    def api_update_skip() -> FlaskResponse:
-        import updater
-
-        if not updater.skip_version():
-            return err("No update to skip", 409)
-        return ok(**updater.status())
-
-    @combined.route("/api/update/reveal", methods=["POST"])
-    def api_update_reveal() -> FlaskResponse:
-        import updater
-
-        if not updater.reveal_download():
-            return err("No downloaded update to show", 404)
-        return ok(**updater.status())
-
-    @combined.route("/api/licenses")
-    def api_licenses() -> Response:
-        # SUMMARY table only; `--licenses` prints the whole ~100 KB notice.
-        import licenses
-
-        return ok(components=licenses.load_components())
-
-    @combined.route("/api/start-settings", methods=["GET"])
-    def api_start_settings_get() -> Response:
-        # `desktop` gates the window-rect toggle: a browser tab has no window to remember.
-        return ok(
-            settings=start_settings.load_start_settings(),
-            desktop=utils.GUI_LAUNCH,
+    try:
+        ws, _label = _open_worksheet_for(type_, id_or_path, worksheet)
+        if ws is None:
+            return err("Could not open spreadsheet", 404)
+        ctx = spreadsheet.build_sheet_context(ws)
+    except Exception as exc:
+        return err(str(exc), 500)
+    if ctx is None:
+        return err(
+            "Could not read participants from this worksheet — check that it "
+            "has ID, Observation and Category headers and P/G participant "
+            "columns."
         )
 
-    @combined.route("/api/start-settings", methods=["POST"])
-    def api_start_settings_post() -> FlaskResponse:
-        data = request.get_json(silent=True) or {}
-        if "persist_enabled" in data:
-            start_settings.set_persist_enabled(bool(data["persist_enabled"]))
-        if "remember_window" in data:
-            start_settings.set_remember_window(bool(data["remember_window"]))
-        return ok(settings=start_settings.load_start_settings())
+    participants = spreadsheet.get_participant_list(
+        ctx.header_row, ctx.id_cell, ctx.num_participants
+    )
+    # Sheet Filename row only; user overrides belong to the previewed identity,
+    # not config.FILENAME_OVERRIDES.
+    sheet_overrides = spreadsheet.participant_filename_overrides(ctx, {})
+    loaded_worksheet = getattr(ws, "title", "") or (worksheet or "")
+    user_overrides = start_settings.filename_overrides(
+        type_, id_or_path, loaded_worksheet
+    )
+    base_dir = (
+        Path(input_dir).expanduser() if input_dir else utils.get_effective_input_dir()
+    )
+    rows, unmatched = _preview_source_rows(
+        ctx.study_name, participants, sheet_overrides, user_overrides, base_dir
+    )
+    return ok(
+        study=ctx.study_name,
+        worksheet=loaded_worksheet,
+        participants=rows,
+        unmatched=unmatched,
+    )
 
-    # ---- Shared settings (available from any page) ----
 
-    @combined.route("/api/settings/reveal", methods=["POST"])
-    def combined_settings_reveal() -> FlaskResponse:
-        """Show the settings file in the OS file browser.
+def api_spreadsheets_preview_override() -> FlaskResponse:
+    """Set (or clear) one participant's source-video filename override.
 
-        Takes no arguments — the path is server-side only. When every setting is
-        at its default the file does not exist, so the config dir is revealed
-        instead (created first, or there would be nothing to open).
-        """
-        path = _studio_settings_path()
-        if not path.is_file():
-            path = path.parent
-            try:
-                path.mkdir(parents=True, exist_ok=True)
-            except OSError as exc:
-                return err(f"Could not open the folder: {exc}")
-        if not utils.reveal_in_file_manager(path):
-            return err("Could not open the folder")
-        return ok(path=str(path))
+    Body: ``{type, id_or_path, worksheet, participant, filename, study,
+    sheet_value, input_dir}``. An empty *filename* clears the override and
+    the participant falls back to *sheet_value* (the sheet's Filename row)
+    or ``{study}_{participant}.mp4``.
 
-    @combined.route("/api/models/llm/reveal", methods=["POST"])
-    def combined_llm_reveal() -> FlaskResponse:
-        """Show a downloaded model's GGUF in the OS file browser.
+    Deliberately does not re-read the spreadsheet: the preview it belongs to
+    costs a ``get_all_values`` (rate-limited on Google) while re-resolving a
+    path is pure disk work, so *study* and *sheet_value* are echoed back
+    from the preview payload the client already holds. They only affect what
+    this route reports — the authoritative resolution happens against the
+    real sheet when the workspace opens.
+    """
+    data = request.get_json(silent=True) or {}
+    type_ = (data.get("type") or "").strip()
+    id_or_path = (data.get("id_or_path") or "").strip()
+    worksheet = (data.get("worksheet") or "").strip()
+    participant = (data.get("participant") or "").strip()
+    filename = (data.get("filename") or "").strip()
+    study = (data.get("study") or "").strip()
+    sheet_value = (data.get("sheet_value") or "").strip()
+    input_dir = (data.get("input_dir") or "").strip()
+    if type_ not in ("google", "excel", "mindnode") or not id_or_path:
+        return err("Required: type ('google'|'excel'|'mindnode') and id_or_path")
+    if not participant:
+        return err("Required: participant")
 
-        Ollama-installed models have no file in the models dir until they are
-        selected, so those reveal their blob in Ollama's own store.
-        """
-        import llm_client
+    user_overrides = start_settings.set_filename_override(
+        type_, id_or_path, worksheet, participant, filename
+    )
+    # If this source is open, re-seed so the blueprints' cached participant lists
+    # pick it up.
+    active = _active_project_source
+    if (
+        active
+        and active.get("type") == type_
+        and active.get("id_or_path") == id_or_path
+        and (active.get("worksheet") or "") == worksheet
+    ):
+        _seed_filename_overrides(active)
 
-        name = str((request.get_json(silent=True) or {}).get("model", "")).strip()
-        if not name:
-            return err("Missing model")
-        path = llm_client.model_path(name)
-        if path is None:
-            return err("Model not found", 404)
-        if not utils.reveal_in_file_manager(path):
-            return err("Could not open the folder")
-        return ok(path=str(path))
+    base_dir = (
+        Path(input_dir).expanduser() if input_dir else utils.get_effective_input_dir()
+    )
+    # Recompute this participant's row only; a one-entry-stale datalist isn't
+    # worth a full preview read.
+    rows, _unmatched = _preview_source_rows(
+        study,
+        [participant],
+        {participant: sheet_value or None},
+        user_overrides,
+        base_dir,
+    )
+    return ok(row=rows[0])
 
-    # ---- Studio routes every page needs (settings modal), re-mounted at root ----
+
+def api_spreadsheets_google_auth() -> FlaskResponse:
+    with _google_auth.lock:
+        if _google_auth.in_flight:
+            return ok(started=False, in_flight=True)
+        if _google_auth.client is not None:
+            return ok(started=False, authenticated=True)
+        _google_auth.in_flight = True
+        _google_auth.error = ""
+
+    def _run_auth() -> None:
+        try:
+            import cli as _cli
+
+            client = _cli.authenticate_google()
+            if client is None:
+                # Missing credentials.json is a setup step, not a broken file; the
+                # overlay expands on each.
+                _google_auth.error = (
+                    "No credentials.json found."
+                    if _cli.resolve_credentials_path() is None
+                    else "Google sign-in failed — credentials.json was found "
+                    "but could not be used."
+                )
+            else:
+                _google_auth.client = client
+                # A different account may have signed in; the previous
+                # account's spreadsheet listing must not survive.
+                _invalidate_spreadsheet_meta()
+        except Exception as exc:
+            # Daemon-thread exceptions otherwise vanish; surface to logs
+            # so a misconfigured credentials.json is debuggable.
+            utils.error_print(f"Google auth thread failed: {exc}")
+            _google_auth.error = str(exc)
+        finally:
+            _google_auth.in_flight = False
+
+    threading.Thread(target=_run_auth, daemon=True).start()
+    return ok(started=True, in_flight=True), 202
+
+
+def api_spreadsheets_open() -> FlaskResponse:
+    data = request.get_json(silent=True) or {}
+    type_ = data.get("type", "")
+    id_or_path = (data.get("id_or_path") or "").strip()
+    worksheet = (data.get("worksheet") or "").strip() or None
+    if type_ not in ("google", "excel", "mindnode") or not id_or_path:
+        return err("Required: type ('google'|'excel'|'mindnode') and id_or_path")
+    # None keeps any stored name; only the Start overlay sends project_name.
+    project_name = data.get("project_name")
+    if project_name is not None and not isinstance(project_name, str):
+        return err("project_name must be a string")
+
+    if _generation_busy():
+        return err(
+            "Generation is in progress — wait for it to finish "
+            "before switching spreadsheets.",
+            409,
+        )
+    if type_ == "mindnode":
+        return _open_mindnode(id_or_path, project_name)
+    if type_ == "google" and _google_auth.client is None:
+        return err("Not authenticated with Google — click 'Connect Google' first.")
+
+    new_ws: Any = None
+    label = ""
+    try:
+        new_ws, label = _open_worksheet_for(type_, id_or_path, worksheet)
+    except Exception as exc:
+        return err(str(exc), 500)
+
+    if new_ws is None:
+        return err("Could not open spreadsheet", 404)
+
+    # Record the worksheet actually loaded (after auto-pick) so recents restore
+    # the exact tab.
+    loaded_worksheet = getattr(new_ws, "title", "") or (worksheet or "")
+    source = {
+        "type": type_,
+        "id_or_path": id_or_path,
+        "label": label,
+        "worksheet": loaded_worksheet,
+    }
+    # Seed before the swap: blueprint re-inits resolve participants. Restored if
+    # the swap fails.
+    prev_overrides = config.FILENAME_OVERRIDES
+    _seed_filename_overrides(source)
+    try:
+        _swap_worksheet(new_ws)
+    except Exception:
+        with config.SETTINGS_LOCK:
+            config.FILENAME_OVERRIDES = prev_overrides
+        raise
+    if _sheet_context is None:
+        return err("Could not parse the spreadsheet", 500)
+    start_settings.record_recent_spreadsheet(type_, id_or_path, label, loaded_worksheet)
+    start_settings.record_project_session(
+        str(utils.get_effective_input_dir()),
+        str(utils.get_effective_output_dir()),
+        source,
+        name=project_name,
+    )
+    global _active_sheet_meta, _active_project_source, _startup_notice
+    _active_sheet_meta = dict(source)
+    _active_project_source = source
+    # A sheet is open now — whatever the boot build failed to open is moot.
+    _startup_notice = None
+    return ok(
+        sheet_loaded=True,
+        spreadsheet_label=_spreadsheet_label(),
+    )
+
+
+def api_spreadsheets_close() -> FlaskResponse:
+    global _active_sheet_meta, _mindnode_doc, _active_project_source
+    if _generation_busy():
+        return err("Generation is in progress — wait for it to finish.", 409)
+    # A mind map is an independent source; close whichever the overlay actually means.
+    if (request.get_json(silent=True) or {}).get("type") == "mindnode":
+        with _mindnode_lock:
+            _mindnode_doc = None
+        # Whatever is still open becomes the session's source again.
+        _active_project_source = _active_sheet_meta
+        _seed_filename_overrides(_active_project_source)
+        return ok(sheet_loaded=_worksheet is not None, mindnode_loaded=False)
+    _swap_worksheet(None)
+    _active_sheet_meta = None
+    _active_project_source = _mindnode_source()
+    _seed_filename_overrides(_active_project_source)
+    return ok(sheet_loaded=False, mindnode_loaded=_mindnode_doc is not None)
+
+
+def api_folder_picker() -> Response:
+    """Open the host OS's native folder picker and return the chosen path.
+
+    Called by the Start overlay's Browse buttons. Returns
+    ``{ok: True, path: "/…"}`` on confirm, ``{ok: True, path: None}`` when
+    the user cancels or the platform has no dialog available.
+    """
+    data = request.get_json(silent=True) or {}
+    initial = (data.get("initial") or "").strip()
+    path = utils.open_native_folder_picker(initial)
+    return ok(path=path)
+
+
+def api_sessions_record() -> FlaskResponse:
+    """Record an "Open workspace" session — used by the no-spreadsheet path.
+
+    The Google/Excel paths already record via api_spreadsheets_open after a
+    successful sheet open; this endpoint covers the case where the user
+    clicks "Open workspace" on the "No spreadsheet" tab.
+
+    An omitted ``name`` leaves any stored project name alone; ``""`` clears
+    it. See :func:`start_settings.record_project_session`.
+    """
+    data = request.get_json(silent=True) or {}
+    input_raw = data.get("input")
+    output_raw = data.get("output")
+    if input_raw is not None and not isinstance(input_raw, str):
+        return err("input must be a string")
+    if output_raw is not None and not isinstance(output_raw, str):
+        return err("output must be a string")
+    input_dir = (input_raw or "").strip()
+    output_dir = (output_raw or "").strip()
+
+    name_raw = data.get("name")
+    if name_raw is not None and not isinstance(name_raw, str):
+        return err("name must be a string")
+
+    spreadsheet_payload = data.get("spreadsheet")
+    spreadsheet_dict: dict[str, Any] | None = None
+    if spreadsheet_payload is not None:
+        if not isinstance(spreadsheet_payload, dict):
+            return err("spreadsheet must be an object or null")
+        ss_type = (spreadsheet_payload.get("type") or "").strip()
+        ss_id = (spreadsheet_payload.get("id_or_path") or "").strip()
+        ss_label = (spreadsheet_payload.get("label") or "").strip()
+        if ss_type not in ("google", "excel"):
+            return err("spreadsheet.type must be 'google' or 'excel'")
+        if not ss_id:
+            return err("spreadsheet.id_or_path is required")
+        spreadsheet_dict = {
+            "type": ss_type,
+            "id_or_path": ss_id,
+            "label": ss_label or ss_id,
+        }
+    start_settings.record_project_session(
+        input_dir or str(utils.get_effective_input_dir()),
+        output_dir or str(utils.get_effective_output_dir()),
+        spreadsheet_dict,
+        name=name_raw,
+    )
+    return ok()
+
+
+def api_changelog() -> Response:
+    import changelog
+
+    return ok(entries=changelog.load_entries())
+
+
+def api_licenses() -> Response:
+    # SUMMARY table only; `--licenses` prints the whole ~100 KB notice.
+    import licenses
+
+    return ok(components=licenses.load_components())
+
+
+def api_start_settings_get() -> Response:
+    # `desktop` gates the window-rect toggle: a browser tab has no window to remember.
+    return ok(
+        settings=start_settings.load_start_settings(),
+        desktop=utils.GUI_LAUNCH,
+    )
+
+
+def api_start_settings_post() -> FlaskResponse:
+    data = request.get_json(silent=True) or {}
+    if "persist_enabled" in data:
+        start_settings.set_persist_enabled(bool(data["persist_enabled"]))
+    if "remember_window" in data:
+        start_settings.set_remember_window(bool(data["remember_window"]))
+    return ok(settings=start_settings.load_start_settings())
+
+
+def _register_start_routes(combined: Flask) -> None:
+    """Start overlay: directories, spreadsheet picker, sessions, About tab."""
+    for rule, view, methods in (
+        ("/api/dirs", api_dirs_get, ["GET"]),
+        ("/api/dirs", api_dirs_post, ["POST"]),
+        ("/api/spreadsheets/excel", api_spreadsheets_excel, ["GET"]),
+        ("/api/spreadsheets/mindnode", api_spreadsheets_mindnode, ["GET"]),
+        (
+            "/api/spreadsheets/mindnode/preview",
+            api_spreadsheets_mindnode_preview,
+            ["GET"],
+        ),
+        ("/api/spreadsheets/mindnode/thumb", api_spreadsheets_mindnode_thumb, ["GET"]),
+        ("/api/spreadsheets/google", api_spreadsheets_google, ["GET"]),
+        ("/api/spreadsheets/worksheets", api_spreadsheets_worksheets, ["GET"]),
+        ("/api/spreadsheets/preview", api_spreadsheets_preview, ["GET"]),
+        (
+            "/api/spreadsheets/preview/override",
+            api_spreadsheets_preview_override,
+            ["POST"],
+        ),
+        ("/api/spreadsheets/google/auth", api_spreadsheets_google_auth, ["POST"]),
+        ("/api/spreadsheets/open", api_spreadsheets_open, ["POST"]),
+        ("/api/spreadsheets/close", api_spreadsheets_close, ["POST"]),
+        ("/api/folder-picker", api_folder_picker, ["POST"]),
+        ("/api/sessions/record", api_sessions_record, ["POST"]),
+        ("/api/changelog", api_changelog, ["GET"]),
+        ("/api/licenses", api_licenses, ["GET"]),
+        ("/api/start-settings", api_start_settings_get, ["GET"]),
+        ("/api/start-settings", api_start_settings_post, ["POST"]),
+    ):
+        combined.add_url_rule(rule, view.__name__, view, methods=methods)
+
+
+# ---- Combined-app routes: Self-update (frozen desktop app only). ----
+
+
+def api_update_status() -> Response:
+    import updater
+
+    return ok(**updater.status())
+
+
+def api_update_check() -> FlaskResponse:
+    """Refresh from GitHub on a thread; ``force`` bypasses the cooldown."""
+    import updater
+
+    if not updater.is_supported():
+        return ok(**updater.status())
+    data = request.get_json(silent=True) or {}
+    force = bool(data.get("force"))
+    # The phase flips before the reply so the page's poller sees "checking".
+    if updater.start_check(force=force):
+        threading.Thread(
+            target=updater.finish_check,
+            kwargs={"force": force},
+            daemon=True,
+            name="update-check",
+        ).start()
+    return ok(**updater.status())
+
+
+def api_update_download() -> FlaskResponse:
+    import updater
+
+    if not updater.start_download():
+        return err("No update to download", 409)
+    threading.Thread(
+        target=updater.finish_download, daemon=True, name="update-download"
+    ).start()
+    return ok(**updater.status())
+
+
+def api_update_apply() -> FlaskResponse:
+    """Install the downloaded update; the app quits and relaunches."""
+    import updater
+
+    if not updater.start_apply():
+        return err("No downloaded update to install", 409)
+    threading.Thread(
+        target=updater.finish_apply, daemon=True, name="update-apply"
+    ).start()
+    return ok(**updater.status())
+
+
+def api_update_skip() -> FlaskResponse:
+    import updater
+
+    if not updater.skip_version():
+        return err("No update to skip", 409)
+    return ok(**updater.status())
+
+
+def api_update_reveal() -> FlaskResponse:
+    import updater
+
+    if not updater.reveal_download():
+        return err("No downloaded update to show", 404)
+    return ok(**updater.status())
+
+
+def _register_update_routes(combined: Flask) -> None:
+    """Self-update (frozen desktop app only)."""
+    for rule, view, methods in (
+        ("/api/update/status", api_update_status, ["GET"]),
+        ("/api/update/check", api_update_check, ["POST"]),
+        ("/api/update/download", api_update_download, ["POST"]),
+        ("/api/update/apply", api_update_apply, ["POST"]),
+        ("/api/update/skip", api_update_skip, ["POST"]),
+        ("/api/update/reveal", api_update_reveal, ["POST"]),
+    ):
+        combined.add_url_rule(rule, view.__name__, view, methods=methods)
+
+
+# ---- Combined-app routes: Shared settings routes every page needs, re-mounted at root. ----
+
+
+def combined_settings_reveal() -> FlaskResponse:
+    """Show the settings file in the OS file browser.
+
+    Takes no arguments — the path is server-side only. When every setting is
+    at its default the file does not exist, so the config dir is revealed
+    instead (created first, or there would be nothing to open).
+    """
+    path = _studio_settings_path()
+    if not path.is_file():
+        path = path.parent
+        try:
+            path.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            return err(f"Could not open the folder: {exc}")
+    if not utils.reveal_in_file_manager(path):
+        return err("Could not open the folder")
+    return ok(path=str(path))
+
+
+def combined_llm_reveal() -> FlaskResponse:
+    """Show a downloaded model's GGUF in the OS file browser.
+
+    Ollama-installed models have no file in the models dir until they are
+    selected, so those reveal their blob in Ollama's own store.
+    """
+    import llm_client
+
+    name = str((request.get_json(silent=True) or {}).get("model", "")).strip()
+    if not name:
+        return err("Missing model")
+    path = llm_client.model_path(name)
+    if path is None:
+        return err("Model not found", 404)
+    if not utils.reveal_in_file_manager(path):
+        return err("Could not open the folder")
+    return ok(path=str(path))
+
+
+def _register_settings_routes(combined: Flask) -> None:
+    """Shared settings routes every page needs, re-mounted at root."""
+    import transcripts_server
+
     for rule, endpoint, view, methods in (
         ("/api/settings", "combined_settings_get", api_settings_get, ["GET"]),
         ("/api/settings", "combined_settings_put", api_settings_put, ["PUT"]),
@@ -4469,85 +4475,150 @@ def build_combined_app(
     ):
         combined.add_url_rule(rule, endpoint, view, methods=methods)
 
-    # ---- Model discovery ----
+    for rule, view, methods in (
+        ("/api/settings/reveal", combined_settings_reveal, ["POST"]),
+        ("/api/models/llm/reveal", combined_llm_reveal, ["POST"]),
+    ):
+        combined.add_url_rule(rule, view.__name__, view, methods=methods)
 
-    @combined.route("/api/models")
-    def api_models() -> Response:
-        import llm_client
-        import thinking_agents
-        import transcripts
 
-        whisper_models = [
+# ---- Combined-app routes: Local LLM model discovery. ----
+
+
+def api_models() -> Response:
+    import llm_client
+    import thinking_agents
+    import transcripts
+
+    whisper_models = [
+        {
+            "name": m["name"],
+            "size_mb": m["size_mb"],
+            "description": m["description"],
+            "selected": m["name"] == config.TRANSCRIBE_MODEL,
+            "cached": transcripts.is_whisper_model_cached(m["name"]),
+        }
+        for m in transcripts.WHISPER_MODELS
+    ]
+
+    # A filesystem scan, so the catalog answers even with the server down.
+    raw = llm_client.list_models()
+    # Models the router already refused; an Ollama-converted GGUF looks fine until
+    # llama.cpp reads it.
+    failures = llm_client.load_failures()
+    # Empty outside the catalog: a hand-dropped GGUF has no repo to link.
+    llm_models = [
+        {
+            "name": m["name"],
+            "label": llm_client.model_label(m["name"]),
+            "model_url": llm_client.model_card_url(m["name"]),
+            "size_mb": round(m["size_bytes"] / (1024 * 1024)),
+            "unusable": failures.get(m["name"], ""),
+        }
+        for m in raw
+    ]
+    # Curated downloads; installed flips the settings row to "Downloaded".
+    llm_suggested = [
+        {
+            "name": m["name"],
+            "label": m["label"],
+            "model_url": llm_client.model_card_url(m["name"]),
+            "stem": llm_client.model_name(m["name"]),
+            "size_mb": m["size_mb"],
+            "description": m["description"],
+            "installed": llm_client.is_model_installed(m["name"], raw),
+            "unusable": failures.get(llm_client.model_name(m["name"]), ""),
+        }
+        for m in llm_client.SUGGESTED_MODELS
+    ]
+
+    # Per-agent model + install status, so the UI can confirm downloads before running.
+    llm_agents = []
+    for a in thinking_agents.AGENTS:
+        model = thinking_agents.resolve_model(a)
+        llm_agents.append(
             {
-                "name": m["name"],
-                "size_mb": m["size_mb"],
-                "description": m["description"],
-                "selected": m["name"] == config.TRANSCRIBE_MODEL,
-                "cached": transcripts.is_whisper_model_cached(m["name"]),
+                "key": a["key"],
+                "model": model,
+                "label": llm_client.model_label(model),
+                "model_url": llm_client.model_card_url(model),
+                "installed": llm_client.is_model_installed(model, raw),
+                "unusable": failures.get(llm_client.model_name(model), ""),
             }
-            for m in transcripts.WHISPER_MODELS
-        ]
-
-        # A filesystem scan, so the catalog answers even with the server down.
-        raw = llm_client.list_models()
-        # Models the router already refused; an Ollama-converted GGUF looks fine until
-        # llama.cpp reads it.
-        failures = llm_client.load_failures()
-        # Empty outside the catalog: a hand-dropped GGUF has no repo to link.
-        llm_models = [
-            {
-                "name": m["name"],
-                "label": llm_client.model_label(m["name"]),
-                "model_url": llm_client.model_card_url(m["name"]),
-                "size_mb": round(m["size_bytes"] / (1024 * 1024)),
-                "unusable": failures.get(m["name"], ""),
-            }
-            for m in raw
-        ]
-        # Curated downloads; installed flips the settings row to "Downloaded".
-        llm_suggested = [
-            {
-                "name": m["name"],
-                "label": m["label"],
-                "model_url": llm_client.model_card_url(m["name"]),
-                "stem": llm_client.model_name(m["name"]),
-                "size_mb": m["size_mb"],
-                "description": m["description"],
-                "installed": llm_client.is_model_installed(m["name"], raw),
-                "unusable": failures.get(llm_client.model_name(m["name"]), ""),
-            }
-            for m in llm_client.SUGGESTED_MODELS
-        ]
-
-        # Per-agent model + install status, so the UI can confirm downloads before running.
-        llm_agents = []
-        for a in thinking_agents.AGENTS:
-            model = thinking_agents.resolve_model(a)
-            llm_agents.append(
-                {
-                    "key": a["key"],
-                    "model": model,
-                    "label": llm_client.model_label(model),
-                    "model_url": llm_client.model_card_url(model),
-                    "installed": llm_client.is_model_installed(model, raw),
-                    "unusable": failures.get(llm_client.model_name(model), ""),
-                }
-            )
-
-        return ok(
-            whisper={"models": whisper_models},
-            llm={
-                "available": llm_client.is_available(),
-                # "not installed" and "not running" need opposite advice; `available`
-                # alone can't tell them apart.
-                "installed": llm_client.is_installed(),
-                "install_hint": llm_client.install_guidance_lines(),
-                "models": llm_models,
-                "suggested": llm_suggested,
-                "agents": llm_agents,
-                "base_url": config.LLM_BASE_URL,
-            },
         )
+
+    return ok(
+        whisper={"models": whisper_models},
+        llm={
+            "available": llm_client.is_available(),
+            # "not installed" and "not running" need opposite advice; `available`
+            # alone can't tell them apart.
+            "installed": llm_client.is_installed(),
+            "install_hint": llm_client.install_guidance_lines(),
+            "models": llm_models,
+            "suggested": llm_suggested,
+            "agents": llm_agents,
+            "base_url": config.LLM_BASE_URL,
+        },
+    )
+
+
+def _register_model_routes(combined: Flask) -> None:
+    """Local LLM model discovery."""
+    for rule, view, methods in (("/api/models", api_models, ["GET"]),):
+        combined.add_url_rule(rule, view.__name__, view, methods=methods)
+
+
+def build_combined_app(
+    worksheet: Any = None,
+    default_page: str = "studio",
+    gspread_client: Any = None,
+) -> Flask:
+    """Build the combined Studio + Screenspace + Transcripts + Workflows Flask app.
+
+    Same setup as :func:`start_combined_server` but stops short of
+    ``app.run`` so tests (and any embedding caller) can hold the live
+    ``Flask`` instance and exercise routes via ``app.test_client()``.
+    """
+    import composer_server
+    import overview
+    import screenspace_server
+    import transcripts_server
+    import workflows_server
+
+    combined = Flask(__name__, static_folder=None)
+    # Keep insertion order: drag-to-reorder relies on GET /api/regions echoing
+    # manifest order.
+    assert isinstance(combined.json, DefaultJSONProvider)  # Flask's stock provider
+    combined.json.sort_keys = False
+
+    _init_combined_state(worksheet, gspread_client)
+
+    combined.register_blueprint(studio_bp, url_prefix="/studio")
+    combined.register_blueprint(
+        screenspace_server.screenspace_bp, url_prefix="/screenspace"
+    )
+    combined.register_blueprint(
+        transcripts_server.transcripts_bp, url_prefix="/transcripts"
+    )
+    combined.register_blueprint(workflows_server.workflows_bp, url_prefix="/workflows")
+    combined.register_blueprint(composer_server.composer_bp, url_prefix="/composer")
+    combined.register_blueprint(overview.overview_bp, url_prefix="/overview")
+
+    combined.after_request(_set_cache_headers)
+    combined.before_request(_reject_cross_origin)
+    combined.before_request(_profile_request_start)
+    combined.after_request(_profile_request_end)
+
+    @combined.route("/")
+    def root():
+        return redirect(f"/{default_page}/")
+
+    _register_core_routes(combined)
+    _register_start_routes(combined)
+    _register_update_routes(combined)
+    _register_settings_routes(combined)
+    _register_model_routes(combined)
 
     return combined
 

@@ -202,3 +202,89 @@ def test_sse_notify_without_key_wakes_every_client():
 
     notify()
     assert qa.qsize() == 2 and qb.qsize() == 1
+
+
+def test_err_carries_extra_fields(app):
+    with app.app_context():
+        resp, code = server_utils.err("Folder error", 400, errors={"input": "x"})
+    assert code == 400
+    assert resp.get_json() == {
+        "ok": False,
+        "error": "Folder error",
+        "errors": {"input": "x"},
+    }
+
+
+def test_pending_and_refused_are_ok_false_at_200(app):
+    with app.app_context():
+        pending = server_utils.pending(partial="…").get_json()
+        refused = server_utils.refused("cancelled", cancelled=True).get_json()
+    assert pending == {"ok": False, "generating": True, "partial": "…"}
+    assert refused == {"ok": False, "reason": "cancelled", "cancelled": True}
+
+
+def test_media_cache_single_flight_and_lru():
+    """Concurrent misses run the producer once; the LRU evicts the oldest key."""
+    import threading
+    import time
+
+    cache = server_utils.MediaCache(max_entries=2)
+    calls: list[int] = []
+    gate = threading.Barrier(6)
+
+    def compute():
+        calls.append(1)
+        time.sleep(0.05)
+        return b"bytes"
+
+    results: list[bytes] = []
+
+    def worker():
+        gate.wait()
+        results.append(cache.get_or_compute(("k", 1), compute))
+
+    threads = [threading.Thread(target=worker) for _ in range(6)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert calls == [1] and results == [b"bytes"] * 6
+
+    cache.get_or_compute(("k", 2), lambda: b"two")
+    cache.get_or_compute(("k", 3), lambda: b"three")
+    refetched: list[int] = []
+    cache.get_or_compute(("k", 1), lambda: refetched.append(1) or b"again")
+    assert refetched == [1], "the oldest key must have been evicted"
+
+
+def test_job_registry_claims_once_and_drops_stale_publishes():
+    import threading
+
+    registry = server_utils.JobRegistry(
+        fresh=lambda: {"state": "running"}, running=lambda t: t["state"] == "running"
+    )
+    started = threading.Event()
+    release = threading.Event()
+
+    def run(token):
+        started.set()
+        release.wait(5)
+        registry.publish("a", token, state="done")
+
+    first = registry.start("a", run)
+    assert first is not None and started.wait(5)
+    assert registry.start("a", run) is None, "a running key cannot be claimed twice"
+    release.set()
+    for _ in range(200):
+        if registry.get("a") == {"state": "done"}:
+            break
+        threading.Event().wait(0.01)
+    assert registry.get("a") == {"state": "done"}
+    second = registry.start("a", lambda token: None)
+    assert second is not None
+    assert not registry.publish("a", first, state="stale"), (
+        "a replaced token is ignored"
+    )
+    assert registry.snapshot()["a"]["state"] == "running"
+    registry.pop("a")
+    assert registry.get("a") is None

@@ -64,7 +64,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from flask import Blueprint, Response, jsonify, request, send_file, stream_with_context
+from flask import Blueprint, Response, request, send_file, stream_with_context
 
 import config
 import files
@@ -78,6 +78,9 @@ import transcripts
 import utils
 import video
 from server_utils import (
+    JobRegistry,
+    refused,
+    pending,
     ApiError,
     JobSlot,
     err,
@@ -120,8 +123,17 @@ _pending_model_unloads_lock = threading.Lock()
 
 # In-flight GGUF downloads by model value; the UI polls
 # /api/models/llm/download-status.
-_llm_download_status: dict[str, dict[str, Any]] = {}
-_llm_download_lock = threading.Lock()
+_llm_downloads = JobRegistry(
+    fresh=lambda: {
+        "status": "starting",
+        "completed": 0,
+        "total": 0,
+        "done": False,
+        "succeeded": False,
+        "error": None,
+    },
+    running=lambda token: not token["done"],
+)
 
 
 def _schedule_model_unload(model: str) -> None:
@@ -1310,7 +1322,7 @@ def api_agent_get(agent_key: str, participant: str) -> FlaskResponse:
     """
     agent = thinking_agents.get_agent(agent_key)
     if agent is None:
-        return jsonify({"ok": False}), 404
+        return err("Unknown agent", 404)
     field = agent["manifest_field"]
     with _manifest_lock:
         entry = _manifest.get("source_transcripts", {}).get(participant)
@@ -1319,7 +1331,7 @@ def api_agent_get(agent_key: str, participant: str) -> FlaskResponse:
         corrections_snapshot = list(_manifest.get("corrections", []))
         version_snapshot = _corrections_version
     if result:
-        resp: dict[str, Any] = {"ok": True, field: result}
+        resp: dict[str, Any] = {field: result}
         for dep in thinking_agents.AGENTS:
             if agent_key in dep["depends_on"]:  # depends_on holds agent keys
                 dep_field = dep["manifest_field"]
@@ -1329,11 +1341,9 @@ def api_agent_get(agent_key: str, participant: str) -> FlaskResponse:
                     resp[f"{dep_field}_started_at"] = _orchestrator.started_at(
                         participant, dep["key"]
                     )
-        return jsonify(resp)
+        return ok(**resp)
     if _orchestrator.is_generating(participant, agent_key):
         resp = {
-            "ok": False,
-            "generating": True,
             "started_at": _orchestrator.started_at(participant, agent_key),
             "partial": _orchestrator.partial_text(participant, agent_key),
         }
@@ -1348,7 +1358,7 @@ def api_agent_get(agent_key: str, participant: str) -> FlaskResponse:
         )
         if deterministic is not None:
             resp["friction"] = deterministic
-        return jsonify(resp)
+        return pending(**resp)
     # Nothing stored, nothing running: report why the last run failed.
     error = _orchestrator.error_for(participant, agent_key)
     deterministic = _deterministic_friction(
@@ -1359,13 +1369,14 @@ def api_agent_get(agent_key: str, participant: str) -> FlaskResponse:
         version=version_snapshot,
     )
     if deterministic is not None:
-        resp = {"ok": True, "friction": deterministic}
+        resp = {"friction": deterministic}
         if error:
             resp["error"] = error
-        return jsonify(resp)
+        return ok(**resp)
     if error:
-        return jsonify({"ok": False, "error": error}), 404
-    return jsonify({"ok": False}), 404
+        return err(error, 404)
+    # Empty message on purpose: the client reads "never ran", not "failed".
+    return err("", 404)
 
 
 @transcripts_bp.route(
@@ -1383,7 +1394,7 @@ def api_agent_regenerate(agent_key: str, participant: str) -> FlaskResponse:
     """
     agent = thinking_agents.get_agent(agent_key)
     if agent is None:
-        return jsonify({"ok": False}), 404
+        return err("Unknown agent", 404)
     if _orchestrator.is_generating(participant, agent_key):
         return ok(generating=True)
     # Stop dependents before clearing fields, or a stale run commits later; stop
@@ -1416,7 +1427,7 @@ def api_agent_stop(agent_key: str, participant: str) -> FlaskResponse:
     new run has started in the meantime.
     """
     if thinking_agents.get_agent(agent_key) is None:
-        return jsonify({"ok": False}), 404
+        return err("Unknown agent", 404)
     if _orchestrator.stop(agent_key, participant):
         model = _agent_model(agent_key)
         if model:
@@ -2173,52 +2184,29 @@ def api_llm_download() -> FlaskResponse:
     if not model:
         return err("Missing model")
 
-    with _llm_download_lock:
-        existing = _llm_download_status.get(model)
-        if existing is not None and not existing.get("done"):
-            return ok(already_downloading=True)
-        _llm_download_status[model] = {
-            "status": "starting",
-            "completed": 0,
-            "total": 0,
-            "done": False,
-            "succeeded": False,
-            "error": None,
-        }
+    def _run_download(token: dict[str, Any]) -> None:
+        def _on_progress(chunk: dict[str, Any]) -> None:
+            fields: dict[str, Any] = {}
+            if chunk.get("status"):
+                fields["status"] = chunk["status"]
+            for key in ("total", "completed"):
+                if isinstance(chunk.get(key), (int, float)):
+                    fields[key] = int(chunk[key])
+            _llm_downloads.publish(model, token, **fields)
 
-    def _on_progress(chunk: dict[str, Any]) -> None:
-        with _llm_download_lock:
-            st = _llm_download_status.get(model)
-            if st is None:
-                return
-            status = chunk.get("status")
-            if status:
-                st["status"] = status
-            total = chunk.get("total")
-            completed = chunk.get("completed")
-            if isinstance(total, (int, float)):
-                st["total"] = int(total)
-            if isinstance(completed, (int, float)):
-                st["completed"] = int(completed)
-
-    def _run_download() -> None:
         succeeded = False
         try:
             succeeded = llm_client.download_model(model, on_progress=_on_progress)
         finally:
-            with _llm_download_lock:
-                st = _llm_download_status.get(model)
-                if st is not None:
-                    st["done"] = True
-                    st["succeeded"] = succeeded
-                    if succeeded:
-                        st["status"] = "success"
-                    elif not st.get("error"):
-                        st["error"] = "Download failed"
+            fields = {"done": True, "succeeded": succeeded}
+            if succeeded:
+                fields["status"] = "success"
+            elif not token.get("error"):
+                fields["error"] = "Download failed"
+            _llm_downloads.publish(model, token, **fields)
 
-    threading.Thread(
-        target=_run_download, daemon=True, name=f"llm-download-{model}"
-    ).start()
+    if _llm_downloads.start(model, _run_download, name=f"llm-download-{model}") is None:
+        return ok(already_downloading=True)
     return ok(started=True)
 
 
@@ -2228,14 +2216,10 @@ def api_llm_download_status() -> FlaskResponse:
     model = (request.args.get("model") or "").strip()
     if not model:
         return err("Missing model")
-    with _llm_download_lock:
-        st = _llm_download_status.get(model)
-        snapshot = dict(st) if st is not None else None
+    snapshot = _llm_downloads.get(model)
     if snapshot is None:
         return ok(found=False)
-    snapshot["ok"] = True
-    snapshot["found"] = True
-    return jsonify(snapshot)
+    return ok(found=True, **snapshot)
 
 
 @transcripts_bp.route("/api/models/llm/<name>", methods=["DELETE"])
@@ -2388,15 +2372,12 @@ def api_transcribe() -> FlaskResponse:
                 ):
                     uncached.append(effective_model)
             if uncached:
-                return jsonify(
-                    {
-                        "ok": False,
-                        "reason": "model_not_cached",
-                        "uncached": [
-                            {"model": m, "size_mb": _whisper_model_size_mb(m)}
-                            for m in uncached
-                        ],
-                    }
+                return refused(
+                    "model_not_cached",
+                    uncached=[
+                        {"model": m, "size_mb": _whisper_model_size_mb(m)}
+                        for m in uncached
+                    ],
                 )
 
         for e in eligible:

@@ -4,7 +4,9 @@ Every blueprint returns the same JSON envelope — ``{"ok": True, ...}`` on succ
 ``{"ok": False, "error": msg}`` plus an HTTP status on failure — and repeats the
 same numeric-arg parse-and-validate block dozens of times. Collapsed here:
 
-- :func:`ok` / :func:`err` build either envelope in one call.
+- :func:`ok` / :func:`err` build either envelope in one call;
+  :func:`pending` ("still generating") and :func:`refused` ("declined") are
+  the two ``ok: False`` states served at HTTP 200.
 - :class:`ApiError` + :func:`json_endpoint` let a handler ``raise`` a uniform
   4xx instead of threading an ``err(...)`` tuple back through every guard.
 - :func:`parse_number_arg` parses + bound-checks one numeric value;
@@ -16,7 +18,8 @@ same numeric-arg parse-and-validate block dozens of times. Collapsed here:
 - :func:`make_participant_cache` builds the mtime-guarded participant cache
   (Transcripts + Screenspace).
 - :class:`JobSlot` + :func:`ndjson_batch_response` run one cancellable batch
-  at a time and stream it as NDJSON (subtitle embed, audio normalize).
+  at a time and stream it as NDJSON (subtitle embed, audio normalize);
+  :class:`JobRegistry` tracks keyed background jobs (remux, model downloads).
 - :func:`make_sse_channel` builds one SSE pub/sub channel (bounded per-client
   queue + coalesce-on-overflow + keepalive + cleanup).
 - :class:`MediaCache` + :func:`parse_clip_window` + :func:`clip_media_response`
@@ -52,9 +55,28 @@ def ok(**fields: Any):
     return jsonify({"ok": True, **fields})
 
 
-def err(message: str, code: int = 400):
-    """Error envelope: ``(jsonify({"ok": False, "error": message}), code)``."""
-    return jsonify({"ok": False, "error": message}), code
+def err(message: str, code: int = 400, **fields: Any):
+    """Error envelope: ``(jsonify({"ok": False, "error": message, **fields}), code)``."""
+    return jsonify({"ok": False, "error": message, **fields}), code
+
+
+def pending(**fields: Any):
+    """Third envelope state: ``{"ok": False, "generating": True, ...}`` at HTTP 200.
+
+    Polling routes use it for "not ready yet". The client resolves it (2xx) and
+    must branch with ``isPending(data)`` in ``utils.js`` rather than assume
+    success.
+    """
+    return jsonify({"ok": False, "generating": True, **fields})
+
+
+def refused(reason: str, **fields: Any):
+    """Declined at HTTP 200: ``{"ok": False, "reason": reason, ...}``.
+
+    The request was understood and not acted on (cancelled, model not cached).
+    Clients branch on ``reason`` or the extra fields, never on the status.
+    """
+    return jsonify({"ok": False, "reason": reason, **fields})
 
 
 def err_no_video(participant: str, code: int = 404):
@@ -222,6 +244,73 @@ class MediaCache:
         with self._lock:
             self._store.clear()
             self._inflight.clear()
+
+
+class JobRegistry:
+    """Keyed background jobs: one running job per key, progress under one lock.
+
+    ``start(key, target, *args)`` is an atomic check-and-set that hands the
+    thread a fresh token dict (``fresh()``) and returns it, or ``None`` while
+    ``running(token)`` still holds for that key. Threads report through
+    ``publish(key, token, **fields)``, which ignores a token the registry has
+    since replaced, so a dead run never clobbers its successor. Pollers read
+    ``get``/``snapshot`` copies. Remux jobs and LLM downloads use it; the
+    Screenspace worker keeps its own priority queue.
+    """
+
+    def __init__(
+        self,
+        fresh: Callable[[], dict[str, Any]],
+        running: Callable[[dict[str, Any]], bool],
+    ) -> None:
+        self._lock = threading.Lock()
+        self._jobs: dict[str, dict[str, Any]] = {}
+        self._fresh = fresh
+        self._running = running
+
+    def start(
+        self, key: str, target: Callable[..., None], *args: Any, name: str = ""
+    ) -> dict[str, Any] | None:
+        with self._lock:
+            existing = self._jobs.get(key)
+            if existing is not None and self._running(existing):
+                return None
+            token = self._fresh()
+            self._jobs[key] = token
+        threading.Thread(
+            target=target, args=(token, *args), daemon=True, name=name or f"job-{key}"
+        ).start()
+        return token
+
+    def seed(self, key: str, token: dict[str, Any]) -> None:
+        """Register *token* under *key* without a thread (tests, resumed state)."""
+        with self._lock:
+            self._jobs[key] = token
+
+    def publish(self, key: str, token: dict[str, Any], **fields: Any) -> bool:
+        with self._lock:
+            if self._jobs.get(key) is not token:
+                return False
+            token.update(fields)
+            return True
+
+    def get(self, key: str) -> dict[str, Any] | None:
+        with self._lock:
+            job = self._jobs.get(key)
+            return dict(job) if job is not None else None
+
+    def snapshot(self) -> dict[str, dict[str, Any]]:
+        with self._lock:
+            return {key: dict(job) for key, job in self._jobs.items()}
+
+    def pop(self, key: str) -> None:
+        with self._lock:
+            self._jobs.pop(key, None)
+
+    def clear(self) -> None:
+        """Forget every job (tests and shutdown)."""
+        with self._lock:
+            self._jobs.clear()
 
 
 class JobSlot:

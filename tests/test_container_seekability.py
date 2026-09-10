@@ -18,6 +18,19 @@ import files
 import video
 
 
+def _fresh_jobs(seeded: dict | None = None):
+    """A remux JobRegistry like remux_server's, optionally pre-seeded."""
+    import remux_server
+    from server_utils import JobRegistry
+
+    registry = JobRegistry(
+        fresh=remux_server._jobs._fresh, running=remux_server._jobs._running
+    )
+    for pid, token in (seeded or {}).items():
+        registry.seed(pid, token)
+    return registry
+
+
 def _have_ffmpeg() -> bool:
     return shutil.which("ffmpeg") is not None and shutil.which("ffprobe") is not None
 
@@ -355,7 +368,7 @@ def remux_client(remux_app, tmp_path, monkeypatch):
         ],
     )
     (tmp_path / "study_P01.mp4").write_bytes(b"stand-in for a real recording")
-    monkeypatch.setattr(remux_server, "_jobs", {})
+    monkeypatch.setattr(remux_server, "_jobs", _fresh_jobs())
     return remux_app.test_client(), tmp_path
 
 
@@ -476,7 +489,7 @@ class TestMultiPartRemux:
 
         monkeypatch.setattr(remux_server.video, "remux_to_faststart", _fail_on_second)
         token: dict = {"state": "running", "progress": 0.0, "error": "", "message": ""}
-        monkeypatch.setattr(remux_server, "_jobs", {"P01": token})
+        monkeypatch.setattr(remux_server, "_jobs", _fresh_jobs({"P01": token}))
 
         remux_server._run_remux("P01", [str(p) for p in two_parts], token)
         assert token["state"] == "error"
@@ -488,7 +501,7 @@ class TestMultiPartRemux:
         calls.clear()
         monkeypatch.setattr(remux_server.video, "remux_to_faststart", real)
         token2: dict = {"state": "running", "progress": 0.0, "error": "", "message": ""}
-        monkeypatch.setattr(remux_server, "_jobs", {"P01": token2})
+        monkeypatch.setattr(remux_server, "_jobs", _fresh_jobs({"P01": token2}))
 
         remux_server._run_remux("P01", [str(p) for p in two_parts], token2)
 
@@ -521,7 +534,7 @@ class TestMultiPartRemux:
 
         monkeypatch.setattr(utils, "get_effective_input_dir", lambda: str(tmp_path))
         utils._discover_videos_cache.clear()
-        monkeypatch.setattr(remux_server, "_jobs", {})
+        monkeypatch.setattr(remux_server, "_jobs", _fresh_jobs())
         client = remux_app.test_client()
         assert client.get("/probe/api/remux/status").get_json()["unseekable"] == ["P01"]
 
@@ -546,7 +559,7 @@ class TestMultiPartRemux:
 
         monkeypatch.setattr(utils, "get_effective_input_dir", lambda: str(tmp_path))
         utils._discover_videos_cache.clear()
-        monkeypatch.setattr(remux_server, "_jobs", {})
+        monkeypatch.setattr(remux_server, "_jobs", _fresh_jobs())
         # Only the first part gets remuxed, so only it has a kept original.
         assert video.remux_to_faststart(str(two_parts[0]))[0]
 

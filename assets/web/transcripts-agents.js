@@ -125,7 +125,7 @@
           if (data.ok && desc.getResult(data)) {
             _stopAgentPoll(desc);
             desc.onResult(pid, data);
-          } else if (data.generating) {
+          } else if (isPending(data)) {
             if (desc.onGenerating) desc.onGenerating(pid, data);
           } else {
             _stopAgentPoll(desc);
@@ -191,7 +191,7 @@
       if (data.ok && data.summary) {
         _stopSummaryPoll();
         _onSummaryResult(pid, data);
-      } else if (data.generating) {
+      } else if (isPending(data)) {
         renderSummaryGenerating(data.started_at ? data.started_at * 1000 : undefined);
         if (data.partial) _updateSummaryStream(data.partial);
         _startSummaryStream(pid);
@@ -606,7 +606,7 @@
       _stopCitationsPoll();
       renderSummaryGenerating();
       apiPost(AGENT_DESCRIPTORS.summary.urlBase + "/" + pid + "/regenerate", {}).then(function (data) {
-        if (data.ok && data.generating) {
+        if (isPending(data)) {
           _startSummaryStream(pid);
           _refreshAgentStateNow();
         }
@@ -668,7 +668,7 @@
         renderCitations(); // clear existing links
         renderCitationsStatus();
         apiPost(AGENT_DESCRIPTORS.citations.urlBase + "/" + pid + "/regenerate", {}).then(function (data) {
-          if (data.ok && data.generating) {
+          if (isPending(data)) {
             _startCitationsPoll(pid);
           }
         }).catch(function () {
@@ -784,7 +784,7 @@
       if (ver !== state.participantReqVer) return;
       if (data.ok && data.friction) {
         _setFrictionData(data.friction);
-      } else if (data.generating) {
+      } else if (isPending(data)) {
         // Mid-run the server sends deterministic scores alongside `generating`; adopt them before flipping the flag.
         if (data.friction) _setFrictionData(data.friction);
         state.frictionGenerating = true;
@@ -974,7 +974,7 @@
       state.frictionStartedAt = null;
       renderFrictionGenerating();
       apiPost(AGENT_DESCRIPTORS.friction.urlBase + "/" + pid + "/regenerate", {}).then(function (data) {
-        if (data.ok && data.generating) {
+        if (isPending(data)) {
           _startFrictionPoll(pid);
           _refreshAgentStateNow();
         } else {
