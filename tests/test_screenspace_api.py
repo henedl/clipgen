@@ -3729,3 +3729,16 @@ def test_event_exclude_tolerates_an_id_less_event(client):
     resp = client.put("/screenspace/api/events/e1/exclude")
     assert resp.status_code == 200
     assert screenspace_server._manifest["events"][1]["excluded"] is True
+
+
+def test_tools_catalog_mirrors_the_registry(client):
+    """Fast-scan and confidence facts come from the AnalysisTool classes, not JS tables."""
+    body = client.get("/screenspace/api/tools").get_json()
+    assert body["ok"] is True
+    tools = body["tools"]
+    assert set(tools) == set(screenspace.TOOLS)
+    for name, facts in tools.items():
+        assert facts["supports_fast_scan"] == bool(facts["fast_scan_description"]), name
+    assert not tools["timelapse"]["has_confidence"]
+    assert not tools["color"]["has_confidence"]
+    assert tools["boundary"]["has_confidence"]

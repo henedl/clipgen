@@ -14,7 +14,6 @@
   var SS = window.ClipgenScreenspace;
   var state = SS.state;
   var _previewRegionRef = SS._previewRegionRef,
-    gatherWorkflowParams = SS.gatherWorkflowParams,
     loadFrame = SS.loadFrame,
     regionRefPayload = SS.regionRefPayload,
     renderWorkflowParams = SS.renderWorkflowParams,
@@ -537,7 +536,7 @@
   function _calBuildBody() {
     var tool = state.activeWorkflow;
     if (!_calIsCalibratable(tool)) return { skip: "Calibration is not available for this tool." };
-    var params = gatherWorkflowParams(tool, { silent: true });
+    var params = SS.gatherWorkflowParams(tool, { silent: true });
     if (params === null) return { skip: "Add the missing parameters above to calibrate." };
     var body = { participant: state.selectedParticipant, tool: tool, parameters: params };
     if (tool === "multitool") {

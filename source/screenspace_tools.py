@@ -389,6 +389,21 @@ class AnalysisTool:
     scan_defaults: ClassVar[dict[str, Any]] = {}
     # Sampling interval when ``params`` carries none (the OCR tools use 2.0).
     scan_interval_default: ClassVar[float] = 0
+    # Client-facing facts served by /api/tools; the frontend derives pickers from them.
+    fast_scan_description: ClassVar[str] = ""
+    # The results pane offers a certainty cutoff; not the same as score_key.
+    has_confidence: ClassVar[bool] = False
+    # (upload body key, image param, mask param) for reference-image tools.
+    reference: ClassVar[tuple[str, str, str] | None] = None
+    # Param that receives the region cut from the reference frame.
+    reference_region_param: ClassVar[str] = ""
+    # Temporal-pair tools preview against a prior frame; the setting names the gap.
+    needs_prev_frame: ClassVar[bool] = False
+    prev_gap_setting: ClassVar[str] = ""
+    # Preview query args copied into params as floats.
+    preview_float_args: ClassVar[tuple[str, ...]] = ()
+    # Preview query args as (arg, param, kind) with kind int | float | bool.
+    preview_args: ClassVar[tuple[tuple[str, str, str], ...]] = ()
 
     def check_frame(
         self,
@@ -479,6 +494,8 @@ class AnalysisTool:
 
 class ColorTool(AnalysisTool):
     name = "color"
+    fast_scan_description = "Lower resolution, skips unchanged frames"
+    preview_float_args = ("h", "s", "v")
     fast_scan_region_dim = 32
     score_key = "_confidence"
     scan_fn_name = "scan_color"
@@ -535,6 +552,10 @@ class ColorTool(AnalysisTool):
 
 class ChangeTool(AnalysisTool):
     name = "change"
+    fast_scan_description = "Lower resolution, skips unchanged frames"
+    has_confidence = True
+    needs_prev_frame = True
+    preview_args = (("noise", "noise_threshold", "int"),)
     fast_scan_region_dim = 128
     score_key = "magnitude"
     scan_fn_name = "scan_changes"
@@ -565,6 +586,9 @@ class ChangeTool(AnalysisTool):
 class SimilarityTool(AnalysisTool):
     # Scalar SSIM only; a spatial heatmap needs per-frame ssim_diff_map, so gate it behind phash.
     name = "similarity"
+    fast_scan_description = "Lower resolution, skips unchanged frames"
+    has_confidence = True
+    reference_region_param = "reference_frame"
     fast_scan_region_dim = 128
     score_key = "score"
     scan_fn_name = "scan_similarity"
@@ -615,6 +639,9 @@ class SimilarityTool(AnalysisTool):
 
 class TextTool(AnalysisTool):
     name = "text"
+    fast_scan_description = "Skips unchanged frames"
+    has_confidence = True
+    preview_args = (("ocr_preprocess", "ocr_preprocess", "bool"),)
     # Fuzzy match quality, a different axis from _extract_confidence's OCR "confidence"; keep them apart.
     score_key = "fuzzy_ratio"
     scan_fn_name = "scan_text"
@@ -651,6 +678,9 @@ class TextTool(AnalysisTool):
 
 class NumbersTool(AnalysisTool):
     name = "numbers"
+    fast_scan_description = "Skips unchanged frames"
+    has_confidence = True
+    preview_args = (("ocr_preprocess", "ocr_preprocess", "bool"),)
     score_key = "confidence"
     scan_fn_name = "scan_numbers"
     scan_interval_default = 2.0
@@ -681,6 +711,9 @@ class NumbersTool(AnalysisTool):
 
 class TemplateTool(AnalysisTool):
     name = "template"
+    fast_scan_description = "Downscales template 2\u00d7, skips unchanged frames"
+    has_confidence = True
+    reference = ("template_image_data", "template_image", "template_mask")
     fast_scan_extra_opts: ClassVar[dict[str, Any]] = {"template_downscale": True}
     score_key = "best_score"
 
@@ -794,6 +827,20 @@ class TemplateTool(AnalysisTool):
 
 class ShapeTool(AnalysisTool):
     name = "shape"
+    fast_scan_description = (
+        "Downscales reference 2\u00d7, skips unchanged frames; thin outlines may vanish"
+    )
+    has_confidence = True
+    reference = ("shape_image_data", "shape_image", "shape_mask")
+    preview_float_args = (
+        "threshold",
+        "scale_min",
+        "scale_max",
+        "scale_steps",
+        "scale_y_min",
+        "scale_y_max",
+        "scale_y_steps",
+    )
     fast_scan_extra_opts: ClassVar[dict[str, Any]] = {"template_downscale": True}
     score_key = "best_score"
 
@@ -887,6 +934,10 @@ class ShapeTool(AnalysisTool):
 
 class FlowTool(AnalysisTool):
     name = "flow"
+    fast_scan_description = "Lower resolution, skips unchanged frames"
+    has_confidence = True
+    needs_prev_frame = True
+    preview_args = (("magnitude", "magnitude_threshold", "float"),)
     fast_scan_region_dim = 128
     score_key = "magnitude"
     scan_fn_name = "scan_flow"
@@ -916,6 +967,8 @@ class FlowTool(AnalysisTool):
 
 class SceneTool(AnalysisTool):
     name = "scene"
+    fast_scan_description = "Lower resolution, skips unchanged frames"
+    has_confidence = True
     fast_scan_region_dim = 64
     score_key = "score"
     scan_fn_name = "scan_scene"
@@ -995,6 +1048,8 @@ class SceneTool(AnalysisTool):
 
 class InactivityTool(AnalysisTool):
     name = "inactivity"
+    fast_scan_description = "Lower resolution, skips unchanged frames"
+    has_confidence = True
     fast_scan_region_dim = 64
     # Raw phash distance in Sensitivity-slider units; the strip inverts it (lower = more inactive).
     score_key = "distance"
@@ -1022,6 +1077,7 @@ class InactivityTool(AnalysisTool):
 
 class BoundaryTool(AnalysisTool):
     name = "boundary"
+    has_confidence = True
     # The scanner runs its own phash per sample; the fast-scan phash-skip would fight it.
     supports_fast_scan = False
     # Scan-only: no check_frame or score_key, so the pinned strip and /api/calibrate skip it.
@@ -1040,6 +1096,17 @@ class BoundaryTool(AnalysisTool):
 
 class AttentionTool(AnalysisTool):
     name = "attention"
+    has_confidence = True
+    needs_prev_frame = True
+    prev_gap_setting = "SCREENSPACE_ATTENTION_INTERVAL"
+    # Saliency overrides so the Model view tunes the scan's math.
+    preview_float_args = (
+        "weight_spectral",
+        "weight_contrast",
+        "weight_motion",
+        "weight_face",
+        "center_bias",
+    )
     # Dwell weighting needs every sampled frame; the fast-scan phash-skip would drop the static ones.
     supports_fast_scan = False
     # Scan-only (full-frame, temporal state): no check_frame or score_key, so calibration skips it.
@@ -1096,6 +1163,8 @@ class TimelapseTool(AnalysisTool):
 
 class MultitoolTool(AnalysisTool):
     name = "multitool"
+    fast_scan_description = "Skips unchanged frames, widens interval"
+    has_confidence = True
 
     def scan(
         self,
@@ -1155,6 +1224,20 @@ TOOLS: dict[str, AnalysisTool] = {
         MultitoolTool(),
     )
 }
+
+
+def tool_catalog() -> dict[str, dict[str, Any]]:
+    """Per-tool client facts for /api/tools; the frontend derives its pickers from it."""
+    return {
+        name: {
+            "supports_fast_scan": tool.supports_fast_scan,
+            "fast_scan_description": tool.fast_scan_description,
+            "has_confidence": tool.has_confidence,
+            "score_key": tool.score_key,
+        }
+        for name, tool in TOOLS.items()
+    }
+
 
 # Keeps the by-name scan_<x> imports referenced; a typo'd scan_fn_name fails at import, not mid-scan.
 _DISPATCHABLE_SCAN_FNS = {

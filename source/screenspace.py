@@ -136,6 +136,7 @@ from screenspace_heatmap import (
 )
 from screenspace_tools import (
     TOOLS,
+    tool_catalog,
     AnalysisTool,
     AttentionTool,
     BoundaryTool,
