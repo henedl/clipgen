@@ -3,6 +3,7 @@
 import contextlib
 import difflib
 import functools
+import hashlib
 import json
 import math
 import os
@@ -769,6 +770,61 @@ def require_optional(module_name: str, feature_label: str) -> None:
 # One manifest file, one key per tool section; per-section JSON text cached by
 # (mtime_ns, size).
 _MANIFEST_LOCK = threading.Lock()
+
+
+def _lock_fd(fd: int) -> None:
+    """Block until *fd* holds an exclusive lock (flock on POSIX, msvcrt on Windows)."""
+    if sys.platform == "win32":
+        import msvcrt
+
+        while True:
+            try:
+                msvcrt.locking(fd, msvcrt.LK_LOCK, 1)
+                return
+            except OSError:
+                continue
+    else:
+        import fcntl
+
+        fcntl.flock(fd, fcntl.LOCK_EX)
+
+
+def _unlock_fd(fd: int) -> None:
+    if sys.platform == "win32":
+        import msvcrt
+
+        msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
+    else:
+        import fcntl
+
+        fcntl.flock(fd, fcntl.LOCK_UN)
+
+
+@contextlib.contextmanager
+def file_lock(key: str | Path) -> Iterator[None]:
+    """Cross-process exclusive lock keyed by the path *key*.
+
+    Pairs with a ``threading.Lock`` for in-process callers. Lock files live in
+    the config dir's ``locks/`` (named by a hash of the resolved key) so the
+    output dir stays clean and the manifest can still vanish with its last
+    section. A CLI run and a Studio server on one output dir serialize here.
+    """
+    import start_settings  # per-user paths live there; a function-local import keeps utils below it
+
+    lock_dir = start_settings.config_dir() / "locks"
+    lock_dir.mkdir(parents=True, exist_ok=True)
+    digest = hashlib.sha1(str(Path(key).resolve()).encode("utf-8")).hexdigest()
+    fd = os.open(lock_dir / f"{digest}.lock", os.O_RDWR | os.O_CREAT, 0o644)
+    try:
+        _lock_fd(fd)
+        yield
+    finally:
+        try:
+            _unlock_fd(fd)
+        finally:
+            os.close(fd)
+
+
 _manifest_cache: dict[str, Any] = {
     "path": None,
     "stamp": None,
@@ -919,7 +975,8 @@ def save_manifest_section(section: str, data: Any) -> Path | None:
         except (TypeError, ValueError) as exc:
             warning_print(f"Could not serialize {section}: {exc}")
             return None
-    with _MANIFEST_LOCK:
+    with _MANIFEST_LOCK, file_lock(_manifest_path()):
+        # The stamp check inside re-reads what another process wrote meanwhile.
         sections = dict(_sections_locked())
         if _manifest_cache["broken"]:
             return None

@@ -67,15 +67,32 @@ from server_utils import (
     err_no_video,
     find_by_id,
     json_endpoint,
+    make_participant_cache,
     ok,
     parse_number_arg,
     remove_by_id,
 )
 import itertools
+import sys
 
 # ---- Module state (initialized by _init_composer_state) ----
 
 _sheet_context: Any = None
+# Cache globals for make_participant_cache; the setters below reset the source.
+_participants: list[dict[str, Any]] = []
+_participant_source: dict[str, Any] | None = None
+_participants_lock = threading.Lock()
+
+
+def _fresh_participant_source() -> dict[str, Any]:
+    return {"sheet_context": None, "dir": "", "mtime": None}
+
+
+_refresh_participants, _find_participant_record = make_participant_cache(
+    sys.modules[__name__],
+    input_dir_getter=utils.get_effective_input_dir,
+    resolve=lambda _unused: files.resolve_participant_videos(_sheet_context),
+)
 _manifest: dict[str, Any] = {}
 _manifest_lock = threading.Lock()
 
@@ -177,11 +194,8 @@ def _participant_duration(participant: str) -> float | None:
 def api_participants() -> Any:
     """Participants with source videos, plus part timelines for stitched seeks."""
     participants: list[dict[str, Any]] = []
-    resolved = [
-        p
-        for p in files.resolve_participant_videos(_sheet_context)
-        if p.get("has_video")
-    ]
+    _refresh_participants()
+    resolved = [p for p in _participants if p.get("has_video")]
     # Prewarm so the loop reads cached probes; serialized ffprobe measured 1.06 s
     # for 24 participants.
     video.prewarm_probes(vp for p in resolved for vp in p["video_paths"])
@@ -1334,16 +1348,17 @@ def api_export_gif() -> Any:
 def _init_composer_state(sheet_context: Any = None) -> None:
     """Initialize module-level state for Composer routes.
 
-    Participants are resolved from ``_sheet_context`` + the input dir on demand
-    (:func:`files.resolve_participant_videos`), so nothing is snapshotted here.
+    Participants are resolved from ``_sheet_context`` + the input dir through
+    the mtime-guarded cache (``server_utils.make_participant_cache``), reset here.
 
     Called once, from ``build_combined_app``. A worksheet swap goes through
     :func:`repin_sheet_state` instead — re-running this would reload the
     manifest and could drop a write still sitting in the persist debounce.
     """
-    global _sheet_context, _manifest
+    global _sheet_context, _manifest, _participant_source
 
     _sheet_context = sheet_context
+    _participant_source = _fresh_participant_source()
     _manifest = _load_manifest()
 
 
@@ -1356,6 +1371,7 @@ def repin_sheet_state(sheet_context: Any = None) -> None:
     Start overlay left its participant list on bare disk discovery, missing
     every sheet-only column and every filename override.
     """
-    global _sheet_context
+    global _sheet_context, _participant_source
 
     _sheet_context = sheet_context
+    _participant_source = _fresh_participant_source()

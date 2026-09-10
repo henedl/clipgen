@@ -16,6 +16,7 @@ Flask = pytest.importorskip("flask").Flask
 
 import composer_server
 import config
+import files
 import utils
 import video
 
@@ -39,6 +40,12 @@ def co_client(co_app, tmp_path, monkeypatch):
     # Seed module globals via monkeypatch so they auto-restore on teardown.
     monkeypatch.setattr(composer_server, "_manifest", composer_server._empty_manifest())
     monkeypatch.setattr(composer_server, "_sheet_context", None)
+    monkeypatch.setattr(composer_server, "_participants", [])
+    monkeypatch.setattr(
+        composer_server,
+        "_participant_source",
+        composer_server._fresh_participant_source(),
+    )
     monkeypatch.setattr(config, "INPUT_DIR", str(tmp_path), raising=False)
     monkeypatch.setattr(config, "OUTPUT_DIR", str(tmp_path), raising=False)
 
@@ -1019,3 +1026,29 @@ def test_combined_app_registers_composer(tmp_path, monkeypatch):
         status = client.get("/api/status").get_json()
         assert status["composer"] is True
         assert client.get("/composer/").status_code == 200
+
+
+def test_participants_are_cached_until_the_input_dir_changes(co_client, monkeypatch):
+    """A second request is a stat(), not another discovery + probe pass."""
+    calls: list[int] = []
+    original = files.resolve_participant_videos
+
+    def counting(ctx):
+        calls.append(1)
+        return original(ctx)
+
+    monkeypatch.setattr(files, "resolve_participant_videos", counting)
+    co_client.get("/composer/api/participants")
+    co_client.get("/composer/api/participants")
+    assert len(calls) == 1
+
+
+def test_repin_sheet_state_invalidates_participants(co_client, monkeypatch):
+    co_client.get("/composer/api/participants")
+    calls: list[int] = []
+    monkeypatch.setattr(
+        files, "resolve_participant_videos", lambda ctx: calls.append(1) or []
+    )
+    composer_server.repin_sheet_state(None)
+    body = co_client.get("/composer/api/participants").get_json()
+    assert calls and body["participants"] == []

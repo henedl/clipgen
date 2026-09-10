@@ -1,6 +1,8 @@
 import json
+import multiprocessing
 import threading
 import time
+from pathlib import Path
 
 import config
 import utils
@@ -354,3 +356,42 @@ def test_store_corrupt_file_reads_as_empty_and_blocks_saves(tmp_path, monkeypatc
     path.write_text(json.dumps({"two": 2}))
     assert utils.save_manifest_section("one", 1) is not None
     assert utils.manifest_sections() == {"one", "two"}
+
+
+_SOURCE_DIR = str(Path(__file__).resolve().parent.parent / "source")
+
+
+def _manifest_writer(out_dir: str, cfg_dir: str, section: str, count: int) -> None:
+    """Spawned worker: save one section *count* times into a shared output dir."""
+    import sys
+
+    sys.path.insert(0, _SOURCE_DIR)
+    import config as _config
+    import start_settings as _start_settings
+    import utils as _utils
+
+    setattr(_start_settings, "config_dir", lambda: Path(cfg_dir))  # noqa: B010
+    _config.OUTPUT_DIR = out_dir
+    for i in range(count):
+        _utils.save_manifest_section(section, {"i": i})
+
+
+def test_concurrent_processes_keep_each_others_sections(tmp_path):
+    """Two processes writing different sections never clobber each other."""
+    out = tmp_path / "out"
+    out.mkdir()
+    count = 80
+    ctx = multiprocessing.get_context("spawn")
+    procs = [
+        ctx.Process(
+            target=_manifest_writer, args=(str(out), str(tmp_path / "cfg"), sec, count)
+        )
+        for sec in ("alpha", "beta")
+    ]
+    for p in procs:
+        p.start()
+    for p in procs:
+        p.join(120)
+    assert [p.exitcode for p in procs] == [0, 0]
+    doc = json.loads((out / config.MANIFEST_FILENAME).read_text(encoding="utf-8"))
+    assert doc == {"alpha": {"i": count - 1}, "beta": {"i": count - 1}}
