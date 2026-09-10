@@ -758,7 +758,7 @@ def wrap_clip_with_cards(
             input_file=clip_path,
             output_file=output_temp_path,
             os_error_message="Filter-based concat failed while wrapping clip with cards.",
-            kind="card",
+            kind="wrap",
             cancel_flag=cancel_flag,
             on_progress=on_progress,
             expected_duration_sec=expected_wrap_duration,

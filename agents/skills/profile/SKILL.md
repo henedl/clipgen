@@ -24,7 +24,8 @@ no-kind fallback; each `scan_*` / multitool pass sets the tool name so a
 workflow of mixed detectors does not lump analysis into one bucket. Callback
 flushes pass `peak=` (largest single frame). `ffmpeg.run.<kind>` (every
 encode/extract subprocess, split by the caller's job: `cut`, `card`,
-`concat`, `reel`, `screenshot`, `gif`, `compress`, `mux`, `burn`, `remux`,
+`concat`, `wrap` (the full-clip re-encode fallback when a body is not
+copy-safe), `reel`, `screenshot`, `gif`, `compress`, `mux`, `burn`, `remux`,
 `normalize`; bare `ffmpeg.run` is only the untagged fallback — a carded clip
 is three subprocesses and one bucket could not say which one cost) /
 `ffmpeg.bytes` and `ffprobe.run` (duration / props / keyframe

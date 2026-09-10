@@ -546,8 +546,8 @@ def run_ffmpeg_process(
     **output** (not input) duration in seconds. See screenspace.py
     ``generate_timelapse`` for the canonical pattern.
 
-    *kind* names the caller's job (``cut``, ``card``, ``concat``, ``reel``,
-    ``screenshot``, ``gif``, ``compress``, ``mux``, ``burn``) and becomes the
+    *kind* names the caller's job (``cut``, ``card``, ``concat``, ``wrap``,
+    ``reel``, ``screenshot``, ``gif``, ``compress``, ``mux``, ``burn``) and becomes the
     ``ffmpeg.run.<kind>`` profile label, so a report can tell which of a
     clip's three subprocesses cost. Bare ``ffmpeg.run`` is the no-kind fallback.
     """

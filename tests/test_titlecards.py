@@ -433,20 +433,21 @@ def test_wrap_clip_with_cards_non_copy_safe_reencodes(monkeypatch, make_clip):
     monkeypatch.setattr(video, "verify_output_file", lambda *_a, **_k: True)
 
     commands = []
-    monkeypatch.setattr(
-        video,
-        "run_ffmpeg_process",
-        lambda cmd, **_k: (
-            commands.append(cmd)
-            or subprocess.CompletedProcess(args=cmd, returncode=0, stderr="")
-        ),
-    )
+    kinds = []
+
+    def fake_run(cmd, **kwargs):
+        commands.append(cmd)
+        kinds.append(kwargs.get("kind"))
+        return subprocess.CompletedProcess(args=cmd, returncode=0, stderr="")
+
+    monkeypatch.setattr(video, "run_ffmpeg_process", fake_run)
     monkeypatch.setattr(titlecards.os, "replace", lambda src, dst: None)
 
     ok, cards_applied = titlecards.wrap_clip_with_cards(clip, "clip.mp4")
     assert ok is True
     assert cards_applied is True
     assert len(commands) == 1
+    assert kinds == ["wrap"]  # not "card": the profile must split the two
     joined = " ".join(commands[0])
     assert "-filter_complex" in joined
     assert "concat=n=3:v=1:a=1" in joined
