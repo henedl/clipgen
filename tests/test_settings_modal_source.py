@@ -25,6 +25,9 @@ def test_model_rows_carry_reveal_and_delete():
     assert '"Delete"' in row
     # Reveal comes first: delete is destructive, so it sits furthest out.
     assert row.index("model-icon--reveal") < row.index("model-icon--delete")
+    # An Ollama model gets a label instead of a Delete that cannot work.
+    assert 'model.source === "ollama"' in row
+    assert row.index('model.source === "ollama"') < row.index("delBtn")
 
 
 def test_model_icons_are_css_masks_with_an_accessible_name():

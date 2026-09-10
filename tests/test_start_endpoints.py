@@ -1478,6 +1478,30 @@ def test_llm_delete_is_reachable_from_the_combined_root(client, monkeypatch, tmp
     assert not gguf.exists()
 
 
+def test_ollama_models_are_flagged_and_refuse_delete(client, monkeypatch, tmp_path):
+    """Ollama owns the blob; the row says so instead of failing with "not found"."""
+    import llm_client
+
+    monkeypatch.setattr(start_settings, "config_dir", lambda: tmp_path)
+    blob = tmp_path / "blobs" / "sha256-abc"
+    blob.parent.mkdir()
+    blob.write_bytes(b"stub")
+    monkeypatch.setattr(
+        llm_client,
+        "_ollama_manifest_models",
+        lambda: [{"stem": "gemma4-latest", "path": blob, "size_bytes": 4}],
+    )
+    monkeypatch.setattr(llm_client, "load_failures", dict)
+
+    models = client.get("/api/models").get_json()["llm"]["models"]
+    assert [(m["name"], m["source"]) for m in models] == [("gemma4-latest", "ollama")]
+
+    resp = client.delete("/api/models/llm/gemma4-latest")
+    assert resp.status_code == 409
+    assert "Ollama" in resp.get_json()["error"]
+    assert blob.exists()
+
+
 def test_models_payload_lists_suggested_models_with_install_state(client, monkeypatch):
     """Every catalog entry is offered; only the one on disk reads installed."""
     import hardware

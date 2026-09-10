@@ -4521,6 +4521,7 @@ def api_models() -> Response:
             "size_mb": round(m["size_bytes"] / (1024 * 1024)),
             "unusable": failures.get(m["name"], ""),
             "fit": llm_client.model_fit(round(m["size_bytes"] / (1024 * 1024)), hw),
+            "source": m.get("source", "local"),
         }
         for m in raw
     ]

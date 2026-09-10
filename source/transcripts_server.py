@@ -2228,13 +2228,16 @@ def api_llm_delete(name: str) -> FlaskResponse:
     """Delete a downloaded GGUF (or an external model's symlink).
 
     Only touches the models dir; deleting a symlink to an ecosystem cache
-    (llama.cpp, HF hub, Ollama) removes the link, never the cached file.
-    Refused while any agent is generating with the model, since the unload
-    would abort that run mid-stream.
+    (llama.cpp, HF hub) removes the link, never the cached file. An Ollama
+    model is refused outright: the scan re-offers it from Ollama's manifests,
+    so only ``ollama rm`` removes it. Refused while any agent is generating
+    with the model, since the unload would abort that run mid-stream.
     """
     name = (name or "").strip()
     if not name:
         return err("Missing model")
+    if llm_client.is_ollama_model(name):
+        return err("Managed by Ollama; remove it with ollama rm", 409)
     target = llm_client.model_file(name)
     if target.parent != llm_client.models_dir() or not (
         target.is_file() or target.is_symlink()

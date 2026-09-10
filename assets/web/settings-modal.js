@@ -396,6 +396,14 @@
       });
       row.appendChild(showBtn);
 
+      // Ollama owns the blob and the scan re-offers it; only `ollama rm` removes it.
+      if (model.source === "ollama") {
+        var managed = el("span", "settings-llm-model-state", "Ollama");
+        managed.title = "Managed by Ollama; remove it with ollama rm";
+        row.appendChild(managed);
+        return row;
+      }
+
       var delBtn = el("button", "btn btn-small btn-icon");
       delBtn.type = "button";
       delBtn.appendChild(

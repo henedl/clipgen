@@ -407,9 +407,12 @@ def list_models() -> list[dict[str, Any]]:
     Ollama-installed models are offered under their ``name-tag`` stem;
     selecting one links its blob in via ``_materialize_external``. A dangling
     symlink (its target deleted, e.g. by ``ollama rm``) is swept here.
+    ``source`` is ``ollama`` for those (link or not: Ollama owns the blob and
+    the scan re-offers it after any delete), else ``local``.
     """
     models = []
     seen = set()
+    ollama_root = _ollama_models_dir()
     directory = models_dir()
     if directory.is_dir():
         for path in sorted(directory.glob("*.gguf")):
@@ -419,12 +422,29 @@ def list_models() -> list[dict[str, Any]]:
                 if path.is_symlink():
                     path.unlink(missing_ok=True)
                 continue
-            models.append({"name": path.stem, "size_bytes": size})
+            source = "local"
+            if path.is_symlink() and path.resolve().is_relative_to(
+                ollama_root.resolve()
+            ):
+                source = "ollama"
+            models.append({"name": path.stem, "size_bytes": size, "source": source})
             seen.add(path.stem)
     for record in _ollama_manifest_models():
         if record["stem"] not in seen:
-            models.append({"name": record["stem"], "size_bytes": record["size_bytes"]})
+            models.append(
+                {
+                    "name": record["stem"],
+                    "size_bytes": record["size_bytes"],
+                    "source": "ollama",
+                }
+            )
     return models
+
+
+def is_ollama_model(value: str) -> bool:
+    """True when *value* names a model Ollama's store provides."""
+    stem = model_name(value)
+    return any(r["stem"] == stem for r in _ollama_manifest_models())
 
 
 def is_model_installed(
