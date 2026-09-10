@@ -250,3 +250,56 @@ def test_no_undefined_cross_file_calls(group: str, pattern: str) -> None:
         f"namespace. See agents/skills/carve-satellite/SKILL.md. Offenders: "
         f"{offenders}"
     )
+
+
+_NAMESPACES = "SS|TS|STUDIO|WF|CO|OV"
+_PAGE_HTML = {
+    "overview": "overview.html",
+    "screenspace": "screenspace.html",
+    "transcripts": "transcripts.html",
+    "studio": "studio.html",
+    "workflows": "workflows.html",
+    "composer": "composer.html",
+}
+
+
+def _load_time_imports(src: str) -> set[str]:
+    """Names bound as ``local = NS.name`` at load; late ``NS.name(...)`` calls are not."""
+    pattern = rf"\b[A-Za-z_$][\w$]*\s*=\s*(?:{_NAMESPACES})\.([A-Za-z_$][\w$]*)\s*[,;]"
+    return set(re.findall(pattern, src))
+
+
+def _published(src: str) -> set[str]:
+    """Names a file puts on the namespace: ``NS.x = …`` or the ``{ x: … }`` literal."""
+    names = set(
+        re.findall(rf"^\s*(?:{_NAMESPACES})\.([A-Za-z_$][\w$]*)\s*=", src, re.MULTILINE)
+    )
+    for body in re.findall(
+        rf"(?:var\s+(?:{_NAMESPACES})|window\.Clipgen\w+)\s*=\s*\{{([^}}]*)\}}", src
+    ):
+        names |= set(re.findall(r"([A-Za-z_$][\w$]*)\s*:", body))
+    return names
+
+
+@pytest.mark.parametrize("group, html", sorted(_PAGE_HTML.items()))
+def test_load_time_imports_have_an_earlier_publisher(group: str, html: str) -> None:
+    """``local = NS.fn`` at load stays undefined unless the owner loaded first."""
+    order = re.findall(
+        r'<script src="([^"]+)"', (_WEB / html).read_text(encoding="utf-8")
+    )
+    files = [f for f in order if f.startswith(group) and (_WEB / f).exists()]
+    sources = {f: _strip((_WEB / f).read_text(encoding="utf-8")) for f in files}
+    publishers: dict[str, str] = {}
+    for f in files:
+        for name in _published(sources[f]):
+            publishers.setdefault(name, f)
+    offenders: dict[str, list[str]] = {}
+    for idx, f in enumerate(files):
+        for name in sorted(_load_time_imports(sources[f])):
+            owner = publishers.get(name)
+            if owner is None or files.index(owner) >= idx:
+                offenders.setdefault(f, []).append(f"{name} (owner: {owner or 'none'})")
+    assert not offenders, (
+        f"{group}: load-time namespace imports whose owner loads later or never "
+        f"publishes; late-bind at the call site or reorder <script> tags: {offenders}"
+    )
