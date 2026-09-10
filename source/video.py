@@ -42,6 +42,9 @@ _keyframe_gap_cache: dict[tuple[str, int], float | None] = {}
 FFPROBE_TIMEOUT_SECONDS = 20
 
 
+# ---- ffmpeg / ffprobe invocation and capability probing ----
+
+
 def _ffprobe_check_output(cmd: list[str]) -> str:
     """Run an ffprobe argv and return stdout text.
 
@@ -471,6 +474,9 @@ def note_hw_encode_failure(encoder: str) -> None:
     )
 
 
+# ---- Encode orchestration: encoder choice, progress, cancellation ----
+
+
 def run_ffmpeg_encode(
     build_command: Callable[[str], list[str]],
     *,
@@ -750,6 +756,9 @@ def _finalize_ffmpeg_output(
             f" File size: {size}\n{success_extra}"
         )
     return True
+
+
+# ---- Cut, subtitle mux, and the shared run_ffmpeg entry ----
 
 
 @contextlib.contextmanager
@@ -1099,6 +1108,9 @@ def run_ffmpeg(
         success_noun="video",
         success_extra=f" Expected duration: {duration} s\n",
     )
+
+
+# ---- Extraction: screenshots, thumbnails, sprites, audio snippets, GIFs ----
 
 
 def extract_screenshot(
@@ -1550,6 +1562,9 @@ def extract_gif(
         verify_label="ffmpeg GIF extraction",
         success_noun="GIF",
     )
+
+
+# ---- Probing: durations, properties, multi-part timelines, audio tracks ----
 
 
 def _probe_duration_seconds_ffprobe_format(filepath: str) -> int | None:
@@ -2157,6 +2172,9 @@ def _delete_quietly(path: Path) -> None:
         pass
 
 
+# ---- Container forensics and the faststart remux ----
+
+
 def probe_max_keyframe_gap(filepath: str) -> float | None:
     """Return the largest gap (seconds) between consecutive keyframes near the start.
 
@@ -2562,6 +2580,9 @@ NORMALIZE_MUXER_BY_EXT = {
 _NORMALIZE_FASTSTART_MUXERS = frozenset({"mp4", "mov"})
 
 
+# ---- Loudness normalization ----
+
+
 def build_normalize_audio_command(
     input_file: str,
     output_file: str,
@@ -2766,6 +2787,9 @@ def extract_frame_at_timestamp(
         .reshape((height, width, 3))
         .copy()
     )
+
+
+# ---- Filesize targeting and compression ----
 
 
 def get_duration(start_time: str, end_time: str | None) -> int | None:
@@ -3044,6 +3068,9 @@ def compress_to_size(
                 utils.warning_print(
                     f"Could not remove temp file: {compressed_temp_path}", [str(e)]
                 )
+
+
+# ---- Reel concatenation ----
 
 
 def _detect_clip_mismatches(
@@ -3415,6 +3442,9 @@ def concat_copy(
         except OSError as e:
             utils.debug_print(f"Stream-copy concat failed: {e}")
             return False
+
+
+# ---- Batch and parallel extraction ----
 
 
 def _batch_extract_screenshots(

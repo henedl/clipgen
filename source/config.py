@@ -147,7 +147,7 @@ GALLERY_BUNDLE_ENABLED: bool = False  # embed images as base64 data URIs in gall
 CLIP_PARALLEL_WORKERS: int = 0  # Max concurrent ffmpeg processes for clip/screenshot/GIF generation; 0 = auto (min(4, cpu_count))
 MAX_FILESIZE_MB: int = 0  # Maximum output file size in MB (0 = disabled)
 MIN_SOURCE_VIDEO_SIZE_MB: int = 100  # Minimum file size (MB) to consider as a source video candidate during fuzzy matching
-MANIFEST_FILENAME: str = "clipgen.json"  # one sectioned state file per output dir; see utils.load_manifest_section
+MANIFEST_FILENAME: str = "clipgen.json"  # one sectioned state file per output dir; see manifest.load_manifest_section
 MANIFEST_ENABLED: bool = (
     False  # use --manifest CLI flag or set True to write manifest alongside artifacts
 )

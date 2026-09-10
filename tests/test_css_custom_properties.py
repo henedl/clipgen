@@ -43,7 +43,7 @@ def _set_at_runtime() -> set[str]:
     """Properties assigned from JS, HTML style attributes, or injected Python.
 
     ``--desktop-chrome-height`` and ``--desktop-traffic-inset`` are the live
-    example: ``utils.render_index_html`` writes them onto ``<html>`` from
+    example: ``server_utils.render_index_html`` writes them onto ``<html>`` from
     ``config`` so the frameless macOS window can size its own title bar.
     """
     names: set[str] = set()

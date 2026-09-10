@@ -6,6 +6,7 @@ from typing import Any
 import pytest
 
 import cli
+import cli_screenspace
 
 
 def _ss_args(**overrides):
@@ -204,7 +205,9 @@ def test_ss_task_omitted_region_defaults_to_full_frame(monkeypatch, capsys):
     import screenspace
 
     monkeypatch.setattr(screenspace, "load_screenspace_manifest", lambda: fake_manifest)
-    monkeypatch.setattr(cli, "_ss_resolve_videos_for_participant", lambda pid: [])
+    monkeypatch.setattr(
+        cli_screenspace, "_ss_resolve_videos_for_participant", lambda pid: []
+    )
     args = _ss_args(
         ss_task=["color", "P01"],
         ss_target_color="#FF0000",
@@ -212,7 +215,7 @@ def test_ss_task_omitted_region_defaults_to_full_frame(monkeypatch, capsys):
         ss_threshold=0.85,
     )
     with pytest.raises(SystemExit) as exc:
-        cli._run_ss_task(args)
+        cli_screenspace._run_ss_task(args)
     assert exc.value.code == 1
     # Reached the video check (region resolved as full_frame), not a region error.
     assert "P01" in capsys.readouterr().out
@@ -226,7 +229,7 @@ def test_ss_build_params_color_presence():
         ss_color_mode="presence",
         ss_min_area=1.0,
     )
-    params = cli._ss_build_params(args, "color", region, lambda _ts: None)
+    params = cli_screenspace._ss_build_params(args, "color", region, lambda _ts: None)
     assert params["color_mode"] == "presence"
     assert params["min_coverage"] == pytest.approx(0.01)
 
@@ -234,7 +237,7 @@ def test_ss_build_params_color_presence():
 def test_ss_build_params_color_average_omits_mode():
     region = {"x": 0, "y": 0, "w": 100, "h": 100}
     args = _ss_args(ss_target_color="#FF0000", ss_tolerance="20,30,30")
-    params = cli._ss_build_params(args, "color", region, lambda _ts: None)
+    params = cli_screenspace._ss_build_params(args, "color", region, lambda _ts: None)
     assert "color_mode" not in params
     assert "min_coverage" not in params
 
@@ -287,22 +290,24 @@ def test_validate_returns_dict_shape():
 
 
 def test_ss_hex_to_hsv_red_only():
-    hsv = cli._ss_hex_to_hsv("#FF0000")
+    hsv = cli_screenspace._ss_hex_to_hsv("#FF0000")
     # OpenCV HSV: red is hue 0, saturation 255, value 255
     assert hsv["s"] == 255
     assert hsv["v"] == 255
 
 
 def test_ss_parse_tolerance_valid():
-    tol = cli._ss_parse_tolerance("20,30,30")
+    tol = cli_screenspace._ss_parse_tolerance("20,30,30")
     assert tol == {"h": 20, "s": 30, "v": 30}
 
 
 @pytest.mark.parametrize(
     "fn,raw",
     [
-        pytest.param(cli._ss_hex_to_hsv, "#ABC", id="hex-invalid-length"),
-        pytest.param(cli._ss_parse_tolerance, "20,30", id="tolerance-wrong-count"),
+        pytest.param(cli_screenspace._ss_hex_to_hsv, "#ABC", id="hex-invalid-length"),
+        pytest.param(
+            cli_screenspace._ss_parse_tolerance, "20,30", id="tolerance-wrong-count"
+        ),
     ],
 )
 def test_ss_conversion_invalid_input_raises(fn, raw):
@@ -324,7 +329,7 @@ def test_ss_conversion_invalid_input_raises(fn, raw):
     ],
 )
 def test_ss_parse_scene_ref_valid(raw, expected):
-    assert cli._ss_parse_scene_ref(raw) == expected
+    assert cli_screenspace._ss_parse_scene_ref(raw) == expected
 
 
 @pytest.mark.parametrize(
@@ -338,7 +343,7 @@ def test_ss_parse_scene_ref_valid(raw, expected):
 )
 def test_ss_parse_scene_ref_invalid_raises(raw, match):
     with pytest.raises(ValueError, match=match):
-        cli._ss_parse_scene_ref(raw)
+        cli_screenspace._ss_parse_scene_ref(raw)
 
 
 # ---- Listing helpers ----
@@ -371,7 +376,7 @@ def test_ss_list_regions_outputs_names(capsys, monkeypatch):
     import screenspace
 
     monkeypatch.setattr(screenspace, "load_screenspace_manifest", lambda: fake_manifest)
-    cli._run_ss_list_regions(_ss_args(ss_list_regions=True))
+    cli_screenspace._run_ss_list_regions(_ss_args(ss_list_regions=True))
     out = capsys.readouterr().out
     assert "btn" in out
     assert "viewport" in out
@@ -393,7 +398,7 @@ def test_ss_list_stashes_outputs_names(capsys, monkeypatch):
     import screenspace
 
     monkeypatch.setattr(screenspace, "load_screenspace_manifest", lambda: fake_manifest)
-    cli._run_ss_list_stashes(_ss_args(ss_list_stashes=True))
+    cli_screenspace._run_ss_list_stashes(_ss_args(ss_list_stashes=True))
     out = capsys.readouterr().out
     assert "saved_v1" in out
     assert "btn" in out
@@ -426,7 +431,7 @@ def test_ss_list_tasks_filters_by_status(capsys, monkeypatch):
     import screenspace
 
     monkeypatch.setattr(screenspace, "load_screenspace_manifest", lambda: fake_manifest)
-    cli._run_ss_list_tasks(_ss_args(ss_list_tasks="completed"))
+    cli_screenspace._run_ss_list_tasks(_ss_args(ss_list_tasks="completed"))
     out = capsys.readouterr().out
     assert "ss_1" in out
     assert "ss_2" not in out
@@ -452,7 +457,7 @@ def test_ss_task_unknown_region_errors(capsys, monkeypatch):
         ss_threshold=0.85,
     )
     with pytest.raises(SystemExit) as exc:
-        cli._run_ss_task(args)
+        cli_screenspace._run_ss_task(args)
     assert exc.value.code == 1
     err = capsys.readouterr().out
     assert "missing" in err
@@ -462,7 +467,7 @@ def test_ss_task_unknown_region_errors(capsys, monkeypatch):
 def test_ss_task_unknown_type_errors(monkeypatch, capsys):
     args = _ss_args(ss_task=["bogus_tool", "P01", "btn"])
     with pytest.raises(SystemExit) as exc:
-        cli._run_ss_task(args)
+        cli_screenspace._run_ss_task(args)
     assert exc.value.code == 1
     err = capsys.readouterr().out
     assert "bogus_tool" in err
@@ -487,7 +492,9 @@ def test_ss_task_no_video_errors(monkeypatch, capsys):
     import screenspace
 
     monkeypatch.setattr(screenspace, "load_screenspace_manifest", lambda: fake_manifest)
-    monkeypatch.setattr(cli, "_ss_resolve_videos_for_participant", lambda pid: [])
+    monkeypatch.setattr(
+        cli_screenspace, "_ss_resolve_videos_for_participant", lambda pid: []
+    )
 
     args = _ss_args(
         ss_task=["color", "P01", "btn"],
@@ -496,7 +503,7 @@ def test_ss_task_no_video_errors(monkeypatch, capsys):
         ss_threshold=0.85,
     )
     with pytest.raises(SystemExit) as exc:
-        cli._run_ss_task(args)
+        cli_screenspace._run_ss_task(args)
     assert exc.value.code == 1
     err = capsys.readouterr().out
     assert "P01" in err
@@ -523,7 +530,9 @@ def test_ss_task_color_missing_target_color_errors(monkeypatch, capsys):
 
     monkeypatch.setattr(screenspace, "load_screenspace_manifest", lambda: fake_manifest)
     monkeypatch.setattr(
-        cli, "_ss_resolve_videos_for_participant", lambda pid: ["/tmp/fake.mp4"]
+        cli_screenspace,
+        "_ss_resolve_videos_for_participant",
+        lambda pid: ["/tmp/fake.mp4"],
     )
     monkeypatch.setattr(
         video_mod,
@@ -533,7 +542,7 @@ def test_ss_task_color_missing_target_color_errors(monkeypatch, capsys):
 
     args = _ss_args(ss_task=["color", "P01", "btn"])  # missing color params
     with pytest.raises(SystemExit) as exc:
-        cli._run_ss_task(args)
+        cli_screenspace._run_ss_task(args)
     assert exc.value.code == 1
     err = capsys.readouterr().out
     assert "target-color" in err.lower() or "target_color" in err.lower()
@@ -565,7 +574,9 @@ def test_ss_task_color_dispatches_and_persists(monkeypatch):
 
     monkeypatch.setattr(screenspace, "load_screenspace_manifest", lambda: fake_manifest)
     monkeypatch.setattr(
-        cli, "_ss_resolve_videos_for_participant", lambda pid: ["/tmp/fake.mp4"]
+        cli_screenspace,
+        "_ss_resolve_videos_for_participant",
+        lambda pid: ["/tmp/fake.mp4"],
     )
     monkeypatch.setattr(
         video_mod,
@@ -621,7 +632,7 @@ def test_ss_task_color_dispatches_and_persists(monkeypatch):
         ss_tolerance="20,30,30",
         ss_threshold=0.85,
     )
-    cli._run_ss_task(args)
+    cli_screenspace._run_ss_task(args)
 
     assert saved_tasks, "Manifest should have been persisted with the new task"
     persisted = saved_tasks[0]
@@ -643,11 +654,15 @@ def test_parse_ss_task_attention(monkeypatch):
 def test_ss_build_params_attention_threshold_optional():
     region = {"x": 0, "y": 0, "w": 100, "h": 100}
     args = _ss_args(ss_threshold=0.2)
-    params = cli._ss_build_params(args, "attention", region, lambda ts: None)
+    params = cli_screenspace._ss_build_params(
+        args, "attention", region, lambda ts: None
+    )
     assert params["shift_threshold"] == 0.2
 
     args = _ss_args()
-    params = cli._ss_build_params(args, "attention", region, lambda ts: None)
+    params = cli_screenspace._ss_build_params(
+        args, "attention", region, lambda ts: None
+    )
     assert "shift_threshold" not in params  # config default applies at scan time
 
 
@@ -675,7 +690,9 @@ def test_ss_task_attention_forces_full_frame(monkeypatch, capsys):
 
     monkeypatch.setattr(screenspace, "load_screenspace_manifest", lambda: fake_manifest)
     monkeypatch.setattr(
-        cli, "_ss_resolve_videos_for_participant", lambda pid: ["/tmp/fake.mp4"]
+        cli_screenspace,
+        "_ss_resolve_videos_for_participant",
+        lambda pid: ["/tmp/fake.mp4"],
     )
     monkeypatch.setattr(
         video_mod,
@@ -694,7 +711,7 @@ def test_ss_task_attention_forces_full_frame(monkeypatch, capsys):
     monkeypatch.setattr(screenspace, "ScreenspaceWorker", _FakeWorker)
 
     args = _ss_args(ss_task=["attention", "P01", "hud"], ss_threshold=0.2)
-    cli._run_ss_task(args)
+    cli_screenspace._run_ss_task(args)
 
     assert saved_tasks
     persisted = saved_tasks[0]
@@ -748,7 +765,9 @@ def _install_ss_stubs(monkeypatch, fake_manifest):
 
     monkeypatch.setattr(screenspace, "load_screenspace_manifest", lambda: fake_manifest)
     monkeypatch.setattr(
-        cli, "_ss_resolve_videos_for_participant", lambda pid: ["/tmp/fake.mp4"]
+        cli_screenspace,
+        "_ss_resolve_videos_for_participant",
+        lambda pid: ["/tmp/fake.mp4"],
     )
     monkeypatch.setattr(
         video_mod, "probe_video_properties", lambda p: {"width": 100, "height": 100}
@@ -783,7 +802,7 @@ def test_ss_task_scene_dispatches_and_persists(monkeypatch):
         ss_scene_ref=["menu:12.5", "game:30:0.8"],
         ss_threshold=0.9,
     )
-    cli._run_ss_task(args)
+    cli_screenspace._run_ss_task(args)
 
     assert saved_tasks
     persisted = saved_tasks[0]
@@ -813,7 +832,7 @@ def test_ss_task_shape_dispatches_and_persists(monkeypatch):
         ss_scale_max=2.0,
         ss_scale_steps=5,
     )
-    cli._run_ss_task(args)
+    cli_screenspace._run_ss_task(args)
 
     assert saved_tasks
     persisted = saved_tasks[0]
@@ -836,7 +855,7 @@ def test_ss_task_shape_requires_reference_timestamp(monkeypatch, capsys):
     _install_ss_stubs(monkeypatch, fake_manifest)
     args = _ss_args(ss_task=["shape", "P01", "btn"])
     with pytest.raises(SystemExit):
-        cli._run_ss_task(args)
+        cli_screenspace._run_ss_task(args)
     assert "reference-timestamp" in capsys.readouterr().out.lower()
 
 
@@ -862,7 +881,7 @@ def test_ss_task_region_resolves_active_over_stash(monkeypatch):
         ss_tolerance="20,30,30",
         ss_threshold=0.85,
     )
-    cli._run_ss_task(args)
+    cli_screenspace._run_ss_task(args)
 
     assert saved_tasks
     # Active geometry wins; the stash copy must not shadow it.
@@ -881,7 +900,7 @@ def test_ss_task_scene_missing_refs_errors(monkeypatch, capsys):
     _install_ss_stubs(monkeypatch, fake_manifest)
     args = _ss_args(ss_task=["scene", "P01", "btn"])  # no --ss-scene-ref
     with pytest.raises(SystemExit) as exc:
-        cli._run_ss_task(args)
+        cli_screenspace._run_ss_task(args)
     assert exc.value.code == 1
     assert "scene-ref" in capsys.readouterr().out.lower()
 
@@ -892,7 +911,7 @@ def test_ss_run_task_unknown_id_errors(monkeypatch, capsys):
 
     monkeypatch.setattr(screenspace, "load_screenspace_manifest", lambda: fake_manifest)
     with pytest.raises(SystemExit) as exc:
-        cli._run_ss_rerun_task(_ss_args(ss_run_task="ss_nope"))
+        cli_screenspace._run_ss_rerun_task(_ss_args(ss_run_task="ss_nope"))
     assert exc.value.code == 1
     assert "ss_nope" in capsys.readouterr().out
 
@@ -920,7 +939,7 @@ def test_ss_run_task_scene_rerun(monkeypatch):
     }
     saved_tasks = _install_ss_stubs(monkeypatch, fake_manifest)
 
-    cli._run_ss_rerun_task(_ss_args(ss_run_task="ss_scene01"))
+    cli_screenspace._run_ss_rerun_task(_ss_args(ss_run_task="ss_scene01"))
 
     assert saved_tasks
     persisted = saved_tasks[0]
@@ -964,7 +983,7 @@ def test_ss_run_task_multitool_rerun(monkeypatch):
     }
     saved_tasks = _install_ss_stubs(monkeypatch, fake_manifest)
 
-    cli._run_ss_rerun_task(_ss_args(ss_run_task="ss_mt01"))
+    cli_screenspace._run_ss_rerun_task(_ss_args(ss_run_task="ss_mt01"))
 
     assert saved_tasks
     persisted = saved_tasks[0]
@@ -1000,7 +1019,7 @@ def test_ss_run_task_uploaded_template_step_errors(monkeypatch, capsys):
     }
     _install_ss_stubs(monkeypatch, fake_manifest)
     with pytest.raises(SystemExit) as exc:
-        cli._run_ss_rerun_task(_ss_args(ss_run_task="ss_mt02"))
+        cli_screenspace._run_ss_rerun_task(_ss_args(ss_run_task="ss_mt02"))
     assert exc.value.code == 1
     assert "cannot be re-run" in capsys.readouterr().out.lower()
 
@@ -1035,7 +1054,7 @@ def test_ss_run_task_multitool_full_frame_step(monkeypatch):
     }
     saved_tasks = _install_ss_stubs(monkeypatch, fake_manifest)
 
-    cli._run_ss_rerun_task(_ss_args(ss_run_task="ss_ff01"))
+    cli_screenspace._run_ss_rerun_task(_ss_args(ss_run_task="ss_ff01"))
 
     assert saved_tasks
     step = saved_tasks[0]["parameters"]["steps"][0]
@@ -1089,7 +1108,7 @@ def test_ss_run_task_multitool_stash_step_disambiguates(monkeypatch):
     }
     saved_tasks = _install_ss_stubs(monkeypatch, fake_manifest)
 
-    cli._run_ss_rerun_task(_ss_args(ss_run_task="ss_stash01"))
+    cli_screenspace._run_ss_rerun_task(_ss_args(ss_run_task="ss_stash01"))
 
     assert saved_tasks
     step = saved_tasks[0]["parameters"]["steps"][0]
@@ -1126,7 +1145,7 @@ def test_ss_run_task_multitool_step_missing_region_errors(monkeypatch, capsys):
     }
     _install_ss_stubs(monkeypatch, fake_manifest)
     with pytest.raises(SystemExit) as exc:
-        cli._run_ss_rerun_task(_ss_args(ss_run_task="ss_gone01"))
+        cli_screenspace._run_ss_rerun_task(_ss_args(ss_run_task="ss_gone01"))
     assert exc.value.code == 1
     assert "not found" in capsys.readouterr().out.lower()
 
@@ -1164,7 +1183,7 @@ def test_ss_run_task_parent_stash_disambiguates(monkeypatch):
     }
     saved_tasks = _install_ss_stubs(monkeypatch, fake_manifest)
 
-    cli._run_ss_rerun_task(_ss_args(ss_run_task="ss_parent01"))
+    cli_screenspace._run_ss_rerun_task(_ss_args(ss_run_task="ss_parent01"))
 
     assert saved_tasks
     # stash_a's hud -> {10,10,10,10}, not stash_b's {20,...} nor the stale saved coords.
@@ -1183,7 +1202,7 @@ def test_ss_rehydrate_applies_shaped_capture_mask():
         "h": 40,
         "mask_points": [[[0.0, 0.0], [1.0, 0.0], [0.5, 1.0]]],
     }
-    cli._ss_rehydrate_task_media(
+    cli_screenspace._ss_rehydrate_task_media(
         "shape", parameters, lambda ts: frame, region, {"regions": {}}, (80, 80)
     )
     assert parameters["shape_mask"].shape == (40, 40)

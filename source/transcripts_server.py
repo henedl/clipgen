@@ -75,6 +75,7 @@ import speakers
 import start_settings
 import thinking_agents
 import transcripts
+import server_utils
 import utils
 import video
 from server_utils import (
@@ -328,7 +329,7 @@ def _transcribe_prewarm_setting() -> str:
 
 transcripts_bp = Blueprint("transcripts", __name__)
 
-utils.register_static_routes(
+server_utils.register_static_routes(
     transcripts_bp,
     "transcripts.html",
     # Resolved per request: POST /api/dirs moves config.INPUT_DIR mid-session, and

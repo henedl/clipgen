@@ -56,6 +56,8 @@ _CACHE_MODULES = (
     "transcripts_server.py",
     "utils.py",
     "viewer.py",
+    "manifest.py",
+    "server_utils.py",
 )
 
 # Caches whose size is bounded by the domain rather than by an explicit cap.

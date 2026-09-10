@@ -51,6 +51,7 @@ from typing import Any, Literal
 
 import config
 import start_settings
+import native_dialogs
 import utils
 
 Shape = Literal["mac-app", "win-inno", "win-zip", "unsupported"]
@@ -872,7 +873,7 @@ def reveal_download() -> bool:
         path = _status.get("path")
     if not path or not Path(path).is_file():
         return False
-    return utils.reveal_in_file_manager(Path(path))
+    return native_dialogs.reveal_in_file_manager(Path(path))
 
 
 # ---- Startup -----------------------------------------------------------------

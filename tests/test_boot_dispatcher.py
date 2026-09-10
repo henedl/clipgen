@@ -12,6 +12,7 @@ from typing import Any
 import pytest
 
 import server
+import manifest
 import utils
 
 
@@ -125,7 +126,7 @@ def test_serve_combined_app_raises_on_build_failure(monkeypatch):
         raise SystemExit(1)
 
     monkeypatch.setattr(utils, "preload_vision_libs_quietly", lambda **kwargs: None)
-    monkeypatch.setattr(utils, "sweep_stale_temp_artifacts", lambda: None)
+    monkeypatch.setattr(manifest, "sweep_stale_temp_artifacts", lambda: None)
     monkeypatch.setattr(server, "build_combined_app", _exit_build)
 
     with pytest.raises(RuntimeError, match="SystemExit"):
@@ -142,7 +143,7 @@ def test_serve_combined_app_returns_before_build_completes(monkeypatch):
         return _fake_app
 
     monkeypatch.setattr(utils, "preload_vision_libs_quietly", lambda **kwargs: None)
-    monkeypatch.setattr(utils, "sweep_stale_temp_artifacts", lambda: None)
+    monkeypatch.setattr(manifest, "sweep_stale_temp_artifacts", lambda: None)
     monkeypatch.setattr(server, "build_combined_app", _slow_build)
 
     live = server.serve_combined_app(port=0)
@@ -174,7 +175,7 @@ def test_gspread_client_factory_runs_on_build_thread(monkeypatch):
         return _fake_app
 
     monkeypatch.setattr(utils, "preload_vision_libs_quietly", lambda **kwargs: None)
-    monkeypatch.setattr(utils, "sweep_stale_temp_artifacts", lambda: None)
+    monkeypatch.setattr(manifest, "sweep_stale_temp_artifacts", lambda: None)
     monkeypatch.setattr(server, "build_combined_app", _build)
 
     live = server.serve_combined_app(
@@ -196,7 +197,7 @@ def test_gspread_client_factory_skipped_when_client_passed(monkeypatch):
         return _fake_app
 
     monkeypatch.setattr(utils, "preload_vision_libs_quietly", lambda **kwargs: None)
-    monkeypatch.setattr(utils, "sweep_stale_temp_artifacts", lambda: None)
+    monkeypatch.setattr(manifest, "sweep_stale_temp_artifacts", lambda: None)
     monkeypatch.setattr(server, "build_combined_app", _build)
 
     live = server.serve_combined_app(
@@ -229,7 +230,7 @@ def test_worksheet_factory_success_reaches_build(monkeypatch):
         return _fake_app
 
     monkeypatch.setattr(utils, "preload_vision_libs_quietly", lambda **kwargs: None)
-    monkeypatch.setattr(utils, "sweep_stale_temp_artifacts", lambda: None)
+    monkeypatch.setattr(manifest, "sweep_stale_temp_artifacts", lambda: None)
     monkeypatch.setattr(server, "build_combined_app", _build)
 
     live = server.serve_combined_app(
@@ -263,7 +264,7 @@ def test_worksheet_factory_failure_degrades_to_sheetless(monkeypatch):
         return _fake_app
 
     monkeypatch.setattr(utils, "preload_vision_libs_quietly", lambda **kwargs: None)
-    monkeypatch.setattr(utils, "sweep_stale_temp_artifacts", lambda: None)
+    monkeypatch.setattr(manifest, "sweep_stale_temp_artifacts", lambda: None)
     monkeypatch.setattr(server, "build_combined_app", _build)
 
     live = server.serve_combined_app(

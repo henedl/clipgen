@@ -73,6 +73,7 @@ import files
 import remux_server
 import screenspace
 import spreadsheet
+import server_utils
 import utils
 import video
 from server_utils import (
@@ -263,7 +264,7 @@ def _sse_task_payload() -> str:
 
 screenspace_bp = Blueprint("screenspace", __name__)
 
-utils.register_static_routes(
+server_utils.register_static_routes(
     screenspace_bp,
     "screenspace.html",
     # Resolved per request: POST /api/dirs moves OUTPUT_DIR without re-init, and a

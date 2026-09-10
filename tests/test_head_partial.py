@@ -1,7 +1,7 @@
 """Regression checks for the shared server-injected ``<head>`` partial (C6).
 
 The six live pages embed ``<!-- CLIPGEN_HEAD_HERE -->`` where the shared
-favicon + fonts block belongs; ``utils.render_index_html`` expands it from
+favicon + fonts block belongs; ``server_utils.render_index_html`` expands it from
 ``assets/web/_head.html``. Exported viewers stay self-contained and must not
 gain the marker.
 
@@ -11,6 +11,7 @@ intended typefaces instead of blocking on a CDN. The no-remote-reference check
 below is what keeps that from regressing.
 """
 
+import server_utils
 import utils
 
 from _frontend_source import WEB
@@ -55,7 +56,7 @@ def test_export_pages_stay_self_contained():
 
 
 def test_render_index_expands_marker():
-    rendered = utils.render_index_html(WEB, "transcripts.html")
+    rendered = server_utils.render_index_html(WEB, "transcripts.html")
     assert HEAD_MARKER not in rendered
     assert FAVICON_LINK in rendered
     assert FONTS_LINK in rendered
@@ -68,7 +69,7 @@ def test_no_live_page_references_a_remote_origin():
     import re
 
     for page in LIVE_PAGES:
-        rendered = utils.render_index_html(WEB, page)
+        rendered = server_utils.render_index_html(WEB, page)
         remote = re.findall(r'(?:href|src)=["\']https?://[^"\']+', rendered)
         assert not remote, f"{page} still loads remote assets: {remote}"
 
@@ -77,10 +78,10 @@ def test_desktop_chrome_script_is_desktop_only():
     """The native-window flag rides the head partial, and only in that launch."""
     import config
 
-    assert "desktopChrome" not in utils.render_index_html(WEB, "studio.html")
+    assert "desktopChrome" not in server_utils.render_index_html(WEB, "studio.html")
 
     utils.DESKTOP_CHROME = "macos"
-    rendered = utils.render_index_html(WEB, "studio.html")
+    rendered = server_utils.render_index_html(WEB, "studio.html")
     assert 'd.dataset.desktopChrome = "macos"' in rendered
     # The measurements come from config, never hand-written into the CSS.
     assert f'"{config.DESKTOP_CHROME_BAR_HEIGHT}px"' in rendered
@@ -91,10 +92,10 @@ def test_desktop_chrome_script_is_desktop_only():
     # The render cache is keyed on mtimes; without the flag in the key too, a
     # browser render would be served into a desktop window and vice versa.
     utils.DESKTOP_CHROME = None
-    assert "desktopChrome" not in utils.render_index_html(WEB, "studio.html")
+    assert "desktopChrome" not in server_utils.render_index_html(WEB, "studio.html")
 
 
 def test_render_index_passthrough_without_marker():
     # Export templates have no marker -> returned unchanged.
     src = (WEB / "gallery.html").read_text(encoding="utf-8")
-    assert utils.render_index_html(WEB, "gallery.html") == src
+    assert server_utils.render_index_html(WEB, "gallery.html") == src

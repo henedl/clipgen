@@ -39,6 +39,7 @@ from typing import Any
 
 import config
 import files
+import manifest as manifest_io
 import utils
 
 # Mutable lists of records collected during an interactive session.
@@ -187,7 +188,7 @@ def load_screenspace_events_for_viewer() -> list[dict[str, Any]]:
     import screenspace
 
     path_str = str(utils.get_effective_output_dir())
-    mtime_ns: int | None = utils.manifest_mtime() or None
+    mtime_ns: int | None = manifest_io.manifest_mtime() or None
 
     with _SS_EVENTS_CACHE_LOCK:
         if (
@@ -501,7 +502,7 @@ def load_manifest_both() -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
 
     Returns (artifacts, reels). Both default to [] on missing/corrupt file.
     """
-    data = utils.load_manifest_section("clips", default={})
+    data = manifest_io.load_manifest_section("clips", default={})
     if not isinstance(data, dict):
         return [], []
     return data.get("artifacts", []), data.get("reels", [])
@@ -551,4 +552,4 @@ def save_manifest(
             mode=mode,
         )
 
-        return utils.save_manifest_section("clips", data)
+        return manifest_io.save_manifest_section("clips", data)

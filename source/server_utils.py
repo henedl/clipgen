@@ -44,10 +44,11 @@ from functools import wraps
 from pathlib import Path
 from typing import Any, cast
 
-from flask import Response, jsonify, request
+from flask import Response, jsonify, request, send_from_directory
 
 import config
 import profiling
+import utils
 
 
 def ok(**fields: Any):
@@ -708,3 +709,143 @@ def make_sse_channel(
         )
 
     return notify, stream, clients
+
+
+# ---- Flask blueprint helpers ----
+
+# render_index_html() expands this from assets/web/_head.html; exported viewers
+# are self-contained and skip it.
+_HEAD_MARKER = "<!-- CLIPGEN_HEAD_HERE -->"
+
+# Keyed str(index path) -> (index_mtime_ns, head_mtime_ns|None, desktop_chrome,
+# rendered); chrome varies per launch, not per file.
+_index_html_cache: dict[str, tuple[int | None, int | None, str | None, str]] = {}
+_index_html_lock = threading.Lock()
+
+
+def _desktop_chrome_head(chrome: str) -> str:
+    """Inline ``<script>`` telling the page it is hosted in a native window.
+
+    Runs in ``<head>``, so it lands before the deferred ``topnav.js`` reads the
+    attribute — the bar lays out inset for the traffic lights on first paint rather
+    than jumping. The two measurements come from config so AppKit (which positions
+    the real buttons) and CSS (which reserves the space) cannot drift apart.
+    """
+    return (
+        "\n  <script>(function () {\n"
+        "    var d = document.documentElement;\n"
+        f'    d.dataset.desktopChrome = "{chrome}";\n'
+        f'    d.style.setProperty("--desktop-chrome-height", "{config.DESKTOP_CHROME_BAR_HEIGHT}px");\n'
+        f'    d.style.setProperty("--desktop-traffic-inset", "{config.DESKTOP_TRAFFIC_LIGHT_INSET}px");\n'
+        "  })();</script>"
+    )
+
+
+def render_index_html(assets_dir: Path, index_html: str) -> str:
+    """Read an index page, expanding the shared ``<head>`` marker if present.
+
+    Pages without the marker are returned unchanged, so this stays safe for any
+    current or future index page. Results are memoized per index path and
+    invalidated when the page (or, for marker pages, ``_head.html``) mtime changes.
+    """
+    index_path = assets_dir / index_html
+    head_path = assets_dir / "_head.html"
+    chrome = utils.DESKTOP_CHROME
+    try:
+        index_mtime: int | None = index_path.stat().st_mtime_ns
+    except OSError:
+        index_mtime = None
+
+    with _index_html_lock:
+        cached = _index_html_cache.get(str(index_path))
+        if cached is not None and cached[0] == index_mtime and cached[2] == chrome:
+            head_mtime_cached = cached[1]
+            if head_mtime_cached is None:
+                return cached[3]
+            try:
+                head_mtime: int | None = head_path.stat().st_mtime_ns
+            except OSError:
+                head_mtime = None
+            if head_mtime == head_mtime_cached:
+                return cached[3]
+
+        html = index_path.read_text(encoding="utf-8")
+        head_mtime_used: int | None = None
+        if _HEAD_MARKER in html:
+            head = head_path.read_text(encoding="utf-8").rstrip("\n")
+            if chrome:
+                head += _desktop_chrome_head(chrome)
+            html = html.replace(_HEAD_MARKER, head)
+            try:
+                head_mtime_used = head_path.stat().st_mtime_ns
+            except OSError:
+                head_mtime_used = None
+        _index_html_cache[str(index_path)] = (
+            index_mtime,
+            head_mtime_used,
+            chrome,
+            html,
+        )
+        return html
+
+
+def register_static_routes(
+    bp: Any,
+    index_html: str,
+    *,
+    media_dir_getter: Any = None,
+    media_error: str = "Media directory not configured",
+    icons: bool = False,
+    logos: bool = True,
+) -> None:
+    """Register standard static-file serving routes on a Flask Blueprint.
+
+    Always registers ``/`` (index) and ``/<path:filename>`` (static assets).
+    Optionally registers ``/icons/<path:filename>``, ``/logos/<path:filename>``,
+    and ``/media/<path:filename>``.
+
+    Args:
+        bp: Flask Blueprint to register routes on.
+        index_html: Filename of the HTML page served at ``/``.
+        media_dir_getter: Callable returning the current media directory path.
+            When provided, a ``/media/<path:filename>`` route is registered.
+        media_error: Error message returned (500) when the media dir is falsy.
+        icons: When True, registers ``/icons/<path:filename>`` from ``assets/icons/``.
+        logos: When True (default), registers ``/logos/<path:filename>`` from
+            ``assets/logos/`` so favicons and the brand mark are available to
+            every served page.
+    """
+    from flask import Response, jsonify
+
+    assets_dir = utils.get_bundled_assets_root() / "assets" / "web"
+
+    @bp.route("/")
+    def serve_index() -> Response:
+        return Response(render_index_html(assets_dir, index_html), mimetype="text/html")
+
+    @bp.route("/<path:filename>")
+    def serve_static(filename: str) -> Response:
+        return send_from_directory(assets_dir, filename)
+
+    if icons:
+        icons_dir = utils.get_bundled_assets_root() / "assets" / "icons"
+
+        @bp.route("/icons/<path:filename>")
+        def serve_icons(filename: str) -> Response:
+            return send_from_directory(icons_dir, filename)
+
+    if logos:
+        logos_dir = utils.get_bundled_assets_root() / "assets" / "logos"
+
+        @bp.route("/logos/<path:filename>")
+        def serve_logos(filename: str) -> Response:
+            return send_from_directory(logos_dir, filename)
+
+    if media_dir_getter is not None:
+
+        @bp.route("/media/<path:filename>")
+        def serve_media(filename: str) -> Response | tuple[Response, int]:
+            d = media_dir_getter()
+            if not d:
+                return jsonify({"ok": False, "error": media_error}), 500
+            return send_from_directory(d, filename)

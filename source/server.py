@@ -89,6 +89,9 @@ import pipeline
 import profiling
 import start_settings
 import titlecards
+import manifest
+import native_dialogs
+import server_utils
 import utils
 import video
 import viewer
@@ -476,7 +479,7 @@ def _override_config(**overrides: Any) -> Iterator[None]:
 studio_bp = Blueprint("studio", __name__)
 
 # Resolved per request so /studio/media/ follows POST /api/dirs moving OUTPUT_DIR mid-session.
-utils.register_static_routes(
+server_utils.register_static_routes(
     studio_bp,
     "studio.html",
     icons=True,
@@ -1138,19 +1141,19 @@ def _generate_intake_clips(
 
 # Reel and artifact stashes share the manifest's "stashes" section.
 def _load_stash_list(kind: str) -> list[dict[str, Any]]:
-    data = utils.load_manifest_section("stashes", default={})
+    data = manifest.load_manifest_section("stashes", default={})
     items = data.get(kind) if isinstance(data, dict) else None
     return items if isinstance(items, list) else []
 
 
 def _save_stash_list(kind: str, stashes: list[dict[str, Any]]) -> Path | None:
-    data = utils.load_manifest_section("stashes", default={})
+    data = manifest.load_manifest_section("stashes", default={})
     if not isinstance(data, dict):
         data = {}
     data[kind] = stashes
     if not any(data.values()):
-        return utils.save_manifest_section("stashes", None)
-    return utils.save_manifest_section("stashes", data)
+        return manifest.save_manifest_section("stashes", None)
+    return manifest.save_manifest_section("stashes", data)
 
 
 def _load_stashes() -> list[dict[str, Any]]:
@@ -2196,7 +2199,7 @@ def api_reveal_artifact() -> FlaskResponse:
         return err("Invalid file path", 403)
     if not p.is_file():
         return err("File not found", 404)
-    if not utils.reveal_in_file_manager(p):
+    if not native_dialogs.reveal_in_file_manager(p):
         return err("Could not open the folder")
     return ok(path=str(p))
 
@@ -3664,7 +3667,7 @@ def api_export_status() -> Response:
     Used by the frontend to gate the Export quick action — if no
     sections exist there is nothing for ``write_export_bundle`` to write.
     """
-    present = utils.manifest_sections()
+    present = manifest.manifest_sections()
     screenspace = "screenspace" in present
     transcripts = "transcripts" in present
     return ok(
@@ -4183,7 +4186,7 @@ def api_folder_picker() -> Response:
     """
     data = request.get_json(silent=True) or {}
     initial = (data.get("initial") or "").strip()
-    path = utils.open_native_folder_picker(initial)
+    path = native_dialogs.open_native_folder_picker(initial)
     return ok(path=path)
 
 
@@ -4398,7 +4401,7 @@ def combined_settings_reveal() -> FlaskResponse:
             path.mkdir(parents=True, exist_ok=True)
         except OSError as exc:
             return err(f"Could not open the folder: {exc}")
-    if not utils.reveal_in_file_manager(path):
+    if not native_dialogs.reveal_in_file_manager(path):
         return err("Could not open the folder")
     return ok(path=str(path))
 
@@ -4417,7 +4420,7 @@ def combined_llm_reveal() -> FlaskResponse:
     path = llm_client.model_path(name)
     if path is None:
         return err("Model not found", 404)
-    if not utils.reveal_in_file_manager(path):
+    if not native_dialogs.reveal_in_file_manager(path):
         return err("Could not open the folder")
     return ok(path=str(path))
 
@@ -4720,7 +4723,7 @@ def _boot_page_html() -> str:
     chrome = utils.DESKTOP_CHROME
     if chrome:
         html = html.replace(
-            "<!-- CLIPGEN_BOOT_CHROME -->", utils._desktop_chrome_head(chrome)
+            "<!-- CLIPGEN_BOOT_CHROME -->", server_utils._desktop_chrome_head(chrome)
         )
     return html
 
@@ -4915,7 +4918,7 @@ def serve_combined_app(
             set_phase("workspace")
             # Must precede the build: it unlinks *.json.tmp regardless of age, and
             # workers atomic-write.
-            utils.sweep_stale_temp_artifacts()
+            manifest.sweep_stale_temp_artifacts()
             client = gspread_client
             if client is None and gspread_client_factory is not None:
                 client = gspread_client_factory()

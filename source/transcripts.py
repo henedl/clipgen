@@ -75,6 +75,7 @@ from typing import Any, Literal, NotRequired, TypedDict
 import config
 import profiling
 import speakers
+import manifest as manifest_io
 import utils
 
 # ---------------------------------------------------------------------------
@@ -1037,7 +1038,7 @@ def load_transcripts_manifest() -> dict[str, Any]:
     Returns a dict with ``source_transcripts``, ``corrections``, and ``marks``
     keys. Every call parses afresh, so callers may mutate the result in place.
     """
-    return utils.load_manifest_section(
+    return manifest_io.load_manifest_section(
         "transcripts", default=_empty_transcripts_manifest()
     )
 
@@ -1084,9 +1085,9 @@ def save_transcripts_manifest(
         "known_terms": known_terms,
     }
     if _is_empty_transcripts_manifest(data):
-        utils.save_manifest_section("transcripts", None)
+        manifest_io.save_manifest_section("transcripts", None)
         return None
-    return utils.save_manifest_section("transcripts", data)
+    return manifest_io.save_manifest_section("transcripts", data)
 
 
 # ---------------------------------------------------------------------------

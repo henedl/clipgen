@@ -43,6 +43,7 @@ from pathlib import Path
 from typing import Any, cast
 
 import config
+import manifest as manifest_io
 import utils
 
 # Catalog names used below; every import here is also facade surface.
@@ -106,7 +107,7 @@ def load_workflows_manifest() -> dict[str, Any]:
     Missing or corrupt files fall back to :func:`empty_workflows_manifest` so
     callers always get the full key set, never a partial dict.
     """
-    data = utils.load_manifest_section("workflows")
+    data = manifest_io.load_manifest_section("workflows")
     if not isinstance(data, dict):
         return empty_workflows_manifest()
     # Backfill any missing top-level keys so callers can index unconditionally.
@@ -155,9 +156,9 @@ def save_workflows_manifest(
         "runs": runs or [],
     }
     if _is_empty_workflows_manifest(payload):
-        utils.save_manifest_section("workflows", None)
+        manifest_io.save_manifest_section("workflows", None)
         return None
-    return utils.save_manifest_section("workflows", payload)
+    return manifest_io.save_manifest_section("workflows", payload)
 
 
 # ---------------------------------------------------------------------------
