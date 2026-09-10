@@ -1,5 +1,9 @@
 # Windows Distribution Plan
 
+> **Status: complete, archived 2026-09-10.** A (rename `_internal`), B (Inno Setup installer),
+> and E2 (RapidOCR replaces easyocr, torch gone) shipped; C, D, E1, and F were rejected. The
+> table under "Status" records each.
+
 How the Windows build is shipped today, and the options for making it feel less like a
 folder of loose parts. Nothing here is urgent; this is a decision record to argue with.
 

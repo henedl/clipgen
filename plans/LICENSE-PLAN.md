@@ -9,7 +9,7 @@ clipgen bundles 20+ third-party libraries into a PyInstaller binary. All license
 ### OpenCV and FFmpeg (decided 2026-04-04, corrected 2026-08-15; **superseded 2026-08-16**)
 
 > **Superseded:** the macOS build now compiles `opencv-python-headless` 4.14.0.94 from its
-> published sdist with `-DWITH_FFMPEG=OFF` (research: [OPENCV-SELF-COMPILE-PLAN.md](OPENCV-SELF-COMPILE-PLAN.md)),
+> published sdist with `-DWITH_FFMPEG=OFF` (research: [OPENCV-SELF-COMPILE-PLAN.md](archive/OPENCV-SELF-COMPILE-PLAN.md)),
 > so the DMG carries **no** FFmpeg libraries inside cv2 and is conveyed MIT again, with GPL
 > applying only to the aggregated ffmpeg/ffprobe executables. The GPL-FFmpeg-inside-opencv
 > section of `build/THIRD-PARTY-LICENSES` was replaced by an LGPL-2.1 section covering the
@@ -148,7 +148,7 @@ of re-deriving it.
   against the self-built wheel's other wins (−76 MB unpacked, no 93-dylib brew chain).
 
 - [x] **Self-compiled OpenCV — researched, de-risked, and implemented 2026-08-16**, see
-  [OPENCV-SELF-COMPILE-PLAN.md](OPENCV-SELF-COMPILE-PLAN.md) for the full evidence. Every open
+  [OPENCV-SELF-COMPILE-PLAN.md](archive/OPENCV-SELF-COMPILE-PLAN.md) for the full evidence. Every open
   question answered empirically on macOS arm64: the sdist builds clean in **122 s** locally
   (~8–15 min on a standard CI runner, cacheable); requires a pin bump to 4.14.0.94 (4.13.x
   published no sdists); the result has **zero** bundled dylibs (Apple frameworks only, codecs
@@ -158,7 +158,7 @@ of re-deriving it.
 
 - **Remove cv2 entirely (reimplement its used surface)** — investigated 2026-08-16, feasible
   with no new dependencies but ~8× the effort of the self-compile; recorded as an optional
-  future work package in [DROP-OPENCV-PLAN.md](DROP-OPENCV-PLAN.md).
+  future work package in [DROP-OPENCV-PLAN.md](archive/DROP-OPENCV-PLAN.md).
 
 - [x] **Take PyAV off the decode path** — Done 2026-08-16, and it went further than this note
   anticipated: the "cannot be excluded" caveat was wrong. `faster_whisper/audio.py` imports `av`

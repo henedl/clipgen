@@ -1,22 +1,21 @@
 # Backend god-file splits — deferred plan
 
-> **Status: Split 1 (workflows) done, 2026-07-23; Split 0 (cli_args) done, 2026-09-03.**
-> Split 0 was not in the original design: `parse_arguments` (~800 lines) referenced exactly one
-> cli-level name, so it moved to `cli_args.py` with a one-line facade import and zero test edits.
-> Current seams for Split 2 are `cli.py` `_SS_VALID_TASK_TYPES`…`_run_ss_rerun_task` and
-> `_SS_CLIPS_CELL_COL`…`_run_transcript_mark` (the line numbers below predate Split 0; re-grep). Designed during the 2026-07 backend refactor
-> pass; the hygiene/consolidation stages of that pass shipped separately (dead config constants,
-> truncation consolidation, `server_utils.make_debounced_persist`). This file holds the three
-> fully-designed god-file splits that were deliberately deferred, plus the items surveyed and
-> skipped. Line numbers reference the tree as of that pass — re-verify before executing, but the
-> seams and traps were verified against real code and tests, not just outlines. Splits 2 (cli) and
-> 3 (utils) remain open.
+> **Status: closed 2026-09-10.** Split 1 (workflows) done 2026-07-23; Split 0 (cli_args) done
+> 2026-09-03; Split 2 (cli) done in two halves — `cli_screenspace.py` in #803, `cli_event_clips.py`
+> on 2026-09-10. Split 3 (utils) **declined** by maintainer decision on 2026-09-10: #803 carved
+> `manifest.py`, `server_utils.py`, and `native_dialogs.py` out of utils.py instead, and the
+> `utils_output` / `utils_timestamps` / `utils_artifacts` design below stays as evidence, not as a
+> route. Split 0 was not in the original design: `parse_arguments` (~800 lines) referenced exactly
+> one cli-level name, so it moved to `cli_args.py` with a one-line facade import and zero test
+> edits. Designed during the 2026-07 backend refactor pass; the hygiene/consolidation stages of that
+> pass shipped separately (dead config constants, truncation consolidation,
+> `server_utils.make_debounced_persist`). Line numbers reference the tree as of that pass.
 
 ## Context
 
 cli.py (~3.8k lines), workflows.py (~3.7k), and utils.py (~2.1k) each contain self-contained
 subsystems with verified seams. The splits below follow the repo's established pattern
-([agents/skills/split-module/SKILL.md](../agents/skills/split-module/SKILL.md)): new modules go in
+([agents/skills/split-module/SKILL.md](../../agents/skills/split-module/SKILL.md)): new modules go in
 `pyproject.toml [tool.setuptools] py-modules` (guarded by `tests/test_packaging.py`); facades
 re-export every public **and test-touched private** name; test patch targets move to the owning
 sibling (re-export only rebinds). Each split should land as its own `refactor:` commit with the full
@@ -78,7 +77,13 @@ Failure modes: importing catalog/runner directly and executing nodes before `wor
 `execute` (docstring + facade discipline; all current importers go through the facade); a missed
 facade re-export (suite catches); copying instead of sharing `NODE_TYPES`.
 
-## Split 2: cli.py → cli_screenspace.py + cli_event_clips.py
+## Split 2: cli.py → cli_screenspace.py + cli_event_clips.py — **Done (#803 + 2026-09-10)**
+
+> `cli_screenspace.py` landed in #803 (916 lines). `cli_event_clips.py` followed on 2026-09-10
+> (~600 lines): the seam was verified self-contained by an AST pass (no bare-name reference to any
+> cli-level helper), `_split_study_participant` below never existed, and the only test churn was
+> `tests/test_cli_event_clip_args.py` (plain calls + the two `_post_marks_to_running_server` patches).
+> cli.py: 3,285 → 1,781 lines.
 
 Both seams verified self-contained: neither region calls any cli-level function defined outside
 itself; `screenspace`/`pipeline` imports are function-local — **keep them function-local** (cv2 must
@@ -116,7 +121,20 @@ module-attribute dispatch keeps future monkeypatches on the owning module visibl
 pyproject: add both. ARCHITECTURE.md: two rows + amend the cli.py row. Review the diff for import
 placement — no lazy import promoted to top-level.
 
-## Split 3: utils.py → utils_output.py + utils_timestamps.py + utils_artifacts.py (utils stays facade + core)
+## Split 3: utils.py → utils_output.py + utils_timestamps.py + utils_artifacts.py (utils stays facade + core) — **Declined (2026-09-10)**
+
+> Re-verified against the tree on 2026-09-10 before the decision; two facts beyond the traps below:
+> - `utils_artifacts` cannot be a clean leaf: `_clip_metadata_fields` calls `safe_cell_a1` and
+>   `discover_participant_videos` calls `get_effective_input_dir`, both staying in utils core, so
+>   the sibling would need a function-local `import utils` cycle break. Its members are also two
+>   disjoint blocks (artifact builders mid-file; discovery at the tail with the source-video regex
+>   cluster it belongs to).
+> - `create_progress_bar` is patched ~24 times (`test_clip_pipeline.py`, `test_pipeline_io.py`,
+>   `test_files_and_artifacts.py`, `test_workflows_executors.py`) and no production code calls it
+>   by attribute: the patches work only because `progress_scope` resolves the name from utils'
+>   own globals. Moving one without the other silently defeats every patch.
+> - `tests/test_import_layering.py` `_TREE_LAYERS` has no room between `profiling: 1` and
+>   `utils: 2`; three chained siblings mean renumbering ~45 entries.
 
 Riskiest split — do last. Import DAG deepest-first: `utils_output` (config + rich only) ←
 `utils_timestamps` ← `utils_artifacts` ← `utils` (core + facade). All ~30 importers keep
