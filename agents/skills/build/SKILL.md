@@ -254,5 +254,5 @@ the build instead of silently degrading webp/vp9/titlecards.
 - [plans/archive/DESKTOP-PACKAGING-PLAN.md](../../../plans/archive/DESKTOP-PACKAGING-PLAN.md) — how
   the current shape was arrived at. Its "deferred ffmpeg bundling" note is resolved: the bundle now
   ships pinned GPL ffmpeg/ffprobe (licensing recorded in `build/THIRD-PARTY-LICENSES` and
-  `plans/LICENSE-PLAN.md`)
+  `plans/archive/LICENSE-PLAN.md`)
 - [desktop.py](../../../source/desktop.py) — the window host and its two JS bridges

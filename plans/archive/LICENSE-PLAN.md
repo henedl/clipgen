@@ -169,12 +169,27 @@ of re-deriving it.
   (`-map 0:a:N -ac 1 -ar 16000 -f f32le`), which also deleted the non-default-audio-track
   demux workaround in `transcribe_video()`.
 
-- **Full transitive-dependency attribution sweep.** Step 5 covered direct dependencies only, and
-  step 6 added the bundled *assets* (icons, fonts, VAD model) rather than any new transitives. The
-  bundle still contains a long tail of unlisted ones (tokenizers, huggingface-hub, cryptography,
-  click/itsdangerous/blinker, sympy, shapely, pyclipper, …). Most are permissive, so this is a
-  completeness task rather than a risk one. Note the list above is stale in two places: onnxruntime
-  *is* attributed now, and networkx left with scikit-image.
+- [x] **Full transitive-dependency attribution sweep** — Done 2026-09-10. The SUMMARY table
+  grew from 36 to 89 rows: every package in the `uv.lock` runtime closure (all platforms; the
+  Windows-only pythonnet/clr-loader and four more macOS-only pyobjc frameworks included) now has
+  a row and a copyright entry, and `tests/test_licenses.py::test_every_locked_dependency_is_attributed`
+  walks the lock so a future `uv add` cannot ship unattributed. Three new full-text sections:
+  BSD-2-Clause (pyasn1, pyasn1-modules, Pygments), ISC (shellingham, requests-oauthlib),
+  PSF-2.0 (typing-extensions). `licenses._GROUP_SEPARATORS` learned `" OR "` so the
+  dual-licensed cryptography and packaging fold into their Apache family.
 
-  This is more visible than it was: anything missing from the SUMMARY table is now also missing
-  from the About tab, so the sweep would show up directly in the UI.
+  The "completeness, not risk" framing above was wrong in two places the sweep surfaced:
+  - **GEOS (LGPL-2.1)** ships on both platforms inside the shapely wheel (a RapidOCR
+    dependency): `shapely/.dylibs/libgeos*.dylib` on macOS, `shapely.libs` on Windows. It is
+    now a nested `GEOS (in shapely)` row, and the LGPL-2.1 section was retitled
+    `LGPL-2.1 (bundled GEOS library and the Windows cv2 FFmpeg DLL)` with a GEOS paragraph
+    and source pointer. `tests/test_packaging.py` asserts the new heading.
+  - **OpenSSL 4.0.1** is statically linked into cryptography's `_rust` extension (google-auth
+    dependency); now a nested `OpenSSL (in cryptography)` row under Apache-2.0.
+
+  Three latent defects fixed on the way: the `WeSpeaker CAM++ model (bundled)` row overflowed
+  the 25-column component field and touched its version cell with a single space, so
+  `licenses.load_components()` silently dropped it (35 rows parsed from 36 lines; the About tab
+  never showed it) — renamed to `WeSpeaker CAM++ (bundled)` and guarded by
+  `test_real_notice_drops_no_rows`; Pillow's table version was stale (12.1.1 → 12.3.0); and a
+  duplicated `google-auth` copyright line in the Apache section.
