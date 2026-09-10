@@ -4489,9 +4489,12 @@ def _register_settings_routes(combined: Flask) -> None:
 
 
 def api_models() -> Response:
+    import hardware
     import llm_client
     import thinking_agents
     import transcripts
+
+    hw = hardware.profile()
 
     whisper_models = [
         {
@@ -4517,9 +4520,13 @@ def api_models() -> Response:
             "model_url": llm_client.model_card_url(m["name"]),
             "size_mb": round(m["size_bytes"] / (1024 * 1024)),
             "unusable": failures.get(m["name"], ""),
+            "fit": llm_client.model_fit(round(m["size_bytes"] / (1024 * 1024)), hw),
         }
         for m in raw
     ]
+    size_by_stem: dict[str, int] = {
+        str(m["name"]): round(int(m["size_bytes"]) / (1024 * 1024)) for m in raw
+    }
     # Curated downloads; installed flips the settings row to "Downloaded".
     llm_suggested = [
         {
@@ -4528,12 +4535,16 @@ def api_models() -> Response:
             "model_url": llm_client.model_card_url(m["name"]),
             "stem": llm_client.model_name(m["name"]),
             "size_mb": m["size_mb"],
+            "rank": m["rank"],
             "description": m["description"],
             "installed": llm_client.is_model_installed(m["name"], raw),
             "unusable": failures.get(llm_client.model_name(m["name"]), ""),
+            "fit": llm_client.model_fit(m["size_mb"], hw),
         }
         for m in llm_client.SUGGESTED_MODELS
     ]
+    for m in llm_client.SUGGESTED_MODELS:
+        size_by_stem.setdefault(llm_client.model_name(m["name"]), int(m["size_mb"]))
 
     # Per-agent model + install status, so the UI can confirm downloads before running.
     llm_agents = []
@@ -4547,6 +4558,12 @@ def api_models() -> Response:
                 "model_url": llm_client.model_card_url(model),
                 "installed": llm_client.is_model_installed(model, raw),
                 "unusable": failures.get(llm_client.model_name(model), ""),
+                # Unknown size (a hand-dropped, absent file) reads as unknown fit.
+                "fit": llm_client.model_fit(
+                    size_by_stem.get(llm_client.model_name(model), 0), hw
+                )
+                if llm_client.model_name(model) in size_by_stem
+                else {"level": "unknown", "need_mb": 0, "usable_mb": 0},
             }
         )
 
@@ -4562,6 +4579,8 @@ def api_models() -> Response:
             "suggested": llm_suggested,
             "agents": llm_agents,
             "base_url": config.LLM_BASE_URL,
+            "hardware": dict(hw, note=llm_client.fit_note(hw)),
+            "recommended": llm_client.recommend_model(hw),
         },
     )
 

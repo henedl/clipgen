@@ -166,3 +166,53 @@ def test_setting_labels_restore_acronyms():
     row = _JS[_JS.index("function _buildRow") : _JS.index("function _buildRow") + 1500]
     for acronym in ("LLM", "GIF", "URL"):
         assert f'"{acronym}")' in row, acronym
+
+
+def test_recommendation_widget_reads_server_fit_and_uses_the_row():
+    """The Summaries card renders the server's verdicts, never its own thresholds.
+
+    "Use recommended" must go through the setting row's select so the change
+    marks, debounces, and saves like a manual pick.
+    """
+    block = _JS[
+        _JS.index("function renderReco") : _JS.index("function _modelNameBlock")
+    ]
+    assert "llm.recommended" in block
+    assert "llm.hardware" in block
+    assert '"Use recommended"' in block
+    assert "_fireChange(sel)" in block
+    assert "apiPut" not in block
+    assert "button[data-model=" in block
+    assert "<svg" not in block
+
+    row = _JS[
+        _JS.index("function _buildSuggestedRow") : _JS.index(
+            "function _buildLlmModelRow"
+        )
+    ]
+    assert "_fitChip(model" in row
+    assert 'setAttribute("data-model"' in row
+
+    chip = _JS[_JS.index("function _fitChip") : _JS.index("function _fitSuffix")]
+    assert "fit.need_mb" in chip and "fit.usable_mb" in chip
+    assert "settings-llm-model-fit--reco" in chip
+    assert "settings-llm-model-fit--warn" in chip
+
+    select = _JS[_JS.index("function _loadModelsForSelect") :]
+    assert "_fitSuffix(m," in select and "_fitSuffix(sm," in select
+    suffix = _JS[
+        _JS.index("function _fitSuffix") : _JS.index("function _hardwareSummary")
+    ]
+    assert "recommended" in suffix and "too large for this machine" in suffix
+
+    css = read("settings-modal.css")
+    for rule in (
+        ".settings-llm-reco {",
+        ".settings-llm-reco-note {",
+        ".settings-llm-model-fit {",
+        ".settings-llm-model-fit--reco {",
+        ".settings-llm-model-fit--warn {",
+        'url("icons/cpu-chip.svg")',
+        'url("icons/sparkles.svg")',
+    ):
+        assert rule in css, rule

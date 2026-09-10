@@ -863,6 +863,81 @@ html[data-theme="dark"] .settings-panel {
   mask-image: url("icons/trash.svg");
 }
 
+/* Recommendation card (Summaries tab): the machine's memory and cores,
+   the catalog pick that fits them, and a one-click "Use recommended". */
+.settings-llm-reco {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+}
+
+.settings-llm-reco-hw,
+.settings-llm-reco-pick {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--text-sm);
+}
+
+.settings-llm-reco-hw {
+  color: var(--color-text-dim);
+}
+
+.settings-llm-reco-pick {
+  font-weight: 600;
+}
+
+.settings-llm-reco-note {
+  font-size: var(--text-xs);
+  color: var(--color-warning);
+}
+
+.settings-llm-reco-icon {
+  display: inline-block;
+  flex-shrink: 0;
+  width: var(--icon-size-sm);
+  height: var(--icon-size-sm);
+  background-color: currentColor;
+  -webkit-mask: no-repeat center / contain;
+  mask: no-repeat center / contain;
+}
+
+.settings-llm-reco-icon--chip {
+  -webkit-mask-image: url("icons/cpu-chip.svg");
+  mask-image: url("icons/cpu-chip.svg");
+}
+
+.settings-llm-reco-icon--pick {
+  -webkit-mask-image: url("icons/sparkles.svg");
+  mask-image: url("icons/sparkles.svg");
+}
+
+/* Memory-fit chip on a catalog row. Neutral by default; the recommended
+   model takes the accent, a model that will not fit takes the warning. */
+.settings-llm-model-fit {
+  padding: 0 var(--space-2);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-full);
+  font-size: var(--text-xs);
+  color: var(--color-text-dim);
+  white-space: nowrap;
+}
+
+.settings-llm-model-fit--reco {
+  border-color: var(--color-accent);
+  color: var(--color-accent);
+}
+
+.settings-llm-model-fit--warn {
+  border-color: var(--color-warning);
+  color: var(--color-warning);
+}
+
 /* Suggested models: the curated catalog beneath the downloaded list. Each
    row downloads in place; the bar grows under the name while it runs. */
 .settings-llm-model-desc {

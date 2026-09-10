@@ -57,6 +57,38 @@
     return mb + " MB";
   }
 
+  var FIT_LABELS = { fits: "Fits", tight: "Tight", too_big: "Too large" };
+
+  // Memory-fit chip from the server's verdict; the recommended model wins the label.
+  function _fitChip(model, isReco) {
+    var fit = model.fit || {};
+    if (!FIT_LABELS[fit.level]) return null;
+    var chip = el("span", "settings-llm-model-fit", isReco ? "Recommended" : FIT_LABELS[fit.level]);
+    if (isReco) chip.classList.add("settings-llm-model-fit--reco");
+    else if (fit.level === "too_big") chip.classList.add("settings-llm-model-fit--warn");
+    chip.title = "Needs about " + _formatSize(fit.need_mb) + ", " +
+      _formatSize(fit.usable_mb) + " usable";
+    return chip;
+  }
+
+  // Option-label suffix; too-large models stay selectable, like "won't load".
+  function _fitSuffix(model, isReco) {
+    if (isReco) return " \u2014 recommended";
+    if (model.fit && model.fit.level === "too_big") return " \u2014 too large for this machine";
+    return "";
+  }
+
+  function _hardwareSummary(hw) {
+    var parts = [];
+    if (hw.chip) parts.push(hw.chip);
+    if (hw.memory_mb) {
+      parts.push(_formatSize(hw.memory_mb).replace(".0 GB", " GB") +
+        (hw.unified_memory ? " unified memory" : " RAM"));
+    }
+    if (hw.cpu_count) parts.push(hw.cpu_count + " cores");
+    return parts.length ? parts.join(" \u00b7 ") : "This machine";
+  }
+
   function _fetchModels() {
     if (_modelsCache) return Promise.resolve(_modelsCache);
     if (_modelsCachePromise) return _modelsCachePromise;
@@ -153,6 +185,9 @@
     wrap.appendChild(el("div", "settings-group-label", "Downloaded models"));
     var list = el("div", "settings-llm-models-list");
     wrap.appendChild(list);
+    wrap.appendChild(el("div", "settings-group-label", "Recommendation"));
+    var reco = el("div", "settings-llm-reco");
+    wrap.appendChild(reco);
     wrap.appendChild(el("div", "settings-group-label", "Suggested models"));
     var suggestedList = el("div", "settings-llm-models-list");
     wrap.appendChild(suggestedList);
@@ -161,6 +196,8 @@
       _fetchModels().then(function (data) {
         list.textContent = "";
         suggestedList.textContent = "";
+        var llm = (data && data.llm) || {};
+        renderReco(llm);
         var models = (data && data.llm && data.llm.models) || [];
         if (!models.length) {
           list.appendChild(el("div", "settings-model-note", "No models downloaded yet."));
@@ -170,9 +207,68 @@
         }
         var suggested = (data && data.llm && data.llm.suggested) || [];
         for (var j = 0; j < suggested.length; j++) {
-          suggestedList.appendChild(_buildSuggestedRow(suggested[j]));
+          suggestedList.appendChild(_buildSuggestedRow(suggested[j], llm.recommended));
         }
       });
+    }
+
+    function _summaryFitNote(agents) {
+      for (var i = 0; i < (agents || []).length; i++) {
+        var a = agents[i];
+        if (a.key !== "summary" || !a.fit) continue;
+        if (a.fit.level === "too_big") return "Your summary model may not fit.";
+        if (a.fit.level === "tight") return "Your summary model is a tight fit.";
+      }
+      return "";
+    }
+
+    // Which catalog model this machine should run, from the server's fit verdicts.
+    function renderReco(llm) {
+      reco.textContent = "";
+      var hw = llm.hardware || {};
+      var hwLine = el("div", "settings-llm-reco-hw");
+      hwLine.appendChild(el("span", "settings-llm-reco-icon settings-llm-reco-icon--chip"));
+      hwLine.appendChild(document.createTextNode(_hardwareSummary(hw)));
+      reco.appendChild(hwLine);
+      var pick = null;
+      var suggested = llm.suggested || [];
+      for (var i = 0; i < suggested.length; i++) {
+        if (suggested[i].name === llm.recommended) pick = suggested[i];
+      }
+      if (!pick) {
+        reco.appendChild(el("div", "settings-llm-reco-note",
+          hw.note || "No catalog model fits this machine."));
+        return;
+      }
+      var line = el("div", "settings-llm-reco-pick");
+      line.appendChild(el("span", "settings-llm-reco-icon settings-llm-reco-icon--pick"));
+      line.appendChild(document.createTextNode("Recommended: " + pick.label));
+      reco.appendChild(line);
+      var note = hw.note || _summaryFitNote(llm.agents);
+      if (note) reco.appendChild(el("div", "settings-llm-reco-note", note));
+
+      var useBtn = el("button", "btn btn-small");
+      useBtn.type = "button";
+      var current = _findSetting("LLM_SUMMARY_MODEL");
+      var inUse = !!current && current.value === pick.name;
+      useBtn.textContent = inUse ? "In use" : "Use recommended";
+      useBtn.disabled = inUse;
+      // Goes through the row's select so the change marks, saves, and refreshes as usual.
+      useBtn.addEventListener("click", function () {
+        var sel = _panelsEl.querySelector(
+          '.settings-row[data-setting="LLM_SUMMARY_MODEL"] select');
+        if (sel) {
+          sel.value = pick.name;
+          _fireChange(sel);
+        }
+        if (!pick.installed) {
+          var dl = suggestedList.querySelector('button[data-model="' + pick.name + '"]');
+          if (dl && !dl.disabled) dl.click();
+        }
+        useBtn.textContent = "In use";
+        useBtn.disabled = true;
+      });
+      reco.appendChild(useBtn);
     }
 
     // Friendly name over mono id; without a catalog label the id stays primary.
@@ -203,7 +299,7 @@
     }
 
     // A curated model: Download with an in-row progress bar, or "Downloaded".
-    function _buildSuggestedRow(model) {
+    function _buildSuggestedRow(model, recommended) {
       var row = el("div", "settings-llm-model-row");
       var name = _modelNameBlock(model);
       name.appendChild(el("span", "settings-llm-model-desc", model.description));
@@ -214,6 +310,8 @@
       row.appendChild(name);
       var size = el("span", "settings-llm-model-size", _formatSize(model.size_mb));
       row.appendChild(size);
+      var chip = _fitChip(model, model.name === recommended);
+      if (chip) row.appendChild(chip);
       var sugLink = _modelLinkButton(model);
       if (sugLink) row.appendChild(sugLink);
 
@@ -230,6 +328,8 @@
       bar.appendChild(fill);
       var dlBtn = el("button", "btn btn-small btn-icon");
       dlBtn.type = "button";
+      // The recommendation widget's "Use recommended" clicks this by model.
+      dlBtn.setAttribute("data-model", model.name);
       dlBtn.appendChild(el("span", "settings-llm-model-icon settings-llm-model-icon--download"));
       dlBtn.appendChild(document.createTextNode("Download"));
       row.appendChild(dlBtn);
@@ -358,6 +458,7 @@
         if (m.description) label += " \u2014 " + m.description;
         // Still selectable: a llama.cpp upgrade may fix it; the mark warns.
         if (m.unusable) label += " \u2014 won't load";
+        if (provider === "llm") label += _fitSuffix(m, opt.value === data.llm.recommended);
         opt.textContent = label;
         opt.title = m.unusable ? m.name + " \u2014 " + m.unusable : m.name;
         if (opt.value === currentValue || m.name === currentValue) {
@@ -378,7 +479,7 @@
         var sopt = document.createElement("option");
         sopt.value = sm.name;
         sopt.textContent = (sm.label || sm.name) + " (" + _formatSize(sm.size_mb) +
-          ") \u2014 not downloaded";
+          ") \u2014 not downloaded" + _fitSuffix(sm, sm.name === data.llm.recommended);
         sopt.title = sm.name + " \u2014 " + sm.description;
         if (sm.name === currentValue) {
           sopt.selected = true;

@@ -1480,8 +1480,18 @@ def test_llm_delete_is_reachable_from_the_combined_root(client, monkeypatch, tmp
 
 def test_models_payload_lists_suggested_models_with_install_state(client, monkeypatch):
     """Every catalog entry is offered; only the one on disk reads installed."""
+    import hardware
     import llm_client
 
+    fixed_hw = {
+        "memory_mb": 16384,
+        "cpu_count": 8,
+        "arch": "arm64",
+        "gpu": "apple",
+        "chip": "Apple M2",
+        "unified_memory": True,
+    }
+    monkeypatch.setattr(hardware, "profile", lambda: fixed_hw)
     on_disk = llm_client.model_name(llm_client.SUGGESTED_MODELS[1]["name"])
     monkeypatch.setattr(
         llm_client, "list_models", lambda: [{"name": on_disk, "size_bytes": 1024}]
@@ -1508,7 +1518,19 @@ def test_models_payload_lists_suggested_models_with_install_state(client, monkey
         repo = catalog["name"].split(":", 1)[0]
         assert entry["model_url"] == f"https://huggingface.co/{repo}"
         assert entry["unusable"] == ""
+        assert entry["rank"] == catalog["rank"]
+        assert entry["fit"]["level"] == "fits"
     assert [m["installed"] for m in suggested] == [False, True, False, False]
+
+    # The recommendation widget reads the machine and the pick off the same payload.
+    llm = body["llm"]
+    assert llm["hardware"]["memory_mb"] == 16384
+    assert llm["hardware"]["chip"] == "Apple M2"
+    assert llm["hardware"]["note"] == ""
+    assert llm["recommended"] == llm_client.recommend_model(fixed_hw)
+    assert llm["models"][0]["fit"]["level"] == "fits"
+    for agent in llm["agents"]:
+        assert agent["fit"]["level"] in {"fits", "tight", "too_big", "unknown"}
 
     # The downloaded list and the agent gate name and link the same model.
     installed = body["llm"]["models"][0]

@@ -77,6 +77,7 @@ class TestSuggestedModels:
             assert m["size_mb"] > 0
             assert m["description"]
             assert m["label"]
+            assert isinstance(m["rank"], int) and m["rank"] >= 1
             user, rest = m["name"].split("/", 1)
             repo, quant = rest.split(":", 1)
             assert llm_client.model_name(m["name"]) == f"{user}--{repo}--{quant}"
@@ -88,6 +89,53 @@ class TestSuggestedModels:
         # Compare stems: an earlier test may leave the value in stem form.
         stems = {llm_client.model_name(m["name"]) for m in llm_client.SUGGESTED_MODELS}
         assert llm_client.model_name(config.LLM_SUMMARY_MODEL) in stems
+
+
+class TestModelFit:
+    """The memory-fit heuristic behind the Summaries recommendation widget."""
+
+    @pytest.mark.parametrize(
+        ("memory_mb", "levels"),
+        [
+            (8192, ["fits", "tight", "too_big", "tight"]),
+            (16384, ["fits", "fits", "fits", "fits"]),
+            (32768, ["fits", "fits", "fits", "fits"]),
+        ],
+    )
+    def test_fit_levels_by_machine(self, memory_mb, levels):
+        hw = {"memory_mb": memory_mb, "gpu": "apple"}
+        got = [
+            llm_client.model_fit(m["size_mb"], hw)["level"]
+            for m in llm_client.SUGGESTED_MODELS
+        ]
+        assert got == levels
+
+    def test_unknown_memory_is_unknown(self):
+        fit = llm_client.model_fit(5417, {"memory_mb": 0})
+        assert fit["level"] == "unknown"
+        assert llm_client.recommend_model({"memory_mb": 0}) is None
+        assert llm_client.fit_note({}) == "Could not read this machine's memory."
+
+    def test_recommendation_picks_top_rank_that_fits(self):
+        # Catalog order breaks rank ties, so Qwen 2B beats Gemma E2B.
+        by_rank: dict[int, str] = {}
+        for m in llm_client.SUGGESTED_MODELS:
+            by_rank.setdefault(m["rank"], m["name"])
+        assert (
+            llm_client.recommend_model({"memory_mb": 8192, "gpu": "apple"})
+            == by_rank[1]
+        )
+        assert (
+            llm_client.recommend_model({"memory_mb": 16384, "gpu": "apple"})
+            == by_rank[3]
+        )
+
+    def test_no_gpu_drops_one_rank(self):
+        by_rank = {m["rank"]: m["name"] for m in llm_client.SUGGESTED_MODELS}
+        hw = {"memory_mb": 32768, "gpu": "none"}
+        assert llm_client.recommend_model(hw) == by_rank[2]
+        assert llm_client.fit_note(hw) == "No GPU detected, larger models run slowly."
+        assert llm_client.fit_note({"memory_mb": 32768, "gpu": "apple"}) == ""
 
 
 class TestModelLabelAndCardUrl:

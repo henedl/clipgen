@@ -83,6 +83,7 @@ _TREE_LAYERS = {
     "profiling": 1,
     "friction": 1,
     "utils": 2,
+    "hardware": 2,
     "files": 3,
     "google_api": 3,
     "cli_args": 3,
