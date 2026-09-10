@@ -12,6 +12,7 @@ Key functions:
   wrap_clip_with_cards(clip, clip_path)   – single-pass prepend+append via one ffmpeg encode
 """
 
+import functools
 import os
 import tempfile
 import threading
@@ -97,17 +98,39 @@ def _body_is_copy_safe(probed: dict | None) -> bool:
     return True
 
 
+# Probed in order; fontconfig's monospace lookup cost 46 ms per card.
+_CARD_FONT_PATHS = (
+    "/System/Library/Fonts/Menlo.ttc",
+    "/System/Library/Fonts/Monaco.ttf",
+    "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf",
+    "/usr/share/fonts/truetype/liberation/LiberationMono-Regular.ttf",
+    "C:/Windows/Fonts/consola.ttf",
+    "C:/Windows/Fonts/cour.ttf",
+)
+
+
+def _escape_drawtext(value: str) -> str:
+    """Escape drawtext metacharacters for a single-quoted option value."""
+    return value.replace("\\", "\\\\").replace(":", "\\:").replace("'", "'\\''")
+
+
+@functools.cache
+def _card_font_option() -> str:
+    """The drawtext font option: a probed fontfile, else fontconfig's monospace."""
+    for path in _CARD_FONT_PATHS:
+        # os.path, not Path.is_file: tests patch the latter to True
+        if os.path.isfile(path):
+            return f"fontfile='{_escape_drawtext(path)}'"
+    return "font=monospace"
+
+
 def _build_drawtext_filter(text: str) -> str:
-    safe_text = (text or "").strip()
-    # Escape drawtext metacharacters
-    safe_text = (
-        safe_text.replace("\\", "\\\\").replace(":", "\\:").replace("'", "'\\''")
-    )
+    safe_text = _escape_drawtext((text or "").strip())
     return (
         f"drawtext=text='{safe_text}'"
         # Static text: expansion off so a literal % can't error the encode
         ":expansion=none"
-        ":font=monospace"
+        f":{_card_font_option()}"
         ":fontcolor=white"
         ":fontsize=min(w\\,h)/16"
         ":x=(w-text_w)/2"

@@ -911,3 +911,27 @@ def test_build_titlecard_frame_removes_card_when_verify_fails(monkeypatch, make_
 
     assert titlecards.build_titlecard_frame(make_clip(), "1280x720") is None
     assert not os.path.exists(seen["path"])
+
+
+def test_card_font_prefers_a_fontfile_over_fontconfig(monkeypatch, tmp_path):
+    font = tmp_path / "a:b" / "Mono.ttf"
+    font.parent.mkdir()
+    font.write_bytes(b"\0")
+    monkeypatch.setattr(titlecards, "_CARD_FONT_PATHS", (str(font),))
+    titlecards._card_font_option.cache_clear()
+    try:
+        option = titlecards._card_font_option()
+        assert option == f"fontfile='{str(font).replace(':', chr(92) + ':')}'"
+        assert f":{option}:fontcolor" in titlecards._build_drawtext_filter("x")
+    finally:
+        titlecards._card_font_option.cache_clear()
+
+
+def test_card_font_falls_back_to_fontconfig_monospace(monkeypatch):
+    monkeypatch.setattr(titlecards, "_CARD_FONT_PATHS", ("/nonexistent/Mono.ttf",))
+    titlecards._card_font_option.cache_clear()
+    try:
+        assert titlecards._card_font_option() == "font=monospace"
+        assert ":font=monospace:" in titlecards._build_drawtext_filter("x")
+    finally:
+        titlecards._card_font_option.cache_clear()
