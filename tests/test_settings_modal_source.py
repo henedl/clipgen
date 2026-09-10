@@ -183,6 +183,10 @@ def test_recommendation_widget_reads_server_fit_and_uses_the_row():
     assert "llm.recommended" in block
     assert "llm.hardware" in block
     assert '"Use recommended"' in block
+    # Caveats stack; a GPU note never replaces a "nothing fits" or summary warning.
+    assert "hw.note ||" not in block
+    assert "No catalog model fits this machine." in block
+    assert "_summaryFitNote(llm.agents)" in block
     assert "_fireChange(sel)" in block
     assert "apiPut" not in block
     assert "button[data-model=" in block

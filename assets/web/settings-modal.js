@@ -235,17 +235,25 @@
       for (var i = 0; i < suggested.length; i++) {
         if (suggested[i].name === llm.recommended) pick = suggested[i];
       }
+      // Every applicable caveat shows; the GPU note must not hide a fit problem.
+      var notes = [];
+      if (!pick && hw.memory_mb) notes.push("No catalog model fits this machine.");
+      if (hw.note) notes.push(hw.note);
       if (!pick) {
-        reco.appendChild(el("div", "settings-llm-reco-note",
-          hw.note || "No catalog model fits this machine."));
+        for (var n = 0; n < notes.length; n++) {
+          reco.appendChild(el("div", "settings-llm-reco-note", notes[n]));
+        }
         return;
       }
       var line = el("div", "settings-llm-reco-pick");
       line.appendChild(el("span", "settings-llm-reco-icon settings-llm-reco-icon--pick"));
       line.appendChild(document.createTextNode("Recommended: " + pick.label));
       reco.appendChild(line);
-      var note = hw.note || _summaryFitNote(llm.agents);
-      if (note) reco.appendChild(el("div", "settings-llm-reco-note", note));
+      var summaryNote = _summaryFitNote(llm.agents);
+      if (summaryNote) notes.unshift(summaryNote);
+      for (var k = 0; k < notes.length; k++) {
+        reco.appendChild(el("div", "settings-llm-reco-note", notes[k]));
+      }
 
       var useBtn = el("button", "btn btn-small");
       useBtn.type = "button";
