@@ -1,9 +1,13 @@
 # OpenCV Self-Compile Plan (WITH_FFMPEG=OFF)
 
+> **Status: complete, archived 2026-09-10.** Every implementation step landed on 2026-08-16
+> (#711). Standing note: if upstream opencv-python#1260 ships a fixed wheel, the CI wheel-build
+> step can go; the inverted license guard stays.
+
 **Status: researched, de-risked, and implemented 2026-08-16** (all steps in "Implementation
 steps" below are done). All findings were verified empirically on macOS arm64 (M4 Pro,
 macOS 15). This resolves the "needs research before anyone commits to it" open item in
-[LICENSE-PLAN.md](LICENSE-PLAN.md). The heavier alternative (removing cv2 entirely) is
+[LICENSE-PLAN.md](../LICENSE-PLAN.md). The heavier alternative (removing cv2 entirely) is
 [DROP-OPENCV-PLAN.md](DROP-OPENCV-PLAN.md).
 
 ## Context
@@ -114,7 +118,7 @@ while the bundle ships Python 3.12; retag with `wheel tags` if that ever matters
    text conveys the app as MIT with GPL only on the aggregated executables. Heading assertions
    in `tests/test_packaging.py` updated, plus a negative assertion that the GPL-inside-cv2
    section stays gone.
-- [x] **Docs**: OpenCV decision in [LICENSE-PLAN.md](LICENSE-PLAN.md) marked superseded.
+- [x] **Docs**: OpenCV decision in [LICENSE-PLAN.md](../LICENSE-PLAN.md) marked superseded.
    Local-dev caveat: dev venvs still install the official (GPL-tainted on macOS) wheel from
    PyPI — fine, GPL obligations attach to distribution, and clipgen distributes only the
    CI-built DMG.

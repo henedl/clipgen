@@ -71,7 +71,7 @@ jobs:
       # leg rebuilds the same version from its published sdist with FFmpeg off:
       # zero bundled dylibs (Apple system frameworks only), all image codecs
       # static in-tree, and −76 MB unpacked. clipgen never uses cv2's video I/O.
-      # Research + local repro recipe: plans/OPENCV-SELF-COMPILE-PLAN.md.
+      # Research + local repro recipe: plans/archive/OPENCV-SELF-COMPILE-PLAN.md.
       - name: Restore no-FFmpeg OpenCV wheel (macOS)
         if: matrix.os == 'macos-latest'
         id: opencv-wheel

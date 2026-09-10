@@ -1,5 +1,9 @@
 # Drop OpenCV Plan
 
+> **Status: closed 2026-09-10, never executed.** cv2 stays by maintainer decision (2026-08-17);
+> the self-compile route in [OPENCV-SELF-COMPILE-PLAN.md](OPENCV-SELF-COMPILE-PLAN.md) shipped
+> instead. Archived for the evidence.
+
 **Status: unscheduled, optional future work package.** Investigated 2026-08-16; recorded so a
 future session inherits the evidence instead of re-deriving it. The near-term route is the
 self-compiled `WITH_FFMPEG=OFF` wheel — researched and de-risked the same day, see
@@ -18,7 +22,7 @@ those guards, on top of the effort estimated below. Plan stays for the evidence,
 
 The macOS arm64 `opencv-python-headless` wheel bundles GPL-3 ffmpeg dylibs
 (opencv/opencv-python#1260), forcing the DMG to be conveyed GPL-3.0-or-later; the dylibs cannot
-be stripped post-hoc ([LICENSE-PLAN.md](LICENSE-PLAN.md) has the three reasons). This plan is the
+be stripped post-hoc ([LICENSE-PLAN.md](../LICENSE-PLAN.md) has the three reasons). This plan is the
 other escape route: remove the cv2 dependency entirely by reimplementing its used surface on
 packages already in the tree — numpy, Pillow, scipy + scikit-image (SSIM already comes from
 skimage), shapely + pyclipper (already rapidocr deps). **No new dependencies.**
@@ -147,7 +151,7 @@ Two new modules (both added to `pyproject.toml [tool.setuptools] py-modules`):
    in the bundle (same shape as the existing PyAV guard); remove the OpenCV/FFmpeg-dylib GPL
    sections from `build/THIRD-PARTY-LICENSES` (the pinned ffmpeg/ffprobe *executables* section
    stays); DMG licensing text back to MIT-app + GPL-aggregated-executables; update
-   [LICENSE-PLAN.md](LICENSE-PLAN.md) (supersede the OpenCV decision, close the #1260-tracking
+   [LICENSE-PLAN.md](../LICENSE-PLAN.md) (supersede the OpenCV decision, close the #1260-tracking
    and self-compile items as moot); add `tests/test_no_cv2.py` (greps `source/` for cv2 imports
    allowlisting the shim, asserts `import screenspace` leaves no real `"cv2"` in `sys.modules`);
    sweep docs (AGENTS/ARCHITECTURE/PERFORMANCE cv2 mentions, `screenspace.py` docstring).

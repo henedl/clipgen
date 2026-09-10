@@ -113,6 +113,7 @@ _TREE_LAYERS = {
     "workflows": 5,
     "pipeline": 6,
     "app": 7,
+    "cli_event_clips": 7,
     "cli_screenspace": 7,
     "screenspace_server": 7,
     "transcripts_server": 7,

@@ -14,6 +14,7 @@ name (`import config`).
 | [viewer.py](../source/viewer.py) | Timeline viewer: artifact record building, data finalization, HTML generation with inlined CSS/JS |
 | [cli.py](../source/cli.py) | CLI mode detection, setup, Google auth, worksheet selection, CLI mode dispatch, `main()`; re-exports `parse_arguments` from cli_args.py |
 | [cli_screenspace.py](../source/cli_screenspace.py) | The Screenspace CLI modes (`--ss-task`, `--ss-rerun`, `--ss-list-*`): parameter parsing, media rehydration, and persisted runs. `cli.py`'s mode table dispatches here |
+| [cli_event_clips.py](../source/cli_event_clips.py) | The event-clip CLI modes (`--ss-clips`, `--transcript-clips`, `--transcript-mark`): Screenspace-event / transcript-segment filtering, clustering through `utils.cluster_spans`, clip records, and posting marks to a running server. `cli.py`'s mode table dispatches here |
 | [cli_args.py](../source/cli_args.py) | The argparse parser: every flag and its help text, grouped by subject. Imports only `config`/`utils` so `--help` stays fast (no cv2/torch/Flask) |
 | [spreadsheet.py](../source/spreadsheet.py) | Spreadsheet parsing, header validation, selector parsing (`reel` input), pure timestamp generation for all modes (no prompts) |
 | [interactive.py](../source/interactive.py) | Interactive prompt helpers for all modes (line/range/cell/category/participant selection, browse mode); keeps generation functions pure |

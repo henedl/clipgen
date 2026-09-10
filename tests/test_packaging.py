@@ -487,7 +487,7 @@ def test_license_notice_is_tracked_and_bundled() -> None:
     ):
         assert heading in text, f"THIRD-PARTY-LICENSES lost its {heading!r} section"
     # The macOS cv2 is self-built with -DWITH_FFMPEG=OFF precisely so the DMG
-    # carries no in-process GPL code (plans/OPENCV-SELF-COMPILE-PLAN.md); a
+    # carries no in-process GPL code (plans/archive/OPENCV-SELF-COMPILE-PLAN.md); a
     # revived GPL-FFmpeg-inside-opencv section would mean that regressed.
     assert "FFmpeg bundled inside opencv-python-headless" not in text, (
         "THIRD-PARTY-LICENSES regrew the GPL-FFmpeg-inside-cv2 section; the "
