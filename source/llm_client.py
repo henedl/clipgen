@@ -65,30 +65,33 @@ _HF_API_TIMEOUT = 30  # seconds; the tree listing is a small JSON response
 # stays warm.
 _MODELS_MAX = "2"
 
-# Download catalog for Settings → Summaries. Same shape as transcripts.WHISPER_MODELS
-# plus "label".
+# Settings → Summaries download catalog; "rank" orders quality for recommend_model.
 SUGGESTED_MODELS: list[dict[str, Any]] = [
     {
         "name": "unsloth/Qwen3.5-2B-GGUF:Q4_K_M",
         "label": "Qwen 3.5 Small (2B)",
+        "rank": 1,
         "size_mb": 1222,
         "description": "Fastest, fine for short transcripts",
     },
     {
         "name": "unsloth/Qwen3.5-4B-GGUF:Q4_K_M",
         "label": "Qwen 3.5 Medium (4B)",
+        "rank": 2,
         "size_mb": 2614,
         "description": "Fast, good for most sessions",
     },
     {
         "name": "unsloth/Qwen3.5-9B-GGUF:Q4_K_M",
         "label": "Qwen 3.5 Large (9B)",
+        "rank": 3,
         "size_mb": 5417,
         "description": "Best quality, needs more RAM",
     },
     {
         "name": "unsloth/gemma-4-E2B-it-GGUF:Q4_K_M",
         "label": "Gemma 4 Compact (2B)",
+        "rank": 1,
         "size_mb": 2963,
         "description": "Gemma, compact alternative",
     },
@@ -103,6 +106,63 @@ _thread_state = threading.local()
 # Router we spawned, terminated at exit. SIGTERM only: SIGKILL orphans its
 # per-model children.
 _server_proc: subprocess.Popen[bytes] | None = None
+
+
+# Runtime buffers over the GGUF's file size (compute graph, mmap slack).
+_FIT_WEIGHT_FACTOR = 1.25
+# KV cache and scratch for the default context.
+_FIT_CONTEXT_MB = 1024
+# Kept for the OS and clipgen itself: 3 GB or a quarter, whichever is larger.
+_FIT_OS_RESERVE_MIN_MB = 3072
+_FIT_OS_RESERVE_FRACTION = 0.25
+# "fits" leaves this much of the usable budget free; up to 100% is "tight".
+_FIT_COMFORT = 0.8
+
+
+def model_fit(size_mb: int, hw: dict[str, Any]) -> dict[str, Any]:
+    """Classify a model's memory fit: fits / tight / too_big / unknown."""
+    memory = int(hw.get("memory_mb") or 0)
+    need = int(size_mb * _FIT_WEIGHT_FACTOR + _FIT_CONTEXT_MB)
+    if memory <= 0:
+        return {"level": "unknown", "need_mb": need, "usable_mb": 0}
+    reserve = max(_FIT_OS_RESERVE_MIN_MB, int(memory * _FIT_OS_RESERVE_FRACTION))
+    usable = max(0, memory - reserve)
+    if need <= usable * _FIT_COMFORT:
+        level = "fits"
+    elif need <= usable:
+        level = "tight"
+    else:
+        level = "too_big"
+    return {"level": level, "need_mb": need, "usable_mb": usable}
+
+
+def recommend_model(hw: dict[str, Any]) -> str | None:
+    """Highest-rank catalog model that fits; one rank lower without a GPU."""
+    if int(hw.get("memory_mb") or 0) <= 0:
+        return None
+    fitting = [
+        m for m in SUGGESTED_MODELS if model_fit(m["size_mb"], hw)["level"] == "fits"
+    ]
+    if not fitting:
+        return None
+    top = max(m["rank"] for m in fitting)
+    if hw.get("gpu") == "none":
+        lower = [m for m in fitting if m["rank"] < top]
+        if lower:
+            top = max(m["rank"] for m in lower)
+    for m in fitting:
+        if m["rank"] == top:
+            return str(m["name"])
+    return None
+
+
+def fit_note(hw: dict[str, Any]) -> str:
+    """One-line caveat for the recommendation widget; empty when none."""
+    if int(hw.get("memory_mb") or 0) <= 0:
+        return "Could not read this machine's memory."
+    if hw.get("gpu") == "none":
+        return "No GPU detected, larger models run slowly."
+    return ""
 
 
 def models_dir() -> Path:
@@ -347,9 +407,12 @@ def list_models() -> list[dict[str, Any]]:
     Ollama-installed models are offered under their ``name-tag`` stem;
     selecting one links its blob in via ``_materialize_external``. A dangling
     symlink (its target deleted, e.g. by ``ollama rm``) is swept here.
+    ``source`` is ``ollama`` for those (link or not: Ollama owns the blob and
+    the scan re-offers it after any delete), else ``local``.
     """
     models = []
     seen = set()
+    ollama_root = _ollama_models_dir()
     directory = models_dir()
     if directory.is_dir():
         for path in sorted(directory.glob("*.gguf")):
@@ -359,12 +422,29 @@ def list_models() -> list[dict[str, Any]]:
                 if path.is_symlink():
                     path.unlink(missing_ok=True)
                 continue
-            models.append({"name": path.stem, "size_bytes": size})
+            source = "local"
+            if path.is_symlink() and path.resolve().is_relative_to(
+                ollama_root.resolve()
+            ):
+                source = "ollama"
+            models.append({"name": path.stem, "size_bytes": size, "source": source})
             seen.add(path.stem)
     for record in _ollama_manifest_models():
         if record["stem"] not in seen:
-            models.append({"name": record["stem"], "size_bytes": record["size_bytes"]})
+            models.append(
+                {
+                    "name": record["stem"],
+                    "size_bytes": record["size_bytes"],
+                    "source": "ollama",
+                }
+            )
     return models
+
+
+def is_ollama_model(value: str) -> bool:
+    """True when *value* names a model Ollama's store provides."""
+    stem = model_name(value)
+    return any(r["stem"] == stem for r in _ollama_manifest_models())
 
 
 def is_model_installed(

@@ -51,7 +51,7 @@ package-dir = {"" = "source"}
 py-modules = [
     "app", "changelog", "cli", "cli_args", "cli_event_clips", "cli_screenspace", "composer_server", "config", "data_export",
     "desktop", "desktop_chrome", "desktop_menu", "excel_io",
-    "files", "friction", "google_api", "interactive", "licenses", "mindnode",
+    "files", "friction", "google_api", "hardware", "interactive", "licenses", "mindnode",
     "llm_client", "manifest", "native_dialogs",
     "overview", "pipeline", "profiling", "remux_server",
     "screenspace", "screenspace_frames", "screenspace_heatmap",
