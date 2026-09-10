@@ -61,8 +61,7 @@ def wf_client(wf_app, tmp_path, monkeypatch):
     # Chaining-trigger baselines + mtime caches (W7).
     monkeypatch.setattr(workflows_server, "_watch_transcript_baseline", {})
     monkeypatch.setattr(workflows_server, "_watch_scan_seen", set())
-    monkeypatch.setattr(workflows_server, "_watch_transcript_cache", (None, {}))
-    monkeypatch.setattr(workflows_server, "_watch_scan_cache", (None, {}))
+    monkeypatch.setattr(workflows_server, "_watch_memo", {})
     # Sandbox save_workflows_manifest's write into tmp (it targets the output dir).
     monkeypatch.setattr(config, "OUTPUT_DIR", str(tmp_path), raising=False)
 

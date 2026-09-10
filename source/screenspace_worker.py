@@ -204,7 +204,9 @@ def dispatch_tool_scan(
     span = sum(piece_durations) or 1.0
     accumulated = 0.0
     all_results: list[dict[str, Any]] = []
-    for (index, local_start, local_end), piece_dur in zip(pieces, piece_durations):
+    for (index, local_start, local_end), piece_dur in zip(
+        pieces, piece_durations, strict=True
+    ):
         if cancel_flag():
             break
         cumulative = timeline[index][2]
@@ -462,6 +464,9 @@ class ScreenspaceWorker:
                 params.get("steps", [])
             ):
                 with self._lock:
+                    # A Cancel that raced this Resume wins.
+                    if task["status"] != TASK_STATUS_PAUSED:
+                        continue
                     task.pop("_partial_results", None)
                     task.pop("_progress_offset", None)
                     task.pop("_progress_scale", None)
@@ -492,6 +497,9 @@ class ScreenspaceWorker:
             resume_at = start + local * (end - start)
 
             with self._lock:
+                # A Cancel that raced the probe above wins.
+                if task["status"] != TASK_STATUS_PAUSED:
+                    continue
                 task["_partial_results"] = list(task.get("result") or [])
                 task["_progress_offset"] = progress
                 task["_progress_scale"] = max(1.0 - progress, 0.001)

@@ -274,15 +274,15 @@ def _number_matches(
     """Check if *value* satisfies the given numeric comparison."""
     if operator == "eq":
         return value == target_value
-    elif operator == "gt":
+    if operator == "gt":
         return value > target_value
-    elif operator == "lt":
+    if operator == "lt":
         return value < target_value
-    elif operator == "gte":
+    if operator == "gte":
         return value >= target_value
-    elif operator == "lte":
+    if operator == "lte":
         return value <= target_value
-    elif operator == "range":
+    if operator == "range":
         return (
             range_min is not None
             and range_max is not None

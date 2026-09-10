@@ -86,6 +86,7 @@ from server_utils import (
     make_debounced_persist,
     make_participant_cache,
     make_sse_channel,
+    mtime_or_zero,
     ok,
     opt_number,
     parse_number_arg,
@@ -794,7 +795,7 @@ def api_calibrate() -> FlaskResponse:
                 results.append(entry)
                 continue
             sub_path, local_ts = mapped
-            sub_mtime = _mtime_or_zero(sub_path)
+            sub_mtime = mtime_or_zero(sub_path)
             frame = _decoded_video_frame(sub_path, sub_mtime, local_ts)
             if frame is None:
                 entry["status"] = "not_evaluable"
@@ -807,7 +808,7 @@ def api_calibrate() -> FlaskResponse:
                 mapped_prev = _map_participant_time(participant, ts - interval)
                 if mapped_prev is not None:
                     prev_frame = _decoded_video_frame(
-                        mapped_prev[0], _mtime_or_zero(mapped_prev[0]), mapped_prev[1]
+                        mapped_prev[0], mtime_or_zero(mapped_prev[0]), mapped_prev[1]
                     )
             ocr_reader = _make_pin_ocr_reader(sub_path, sub_mtime, local_ts, frame)
             if task_type == "multitool":
@@ -880,17 +881,12 @@ def _participant_timeline(participant_id: str) -> list[tuple[str, int, int]] | N
         if cached is not None and cached[0] == mtimes:
             return cached[1]
     timeline = video.build_source_timeline(paths)
+    if timeline is None:
+        # A failed probe must not stick as "single video".
+        return None
     with _participant_timeline_lock:
         _participant_timeline_cache[participant_id] = (mtimes, timeline)
     return timeline
-
-
-def _mtime_or_zero(path: str) -> int:
-    """Return a path's ``mtime_ns`` for cache keys, or 0 if it can't be stat'd."""
-    try:
-        return Path(path).stat().st_mtime_ns
-    except OSError:
-        return 0
 
 
 def _map_participant_time(
@@ -902,7 +898,7 @@ def _map_participant_time(
     no stat). Multi-video participants resolve which sub-video owns *global_ts*
     and the local offset within it. Returns None when the participant has no
     video or (multi-video) the timestamp is out of range. Callers needing the
-    file's mtime for a cache key obtain it via :func:`_mtime_or_zero`.
+    file's mtime for a cache key obtain it via :func:`mtime_or_zero`.
     """
     paths = _participant_video_paths(participant_id)
     if not paths:
@@ -928,7 +924,7 @@ def _participant_frame_extractor(
         mapped = _map_participant_time(participant_id, global_ts)
         if mapped is None:
             return None
-        return _decoded_video_frame(mapped[0], _mtime_or_zero(mapped[0]), mapped[1])
+        return _decoded_video_frame(mapped[0], mtime_or_zero(mapped[0]), mapped[1])
 
     return _extract
 
@@ -1017,7 +1013,7 @@ def api_video_frame(participant: str, timestamp: str) -> FlaskResponse:
     if mapped is None:
         return err_no_video(participant)
     video_path, local_ts = mapped
-    mtime_ns = _mtime_or_zero(video_path)
+    mtime_ns = mtime_or_zero(video_path)
 
     width = request.args.get("w", 0, type=int)
     cache_key = (video_path, mtime_ns, round(local_ts, 3), width)
@@ -1072,7 +1068,7 @@ def api_heatmap_sprite(filename: str) -> FlaskResponse:
     cols = max(1, min(int(cols or 1), 64))
 
     sprite_bytes = _heatmap_sprite_cache.get_or_compute(
-        (str(gif_path), _mtime_or_zero(str(gif_path)), cols),
+        (str(gif_path), mtime_or_zero(str(gif_path)), cols),
         lambda: screenspace.build_gif_sprite_bytes(str(gif_path), cols),
     )
     if sprite_bytes is None:
@@ -1328,7 +1324,7 @@ def api_video_info(participant: str) -> FlaskResponse:
                 for p, d, c in timeline
             ],
         }
-        return ok(info=info)
+        return ok(info=utils.sanitize_floats(info))
 
     resolved = _find_participant_video_with_mtime(participant)
     if resolved is None:
@@ -1367,7 +1363,7 @@ def api_video_info(participant: str) -> FlaskResponse:
     with _video_metadata_cache_lock:
         _video_metadata_cache[participant] = (mtime_ns, info)
 
-    return ok(info=info)
+    return ok(info=utils.sanitize_floats(info))
 
 
 @screenspace_bp.route("/api/video/stream/<participant>")
@@ -1572,9 +1568,7 @@ def api_regions_create() -> FlaskResponse:
         return err("Region name is required")
 
     for field in ("x", "y", "w", "h"):
-        val = data.get(field)
-        if val is None or not isinstance(val, (int, float)):
-            return err(f"'{field}' must be a number")
+        data[field] = parse_number_arg(data.get(field), field, finite=True)
 
     canvas_w = data.get("canvas_width")
     canvas_h = data.get("canvas_height")
@@ -1648,10 +1642,11 @@ def api_regions_delete_all() -> FlaskResponse:
 
 
 @screenspace_bp.route("/api/regions/reorder", methods=["PUT"])
+@json_endpoint
 def api_regions_reorder() -> FlaskResponse:
     """Reorder active regions to match the given name order."""
-    data = request.get_json(silent=True)
-    if not data or not isinstance(data.get("names"), list):
+    data = require_json_body("names list required")
+    if not isinstance(data.get("names"), list):
         return err("names list required")
 
     with _manifest_lock:
@@ -1734,9 +1729,10 @@ def api_stashes_restore(stash_id: str) -> FlaskResponse:
         stash = find_by_id(_manifest.get("stashes", []), stash_id)
         if stash is None:
             return err("Stash not found", 404)
-        _manifest["regions"] = copy.deepcopy(stash["regions"])
+        regions = copy.deepcopy(stash["regions"])
+        _manifest["regions"] = regions
         _do_persist(drain_events=False)
-    return ok(regions=_manifest["regions"])
+    return ok(regions=copy.deepcopy(regions))
 
 
 @screenspace_bp.route("/api/stashes/<stash_id>/regions", methods=["POST"])
@@ -1986,8 +1982,8 @@ def _extract_tool_media(
         if upload_b64:
             try:
                 bgr, mask = _template_bgr_and_mask_from_b64(upload_b64)
-            except ValueError:
-                raise ApiError(f"{context}could not decode uploaded image")
+            except ValueError as exc:
+                raise ApiError(f"{context}could not decode uploaded image") from exc
             spec[image_param] = bgr
             if mask is not None:
                 spec[mask_param] = mask
@@ -2020,7 +2016,6 @@ def _extract_tool_media(
 
 def _prepare_multitool_steps(
     parameters: dict[str, Any],
-    all_known_regions: dict[str, Any],
     frame_at: Callable[[float], "Any | None"],
     region_coords: dict[str, Any],
     resolve_region_fn: Any,
@@ -2116,7 +2111,7 @@ def _prepare_task_media(
 
     if task_type == "multitool":
         parameters = _prepare_multitool_steps(
-            parameters, all_known_regions, frame_at, region_coords, resolve_region_fn
+            parameters, frame_at, region_coords, resolve_region_fn
         )
 
     return parameters
@@ -2227,12 +2222,13 @@ def api_tasks_cancel(task_id: str) -> FlaskResponse:
 
 
 @screenspace_bp.route("/api/tasks/reorder", methods=["PUT"])
+@json_endpoint
 def api_tasks_reorder() -> FlaskResponse:
     """Reorder queued tasks by priority."""
     if not _worker:
         return err("Worker not initialized", 500)
-    data = request.get_json(silent=True)
-    if not data or "task_ids" not in data:
+    data = require_json_body("task_ids list required")
+    if "task_ids" not in data:
         return err("task_ids list required")
     _worker.reorder(data["task_ids"])
     _schedule_persist()

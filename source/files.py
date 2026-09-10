@@ -57,10 +57,7 @@ def get_unique_filename(filename: str, file_format: str | None = None) -> str:
     directory = resolved.parent
     name = resolved.name
     # Strip extension to get base name
-    if name.endswith(file_extension):
-        base = name[: -len(file_extension)]
-    else:
-        base = name
+    base = name.removesuffix(file_extension)
     max_base = config.MAX_FILENAME_LENGTH - len(file_extension)
     base = safe_truncate(base, max_base)
 

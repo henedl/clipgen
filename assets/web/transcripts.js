@@ -163,11 +163,7 @@
   var _sheetXrefIdle = false;
 
   function loadCrossRefData() {
-    fetch("../screenspace/api/events?excluded=false")
-      .then(function (r) {
-        if (!r.ok) throw new Error("HTTP " + r.status);
-        return r.json();
-      })
+    apiGet("../screenspace/api/events?excluded=false")
       .then(function (data) {
         _markXrefSource("screenspace", false);
         if (data.ok) {
@@ -179,11 +175,7 @@
       .catch(function () { _markXrefSource("screenspace", true); });
 
     if (_sheetXrefIdle) return;
-    fetch("../studio/api/sheet")
-      .then(function (r) {
-        if (!r.ok) throw new Error("HTTP " + r.status);
-        return r.json();
-      })
+    apiGet("../studio/api/sheet")
       .then(function (data) {
         _markXrefSource("studio", false);
         if (data.ok && data.sheet_loaded === false) _sheetXrefIdle = true;

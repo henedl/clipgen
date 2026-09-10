@@ -81,8 +81,7 @@ _watch_pending: dict[str, tuple[int, float]] = {}  # pid -> last-poll (size, mti
 _watch_transcript_baseline: dict[str, str] = {}  # pid -> transcribed_at stamp
 _watch_scan_seen: set[str] = set()  # completed screenspace task ids
 # mtime-gated parse caches so an unchanged manifest is never re-read per poll.
-_watch_transcript_cache: tuple[tuple[int, int] | None, dict[str, str]] = (None, {})
-_watch_scan_cache: tuple[tuple[int, int] | None, dict[str, str]] = (None, {})
+_watch_memo: dict[str, tuple[tuple[int, int] | None, dict[str, str]]] = {}
 _watch_lock = threading.Lock()
 _watch_thread: threading.Thread | None = None
 _watch_stop = threading.Event()  # tests only; production never sets it
@@ -747,7 +746,7 @@ def _batch_summary(batch_id: str) -> dict[str, Any] | None:
     children: list[dict[str, Any]] = []
     counts: dict[str, int] = {}
     child_statuses: list[str] = []
-    for run_id, participant in zip(run_ids, participants):
+    for run_id, participant in zip(run_ids, participants, strict=True):
         meta = all_meta.get(run_id)
         status = (meta or {}).get("status", workflows.RUN_STATUS_QUEUED)
         child_statuses.append(status)
@@ -838,7 +837,9 @@ def _run_batch_child(
     )
     with _runs_lock:
         _runs[run_id] = runner
-    # The cancel endpoint cancels every live runner, so a late cancel still reaches this child.
+        # A cancel between the check above and this registration saw no runner.
+        if batch_cancel.is_set():
+            runner.cancel()
     try:
         runner.run()
     except Exception as exc:  # belt-and-suspenders; run() catches per node
@@ -867,7 +868,7 @@ def _run_batch(batch_id: str, blueprint: dict[str, Any]) -> None:
     if record is None:
         return
     cancel_event: threading.Event = record["cancel_event"]
-    plan = list(zip(record["runIds"], record["participants"]))
+    plan = list(zip(record["runIds"], record["participants"], strict=True))
 
     # Shared sources once per batch: one Sheets API hit, not N.
     seed_results = _precompute_shared_nodes(
@@ -929,10 +930,7 @@ def api_batch_create() -> Any:
         v["id"] for v in utils.discover_participant_videos() if v.get("has_video")
     ]
     requested = data.get("participants")
-    if requested:
-        participants = [p for p in requested if p in available]
-    else:
-        participants = available
+    participants = [p for p in requested if p in available] if requested else available
     if not participants:
         return err("No participants with video found")
 
@@ -1027,7 +1025,6 @@ def _trigger_enabled(trigger: Any, trigger_type: str) -> bool:
 
 def _transcript_markers() -> dict[str, str]:
     """``{pid: transcribed_at}`` for every transcribed participant (mtime-gated)."""
-    global _watch_transcript_cache
 
     def build(manifest: dict[str, Any]) -> dict[str, str]:
         source = manifest.get("source_transcripts", {}) or {}
@@ -1039,15 +1036,11 @@ def _transcript_markers() -> dict[str, str]:
             if isinstance(entry, dict) and entry.get("transcribed_at")
         }
 
-    _watch_transcript_cache, markers = manifest_io.memo_section(
-        _watch_transcript_cache, "transcripts", build
-    )
-    return markers
+    return manifest_io.memo_section(_watch_memo, "transcripts", "transcripts", build)
 
 
 def _scan_markers() -> dict[str, str]:
     """``{task_id: participant}`` for every completed Screenspace task (mtime-gated)."""
-    global _watch_scan_cache
 
     def build(manifest: dict[str, Any]) -> dict[str, str]:
         return {
@@ -1058,10 +1051,7 @@ def _scan_markers() -> dict[str, str]:
             and task.get("id")
         }
 
-    _watch_scan_cache, markers = manifest_io.memo_section(
-        _watch_scan_cache, "screenspace", build
-    )
-    return markers
+    return manifest_io.memo_section(_watch_memo, "screenspace", "screenspace", build)
 
 
 def _seed_watch_seen(trigger_type: str | None = None) -> None:
@@ -1077,7 +1067,6 @@ def _seed_watch_seen(trigger_type: str | None = None) -> None:
     be marked seen and never fire, and any completion since the last poll tick
     would be swallowed. Arming passes the type it is arming.
     """
-    global _watch_transcript_cache, _watch_scan_cache
     with _watch_lock:
         if trigger_type in (None, "new_video"):
             _watch_seen.clear()
@@ -1087,11 +1076,11 @@ def _seed_watch_seen(trigger_type: str | None = None) -> None:
                     _watch_seen.add(str(entry["id"]))
         if trigger_type in (None, "transcript_complete"):
             # Force a fresh parse (the cached mtime may predate this call).
-            _watch_transcript_cache = (None, {})
+            _watch_memo.pop("transcripts", None)
             _watch_transcript_baseline.clear()
             _watch_transcript_baseline.update(_transcript_markers())
         if trigger_type in (None, "scan_event"):
-            _watch_scan_cache = (None, {})
+            _watch_memo.pop("screenspace", None)
             _watch_scan_seen.clear()
             _watch_scan_seen.update(_scan_markers())
 

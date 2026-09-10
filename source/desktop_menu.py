@@ -94,20 +94,6 @@ def is_supported() -> bool:
     return sys.platform == "darwin"
 
 
-def _appkit() -> Any:
-    """Import AppKit as an opaque module.
-
-    Imported by name rather than with a plain ``import AppKit`` because pyobjc
-    only exists on macOS, and CI type-checks on Linux — a literal import is an
-    ``unresolved-import`` error there. Do not "simplify" it back.
-
-    Typed as ``Any`` on purpose: pyobjc's stubs are incomplete and every call
-    below is a dynamically-bridged ObjC selector, so checking against them buys
-    nothing and costs a suppression at each site.
-    """
-    return importlib.import_module("AppKit")
-
-
 def menus(get_window: Callable[[], Any]) -> list:
     """The menu list to hand ``webview.start``; empty off macOS.
 
@@ -231,7 +217,7 @@ def enhance_menu_bar(get_window: Callable[[], Any]) -> None:
 def _enhance_on_main(get_window: Callable[[], Any]) -> None:
     """Everything the public menu API cannot express, in one main-thread pass."""
     try:
-        AppKit = _appkit()
+        AppKit = utils.import_appkit()
         app = AppKit.NSApplication.sharedApplication()
         main = app.mainMenu()
         if main is None:

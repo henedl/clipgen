@@ -179,7 +179,7 @@ def compute_stats(
     ``by_category`` includes every category (zeros shown) so the stats panel can
     render all six chips. ``markers_per_minute`` uses the transcript duration.
     """
-    by_category: dict[str, int] = {c: 0 for c in CATEGORY_ORDER}
+    by_category: dict[str, int] = dict.fromkeys(CATEGORY_ORDER, 0)
     total = 0
     for row in scored:
         for category, count in row.get("counts", {}).items():

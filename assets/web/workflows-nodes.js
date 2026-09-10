@@ -164,10 +164,7 @@
       }
       if (!_llmModelsRequested) {
         _llmModelsRequested = true;
-        fetch("../api/models")
-          .then(function (r) {
-            return r.json();
-          })
+        apiGet("../api/models")
           .then(function (res) {
             var models = (res && res.llm && res.llm.models) || [];
             models.forEach(function (m) {
@@ -176,7 +173,9 @@
               mdl.appendChild(o);
             });
           })
-          .catch(function () {});
+          .catch(function () {
+            _llmModelsRequested = false; // the LLM server may still be starting; retry next open
+          });
       }
       return mid;
     }

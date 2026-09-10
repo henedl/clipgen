@@ -244,6 +244,28 @@ def test_filter_transcript_segments_by_text_substr():
     assert [r[1]["id"] for r in rows] == ["P01:0"]
 
 
+def test_filter_transcript_segments_matches_corrected_text_and_keeps_ids():
+    """Corrections apply before matching; the raw segment's id survives."""
+    manifest = {
+        "source_transcripts": {
+            "P01": {
+                "segments": [
+                    {"id": "P01:0", "start": 0.0, "end": 5.0, "text": "Check out flow"},
+                ]
+            }
+        },
+        "corrections": [{"from": "check out", "to": "checkout"}],
+        "marks": [],
+    }
+    rows = cli_event_clips._filter_transcript_segments(
+        manifest,
+        participants=None,
+        mark_categories=None,
+        text_substr="checkout",
+    )
+    assert [(r[1]["id"], r[1]["text"]) for r in rows] == [("P01:0", "checkout flow")]
+
+
 # ---- Cluster builders ----
 
 
@@ -578,7 +600,9 @@ def test_transcript_mark_alone_validates():
 def no_running_server(monkeypatch):
     """Force _run_transcript_mark to take the direct-disk-write path."""
     monkeypatch.setattr(
-        cli_event_clips, "_post_marks_to_running_server", lambda *_a, **_k: None
+        cli_event_clips,
+        "_post_marks_to_running_server",
+        lambda *_a, **_k: "unreachable",
     )
 
 
@@ -761,7 +785,7 @@ def test_run_transcript_mark_routes_through_running_server(monkeypatch, capsys):
         posted["seg_ids"] = list(seg_ids)
         posted["category"] = category
         posted["label"] = label
-        return {"ok": True, "marks": [{"segment_id": s} for s in seg_ids]}
+        return "posted"
 
     monkeypatch.setattr(cli_event_clips, "_post_marks_to_running_server", fake_post)
 
@@ -780,3 +804,25 @@ def test_run_transcript_mark_routes_through_running_server(monkeypatch, capsys):
     assert saved["called"] is False
     out = capsys.readouterr().out
     assert "via running Transcripts server" in out
+
+
+def test_run_transcript_mark_rejected_by_server_skips_disk(monkeypatch, capsys):
+    """A server that answered but refused must not be bypassed with a disk write."""
+    import transcripts
+
+    monkeypatch.setattr(transcripts, "load_transcripts_manifest", _mark_manifest)
+    monkeypatch.setattr(
+        cli_event_clips, "_post_marks_to_running_server", lambda *_a, **_k: "rejected"
+    )
+    saved: dict = {"called": False}
+    monkeypatch.setattr(
+        transcripts,
+        "save_transcripts_manifest",
+        lambda *_a, **_k: saved.update({"called": True}),
+    )
+
+    args = _ss_args(transcript_mark="checkout", transcript_mark_category="insight")
+    cli_event_clips._run_transcript_mark(args)
+
+    assert saved["called"] is False
+    assert "rejected" in capsys.readouterr().out

@@ -2140,7 +2140,7 @@ def test_parallel_gifs_reserve_nothing_for_a_tail_past_the_end(monkeypatch, tmp_
     monkeypatch.setattr(config, "OUTPUT_DIR", str(tmp_path), raising=False)
     monkeypatch.setattr(video, "extract_gif", lambda *_a, **_k: True)
 
-    artifacts = video._parallel_extract_gifs("in.mp4", [0, 10], 10, 3, 10)
+    artifacts = video._parallel_extract_gifs("in.mp4", [0, 10], 3, 10)
 
     assert artifacts is not None and len(artifacts) == 1
     assert sorted(p.name for p in tmp_path.iterdir()) == ["gallery_0_00.gif"]

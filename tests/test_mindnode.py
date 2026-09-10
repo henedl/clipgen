@@ -789,7 +789,7 @@ def test_intake_video_paths_follow_the_input_dir(monkeypatch, tmp_path):
     monkeypatch.setattr(screenspace_server, "_participants", [])
     monkeypatch.setattr(transcripts_server, "_participants", [])
 
-    paths = server._resolve_intake_video_paths("P01", "mindnode")
+    paths = server._resolve_intake_video_paths("P01")
     assert paths == [str(video)]
 
 

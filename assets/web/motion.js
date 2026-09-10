@@ -184,9 +184,6 @@
   }
 
   // ---- Size awareness: measureSizeScale() gives ≈1 for pills, less for cards; size-aware kinds multiply in.
-  function clamp(v, lo, hi) {
-    return v < lo ? lo : v > hi ? hi : v;
-  }
   function measureSizeScale(el) {
     if (!el || !el.getBoundingClientRect) return 1;
     var r = el.getBoundingClientRect();

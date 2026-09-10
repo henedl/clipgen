@@ -767,13 +767,6 @@
     }
   }
 
-  function fmtClock(sec) {
-    var s = Math.max(0, Math.round(Number(sec) || 0));
-    var m = Math.floor(s / 60);
-    var r = s % 60;
-    return m + ":" + (r < 10 ? "0" : "") + r;
-  }
-
   // Wall-clock start time of a run/batch (ISO → local HH:MM); "" if unparseable.
   function fmtStartTime(iso) {
     if (!iso) return "";
@@ -806,7 +799,7 @@
 
   function eventLabel(ev) {
     if (!ev || typeof ev !== "object") return String(ev);
-    var t = ev.time_in != null ? fmtClock(ev.time_in) + "  " : "";
+    var t = ev.time_in != null ? formatDuration(ev.time_in) + "  " : "";
     return t + (ev.event_type || ev.detector || "event");
   }
 

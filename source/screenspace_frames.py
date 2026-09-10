@@ -31,7 +31,6 @@ def scan_video_frames(
     *,
     start_seconds: float = 0.0,
     end_seconds: float | None = None,
-    fps: float = 0.0,
     duration: float = 0.0,
     fast_opts: dict[str, Any] | None = None,
     cv_scale: float | None = None,
@@ -41,8 +40,8 @@ def scan_video_frames(
 
     The *callback* receives ``(timestamp_seconds, region_pixels)`` and may
     return ``False`` to stop early. ``region=None`` passes the full frame
-    (used by template detection). *fps* / *duration*, when given, skip an
-    internal metadata probe.
+    (used by template detection). *duration*, when given, skips an internal
+    metadata probe.
 
     *fast_opts* enables fast-scan optimizations:
     - ``phash_skip``: skip frames whose perceptual hash is unchanged
@@ -69,7 +68,6 @@ def scan_video_frames(
         callback,
         start_seconds=start_seconds,
         end_seconds=end_seconds if end_seconds is not None else 0.0,
-        fps=fps,
         duration=duration,
         fast_opts=fast_opts,
         full_frame=full_frame,
@@ -90,7 +88,6 @@ def scan_video_full_frames(
     *,
     start_seconds: float = 0.0,
     end_seconds: float | None = None,
-    fps: float = 0.0,
     duration: float = 0.0,
     fast_opts: dict[str, Any] | None = None,
     cv_scale: float | None = None,
@@ -104,7 +101,6 @@ def scan_video_full_frames(
         callback,
         start_seconds=start_seconds,
         end_seconds=end_seconds,
-        fps=fps,
         duration=duration,
         fast_opts=fast_opts,
         cv_scale=cv_scale,
@@ -276,7 +272,6 @@ def _scan_via_ffmpeg_pipe(
     *,
     start_seconds: float = 0.0,
     end_seconds: float = 0.0,
-    fps: float = 0.0,
     duration: float = 0.0,
     fast_opts: dict[str, Any] | None = None,
     full_frame: bool = False,

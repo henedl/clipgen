@@ -540,7 +540,7 @@ def _corrected_segments_with_ids(
         participant, raw_segments, corrections, version=version
     )
     out: list[Any] = []
-    for raw, cor in zip(raw_segments, corrected):
+    for raw, cor in zip(raw_segments, corrected, strict=True):
         seg = dict(cor)
         seg_id = raw.get("id")
         if seg_id:
@@ -580,7 +580,7 @@ def api_transcript(participant: str) -> FlaskResponse:
 
     # Build response segments with corrected flag and marks
     segments = []
-    for raw, corrected in zip(raw_segments, corrected_segments):
+    for raw, corrected in zip(raw_segments, corrected_segments, strict=True):
         seg_id = raw.get("id", "")
         seg: dict[str, Any] = {
             "id": seg_id,
@@ -1694,10 +1694,11 @@ def api_dictionary_export() -> FlaskResponse:
 
 
 @transcripts_bp.route("/api/dictionary/import", methods=["POST"])
+@json_endpoint
 def api_dictionary_import() -> FlaskResponse:
     """Merge a dictionary CSV into the study."""
-    data = request.get_json(silent=True)
-    if not data or not str(data.get("csv", "")).strip():
+    data = require_json_body("Missing CSV content")
+    if not str(data.get("csv", "")).strip():
         return err("Missing CSV content")
 
     corrections, terms = transcripts.parse_dictionary_csv(str(data["csv"]))
@@ -2001,10 +2002,7 @@ def api_marks_delete(mark_id: str) -> FlaskResponse:
     data = request.get_json(silent=True)
     ids_to_remove: list[str] = []
 
-    if data and data.get("ids"):
-        ids_to_remove = data["ids"]
-    else:
-        ids_to_remove = [mark_id]
+    ids_to_remove = data["ids"] if data and data.get("ids") else [mark_id]
 
     with _manifest_lock:
         marks = _manifest.get("marks", [])
@@ -2060,7 +2058,7 @@ def api_search() -> FlaskResponse:
             pid, raw_segments, corrections, version=version_snapshot
         )
         participant_count = 0
-        for raw, seg in zip(raw_segments, corrected):
+        for raw, seg in zip(raw_segments, corrected, strict=True):
             text_lower = seg["text"].lower()
             n = text_lower.count(query_lower)
             if n > 0:
@@ -2884,8 +2882,10 @@ class AgentOrchestrator:
             self._cancel_events[agent_key][participant] = cancel_event
             self._started_at[agent_key][participant] = datetime.now(UTC).timestamp()
             self._errors[agent_key].pop(participant, None)
+        # Bound once so a stopped run cannot write into its successor's buffer.
+        buf: list[str] = []
         with self._partial_lock:
-            self._partial[agent_key][participant] = []
+            self._partial[agent_key][participant] = buf
 
         # Cancel a Stop-scheduled unload for this model; the run would only force
         # a reload.
@@ -2914,9 +2914,7 @@ class AgentOrchestrator:
 
                 def _sink(tok: str) -> None:
                     with self._partial_lock:
-                        buf = self._partial.get(agent_key, {}).get(participant)
-                        if buf is not None:
-                            buf.append(tok)
+                        buf.append(tok)
 
                 result = agent["run"](snapshot, cancel_event, _sink)
                 # Defense in depth: a Stop in the same tick drops the result.

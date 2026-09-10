@@ -122,11 +122,7 @@
     } else if (!cached) {
       _cvFrameCache.mark(url, "loading");
       img.src = "";
-      fetch(url)
-        .then(function (r) {
-          if (!r.ok) throw new Error("status " + r.status);
-          return r.blob();
-        })
+      apiGetBlob(url)
         .then(function (blob) {
           var objUrl = _cvFrameCache.setBlob(url, blob);
           if (seq === _cvPreviewSeq && !preview.classList.contains("hidden") && img.parentNode) {
@@ -1072,14 +1068,28 @@
     clearTimeout(_cvSaveOffsetsTimer);
     _cvSaveOffsetsTimer = setTimeout(function () {
       _cvSaveOffsetsTimer = null;
-      fetch("api/convergence/offsets", {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ offsets: cvState.offsets || {} }),
-      }).catch(function () {
-        // Persistence is best-effort; client state remains correct in-session.
-      });
+      cvPutOffsets();
     }, 500);
+  }
+
+  // Manual fetch, not apiPut: keepalive lets the PUT outlive a pagehide.
+  function cvPutOffsets() {
+    fetch("api/convergence/offsets", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ offsets: cvState.offsets || {} }),
+      keepalive: true,
+    }).catch(function () {
+      // Persistence is best-effort; client state remains correct in-session.
+    });
+  }
+
+  // A pending debounce would die with the page; send it now.
+  function cvFlushOffsets() {
+    if (!_cvSaveOffsetsTimer) return;
+    clearTimeout(_cvSaveOffsetsTimer);
+    _cvSaveOffsetsTimer = null;
+    cvPutOffsets();
   }
 
   // --- Per-participant alignment offset editor ---
@@ -1522,12 +1532,14 @@
     clearTimeout(_cvHoverDebounce);
     _cvHoverDebounce = null;
     cvHideFramePreview();
+    cvFlushOffsets();
   }
 
   function init() {
 
     document.addEventListener("mousemove", _cvOnDocMouseMove);
     document.addEventListener("mouseup", _cvOnDocMouseUp);
+    window.addEventListener("pagehide", cvFlushOffsets);
 
     // Zone navigation hotkeys; the dispatcher's typing guard covers the offset inputs.
     function _zoneNavReady() {

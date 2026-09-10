@@ -784,7 +784,7 @@ def _run_ss_detector(
         spans = [1.0] * len(scan_targets)
         total_span = float(len(scan_targets))
     done_span = 0.0
-    for window, win_span in zip(scan_targets, spans):
+    for window, win_span in zip(scan_targets, spans, strict=True):
         if ctx.cancel_flag():
             break
         scan_params = dict(task["parameters"])

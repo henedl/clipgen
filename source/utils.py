@@ -4,6 +4,7 @@ import contextlib
 import difflib
 import functools
 import hashlib
+import importlib
 import json
 import math
 import os
@@ -822,6 +823,42 @@ def file_lock(key: str | Path) -> Iterator[None]:
             os.close(fd)
 
 
+def import_appkit() -> Any:
+    """Import AppKit as an opaque module.
+
+    Imported by name rather than with a plain ``import AppKit`` because pyobjc
+    only exists on macOS, and CI type-checks on Linux — a literal import is an
+    ``unresolved-import`` error there. Do not "simplify" it back.
+
+    Typed as ``Any`` on purpose: pyobjc's stubs are incomplete (they omit
+    ``NSNotificationCenter``, among others) and every call is a dynamically
+    bridged ObjC selector, so checking against them buys nothing and costs a
+    suppression at each site.
+    """
+    return importlib.import_module("AppKit")
+
+
+def write_json_atomic(path: Path, data: Any, label: str) -> Path | None:
+    """Write *data* to *path* via a .tmp sibling and an atomic replace.
+
+    A crash or full disk mid-write leaves the previous file intact rather than
+    truncated. Returns the path written, or None on failure.
+    """
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+        os.replace(tmp, path)
+        return path
+    except (OSError, TypeError, ValueError) as exc:
+        try:
+            tmp.unlink(missing_ok=True)
+        except OSError:
+            pass
+        warning_print(f"Could not write {label}: {exc}")
+        return None
+
+
 def get_bundled_assets_root() -> Path:
     """Return the base directory for bundled project assets.
 
@@ -938,8 +975,7 @@ def normalize_study_name(raw_name: str) -> str:
     name = str(raw_name)
     name = name.lower()
     name = name.replace("study ", "study")
-    name = name.replace(" ", "_")
-    return name
+    return name.replace(" ", "_")
 
 
 def sanitize_filename(text: str) -> str:
@@ -2177,7 +2213,7 @@ def validate_prompt(text: str, placeholders: list[str]) -> str | None:
     # Ground truth: .format() catches stray positional {} and nested format-spec
     # references parse() misses.
     try:
-        text.format(**{p: "" for p in placeholders})
+        text.format(**dict.fromkeys(placeholders, ""))
     except (KeyError, IndexError, ValueError) as exc:
         bad = exc.args[0] if exc.args else exc
         return f"references an unknown placeholder ({bad}); allowed: " + ", ".join(

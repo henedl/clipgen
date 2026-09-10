@@ -101,21 +101,6 @@ def chrome_style() -> str | None:
     return "macos" if is_supported() else None
 
 
-def _appkit() -> Any:
-    """Import AppKit as an opaque module.
-
-    Imported by name rather than with a plain ``import AppKit`` because pyobjc
-    only exists on macOS, and CI type-checks on Linux — a literal import is an
-    ``unresolved-import`` error there. Do not "simplify" it back.
-
-    Typed as ``Any`` on purpose: pyobjc's stubs are incomplete (they omit
-    ``NSNotificationCenter``, among others) and every call below is a
-    dynamically-bridged ObjC selector, so checking against them buys nothing and
-    costs a suppression at each site.
-    """
-    return importlib.import_module("AppKit")
-
-
 def apply(window: Any) -> bool:
     """Style *window*'s native chrome. Returns whether anything was applied.
 
@@ -126,7 +111,7 @@ def apply(window: Any) -> bool:
     if not is_supported():
         return False
     try:
-        AppKit = _appkit()
+        AppKit = utils.import_appkit()
     except ImportError:  # pragma: no cover - pyobjc ships with pywebview on macOS
         utils.warning_print("AppKit unavailable — keeping the standard title bar.")
         return False
@@ -170,7 +155,7 @@ def teardown() -> None:
     if not _observers:
         return
     try:
-        center = _appkit().NSNotificationCenter.defaultCenter()
+        center = utils.import_appkit().NSNotificationCenter.defaultCenter()
         for token in _observers:
             center.removeObserver_(token)
     except Exception as exc:
@@ -195,8 +180,8 @@ def on_shown(window: Any) -> None:
     if not is_supported() or native is None:
         return
     try:
-        AppKit = _appkit()
-        # Imported by name for the same reason as AppKit — see _appkit().
+        AppKit = utils.import_appkit()
+        # Imported by name for the same reason as AppKit — see utils.import_appkit().
         app_helper: Any = importlib.import_module("PyObjCTools.AppHelper")
         _rearm_reassert_budget()
         app_helper.callAfter(lambda: _apply_titlebar_layout(AppKit, native))
@@ -218,7 +203,7 @@ def ensure_key(window: Any) -> None:
     if not is_supported() or native is None:
         return
     try:
-        AppKit = _appkit()
+        AppKit = utils.import_appkit()
         app_helper: Any = importlib.import_module("PyObjCTools.AppHelper")
         app_helper.callAfter(lambda: _claim_key(AppKit, native, _KEY_ATTEMPTS))
     except Exception as exc:
@@ -253,10 +238,10 @@ def set_appearance(window: Any, theme: str) -> None:
         return
     name = "NSAppearanceNameAqua" if theme == "light" else "NSAppearanceNameDarkAqua"
     try:
-        AppKit = _appkit()
+        AppKit = utils.import_appkit()
         # The constants are their own names; getattr is belt-and-braces.
         appearance = AppKit.NSAppearance.appearanceNamed_(getattr(AppKit, name, name))
-        # Imported by name for the same reason as AppKit — see _appkit().
+        # Imported by name for the same reason as AppKit — see utils.import_appkit().
         app_helper: Any = importlib.import_module("PyObjCTools.AppHelper")
 
         def apply_appearance() -> None:
@@ -281,7 +266,7 @@ def titlebar_double_click(window: Any) -> None:
     if not is_supported() or native is None:
         return
     try:
-        AppKit = _appkit()
+        AppKit = utils.import_appkit()
         if _is_fullscreen(AppKit, native):
             return  # AppKit owns the window's size in fullscreen
         defaults = AppKit.NSUserDefaults.standardUserDefaults()
@@ -290,7 +275,7 @@ def titlebar_double_click(window: Any) -> None:
         )
         if action is None:
             return
-        # Imported by name (see _appkit). callAfter hops off the bridge's worker thread.
+        # Imported by name (see utils.import_appkit). callAfter hops off the bridge's worker thread.
         app_helper: Any = importlib.import_module("PyObjCTools.AppHelper")
         if action == "minimize":
             app_helper.callAfter(lambda: native.performMiniaturize_(None))
@@ -673,7 +658,7 @@ def _schedule_settle(AppKit: Any, native: Any, attempts: int) -> None:
 
     def fire() -> None:
         try:
-            # Imported by name (see _appkit). callAfter hops off the timer thread.
+            # Imported by name (see utils.import_appkit). callAfter hops off the timer thread.
             app_helper: Any = importlib.import_module("PyObjCTools.AppHelper")
             app_helper.callAfter(lambda: _settle(AppKit, native, attempts))
         except Exception as exc:
@@ -725,7 +710,7 @@ def _claim_key(AppKit: Any, native: Any, attempts: int) -> None:
 
     def fire() -> None:
         try:
-            # Imported by name (see _appkit). callAfter hops off the timer thread.
+            # Imported by name (see utils.import_appkit). callAfter hops off the timer thread.
             app_helper: Any = importlib.import_module("PyObjCTools.AppHelper")
             app_helper.callAfter(lambda: _claim_key(AppKit, native, attempts - 1))
         except Exception as exc:
@@ -785,7 +770,7 @@ def _bind_frame_observer(AppKit: Any, native: Any, handler: Any) -> None:
     if not views:
         return
     if len(views) == len(_frame_observed) and all(
-        a is b for a, b in zip(views, _frame_observed)
+        a is b for a, b in zip(views, _frame_observed, strict=True)
     ):
         return
     center = AppKit.NSNotificationCenter.defaultCenter()

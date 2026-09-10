@@ -129,7 +129,7 @@ def _empty_manifest() -> dict[str, Any]:
     return {
         "cuts": [],
         "ui": {
-            "markerSources": {src: True for src in _MARKER_SOURCES},
+            "markerSources": dict.fromkeys(_MARKER_SOURCES, True),
             "markerThumbnails": False,
             "markerAudioScrub": False,
             "followPlayhead": True,
@@ -863,7 +863,7 @@ def _find_participant_parts(participant: str) -> list[dict[str, Any]] | None:
     parts = _participant_parts(p["video_paths"])
     if parts is None:
         return None
-    for part, vp in zip(parts, p["video_paths"]):
+    for part, vp in zip(parts, p["video_paths"], strict=True):
         part["path"] = str(vp)
     return parts
 

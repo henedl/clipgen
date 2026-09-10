@@ -1,5 +1,6 @@
 """Tests for Screenspace server API endpoints."""
 
+import json
 import os
 
 import numpy as np
@@ -2176,6 +2177,59 @@ def test_video_info_no_video(client):
 def test_video_info_participant_without_video(client):
     resp = client.get("/screenspace/api/video/info/P01")
     assert resp.status_code == 404
+
+
+def test_video_info_sanitizes_non_finite_duration(client, tmp_path, monkeypatch):
+    """ffprobe can report nan; the response must still parse as JSON."""
+    import video as video_mod
+
+    video_file = tmp_path / "study_P05.mp4"
+    video_file.write_bytes(b"\x00v1")
+    monkeypatch.setattr(
+        screenspace_server,
+        "_participants",
+        [{"id": "P05", "video_paths": [str(video_file)], "has_video": True}],
+    )
+    monkeypatch.setattr(screenspace_server, "_video_metadata_cache", {})
+    monkeypatch.setattr(
+        video_mod,
+        "probe_video_properties",
+        lambda _p: {"width": 1, "height": 1, "fps": 30.0, "duration": float("nan")},
+    )
+
+    resp = client.get("/screenspace/api/video/info/P05")
+    data = json.loads(resp.data)
+    assert data["ok"] is True
+    assert data["info"]["duration"] == 0
+    assert data["info"]["duration_seconds"] is None
+
+
+def test_participant_timeline_does_not_cache_a_failed_probe(
+    client, tmp_path, monkeypatch
+):
+    """One transient probe failure must not read as 'single video' forever."""
+    import video as video_mod
+
+    parts = [tmp_path / "study_P07_1.mp4", tmp_path / "study_P07_2.mp4"]
+    for part in parts:
+        part.write_bytes(b"\x00")
+    monkeypatch.setattr(
+        screenspace_server,
+        "_participant_video_paths",
+        lambda _pid: [str(p) for p in parts],
+    )
+    monkeypatch.setattr(screenspace_server, "_participant_timeline_cache", {})
+    calls = []
+
+    def _probe(paths):
+        calls.append(paths)
+        return None if len(calls) == 1 else [(paths[0], 10, 0), (paths[1], 10, 10)]
+
+    monkeypatch.setattr(video_mod, "build_source_timeline", _probe)
+
+    assert screenspace_server._participant_timeline("P07") is None
+    assert screenspace_server._participant_timeline("P07") is not None
+    assert len(calls) == 2
 
 
 def test_participants_payload_includes_version(client, tmp_path, monkeypatch):

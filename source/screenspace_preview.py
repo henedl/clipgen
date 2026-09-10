@@ -727,13 +727,11 @@ def _preview_change(
     curr_gray = cv2.cvtColor(curr_blur, cv2.COLOR_BGR2GRAY)
 
     if prev_frame is None:
-        panel = _label_panel(_fit_width(curr_gray, 200), "gray-blur (no prev)")
-        return panel
+        return _label_panel(_fit_width(curr_gray, 200), "gray-blur (no prev)")
 
     prev_pixels = _clip_region_pixels(prev_frame, region)
     if prev_pixels is None or prev_pixels.shape[:2] != pixels.shape[:2]:
-        panel = _label_panel(_fit_width(curr_gray, 200), "gray-blur (no prev)")
-        return panel
+        return _label_panel(_fit_width(curr_gray, 200), "gray-blur (no prev)")
 
     prev_blur = cv2.GaussianBlur(prev_pixels, (k, k), 0)
     prev_gray = cv2.cvtColor(prev_blur, cv2.COLOR_BGR2GRAY)

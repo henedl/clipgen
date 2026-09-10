@@ -74,27 +74,27 @@ def _extract_confidence(tool_type: str, result: dict[str, Any]) -> float:
     """Extract a normalized [0, 1] confidence from a tool-specific result dict."""
     if tool_type == "color":
         return result.get("_confidence", 1.0)
-    elif tool_type == "change":
+    if tool_type == "change":
         return min(result.get("magnitude", 0.0), 1.0)
-    elif tool_type == "similarity":
+    if tool_type == "similarity":
         return result.get("score", 0.0)
-    elif tool_type == "text":
+    if tool_type == "text":
         return result.get("confidence", 0.0)
-    elif tool_type == "numbers":
+    if tool_type == "numbers":
         return result.get("confidence", 1.0)
-    elif tool_type == "template" or tool_type == "shape":
+    if tool_type in {"template", "shape"}:
         return result.get("best_score", 0.0)
-    elif tool_type == "flow":
+    if tool_type == "flow":
         return min(result.get("magnitude", 0.0) / 10.0, 1.0)
-    elif tool_type == "scene":
+    if tool_type == "scene":
         return result.get("score", 0.0)
-    elif tool_type == "multitool":
+    if tool_type == "multitool":
         return result.get("min_confidence", 0.0)
-    elif tool_type == "inactivity":
+    if tool_type == "inactivity":
         if "_confidence" in result:
             return float(result["_confidence"])
         return min(result.get("duration", 0.0) / 30.0, 1.0)
-    elif tool_type == "boundary":
+    if tool_type == "boundary":
         if "_confidence" in result:
             return float(result["_confidence"])
         thr = config.SCREENSPACE_BOUNDARY_PHASH_THRESHOLD
@@ -102,7 +102,7 @@ def _extract_confidence(tool_type: str, result: dict[str, Any]) -> float:
         if thr <= 0:
             return 1.0
         return max(0.0, min((dist - thr) / float(thr), 1.0))
-    elif tool_type == "attention":
+    if tool_type == "attention":
         # Shift events carry _confidence; backfilled/raw samples fall back to
         # the peak strength.
         return float(result.get("_confidence", result.get("peak_value", 1.0)))

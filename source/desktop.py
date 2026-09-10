@@ -18,7 +18,6 @@ rect — the standard escape hatch for a saved geometry that has become unusable
 """
 
 import ctypes
-import importlib
 import os
 import sys
 import threading
@@ -144,9 +143,7 @@ def _shift_held() -> bool:
     """
     try:
         if sys.platform == "darwin":
-            # Imported by name, typed Any: see desktop_chrome._appkit (Linux CI,
-            # incomplete stubs).
-            appkit: Any = importlib.import_module("AppKit")
+            appkit = utils.import_appkit()
             flags = appkit.NSEvent.modifierFlags()
             return bool(flags & appkit.NSEventModifierFlagShift)
         if sys.platform == "win32":

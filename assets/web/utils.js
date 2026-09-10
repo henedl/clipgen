@@ -1013,6 +1013,22 @@ var escapeHtml = function (str) {
   return div.innerHTML;
 };
 
+// Escapes per piece around raw-text matches; matching escaped text splits entities like &amp;.
+var clipgenHighlightMatches = function (text, query, cssClass) {
+  if (!query) return escapeHtml(text);
+  var regex = new RegExp(query.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "gi");
+  var out = "";
+  var last = 0;
+  var m;
+  while ((m = regex.exec(text)) !== null) {
+    out += escapeHtml(text.slice(last, m.index));
+    out += '<span class="' + cssClass + '">' + escapeHtml(m[0]) + "</span>";
+    last = m.index + m[0].length;
+  }
+  out += escapeHtml(text.slice(last));
+  return out;
+};
+
 // Escapes, then converts inline `code`, **bold**, hugging *italic*. No underscore emphasis: snake_case would mangle.
 var clipgenRenderInlineMarkdown = function (str) {
   var html = escapeHtml(str == null ? "" : String(str));

@@ -1450,14 +1450,9 @@ _MD_SEGMENT = re.compile(
 )
 
 
-def _srt_time_to_seconds(ts: str) -> float:
-    h, m, rest = ts.split(":")
-    s, ms = rest.split(",")
-    return int(h) * 3600 + int(m) * 60 + int(s) + int(ms) / 1000
-
-
-def _vtt_time_to_seconds(ts: str) -> float:
-    parts = ts.replace(".", ":").split(":")
+def _cue_time_to_seconds(ts: str) -> float:
+    """SRT (``,`` before ms) or VTT (``.``) cue time; hours optional."""
+    parts = ts.replace(",", ":").replace(".", ":").split(":")
     if len(parts) == 3:
         m, s, ms = parts
         return int(m) * 60 + int(s) + int(ms) / 1000
@@ -1465,12 +1460,6 @@ def _vtt_time_to_seconds(ts: str) -> float:
         h, m, s, ms = parts
         return int(h) * 3600 + int(m) * 60 + int(s) + int(ms) / 1000
     return 0.0
-
-
-def _md_time_to_seconds(ts: str) -> float | None:
-    """Parse a Markdown transcript stamp; None on failure — never a fabricated
-    0.0, which reads as a valid segment start at the top of the recording."""
-    return utils.timestamp_to_seconds(ts)
 
 
 def _parse_cues(
@@ -1495,11 +1484,11 @@ def _parse_cues(
 
 
 def _parse_srt(text: str, filepath: str) -> TranscriptResult:
-    return _parse_cues(_SRT_BLOCK, _srt_time_to_seconds, 2, text, filepath)
+    return _parse_cues(_SRT_BLOCK, _cue_time_to_seconds, 2, text, filepath)
 
 
 def _parse_vtt(text: str, filepath: str) -> TranscriptResult:
-    return _parse_cues(_VTT_CUE, _vtt_time_to_seconds, 1, text, filepath)
+    return _parse_cues(_VTT_CUE, _cue_time_to_seconds, 1, text, filepath)
 
 
 def _parse_markdown(text: str, filepath: str) -> TranscriptResult:
@@ -1515,8 +1504,9 @@ def _parse_markdown(text: str, filepath: str) -> TranscriptResult:
         model = model_match.group(1)
 
     for match in _MD_SEGMENT.finditer(text):
-        start = _md_time_to_seconds(match.group(1))
-        end = _md_time_to_seconds(match.group(2))
+        # None on failure, never a fabricated 0.0 (a valid start).
+        start = utils.timestamp_to_seconds(match.group(1))
+        end = utils.timestamp_to_seconds(match.group(2))
         if start is None or end is None:
             # Unparseable stamp (e.g. "0:00.5"): skip loudly rather than fabricate 0:00.
             utils.warning_print(
@@ -1864,7 +1854,7 @@ class TranscriptWorker:
             block["error"] = error
             return block
         with self._lock:
-            for seg, labelled in zip(segments, work):
+            for seg, labelled in zip(segments, work, strict=True):
                 if "speaker" in labelled:
                     seg["speaker"] = labelled["speaker"]
                 else:

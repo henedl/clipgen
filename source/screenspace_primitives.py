@@ -513,7 +513,7 @@ def _channel_runs(flags: np.ndarray) -> tuple[tuple[int, int], ...]:
     breaks = np.flatnonzero(np.diff(idx) > 1)
     starts = np.concatenate(([idx[0]], idx[breaks + 1]))
     ends = np.concatenate((idx[breaks], [idx[-1]]))
-    return tuple(zip(starts.tolist(), ends.tolist()))
+    return tuple(zip(starts.tolist(), ends.tolist(), strict=True))
 
 
 @functools.cache
@@ -935,8 +935,7 @@ def _template_correlation_map(
     result = cv2.matchTemplate(
         frame_gray, tmpl_gray, cv2.TM_CCOEFF_NORMED, mask=gray_mask
     )
-    result = _neutralize_nonfinite(result)
-    return result
+    return _neutralize_nonfinite(result)
 
 
 def _template_corr_window(
@@ -1940,7 +1939,7 @@ def sparse_grid_cells(cells: np.ndarray, min_mag: float) -> list[dict[str, float
     mags = cells[ys, xs].tolist()
     return [
         {"x": centers[x], "y": centers[y], "mag": round(mag, 3)}
-        for y, x, mag in zip(ys.tolist(), xs.tolist(), mags)
+        for y, x, mag in zip(ys.tolist(), xs.tolist(), mags, strict=True)
     ]
 
 

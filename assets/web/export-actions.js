@@ -33,22 +33,16 @@
   }
 
   function runExport() {
-    // Manual fetch: apiPost throws "Server error <code>" and drops the body's j.error.
-    fetch("/api/export", { method: "POST" })
-      .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, j: j }; }); })
-      .then(function (res) {
-        if (res.ok && res.j && res.j.ok) {
-          var written = res.j.written || [];
-          var names = surfaceNames(written);
-          showToast(
-            "Exported " + (names ? names + " — " : "") +
-              clipgenPluralUnit(written.length, "file", "files") + " in " + res.j.output_dir
-          );
-        } else {
-          showToast((res.j && res.j.error) || "Export failed");
-        }
+    apiPost("/api/export", {})
+      .then(function (j) {
+        var written = j.written || [];
+        var names = surfaceNames(written);
+        showToast(
+          "Exported " + (names ? names + " — " : "") +
+            clipgenPluralUnit(written.length, "file", "files") + " in " + j.output_dir
+        );
       })
-      .catch(function (err) { showToast("Export failed: " + err.message); });
+      .catch(function (err) { showToast(err.serverMessage || "Export failed: " + err.message); });
   }
 
   function exportQuickAction() {

@@ -391,12 +391,12 @@ def ndjson_batch_response(
     return response
 
 
-def mtime_or_zero(path: str | Path) -> float:
-    """A file's ``st_mtime`` for cache keys, or 0.0 when it can't be stat'd."""
+def mtime_or_zero(path: str | Path) -> int:
+    """A file's ``st_mtime_ns`` for cache keys, or 0 when it can't be stat'd."""
     try:
-        return Path(path).stat().st_mtime
+        return Path(path).stat().st_mtime_ns
     except OSError:
-        return 0.0
+        return 0
 
 
 def parse_clip_window() -> tuple[float, float] | None:

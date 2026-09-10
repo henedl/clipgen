@@ -13,6 +13,7 @@
   var _AUDIO_CACHE_MAX_SECONDS = 600;
   var _audioBuffers = {};
   var _audioLoading = {};
+  var _audioFailed = {}; // keys whose fetch/decode failed; never refetched per pointer move
   var _audioTicks = {}; // key → LRU tick (parallel map keeps the buffer shape)
   var _audioTick = 0;
   var _audioTotalSeconds = 0;
@@ -68,11 +69,15 @@
       _touchAudio(key);
       return Promise.resolve(_audioBuffers[key]);
     }
+    if (_audioFailed[key]) return Promise.resolve(null);
     if (_audioLoading[key]) return _audioLoading[key];
     var gen = _audioGen;
     // arrayBuffer (audio) — apiGet only handles JSON, so use fetch directly.
     _audioLoading[key] = fetch(url)
-      .then(function (r) { return r.arrayBuffer(); })
+      .then(function (r) {
+        if (!r.ok) throw new Error("Server error " + r.status);
+        return r.arrayBuffer();
+      })
       .then(function (buf) { return getAudioContext().decodeAudioData(buf); })
       .then(function (decoded) {
         delete _audioLoading[key];
@@ -87,6 +92,7 @@
       })
       .catch(function () {
         delete _audioLoading[key];
+        _audioFailed[key] = true;
         return null;
       });
     return _audioLoading[key];
@@ -97,6 +103,7 @@
     _audioGen++;
     audioScrubStop();
     _audioBuffers = {};
+    _audioFailed = {};
     _audioTicks = {};
     _waveformCache = {};
     _audioTotalSeconds = 0;

@@ -157,7 +157,7 @@ _busy_slots: dict[str, bool] = {
     "gallery": False,
 }
 # Claim token per slot; a stale release must not drop a successor's claim.
-_busy_owners: dict[str, str | None] = {slot: None for slot in _busy_slots}
+_busy_owners: dict[str, str | None] = dict.fromkeys(_busy_slots)
 # Intake has no busy slot (it runs alongside generate); sheet swaps still check this.
 _intake_active = 0
 # Serializes stash load → mutate → save across concurrent CRUD requests.
@@ -904,15 +904,14 @@ def _save_manifest_quiet() -> None:
         utils.warning_print(f"Failed to save manifest: {e}")
 
 
-def _resolve_intake_video_paths(participant: str, source: str = "") -> list[str]:
+def _resolve_intake_video_paths(participant: str) -> list[str]:
     """Resolve the ordered source-video path(s) for an intake participant.
 
     Reads the live input directory (and the open sheet, when there is one)
     rather than the Screenspace/Transcripts ``_participants`` caches. Those
     only refresh on ``/api/participants``; ``POST /api/dirs`` and a MindNode-only
     session never hit that route, so a generate would look at the boot-time
-    scan and report "No video for P01". ``source`` is kept for call-site
-    compatibility — both tool lists scan the same files.
+    scan and report "No video for P01".
     """
     p = files.find_participant_record(_sheet_context, participant)
     return list(p["video_paths"]) if p is not None and p.get("has_video") else []
@@ -958,7 +957,7 @@ def _process_intake_item(
     # A MindNode document may hold several trees, so an item can name its own study.
     study = str(item.get("study") or "") or study
 
-    video_paths = _resolve_intake_video_paths(participant, source)
+    video_paths = _resolve_intake_video_paths(participant)
 
     if not video_paths:
         return {"_ok": False, "_error": f"No video for {participant}"}
@@ -2840,8 +2839,7 @@ def api_reel_direct() -> FlaskResponse:
                     )
                     continue
 
-                source = seg.get("source", "screenspace")
-                video_paths = _resolve_intake_video_paths(participant, source)
+                video_paths = _resolve_intake_video_paths(participant)
 
                 if not video_paths:
                     completed += 1

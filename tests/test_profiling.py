@@ -779,7 +779,6 @@ def test_scan_callback_label_uses_profile_kind(monkeypatch):
         {"x": 0, "y": 0, "w": 8, "h": 8},
         0.1,
         _cb,
-        fps=30,
         duration=1,
         profile_kind="change",
     )
@@ -826,7 +825,6 @@ def test_deep_profiler_disabled_when_scan_callback_raises(monkeypatch):
         {"x": 0, "y": 0, "w": 8, "h": 8},
         0.1,
         _cb,
-        fps=30,
         duration=1,
         profile_kind="change",
     )

@@ -324,6 +324,38 @@ class TestScreenspaceWorker:
         assert t["status"] == "queued"
         assert t.get("parameters", {}).get("start_seconds") == 50.0
 
+    def test_resume_keeps_a_cancel_that_raced_the_probe(self, monkeypatch):
+        """A Cancel landing during resume's duration probe must win."""
+        worker = screenspace.ScreenspaceWorker()
+        task = screenspace.create_task(
+            "color",
+            "P01",
+            "s.mp4",
+            ["/v.mp4"],
+            "r",
+            {"x": 0, "y": 0, "w": 1, "h": 1},
+            parameters={"start_seconds": 0.0},
+        )
+        worker.enqueue(task)
+        with worker._lock:
+            worker._tasks[task["id"]]["status"] = screenspace.TASK_STATUS_PAUSED
+            worker._tasks[task["id"]]["progress"] = 0.5
+
+        def _probe_then_cancel(_paths):
+            worker.cancel(task["id"])
+
+        monkeypatch.setattr(
+            screenspace_worker.video, "timeline_or_none", _probe_then_cancel
+        )
+        monkeypatch.setattr(
+            screenspace_worker, "_probe_video_meta", lambda _p: (30.0, 100.0)
+        )
+        worker.resume()
+        t = worker.get_task(task["id"])
+        assert t is not None
+        assert t["status"] == "cancelled"
+        assert t.get("parameters", {}).get("start_seconds") == 0.0
+
     def test_resume_restarts_offset_multitool_from_scratch(self):
         # Offset chains need every frame from the original start to join, so a
         # paused offset task must restart wholesale — start_seconds is NOT
