@@ -32,6 +32,7 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
+from typing import Any
 
 from scan_bench import (
     baseline_rows,
@@ -53,7 +54,7 @@ SCENARIOS: dict[str, list[str]] = {
 }
 
 
-def summarize(profile: dict[str, dict[str, float]]) -> dict[str, float]:
+def summarize(profile: dict[str, dict[str, float]]) -> dict[str, Any]:
     """Reduce one run's parsed report to the per-scenario comparison row."""
 
     def get(label: str) -> dict[str, float]:
@@ -62,13 +63,24 @@ def summarize(profile: dict[str, dict[str, float]]) -> dict[str, float]:
     clip = get("pipeline.clip")
     pool = get("pipeline.pool_wall")
     wrap = get("titlecard.wrap")
+    # One label per subprocess kind; bare ffmpeg.run is the untagged fallback.
+    ffmpeg = {
+        label: row for label, row in profile.items() if label.startswith("ffmpeg.run")
+    }
     return {
         "clip_s": clip["seconds"],
         "clips": int(clip["n"]),
         "pool_wall_s": pool["seconds"],
         "parallelism": clip["seconds"] / pool["seconds"] if pool["seconds"] else 0.0,
-        "ffmpeg_s": get("ffmpeg.run")["seconds"],
-        "ffmpeg_n": int(get("ffmpeg.run")["n"]),
+        "ffmpeg_s": sum(r["seconds"] for r in ffmpeg.values()),
+        "ffmpeg_n": sum(int(r["n"]) for r in ffmpeg.values()),
+        "ffmpeg_kinds": {
+            label.removeprefix("ffmpeg.run.") or "other": {
+                "s": r["seconds"],
+                "n": int(r["n"]),
+            }
+            for label, r in ffmpeg.items()
+        },
         "ffprobe_n": int(get("ffprobe.run")["n"]),
         "cards_s": wrap["seconds"],
         "cards_copy": int(get("titlecard.copy")["n"]),
@@ -77,9 +89,7 @@ def summarize(profile: dict[str, dict[str, float]]) -> dict[str, float]:
     }
 
 
-def keep_best(
-    best: dict[str, float] | None, summary: dict[str, float]
-) -> dict[str, float]:
+def keep_best(best: dict[str, Any] | None, summary: dict[str, Any]) -> dict[str, Any]:
     """Fastest successful run wins; a failed run (0 clips) never displaces one."""
     if best is None:
         return summary
@@ -206,7 +216,7 @@ def run_scenario(
 
 
 def print_table(
-    rows: dict[str, dict[str, float]], baseline: dict[str, dict[str, float]] | None
+    rows: dict[str, dict[str, Any]], baseline: dict[str, dict[str, Any]] | None
 ) -> None:
     delta_hdr = "    Δclip" if baseline else ""
     print(
@@ -235,6 +245,13 @@ def print_table(
             else:
                 line += "  (no base)"
         print(line)
+        kinds = row.get("ffmpeg_kinds") or {}
+        if kinds:
+            parts = "  ".join(
+                f"{kind} {v['s']:.3f}s/n={v['n']}"
+                for kind, v in sorted(kinds.items(), key=lambda kv: -kv[1]["s"])
+            )
+            print(f"{'':<14}ffmpeg: {parts}")
 
 
 def main() -> int:
@@ -299,9 +316,9 @@ def main() -> int:
     if args.compare:
         baseline = baseline_rows(ap, args.compare, "scenarios", args.duration)
 
-    rows: dict[str, dict[str, float]] = {}
+    rows: dict[str, dict[str, Any]] = {}
     for scenario in scenarios:
-        best: dict[str, float] | None = None
+        best: dict[str, Any] | None = None
         for _ in range(max(1, args.runs)):
             summary = summarize(run_scenario(scenario, args.input, out_root))
             best = keep_best(best, summary)

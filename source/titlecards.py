@@ -286,6 +286,7 @@ def _build_card_frame(
         input_file=input_label,
         output_file=card_path,
         os_error_message=f"ffmpeg could not successfully run for {label} generation.",
+        kind="card",
         cancel_flag=cancel_flag,
     )
     if ffmpeg_result is None or ffmpeg_result.returncode != 0:
@@ -757,6 +758,7 @@ def wrap_clip_with_cards(
             input_file=clip_path,
             output_file=output_temp_path,
             os_error_message="Filter-based concat failed while wrapping clip with cards.",
+            kind="card",
             cancel_flag=cancel_flag,
             on_progress=on_progress,
             expected_duration_sec=expected_wrap_duration,
