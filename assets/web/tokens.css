@@ -108,6 +108,13 @@
      between filled and unfilled portions is visible on the solid button. */
   --accent-progress-fill: #1a4fd9;
 
+  /* Outcomes: solid green / red for status chips and validation borders */
+  --success:          #16a34a;
+  --success-strong:   #15803d;
+  --danger:           #dc2626;
+  --danger-bg:        #fef2f2;
+  --danger-bg-dark:   #451a1a;
+
   /* Borders */
   --border:           #23252a;
   --border-strong:    #2e3138;

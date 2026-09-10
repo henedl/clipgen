@@ -303,3 +303,40 @@ def test_load_time_imports_have_an_earlier_publisher(group: str, html: str) -> N
         f"{group}: load-time namespace imports whose owner loads later or never "
         f"publishes; late-bind at the call site or reorder <script> tags: {offenders}"
     )
+
+
+def _bare_refs(src: str) -> set[str]:
+    """Identifiers read bare: not a property (``.x``), not an object key (``x:``)."""
+    refs = set(re.findall(r"(?<![.\w$])([A-Za-z_$][\w$]*)(?!\s*:)(?![\w$])", src))
+    return refs - _KEYWORDS
+
+
+@pytest.mark.parametrize("group, pattern", sorted(_GROUPS.items()))
+def test_no_undefined_cross_file_references(group: str, pattern: str) -> None:
+    """The non-call twin of the test above: a sibling's function passed as a
+    callback (``addEventListener("click", fn)``) binds ``undefined`` silently."""
+    files = [
+        p for p in sorted(_WEB.glob(pattern)) if _is_iife(p.read_text(encoding="utf-8"))
+    ]
+    ambient = _ambient_globals()
+    stripped = {p.name: _strip(p.read_text(encoding="utf-8")) for p in files}
+    defs = {name: _local_defs(s) for name, s in stripped.items()}
+    top = {
+        name: _top_level_defs(re.sub(r"^  ", "", s, flags=re.MULTILINE))
+        for name, s in stripped.items()
+    }
+
+    offenders: dict[str, list[str]] = {}
+    for fname, src in stripped.items():
+        unresolved = _bare_refs(src) - defs[fname] - ambient - _BUILTINS
+        cross_file = sorted(
+            name
+            for name in unresolved
+            if any(name in top[other] for other in stripped if other != fname)
+        )
+        if cross_file:
+            offenders[fname] = cross_file
+    assert not offenders, (
+        f"{group}: bare cross-file reference(s) with no delegator / namespace "
+        f"import. Route them through the namespace. Offenders: {offenders}"
+    )
