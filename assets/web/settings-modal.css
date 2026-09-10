@@ -786,10 +786,29 @@ html[data-theme="dark"] .settings-panel {
   overflow-wrap: anywhere;
 }
 
+/* Fixed-width columns right of the name (size, fit, link, action) so the
+   rows read as a table and models compare at a glance. ch units: the
+   widths are set by the longest label, not by the spacing scale. */
 .settings-llm-model-size {
+  min-width: 7ch;
+  text-align: right;
   color: var(--color-text-dim);
   font-size: var(--text-xs);
   white-space: nowrap;
+}
+
+.settings-llm-model-link-slot {
+  display: inline-flex;
+  justify-content: center;
+  width: calc(var(--icon-size-md) + var(--space-2));
+  flex-shrink: 0;
+}
+
+.settings-llm-model-action {
+  display: inline-flex;
+  justify-content: flex-end;
+  min-width: 13ch;
+  flex-shrink: 0;
 }
 
 /* A model the router already refused. Dimmed, not hidden: it stays deletable,
@@ -920,6 +939,9 @@ html[data-theme="dark"] .settings-panel {
 /* Memory-fit chip on a catalog row. Neutral by default; the recommended
    model takes the accent, a model that will not fit takes the warning. */
 .settings-llm-model-fit {
+  box-sizing: border-box;
+  min-width: 12ch;
+  text-align: center;
   padding: 0 var(--space-2);
   border: 1px solid var(--color-border);
   border-radius: var(--radius-full);

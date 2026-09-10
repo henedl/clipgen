@@ -298,6 +298,14 @@
       return link;
     }
 
+    // Same width with or without a link, so the columns to its right line up.
+    function _modelLinkSlot(model) {
+      var slot = el("span", "settings-llm-model-link-slot");
+      var link = _modelLinkButton(model);
+      if (link) slot.appendChild(link);
+      return slot;
+    }
+
     // A curated model: Download with an in-row progress bar, or "Downloaded".
     function _buildSuggestedRow(model, recommended) {
       var row = el("div", "settings-llm-model-row");
@@ -312,14 +320,15 @@
       row.appendChild(size);
       var chip = _fitChip(model, model.name === recommended);
       if (chip) row.appendChild(chip);
-      var sugLink = _modelLinkButton(model);
-      if (sugLink) row.appendChild(sugLink);
+      row.appendChild(_modelLinkSlot(model));
+      var action = el("span", "settings-llm-model-action");
+      row.appendChild(action);
 
       if (model.installed) {
         var done = el("span", "settings-llm-model-state");
         done.appendChild(el("span", "settings-llm-model-icon settings-llm-model-icon--done"));
         done.appendChild(document.createTextNode("Downloaded"));
-        row.appendChild(done);
+        action.appendChild(done);
         return row;
       }
 
@@ -332,7 +341,7 @@
       dlBtn.setAttribute("data-model", model.name);
       dlBtn.appendChild(el("span", "settings-llm-model-icon settings-llm-model-icon--download"));
       dlBtn.appendChild(document.createTextNode("Download"));
-      row.appendChild(dlBtn);
+      action.appendChild(dlBtn);
 
       function onProgress(st) {
         if (st.done) {
@@ -375,11 +384,10 @@
         row.classList.add("settings-llm-model-row--unusable");
       }
       row.appendChild(name);
-      if (model.size_mb) {
-        row.appendChild(el("span", "settings-llm-model-size", _formatSize(model.size_mb)));
-      }
-      var link = _modelLinkButton(model);
-      if (link) row.appendChild(link);
+      row.appendChild(
+        el("span", "settings-llm-model-size", model.size_mb ? _formatSize(model.size_mb) : "")
+      );
+      row.appendChild(_modelLinkSlot(model));
 
       var showBtn = el("button", "settings-llm-model-reveal");
       showBtn.type = "button";
@@ -395,12 +403,14 @@
           });
       });
       row.appendChild(showBtn);
+      var action = el("span", "settings-llm-model-action");
+      row.appendChild(action);
 
       // Ollama owns the blob and the scan re-offers it; only `ollama rm` removes it.
       if (model.source === "ollama") {
         var managed = el("span", "settings-llm-model-state", "Ollama");
         managed.title = "Managed by Ollama; remove it with ollama rm";
-        row.appendChild(managed);
+        action.appendChild(managed);
         return row;
       }
 
@@ -419,7 +429,7 @@
             _setStatus((e && e.message) || "Delete failed");
           });
       });
-      row.appendChild(delBtn);
+      action.appendChild(delBtn);
       return row;
     }
 
