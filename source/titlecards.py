@@ -29,6 +29,8 @@ from utils import ClipRecord
 
 _endcard_cache: dict[str, str] = {}
 _endcard_lock = threading.Lock()
+# One build per key: parallel clip workers otherwise all encode the first endcard.
+_endcard_flights: dict[str, threading.Lock] = {}
 
 
 def _x264_video_args() -> list[str]:
@@ -434,24 +436,24 @@ def get_or_build_endcard(
         cached = _endcard_cache.get(cache_key)
         if cached and Path(cached).is_file():
             return cached
-    path = build_endcard_frame(
-        resolution,
-        cancel_flag=cancel_flag,
-        card_duration_seconds=duration,
-        match_fps=match_fps,
-        audio_match=audio_match,
-    )
-    if path:
+        flight = _endcard_flights.setdefault(cache_key, threading.Lock())
+    with flight:
+        # Re-check: a waiter finds the first builder's card here
         with _endcard_lock:
-            existing = _endcard_cache.get(cache_key)
-            if existing and Path(existing).is_file():
-                try:
-                    Path(path).unlink()
-                except OSError:
-                    pass
-                return existing
-            _endcard_cache[cache_key] = path
-    return path
+            cached = _endcard_cache.get(cache_key)
+            if cached and Path(cached).is_file():
+                return cached
+        path = build_endcard_frame(
+            resolution,
+            cancel_flag=cancel_flag,
+            card_duration_seconds=duration,
+            match_fps=match_fps,
+            audio_match=audio_match,
+        )
+        if path:
+            with _endcard_lock:
+                _endcard_cache[cache_key] = path
+        return path
 
 
 def clear_endcard_cache() -> None:
@@ -463,6 +465,7 @@ def clear_endcard_cache() -> None:
             except OSError:
                 pass
         _endcard_cache.clear()
+        _endcard_flights.clear()
 
 
 def _input_count(input_args: list[str]) -> int:
