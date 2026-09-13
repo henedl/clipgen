@@ -8,6 +8,17 @@ Notable changes per release. One level-2 heading per version — `## <version> �
 
 `<Tool>` is one of `Core`, `Studio`, `Screenspace`, `Transcripts`, `Workflows`, `Composer`, `Overview`. Write for someone using clipgen, not building it: name the thing by what it is called in the interface, say what changed for them, and leave the internals in the commit. Add a second sentence only when the first leaves an obvious "so what". Lines render as **plain text** in the Start overlay's Recent updates tab — no backticks or markdown inside them, or it shows up literally.
 
+## v0.17.2 — 2026-09-10
+**Core:** Feat: Settings, Summaries recommends an AI model sized for your memory and GPU, shows whether each model fits, and switches to it with Use recommended.
+**Core:** Feat: Clips with title cards build faster in batch runs, with quicker card fonts and one shared endcard when several clips run at once.
+
+## v0.17.1 — 2026-09-06
+**Transcripts:** Feat: Speaker attribution is optional per participant and labels who said each line on an existing transcript, with colored chips, rename, and speakers kept in exports.
+**Core:** Feat: The macOS and Windows desktop app checks GitHub for updates and can download and install a new release from About.
+**Transcripts:** Fix: Stopping speaker detection or turning speakers off no longer drops the transcript or your speaker renames.
+**Core:** Fix: A failed reel build no longer leaves a broken output file on disk.
+**Screenspace:** Fix: Preview overlays stay tied to the current region and step instead of showing stale images.
+
 ## v0.17.0 — 2026-09-03
 **Screenspace:** Feat: Click a Multitool step to focus it. Model view previews that step's tool, region and reference, and its calibration track is highlighted.
 **Screenspace:** Feat: Template and Shape scans run much faster when the tool has a search region.
