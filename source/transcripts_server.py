@@ -631,7 +631,9 @@ def api_edit_segment(participant: str) -> FlaskResponse:
         if raw_seg is None:
             return err("Segment not found", 404)
 
-        original_text = raw_seg["text"]
+        # Match the text the user saw: earlier rules already rewrote the raw segment.
+        corrections = _manifest.setdefault("corrections", [])
+        original_text = transcripts.apply_corrections([raw_seg], corrections)[0]["text"]
         if original_text == new_text:
             return ok(correction=None)
 
@@ -642,7 +644,7 @@ def api_edit_segment(participant: str) -> FlaskResponse:
             "to": new_text,
             "created": datetime.now(UTC).isoformat(),
         }
-        _manifest.setdefault("corrections", []).append(correction)
+        corrections.append(correction)
         _bump_corrections_version()  # new correction invalidates corrected cache
         _mark_friction_stale(entry)  # edited segment text invalidates friction scores
 
@@ -1526,27 +1528,30 @@ def api_corrections_add() -> FlaskResponse:
     if not from_text or not to_text:
         return err("'from' and 'to' required")
 
-    removed_id = None
+    removed: list[str] = []
+    updated: list[str] = []
     with _manifest_lock:
         corrections = _manifest.setdefault("corrections", [])
 
-        # Chain into an existing correction: "teh"→"the" + "the"→"they" becomes
-        # "teh"→"they"; from == to deletes it.
-        chained = None
-        for c in corrections:
-            if c.get("to", "").lower() == from_text.lower():
-                chained = c
-                break
-
-        if chained:
-            if chained.get("from", "").lower() == to_text.lower():
-                corrections.remove(chained)
-                removed_id = chained["id"]
-                correction = None
+        # Rewrite rules producing this word; identity reverts delete. Add the
+        # pair unless purely reverting.
+        for c in list(corrections):
+            if c.get("to", "").lower() != from_text.lower():
+                continue
+            if c.get("from", "").lower() == to_text.lower():
+                corrections.remove(c)
+                removed.append(c["id"])
             else:
-                chained["to"] = to_text
-                correction = chained
-        else:
+                c["to"] = to_text
+                updated.append(c["id"])
+        correction = None
+        exists = any(
+            c.get("from", "").lower() == from_text.lower()
+            and c.get("to", "").lower() == to_text.lower()
+            for c in corrections
+        )
+        pure_revert = bool(removed) and not updated
+        if not pure_revert and not exists:
             correction = {
                 "id": f"c_{uuid.uuid4().hex[:8]}",
                 "from": from_text,
@@ -1558,9 +1563,7 @@ def api_corrections_add() -> FlaskResponse:
         _bump_corrections_version()  # add/update/remove invalidates corrected cache
     # Schedule outside _manifest_lock so it never nests with the debounce timer lock.
     _schedule_persist()
-    if removed_id is not None:
-        return ok(correction=None, removed=removed_id)
-    return ok(correction=correction)
+    return ok(correction=correction, removed=removed, updated=updated)
 
 
 @transcripts_bp.route("/api/corrections/<correction_id>", methods=["DELETE"])

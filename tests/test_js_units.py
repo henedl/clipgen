@@ -78,3 +78,132 @@ def test_is_pending_reads_the_generating_flag_only():
 def test_clamp_bounds_both_ends():
     out = _probe("[clamp(5, 0, 3), clamp(-1, 0, 3), clamp(2, 0, 3)]", snippet=_CLAMP)
     assert out == [3, 0, 2]
+
+
+# ---- Composer undo/redo history (composer.js) ----
+
+_COMPOSER = read("composer.js")
+_HISTORY = slice_between(
+    _COMPOSER, "  var _undoStack = [];", "  // ---- User-facing cut actions"
+)
+
+# A fake server: create allocates a fresh id, edits on unknown ids reject.
+_HISTORY_STUBS = """
+var qs = function () { return {}; };
+var server = { cuts: {}, anns: {}, next: 0 };
+var fresh = function (prefix) { server.next += 1; return prefix + server.next; };
+var known = function (store, id) {
+  return id in store ? Promise.resolve() : Promise.reject(new Error("No " + id));
+};
+var applyCreate = function (cut) {
+  var c = { id: fresh("cut_"), start: cut.start, end: cut.end };
+  server.cuts[c.id] = c; return Promise.resolve(c);
+};
+var applyDelete = function (id) {
+  return known(server.cuts, id).then(function () { delete server.cuts[id]; });
+};
+var applyTimes = function (id, t) {
+  return known(server.cuts, id).then(function () { server.cuts[id].end = t.end; });
+};
+var applyAnnCreate = function (ann) {
+  var a = { id: fresh("ann_"), text: ann.text };
+  server.anns[a.id] = a; return Promise.resolve(a);
+};
+var applyAnnDelete = function (id) {
+  return known(server.anns, id).then(function () { delete server.anns[id]; });
+};
+var applyAnnPatch = function (id, p) {
+  return known(server.anns, id).then(function () { server.anns[id].text = p.text; });
+};
+var applyTrim = function () { return Promise.resolve(); };
+var failures = [];
+var opFailed = function (e) { failures.push(String(e && e.message)); };
+var settle = function () { return new Promise(function (r) { setTimeout(r, 0); }); };
+var steps = function (fns) {
+  return fns.reduce(function (p, fn) { return p.then(fn).then(settle); }, Promise.resolve());
+};
+"""
+
+
+def _run_history(script: str) -> dict:
+    """Drive the sliced history code with *script* and dump the outcome."""
+    probe = (
+        "steps(["
+        + script
+        + "]).then(function () { console.log(JSON.stringify({"
+        + "failures: failures, undo: _undoStack.length, redo: _redoStack.length,"
+        + " cuts: Object.keys(server.cuts), anns: Object.keys(server.anns),"
+        + " server: server })); });"
+    )
+    return json.loads(node_eval(_HISTORY, probe, _HISTORY_STUBS)[0])
+
+
+def test_composer_history_survives_cut_delete_and_restore():
+    """create → edit → delete, undo ×3 then redo ×3 must never hit a stale id."""
+    out = _run_history(
+        """
+        function () { return applyCreate({start: 1, end: 2}).then(function (c) {
+          recordOp({type: "create", cut: c});
+          recordOp({type: "edit", id: c.id, before: {start: 1, end: 2}, after: {start: 1, end: 5}});
+          return applyTimes(c.id, {end: 5});
+        }); },
+        function () { return applyDelete("cut_1").then(function () {
+          recordOp({type: "delete", cut: {id: "cut_1", start: 1, end: 5}});
+        }); },
+        function () { undo(); }, function () { undo(); }, function () { undo(); },
+        function () { redo(); }, function () { redo(); }, function () { redo(); }
+        """
+    )
+    assert out["failures"] == []
+    assert (out["undo"], out["redo"]) == (3, 0)
+    assert out["cuts"] == []  # redo of the delete removed the restored cut
+
+
+def test_composer_history_remaps_grouped_annotation_edits():
+    """A group holding an ann-edit on a restored annotation follows the new id."""
+    out = _run_history(
+        """
+        function () { return applyAnnCreate({text: "a"}).then(function (a) {
+          recordOp({type: "ann-create", annotation: a});
+          recordOp({type: "ann-group", ops: [
+            {type: "ann-edit", id: a.id, field: "text", before: "a", after: "b"}
+          ]});
+          return applyAnnPatch(a.id, {text: "b"});
+        }); },
+        function () { return applyAnnDelete("ann_1").then(function () {
+          recordOp({type: "ann-delete", annotation: {id: "ann_1", text: "b"}});
+        }); },
+        function () { undo(); }, function () { undo(); },
+        function () { redo(); }
+        """
+    )
+    assert out["failures"] == []
+    assert (out["undo"], out["redo"]) == (2, 1)
+    assert next(iter(out["server"]["anns"].values()))["text"] == "b"
+
+
+# ---- Transcript inline-edit word diff (transcripts.js) ----
+
+_TRANSCRIPTS = read("transcripts.js")
+_EXTRACT = slice_between(
+    _TRANSCRIPTS, "  function extractCorrections(", "  function saveCorrections("
+)
+
+
+def _diff(old: str, new: str) -> list:
+    return _probe(
+        "extractCorrections(" + json.dumps(old) + ", " + json.dumps(new) + ")",
+        snippet=_EXTRACT,
+    )
+
+
+def test_extract_corrections_keeps_insertions_and_deletions():
+    """Pure insert / delete groups surface with one empty side, never vanish."""
+    assert _diff("I like it", "I really like it") == [{"from": "", "to": "really"}]
+    assert _diff("I really like it", "I like it") == [{"from": "really", "to": ""}]
+    assert _diff("I like it", "I love it") == [{"from": "like", "to": "love"}]
+    assert _diff("I like it today", "I really love it") == [
+        {"from": "like", "to": "really love"},
+        {"from": "today", "to": ""},
+    ]
+    assert _diff("same text", "same  text") == []

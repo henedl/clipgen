@@ -76,7 +76,7 @@ _RUN_TERMINAL = {
 
 # ---- Auto-run trigger state ----
 _watch_seen: set[str] = set()  # pids already accounted for (never fire again)
-_watch_pending: dict[str, tuple[int, float]] = {}  # pid -> last-poll (size, mtime)
+_watch_pending: dict[str, tuple] = {}  # pid -> last-poll (path, size, mtime) per part
 # Chaining-trigger baselines: completions already accounted for (never re-fire).
 _watch_transcript_baseline: dict[str, str] = {}  # pid -> transcribed_at stamp
 _watch_scan_seen: set[str] = set()  # completed screenspace task ids
@@ -592,10 +592,10 @@ def api_run_create() -> Any:
                 return None
             return loaded if isinstance(loaded, dict) else None
 
-        seed_results, _plan_notes = workflows.compute_resume_plan(
-            blueprint, prior.get("nodeStates") or {}, _load_sidecar
+        seed_results, plan_notes = workflows.compute_resume_plan(
+            blueprint, prior.get("nodeStates") or {}, _load_sidecar, sample_window
         )
-        seed_note = f"Reused from run {resume_from}"
+        seed_note = "; ".join([f"Reused from run {resume_from}"] + plan_notes)
 
     return ok(
         run=_launch_run(
@@ -782,10 +782,15 @@ def _precompute_shared_nodes(
     Returns ``{node_id: result}`` to seed into every child runner, so a batch hits
     the rate-limited Sheets API once instead of once per participant. A node that
     raises is simply omitted — the child re-runs it normally (no behavior change).
+    A node with any incoming edge (a gate; these sources take no data) is left to
+    the children, whose gates must be able to skip it.
     """
+    gated = {str(e.get("to")) for e in blueprint.get("edges", [])}
     seeded: dict[str, dict[str, Any]] = {}
     for node in blueprint.get("nodes", []):
         if node.get("type") not in _BATCH_CACHEABLE_TYPES or node.get("disabled"):
+            continue
+        if str(node.get("id")) in gated:
             continue
         executor = workflows.NODE_TYPES.get(node["type"], {}).get("execute")
         if executor is None:
@@ -1085,15 +1090,22 @@ def _seed_watch_seen(trigger_type: str | None = None) -> None:
             _watch_scan_seen.update(_scan_markers())
 
 
-def _stat_first_video(video_paths: list[str]) -> tuple[int, float] | None:
-    """``(size, mtime)`` of a participant's first video, or ``None`` if unreadable."""
+def _stat_videos(video_paths: list[str]) -> tuple | None:
+    """``(path, size, mtime)`` per part, or ``None`` if any part is unreadable.
+
+    Every part counts: a multi-part recording whose later part is still copying
+    must not read as stable.
+    """
     if not video_paths:
         return None
-    try:
-        st = os.stat(video_paths[0])
-    except OSError:
-        return None  # mid-rename / vanished — treat as not-yet-stable
-    return (st.st_size, st.st_mtime)
+    stats = []
+    for path in video_paths:
+        try:
+            st = os.stat(path)
+        except OSError:
+            return None  # mid-rename / vanished — treat as not-yet-stable
+        stats.append((str(path), st.st_size, st.st_mtime))
+    return tuple(stats)
 
 
 def _armed_blueprint_locked(trigger_type: str) -> dict[str, Any] | None:
@@ -1134,8 +1146,8 @@ def _maybe_fire_trigger(participant: str, trigger_type: str) -> None:
 def _poll_new_videos() -> None:
     """The original watch-dir tick: fire on newly-arrived, stable participants.
 
-    A pid fires only after it stats identically across two consecutive polls
-    (the partial-copy guard).
+    A pid fires only after every part stats identically across two consecutive
+    polls (the partial-copy guard).
     """
     entries = {
         str(e["id"]): e
@@ -1151,7 +1163,7 @@ def _poll_new_videos() -> None:
         for pid, entry in entries.items():
             if pid in _watch_seen:
                 continue
-            stat = _stat_first_video(entry.get("video_paths", []))
+            stat = _stat_videos(entry.get("video_paths", []))
             if stat is None:
                 continue
             if _watch_pending.get(pid) == stat:

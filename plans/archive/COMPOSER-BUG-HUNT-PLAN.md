@@ -1,9 +1,10 @@
 # Composer bug hunt
 
-Status: findings verified; fixes pending.
+Status: fixed (2026-09-18).
 
-Scope: Composer mutation routes and undo/redo history. Four verified findings;
-no implementation changes.
+Scope: Composer mutation routes and undo/redo history. Four verified findings,
+all fixed with API / Node regressions in `tests/test_composer_server.py` and
+`tests/test_js_units.py`.
 
 ## 1. Rejected annotation updates mutate live state
 
@@ -28,10 +29,10 @@ Expected: a rejected update leaves both live and persisted state unchanged.
 
 Implementation plan:
 
-- [ ] Validate supplied fields before mutating the stored annotation, under the existing lock.
-- [ ] Add an API regression in `tests/test_composer_server.py` covering the rejected combined update.
-- [ ] Assert live state and disk retain the original annotation after rejection and a subsequent successful mutation.
-- [ ] Verify valid combined updates still persist every requested field.
+- [x] Validate supplied fields before mutating the stored annotation, under the existing lock.
+- [x] Add an API regression in `tests/test_composer_server.py` covering the rejected combined update.
+- [x] Assert live state and disk retain the original annotation after rejection and a subsequent successful mutation.
+- [x] Verify valid combined updates still persist every requested field.
 
 ## 2. Marker trims accept invalid spans
 
@@ -54,11 +55,11 @@ Invalid requests must not mutate or persist state.
 
 Implementation plan:
 
-- [ ] Reject non-finite times using the existing numeric-validation pattern.
-- [ ] Normalize start before checking the final span's minimum duration.
-- [ ] Add API regressions for negative spans, NaN, and positive/negative infinity.
-- [ ] Verify rejected requests preserve prior trims and return valid JSON.
-- [ ] Retain valid trim metadata and time-only undo/redo behavior.
+- [x] Reject non-finite times using the existing numeric-validation pattern.
+- [x] Normalize start before checking the final span's minimum duration.
+- [x] Add API regressions for negative spans, NaN, and positive/negative infinity.
+- [x] Verify rejected requests preserve prior trims and return valid JSON.
+- [x] Retain valid trim metadata and time-only undo/redo behavior.
 
 ## 3. Restoring deleted objects breaks earlier undo entries
 
@@ -93,11 +94,13 @@ Expected: undo/redo continues across deletion and recreation of the same object.
 
 Implementation plan:
 
-- [ ] Remap object references across both history stacks when recreation changes an ID.
-- [ ] Include create/delete snapshots, edit IDs, and nested annotation group operations.
-- [ ] Cover cut and annotation create/edit/delete, full undo, and full redo sequences.
-- [ ] Verify grouped annotation history and repeated delete/restore cycles.
-- [ ] Exercise the sequence in a browser with existing UI tooling.
+- [x] Remap object references across both history stacks when recreation changes an ID.
+- [x] Include create/delete snapshots, edit IDs, and nested annotation group operations.
+- [x] Cover cut and annotation create/edit/delete, full undo, and full redo sequences.
+- [x] Verify grouped annotation history and repeated delete/restore cycles.
+  Out of scope: an `ann-group` still applies sub-ops with `Promise.all`, so a
+  sub-op failing mid-group leaves the others applied.
+- [x] Exercise the sequence in a browser with existing UI tooling (`shot.py composer --eval-file`: edit, delete, undo ×2, redo ×2 with no failure toast).
 
 ## 4. Concurrent cut updates silently overwrite newer times
 
@@ -128,11 +131,11 @@ updates do not silently restore stale fields omitted from the request.
 
 Implementation plan:
 
-- [ ] Keep duration probing outside the lock, but merge and clamp against current state atomically.
-- [ ] Avoid rewriting times for label-only updates.
-- [ ] Add event-coordinated API regressions for rename versus timing edits.
-- [ ] Cover overlapping start-only/end-only edits and deletion during duration lookup.
-- [ ] Retain span validation and missing-cut errors without holding locks during media I/O.
+- [x] Keep duration probing outside the lock, but merge and clamp against current state atomically.
+- [x] Avoid rewriting times for label-only updates.
+- [x] Add event-coordinated API regressions for rename versus timing edits.
+- [x] Cover overlapping start-only/end-only edits and deletion during duration lookup.
+- [x] Retain span validation and missing-cut errors without holding locks during media I/O.
 
 ## Verification and handoff
 

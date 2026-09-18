@@ -248,7 +248,13 @@ def api_manifest() -> Any:
 
 def _clamp_span(participant: str, start: float, end: float) -> tuple[float, float]:
     """Clamp a cut span to ``0 <= start < end <= duration`` at MIN_CUT_SECONDS."""
-    duration = _participant_duration(participant)
+    return _clamp_times(_participant_duration(participant), start, end)
+
+
+def _clamp_times(
+    duration: float | None, start: float, end: float
+) -> tuple[float, float]:
+    """Pure half of _clamp_span; safe to call under _manifest_lock."""
     start = max(0.0, start)
     if duration is not None:
         start = min(start, max(0.0, duration - MIN_CUT_SECONDS))
@@ -264,8 +270,8 @@ def api_cut_create() -> Any:
     participant = str(data.get("participant", "")).strip()
     if not participant:
         return err("participant is required")
-    start = parse_number_arg(data.get("start", 0), "start")
-    end = parse_number_arg(data.get("end", 0), "end")
+    start = parse_number_arg(data.get("start", 0), "start", finite=True)
+    end = parse_number_arg(data.get("end", 0), "end", finite=True)
     if end <= start:
         return err("end must be after start")
     start, end = _clamp_span(participant, start, end)
@@ -286,29 +292,37 @@ def api_cut_create() -> Any:
 @composer_bp.route("/api/cuts/<cut_id>", methods=["PATCH"])
 @json_endpoint
 def api_cut_update(cut_id: str) -> Any:
+    """Patch a cut's times and/or label.
+
+    Times merge over the cut's *current* values under the lock, so a label-only
+    PATCH never rewrites times and two overlapping edits keep each other's
+    fields. The duration probe (a cold-cache ffprobe) runs outside the lock.
+    """
     data = request.get_json(silent=True) or {}
-    # Clamp outside the lock: _clamp_span may ffprobe on a cold cache (see
-    # api_cut_create).
+    new_start = new_end = None
+    if data.get("start") is not None:
+        new_start = parse_number_arg(data["start"], "start", finite=True)
+    if data.get("end") is not None:
+        new_end = parse_number_arg(data["end"], "end", finite=True)
     with _manifest_lock:
         cut = find_by_id(_manifest.get("cuts", []), cut_id)
         if cut is None:
             return err(f"No cut {cut_id}", 404)
-        start = cut["start"]
-        end = cut["end"]
         participant = cut["participant"]
-    if data.get("start") is not None:
-        start = parse_number_arg(data["start"], "start")
-    if data.get("end") is not None:
-        end = parse_number_arg(data["end"], "end")
-    if end <= start:
-        return err("end must be after start")
-    start, end = _clamp_span(participant, start, end)
+    duration = None
+    if new_start is not None or new_end is not None:
+        duration = _participant_duration(participant)
     with _manifest_lock:
         # Re-find: the cut may have been deleted while the lock was released.
         cut = find_by_id(_manifest.get("cuts", []), cut_id)
         if cut is None:
             return err(f"No cut {cut_id}", 404)
-        cut["start"], cut["end"] = start, end
+        if new_start is not None or new_end is not None:
+            start = cut["start"] if new_start is None else new_start
+            end = cut["end"] if new_end is None else new_end
+            if end <= start:
+                return err("end must be after start")
+            cut["start"], cut["end"] = _clamp_times(duration, start, end)
         if data.get("label") is not None:
             cut["label"] = str(data["label"])
         _persist_locked()
@@ -325,6 +339,7 @@ def api_cut_delete(cut_id: str) -> Any:
 
 
 @composer_bp.route("/api/trims/<path:key>", methods=["PUT"])
+@json_endpoint
 def api_trim_put(key: str) -> Any:
     """Set a non-destructive span override for one source marker.
 
@@ -334,18 +349,18 @@ def api_trim_put(key: str) -> Any:
     times only.
     """
     data = request.get_json(silent=True) or {}
-    try:
-        start = float(data["start"])
-        end = float(data["end"])
-    except (KeyError, TypeError, ValueError):
+    if data.get("start") is None or data.get("end") is None:
         return err("start and end are required numbers")
+    # Clamp before the ordering check so a negative span can't slip through.
+    start = max(0.0, parse_number_arg(data["start"], "start", finite=True))
+    end = parse_number_arg(data["end"], "end", finite=True)
     if end < start + MIN_CUT_SECONDS:
         return err("end must be after start")
     with _manifest_lock:
         trims = _manifest.setdefault("trims", {})
         existing = trims.get(key, {})
         trim = {
-            "start": round(max(0.0, start), 3),
+            "start": round(start, 3),
             "end": round(end, 3),
             "participant": str(
                 data.get("participant") or existing.get("participant", "")
@@ -548,23 +563,26 @@ def api_annotation_create() -> Any:
 
 @composer_bp.route("/api/annotations/<ann_id>", methods=["PATCH"])
 def api_annotation_update(ann_id: str) -> Any:
+    """Validate every supplied field before touching the stored annotation."""
     data = request.get_json(silent=True) or {}
     with _manifest_lock:
         ann = find_by_id(_manifest.get("annotations", []), ann_id)
         if ann is None:
             return err(f"No annotation {ann_id}", 404)
+        changes: dict[str, Any] = {}
         if data.get("span") is not None:
             span = _parse_annotation_span(data["span"])
             if span is None:
                 return err("span with start < end is required")
-            ann["span"] = {"start": span[0], "end": span[1]}
+            changes["span"] = {"start": span[0], "end": span[1]}
         if data.get("geometry") is not None:
             geometry = _sanitize_annotation_geometry(ann["type"], data["geometry"])
             if geometry is None:
                 return err("invalid geometry for type " + str(ann["type"]))
-            ann["geometry"] = geometry
+            changes["geometry"] = geometry
         if data.get("style") is not None:
-            ann["style"] = _sanitize_annotation_style(data["style"])
+            changes["style"] = _sanitize_annotation_style(data["style"])
+        ann.update(changes)
         _persist_locked()
         return ok(annotation=copy.deepcopy(ann))
 

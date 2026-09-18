@@ -286,7 +286,7 @@ _TEST_BASELINE: dict[str, int] = {
     "tests/test_workflows_collection_ops.py": 1,
     "tests/test_workflows_executors.py": 15,
     "tests/test_workflows_frontend_source.py": 19,
-    "tests/test_workflows_runner.py": 25,
+    "tests/test_workflows_runner.py": 24,
     "tests/ui/_ui_browser.py": 1,
     "tests/ui/_ui_fixtures.py": 9,
     "tests/ui/_ui_pages.py": 3,

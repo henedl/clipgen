@@ -1,6 +1,7 @@
 # Transcripts bug hunt
 
-Status: two findings verified; fixes pending.
+Status: fixed (2026-09-18). Regressions in `tests/test_transcripts_api.py` and
+`tests/test_js_units.py`.
 
 Scope: inline transcript editing and study-local correction rules. No production
 code or test changes. Separate from the Composer and Workflows hunts.
@@ -38,16 +39,22 @@ not appear saved or partially succeed without feedback.
 
 Implementation plan:
 
-- [ ] Represent insertion and deletion edits without silently dropping diff groups.
-- [ ] Choose contextual replacements or persisted segment edits that preserve the whole submitted text.
-- [ ] Retain intentional study-wide correction behavior and avoid empty-pattern global substitutions.
-- [ ] Add behavioral regressions for insert-only, delete-only, and mixed edits.
-- [ ] Verify the final visible text equals the requested text after a reload.
-- [ ] Exercise editing and reload through existing UI tooling; verify failed saves restore or explain state.
+- [x] Represent insertion and deletion edits without silently dropping diff groups.
+- [x] Choose contextual replacements or persisted segment edits that preserve the whole submitted text.
+- [x] Retain intentional study-wide correction behavior and avoid empty-pattern global substitutions.
+- [x] Add behavioral regressions for insert-only, delete-only, and mixed edits.
+- [x] Verify the final visible text equals the requested text after a reload.
+- [x] Exercise editing and reload through existing UI tooling; verify failed saves restore or explain state.
 
 Coordinate representation changes with the backend: correction creation requires
 nonempty `from` and `to`, and `transcripts.apply_corrections` skips empty values.
 Emitting empty correction halves from JavaScript alone will not fix this.
+
+Landed as: `extractCorrections` keeps insert/delete groups; when any group has
+an empty side, `finishSegmentEditing` saves the whole segment through the
+existing `PUT api/transcript/<pid>/segment` route (which now matches the
+segment's *corrected* text), otherwise the study-wide correction path runs as
+before. Every branch reloads the transcript.
 
 ## 2. Chaining updates only one matching correction
 
@@ -81,12 +88,16 @@ global-correction semantics for other matching occurrences as well.
 
 Implementation plan:
 
-- [ ] Resolve every applicable correction chain deterministically instead of stopping at the first match.
-- [ ] Preserve the submitted replacement's intended effect on raw matching text.
-- [ ] Cover two misspellings converging on one destination, in both insertion orders.
-- [ ] Cover editing the second corrected occurrence and reloading the transcript.
-- [ ] Preserve chain reversal, case-insensitive matching, and literal replacement behavior.
-- [ ] Verify response handling and persistence when more than one rule changes.
+- [x] Resolve every applicable correction chain deterministically instead of stopping at the first match.
+- [x] Preserve the submitted replacement's intended effect on raw matching text.
+- [x] Cover two misspellings converging on one destination, in both insertion orders.
+- [x] Cover editing the second corrected occurrence and reloading the transcript.
+- [x] Preserve chain reversal, case-insensitive matching, and literal replacement behavior.
+- [x] Verify response handling and persistence when more than one rule changes.
+
+Landed as: every rule whose `to` matches the new `from` is rewritten (or deleted
+when it reverts), and the submitted rule is added too unless the POST was a pure revert.
+Response carries `correction`, `removed` and `updated` lists.
 
 ## Verification and handoff
 
