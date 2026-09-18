@@ -89,6 +89,7 @@ from workflows_runner import (  # noqa: F401
     bind_participant,
     blueprint_participant_nodes,
     compute_resume_plan,
+    node_exec_definition,
     inspectable_sidecar_view,
     run_results_dir,
     topo_order,
@@ -465,7 +466,7 @@ def _exec_transcript_export(
         files.release_reservation(output_path)
         return {
             "artifacts": {"artifacts": [], "study": study, "count": 0},
-            "__note__": "Transcript couldn't be written",
+            "__degraded__": "Transcript couldn't be written",
         }
     # "export" routes to the viewer's Attachments pane; "transcript" is a timeline
     # card type.
@@ -485,7 +486,10 @@ def _exec_summarize(
     transcript = inputs.get("transcript") or {}
     segments = transcript.get("segments") or []
     if not llm_client.ensure_server():
-        return {"summary": "", "__note__": "AI server would not start. Summary skipped"}
+        return {
+            "summary": "",
+            "__degraded__": "AI server would not start. Summary skipped",
+        }
     summary = thinking_agents.summarize_transcript(
         segments, model=params.get("model") or None, cancel_event=ctx.cancel_event
     )
@@ -504,7 +508,7 @@ def _exec_citations(
     if not llm_client.ensure_server():
         return {
             "citations": [],
-            "__note__": "AI server would not start. Citations skipped",
+            "__degraded__": "AI server would not start. Citations skipped",
         }
     cites = thinking_agents.find_citations(
         summary,
@@ -528,7 +532,7 @@ def _exec_friction(
     if not llm_client.ensure_server():
         return {
             "friction": [],
-            "__note__": "AI server would not start. Friction skipped",
+            "__degraded__": "AI server would not start. Friction skipped",
         }
     scored = friction.score_segments(segments)
     candidates = friction.select_candidates(scored, config.FRICTION_CANDIDATE_LIMIT)
@@ -542,7 +546,7 @@ def _exec_friction(
     if moments is None:
         # "Didn't run" (model failure / unrenderable candidates) must not read
         # as "ran and found nothing".
-        return {"friction": [], "__note__": "Friction analysis failed. See log"}
+        return {"friction": [], "__degraded__": "Friction analysis failed. See log"}
     return {"friction": moments}
 
 
@@ -558,7 +562,10 @@ def _exec_report(
     if not summary:
         return {"report": "", "__note__": "No summary wired"}
     if not llm_client.ensure_server():
-        return {"report": "", "__note__": "AI server would not start. Report skipped"}
+        return {
+            "report": "",
+            "__degraded__": "AI server would not start. Report skipped",
+        }
     # Same injection seam as the Overview Reports tab; unwired, both lists are empty.
     observation_lines, mark_lines = thinking_agents.report_source_lines(participant)
     text = thinking_agents.build_report(
@@ -570,7 +577,7 @@ def _exec_report(
         cancel_event=ctx.cancel_event,
     )
     if not text:
-        return {"report": "", "__note__": "Report generation failed"}
+        return {"report": "", "__degraded__": "Report generation failed"}
     out: dict[str, Any] = {"report": text}
     if not participant:
         out["__note__"] = "No video wired — the report covers the summary only"
@@ -738,11 +745,10 @@ def _run_ss_detector(
     paths = list(src.get("video_paths") or [])
     tool = screenspace.TOOLS.get(tool_name)
     if not paths or tool is None:
-        note = "No video wired" if not paths else f"Unknown detector: {tool_name}"
-        return {
-            "events": {"events": [], "source": src, "raw_results": []},
-            "__note__": note,
-        }
+        empty = {"events": {"events": [], "source": src, "raw_results": []}}
+        if not paths:
+            return {**empty, "__note__": "No video wired"}
+        return {**empty, "__degraded__": f"Unknown detector: {tool_name}"}
 
     # _resolve_region_coords supplies the full frame when unwired; zero-size coords
     # would silently no-op.
@@ -756,7 +762,7 @@ def _run_ss_detector(
     ):
         return {
             "events": {"events": [], "source": src, "raw_results": []},
-            "__note__": "Couldn't read the reference frame at the given time",
+            "__degraded__": "Couldn't read the reference frame at the given time",
         }
 
     task = screenspace_manifest.create_task(
@@ -1064,7 +1070,7 @@ def _exec_interval_captures(
     if not ranges:
         duration = video_mod.get_file_duration(paths[0]) or 0
         if duration <= 0:
-            return {**empty, "__note__": "Couldn't read the video duration"}
+            return {**empty, "__degraded__": "Couldn't read the video duration"}
         ranges = [(0.0, float(duration))]
 
     # Expand windows into sample points; GIFs get a [t, t+gif_dur] span.
@@ -1139,7 +1145,7 @@ def _exec_timelapse(
     if region_coords["w"] <= 0 or region_coords["h"] <= 0:
         return {
             "artifacts": {"artifacts": [], "study": study, "count": 0},
-            "__note__": "Couldn't read the video",
+            "__degraded__": "Couldn't read the video",
         }
 
     out_format = str(params.get("output_format", "mp4") or "mp4")
@@ -1162,7 +1168,7 @@ def _exec_timelapse(
         files.release_reservation(output_path)
         return {
             "artifacts": {"artifacts": [], "study": study, "count": 0},
-            "__note__": "Timelapse couldn't be generated",
+            "__degraded__": "Timelapse couldn't be generated",
         }
     rec = _attachment_artifact("timelapse", result, src, "Timelapse")
     return {"artifacts": {"artifacts": [rec], "study": study, "count": 1}}
@@ -1655,7 +1661,7 @@ def _exec_data_export(
                     files.release_reservation(prior)
                 return {
                     "artifacts": {"artifacts": [], "study": study, "count": 0},
-                    "__note__": "Export couldn't be written",
+                    "__degraded__": "Export couldn't be written",
                 }
             written.append(output_path)
             records.append(

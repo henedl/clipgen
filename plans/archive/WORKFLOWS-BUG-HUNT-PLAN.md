@@ -1,6 +1,7 @@
 # Workflows bug hunt
 
-Status: four findings verified; fixes pending.
+Status: fixed (2026-09-18). Regressions in `tests/test_workflows_runner.py` and
+`tests/test_workflows_api.py`.
 
 Scope: workflow execution, resume planning, failure status, batches, and arrival
 triggers. No implementation changes. This extends the separate Composer hunt.
@@ -39,14 +40,19 @@ not independently reproduced in this hunt.
 
 Implementation plan:
 
-- [ ] Persist the execution definition needed to validate cached results.
-- [ ] Compare parameters, disabled state, incoming edges, and relevant run options on resume.
-- [ ] Invalidate changed nodes and their descendants while retaining safe reuse elsewhere.
-- [ ] Ensure disabled nodes cannot execute through the seed shortcut.
-- [ ] Add regressions for changed ranges, newly disabled nodes, rewired inputs, and unchanged graphs.
-- [ ] Cover a failed downstream node resumed after an upstream edit through the API.
+- [x] Persist the execution definition needed to validate cached results.
+- [x] Compare parameters, disabled state, incoming edges, and relevant run options on resume.
+- [x] Invalidate changed nodes and their descendants while retaining safe reuse elsewhere.
+- [x] Ensure disabled nodes cannot execute through the seed shortcut.
+- [x] Add regressions for changed ranges, newly disabled nodes, rewired inputs, and unchanged graphs.
+- [x] Cover a failed downstream node resumed after an upstream edit through the API.
 
 Use the new persisted shape directly; do not add schema migrations or legacy readers.
+
+Landed as: sidecars carry an `__exec__` stamp (params, incoming edges, sample
+window) written by `write_node_sidecar`; `compute_resume_plan` re-runs any node
+whose stamp differs or that is now muted, and the runner checks `disabled` and
+gates before accepting a seed.
 
 ## 2. Operational failures become successful, reusable results
 
@@ -80,17 +86,21 @@ misleading: resuming the run can retry that branch while preserving the empty su
 
 Implementation plan:
 
-- [ ] Separate informational executor notes from operational failure outcomes.
-- [ ] Mark AI startup failure as failed or degraded, and propagate that status to the run.
-- [ ] Audit existing failure returns for the same outcome ambiguity, especially failed exports.
-- [ ] Keep genuinely informational notes from becoming false failure reports.
-- [ ] Add a regression using the real summary executor with mocked startup failure.
-- [ ] Verify resume retries the operation after recovery instead of reusing its empty output.
+- [x] Separate informational executor notes from operational failure outcomes.
+- [x] Mark AI startup failure as failed or degraded, and propagate that status to the run.
+- [x] Audit existing failure returns for the same outcome ambiguity, especially failed exports.
+- [x] Keep genuinely informational notes from becoming false failure reports.
+- [x] Add a regression using the real summary executor with mocked startup failure.
+- [x] Verify resume retries the operation after recovery instead of reusing its empty output.
 
 `tests/test_workflows_runner.py::test_executor_note_surfaces_and_is_stripped`
 currently expects a generic note to remain completed. Preserve that distinction
 or deliberately refine the outcome contract; treating every note as failure would
 also misclassify informational results such as an already-seekable video.
+
+Landed as: a second reserved key, `__degraded__`, marks work that could not run;
+`__note__` stays informational. The runner folds `__degraded__` into the node and
+run status, and only `completed` nodes seed a resume.
 
 ## 3. Batch precomputation bypasses closed gates
 
@@ -125,15 +135,18 @@ and output visibility for every participant.
 
 Implementation plan:
 
-- [ ] Exclude control-dependent Sheet Selection nodes from unconditional precomputation.
-- [ ] Apply each child's skip and mute decisions before accepting batch seeds.
-- [ ] Preserve shared caching for independent Sheet Selection sources.
-- [ ] Add closed/open gate regressions comparing normal and batch child runs.
-- [ ] Verify a participant-dependent gate can allow one child and block another.
-- [ ] Verify blocked outputs cannot reach downstream consumers through cached seeds.
+- [x] Exclude control-dependent Sheet Selection nodes from unconditional precomputation.
+- [x] Apply each child's skip and mute decisions before accepting batch seeds.
+- [x] Preserve shared caching for independent Sheet Selection sources.
+- [x] Add closed/open gate regressions comparing normal and batch child runs.
+- [x] Verify a participant-dependent gate can allow one child and block another.
+- [x] Verify blocked outputs cannot reach downstream consumers through cached seeds.
 
 Coordinate the seed-order change with finding 1; this bug also occurs in a fresh
 batch with an unchanged graph, without any resume operation.
+
+Landed as: `_precompute_shared_nodes` skips any cacheable node with an incoming
+edge, and the runner's seed check now follows the mute and gate checks.
 
 ## 4. Arrival triggers ignore recording parts still being copied
 
@@ -167,14 +180,16 @@ polls before the participant is marked seen and launched.
 
 Implementation plan:
 
-- [ ] Fingerprint all ordered video paths, including path identity, size, and modification time.
-- [ ] Restart stability tracking when any part changes, appears, disappears, or cannot be read.
-- [ ] Add multipart regressions for a growing later part and changing path membership.
-- [ ] Verify exactly one launch after all discovered parts stabilize.
-- [ ] Retain single-file behavior and the no-retroactive-launch rule when arming.
+- [x] Fingerprint all ordered video paths, including path identity, size, and modification time.
+- [x] Restart stability tracking when any part changes, appears, disappears, or cannot be read.
+- [x] Add multipart regressions for a growing later part and changing path membership.
+- [x] Verify exactly one launch after all discovered parts stabilize.
+- [x] Retain single-file behavior and the no-retroactive-launch rule when arming.
 
 This fix can cover known parts; identifying a future part that has not appeared
 yet would require a separate arrival/completion contract and is outside this finding.
+
+Landed as: `_stat_videos` fingerprints every part as `(path, size, mtime)`.
 
 ## Verification and handoff
 

@@ -446,6 +446,158 @@ def test_trim_put_rejects_inverted_span(co_client):
     assert resp.status_code == 400
 
 
+@pytest.mark.parametrize(
+    "body",
+    [
+        {"start": -2, "end": -1},  # negative span survived the clamp-after-check
+        {"start": 0, "end": "NaN"},
+        {"start": "Infinity", "end": 5},
+        {"start": 0, "end": "-Infinity"},
+    ],
+)
+def test_trim_put_rejects_invalid_times(co_client, tmp_path, body):
+    """Non-finite or negative spans must not mutate state or emit bare NaN JSON."""
+    key = "sheet:P01:1"
+    assert (
+        co_client.put(
+            f"/composer/api/trims/{key}", json={"start": 1, "end": 2}
+        ).status_code
+        == 200
+    )
+    resp = co_client.put(f"/composer/api/trims/{key}", json=body)
+    assert resp.status_code == 400
+    assert json.loads(resp.data)["ok"] is False  # strict JSON, no NaN literal
+    stored = co_client.get("/composer/api/manifest").get_json()["manifest"]["trims"]
+    assert stored[key]["start"] == 1 and stored[key]["end"] == 2
+    assert _manifest_on_disk(tmp_path)["trims"][key]["end"] == 2
+
+
+@pytest.mark.parametrize("field", ["start", "end"])
+def test_cut_routes_reject_non_finite(co_client, field):
+    body = {"participant": "P01", "start": 1.0, "end": 3.0}
+    body[field] = "NaN"
+    assert co_client.post("/composer/api/cuts", json=body).status_code == 400
+    cut = co_client.post(
+        "/composer/api/cuts", json={"participant": "P01", "start": 1.0, "end": 3.0}
+    ).get_json()["cut"]
+    resp = co_client.patch(f"/composer/api/cuts/{cut['id']}", json={field: "inf"})
+    assert resp.status_code == 400
+
+
+def test_cut_label_patch_keeps_concurrent_time_edit(co_client, monkeypatch):
+    """A label-only PATCH must not write back times it read before the lock.
+
+    The rename is paused inside the duration probe while a timing PATCH
+    lands; the rename then resumes and must leave the new end alone.
+    """
+    import threading
+
+    cut = co_client.post(
+        "/composer/api/cuts", json={"participant": "P01", "start": 1.0, "end": 2.0}
+    ).get_json()["cut"]
+    real_duration = composer_server._participant_duration
+    entered, resume = threading.Event(), threading.Event()
+    calls = {"n": 0}
+
+    def _blocking(participant):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            entered.set()
+            resume.wait(5)
+        return real_duration(participant)
+
+    monkeypatch.setattr(composer_server, "_participant_duration", _blocking)
+    monkeypatch.setattr(composer_server, "_persist_locked", lambda: None)
+
+    results = {}
+
+    bg = co_client.application.test_client()
+
+    def _rename():
+        results["rename"] = bg.patch(
+            f"/composer/api/cuts/{cut['id']}", json={"label": "new", "end": 2.0}
+        ).status_code
+
+    t = threading.Thread(target=_rename)
+    t.start()
+    assert entered.wait(5)
+    other = co_client.patch(f"/composer/api/cuts/{cut['id']}", json={"end": 4.0})
+    assert other.status_code == 200
+    resume.set()
+    t.join(5)
+    assert results["rename"] == 200
+    # Label-only rename never touches times at all: no probe, no rewrite.
+    label_only = co_client.patch(
+        f"/composer/api/cuts/{cut['id']}", json={"label": "final"}
+    ).get_json()["cut"]
+    assert label_only["label"] == "final"
+    assert label_only["start"] == 1.0
+    assert calls["n"] == 2  # both timed PATCHes probed; the label-only one didn't
+
+
+def test_cut_patch_merges_over_current_times(co_client, monkeypatch):
+    """An end-only edit racing a start-only edit keeps both."""
+    import threading
+
+    cut = co_client.post(
+        "/composer/api/cuts", json={"participant": "P01", "start": 1.0, "end": 5.0}
+    ).get_json()["cut"]
+    real_duration = composer_server._participant_duration
+    entered, resume = threading.Event(), threading.Event()
+    first = {"done": False}
+
+    def _blocking(participant):
+        if not first["done"]:
+            first["done"] = True
+            entered.set()
+            resume.wait(5)
+        return real_duration(participant)
+
+    monkeypatch.setattr(composer_server, "_participant_duration", _blocking)
+    bg = co_client.application.test_client()
+    t = threading.Thread(
+        target=lambda: bg.patch(f"/composer/api/cuts/{cut['id']}", json={"end": 8.0})
+    )
+    t.start()
+    assert entered.wait(5)
+    co_client.patch(f"/composer/api/cuts/{cut['id']}", json={"start": 2.0})
+    resume.set()
+    t.join(5)
+    got = co_client.get("/composer/api/manifest").get_json()["manifest"]["cuts"][0]
+    assert (got["start"], got["end"]) == (2.0, 8.0)
+
+
+def test_cut_patch_deleted_during_probe_404s(co_client, monkeypatch):
+    import threading
+
+    cut = co_client.post(
+        "/composer/api/cuts", json={"participant": "P01", "start": 1.0, "end": 5.0}
+    ).get_json()["cut"]
+    entered, resume = threading.Event(), threading.Event()
+
+    def _blocking(participant):
+        entered.set()
+        resume.wait(5)
+        return 20.0
+
+    monkeypatch.setattr(composer_server, "_participant_duration", _blocking)
+    status = {}
+    bg = co_client.application.test_client()
+    t = threading.Thread(
+        target=lambda: status.update(
+            code=bg.patch(
+                f"/composer/api/cuts/{cut['id']}", json={"end": 8.0}
+            ).status_code
+        )
+    )
+    t.start()
+    assert entered.wait(5)
+    assert co_client.delete(f"/composer/api/cuts/{cut['id']}").status_code == 200
+    resume.set()
+    t.join(5)
+    assert status["code"] == 404
+
+
 # ---- Annotations ----
 
 
@@ -479,6 +631,39 @@ def test_annotation_crud_round_trip(co_client, tmp_path):
     deleted = co_client.delete(f"/composer/api/annotations/{ann['id']}").get_json()
     assert deleted["ok"] is True
     assert _manifest_on_disk(tmp_path)["annotations"] == []
+
+
+def test_annotation_rejected_update_leaves_state_untouched(co_client, tmp_path):
+    """A 400 on geometry must not leave a half-applied span in live state."""
+    ann = _make_annotation(co_client, span={"start": 1.0, "end": 2.0})["annotation"]
+    resp = co_client.patch(
+        f"/composer/api/annotations/{ann['id']}",
+        json={"span": {"start": 5.0, "end": 6.0}, "geometry": {"text": ""}},
+    )
+    assert resp.status_code == 400
+    live = co_client.get("/composer/api/manifest").get_json()["manifest"]
+    assert live["annotations"][0]["span"] == {"start": 1.0, "end": 2.0}
+    # A later valid mutation must not flush the rejected span to disk.
+    ok_resp = co_client.patch(
+        f"/composer/api/annotations/{ann['id']}", json={"style": {"color": "#fff"}}
+    )
+    assert ok_resp.status_code == 200
+    on_disk = _manifest_on_disk(tmp_path)["annotations"][0]
+    assert on_disk["span"] == {"start": 1.0, "end": 2.0}
+    # A valid combined update still persists every field.
+    combined = co_client.patch(
+        f"/composer/api/annotations/{ann['id']}",
+        json={
+            "span": {"start": 3.0, "end": 4.0},
+            "geometry": {"x": 0.5, "y": 0.5, "text": "ok"},
+        },
+    ).get_json()["annotation"]
+    assert combined["span"] == {"start": 3.0, "end": 4.0}
+    assert combined["geometry"]["text"] == "ok"
+    assert _manifest_on_disk(tmp_path)["annotations"][0]["span"] == {
+        "start": 3.0,
+        "end": 4.0,
+    }
 
 
 def test_annotation_freehand_and_validation(co_client):

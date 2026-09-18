@@ -1577,9 +1577,29 @@
     }
 
     var corrections = extractCorrections(originalText, newText);
-    if (corrections.length === 0) return;
+    var partial = corrections.some(function (c) { return !c.from || !c.to; });
+    if (corrections.length && !partial) {
+      saveCorrections(corrections);
+      return;
+    }
+    // Insertions and deletions have no from→to rule form; save the whole segment.
+    saveSegmentText(textEl.getAttribute("data-id"), newText);
+  }
 
-    saveCorrections(corrections);
+  function saveSegmentText(segId, text) {
+    var pid = state.selectedParticipant;
+    if (!pid || !segId) return;
+    apiPut("api/transcript/" + encodeURIComponent(pid) + "/segment", { segment_id: segId, text: text })
+      .then(function (data) {
+        showToast(data.ok ? "Segment saved" : (data.error || "Failed to save segment"));
+      }, function () {
+        showToast("Failed to save segment");
+      })
+      .then(function () {
+        if (state.streamingParticipant) return;
+        loadTranscript(pid);
+        loadCorrections();
+      });
   }
 
   function extractCorrections(oldText, newText) {
@@ -1615,7 +1635,7 @@
       }
     }
 
-    // Group consecutive non-equal ops into from→to correction pairs
+    // Group non-equal runs into from→to pairs; pure insert/delete leaves one side empty.
     var corrections = [];
     var k = 0;
     while (k < ops.length) {
@@ -1627,9 +1647,7 @@
           else toParts.push(ops[k].word);
           k++;
         }
-        if (fromParts.length > 0 && toParts.length > 0) {
-          corrections.push({ from: fromParts.join(" "), to: toParts.join(" ") });
-        }
+        corrections.push({ from: fromParts.join(" "), to: toParts.join(" ") });
       } else {
         k++;
       }
@@ -1644,8 +1662,8 @@
       chain = chain.then(function () {
         return apiPost("api/corrections", { from: c.from, to: c.to }).then(function (data) {
           if (data.ok) {
-            if (data.removed) removed++;
-            else if (data.correction) updated++;  // covers both new and updated
+            removed += (data.removed || []).length;
+            updated += (data.updated || []).length + (data.correction ? 1 : 0);
           }
         });
       });
@@ -1664,6 +1682,8 @@
       }
     }).catch(function () {
       showToast("Failed to save correction");
+      // Drop the unsaved edit from the DOM rather than leave it looking saved.
+      if (!state.streamingParticipant && state.selectedParticipant) loadTranscript(state.selectedParticipant);
     });
   }
 

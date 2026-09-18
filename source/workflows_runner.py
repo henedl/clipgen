@@ -28,8 +28,7 @@ from workflows_catalog import ADAPTERS, NODE_TYPES, NodeContext
 RUN_STATUS_QUEUED = "queued"
 RUN_STATUS_RUNNING = "running"
 RUN_STATUS_COMPLETED = "completed"
-# Every node ran, but some result is known incomplete (coercion failed, sidecar
-# unwritten).
+# Every node ran, but a result is known incomplete; never reused as a resume seed.
 RUN_STATUS_DEGRADED = "degraded"
 RUN_STATUS_FAILED = "failed"
 RUN_STATUS_CANCELLED = "cancelled"
@@ -277,17 +276,44 @@ def inspectable_sidecar_view(payload: dict[str, Any]) -> dict[str, Any]:
     return {
         port: val
         for port, val in payload.items()
-        if port != "__type__" and out_types.get(port) in _INSPECTABLE_PORT_TYPES
+        if not port.startswith("__") and out_types.get(port) in _INSPECTABLE_PORT_TYPES
+    }
+
+
+def node_exec_definition(
+    node: dict[str, Any], edges: list[dict[str, Any]], sample_window: float = 0.0
+) -> dict[str, Any]:
+    """What a node's result depends on: params, incoming wiring, sample window.
+
+    Stored in the sidecar as ``__exec__``; resume reuses a result only when the
+    current definition still matches.
+    """
+    nid = node.get("id")
+    inputs = sorted(
+        [str(e.get("from", "")), str(e.get("fromPort", "")), str(e.get("toPort", ""))]
+        for e in edges
+        if e.get("to") == nid
+    )
+    return {
+        "params": copy.deepcopy(node.get("params", {}) or {}),
+        "inputs": inputs,
+        "sampleWindow": float(sample_window or 0.0),
     }
 
 
 def write_node_sidecar(
-    output_dir: Path | str, run_id: str, node_id: str, node_type_id: str, result: Any
+    output_dir: Path | str,
+    run_id: str,
+    node_id: str,
+    node_type_id: str,
+    result: Any,
+    exec_def: dict[str, Any] | None = None,
 ) -> str:
     """Atomically write a node's JSON-safe result ports to its run sidecar.
 
     Persists every ``_SIDECAR_PORT_TYPES`` port plus a self-describing
-    ``__type__`` key (consumed by resume + the read-time inspectable filter).
+    ``__type__`` key and the ``__exec__`` definition (both consumed by resume;
+    the read-time inspectable filter drops every ``__`` key).
     Returns ``"written"`` when a sidecar now exists, ``"empty"`` when there was
     nothing to persist (bad ``node_id`` or no sidecar-able ports — not a problem),
     and ``"failed"`` when the write itself errored. The caller must tell those
@@ -302,6 +328,8 @@ def write_node_sidecar(
     if not payload:
         return "empty"
     payload["__type__"] = node_type_id
+    if exec_def is not None:
+        payload["__exec__"] = exec_def
     path = run_results_dir(output_dir, run_id) / f"{node_id}.json"
     written = utils.write_json_atomic(
         path, utils.sanitize_floats(payload), f"workflow sidecar ({node_id})"
@@ -325,6 +353,7 @@ def compute_resume_plan(
     blueprint: dict[str, Any],
     prior_node_states: dict[str, Any],
     load_sidecar: Callable[[str], dict[str, Any] | None],
+    sample_window: float = 0.0,
 ) -> tuple[dict[str, dict[str, Any]], list[str]]:
     """Plan a resume: which prior-run nodes can be reused as seeds vs. re-run.
 
@@ -333,8 +362,9 @@ def compute_resume_plan(
     ``seed_results`` feeds :class:`WorkflowRunner`'s ``seed_results`` and
     ``notes`` carries human-readable degradation reasons.
 
-    A node re-runs when: it didn't complete in the prior run; its id/type
-    changed since (graph edited between runs); its sidecar is missing or
+    A node re-runs when: it didn't complete in the prior run; it is muted now;
+    its id/type, params, incoming wiring, or sample window changed since (the
+    sidecar's ``__exec__`` no longer matches); its sidecar is missing or
     doesn't cover every declared output port (e.g. clipRecords producers,
     which are never sidecar-persisted); OR any ancestor re-runs (fresh inputs
     invalidate the cached output). Additionally, a re-running ``heatmap``
@@ -355,10 +385,11 @@ def compute_resume_plan(
     notes: list[str] = []
     rerun: set[str] = set()
     seeds: dict[str, dict[str, Any]] = {}
+    edges = list(blueprint.get("edges", []))
     for n in nodes:
         nid = n["id"]
         prior = prior_node_states.get(nid) or {}
-        if prior.get("status") != NODE_STATUS_COMPLETED:
+        if prior.get("status") != NODE_STATUS_COMPLETED or n.get("disabled"):
             rerun.add(nid)
             continue
         payload = load_sidecar(nid)
@@ -368,8 +399,12 @@ def compute_resume_plan(
         if str(payload.get("__type__", "")) != str(n.get("type", "")):
             rerun.add(nid)  # the node changed type since the prior run
             continue
+        if payload.get("__exec__") != node_exec_definition(n, edges, sample_window):
+            rerun.add(nid)  # params / wiring / sample window changed
+            notes.append(f"{nid} changed since the prior run")
+            continue
         declared = (NODE_TYPES.get(str(n.get("type", ""))) or {}).get("outputs", [])
-        stored = {k: v for k, v in payload.items() if k != "__type__"}
+        stored = {k: v for k, v in payload.items() if not k.startswith("__")}
         if not declared or any(p["name"] not in stored for p in declared):
             # A missing port would hand downstream None; re-run instead.
             rerun.add(nid)
@@ -514,6 +549,9 @@ class WorkflowRunner:
             seen.add(nid)
             stack.extend(self._deps(nid))
         return seen
+
+    def _exec_definition(self, node: dict[str, Any]) -> dict[str, Any]:
+        return node_exec_definition(node, self.edges, self.sample_window)
 
     def _gate_blocks(self, node_id: str) -> bool:
         """True if ``node_id`` is a gate that completed with ``pass`` False."""
@@ -695,8 +733,19 @@ class WorkflowRunner:
                     node_id, status=NODE_STATUS_SKIPPED, completed_at=_now_iso()
                 )
                 continue
-            # Seed check precedes the mute/skip gates: a resume seed survives a
-            # skipped upstream re-run.
+            # Mute and gate checks precede the seed check: a seed never bypasses either.
+            if node.get("disabled"):
+                self._set_node(
+                    node_id, status=NODE_STATUS_SKIPPED, completed_at=_now_iso()
+                )
+                self._notify(force=True)
+                continue
+            if self._should_skip(node_id):
+                self._set_node(
+                    node_id, status=NODE_STATUS_SKIPPED, completed_at=_now_iso()
+                )
+                self._notify(force=True)
+                continue
             if node_id in self._seed_results:
                 seeded = self._seed_results[node_id]
                 with self._lock:
@@ -704,7 +753,12 @@ class WorkflowRunner:
                 # Every write_node_sidecar return is a truthy string; only "written"
                 # means a sidecar exists.
                 sidecar = write_node_sidecar(
-                    self.ctx.output_dir, self.run_id, node_id, node["type"], seeded
+                    self.ctx.output_dir,
+                    self.run_id,
+                    node_id,
+                    node["type"],
+                    seeded,
+                    self._exec_definition(node),
                 )
                 if sidecar == "written" and _inspectable_result(node["type"], seeded):
                     with self._lock:
@@ -722,21 +776,6 @@ class WorkflowRunner:
                     progress=1.0,
                     completed_at=_now_iso(),
                     note="; ".join(seed_notes) if seed_notes else None,
-                )
-                self._notify(force=True)
-                continue
-
-            # Muted nodes skip; _should_skip then propagates SKIPPED downstream like
-            # a blocking gate.
-            if node.get("disabled"):
-                self._set_node(
-                    node_id, status=NODE_STATUS_SKIPPED, completed_at=_now_iso()
-                )
-                self._notify(force=True)
-                continue
-            if self._should_skip(node_id):
-                self._set_node(
-                    node_id, status=NODE_STATUS_SKIPPED, completed_at=_now_iso()
                 )
                 self._notify(force=True)
                 continue
@@ -765,25 +804,33 @@ class WorkflowRunner:
                 with profiling.span(f"workflows.node {node['type']}"):
                     result = executor(self.ctx, inputs, params)
                 result = result if isinstance(result, dict) else {}
-                # Reserved ``__note__`` flags a non-fatal degraded outcome; shown on
-                # the node, never a port.
+                # Reserved keys shown on the node, never a port: informational note or
+                # degraded reason.
                 notes = list(input_notes)
                 exec_note = result.pop("__note__", None)
                 if exec_note:
                     notes.append(str(exec_note))
+                exec_degraded = result.pop("__degraded__", None)
+                if exec_degraded:
+                    notes.append(str(exec_degraded))
                 with self._lock:
                     self._results[node_id] = result
                 # Persist JSON-safe ports for resume and the inspector, outliving
                 # this runner; ``hasResult`` only when renderable.
                 sidecar = write_node_sidecar(
-                    self.ctx.output_dir, self.run_id, node_id, node["type"], result
+                    self.ctx.output_dir,
+                    self.run_id,
+                    node_id,
+                    node["type"],
+                    result,
+                    self._exec_definition(node),
                 )
                 if sidecar == "written" and _inspectable_result(node["type"], result):
                     with self._lock:
                         self._sidecars.add(node_id)
                 if sidecar == "failed":
                     notes.append("Result sidecar could not be written")
-                degraded = inputs_degraded or sidecar == "failed"
+                degraded = bool(exec_degraded) or inputs_degraded or sidecar == "failed"
                 self._set_node(
                     node_id,
                     status=(

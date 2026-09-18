@@ -554,30 +554,55 @@
     syncUndoButtons();
   }
 
-  // A re-created cut gets a fresh server id; store it for the paired op.
+  // Re-creation assigns a fresh server id; rewrite every stacked op naming the old one.
+  function remapHistoryId(oldId, newId) {
+    if (!oldId || oldId === newId) return;
+    function walk(op) {
+      if (op.type === "edit" || op.type === "ann-edit") {
+        if (op.id === oldId) op.id = newId;
+      } else if (op.type === "create" || op.type === "delete") {
+        if (op.cut.id === oldId) op.cut.id = newId;
+      } else if (op.type === "ann-create" || op.type === "ann-delete") {
+        if (op.annotation.id === oldId) op.annotation.id = newId;
+      } else if (op.type === "ann-group") {
+        op.ops.forEach(walk);
+      }
+    }
+    _undoStack.forEach(walk);
+    _redoStack.forEach(walk);
+  }
+
+  function recreateCut(op) {
+    var oldId = op.cut.id;
+    return applyCreate(op.cut).then(function (cut) {
+      remapHistoryId(oldId, cut.id);
+      op.cut = cut;
+    });
+  }
+
+  function recreateAnnotation(op) {
+    var oldId = op.annotation.id;
+    return applyAnnCreate(op.annotation).then(function (ann) {
+      remapHistoryId(oldId, ann.id);
+      op.annotation = ann;
+    });
+  }
+
   function applyOp(op, isUndo) {
     if (op.type === "create") {
-      return isUndo
-        ? applyDelete(op.cut.id)
-        : applyCreate(op.cut).then(function (cut) { op.cut = cut; });
+      return isUndo ? applyDelete(op.cut.id) : recreateCut(op);
     }
     if (op.type === "delete") {
-      return isUndo
-        ? applyCreate(op.cut).then(function (cut) { op.cut = cut; })
-        : applyDelete(op.cut.id);
+      return isUndo ? recreateCut(op) : applyDelete(op.cut.id);
     }
     if (op.type === "trim") {
       return applyTrim(op.key, isUndo ? op.before : op.after);
     }
     if (op.type === "ann-create") {
-      return isUndo
-        ? applyAnnDelete(op.annotation.id)
-        : applyAnnCreate(op.annotation).then(function (ann) { op.annotation = ann; });
+      return isUndo ? applyAnnDelete(op.annotation.id) : recreateAnnotation(op);
     }
     if (op.type === "ann-delete") {
-      return isUndo
-        ? applyAnnCreate(op.annotation).then(function (ann) { op.annotation = ann; })
-        : applyAnnDelete(op.annotation.id);
+      return isUndo ? recreateAnnotation(op) : applyAnnDelete(op.annotation.id);
     }
     if (op.type === "ann-edit") {
       var payload = {};

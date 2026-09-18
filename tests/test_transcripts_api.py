@@ -4396,3 +4396,105 @@ def test_merge_strips_speakers_from_a_transcription_after_disable(monkeypatch):
     assert merged["segments"][0]["text"] == "fresh"
     assert "speaker" not in merged["segments"][0]
     assert merged["speakers"] == {"enabled": False}
+
+
+# ---- Corrections chaining + whole-segment edits ----
+
+
+def _corrections_pairs(tr_client):
+    rows = tr_client.get("/transcripts/api/corrections").get_json()["corrections"]
+    return sorted((c["from"], c["to"]) for c in rows)
+
+
+@pytest.mark.parametrize("order", [("teh", "hte"), ("hte", "teh")])
+def test_corrections_chain_rewrites_every_matching_rule(tr_client, monkeypatch, order):
+    """Two misspellings converging on one word must both follow a later edit,
+    and raw text already reading that word must be corrected as well."""
+    monkeypatch.setattr(transcripts_server, "_schedule_persist", lambda: None)
+    transcripts_server._manifest["source_transcripts"]["P01"] = {
+        "segments": [{"id": "P01:0", "start": 0.0, "end": 1.0, "text": "teh hte the"}],
+    }
+    for word in order:
+        assert (
+            tr_client.post(
+                "/transcripts/api/corrections", json={"from": word, "to": "the"}
+            ).status_code
+            == 200
+        )
+    resp = tr_client.post(
+        "/transcripts/api/corrections", json={"from": "the", "to": "they"}
+    )
+    body = resp.get_json()
+    assert resp.status_code == 200
+    assert len(body["updated"]) == 2 and body["removed"] == []
+    assert body["correction"]["from"] == "the"
+    assert _corrections_pairs(tr_client) == [
+        ("hte", "they"),
+        ("teh", "they"),
+        ("the", "they"),
+    ]
+    seg = tr_client.get("/transcripts/api/transcript/P01").get_json()["segments"][0]
+    assert seg["text"] == "they they they"
+
+
+def test_corrections_revert_deletes_without_adding(tr_client, monkeypatch):
+    monkeypatch.setattr(transcripts_server, "_schedule_persist", lambda: None)
+    transcripts_server._manifest["source_transcripts"]["P01"] = {
+        "segments": [{"id": "P01:0", "start": 0.0, "end": 1.0, "text": "teh the"}],
+    }
+    tr_client.post("/transcripts/api/corrections", json={"from": "teh", "to": "the"})
+    body = tr_client.post(
+        "/transcripts/api/corrections", json={"from": "the", "to": "teh"}
+    ).get_json()
+    assert len(body["removed"]) == 1 and body["correction"] is None
+    assert _corrections_pairs(tr_client) == []
+    seg = tr_client.get("/transcripts/api/transcript/P01").get_json()["segments"][0]
+    assert seg["text"] == "teh the"
+
+
+def test_corrections_mixed_revert_still_adds_submitted_pair(tr_client, monkeypatch):
+    """Reverting one rule while rewriting another is a global edit, so the
+    submitted pair must land too and correct raw occurrences of the word."""
+    monkeypatch.setattr(transcripts_server, "_schedule_persist", lambda: None)
+    transcripts_server._manifest["source_transcripts"]["P01"] = {
+        "segments": [{"id": "P01:0", "start": 0.0, "end": 1.0, "text": "teh hte the"}],
+    }
+    tr_client.post("/transcripts/api/corrections", json={"from": "teh", "to": "the"})
+    tr_client.post("/transcripts/api/corrections", json={"from": "hte", "to": "the"})
+    body = tr_client.post(
+        "/transcripts/api/corrections", json={"from": "the", "to": "teh"}
+    ).get_json()
+    assert len(body["removed"]) == 1 and len(body["updated"]) == 1
+    assert body["correction"]["from"] == "the"
+    assert _corrections_pairs(tr_client) == [("hte", "teh"), ("the", "teh")]
+    seg = tr_client.get("/transcripts/api/transcript/P01").get_json()["segments"][0]
+    assert seg["text"] == "teh teh teh"
+
+
+def test_corrections_duplicate_rule_is_not_added_twice(tr_client, monkeypatch):
+    monkeypatch.setattr(transcripts_server, "_schedule_persist", lambda: None)
+    for _ in range(2):
+        tr_client.post(
+            "/transcripts/api/corrections", json={"from": "teh", "to": "the"}
+        )
+    assert _corrections_pairs(tr_client) == [("teh", "the")]
+
+
+def test_edit_segment_matches_already_corrected_text(tr_client, monkeypatch):
+    """A whole-segment edit lands after word rules, so it must match the text
+    those rules produce — the text the user actually edited."""
+    monkeypatch.setattr(transcripts_server, "_schedule_persist", lambda: None)
+    transcripts_server._manifest["source_transcripts"]["P01"] = {
+        "segments": [
+            {"id": "P01:0", "start": 0.0, "end": 1.0, "text": "I like teh cat"}
+        ],
+    }
+    tr_client.post("/transcripts/api/corrections", json={"from": "teh", "to": "the"})
+    resp = tr_client.put(
+        "/transcripts/api/transcript/P01/segment",
+        json={"segment_id": "P01:0", "text": "I really like the cat"},
+    )
+    assert resp.status_code == 200
+    assert resp.get_json()["correction"]["from"] == "I like the cat"
+    seg = tr_client.get("/transcripts/api/transcript/P01").get_json()["segments"][0]
+    assert seg["text"] == "I really like the cat"

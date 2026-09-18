@@ -420,10 +420,10 @@ def test_thinking_executors_empty_when_llm_unavailable(tmp_path, monkeypatch):
     assert summarize["summary"] == ""
     assert citations["citations"] == []
     assert friction["friction"] == []
-    # Degraded-but-completed: a __note__ explains the empty output (AI server down).
-    assert "AI server" in summarize["__note__"]
-    assert "AI server" in citations["__note__"]
-    assert "AI server" in friction["__note__"]
+    # Work that could not run is __degraded__ (retried on resume), not a note.
+    assert "AI server" in summarize["__degraded__"]
+    assert "AI server" in citations["__degraded__"]
+    assert "AI server" in friction["__degraded__"]
 
 
 def test_make_clips_notes_when_nothing_wired(tmp_path):
@@ -1516,7 +1516,7 @@ def test_data_export_partial_write_failure_rolls_back(tmp_path, monkeypatch):
     }
     out = _run("data_export", _ctx(tmp_path), {"events": events_in}, {"format": "both"})
     assert out["artifacts"]["artifacts"] == []
-    assert "__note__" in out
+    assert "__degraded__" in out
     # Neither the failed CSV nor the previously-written JSON remains.
     assert not (tmp_path / "export_events_P01.json").exists()
     assert not (tmp_path / "export_events_P01.csv").exists()
