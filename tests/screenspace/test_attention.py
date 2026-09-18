@@ -1,5 +1,8 @@
 """Tests for the Attention tool: saliency primitives, scan, heatmaps, events."""
 
+import itertools
+from unittest.mock import Mock
+
 import cv2
 import numpy as np
 import pytest
@@ -195,6 +198,57 @@ class TestChannels:
 
 
 class TestSaliencyMap:
+    @pytest.mark.parametrize("enabled", itertools.product((False, True), repeat=4))
+    def test_disabled_channels_match(self, monkeypatch, enabled):
+        """Skipping channels preserves the previous weighted calculation exactly."""
+        rng = np.random.default_rng(23)
+        frame = rng.integers(0, 256, (31, 43, 3), dtype=np.uint8)
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        prev = rng.integers(0, 256, gray.shape, dtype=np.uint8)
+        maps = {
+            "spectral": screenspace.compute_spectral_residual(gray),
+            "contrast": screenspace.compute_color_contrast(frame),
+            "motion": screenspace.compute_motion_saliency(prev, gray),
+            "face": rng.random(gray.shape, dtype=np.float32),
+        }
+        weights = {
+            key: weight if active else 0.0
+            for key, weight, active in zip(
+                maps, (1.0, 0.7, 1.2, 0.8), enabled, strict=True
+            )
+        }
+        expected = weights["spectral"] * maps["spectral"]
+        for key in ("contrast", "motion", "face"):
+            expected += weights[key] * maps[key]
+        if sum(weights.values()) > 0:
+            expected /= sum(weights.values())
+        expected *= screenspace_primitives._center_prior(gray.shape, 0.25)
+        expected = np.clip(expected, 0.0, 1.0).astype(np.float32)
+
+        callbacks = {}
+        for key, name in (
+            ("spectral", "compute_spectral_residual"),
+            ("contrast", "compute_color_contrast"),
+            ("motion", "compute_motion_saliency"),
+            ("face", "compute_face_saliency"),
+        ):
+            callbacks[key] = Mock(return_value=maps[key])
+            monkeypatch.setattr(screenspace_primitives, name, callbacks[key])
+        available = Mock(return_value=True)
+        monkeypatch.setattr(
+            screenspace_primitives, "face_detection_available", available
+        )
+
+        actual, actual_gray = screenspace.compute_saliency_map(
+            frame, prev, weights=weights, center_bias=0.25, include_face=True
+        )
+        np.testing.assert_array_equal(actual, expected)
+        np.testing.assert_array_equal(actual_gray, gray)
+        assert actual.dtype == np.float32
+        for key, callback in callbacks.items():
+            assert callback.call_count == int(weights[key] != 0.0)
+        assert available.call_count == int(weights["face"] != 0.0)
+
     def test_peak_lands_on_bright_patch(self):
         frame = _bright_patch_frame()
         sal, curr_gray = screenspace.compute_saliency_map(

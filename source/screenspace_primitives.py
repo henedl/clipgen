@@ -1856,21 +1856,27 @@ def compute_saliency_map(
         center_bias = config.SCREENSPACE_ATTENTION_CENTER_BIAS
     if include_face is None:
         include_face = config.SCREENSPACE_ATTENTION_FACE_CHANNEL
+    if include_face and weights.get("face", 0.0) == 0.0:
+        include_face = False
     if include_face and not face_detection_available():
-        # No CascadeClassifier: drop the face weight from the denominator so zeros don't dim the map.
+        # Unavailable face detection must not dilute the other channels.
         include_face = False
 
     curr_gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
-    combined = weights.get("spectral", 0.0) * compute_spectral_residual(curr_gray)
-    combined += weights.get("contrast", 0.0) * compute_color_contrast(bgr)
-    combined += weights.get("motion", 0.0) * compute_motion_saliency(
-        prev_gray, curr_gray
+    spectral = weights.get("spectral", 0.0)
+    contrast = weights.get("contrast", 0.0)
+    motion = weights.get("motion", 0.0)
+    # Zero-weight channels contribute nothing; avoid their filters and model loading.
+    combined = (
+        spectral * compute_spectral_residual(curr_gray)
+        if spectral != 0.0
+        else np.zeros(curr_gray.shape, dtype=np.float32)
     )
-    total = (
-        weights.get("spectral", 0.0)
-        + weights.get("contrast", 0.0)
-        + weights.get("motion", 0.0)
-    )
+    if contrast != 0.0:
+        combined += contrast * compute_color_contrast(bgr)
+    if motion != 0.0:
+        combined += motion * compute_motion_saliency(prev_gray, curr_gray)
+    total = spectral + contrast + motion
     if include_face:
         combined += weights.get("face", 0.0) * compute_face_saliency(curr_gray)
         total += weights.get("face", 0.0)
