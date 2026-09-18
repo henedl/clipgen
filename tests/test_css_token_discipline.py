@@ -44,6 +44,11 @@ _SCOPED_OVERRIDES = {
     "topnav.css": {"--topnav-height"},  # desktop-chrome height override
 }
 
+# Raw cubic-bezier() counts; shared curves are the --ease-* tokens.
+_EASING_BASELINE = {
+    "start-overlay.css": 6,  # bespoke tool-tile artwork loops
+}
+
 _PROP = re.compile(
     r"^\s*(margin(?:-[a-z]+)?|padding(?:-[a-z]+)?|gap|row-gap|column-gap"
     r"|font-size|border-radius|box-shadow)\s*:",
@@ -98,6 +103,15 @@ def test_no_new_raw_design_values():
     assert not shrank, "nice — fewer raw values; ratchet _BASELINE down:\n" + "\n".join(
         shrank
     )
+
+
+def test_no_new_raw_easing_curves():
+    """Inline cubic-bezier() may not grow; use an --ease-* token."""
+    for name, css in _page_css():
+        actual = css.count("cubic-bezier(")
+        frozen = _EASING_BASELINE.get(name, 0)
+        assert actual <= frozen, f"{name}: {actual} raw curves (baseline {frozen})"
+        assert actual >= frozen, f"{name}: ratchet _EASING_BASELINE to {actual}"
 
 
 def test_baseline_has_no_dead_entries():

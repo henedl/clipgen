@@ -73,8 +73,8 @@
   opacity: 0;
   transform: translateY(12px) scale(0.985);
   transition:
-    opacity 460ms cubic-bezier(.22, 1, .36, 1),
-    transform 460ms cubic-bezier(.22, 1, .36, 1);
+    opacity 460ms var(--ease-out),
+    transform 460ms var(--ease-out);
 }
 
 .start-panel.is-in {
@@ -136,7 +136,7 @@
 }
 
 .start-overlay .panel-close:active {
-  transform: scale(0.94);
+  transform: scale(var(--scale-press));
 }
 
 /* ---- Cascade-in animation ------------------------------------------ */
@@ -145,8 +145,8 @@
   opacity: 0;
   transform: translateY(8px);
   transition:
-    opacity 420ms cubic-bezier(.22, 1, .36, 1),
-    transform 420ms cubic-bezier(.22, 1, .36, 1);
+    opacity 420ms var(--ease-out),
+    transform 420ms var(--ease-out);
 }
 
 .start-overlay .cascade-in.is-in {
@@ -294,7 +294,7 @@
   line-height: 1;
   color: var(--fg);
   opacity: 0;
-  animation: start-overlay-wordmark 500ms cubic-bezier(.22, 1, .36, 1) 360ms forwards;
+  animation: start-overlay-wordmark 500ms var(--ease-out) 360ms forwards;
 }
 
 @keyframes start-overlay-wordmark {
@@ -339,7 +339,7 @@
   backdrop-filter: blur(18px) saturate(1.2);
   box-shadow: var(--shadow-xl);
   transform-origin: bottom center;
-  animation: rail-recents-in var(--duration-normal) cubic-bezier(.22, 1, .36, 1);
+  animation: rail-recents-in var(--duration-normal) var(--ease-out);
 }
 
 @supports not (backdrop-filter: blur(1px)) {
@@ -672,7 +672,7 @@
 /* Same idea as overview.css .tab-slide-enter: the newly revealed panel eases
  * in, so switching tabs reads as a move rather than a repaint. */
 .start-overlay .start-tabpanel.is-entering .start-tabpanel__scroll {
-  animation: so-tab-enter 220ms cubic-bezier(.22, 1, .36, 1);
+  animation: so-tab-enter 220ms var(--ease-out);
 }
 
 @keyframes so-tab-enter {
@@ -1627,7 +1627,7 @@
   transform: translateX(0);
   opacity: 0;
   transition:
-    transform 700ms cubic-bezier(.22, 1, .36, 1),
+    transform 700ms var(--ease-out),
     opacity 500ms ease-out;
 }
 
@@ -1660,7 +1660,7 @@
 .start-overlay .art-screenspace__box {
   stroke-dasharray: 4 3;
   stroke-dashoffset: 0;
-  transition: stroke-dashoffset 700ms cubic-bezier(.22, 1, .36, 1);
+  transition: stroke-dashoffset 700ms var(--ease-out);
 }
 
 .start-overlay .tool-tile:hover .art-screenspace__box {
@@ -1689,8 +1689,8 @@
   width: 68px;
   height: 20px;
   transition:
-    width 700ms cubic-bezier(.22, 1, .36, 1),
-    height 700ms cubic-bezier(.22, 1, .36, 1),
+    width 700ms var(--ease-out),
+    height 700ms var(--ease-out),
     opacity 500ms ease-out;
 }
 
@@ -1713,7 +1713,7 @@
   opacity: 0;
   pointer-events: none;
   transition:
-    transform 700ms cubic-bezier(.22, 1, .36, 1),
+    transform 700ms var(--ease-out),
     opacity 500ms ease-out;
 }
 
@@ -1735,7 +1735,7 @@
   transform: translateX(-6px);
   opacity: 0;
   transition:
-    transform 700ms cubic-bezier(.22, 1, .36, 1),
+    transform 700ms var(--ease-out),
     opacity 500ms ease-out;
 }
 
@@ -1753,7 +1753,7 @@
 .start-overlay .art-transcripts__line-fill {
   transform-origin: left;
   transform: scaleX(0);
-  transition: transform 700ms cubic-bezier(.22, 1, .36, 1);
+  transition: transform 700ms var(--ease-out);
 }
 
 .start-overlay .tool-tile:hover .art-transcripts__line-fill {

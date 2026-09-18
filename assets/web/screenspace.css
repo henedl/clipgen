@@ -745,9 +745,9 @@ body {
   grid-template-columns: 1fr;
   align-items: center;
   flex-shrink: 0;
-  transition: grid-template-columns var(--duration-normal) cubic-bezier(0.3, 0.9, 0.35, 1),
-              opacity var(--duration-normal) cubic-bezier(0.3, 0.9, 0.35, 1),
-              margin-left var(--duration-normal) cubic-bezier(0.3, 0.9, 0.35, 1),
+  transition: grid-template-columns var(--duration-normal) var(--ease-slide),
+              opacity var(--duration-normal) var(--ease-slide),
+              margin-left var(--duration-normal) var(--ease-slide),
               visibility var(--duration-normal);
 }
 
@@ -3825,12 +3825,17 @@ body.panel-dragging #bottomPanel {
   border-radius: var(--radius-sm);
   color: var(--color-text-dim);
   cursor: pointer;
-  transition: background var(--duration-fast), color var(--duration-fast);
+  transition: background var(--duration-fast), color var(--duration-fast), transform var(--duration-instant);
 }
 
 .rp-icon-btn:hover {
   background: rgba(59, 130, 246, 0.1);
   color: var(--color-accent);
+}
+
+/* Press feedback; ungated by reduced motion like every press affordance. */
+.rp-icon-btn:active:not(:disabled) {
+  transform: scale(var(--scale-press));
 }
 
 .rp-icon-btn.active {

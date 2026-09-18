@@ -34,7 +34,7 @@
   cursor: pointer;
   user-select: none;
   white-space: nowrap;
-  transition: background-color var(--duration-instant) ease-out, border-color var(--duration-instant) ease-out, color var(--duration-instant) ease-out;
+  transition: background-color var(--duration-instant) ease-out, border-color var(--duration-instant) ease-out, color var(--duration-instant) ease-out, transform var(--duration-instant);
 }
 .filter-chip:hover {
   border-color: var(--border-strong);
@@ -93,7 +93,7 @@
   font-size: 11px;
   cursor: pointer;
   user-select: none;
-  transition: background-color var(--duration-instant) ease-out, border-color var(--duration-instant) ease-out, color var(--duration-instant) ease-out;
+  transition: background-color var(--duration-instant) ease-out, border-color var(--duration-instant) ease-out, color var(--duration-instant) ease-out, transform var(--duration-instant);
 }
 .participant-pill:hover {
   background: var(--bg-hover);
@@ -203,7 +203,7 @@
   line-height: 1;
   cursor: pointer;
   user-select: none;
-  transition: background-color var(--duration-instant) ease-out, border-color var(--duration-instant) ease-out, color var(--duration-instant) ease-out;
+  transition: background-color var(--duration-instant) ease-out, border-color var(--duration-instant) ease-out, color var(--duration-instant) ease-out, transform var(--duration-instant);
 }
 .cg-btn:hover { background: var(--bg-hover); }
 .cg-btn:focus-visible {
@@ -213,6 +213,13 @@
 .cg-btn:disabled {
   opacity: 0.5;
   cursor: not-allowed;
+}
+
+/* Press feedback; ungated by reduced motion like every press affordance. */
+.cg-btn:active:not(:disabled),
+.filter-chip:active:not(:disabled),
+.participant-pill:active:not(:disabled) {
+  transform: scale(var(--scale-press));
 }
 
 .cg-btn-sm { height: 24px; padding: 0 8px; font-size: 11.5px; }
