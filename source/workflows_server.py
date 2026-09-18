@@ -517,10 +517,17 @@ def _launch_run(
     with _runs_lock:
         _runs[run_id] = runner
     _persist_run(runner.snapshot())
+    profiling.op_open(
+        "workflow_run",
+        op_id=run_id,
+        meta={"blueprint": str(blueprint.get("id", "")), "participant": participant},
+    )
 
     def _run_and_finalize() -> None:
         try:
-            runner.run()
+            with profiling.op_run(run_id, kind="workflow_run"):
+                runner.run()
+                profiling.op_outcome(run_id, runner.status)
         finally:
             _persist_run(runner.snapshot())
             _notify_run_clients(run_id)
@@ -846,7 +853,14 @@ def _run_batch_child(
         if batch_cancel.is_set():
             runner.cancel()
     try:
-        runner.run()
+        with profiling.op_run(
+            run_id,
+            kind="workflow_run",
+            parent=batch_id,
+            meta={"participant": participant},
+        ):
+            runner.run()
+            profiling.op_outcome(run_id, runner.status)
     except Exception as exc:  # belt-and-suspenders; run() catches per node
         utils.error_print(f"workflow batch child {participant} crashed: {exc}")
     _persist_run(runner.snapshot())
@@ -882,7 +896,11 @@ def _run_batch(batch_id: str, blueprint: dict[str, Any]) -> None:
 
     workers = max(1, min(4, int(config.WORKFLOWS_BATCH_WORKERS or 1)))
     _child = profiling.timed("workflows.batch_child")(_run_batch_child)
-    with profiling.span("workflows.batch_wall"):
+    with (
+        profiling.op_run(batch_id, kind="workflow_batch"),
+        profiling.span("workflows.batch_wall"),
+    ):
+        _child = profiling.bind(_child)
         if workers == 1 or len(plan) <= 1:
             for run_id, participant in plan:
                 _child(
@@ -951,6 +969,12 @@ def api_batch_create() -> Any:
             "cancel_event": threading.Event(),
             "createdAt": datetime.now(UTC).isoformat(),
         }
+    profiling.op_open(
+        "workflow_batch",
+        op_id=batch_id,
+        work=len(participants),
+        meta={"blueprint": bp_id},
+    )
 
     threading.Thread(
         target=_run_batch,

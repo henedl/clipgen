@@ -79,6 +79,8 @@ def build_init_script(theme: str = "dark", *, dismiss_start: bool = True) -> str
         f" localStorage.setItem('clipgen-theme', '{theme}');"
         "} catch (e) {}"
         "window.CLIPGEN_DEV_TOKEN_TWEAK = false;"
+        # Chromium keeps 250 resource entries; a soak's polls would fall off.
+        "try { performance.setResourceTimingBufferSize(10000); } catch (e) {}"
     )
 
 

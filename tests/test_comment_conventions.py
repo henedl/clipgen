@@ -257,7 +257,7 @@ _TEST_BASELINE: dict[str, int] = {
     "tests/test_packaging.py": 4,
     "tests/test_participant_merge.py": 5,
     "tests/test_pipeline_io.py": 2,
-    "tests/test_profiling.py": 7,
+    "tests/test_profiling.py": 6,
     "tests/test_resource_lifecycle.py": 1,
     "tests/test_screenspace_api.py": 15,
     "tests/test_screenspace_preview.py": 5,

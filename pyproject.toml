@@ -86,7 +86,8 @@ override-dependencies = [
 # and is not a package"). Our directory is `source`, so say it explicitly or
 # every first-party import comes back unresolved. `.` stays on the list so the
 # root `clipgen.py` launcher is still checked.
-root = [".", "./source"]
+# `tests/perf` holds the bench modules `tests/ui/ui_bench.py` imports by bare name.
+root = [".", "./source", "./tests/perf"]
 
 [tool.ruff]
 # Ruff 0.16 enables ~413 rules by default (up from 59 in 0.15). We run those defaults

@@ -1086,6 +1086,7 @@ def _process_intake_item(
     return artifact
 
 
+@profiling.scoped("intake", work_of=lambda items, *a, **k: len(items))
 def _generate_intake_clips(
     items: list[dict[str, Any]],
     output_format: str = "clip",
@@ -1113,7 +1114,7 @@ def _generate_intake_clips(
 
     results: list[dict[str, Any]] = [{} for _ in items]
     # See pipeline._parallel_map_ordered for what this label pair buys.
-    _worker = profiling.timed("pipeline.clip")(_process_intake_item)
+    _worker = profiling.bind(profiling.timed("pipeline.clip")(_process_intake_item))
     with (
         profiling.span("pipeline.pool_wall"),
         concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool,
@@ -1658,7 +1659,9 @@ def api_generate() -> FlaskResponse:
             workers = pipeline._resolve_clip_workers()
             # Same labels as pipeline._parallel_map_ordered: CLIP_PARALLEL_WORKERS
             # drives this pool too.
-            _worker = profiling.timed("pipeline.clip")(_generate_and_persist)
+            _worker = profiling.bind(
+                profiling.timed("pipeline.clip")(_generate_and_persist)
+            )
             if workers >= 2 and len(to_generate) >= 2:
                 with (
                     profiling.span("pipeline.pool_wall"),
@@ -1740,7 +1743,13 @@ def api_generate() -> FlaskResponse:
             _save_manifest_quiet()
             _release_busy("generate", token)
 
-    response = ndjson_response(stream_with_busy_release())
+    response = ndjson_response(
+        profiling.op_stream(
+            stream_with_busy_release(),
+            kind="generate",
+            work=total_artifacts or len(cell_strings),
+        )
+    )
     # Covers an unstarted generator; the token makes the double release safe.
     response.call_on_close(lambda: _release_busy("generate", token))
     return response
@@ -2698,7 +2707,9 @@ def api_generate_intake() -> FlaskResponse:
             workers = pipeline._resolve_clip_workers()
             # Same labels as pipeline._parallel_map_ordered: CLIP_PARALLEL_WORKERS
             # drives this pool too.
-            _worker = profiling.timed("pipeline.clip")(_process_intake_item)
+            _worker = profiling.bind(
+                profiling.timed("pipeline.clip")(_process_intake_item)
+            )
             if workers >= 2 and len(items) >= 2:
                 with (
                     profiling.span("pipeline.pool_wall"),
@@ -2756,7 +2767,9 @@ def api_generate_intake() -> FlaskResponse:
             _save_manifest_quiet()
             _mark_intake_active(False)
 
-    return ndjson_response(stream())
+    return ndjson_response(
+        profiling.op_stream(stream(), kind="intake", work=len(items))
+    )
 
 
 @studio_bp.route("/api/reel-direct", methods=["POST"])
@@ -3497,7 +3510,10 @@ def _profile_request_end(response):
     response size rides along as ``bytes=`` so a cheap-but-bloated poll shows.
     """
     t0 = getattr(g, "_prof_t0", None)
-    if t0 is not None and request.url_rule is not None:
+    if t0 is None or request.url_rule is None:
+        return response
+    # Inspecting the profile must not show up in it.
+    if not request.url_rule.rule.startswith("/api/profile"):
         # content_length is the header only; streamed bodies are counted by stream_span.
         profiling.add(
             f"route {request.url_rule.rule}",
@@ -3604,25 +3620,47 @@ def _init_combined_state(
 
 
 def api_profile() -> FlaskResponse:
-    """Profiling snapshot for agents (``?reset=1`` brackets a window).
+    """Profiling export for agents (``?reset=1`` brackets a window atomically).
 
     404 when profiling is off so a plain launch exposes nothing — the
     endpoint mirrors the ``--profile`` opt-in rather than adding its own.
+    The payload is :func:`profiling.export`: ``labels`` plus the startup
+    marks, peak RSS, dropped-label count, in-flight spans and environment.
+    ``peak_rss_mb`` and ``startup`` record once per process; a reset cannot
+    clear them.
     """
     if not config.PROFILING:
         return err("profiling is off (launch with --profile)", 404)
-    snap = profiling.snapshot()
-    if request.args.get("reset") == "1":
-        profiling.reset()
-    # peak_rss is not a label (monotonic, unaffected by ?reset=1); live-server
-    # knobs need it here.
-    return ok(
-        profile=snap,
-        peak_rss_mb=profiling.peak_rss_mb(),
-        # Like peak_rss: not a label, records once per process, and
-        # ?reset=1 cannot clear it.
-        startup=profiling.startup_snapshot(),
-    )
+    return ok(**profiling.export(reset=request.args.get("reset") == "1"))
+
+
+def api_profile_deep() -> FlaskResponse:
+    """The deep-profiled labels and whether each can be downloaded yet."""
+    if not config.PROFILING:
+        return err("profiling is off (launch with --profile)", 404)
+    return ok(labels=profiling.deep_labels())
+
+
+def api_profile_deep_file() -> FlaskResponse:
+    """Download one label's merged cProfile stats (``?label=``) as a ``.prof``.
+
+    409 while a span with that label is running: reading a profiler another
+    thread is inside would stop it. Files land in the config dir's
+    ``profiles/`` so the download survives the process.
+    """
+    if not config.PROFILING:
+        return err("profiling is off (launch with --profile)", 404)
+    label = request.args.get("label", "")
+    entries = {entry["label"]: entry for entry in profiling.deep_labels()}
+    if label not in entries:
+        return err("Unknown deep-profile label", 404)
+    if entries[label]["running"]:
+        return err("Label is still running; try again", 409)
+    written = profiling.deep_dump(start_settings.config_dir() / "profiles", [label])
+    path = next((entry.get("path") for entry in written if entry.get("path")), None)
+    if path is None:
+        return err("Nothing recorded for that label", 404)
+    return send_file(path, as_attachment=True, download_name=Path(path).name)
 
 
 def status() -> Response:
@@ -3700,6 +3738,8 @@ def _register_core_routes(combined: Flask) -> None:
     """Root-level status, profiling, and export routes."""
     for rule, view, methods in (
         ("/api/profile", api_profile, ["GET"]),
+        ("/api/profile/deep", api_profile_deep, ["GET"]),
+        ("/api/profile/deep/file", api_profile_deep_file, ["GET"]),
         ("/api/status", status, ["GET"]),
         ("/api/export/status", api_export_status, ["GET"]),
         ("/api/export", api_export, ["POST"]),

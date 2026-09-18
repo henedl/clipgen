@@ -70,39 +70,25 @@ def test_redirect_config_honors_dir_overrides(monkeypatch, tmp_path):
     assert config.OUTPUT_DIR == str(tmp_path / "out")
 
 
-def _write_gridbench(path: Path, *, rows: int = 3, participants: int = 2) -> None:
-    """The profile-skill gridbench geometry, shrunk for a unit test."""
-    import openpyxl
-
-    wb = openpyxl.Workbook()
-    ws = wb.active
-    ws.title = "Observations"
-    ws["A1"] = "gridbench"
-    ws["F2"] = "ID"
-    for i in range(participants):
-        ws.cell(2, 7 + i, f"P{i + 1:02d}")
-    for col, h in enumerate(
-        ("Count", "Reported", "Severity", "Category", "Observation", "Summary"), 1
-    ):
-        ws.cell(5, col, h)
-    sevs = ("Critical", "Serious", "Moderate", "Minor")
-    for r in range(rows):
-        ws.cell(6 + r, 3, sevs[r % 4])
-        ws.cell(6 + r, 4, "Onboarding")
-        ws.cell(6 + r, 5, f"Observation {r}")
-        for i in range(participants):
-            ws.cell(6 + r, 7 + i, "0:01-0:04" if i % 3 == 0 else "")
-    wb.save(path)
-    wb.close()
+def _load_perf(name: str) -> ModuleType:
+    path = Path(__file__).resolve().parent / "perf" / f"{name}.py"
+    spec = importlib.util.spec_from_file_location(f"clipgen_perf_{name}", path)
+    assert spec is not None and spec.loader is not None
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
 
 
-def test_gridbench_recipe_satisfies_sheet_context(tmp_path):
+def test_gridbench_fixture_satisfies_sheet_context(tmp_path):
+    """The bench sheet geometry is the one build_sheet_context accepts."""
     session = _load_ui("_ui_session")
+    bf = _load_perf("bench_fixtures")
     path = tmp_path / "gridbench.xlsx"
-    _write_gridbench(path)
+    bf.write_sheet(path, study="gridbench", rows=3, participants=2)
     workbook, reason = session._open_sheet(path)
     assert reason == ""
     assert workbook is not None
+    assert bf.sheet_rows(path) == 3
 
 
 def test_open_sheet_rejects_a_blank_workbook(tmp_path):

@@ -70,6 +70,7 @@ import config
 import files
 import friction
 import llm_client
+import profiling
 import remux_server
 import speakers
 import start_settings
@@ -2976,7 +2977,9 @@ class AgentOrchestrator:
                     self._threads[agent_key].discard(t)
 
         t = threading.Thread(
-            target=_run,
+            target=profiling.scoped(
+                "agent", meta={"agent": agent_key, "participant": participant}
+            )(_run),
             daemon=True,
             name=f"{agent['thread_name_prefix']}-{participant}",
         )

@@ -114,13 +114,14 @@ def test_export_conflicts_with_studio(monkeypatch):
     [
         ["clipgen.py", "--profile", "--ss-task", "change", "P01"],
         ["clipgen.py", "--profile", "--screenspace"],
+        ["clipgen.py", "--profile-output", "/tmp/p.json", "--screenspace"],
     ],
 )
 def test_profile_combines_with_modes(monkeypatch, argv):
     """--profile is a run option like -v: never a mode conflict."""
     monkeypatch.setattr("sys.argv", argv)
     args = cli.parse_arguments()
-    assert args.profile is True
+    assert args.profile is True or args.profile_output
     cli._validate_mode_conflicts(args)  # must not SystemExit
 
 
@@ -135,6 +136,22 @@ def test_profile_flag_enables_profiling(monkeypatch):
     args = _base_args(profile=True)
     cli._apply_config_overrides(args, cli_mode=True)
     assert config.PROFILING is True
+    profiling.reset()
+
+
+def test_profile_output_enables_profiling(monkeypatch, tmp_path):
+    import atexit
+
+    import config
+    import profiling
+
+    monkeypatch.setattr(config, "PROFILING", False)
+    monkeypatch.setattr(config, "PROFILE_OUTPUT", "")
+    monkeypatch.setattr(atexit, "register", lambda fn: fn)  # no process-exit hook
+    args = _base_args(profile_output=str(tmp_path / "p.json"))
+    cli._apply_config_overrides(args, cli_mode=True)
+    assert config.PROFILING is True
+    assert config.PROFILE_OUTPUT == str(tmp_path / "p.json")
     profiling.reset()
 
 

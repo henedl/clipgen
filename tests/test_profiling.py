@@ -28,8 +28,10 @@ def _clean_profiling(monkeypatch):
     monkeypatch.setattr(profiling, "_STARTUP_T0", None)
     monkeypatch.setattr(profiling, "_STARTUP_MARKS", [])
     profiling.reset()
+    profiling.deep_reset()
     yield
     profiling.reset()
+    profiling.deep_reset()
 
 
 # ---------- accumulator ------------------------------------------------------
@@ -125,7 +127,7 @@ def test_label_cap_drops_new_labels(monkeypatch):
 
 def _deep_probe_workload():
     """A named function the deep profile must be able to attribute time to."""
-    return sum(range(2000))
+    return sum(range(200000))
 
 
 def test_deep_profiler_none_when_unrequested(monkeypatch):
@@ -213,12 +215,16 @@ def test_deep_report_covers_timed_decorator(monkeypatch, capsys):
     assert "_deep_probe_workload" in out
 
 
-def test_reset_clears_deep_profiles(monkeypatch, capsys):
+def test_reset_keeps_deep_profiles(monkeypatch, capsys):
+    """A window reset must never discard a profiler a thread may be inside."""
     monkeypatch.setattr(config, "PROFILING", True)
     monkeypatch.setattr(config, "PROFILE_DEEP", "unit.deep")
     with profiling.span("unit.deep"):
         _deep_probe_workload()
     profiling.reset()
+    profiling.report()
+    assert "profile-deep | unit.deep" in capsys.readouterr().out
+    profiling.deep_reset()
     profiling.report()
     assert "profile-deep" not in capsys.readouterr().out
 
@@ -355,26 +361,26 @@ def test_api_profile_snapshot_and_reset(client, monkeypatch):
     assert resp.status_code == 200
     body = resp.get_json()
     assert body["ok"] is True
-    assert body["profile"]["scan.callback"] == {
+    assert body["labels"]["scan.callback"] == {
         "seconds": 1.5,
         "count": 10,
         "max": 0.0,
         "bytes": 0,
         "first": 0.0,
     }
-    # The route hook records the response size beside its wall time (it runs
-    # after the snapshot above was taken, so read the live totals).
-    assert profiling.snapshot()["route /api/profile"]["bytes"] > 0
+    # Inspecting the profile must not appear in the profile.
+    assert "route /api/profile" not in profiling.snapshot()
     # Monotonic and process-global, so it rides beside the label map, not in it.
     assert "peak_rss_mb" in body
-    # Request itself was timed by the route hook.
-    assert any(label.startswith("route ") for label in profiling.snapshot())
+    assert body["mode"] == "profile"
+    assert body["env"]["python"]
+    assert body["active_spans"] == []
 
     resp = client.get("/api/profile?reset=1")
     assert resp.status_code == 200
     resp = client.get("/api/profile")
     body = resp.get_json()
-    assert "scan.callback" not in body["profile"]
+    assert "scan.callback" not in body["labels"]
 
 
 # ---------- streaming responses -----------------------------------------------
@@ -425,6 +431,7 @@ def test_route_label_alone_misses_streamed_body(stream_app, monkeypatch):
     assert snap["stream /slow"]["seconds"] >= 0.09
     assert snap["stream /slow"]["count"] == 1
     assert snap["stream /slow"]["bytes"] == 2
+    assert snap["stream.complete /slow"]["count"] == 1
     # Time to first chunk is the perceived latency; here ~50 ms of the ~100 ms.
     first = snap["stream.first /slow"]["seconds"]
     assert 0.04 <= first < 0.09, first
@@ -451,12 +458,54 @@ def test_stream_span_records_on_client_disconnect(monkeypatch):
         finally:
             cleaned.append(True)  # the route's own disconnect cleanup
 
-    gen = profiling.stream_span("stream /abandoned", body())
+    gen = profiling.stream_span(body(), rule="/abandoned")
     next(gen)
     gen.close()  # what the WSGI server does when the client drops
     assert cleaned, "inner generator was not closed with the span"
-    assert profiling.snapshot()["stream /abandoned"]["seconds"] > 0
+    snap = profiling.snapshot()
+    assert snap["stream /abandoned"]["seconds"] > 0
+    assert snap["stream.disconnect /abandoned"]["count"] == 1
+    assert profiling.active_spans() == []
     profiling.reset()
+
+
+def test_stream_span_error_outcome_wins_over_close_failure(monkeypatch):
+    """The body's exception propagates even when its cleanup also fails."""
+    monkeypatch.setattr(config, "PROFILING", True)
+
+    class Body:
+        def __iter__(self):
+            yield "x"
+            raise ValueError("body broke")
+
+        def close(self):
+            raise RuntimeError("cleanup broke")
+
+    with pytest.raises(ValueError, match="body broke"):
+        list(profiling.stream_span(Body(), rule="/broken"))
+    assert profiling.snapshot()["stream.error /broken"]["count"] == 1
+
+
+def test_stream_span_close_failure_raises_after_completion(monkeypatch):
+    monkeypatch.setattr(config, "PROFILING", True)
+
+    class Body:
+        def __iter__(self):
+            yield "x"
+
+        def close(self):
+            raise RuntimeError("cleanup broke")
+
+    with pytest.raises(RuntimeError, match="cleanup broke"):
+        list(profiling.stream_span(Body(), rule="/late"))
+    # Recorded before the cleanup error escaped.
+    assert profiling.snapshot()["stream /late"]["count"] == 1
+
+
+def test_stream_span_counts_encoded_bytes(monkeypatch):
+    monkeypatch.setattr(config, "PROFILING", True)
+    list(profiling.stream_span(iter(["é", b"ab"]), rule="/utf8"))
+    assert profiling.snapshot()["stream /utf8"]["bytes"] == 4
 
 
 # ---------- bytes ------------------------------------------------------------
@@ -938,3 +987,317 @@ def test_deep_report_survives_never_enabled_profilers(monkeypatch, capsys):
     out = capsys.readouterr().out
     assert "profile-deep | unit.pool" in out
     assert "_deep_probe_workload" in out
+
+
+# ---------- windows, overflow, export -----------------------------------------
+
+
+def test_snapshot_reset_is_atomic_under_concurrent_adds(monkeypatch):
+    """No contribution may vanish between the copy and the clear."""
+    import threading
+
+    monkeypatch.setattr(config, "PROFILING", True)
+    stop = threading.Event()
+    adds = [0]
+
+    def adder():
+        while not stop.is_set():
+            profiling.add("race", 0.0, 1)
+            adds[0] += 1
+
+    thread = threading.Thread(target=adder)
+    thread.start()
+    seen = 0
+    for _ in range(200):
+        seen += profiling.snapshot(reset=True).get("race", {}).get("count", 0)
+    stop.set()
+    thread.join()
+    seen += profiling.snapshot(reset=True).get("race", {}).get("count", 0)
+    assert seen == adds[0]
+
+
+def test_active_spans_lists_in_flight_work(monkeypatch):
+    monkeypatch.setattr(config, "PROFILING", True)
+    with profiling.span("unit.active"):
+        active = profiling.active_spans()
+        assert [entry["label"] for entry in active] == ["unit.active"]
+        assert active[0]["elapsed_s"] >= 0
+    assert profiling.active_spans() == []
+
+
+def test_active_spans_survive_a_reset(monkeypatch):
+    """The reset clears totals, not the record of what is still running."""
+    monkeypatch.setattr(config, "PROFILING", True)
+    with profiling.span("unit.crossing"):
+        profiling.reset()
+        assert [e["label"] for e in profiling.active_spans()] == ["unit.crossing"]
+    # Completed after the reset, so it lands in the new window.
+    assert profiling.snapshot()["unit.crossing"]["count"] == 1
+
+
+def test_dropped_labels_are_counted_and_reported(monkeypatch, capsys):
+    monkeypatch.setattr(config, "PROFILING", True)
+    monkeypatch.setattr(profiling, "_MAX_LABELS", 1)
+    profiling.add("a", 1.0)
+    profiling.add("b", 1.0)
+    profiling.add("c", 1.0)
+    assert profiling.dropped_labels() == 2
+    profiling.report()
+    out = capsys.readouterr().out
+    assert "profile | labels_dropped" in out and "n=2" in out
+    profiling.reset()
+    assert profiling.dropped_labels() == 0
+
+
+def test_export_reset_reports_the_windows_dropped_labels(monkeypatch):
+    """A reset export must carry the overflow of the window it closes."""
+    monkeypatch.setattr(config, "PROFILING", True)
+    monkeypatch.setattr(profiling, "_MAX_LABELS", 1)
+    profiling.add("a", 1.0)
+    profiling.add("b", 1.0)
+    doc = profiling.export(reset=True)
+    assert doc["dropped_labels"] == 1
+    assert list(doc["labels"]) == ["a"]
+    assert profiling.export()["dropped_labels"] == 0
+
+
+def test_export_shape(monkeypatch):
+    monkeypatch.setattr(config, "PROFILING", True)
+    monkeypatch.setattr(config, "PROFILE_DEEP", "")
+    profiling.enable()
+    profiling.add("work", 0.5)
+    doc = profiling.export()
+    assert doc["mode"] == "profile"
+    assert doc["labels"]["work"]["count"] == 1
+    assert doc["window_seconds"] >= 0
+    assert doc["dropped_labels"] == 0
+    assert doc["active_spans"] == []
+    assert set(doc["env"]["settings"]) == set(profiling._ENV_SETTINGS)
+    assert doc["env"]["python"] and doc["env"]["cpu_count"]
+    monkeypatch.setattr(config, "PROFILE_DEEP", "x")
+    assert profiling.export()["mode"] == "deep"
+
+
+def test_environment_degrades_without_git_or_ffmpeg(monkeypatch):
+    def missing(*_a, **_k):
+        raise FileNotFoundError("nope")
+
+    monkeypatch.setattr(profiling.subprocess, "run", missing)
+    env = profiling.environment()
+    assert env["commit"] is None
+    assert env["dirty"] is None
+    assert env["ffmpeg"] is None
+    assert env["version"]
+
+
+def test_report_writes_profile_output(monkeypatch, tmp_path, capsys):
+    import json
+
+    monkeypatch.setattr(config, "PROFILING", True)
+    path = tmp_path / "out" / "profile.json"
+    monkeypatch.setattr(config, "PROFILE_OUTPUT", str(path))
+    profiling.add("work", 0.25)
+    profiling.report()
+    assert f"profile | written {path}" in capsys.readouterr().out
+    doc = json.loads(path.read_text())
+    assert doc["labels"]["work"]["seconds"] == 0.25
+
+
+# ---------- operation records --------------------------------------------------
+
+
+@pytest.fixture(autouse=True)
+def _clean_ops():
+    profiling.ops_reset()
+    yield
+    profiling.ops_reset()
+
+
+def test_operation_lifecycle_and_durations(monkeypatch):
+    monkeypatch.setattr(config, "PROFILING", True)
+    op = profiling.op_open("scan", op_id="ss_1", work=3, meta={"type": "color"})
+    assert op == "ss_1"
+    active = profiling.operations()["active"]
+    assert active[0]["started_at"] is None and active[0]["queue_wait_s"] >= 0
+    with profiling.op_run("ss_1"):
+        assert profiling.current_op() == "ss_1"
+        profiling.add("scan.callback.color", 0.5, 10)
+        profiling.op_work("ss_1", 10)
+    assert profiling.current_op() is None
+    ops = profiling.operations()
+    assert ops["active"] == []
+    rec = ops["recent"][0]
+    assert rec["outcome"] == "completed"
+    assert rec["work"] == 10
+    assert rec["kind"] == "scan" and rec["meta"] == {"type": "color"}
+    assert rec["measures"]["scan.callback.color"] == {"seconds": 0.5, "count": 10}
+    assert rec["queue_wait_s"] + rec["run_s"] == pytest.approx(rec["elapsed_s"])
+    # Aggregate labels are untouched by the record.
+    assert profiling.snapshot()["scan.callback.color"]["count"] == 10
+
+
+def test_operation_outcomes(monkeypatch):
+    monkeypatch.setattr(config, "PROFILING", True)
+    with pytest.raises(ValueError), profiling.op_run("f", kind="x"):
+        raise ValueError("boom")
+    with profiling.op_run("c", kind="x"):
+        profiling.op_outcome("c", "cancelled")
+    outcomes = {r["id"]: r["outcome"] for r in profiling.operations()["recent"]}
+    assert outcomes == {"f": "failed", "c": "cancelled"}
+
+
+def test_op_stream_abandoned_on_disconnect(monkeypatch):
+    monkeypatch.setattr(config, "PROFILING", True)
+
+    def body():
+        yield "a"
+        yield "b"
+
+    gen = profiling.op_stream(body(), kind="generate", work=2)
+    assert next(gen) == "a"
+    gen.close()
+    rec = profiling.operations()["recent"][0]
+    assert rec["kind"] == "generate" and rec["outcome"] == "abandoned"
+    assert list(profiling.op_stream(body(), kind="generate")) == ["a", "b"]
+    assert profiling.operations()["recent"][1]["outcome"] == "completed"
+
+
+def test_bind_carries_the_operation_to_pool_threads(monkeypatch):
+    from concurrent.futures import ThreadPoolExecutor
+
+    monkeypatch.setattr(config, "PROFILING", True)
+
+    def work(i):
+        profiling.add("pipeline.clip", 0.1)
+        return profiling.current_op()
+
+    with profiling.op_run("batch", kind="clips"), ThreadPoolExecutor(2) as pool:
+        seen = list(pool.map(profiling.bind(work), range(4)))
+        unbound = list(pool.map(work, range(1)))
+    assert seen == ["batch"] * 4
+    assert unbound == [None]
+    rec = profiling.operations()["recent"][0]
+    assert rec["measures"]["pipeline.clip"]["count"] == 4
+
+
+def test_op_scope_nests_into_the_current_operation(monkeypatch):
+    monkeypatch.setattr(config, "PROFILING", True)
+
+    @profiling.scoped("clips", work_of=lambda items: len(items))
+    def cut(items):
+        return profiling.current_op()
+
+    with profiling.op_run("req", kind="generate"):
+        assert cut([1, 2, 3]) == "req"  # no second record under a request
+    recs = profiling.operations()["recent"]
+    assert [r["kind"] for r in recs] == ["generate"]
+    outer = cut([1, 2])
+    recs = profiling.operations()["recent"]
+    assert recs[-1]["id"] == outer and recs[-1]["work"] == 2
+
+
+def test_parent_defaults_to_the_current_operation(monkeypatch):
+    monkeypatch.setattr(config, "PROFILING", True)
+    with profiling.op_run("run_1", kind="workflow_run"):
+        child = profiling.op_open("screenspace_task", op_id="ss_9")
+    assert profiling.operations()["active"][0]["parent"] == "run_1"
+    assert child == "ss_9"
+
+
+def test_operation_records_are_bounded(monkeypatch):
+    monkeypatch.setattr(config, "PROFILING", True)
+    monkeypatch.setattr(profiling, "_MAX_OPS_ACTIVE", 2)
+    for i in range(3):
+        profiling.op_open("x", op_id=f"a{i}")
+    assert len(profiling.operations()["active"]) == 2
+    assert profiling.operations()["evicted"] == 1
+    profiling.ops_reset()
+    cap = profiling._OPS_DONE.maxlen or 0
+    for i in range(cap + 5):
+        with profiling.op_run(f"d{i}", kind="x"):
+            pass
+    ops = profiling.operations()
+    assert len(ops["recent"]) == cap
+    assert ops["evicted"] == 5
+
+
+def test_operations_are_noops_when_off():
+    op = profiling.op_open("x", op_id="q")
+    with profiling.op_run(op):
+        assert profiling.current_op() is None
+    assert profiling.operations() == {"active": [], "recent": [], "evicted": 0}
+
+
+def test_export_includes_operations(monkeypatch):
+    monkeypatch.setattr(config, "PROFILING", True)
+    with profiling.op_run("o1", kind="x"):
+        pass
+    doc = profiling.export()
+    assert doc["operations"]["recent"][0]["id"] == "o1"
+
+
+# ---------- deep-profile files ---------------------------------------------------
+
+
+def test_deep_dump_writes_loadable_stats(monkeypatch, tmp_path):
+    import pstats
+
+    monkeypatch.setattr(config, "PROFILING", True)
+    monkeypatch.setattr(config, "PROFILE_DEEP", "unit.dump")
+    with profiling.span("unit.dump"):
+        _deep_probe_workload()
+    assert profiling.deep_labels() == [
+        {"label": "unit.dump", "done": True, "running": False}
+    ]
+    written = profiling.deep_dump(tmp_path / "deep")
+    assert written[0]["label"] == "unit.dump"
+    stats = pstats.Stats(written[0]["path"])
+    assert getattr(stats, "total_calls", 0) > 0
+
+
+def test_deep_dump_skips_a_running_label(monkeypatch, tmp_path):
+    monkeypatch.setattr(config, "PROFILING", True)
+    monkeypatch.setattr(config, "PROFILE_DEEP", "unit.live")
+    with profiling.span("unit.live"):
+        assert profiling.deep_labels()[0]["running"] is True
+        assert profiling.deep_dump(tmp_path) == [
+            {"label": "unit.live", "skipped": "running"}
+        ]
+
+
+def test_report_writes_deep_files_beside_profile_output(monkeypatch, tmp_path, capsys):
+    import json
+
+    monkeypatch.setattr(config, "PROFILING", True)
+    monkeypatch.setattr(config, "PROFILE_DEEP", "unit.file")
+    out = tmp_path / "profile.json"
+    monkeypatch.setattr(config, "PROFILE_OUTPUT", str(out))
+    with profiling.span("unit.file"):
+        _deep_probe_workload()
+    profiling.report()
+    capsys.readouterr()
+    doc = json.loads(out.read_text())
+    assert doc["deep_files"][0]["label"] == "unit.file"
+    assert (tmp_path / "profile.deep" / "unit.file.prof").is_file()
+
+
+def test_api_profile_deep_routes(client, monkeypatch, tmp_path):
+    import start_settings
+
+    assert client.get("/api/profile/deep").status_code == 404
+    monkeypatch.setattr(config, "PROFILING", True)
+    monkeypatch.setattr(config, "PROFILE_DEEP", "unit.route")
+    monkeypatch.setattr(start_settings, "config_dir", lambda: tmp_path)
+    assert client.get("/api/profile/deep").get_json()["labels"] == []
+    assert client.get("/api/profile/deep/file?label=nope").status_code == 404
+    with profiling.span("unit.route"):
+        _deep_probe_workload()
+        assert client.get("/api/profile/deep/file?label=unit.route").status_code == 409
+    listing = client.get("/api/profile/deep").get_json()["labels"]
+    assert listing == [{"label": "unit.route", "done": True, "running": False}]
+    resp = client.get("/api/profile/deep/file?label=unit.route")
+    assert resp.status_code == 200
+    assert "attachment" in resp.headers["Content-Disposition"]
+    assert (tmp_path / "profiles" / "unit.route.prof").is_file()
+    # Neither inspection route shows up in the profile it reports on.
+    assert not any(k.startswith("route /api/profile") for k in profiling.snapshot())

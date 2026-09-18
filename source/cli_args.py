@@ -735,6 +735,12 @@ def _add_run_args(parser: argparse.ArgumentParser) -> None:
         "--profile); prints a per-label function breakdown at exit",
     )
     run_opts.add_argument(
+        "--profile-output",
+        metavar="PATH",
+        default=None,
+        help="Write the profiling report as JSON to PATH (implies --profile)",
+    )
+    run_opts.add_argument(
         "--settings",
         action="store_true",
         help="Open the interactive settings editor before running "

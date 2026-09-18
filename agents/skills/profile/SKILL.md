@@ -17,6 +17,22 @@ changes what work runs.
 profile | scan.callback                  1.339s  n=962  avg=1.4ms
 ```
 
+**`--profile-output PATH`** (implies `--profile`) also writes the report as
+full-precision JSON — the form every tool below reads; the console lines are for
+eyes only. Keys: `mode` (`profile`, or `deep` when `--profile-deep` is attached —
+a deep run's totals carry cProfile's overhead and the benches refuse to compare
+one), `window_seconds`, `labels` (`{label: {seconds, count, max, bytes,
+first}}`), `startup`, `peak_rss_mb`, `dropped_labels` (labels refused at the
+1024 cap; the console prints `labels_dropped n=K` when non-zero), `active_spans`
+(work still in flight when the report was taken), and `env` — commit + dirty
+state, Python, platform, chip/cores/memory, the ffmpeg version line, package
+versions, and the tuning knobs from [PERFORMANCE.md](../../PERFORMANCE.md) as
+`settings`. `GET /api/profile` on a live server returns the same document;
+`?reset=1` snapshots and clears in one atomic step. A window is defined by
+*completion*: a span that straddles the reset lands in the new window, and
+`active_spans` names what crossed it. Inspecting the profile never appears in
+its own `route` totals.
+
 Label glossary — backend: `scan.decode_wait` / `scan.fast_filter` / `scan.callback.<tool>`
 (the per-frame split for every Screenspace tool, plus a per-scan summary line
 `profile | scan <tool> <file>:`). `scan.callback` without a suffix is only the
@@ -44,7 +60,8 @@ dump+write of that `clipgen.json` section, with its size as `bytes=`) and
 `manifest.save.unchanged <section>` (saves skipped as identical — a debounced
 persister that mostly skips is healthy, a poll path that loads a multi-MB
 section every tick is not),
-`ollama.generate`, `titlecard.wrap` plus
+`llm.generate` (one llama.cpp chat completion, recorded even when the call
+fails), `titlecard.wrap` plus
 `titlecard.copy` / `titlecard.reencode` counts (the concat-demuxer vs filter
 fallback), `workflows.run` / `workflows.node <type>` / `workflows.batch_child` /
 `workflows.batch_wall` (`WORKFLOWS_BATCH_WORKERS` effective parallelism, same
@@ -103,9 +120,10 @@ Four report tokens are easy to misread:
   batched flushes, because a batch's `seconds` is a sum with no per-item max. A
   flusher that tracked its own maximum passes `add(..., peak=)` to populate it —
   `scan.callback.<tool>` and `transcribe.decode` do.
-- **`first=`** is the cold hit: the label's first single-occurrence
+- **`first=`** is the first observation: the label's first single-occurrence
   contribution, printed only when it is at least 5 ms *and* double the average
-  of the calls after it. A route whose first call pays a lazy import or a
+  of the calls after it. Resetting the window clears the number, not the caches
+  that made it slow, so a second window's first observation is usually warm. A route whose first call pays a lazy import or a
   cache fill (`/api/models` imports `huggingface_hub`: measured 80-120 ms
   cold, 1.5 ms warm) otherwise reads as a modest `avg` with a large `max`,
   indistinguishable from an occasional slow request. Absent on batched labels,
@@ -137,75 +155,22 @@ transcription refuses it before any `transcribe.*` label is recorded.
 2 participants, so `shot.py studio --perf` reports a `studio.renderGrid` of a few
 milliseconds and tells you nothing about the 200×12 case
 [PERFORMANCE-PLAN-2](../../../plans/archive/PERFORMANCE-PLAN-2.md) §4.1 named.
-For grid / Sheets work, generate a real one — geometry mirrors
-`_ui_fixtures._make_workbook`, which is the authoritative layout (`ID` at F2 with
+Real-sized inputs come from **`tests/perf/bench_fixtures.py`**, the one place
+the benchmark geometry is written: `write_sheet(path, study=, rows=,
+participants=)` (the `_ui_fixtures._make_workbook` layout — `ID` at F2 with
 participant columns to its right *on row 2*, `Observation`/`Category` on row 5,
-data from row 6):
-
-```python
-# /tmp/gridbench.xlsx — 200 rows x 12 participants
-import openpyxl
-
-wb = openpyxl.Workbook()
-ws = wb.active
-ws.title = "Observations"
-ws["A1"] = "gridbench"
-ws["F2"] = "ID"
-for i in range(12):
-    ws.cell(2, 7 + i, f"P{i + 1:02d}")
-for col, h in enumerate(
-    ("Count", "Reported", "Severity", "Category", "Observation", "Summary"), 1
-):
-    ws.cell(5, col, h)
-sevs = ("Critical", "Serious", "Moderate", "Minor")
-for r in range(200):
-    ws.cell(6 + r, 3, sevs[r % 4])  # renderGrid paints .sev-* classes, so an
-    ws.cell(6 + r, 4, "Onboarding")  # empty Severity column under-measures it
-    ws.cell(6 + r, 5, f"Observation {r}")
-    for i in range(12):
-        ws.cell(6 + r, 7 + i, "0:01-0:04" if i % 3 == 0 else "")
-wb.save("/tmp/gridbench.xlsx")
-```
-
-Sanity-check it before trusting any number — a drifted layout yields a silently
-small grid, not an error:
+data from row 6, severities cycling so `renderGrid` paints its `.sev-*`
+classes), `make_testsrc_video(path, duration=, audio=)`,
+`transcripts_section({"P01": 2400})` and `screenspace_section(events=2000,
+…)` for the two synthetic manifests (2000 real Whisper segments is hours of
+audio), `write_manifest(out_dir, sections)`, and `sheet_rows` /
+`manifest_counts` to prove what was written. `tests/ui/ui_bench.py` builds
+its workloads from these; for a one-off:
 
 ```bash
-uv run python -c "import sys; sys.path.insert(0,'source'); import excel_io, spreadsheet; \
-  print(spreadsheet.build_sheet_context(excel_io.open_excel_workbook('/tmp/gridbench.xlsx')) is not None)"
-```
-
-For `transcripts.renderSegments` ([PERFORMANCE-PLAN-3](../../../plans/archive/PERFORMANCE-PLAN-3.md)
-§8c gates virtualization on ">2000-segment sessions"), **synthesize the manifest**
-— 2000 real Whisper segments is hours of audio:
-
-```python
-import json, pathlib
-
-segs = [
-    {
-        "id": f"P01:{i}",
-        "start": i * 3.0,
-        "end": i * 3.0 + 2.8,
-        "text": f"Synthetic segment {i} for render benchmarking.",
-    }
-    for i in range(2400)
-]
-out = pathlib.Path("/tmp/tsbench/clipgen.json")
-out.parent.mkdir(parents=True, exist_ok=True)
-out.write_text(
-    json.dumps(
-        {
-            "transcripts": {
-                "source_transcripts": {
-                    "P01": {"segments": segs, "language": "en", "model": "synthetic"}
-                },
-                "corrections": [],
-                "marks": [],
-            }
-        }
-    )
-)
+uv run python -c "import sys; sys.path.insert(0,'tests/perf'); import bench_fixtures as bf, pathlib; \
+  bf.write_sheet(pathlib.Path('/tmp/gridbench.xlsx'), study='gridbench', rows=200, participants=12); \
+  print(bf.sheet_rows(pathlib.Path('/tmp/gridbench.xlsx')))"
 ```
 
 ## Step 3 — Capture a baseline
@@ -232,10 +197,30 @@ uv run python tests/perf/scan_bench.py --save /tmp/base.json     # baseline
 uv run python tests/perf/scan_bench.py --compare /tmp/base.json --fail-on 10
 ```
 
-`--duration` rebuilds when the existing fixture's probed length does not match.
-A leftover 120 s `/tmp/ssbench/bench_P01.mp4` would otherwise ignore
-`--duration 15` and poison `--compare`. The harness prints `fixture … Ns` at
-the start of a run so a wrong-length file is visible before the table.
+The fixture is rebuilt when its probed duration, size, frame rate or audio
+presence differs from the bench's spec — a leftover 120 s (or 640×360)
+`/tmp/ssbench/bench_P01.mp4` would otherwise ignore `--duration 15` and poison
+`--compare`. The harness prints `fixture … Ns` at the start of a run.
+
+**Reading a bench run.** Each repetition is a fresh `uv run clipgen.py`
+process (the OS file cache is whatever it is — nothing here is "cold").
+`--runs` defaults to 3 and every sample is kept; the table shows the
+**median**, min and median absolute deviation of subprocess elapsed time (the
+primary, end-to-end metric) beside the breakdown columns, and a `status` per
+row: `ok`, `invalid` (a repetition exited non-zero, recorded no work, or left
+its output short — any bad repetition voids the row, so a good run can never
+hide a bad one), `incomparable` (the baseline did a different amount of work,
+e.g. a different frame or clip count), or `regression`. Exit codes follow the
+worst row: 1 regression, 2 usage, 3 invalid, 4 incomparable. `--compare`
+refuses a baseline recorded on another fixture spec or workload, prints every
+environment difference (chip, cores, memory, Python, ffmpeg, tuning settings —
+never the commit), and needs `--allow-env-mismatch` to proceed across them.
+Thresholds: `--fail-on PCT` on the median, `--fail-abs SECONDS`, and
+`--fail-metric elapsed|callback` (`|clip` for clip_bench); with both thresholds
+set a regression must exceed both. `--deep` runs are diagnostics and refuse
+`--save`/`--compare`. `clip_bench`'s carded scenarios are `invalid` on an ffmpeg
+without `drawtext` (clipgen disables cards for the run; the bench reports that
+rather than a faster "carded" row).
 
 Template and Shape use a seeded top-left 20%-frame region. This keeps their
 reference non-degenerate while measuring bounded correlation instead of a
@@ -248,8 +233,8 @@ uv run python tests/perf/scan_bench.py --tools shape --deep --runs 2
 
 `--tools color,text` narrows the sweep (`text` is off by default: OCR is 10×
 slower and pins ~0.8 GB RSS per pooled engine — 3.3 GB at the default auto
-pool of 4); `--runs 2` keeps the fastest run per tool. For a
-single tool the direct CLI form is still useful (unique `-o` dir per run):
+pool of 4). For a single tool the direct CLI form is still useful (unique
+`-o` dir per run):
 
 ```bash
 uv run clipgen.py --ss-task color P01 --ss-target-color '#FF0000' \
@@ -272,33 +257,52 @@ does not match, and timestamps stay inside that length (an MM:SS with SS > 59
 is dropped at parse). Same `fixture … Ns` line as scan_bench.
 
 Live server: launch with `--profile`, then `curl http://127.0.0.1:8089/api/profile`
-(404 without the flag; `?reset=1` snapshots then clears, bracketing a window).
+(404 without the flag; `?reset=1` snapshots then clears atomically, bracketing
+a window; the label map is under `labels`, see Step 1).
 
 Browser: `uv sync --extra dev --extra ui` (~1 s from cache; `/check` uninstalls the
-ui extra), then
+ui extra). **The workload bench is `tests/ui/ui_bench.py`** — it builds the
+real-sized fixtures, proves each page loaded all of them (a DOM count that
+must equal the fixture's count before anything is timed), and times a fixed
+set of interactions each on its own condition, never a sleep:
 
 ```bash
-CLIPGEN_UI_CHECK=1 uv run --extra ui python tests/ui/shot.py studio --perf --wait 5000
+CLIPGEN_UI_CHECK=1 uv run --extra ui python tests/ui/ui_bench.py --save /tmp/ui.json
+CLIPGEN_UI_CHECK=1 uv run --extra ui python tests/ui/ui_bench.py --compare /tmp/ui.json --fail-on 15
+CLIPGEN_UI_CHECK=1 uv run --extra ui python tests/ui/ui_bench.py --scenarios idle --soak 60
 ```
 
-The UI fixture is 6 rows × 2 participants — `studio.renderGrid` will be a few
-milliseconds and tell you nothing. Point `--sheet` / `--output` at the
-benchmark inputs from Step 2:
+| Scenario | Workload | Timed actions |
+|---|---|---|
+| `studio` | 200 rows × 12 participants | `filter` (severity → 50 rows), `restore` (→ 200), `queue` (ten cells → Generate enabled) |
+| `transcripts` | 2400 segments (P01), 100 (P02) | `search`, `clear-search`, `switch` (→ P02's 100 rows), `restore` |
+| `screenspace` | 2000 events on the fixture video | `open-results` (first chunk), `drain` (scroll the lazy list to all 2000), `filter` (confidence 0.6), `switch-pane`, `switch-back` |
+| `idle` | the six pages, default fixture | a sampled soak per page, second half as a background tab |
+
+The table shows subprocess-free **elapsed** (browser context open → last
+condition met) as median/min/MAD plus each action's median ms; `--fail-metric
+load` switches the thresholds to `domContentLoaded`. Rows, status words, exit
+codes and `--compare` rules are the same as the backend benches. Every run
+writes `<work>/runs/<scenario>-<n>.json` — the load capture, each action's ms
+with the counts observed before and after and the server's
+`/api/profile?reset=1` window for it, the workload counts asserted, page
+errors, and the screenshot in `<work>/shots/` (look at it: a green run that
+photographs an empty page is the failure this harness exists to catch).
+
+For one page and a hand-rolled input, `shot.py --perf` is still the tool;
+`--perf-output PATH` saves the same object the `perf-json:` line prints, plus
+page errors and the screenshot path:
 
 ```bash
 CLIPGEN_UI_CHECK=1 uv run --extra ui python tests/ui/shot.py studio \
-    --perf --sheet /tmp/gridbench.xlsx --wait 2000 \
+    --perf --sheet /tmp/gridbench.xlsx --wait 2000 --perf-output /tmp/studio-perf.json \
     --eval "return document.querySelectorAll('#sheetGrid tbody tr').length"
-CLIPGEN_UI_CHECK=1 uv run --extra ui python tests/ui/shot.py transcripts \
-    --perf --output /tmp/tsbench --wait 2000 \
-    --eval "return document.querySelectorAll('.segment-row').length"
-CLIPGEN_UI_CHECK=1 uv run --extra ui python tests/ui/shot.py screenspace \
-    --perf --input /tmp/ssbench --output /tmp/ssbench/out --wait 2000
 ```
 
-Sanity-check the `--eval` counts before trusting `perf | studio.renderGrid`
-(200 rows) or `transcripts.renderSegments` (2400 rows). A drifted sheet
-layout yields a silently small grid, not an error.
+Sanity-check the `--eval` count before trusting `perf | studio.renderGrid`. A
+drifted sheet layout yields a silently small grid, not an error. A CDP metric
+the build does not report prints as `perf | <name> unsupported`, never as 0;
+the same goes for `longtasks` when the browser lacks the observer.
 
 Each `--perf` run prints `perf | ` lines (CDP layout/script/heap metrics,
 navigation/resource timing, the clipgenPerf measures) plus one `perf-json:`
@@ -325,18 +329,24 @@ indicative; add `--full-chromium` when paint fidelity matters.
 
 **Leaks and idle churn — `--soak SECONDS`.** Load-time numbers say nothing
 about a page that merely sits open: pollers re-rendering into the DOM,
-listeners re-bound per tick, payloads retained per poll. `--perf --soak 20`
-re-samples after the page has idled that long and prints `perf | soak.*`
-deltas — `soak.Nodes` / `soak.JSEventListeners` / `soak.JSHeapUsedSize`
-(growth with nothing happening is a leak; a few nodes for a toast or a clock
-is not), `soak.poll.<page>.<name> n=+N` (ticks during the window — check
-against the poller's interval, and against 0 for a page that should be
-paused), and `soak.longtasks`. Read the server's exit report alongside it:
+listeners re-bound per tick, payloads retained per poll. `--perf --soak 60`
+samples every `--soak-interval` (5 s) for the window and prints one
+trajectory per counter — `soak.Nodes` / `soak.JSEventListeners` /
+`soak.JSHeapUsedSize` / `soak.Documents` / `soak.transferSize` as `first ->
+last (slope/min)`, `soak.poll.<page>.<name> n=a -> b (visible …/min, hidden
+…/min)`, `soak.longtasks`, and a `soak.samples` line with every reading.
+`--soak-hidden` emulates a background tab for the second half (Chromium
+never hides a headless page on its own), so a poller that should pause
+reads as `hidden +0.0/min` and one that does not is caught. **Sustained
+growth is a signal to investigate, not proof of a leak** — a toast or a
+clock moves a few nodes, and the JS heap oscillates with GC; read the slope
+over the whole window, never two points. The `idle` scenario of `ui_bench.py`
+does this for all six pages. Read the server's exit report alongside it:
 `route` lines with a large `bytes=` ÷ `n=` are the polls to slim.
 
 ```bash
 CLIPGEN_UI_CHECK=1 uv run --extra ui python tests/ui/shot.py transcripts \
-    --perf --soak 20 --output /tmp/tsbench
+    --perf --soak 60 --soak-hidden --output /tmp/tsbench
 ```
 
 ## Step 4 — Interpret
@@ -421,9 +431,44 @@ CLIPGEN_UI_CHECK=1 uv run --extra ui python tests/ui/shot.py transcripts \
   its first cached clip at 10 ms and finishes at 40 s and one that sits silent
   for 20 s then floods have the same total. Optimize `stream.first` for
   time-to-first-response (see the two-pass pattern in
-  [PERFORMANCE.md](../../PERFORMANCE.md)); `stream` for throughput.
+  [PERFORMANCE.md](../../PERFORMANCE.md)); `stream` for throughput. `bytes=` on
+  `stream` is the UTF-8 size that crossed the wire. `stream.complete` /
+  `stream.error` / `stream.disconnect <rule>` count how drains ended — a
+  `disconnect` count climbing on a poll-driven page is a tab closing
+  mid-generate, an `error` count is the route raising after its first chunk.
 - `longtasks` / `cdp.LayoutCount` → render work; check DocumentFragment batching and
   rAF-throttling per [CODE-REVIEW.md](../../CODE-REVIEW.md).
+
+**Overlapping work — `operations` in the JSON and on `/api/profile`.** The
+label table sums across every job in the process; when a Studio generate and
+a Screenspace scan overlap it cannot say which one a slow `ffmpeg.run.cut`
+belonged to. Each job is also an operation record: clip batches (`clips` from
+the CLI, `generate` / `intake` / `reel` / `regenerate` from Studio), every
+`screenspace_task`, `transcribe` / `speakers` task and thinking `agent`, and
+`workflow_run` / `workflow_batch` (children carry the batch as `parent`; a
+scan a workflow node launches carries the run). Fields: `id` (the task or
+run id — never a label), `kind`, `meta`, `queued_at` / `started_at` /
+`ended_at`, `queue_wait_s` / `run_s` / `elapsed_s` (the one additive
+identity), `outcome` (`completed`, `failed`, `cancelled`, `paused`,
+`abandoned` for a streamed response the client dropped, or the task's own
+terminal status), `work` (clips cut, results found, segments) and
+`measures` — the labels recorded by threads working for it. Measures are
+**inclusive**: a `pipeline.pool_wall` contains its `pipeline.clip` seconds,
+so never add them. `active` lists running jobs (read it mid-run), `recent`
+the last 100 finished, `evicted` how many fell off either list. A large
+`queue_wait_s` on `screenspace_task`s is `SCREENSPACE_PARALLEL_WORKERS`
+saturating; a long `run_s` with small measures is time spent outside any
+labelled span.
+
+**Downloading a deep profile.** The printed top-15 is a start; the full
+`cProfile` stats of a finished deep label come as a `.prof` file:
+`--profile-output p.json` writes them beside it as `p.deep/<label>.prof`
+(listed under `deep_files`), and on a live server `GET /api/profile/deep`
+lists the labels while `GET /api/profile/deep/file?label=<label>` downloads
+one (409 while a span with that label is still running — reading it would
+stop the profiler). Open with `uv run python -c "import pstats;
+pstats.Stats('p.deep/scan.callback.color.prof').sort_stats('cumulative').print_stats(30)"`
+or `snakeviz`.
 
 ## Step 5 — Prove the fix
 

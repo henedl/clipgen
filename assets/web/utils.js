@@ -186,16 +186,27 @@ var clipgenApplyConfig = function (payload) {
 // ---- Performance instrumentation ----
 // No-op unless CLIPGEN_CONFIG.profiling; read via `tests/ui/shot.py --perf`. See agents/skills/profile/SKILL.md.
 var clipgenPerf = (function () {
+  var MAX_LABELS = 512; // bounded like the Python side; overflow is counted, never silent
   var acc = {
     measures: {},
     longtasks: { count: 0, totalMs: 0, maxMs: 0 },
+    dropped: 0,
+    supported: { longtask: null }, // null until observe() runs; false when the browser lacks it
   };
   window.__clipgenPerf = acc;
   var observer = null;
+  var labelCount = 0;
+  // Per-label stacks of start times: nested same-label spans each get a sample.
+  var open = {};
 
   function record(label, ms) {
+    if (!CLIPGEN_CONFIG.profiling) return;
     var m = acc.measures[label];
-    if (!m) { m = acc.measures[label] = { totalMs: 0, n: 0, maxMs: 0 }; }
+    if (!m) {
+      if (labelCount >= MAX_LABELS) { acc.dropped += 1; return; }
+      labelCount += 1;
+      m = acc.measures[label] = { totalMs: 0, n: 0, maxMs: 0 };
+    }
     m.totalMs += ms;
     m.n += 1;
     if (ms > m.maxMs) m.maxMs = ms;
@@ -203,17 +214,18 @@ var clipgenPerf = (function () {
 
   function begin(label) {
     if (!CLIPGEN_CONFIG.profiling) return;
+    (open[label] || (open[label] = [])).push(performance.now());
+    // Trace breadcrumb only; timing comes from the stack above.
     try { performance.mark("cg:" + label + ":start"); } catch (_) {}
   }
 
   function end(label) {
     if (!CLIPGEN_CONFIG.profiling) return;
-    try {
-      var entry = performance.measure("cg:" + label, "cg:" + label + ":start");
-      record(label, entry.duration);
-      performance.clearMarks("cg:" + label + ":start");
-      performance.clearMeasures("cg:" + label);
-    } catch (_) {} // begin() never ran for this label
+    var stack = open[label];
+    if (!stack || !stack.length) return; // begin() never ran for this label
+    record(label, performance.now() - stack.pop());
+    if (!stack.length) delete open[label];
+    try { performance.mark("cg:" + label + ":end"); } catch (_) {}
   }
 
   // Time a synchronous function; returns its result.
@@ -249,11 +261,18 @@ var clipgenPerf = (function () {
     };
   }
 
-  // Longtask observer: main-thread stalls >50ms, the browser's own signal.
-  // Feature-detected; unsupported builds degrade to measures-only.
+  // Longtask observer: main-thread stalls >50ms. Unsupported browsers report false.
   function observe() {
     if (observer || !CLIPGEN_CONFIG.profiling) return;
-    if (typeof PerformanceObserver === "undefined") return;
+    if (typeof PerformanceObserver === "undefined") {
+      acc.supported.longtask = false;
+      return;
+    }
+    var types = PerformanceObserver.supportedEntryTypes;
+    if (types && types.indexOf("longtask") < 0) {
+      acc.supported.longtask = false;
+      return;
+    }
     try {
       observer = new PerformanceObserver(function (list) {
         var entries = list.getEntries();
@@ -265,11 +284,13 @@ var clipgenPerf = (function () {
         }
       });
       observer.observe({ entryTypes: ["longtask"] });
+      acc.supported.longtask = true;
       window.addEventListener("pagehide", function () {
         if (observer) { observer.disconnect(); observer = null; }
       });
     } catch (_) {
       observer = null;
+      acc.supported.longtask = false;
     }
   }
 
