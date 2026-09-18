@@ -1648,8 +1648,8 @@
   line-height: 1.5;
 }
 
-/* Studio: playhead sweep + clip pulse. Default state explicit so the
- * transition on mouseleave has a target to ease back to. */
+/* Studio: playhead sweep + clip pulse. Loops sit paused on the base rule and run
+ * on hover, so leaving freezes them in place; removing one snaps it to frame 0. */
 .start-overlay .art-studio__playhead {
   transform-origin: 0 0;
   transform: translateX(0);
@@ -1657,12 +1657,13 @@
   transition:
     transform 700ms var(--ease-out),
     opacity 500ms ease-out;
+  animation: so-studio-sweep 2.2s cubic-bezier(.45, .05, .55, .95) infinite paused;
 }
 
 .start-overlay .tool-tile:hover .art-studio__playhead {
   opacity: 1;
   transition: opacity 200ms ease-in;
-  animation: so-studio-sweep 2.2s cubic-bezier(.45, .05, .55, .95) infinite;
+  animation-play-state: running;
 }
 
 @keyframes so-studio-sweep {
@@ -1673,10 +1674,11 @@
 .start-overlay .art-studio__clip {
   opacity: 0.6;
   transition: opacity 600ms ease-out;
+  animation: so-studio-flash 2.2s linear infinite paused;
 }
 
 .start-overlay .tool-tile:hover .art-studio__clip {
-  animation: so-studio-flash 2.2s linear infinite;
+  animation-play-state: running;
 }
 
 @keyframes so-studio-flash {
@@ -1689,10 +1691,11 @@
   stroke-dasharray: 4 3;
   stroke-dashoffset: 0;
   transition: stroke-dashoffset 700ms var(--ease-out);
+  animation: so-screenspace-march 1.2s linear infinite paused;
 }
 
 .start-overlay .tool-tile:hover .art-screenspace__box {
-  animation: so-screenspace-march 1.2s linear infinite;
+  animation-play-state: running;
 }
 
 @keyframes so-screenspace-march {
@@ -1702,13 +1705,13 @@
 .start-overlay .art-screenspace__solid {
   opacity: 0.55;
   transition: opacity 600ms ease-out;
+  /* Starts at the trough (-0.8s, half a cycle), which matches the resting opacity. */
+  --pulse-trough: .55;
+  animation: cg-pulse 1.6s ease-in-out -0.8s infinite paused;
 }
 
 .start-overlay .tool-tile:hover .art-screenspace__solid {
-  /* Shared breathe from tokens.css. The -0.8s (half the duration) starts it at
-   * the trough, matching the .55 resting opacity above. */
-  --pulse-trough: .55;
-  animation: cg-pulse 1.6s ease-in-out -0.8s infinite;
+  animation-play-state: running;
 }
 
 /* Geometry-property animation on width/height needs the un-prefixed values
@@ -1765,12 +1768,13 @@
   transition:
     transform 700ms var(--ease-out),
     opacity 500ms ease-out;
+  animation: so-transcripts-scrub 2.4s cubic-bezier(.45, .05, .55, .95) infinite paused;
 }
 
 .start-overlay .tool-tile:hover .art-transcripts__cursor {
   opacity: 1;
   transition: opacity 200ms ease-in;
-  animation: so-transcripts-scrub 2.4s cubic-bezier(.45, .05, .55, .95) infinite;
+  animation-play-state: running;
 }
 
 @keyframes so-transcripts-scrub {
@@ -1782,10 +1786,11 @@
   transform-origin: left;
   transform: scaleX(0);
   transition: transform 700ms var(--ease-out);
+  animation: so-transcripts-fill 2.4s cubic-bezier(.45, .05, .55, .95) infinite paused;
 }
 
 .start-overlay .tool-tile:hover .art-transcripts__line-fill {
-  animation: so-transcripts-fill 2.4s cubic-bezier(.45, .05, .55, .95) infinite;
+  animation-play-state: running;
 }
 
 @keyframes so-transcripts-fill {
@@ -2288,6 +2293,12 @@ html[data-theme="light"] .start-overlay .rail__shimmer::before {
   .start-overlay .rail-recents-more__chev {
     transition: none;
   }
+  .start-overlay .art-studio__playhead,
+  .start-overlay .art-studio__clip,
+  .start-overlay .art-screenspace__box,
+  .start-overlay .art-screenspace__solid,
+  .start-overlay .art-transcripts__cursor,
+  .start-overlay .art-transcripts__line-fill,
   .start-overlay .tool-tile:hover .art-studio__playhead,
   .start-overlay .tool-tile:hover .art-studio__clip,
   .start-overlay .tool-tile:hover .art-screenspace__box,

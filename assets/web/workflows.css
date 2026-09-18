@@ -1478,6 +1478,13 @@ body[data-frontend="workflows"] {
     border-color var(--duration-fast);
 }
 
+/* Hit slop. */
+.wf-wire-delete-btn::after {
+  content: "";
+  position: absolute;
+  inset: calc(var(--space-1-5) * -1);
+}
+
 .wf-wire-delete-btn:hover {
   color: var(--severity-high);
   border-color: var(--severity-high);
