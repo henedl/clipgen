@@ -445,6 +445,12 @@ html[data-theme="light"] .cg-logo {
 
 /* ---- Shared utilities ---- */
 
+/* Crisper text on macOS; every page inherits it from here. */
+body {
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
 /* Tabular monospace — required on every timestamp, run number, version label.
  * Pairs with elements.style font-family override or works alone. */
 .cg-mono {
@@ -811,6 +817,7 @@ audio.cg-audiotrack { display: none; }
   font-size: var(--text-xs);
   color: var(--fg-faint);
   line-height: 1.35;
+  text-wrap: pretty;
 }
 /* Slider: themed track + thumb (mirrors screenspace's .param-control range),
    with a faint center tick marking the 100% source level. */
@@ -903,6 +910,7 @@ audio.cg-audiotrack { display: none; }
 .cg-modal-card h3 {
   font-size: var(--text-md);
   font-weight: 600;
+  text-wrap: balance;
 }
 .cg-modal-card p {
   font-size: var(--text-sm);

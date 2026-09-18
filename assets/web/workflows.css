@@ -44,8 +44,6 @@ body[data-frontend="workflows"] {
   background: var(--bg);
   color: var(--fg);
   font-family: var(--font-sans);
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
   letter-spacing: -0.005em;
   line-height: 1.5;
 }
@@ -141,6 +139,7 @@ body[data-frontend="workflows"] {
   font-size: var(--text-sm);
   color: var(--fg-faint);
   line-height: 1.5;
+  text-wrap: pretty;
 }
 
 /* ---- Canvas pane: toolbar + pannable canvas ---- */
@@ -1068,6 +1067,7 @@ body[data-frontend="workflows"] {
   margin: 0;
   font-size: var(--text-2xl);
   font-weight: 700;
+  text-wrap: balance;
 }
 
 .wf-canvas-empty p {
@@ -1080,6 +1080,7 @@ body[data-frontend="workflows"] {
 .wf-canvas-empty .wf-empty-sub {
   font-size: var(--text-sm);
   color: var(--fg-faint);
+  text-wrap: pretty;
 }
 
 /* Built-in recipe chips on the empty canvas. The parent is pointer-events:none,
@@ -1644,6 +1645,7 @@ body[data-frontend="workflows"] {
 .wf-validation-count {
   font-size: var(--text-xs);
   color: var(--fg-faint);
+  font-variant-numeric: tabular-nums;
 }
 
 .wf-issue-list {
@@ -2086,6 +2088,7 @@ body[data-frontend="workflows"] {
   font-size: var(--text-md);
   font-weight: 600;
   color: var(--fg);
+  text-wrap: balance;
 }
 
 .wf-dialog-body {

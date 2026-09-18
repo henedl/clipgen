@@ -101,6 +101,7 @@
   font-size: var(--text-2xs);
   color: var(--color-text-dim);
   white-space: nowrap;
+  font-variant-numeric: tabular-nums;
 }
 
 .md-search-results {
@@ -303,6 +304,7 @@
 .md-details-count {
   font-size: var(--text-2xs);
   color: var(--fg-faint);
+  font-variant-numeric: tabular-nums;
 }
 
 .md-details-body {
@@ -351,6 +353,7 @@
   font-size: var(--text-xs);
   color: var(--color-text-dim);
   margin-left: auto;
+  font-variant-numeric: tabular-nums;
 }
 
 .md-section-chevron {
@@ -461,6 +464,7 @@
 .md-count-value {
   position: relative;
   z-index: 1;
+  font-variant-numeric: tabular-nums;
 }
 
 .md-inline-bar {
@@ -616,6 +620,7 @@
   font-size: var(--text-xs);
   font-family: var(--font-mono);
   text-align: right;
+  font-variant-numeric: tabular-nums;
 }
 
 .md-cat-bar-coverage {

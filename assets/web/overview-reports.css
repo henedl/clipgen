@@ -200,6 +200,7 @@
   margin-top: var(--space-2);
   font-size: var(--text-base);
   line-height: 1.55;
+  text-wrap: pretty;
 }
 
 .rp-report-body h3 {
@@ -223,6 +224,7 @@
 
 .rp-report-hint {
   color: var(--color-text-dim);
+  text-wrap: pretty;
 }
 
 /* Streaming partial text keeps the model's raw line breaks until the final
@@ -348,6 +350,7 @@
 
 .rp-clip-time {
   color: var(--color-text-dim);
+  font-variant-numeric: tabular-nums;
 }
 
 .rp-clip-sev {

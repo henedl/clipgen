@@ -429,6 +429,7 @@ html[data-desktop-chrome="macos"][data-desktop-fullscreen] .topnav-left {
   box-shadow: var(--shadow-lg);
   z-index: var(--z-toast, 3000);
   transition: opacity var(--duration-fast);
+  text-wrap: balance;
 }
 
 .toast.hidden {
