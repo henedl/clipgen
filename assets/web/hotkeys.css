@@ -13,6 +13,11 @@
   align-items: center;
   justify-content: center;
   z-index: var(--z-modal);
+  background: transparent;
+  transition: background-color var(--duration-fast) ease-out;
+}
+
+.hk-overlay.is-open {
   background: rgba(10, 10, 11, 0.55);
 }
 
@@ -235,4 +240,10 @@
   background-color: currentColor;
   mask: var(--hk-help-svg) no-repeat center / contain;
   -webkit-mask: var(--hk-help-svg) no-repeat center / contain;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .hk-overlay {
+    transition: none;
+  }
 }

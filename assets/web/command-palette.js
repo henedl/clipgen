@@ -96,6 +96,7 @@
   var participantSource = null; // page-set fn returning participant id strings
   var els = null;     // { overlay, panel, input, list, empty }
   var isOpen = false;
+  var closeTimer = 0;
   var commands = [];  // prepared visible commands for the current open
   var rendered = [];  // commands currently in the list, in DOM order
   var selectedIndex = -1;
@@ -586,6 +587,7 @@
     commands = collectCommands();
     els.input.value = "";
     isOpen = true;
+    clearTimeout(closeTimer);
     els.overlay.classList.remove("hidden");
     render();
     openBlockingModal(els.overlay, {
@@ -595,6 +597,8 @@
       onBackdropClick: close,
     });
     requestAnimationFrame(function () {
+      if (!isOpen) return;
+      els.overlay.classList.add("is-open");
       els.panel.classList.add("is-in");
     });
   }
@@ -604,8 +608,14 @@
     isOpen = false;
     closeBlockingModal(els.overlay);
     els.panel.classList.remove("is-in");
-    els.overlay.classList.add("hidden");
+    els.overlay.classList.remove("is-open");
     els.input.value = "";
+    // Hide after the exit transition; its length is read from CSS so they cannot drift.
+    var ms = parseFloat(getComputedStyle(els.panel).transitionDuration) * 1000 || 0;
+    clearTimeout(closeTimer);
+    closeTimer = setTimeout(function () {
+      if (!isOpen) els.overlay.classList.add("hidden");
+    }, ms);
   }
 
   function toggle() {
