@@ -34,8 +34,6 @@ body[data-frontend="composer"] {
   background: var(--bg);
   color: var(--fg);
   font-family: var(--font-sans);
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
   letter-spacing: -0.005em;
   line-height: 1.5;
   height: 100%;
@@ -630,11 +628,13 @@ body[data-frontend="composer"] {
   text-align: center;
   color: var(--fg-muted);
   font-size: var(--text-sm);
+  text-wrap: balance;
 }
 
 .co-empty-sub {
   color: var(--fg-dim);
   font-size: var(--text-xs);
+  text-wrap: pretty;
 }
 
 /* ---- Cuts rail ---- */
@@ -754,6 +754,7 @@ body[data-frontend="composer"] {
   color: var(--fg-dim);
   font-size: var(--text-xs);
   padding: 0 var(--space-1);
+  text-wrap: pretty;
 }
 
 .co-cut-item {
@@ -1016,6 +1017,7 @@ body[data-frontend="composer"] {
 .co-timeline-hint {
   color: var(--fg-dim);
   font-size: var(--text-2xs);
+  text-wrap: pretty;
 }
 
 /* ---- Tooltip ---- */

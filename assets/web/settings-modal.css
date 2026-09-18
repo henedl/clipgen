@@ -795,6 +795,7 @@ html[data-theme="dark"] .settings-panel {
   color: var(--color-text-dim);
   font-size: var(--text-xs);
   white-space: nowrap;
+  font-variant-numeric: tabular-nums;
 }
 
 .settings-llm-model-link-slot {

@@ -55,8 +55,6 @@ html {
 
 body {
   font-family: var(--font-sans);
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
   letter-spacing: -0.005em;
   background-color: var(--color-bg);
   color: var(--color-text);
@@ -406,6 +404,7 @@ body[data-active-tab]:not([data-active-tab="sheet"]) #studioSidebar {
   color: var(--accent-fg);
   font-weight: 500;
   margin-left: var(--space-1);
+  font-variant-numeric: tabular-nums;
 }
 
 .tab-status-dot {
@@ -513,6 +512,7 @@ body[data-active-tab]:not([data-active-tab="sheet"]) #studioSidebar {
   font-size: var(--text-sm);
   line-height: 1.55;
   text-align: center;
+  text-wrap: balance;
 }
 
 #sheetLoading .sheet-loading-caption {
@@ -1211,6 +1211,7 @@ body.dragging #sheetMain {
   color: var(--color-text-dim);
   font-size: var(--text-sm);
   text-align: center;
+  text-wrap: balance;
 }
 
 /* The empty element studio.js hands to setDragImage() to blank out the native
@@ -1670,6 +1671,7 @@ html[data-theme="dark"] .queue-card-error .queue-card-thumb {
   padding: var(--space-1) var(--space-2) 2px;
   font-size: var(--text-2xs);
   color: var(--fg-faint);
+  text-wrap: pretty;
 }
 
 #stashedReelsHeader h3,
@@ -2013,6 +2015,7 @@ html[data-theme="dark"] .queue-card-error .queue-card-thumb {
   font-size: var(--text-xs);
   color: var(--fg-muted);
   margin: 0;
+  text-wrap: pretty;
 }
 .gallery-dialog-fields {
   display: flex;
@@ -2177,6 +2180,7 @@ html[data-theme="dark"] .queue-card-error .queue-card-thumb {
   font-size: var(--text-sm);
   color: var(--fg-faint);
   white-space: nowrap;
+  font-variant-numeric: tabular-nums;
 }
 
 /* Status overlay */
@@ -2218,6 +2222,7 @@ html[data-theme="dark"] .queue-card-error .queue-card-thumb {
 .status-card h3 {
   font-size: var(--text-md);
   font-weight: 600;
+  text-wrap: balance;
 }
 
 .status-card p {
@@ -2281,6 +2286,7 @@ html[data-theme="dark"] .queue-card-error .queue-card-thumb {
   font-size: var(--text-sm);
   color: var(--fg-faint);
   white-space: nowrap;
+  font-variant-numeric: tabular-nums;
 }
 .build-elapsed:empty {
   display: none;
@@ -2690,6 +2696,7 @@ html[data-theme="dark"] .log-panel {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  text-wrap: pretty;
 }
 
 /* Asterisk chip on a card whose timestamp has a Composer trim override —

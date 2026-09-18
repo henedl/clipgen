@@ -940,6 +940,7 @@
   padding: 12px 10px;
   color: var(--fg-faint);
   font-size: 12.5px;
+  text-wrap: balance;
 }
 
 /* ---- Spreadsheet card ----------------------------------------------- */
@@ -1190,6 +1191,7 @@
   font-size: 12.5px;
   color: var(--fg-faint);
   font-style: italic;
+  text-wrap: balance;
 }
 
 /* Second dropdown: appears only when the chosen spreadsheet has 2+ tabs. */
@@ -1781,6 +1783,7 @@
   font-size: 12px;
   color: var(--fg-faint);
   padding: 8px 0;
+  text-wrap: balance;
 }
 
 .start-overlay .changelog__entry {

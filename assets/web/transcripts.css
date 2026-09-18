@@ -22,8 +22,6 @@ html {
 
 body {
   font-family: var(--font-sans);
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
   letter-spacing: -0.005em;
   background-color: var(--color-bg);
   color: var(--color-text);
@@ -138,6 +136,7 @@ body {
   font-family: var(--font-mono);
   color: var(--color-text-dim);
   white-space: nowrap;
+  font-variant-numeric: tabular-nums;
 }
 
 /* 150% of #headerSearch — result text is the whole point of the dropdown, and
@@ -619,15 +618,18 @@ body {
   gap: var(--space-2);
   color: var(--color-text-dim);
   font-size: var(--text-sm);
+  text-wrap: balance;
 }
 
 .panel-empty-text {
   margin: 0;
+  text-wrap: balance;
 }
 
 .panel-empty-hint {
   margin: 0;
   font-size: var(--text-xs);
+  text-wrap: pretty;
 }
 
 #summaryBody {
@@ -663,6 +665,7 @@ body {
   white-space: pre-wrap;
   color: var(--color-text);
   margin-bottom: var(--space-2);
+  text-wrap: pretty;
 }
 
 .summary-stream:empty {
@@ -1315,11 +1318,13 @@ body {
   padding: var(--space-8) var(--space-4);
   color: var(--color-text-dim);
   gap: var(--space-2);
+  text-wrap: balance;
 }
 
 .empty-hint {
   font-size: var(--text-sm);
   opacity: 0.7;
+  text-wrap: pretty;
 }
 
 /* Segment mark gutter — 14 px circular dot, hollow when unmarked
@@ -1869,6 +1874,7 @@ body {
   font-size: var(--text-sm);
   color: var(--color-text-dim);
   font-style: italic;
+  text-wrap: balance;
 }
 
 /* Pre-fetch placeholder in #participantPills. Geometry only — the shimmer and
@@ -2255,6 +2261,7 @@ body {
   color: var(--color-text-dim);
   font-size: var(--text-xs);
   text-align: right;
+  text-wrap: pretty;
 }
 
 .pill-options-footer {
@@ -2326,6 +2333,7 @@ body {
 .modal-header h3 {
   font-size: var(--text-lg);
   font-weight: 600;
+  text-wrap: balance;
 }
 
 .model-install-modal {
@@ -2389,6 +2397,7 @@ body {
   line-height: 1.5;
   white-space: pre-wrap;
   overflow-x: auto;
+  text-wrap: pretty;
 }
 
 .model-install-hint.hidden {
@@ -2422,6 +2431,7 @@ body {
   margin-top: var(--space-2);
   font-size: var(--text-xs);
   color: var(--color-text-dim);
+  font-variant-numeric: tabular-nums;
 }
 
 .model-install-actions {
@@ -2507,6 +2517,7 @@ body {
   color: var(--color-text-dim);
   margin-bottom: var(--space-4);
   min-height: 1.2em;
+  text-wrap: pretty;
 }
 
 .param-modal-progress {
@@ -2536,6 +2547,7 @@ body {
   margin-top: var(--space-2);
   font-size: var(--text-xs);
   color: var(--color-text-dim);
+  font-variant-numeric: tabular-nums;
 }
 
 .param-modal-actions {
@@ -2575,6 +2587,7 @@ body {
   margin: var(--space-1) 0 var(--space-3);
   color: var(--color-text-dim);
   font-size: var(--text-xs);
+  text-wrap: pretty;
 }
 
 .dict-actions,
@@ -2588,6 +2601,7 @@ body {
   color: var(--color-text-dim);
   font-size: var(--text-sm);
   padding: var(--space-2) 0;
+  text-wrap: balance;
 }
 
 .term-form {
