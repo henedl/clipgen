@@ -333,6 +333,14 @@ class ScreenspaceWorker:
         task_id = task["id"]
         with self._lock:
             self._tasks[task_id] = task
+        profiling.op_open(
+            "screenspace_task",
+            op_id=task_id,
+            meta={
+                "type": task.get("type", ""),
+                "participant": task.get("participant", ""),
+            },
+        )
         self._queue.put((task.get("priority", 100), task["created_at"], task_id))
         return task_id
 
@@ -774,6 +782,17 @@ class ScreenspaceWorker:
                     utils.warning_print(f"Worker loop error: {exc}")
 
     def _execute_task(self, task: dict[str, Any]) -> None:
+        """Run the task as one operation record; the body owns the status."""
+        task_id = task["id"]
+        with profiling.op_run(task_id, kind="screenspace_task"):
+            self._execute_task_body(task)
+            with self._lock:
+                status = str(task.get("status", ""))
+                result = task.get("result")
+            profiling.op_outcome(task_id, status)
+            profiling.op_work(task_id, len(result) if isinstance(result, list) else 0)
+
+    def _execute_task_body(self, task: dict[str, Any]) -> None:
         """Dispatch task to the appropriate workflow function."""
         task_id = task["id"]
 

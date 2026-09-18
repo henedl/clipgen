@@ -1,6 +1,6 @@
 # More reliable performance diagnostics
 
-Status: In progress; Phases 1-2 landed, Phase 3 pending.
+Status: Done; all three phases landed.
 
 ## Summary
 
@@ -20,7 +20,7 @@ This review used source inspection; it does not establish new performance baseli
 | --- | --- | --- |
 | 1. Trustworthy measurements | Done | Reliable structured exports and benchmark comparisons |
 | 2. Browser workloads | Done | Verified workloads with load, interaction, and idle reports |
-| 3. Concurrent work | Not started | Bounded operation records and inspectable deep profiles |
+| 3. Concurrent work | Done | Bounded operation records and inspectable deep profiles |
 
 Implement phases in order and ship them independently. Mark checklist items as
 they land, update this table, and record validation and unresolved issues below.
@@ -100,14 +100,14 @@ reports distinguish load cost, interaction cost, and idle churn.
 
 ## Phase 3 — Explain overlapping work
 
-- [ ] Add bounded operation records for clip batches, Screenspace tasks, transcription tasks, and workflow runs.
-- [ ] Record operation ID, parent ID, kind, queued/start/end times, outcome, work count, and accumulated measurements.
-- [ ] Pass operation context explicitly into worker submissions; do not assume request context follows threads.
-- [ ] Keep existing aggregate labels stable. Store task IDs as operation fields rather than creating a label per task.
-- [ ] Separate queue wait, execution duration, and overall elapsed time. Clearly identify inclusive timings that overlap.
-- [ ] Retain the latest 100 completed operations plus active operations; expose eviction counts.
-- [ ] Include operation records in JSON and `/api/profile`, allowing inspection of running jobs without waiting for process exit.
-- [ ] Add downloadable deep-profile files for completed profiles so investigation is not limited to the printed top 15 functions.
+- [x] Add bounded operation records for clip batches, Screenspace tasks, transcription tasks, and workflow runs.
+- [x] Record operation ID, parent ID, kind, queued/start/end times, outcome, work count, and accumulated measurements.
+- [x] Pass operation context explicitly into worker submissions; do not assume request context follows threads.
+- [x] Keep existing aggregate labels stable. Store task IDs as operation fields rather than creating a label per task.
+- [x] Separate queue wait, execution duration, and overall elapsed time. Clearly identify inclusive timings that overlap.
+- [x] Retain the latest 100 completed operations plus active operations; expose eviction counts.
+- [x] Include operation records in JSON and `/api/profile`, allowing inspection of running jobs without waiting for process exit.
+- [x] Add downloadable deep-profile files for completed profiles so investigation is not limited to the printed top 15 functions.
 
 Defer continuous CPU/process-tree memory sampling and a dedicated dashboard. Both
 can build on these artifacts later; neither is needed for the first diagnostic
@@ -115,13 +115,13 @@ improvements.
 
 ## Validation and rollout
 
-- [ ] Test atomic reset under concurrent recording, active deep profiles, Unicode streams, disconnects, capacity limits, and disabled-mode behavior.
-- [ ] Test failed subprocesses with partial metrics, missing outputs, mismatched fixtures, missing baseline scenarios, repeated-run aggregation, and threshold boundaries.
-- [ ] Test nested browser spans, rejected promises, unsupported observers, scenario readiness failures, and bounded collection.
-- [ ] Run existing profiling and benchmark tests, relevant frontend checks, and six-page UI smoke; inspect screenshots.
-- [ ] Measure instrumentation overhead using identical workloads with profiling off, ordinary profiling, and deep profiling separately.
-- [ ] Keep timing regression gates opt-in; ordinary CI should enforce correctness and workload validity.
-- [ ] Update the profiling skill and performance guidance with canonical commands, interpretation rules, and current labels, including `llm.generate`.
+- [x] Test atomic reset under concurrent recording, active deep profiles, Unicode streams, disconnects, capacity limits, and disabled-mode behavior.
+- [x] Test failed subprocesses with partial metrics, missing outputs, mismatched fixtures, missing baseline scenarios, repeated-run aggregation, and threshold boundaries.
+- [x] Test nested browser spans, rejected promises, unsupported observers, scenario readiness failures, and bounded collection.
+- [x] Run existing profiling and benchmark tests, relevant frontend checks, and six-page UI smoke; inspect screenshots.
+- [x] Measure instrumentation overhead using identical workloads with profiling off, ordinary profiling, and deep profiling separately.
+- [x] Keep timing regression gates opt-in; ordinary CI should enforce correctness and workload validity.
+- [x] Update the profiling skill and performance guidance with canonical commands, interpretation rules, and current labels, including `llm.generate`.
 
 Defaults: developer-facing, local artifacts, no telemetry, no new heavy dependencies
 or automatic browser/model downloads. Preserve opt-in instrumentation and avoid
@@ -189,3 +189,34 @@ per-frame recording overhead.
   finding of this plan.
 - Not done: a Composer poller check (Composer has no poller); browser
   scenarios are opt-in (`CLIPGEN_UI_CHECK=1`) and never run in CI.
+
+### Phase 3 (landed)
+
+- Operation records in `profiling.py`: `op_open` / `op_run` / `op_scope` /
+  `scoped` / `op_stream` / `bind`, thread-local context handed over
+  explicitly at every pool submission, per-record inclusive `measures`
+  (64-label cap), `queue_wait_s + run_s == elapsed_s`, outcomes
+  `completed` / `failed` / `cancelled` / `paused` / `abandoned` or the
+  task's terminal status, 256 active + last 100 finished with an `evicted`
+  count. Exported under `operations` in the JSON and on `/api/profile`.
+- Hooked: `process_clips` / `_process_reel` / `regenerate_from_manifest`
+  (one record per CLI call, nested under a request's record otherwise),
+  Studio `generate` / `intake` streams and `_generate_intake_clips`,
+  `ScreenspaceWorker` tasks (queued at enqueue, run in the pool thread),
+  `TranscriptWorker` tasks, thinking agents, workflow runs, batches and
+  batch children (child `parent` = batch id). Aggregate labels unchanged.
+- Deep profiles: `deep_labels` / `deep_dump`; `--profile-output p.json`
+  writes `p.deep/<label>.prof` (listed as `deep_files`); `GET
+  /api/profile/deep` lists labels, `GET /api/profile/deep/file?label=`
+  downloads one, 409 while a span with that label is running.
+- Verified: a Studio generate (8 cells) and a Screenspace scan POSTed
+  concurrently against `--studio --profile` appear as two records with
+  their own ids, kinds, work counts and disjoint measures; a workflow run's
+  record carries `workflows.run` and its node spans (unit test).
+- Instrumentation overhead, `--ss-task flow` over a 120 s testsrc at 0.1 s
+  interval, three fresh runs each, medians: off 1.745 s, `--profile`
+  1.746 s, `--profile-deep scan.callback` 1.764 s. Within run-to-run noise
+  on this workload; deep profiling's cost scales with the profiled span's
+  call density and is a diagnostic, never a comparison baseline.
+- Deferred, as planned: continuous CPU / process-tree memory sampling and a
+  dedicated dashboard.

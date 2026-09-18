@@ -713,7 +713,7 @@ def _parallel_map_ordered(
     """
     # pipeline.clip / pipeline.pool_wall is effective parallelism, what
     # CLIP_PARALLEL_WORKERS is tuned against; shared by every pool.
-    worker_fn = profiling.timed("pipeline.clip")(worker_fn)
+    worker_fn = profiling.bind(profiling.timed("pipeline.clip")(worker_fn))
     with (
         profiling.span("pipeline.pool_wall"),
         concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool,
@@ -1019,6 +1019,7 @@ def _transcribe_segments(
             files.release_reservation(t_path)
 
 
+@profiling.scoped("clips", work_of=lambda clips_list, *a, **k: len(clips_list))
 def process_clips(
     clips_list: list[ClipRecord],
     output_format: str = "clip",
@@ -1376,6 +1377,7 @@ def process_reel(
         titlecards.clear_endcard_cache()
 
 
+@profiling.scoped("reel", work_of=lambda clips_list, *a, **k: len(clips_list))
 def _process_reel(
     clips_list: list[ClipRecord],
     output_file: str | None = None,
@@ -1701,6 +1703,10 @@ def _regenerate_batch(
     return count
 
 
+@profiling.scoped(
+    "regenerate",
+    work_of=lambda artifacts, reels=None: len(artifacts) + len(reels or []),
+)
 def regenerate_from_manifest(
     artifacts: list[dict[str, Any]],
     reels: list[dict[str, Any]] | None = None,

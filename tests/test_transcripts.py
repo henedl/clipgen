@@ -1526,6 +1526,20 @@ class TestTranscriptWorker:
         assert task["id"] == task_id
         assert worker.get_task("nonexistent") is None
 
+    def test_enqueue_records_an_operation(self, monkeypatch):
+        """The queued task is an operation record keyed by its own id."""
+        import profiling
+
+        monkeypatch.setattr(config, "PROFILING", True)
+        profiling.ops_reset()
+        worker = transcripts.TranscriptWorker()
+        task_id = worker.enqueue(transcripts.create_transcript_task("P01", ["/v.mp4"]))
+        active = profiling.operations()["active"]
+        assert [(a["id"], a["kind"], a["meta"]) for a in active] == [
+            (task_id, "transcribe", {"participant": "P01"})
+        ]
+        profiling.ops_reset()
+
     def test_cancel_all_cancels_queued_and_flags_running(self):
         """cancel_all marks queued tasks cancelled and flags running ones."""
         worker = transcripts.TranscriptWorker()

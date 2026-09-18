@@ -1681,6 +1681,11 @@ class TranscriptWorker:
         task_id = task["id"]
         with self._lock:
             self._tasks[task_id] = task
+        profiling.op_open(
+            str(task.get("kind", "transcribe")),
+            op_id=task_id,
+            meta={"participant": task.get("participant", "")},
+        )
         self._queue.put((100, task_id))
         return task_id
 
@@ -1780,16 +1785,23 @@ class TranscriptWorker:
                 task["status"] = TASK_STATUS_RUNNING
 
             # Nothing restarts this thread, so a death here wedges every later transcribe request.
-            try:
-                self._execute_task(task)
-            except Exception as exc:
-                utils.error_print(f"Transcription task failed: {exc}")
-                with self._lock:
-                    if task.get("status") == TASK_STATUS_RUNNING:
-                        task["status"] = TASK_STATUS_FAILED
-                        task["error"] = str(exc)
-                        task.setdefault("partial_segments", [])
-                        task["completed_at"] = datetime.now(UTC).isoformat()
+            with profiling.op_run(task_id, kind=str(task.get("kind", "transcribe"))):
+                try:
+                    self._execute_task(task)
+                except Exception as exc:
+                    utils.error_print(f"Transcription task failed: {exc}")
+                    with self._lock:
+                        if task.get("status") == TASK_STATUS_RUNNING:
+                            task["status"] = TASK_STATUS_FAILED
+                            task["error"] = str(exc)
+                            task.setdefault("partial_segments", [])
+                            task["completed_at"] = datetime.now(UTC).isoformat()
+                finally:
+                    with self._lock:
+                        status = str(task.get("status", ""))
+                        result = task.get("result") or {}
+                    profiling.op_outcome(task_id, status)
+                    profiling.op_work(task_id, len(result.get("segments") or []))
 
             if self.on_task_complete:
                 try:

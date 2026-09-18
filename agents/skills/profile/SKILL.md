@@ -439,6 +439,37 @@ CLIPGEN_UI_CHECK=1 uv run --extra ui python tests/ui/shot.py transcripts \
 - `longtasks` / `cdp.LayoutCount` → render work; check DocumentFragment batching and
   rAF-throttling per [CODE-REVIEW.md](../../CODE-REVIEW.md).
 
+**Overlapping work — `operations` in the JSON and on `/api/profile`.** The
+label table sums across every job in the process; when a Studio generate and
+a Screenspace scan overlap it cannot say which one a slow `ffmpeg.run.cut`
+belonged to. Each job is also an operation record: clip batches (`clips` from
+the CLI, `generate` / `intake` / `reel` / `regenerate` from Studio), every
+`screenspace_task`, `transcribe` / `speakers` task and thinking `agent`, and
+`workflow_run` / `workflow_batch` (children carry the batch as `parent`; a
+scan a workflow node launches carries the run). Fields: `id` (the task or
+run id — never a label), `kind`, `meta`, `queued_at` / `started_at` /
+`ended_at`, `queue_wait_s` / `run_s` / `elapsed_s` (the one additive
+identity), `outcome` (`completed`, `failed`, `cancelled`, `paused`,
+`abandoned` for a streamed response the client dropped, or the task's own
+terminal status), `work` (clips cut, results found, segments) and
+`measures` — the labels recorded by threads working for it. Measures are
+**inclusive**: a `pipeline.pool_wall` contains its `pipeline.clip` seconds,
+so never add them. `active` lists running jobs (read it mid-run), `recent`
+the last 100 finished, `evicted` how many fell off either list. A large
+`queue_wait_s` on `screenspace_task`s is `SCREENSPACE_PARALLEL_WORKERS`
+saturating; a long `run_s` with small measures is time spent outside any
+labelled span.
+
+**Downloading a deep profile.** The printed top-15 is a start; the full
+`cProfile` stats of a finished deep label come as a `.prof` file:
+`--profile-output p.json` writes them beside it as `p.deep/<label>.prof`
+(listed under `deep_files`), and on a live server `GET /api/profile/deep`
+lists the labels while `GET /api/profile/deep/file?label=<label>` downloads
+one (409 while a span with that label is still running — reading it would
+stop the profiler). Open with `uv run python -c "import pstats;
+pstats.Stats('p.deep/scan.callback.color.prof').sort_stats('cumulative').print_stats(30)"`
+or `snakeviz`.
+
 ## Step 5 — Prove the fix
 
 Same input, same command, main vs. branch, both runs reproduced. The optimized

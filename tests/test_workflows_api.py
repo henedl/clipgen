@@ -703,6 +703,31 @@ def test_run_executes_small_dag(wf_client, monkeypatch):
     assert final["nodeStates"]["s"]["status"] == "degraded"
 
 
+def test_run_is_an_operation_record(wf_client, monkeypatch):
+    """The run's id, outcome and node spans land in one operation record."""
+    import profiling
+
+    monkeypatch.setattr(config, "DEBUGGING", True, raising=False)
+    monkeypatch.setattr(config, "PROFILING", True)
+    profiling.ops_reset()
+    bp_id = _make_blueprint(
+        wf_client,
+        nodes=[{"id": "v", "type": "video_source", "params": {"participant": "P01"}}],
+        edges=[],
+    )
+    run = wf_client.post("/workflows/api/runs", json={"blueprintId": bp_id}).get_json()[
+        "run"
+    ]
+    final = _wait_terminal(wf_client, run["id"])
+    recent = {r["id"]: r for r in profiling.operations()["recent"]}
+    rec = recent[run["id"]]
+    assert rec["kind"] == "workflow_run"
+    assert rec["outcome"] == final["status"]
+    assert "workflows.run" in rec["measures"]
+    assert "workflows.node video_source" in rec["measures"]
+    profiling.ops_reset()
+
+
 def test_run_rejects_cycle_with_400(wf_client):
     bp_id = _make_blueprint(
         wf_client,

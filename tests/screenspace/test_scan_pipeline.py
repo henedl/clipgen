@@ -60,6 +60,38 @@ class TestFastScanDispatchIntervalMultiplier:
         assert captured["fast_opts"]["phash_skip"] is True
         assert captured["fast_opts"]["max_region_dim"] == 32
 
+    def test_execute_task_records_an_operation(self, monkeypatch):
+        """A finished task is one operation record: outcome and result count."""
+        import profiling
+
+        monkeypatch.setattr(config, "PROFILING", True)
+        profiling.ops_reset()
+        worker = screenspace.ScreenspaceWorker()
+        monkeypatch.setattr(
+            worker,
+            "_dispatch",
+            lambda *_a, **_k: [{"timestamp": 1.0}, {"timestamp": 2.0}],
+        )
+        task = screenspace.create_task(
+            "color",
+            "P01",
+            "fake_P01.mp4",
+            ["/fake_P01.mp4"],
+            "toolbar",
+            {"x": 0, "y": 0, "w": 10, "h": 10},
+            parameters={},
+        )
+        worker.enqueue(task)
+        with worker._lock:
+            task["status"] = screenspace.TASK_STATUS_RUNNING
+        worker._execute_task(task)
+        assert task["status"] == screenspace.TASK_STATUS_COMPLETED
+        recent = profiling.operations()["recent"]
+        assert [(r["id"], r["kind"], r["outcome"], r["work"]) for r in recent] == [
+            (task["id"], "screenspace_task", "completed", 2)
+        ]
+        profiling.ops_reset()
+
     def test_fast_scan_interval_not_persisted_on_task(self, monkeypatch):
         """Pause/resume re-dispatches the same task; interval must not compound."""
         captured_intervals: list[float] = []

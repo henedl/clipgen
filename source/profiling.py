@@ -36,10 +36,12 @@ import io
 import itertools
 import platform
 import pstats
+import re
 import subprocess
 import sys
 import threading
 import time
+from collections import deque
 from collections.abc import Callable, Generator, Iterable, Iterator
 from contextlib import contextmanager
 from pathlib import Path
@@ -65,6 +67,15 @@ _DEEP: dict[tuple[str, int], cProfile.Profile] = {}
 _DEEP_DONE: set[str] = set()  # labels whose deep-profiled span finished at least once
 _MAX_DEEP = 16
 _DEEP_TOP = 15  # rows of pstats output per label
+
+# Operation records: one per job (clip batch, scan, transcription, workflow run).
+_OPS_ACTIVE: dict[str, dict[str, Any]] = {}
+_OPS_DONE: deque[dict[str, Any]] = deque(maxlen=100)
+_OPS_EVICTED = 0
+_MAX_OPS_ACTIVE = 256
+_MAX_OP_LABELS = 64
+_OP_IDS = itertools.count(1)
+_CURRENT = threading.local()  # the operation this thread is working for
 
 # Recorded even with profiling off (first mark precedes argv parsing); reported only when on.
 _STARTUP_T0: float | None = None
@@ -209,7 +220,10 @@ def add(
         return
     if peak is None and n == 1:
         peak = seconds
+    op = getattr(_CURRENT, "op", None)
     with _LOCK:
+        if op is not None:
+            _op_measure(op, label, seconds, n)
         entry = _TOTALS.get(label)
         if entry is None:
             if len(_TOTALS) >= _MAX_LABELS:
@@ -584,15 +598,16 @@ def export(*, reset: bool = False) -> dict[str, Any]:
         "peak_rss_mb": peak_rss_mb(),
         "dropped_labels": dropped_labels(),
         "active_spans": active_spans(),
+        "operations": operations(),
         "env": environment(),
     }
 
 
-def write_export(path: Path) -> Path | None:
-    """Write :func:`export` to *path* as JSON; ``None`` when the write fails."""
+def write_export(path: Path, **extra: Any) -> Path | None:
+    """Write :func:`export` plus *extra* keys to *path*; ``None`` on failure."""
     import utils
 
-    return utils.write_json_atomic(path, export(), "profile output")
+    return utils.write_json_atomic(path, {**export(), **extra}, "profile output")
 
 
 def _deep_report() -> None:
@@ -651,9 +666,344 @@ def report() -> None:
             print(f"profile | {'labels_dropped':<32} {0.0:8.3f}s  n={dropped}")
     _deep_report()
     if config.PROFILE_OUTPUT:
-        written = write_export(Path(config.PROFILE_OUTPUT))
+        out = Path(config.PROFILE_OUTPUT)
+        deep_files = deep_dump(out.with_name(out.stem + ".deep")) if _DEEP else []
+        written = write_export(out, deep_files=deep_files)
         if written is not None:
             print(f"profile | written {written}")
+
+
+# ---- Operation records: per-job attribution that aggregate labels cannot give. ----
+
+
+def current_op() -> str | None:
+    """The operation this thread is working for, if any.
+
+    Aggregate labels answer "where does time go"; they cannot say which of
+    two concurrent scans a slow ffmpeg belonged to. An operation record does:
+    queued / started / ended stamps, an outcome, a work count, and the labels
+    recorded by threads working for it. Context is passed explicitly — a
+    thread enters an operation via :func:`op_run` or a :func:`bind`-wrapped
+    callable — never inferred from a request. Task ids are record fields,
+    never labels.
+    """
+    return getattr(_CURRENT, "op", None)
+
+
+def _op_measure(op_id: str, label: str, seconds: float, n: int) -> None:
+    """Fold one contribution into the operation's own label map; lock held."""
+    rec = _OPS_ACTIVE.get(op_id)
+    if rec is None:
+        return
+    entry = rec["measures"].get(label)
+    if entry is None:
+        if len(rec["measures"]) >= _MAX_OP_LABELS:
+            return
+        rec["measures"][label] = [seconds, float(n)]
+    else:
+        entry[0] += seconds
+        entry[1] += n
+
+
+def op_open(
+    kind: str,
+    *,
+    op_id: str | None = None,
+    parent: str | None = None,
+    work: int = 0,
+    meta: dict[str, Any] | None = None,
+) -> str:
+    """Record an operation as queued; returns its id (minted when omitted).
+
+    *parent* defaults to the operation the calling thread is inside, so a
+    scan launched by a workflow node records the run as its parent. Past
+    ``_MAX_OPS_ACTIVE`` the id is still returned but nothing is recorded and
+    ``evicted`` counts it.
+    """
+    global _OPS_EVICTED
+    op_id = op_id or f"{kind}_{next(_OP_IDS)}"
+    if not config.PROFILING:
+        return op_id
+    if parent is None:
+        parent = current_op()
+    with _LOCK:
+        if len(_OPS_ACTIVE) >= _MAX_OPS_ACTIVE:
+            _OPS_EVICTED += 1
+            return op_id
+        _OPS_ACTIVE[op_id] = {
+            "id": op_id,
+            "parent": parent,
+            "kind": kind,
+            "meta": dict(meta or {}),
+            "queued_at": time.time(),
+            "started_at": None,
+            "ended_at": None,
+            "outcome": None,
+            "work": work,
+            "measures": {},
+        }
+    return op_id
+
+
+def op_outcome(op_id: str, outcome: str) -> None:
+    """Name how the operation ended (``cancelled``, ``paused``, ...)."""
+    with _LOCK:
+        rec = _OPS_ACTIVE.get(op_id)
+        if rec is not None and outcome:
+            rec["outcome"] = outcome
+
+
+def op_work(op_id: str, n: int) -> None:
+    """Set the operation's work count (clips cut, frames scanned, ...)."""
+    with _LOCK:
+        rec = _OPS_ACTIVE.get(op_id)
+        if rec is not None:
+            rec["work"] = n
+
+
+def _op_close(op_id: str, forced: str | None) -> None:
+    """Move an active record to the recent list with its derived durations."""
+    global _OPS_EVICTED
+    now = time.time()
+    with _LOCK:
+        rec = _OPS_ACTIVE.pop(op_id, None)
+        if rec is None:
+            return
+        rec["ended_at"] = now
+        rec["outcome"] = forced or rec["outcome"] or "completed"
+        started = rec["started_at"] or now
+        rec["queue_wait_s"] = started - rec["queued_at"]
+        rec["run_s"] = now - started
+        rec["elapsed_s"] = now - rec["queued_at"]
+        if len(_OPS_DONE) == _OPS_DONE.maxlen:
+            _OPS_EVICTED += 1
+        _OPS_DONE.append(rec)
+
+
+@contextmanager
+def op_run(
+    op_id: str,
+    *,
+    kind: str = "",
+    parent: str | None = None,
+    meta: dict[str, Any] | None = None,
+) -> Iterator[str]:
+    """Run the operation on this thread: stamps, thread context, outcome.
+
+    Opens the record first when *op_id* was never queued (a job that starts
+    the moment it is created). Labels recorded by this thread — and by pool
+    threads running ``bind``-wrapped callables submitted from it — fold into
+    the record's ``measures``. Those measures are *inclusive*: a
+    ``pipeline.pool_wall`` contains its ``pipeline.clip`` seconds. The only
+    additive identity is ``queue_wait_s + run_s == elapsed_s``. An exception
+    ends the operation ``failed``; a generator closed by a client
+    disconnect ends it ``abandoned``; otherwise the outcome set with
+    :func:`op_outcome` stands, defaulting to ``completed``.
+    """
+    if not config.PROFILING:
+        yield op_id
+        return
+    with _LOCK:
+        known = op_id in _OPS_ACTIVE
+    if not known:
+        op_open(kind or "op", op_id=op_id, parent=parent, meta=meta)
+    now = time.time()
+    with _LOCK:
+        rec = _OPS_ACTIVE.get(op_id)
+        if rec is not None and rec["started_at"] is None:
+            rec["started_at"] = now
+    prev = current_op()
+    _CURRENT.op = op_id
+    forced: str | None = None
+    try:
+        yield op_id
+    except GeneratorExit:
+        forced = "abandoned"
+        raise
+    except BaseException:
+        forced = "failed"
+        raise
+    finally:
+        _CURRENT.op = prev
+        _op_close(op_id, forced)
+
+
+@contextmanager
+def op_scope(
+    kind: str, *, work: int = 0, meta: dict[str, Any] | None = None
+) -> Iterator[str | None]:
+    """A new operation unless this thread is already inside one.
+
+    ``process_clips`` is both a CLI entry point (one operation per call) and
+    a per-cell helper under a Studio request (already inside that request's
+    operation); this keeps one record per job either way.
+    """
+    current = current_op()
+    if not config.PROFILING or current is not None:
+        yield current
+        return
+    with op_run(op_open(kind, work=work, meta=meta)) as op_id:
+        yield op_id
+
+
+def scoped(
+    kind: str,
+    *,
+    work_of: Callable[..., int] | None = None,
+    meta: dict[str, Any] | None = None,
+) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
+    """Decorator form of :func:`op_scope`; *work_of* derives the count from the args."""
+
+    def decorate(fn: Callable[..., Any]) -> Callable[..., Any]:
+        @functools.wraps(fn)
+        def wrapper(*args: Any, **kwargs: Any) -> Any:
+            if not config.PROFILING:
+                return fn(*args, **kwargs)
+            work = work_of(*args, **kwargs) if work_of is not None else 0
+            with op_scope(kind, work=work, meta=meta):
+                return fn(*args, **kwargs)
+
+        return wrapper
+
+    return decorate
+
+
+def op_stream(
+    body: Iterable[Any],
+    *,
+    kind: str,
+    work: int = 0,
+    meta: dict[str, Any] | None = None,
+) -> Generator[Any, None, None]:
+    """Run a streaming response body as one operation on the draining thread."""
+    if not config.PROFILING:
+        yield from body
+        return
+    with op_run(op_open(kind, work=work, meta=meta)):
+        yield from body
+
+
+def bind(fn: Callable[..., Any]) -> Callable[..., Any]:
+    """Wrap *fn* so a pool thread runs it inside the submitter's operation.
+
+    Call on the submitting thread: the current operation is captured now and
+    re-entered around every call, which is the explicit hand-off a thread
+    pool needs — nothing about the request follows the work on its own.
+    """
+    op = current_op()
+    if not config.PROFILING or op is None:
+        return fn
+
+    @functools.wraps(fn)
+    def wrapper(*args: Any, **kwargs: Any) -> Any:
+        prev = current_op()
+        _CURRENT.op = op
+        try:
+            return fn(*args, **kwargs)
+        finally:
+            _CURRENT.op = prev
+
+    return wrapper
+
+
+def _op_export(rec: dict[str, Any], now: float) -> dict[str, Any]:
+    out = dict(rec)
+    out["measures"] = {
+        label: {"seconds": secs, "count": int(n)}
+        for label, (secs, n) in rec["measures"].items()
+    }
+    if out.get("ended_at") is None:
+        started = out["started_at"]
+        out["queue_wait_s"] = (started if started is not None else now) - out[
+            "queued_at"
+        ]
+        out["run_s"] = (now - started) if started is not None else 0.0
+        out["elapsed_s"] = now - out["queued_at"]
+    return out
+
+
+def operations() -> dict[str, Any]:
+    """``{active, recent, evicted}``: running jobs, the last 100 finished, overflow."""
+    now = time.time()
+    with _LOCK:
+        active = [_op_export(rec, now) for rec in _OPS_ACTIVE.values()]
+        recent = [_op_export(rec, now) for rec in _OPS_DONE]
+        evicted = _OPS_EVICTED
+    return {"active": active, "recent": recent, "evicted": evicted}
+
+
+def ops_reset() -> None:
+    """Forget every operation record; for tests that share a process."""
+    global _OPS_EVICTED
+    with _LOCK:
+        _OPS_ACTIVE.clear()
+        _OPS_DONE.clear()
+        _OPS_EVICTED = 0
+    _CURRENT.op = None
+
+
+# ---- Deep-profile files ------------------------------------------------------------
+
+
+def _slug(label: str) -> str:
+    return re.sub(r"[^A-Za-z0-9._-]+", "_", label).strip("_") or "profile"
+
+
+def deep_labels() -> list[dict[str, Any]]:
+    """Every deep-profiled label with whether it has finished and is running."""
+    with _LOCK:
+        labels = {label for label, _tid in _DEEP}
+        running = {label for label, _start, _tid in _ACTIVE.values()}
+        done = set(_DEEP_DONE)
+    return [
+        {"label": label, "done": label in done, "running": label in running}
+        for label in sorted(labels)
+    ]
+
+
+def _merged_stats(profs: list[cProfile.Profile]) -> pstats.Stats | None:
+    """Merge per-thread profilers; losers of the interpreter's slot raise and are skipped."""
+    stats: pstats.Stats | None = None
+    for prof in profs:
+        try:
+            if stats is None:
+                stats = pstats.Stats(prof)
+            else:
+                stats.add(prof)
+        except (TypeError, ValueError):
+            continue
+    if stats is None or not getattr(stats, "total_calls", 0):
+        return None
+    return stats
+
+
+def deep_dump(directory: Path, labels: list[str] | None = None) -> list[dict[str, Any]]:
+    """Write one ``.prof`` per finished deep label into *directory*.
+
+    A label with a span in flight is skipped (``{"label", "skipped":
+    "running"}``): reading a profiler another thread is inside would stop
+    it. The files load with ``pstats.Stats(path)`` or snakeviz.
+    """
+    with _LOCK:
+        groups: dict[str, list[cProfile.Profile]] = {}
+        for (label, _tid), prof in _DEEP.items():
+            if labels is None or label in labels:
+                groups.setdefault(label, []).append(prof)
+        running = {label for label, _start, _tid in _ACTIVE.values()}
+    out: list[dict[str, Any]] = []
+    for label, profs in sorted(groups.items()):
+        if label in running:
+            out.append({"label": label, "skipped": "running"})
+            continue
+        stats = _merged_stats(profs)
+        if stats is None:
+            out.append({"label": label, "skipped": "empty"})
+            continue
+        directory.mkdir(parents=True, exist_ok=True)
+        path = directory / f"{_slug(label)}.prof"
+        stats.dump_stats(str(path))
+        out.append({"label": label, "path": str(path)})
+    return out
 
 
 def scan_summary(
