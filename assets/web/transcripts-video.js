@@ -40,8 +40,7 @@
   var _txFillPid = null;      // participant the display belongs to (reset on switch)
 
   function setIconClass(span, klass) {
-    if (!span) return;
-    span.className = "player-btn-icon " + klass;
+    window.ClipgenMotion.swapIcon(span, "player-btn-icon " + klass);
   }
 
   function updatePlayerButtons() {

@@ -158,8 +158,7 @@
     var showExcludedBtn = qs("#showExcludedBtn");
     function updateShowExcludedIcon() {
       var iconSpan = showExcludedBtn.querySelector(".rp-icon-btn-icon");
-      iconSpan.classList.toggle("rp-icon-eye", state.showExcluded);
-      iconSpan.classList.toggle("rp-icon-eye-slash", !state.showExcluded);
+      window.ClipgenMotion.swapIcon(iconSpan, "rp-icon-btn-icon " + (state.showExcluded ? "rp-icon-eye" : "rp-icon-eye-slash"));
       showExcludedBtn.classList.toggle("active", state.showExcluded);
     }
     updateShowExcludedIcon();

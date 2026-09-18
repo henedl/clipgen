@@ -27,6 +27,7 @@
  *   animateOutAll(els, kind, opts) -> Promise  staggered exit for whole-list clears
  *   animateIn(el, kind, opts)   -> Promise   entry: "stashLand" | "pop" | "fade"
  *   flyTo(el, targetEl, opts)   -> Promise   FUTURE seam (ghost fly-to-target)
+ *   swapIcon(span, className)             cross-fade a mask-icon span to a new glyph class
  */
 (function (global) {
   "use strict";
@@ -57,6 +58,8 @@
       slideDownPx: 16, // how far it slides down as it fades
       sizeAware: true, // scale the motion down on larger objects (cards vs pills)
     },
+    // Icon glyph swap (play/pause, mute, eye): outgoing shrinks away as incoming grows in.
+    iconSwap: { duration: 150, easing: "cubic-bezier(.22, 1, .36, 1)", scale: 0.25 },
     // Delete/clear exit: falls downward, tilts lopsided, fades out fast.
     delete: {
       duration: 260,
@@ -305,6 +308,50 @@
     return animateOut(el, opts.fallbackKind || "stash", opts);
   }
 
+  // mask-image cannot transition, so a ghost of the old glyph fades out.
+  function swapIcon(span, className) {
+    if (!span) return;
+    var seen = span._cgSwapSeen;
+    span._cgSwapSeen = true;
+    if (span.className === className) return;
+    if (span._cgSwapGhost && span._cgSwapGhost.parentNode) {
+      span._cgSwapGhost.parentNode.removeChild(span._cgSwapGhost);
+    }
+    if (span._cgSwapAnim) span._cgSwapAnim.cancel();
+    span._cgSwapGhost = span._cgSwapAnim = null;
+    // First call is the page settling into its state, not a user toggle.
+    if (!seen || REDUCED.matches || !HAS_WAAPI || !span.parentNode) {
+      span.className = className;
+      return;
+    }
+    var p = PARAMS.iconSwap;
+    var small = "scale(" + p.scale + ")";
+    var ghost = span.cloneNode(false);
+    ghost.removeAttribute("id");
+    ghost.setAttribute("aria-hidden", "true");
+    ghost.style.position = "absolute";
+    ghost.style.left = span.offsetLeft + "px";
+    ghost.style.top = span.offsetTop + "px";
+    ghost.style.margin = "0";
+    ghost.style.pointerEvents = "none";
+    span.className = className;
+    span.parentNode.appendChild(ghost);
+    span._cgSwapGhost = ghost;
+    var timing = { duration: p.duration, easing: p.easing, fill: "both" };
+    try {
+      span._cgSwapAnim = span.animate(
+        [{ opacity: 0, transform: small }, { opacity: 1, transform: "scale(1)" }], timing);
+      var out = ghost.animate(
+        [{ opacity: 1, transform: "scale(1)" }, { opacity: 0, transform: small }], timing);
+      out.onfinish = out.oncancel = function () {
+        if (ghost.parentNode) ghost.parentNode.removeChild(ghost);
+        if (span._cgSwapGhost === ghost) span._cgSwapGhost = null;
+      };
+    } catch (_e) {
+      if (ghost.parentNode) ghost.parentNode.removeChild(ghost);
+    }
+  }
+
   // Shared reduced-motion answer; callers (utils.js popModalOut) must not re-query matchMedia.
   function isReduced() {
     return !!REDUCED.matches || !HAS_WAAPI;
@@ -316,6 +363,7 @@
     animateOutAll: animateOutAll,
     animateIn: animateIn,
     flyTo: flyTo,
+    swapIcon: swapIcon,
     isReduced: isReduced,
   };
 })(window);

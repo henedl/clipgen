@@ -1176,7 +1176,8 @@ body {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .artifact-marker.selected {
+  .artifact-marker.selected,
+  .artifact-media.thumb-loaded img {
     animation: none;
   }
 

@@ -344,12 +344,24 @@ html[data-desktop-chrome="macos"][data-desktop-fullscreen] .topnav-left {
   min-width: 240px;
   max-width: 360px;
   padding: var(--space-1-5);
-  display: none;
+  display: flex;
   flex-direction: column;
   font-size: 12.5px;
+  /* Closed state stays in the tree so open and close can both transition. */
+  visibility: hidden;
+  opacity: 0;
+  transform: translateY(-4px) scale(0.98);
+  transform-origin: top right;
+  pointer-events: none;
+  transition: opacity var(--duration-instant) var(--ease-out),
+              transform var(--duration-instant) var(--ease-out),
+              visibility var(--duration-instant);
 }
 .topnav-qa-panel.is-open {
-  display: flex;
+  visibility: visible;
+  opacity: 1;
+  transform: none;
+  pointer-events: auto;
 }
 
 .topnav-qa-item {
@@ -412,6 +424,7 @@ html[data-desktop-chrome="macos"][data-desktop-fullscreen] .topnav-left {
   .topnav-icon-btn,
   .topnav-qa-trigger,
   .topnav-qa-caret,
+  .topnav-qa-panel,
   .topnav-right #themeToggle {
     transition: none;
   }

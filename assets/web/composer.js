@@ -162,12 +162,12 @@
 
   function updatePlayButton() {
     var icon = qs("#coPlayIcon");
-    if (icon) icon.className = "co-btn-icon " + (state.playing ? "co-icon-pause" : "co-icon-play");
+    window.ClipgenMotion.swapIcon(icon, "co-btn-icon " + (state.playing ? "co-icon-pause" : "co-icon-play"));
   }
 
   function updateMuteButton() {
     var icon = qs("#coMuteIcon");
-    if (icon) icon.className = "co-btn-icon " + (state.videoMuted ? "co-icon-mute-off" : "co-icon-mute");
+    window.ClipgenMotion.swapIcon(icon, "co-btn-icon " + (state.videoMuted ? "co-icon-mute-off" : "co-icon-mute"));
     // Accent tint while sound is on — matches Screenspace/Transcripts mute btns.
     var btn = qs("#coMuteBtn");
     if (btn) btn.classList.toggle("active", !state.videoMuted);
@@ -930,10 +930,7 @@
       btn.setAttribute("aria-label", hideLabel);
       btn.setAttribute("data-tooltip", hideLabel + " (hold to peek, tap to toggle)");
       var icon = btn.querySelector(".co-btn-icon");
-      if (icon) {
-        icon.classList.toggle("co-icon-eye", state.annHidden);
-        icon.classList.toggle("co-icon-eye-slash", !state.annHidden);
-      }
+      window.ClipgenMotion.swapIcon(icon, "co-btn-icon " + (state.annHidden ? "co-icon-eye" : "co-icon-eye-slash"));
     }
     renderAnnotations();
     renderTimeline();

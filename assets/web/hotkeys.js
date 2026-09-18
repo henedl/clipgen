@@ -494,7 +494,7 @@
       return;
     }
     var modalOpen = blockingModalOpen();
-    if (modalOpen && _sheetEl && !_sheetEl.classList.contains("hidden")) {
+    if (modalOpen && _sheetOpen) {
       // Our own cheatsheet modal: its toggle combo still closes it; everything else stays suppressed.
       if (!isTypingTarget(e.target)) {
         var sheetCombo = normalizeEvent(e);
@@ -733,6 +733,7 @@
   // ---- Cheatsheet overlay ----
 
   var _sheetEl = null;
+  var _sheetOpen = false;
 
   function buildSheet() {
     var overlay = el("div", "hk-overlay hidden");
@@ -804,7 +805,13 @@
   function openCheatsheet() {
     if (!_sheetEl) _sheetEl = buildSheet();
     renderSheet();
-    _sheetEl.classList.remove("hidden");
+    _sheetOpen = true;
+    if (typeof popModalIn === "function") popModalIn(_sheetEl, _sheetEl.querySelector(".hk-panel"));
+    else _sheetEl.classList.remove("hidden");
+    // Next frame, so the backdrop has a painted start value to fade from.
+    requestAnimationFrame(function () {
+      if (_sheetOpen) _sheetEl.classList.add("is-open");
+    });
     if (typeof openBlockingModal === "function") {
       openBlockingModal(_sheetEl, {
         onEscape: closeCheatsheet,
@@ -815,13 +822,17 @@
   }
 
   function closeCheatsheet() {
-    if (!_sheetEl || _sheetEl.classList.contains("hidden")) return;
-    _sheetEl.classList.add("hidden");
+    if (!_sheetEl || !_sheetOpen) return;
+    _sheetOpen = false;
+    _sheetEl.classList.remove("is-open");
     if (typeof closeBlockingModal === "function") closeBlockingModal(_sheetEl);
+    var hide = function () { _sheetEl.classList.add("hidden"); };
+    if (typeof popModalOut === "function") popModalOut(_sheetEl, _sheetEl.querySelector(".hk-panel"), hide);
+    else hide();
   }
 
   function toggleCheatsheet() {
-    if (_sheetEl && !_sheetEl.classList.contains("hidden")) closeCheatsheet();
+    if (_sheetOpen) closeCheatsheet();
     else openCheatsheet();
   }
 
