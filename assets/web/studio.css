@@ -1357,6 +1357,7 @@ body.dragging #sheetMain {
   position: relative;
   transition: box-shadow var(--duration-fast), border-color var(--duration-fast);
   user-select: none;
+  box-shadow: var(--shadow-card);
 }
 
 /* No will-change on .queue-card. The original always-on rule promoted every
@@ -1370,7 +1371,7 @@ body.dragging #sheetMain {
 
 .queue-card:hover {
   border-color: var(--color-accent);
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+  box-shadow: var(--shadow-md);
 }
 
 .queue-card-thumb {
@@ -1386,6 +1387,8 @@ body.dragging #sheetMain {
   height: 100%;
   object-fit: cover;
   display: block;
+  outline: 1px solid var(--outline-media);
+  outline-offset: -1px;
 }
 
 /* Card scrubber (opt-in): the sprite sheet is painted as the thumb's
@@ -1441,7 +1444,7 @@ body.dragging #sheetMain {
   font-family: var(--font-mono);
   font-variant-numeric: tabular-nums;
   font-size: var(--text-xs);
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-md);
   box-shadow: var(--shadow-pop);
   user-select: none;
 }

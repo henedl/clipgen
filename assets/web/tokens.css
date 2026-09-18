@@ -206,10 +206,16 @@
   --color-backdrop:            rgba(0, 0, 0, 0.4); /* dimming scrim behind modal overlays (both themes) */
 
   /* Shadows (depend on theme colors above) */
-  --shadow-sm:    0 1px 3px var(--color-panel-shadow);
-  --shadow-md:    0 4px 12px var(--color-panel-shadow);
-  --shadow-lg:    0 8px 24px var(--color-panel-shadow);
-  --shadow-xl:    0 24px 60px var(--color-panel-shadow);
+  /* Each step pairs an ambient layer with a tight contact layer. */
+  --color-panel-shadow-contact: rgba(0, 0, 0, 0.35);
+  --shadow-sm:    0 1px 3px var(--color-panel-shadow), 0 1px 1px var(--color-panel-shadow-contact);
+  --shadow-md:    0 4px 12px var(--color-panel-shadow), 0 1px 3px var(--color-panel-shadow-contact);
+  --shadow-lg:    0 8px 24px var(--color-panel-shadow), 0 2px 6px var(--color-panel-shadow-contact);
+  --shadow-xl:    0 24px 60px var(--color-panel-shadow), 0 4px 12px var(--color-panel-shadow-contact);
+  /* Resting cards: dark surfaces cannot show a drop shadow. */
+  --shadow-card:  none;
+  /* Hairline over thumbnails and video so bright frames keep an edge. */
+  --outline-media: rgba(255, 255, 255, 0.1);
   --shadow-focus: 0 0 0 2px var(--accent);
 
   /* Severity legacy aliases (--sev-* → --severity-*) */
@@ -405,6 +411,9 @@ html[data-theme="light"],
   --color-panel-bg:         rgba(255, 255, 255, 0.97);
   --color-panel-border:     rgba(148, 163, 184, 0.22);
   --color-panel-shadow:     rgba(15, 23, 42, 0.12);
+  --color-panel-shadow-contact: rgba(15, 23, 42, 0.08);
+  --shadow-card: 0 1px 2px -1px rgba(15, 23, 42, 0.08), 0 2px 4px rgba(15, 23, 42, 0.05);
+  --outline-media: rgba(0, 0, 0, 0.1);
 
   /* Content / task / category / region — saturated variants for light bg */
   --color-clip:   #3659b3;

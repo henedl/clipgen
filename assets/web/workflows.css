@@ -1749,6 +1749,7 @@ body[data-frontend="workflows"] {
   background: var(--bg);
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-card);
 }
 
 /* "Reconnecting…" pill shown on the active run/batch card while a dropped SSE
