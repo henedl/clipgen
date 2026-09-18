@@ -27,7 +27,7 @@
  *   animateOutAll(els, kind, opts) -> Promise  staggered exit for whole-list clears
  *   animateIn(el, kind, opts)   -> Promise   entry: "stashLand" | "pop" | "fade"
  *   flyTo(el, targetEl, opts)   -> Promise   FUTURE seam (ghost fly-to-target)
- *   swapIcon(span, className)             cross-fade a mask-icon span to a new glyph class
+ *   swapIcon(span, className, force)      cross-fade a mask-icon span to a new glyph class
  */
 (function (global) {
   "use strict";
@@ -308,10 +308,10 @@
     return animateOut(el, opts.fallbackKind || "stash", opts);
   }
 
-  // mask-image cannot transition, so a ghost of the old glyph fades out.
-  function swapIcon(span, className) {
+  // Ghosts the old glyph, since mask-image cannot transition. `force` animates a freshly built span.
+  function swapIcon(span, className, force) {
     if (!span) return;
-    var seen = span._cgSwapSeen;
+    var seen = span._cgSwapSeen || !!force;
     span._cgSwapSeen = true;
     if (span.className === className) return;
     if (span._cgSwapGhost && span._cgSwapGhost.parentNode) {

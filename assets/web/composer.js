@@ -1080,6 +1080,8 @@
       .catch(opFailed);
   }
 
+  var _shownGenStatus = {}; // cut id -> status already rendered
+
   function renderCutList() {
     if (state.sidebarTab !== "cuts") return;
     var list = qs("#coCutList");
@@ -1129,7 +1131,12 @@
         statusIcon.setAttribute("data-tooltip",
           okStatus ? "Generated" : "Generation failed");
         nameRow.appendChild(statusIcon);
+        // Pop only when the status is new; the list re-renders often.
+        if (_shownGenStatus[cut.id] !== cut._genStatus) {
+          window.ClipgenMotion.animateIn(statusIcon, "pop");
+        }
       }
+      _shownGenStatus[cut.id] = cut._genStatus || "";
       var del = el("button", "co-cut-delete");
       del.type = "button";
       del.setAttribute("data-tooltip", "Delete cut");

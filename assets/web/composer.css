@@ -888,6 +888,14 @@ body[data-frontend="composer"] {
   padding: var(--space-1);
   border-radius: var(--radius-xs);
   line-height: 0;
+  position: relative;
+}
+
+/* Hit slop. */
+.co-cut-delete::after {
+  content: "";
+  position: absolute;
+  inset: calc(var(--space-1) * -1);
 }
 
 .co-cut-delete:hover {

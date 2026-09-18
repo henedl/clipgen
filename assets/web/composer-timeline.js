@@ -413,6 +413,7 @@
 
   // Fold-button rail. The signature skips per-frame innerHTML rebuilds that destroy hovered tooltip anchors.
   var _railSig = null;
+  var _foldToggled = null; // lane whose fold button was just clicked
 
   function renderLaneRail(L) {
     var rail = qs("#coLaneRail");
@@ -431,6 +432,7 @@
     rail.innerHTML = "";
     if (!state.duration) return;
     var frag = document.createDocumentFragment();
+    var swapTo = null;
 
     function foldButton(source, laneY, laneH) {
       var folded = !!state.laneFolds[source];
@@ -442,10 +444,15 @@
       btn.setAttribute("aria-label", foldLabel);
       // Vertically center in the lane (CSS translateY(-50%) does the rest).
       btn.style.top = (laneY + laneH / 2) + "px";
-      btn.appendChild(el("span",
-        "co-btn-icon " + (folded ? "co-icon-fold-closed" : "co-icon-fold-open")));
+      // The clicked lane's glyph starts as the old one, then cross-fades once attached.
+      var toggled = source === _foldToggled;
+      var icon = el("span",
+        "co-btn-icon " + (folded !== toggled ? "co-icon-fold-closed" : "co-icon-fold-open"));
+      btn.appendChild(icon);
+      if (toggled) swapTo = { icon: icon, cls: "co-btn-icon " + (folded ? "co-icon-fold-closed" : "co-icon-fold-open") };
       btn.addEventListener("click", function (e) {
         e.stopPropagation();
+        _foldToggled = source;
         state.laneFolds[source] = !state.laneFolds[source];
         if (CO.persistLaneUi) CO.persistLaneUi();
         updateTimelineHeight();
@@ -464,6 +471,8 @@
         foldButton("annotations", L.annotationsLane.y, L.annotationsLane.h));
     }
     rail.appendChild(frag);
+    _foldToggled = null;
+    if (swapTo) window.ClipgenMotion.swapIcon(swapTo.icon, swapTo.cls, true);
     if (focusSource) {
       var again = rail.querySelector('[data-source="' + focusSource + '"]');
       if (again) again.focus();

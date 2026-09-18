@@ -1303,6 +1303,13 @@ select:not([multiple]):not([size]):not(.cg-select-nocaret) {
   cursor: pointer;
   transition: color var(--duration-fast);
 }
+
+/* Hit slop. Vertical only: segments touch side to side. */
+.cg-segtrack-btn::after {
+  content: "";
+  position: absolute;
+  inset: calc(var(--space-1-5) * -1) 0;
+}
 .cg-segtrack-btn:hover { color: var(--fg); }
 .cg-segtrack-btn.active { color: var(--accent-fg); }
 .cg-segtrack-btn:focus-visible {

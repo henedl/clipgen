@@ -655,6 +655,13 @@
   transition: opacity var(--duration-fast);
 }
 
+/* Hit slop. */
+.card-tile-delete::after {
+  content: "";
+  position: absolute;
+  inset: calc(var(--space-1-5) * -1);
+}
+
 .card-tile:hover .card-tile-delete,
 .card-tile-delete:focus-visible {
   opacity: 1;

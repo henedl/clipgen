@@ -716,6 +716,14 @@ body {
   align-items: center;
   justify-content: center;
   border-radius: var(--radius-sm);
+  position: relative;
+}
+
+/* Hit slop. Vertical only: the actions sit side by side. */
+.summary-action-btn::after {
+  content: "";
+  position: absolute;
+  inset: calc(var(--space-1-5) * -1) 0;
 }
 
 .summary-action-btn:hover {

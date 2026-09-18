@@ -234,6 +234,14 @@ body {
   justify-content: center;
   transition: background var(--duration-fast), color var(--duration-fast),
     border-color var(--duration-fast);
+  position: relative;
+}
+
+/* Hit slop. */
+.ss-info-expand-btn::after {
+  content: "";
+  position: absolute;
+  inset: calc(var(--space-1) * -1);
 }
 
 .ss-info-collapse-btn:hover,
@@ -925,6 +933,13 @@ body[data-frontend="screenspace"] {
   cursor: pointer;
   opacity: 0.72;
   transition: opacity var(--duration-fast), color var(--duration-fast);
+}
+
+/* Hit slop. */
+.pin-tray-remove::after {
+  content: "";
+  position: absolute;
+  inset: calc(var(--space-1) * -1);
 }
 
 .pin-tray-item:hover .pin-tray-remove,
@@ -3727,6 +3742,14 @@ body.panel-dragging #bottomPanel {
   flex-shrink: 0;
   display: inline-flex;
   align-items: center;
+  position: relative;
+}
+
+/* Hit slop. Vertical only: edit and dismiss sit side by side. */
+.task-card-edit::after {
+  content: "";
+  position: absolute;
+  inset: calc(var(--space-1-5) * -1) 0;
 }
 
 .task-card-edit:hover {
@@ -3746,6 +3769,14 @@ body.panel-dragging #bottomPanel {
   flex-shrink: 0;
   display: inline-flex;
   align-items: center;
+  position: relative;
+}
+
+/* Hit slop. */
+.task-card-dismiss::after {
+  content: "";
+  position: absolute;
+  inset: calc(var(--space-1-5) * -1) 0;
 }
 
 .task-card-dismiss:hover {
@@ -3810,6 +3841,14 @@ body.panel-dragging #bottomPanel {
   font-size: var(--text-xs);
   color: var(--color-text-dim);
   transition: background var(--duration-fast), color var(--duration-fast);
+  position: relative;
+}
+
+/* Hit slop. Horizontal only: result rows stack. */
+.result-exclude-btn::after {
+  content: "";
+  position: absolute;
+  inset: 0 calc(var(--space-1-5) * -1);
 }
 
 .result-exclude-btn:hover {
