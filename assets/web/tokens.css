@@ -473,7 +473,6 @@ body {
  * Pairs with elements.style font-family override or works alone. */
 .cg-mono {
   font-family: var(--font-mono);
-  font-feature-settings: "tnum";
   font-variant-numeric: tabular-nums;
 }
 

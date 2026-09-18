@@ -1979,7 +1979,7 @@ body {
 
 .pill-id {
   font-family: var(--font-mono);
-  font-feature-settings: "tnum";
+  font-variant-numeric: tabular-nums;
   font-size: 11.5px;
   font-weight: 500;
   letter-spacing: 0.01em;
