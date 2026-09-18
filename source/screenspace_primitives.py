@@ -1095,14 +1095,16 @@ def _edge_blur(edges: np.ndarray) -> np.ndarray:
     return cv2.GaussianBlur(dilated, (k, k), 0).astype(np.float32)
 
 
-def _frame_edge_map(frame: np.ndarray) -> np.ndarray:
+def _frame_edge_map(frame: np.ndarray, gray: np.ndarray | None = None) -> np.ndarray:
     """Per-frame edge ridge map that every shape-matching surface shares.
 
     Scan, check_frame, and previews must all call this — matching against
     anything else would show users a different model than reality. Computed
-    once per frame; the scale sweep only rescales the reference side.
+    once per frame; the scale sweep only rescales the reference side. A caller
+    that already holds *frame*'s BGR2GRAY conversion passes it as *gray*.
     """
-    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    if gray is None:
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
     return _edge_blur(canny_edges(gray))
 
 

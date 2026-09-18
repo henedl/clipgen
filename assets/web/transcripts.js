@@ -41,6 +41,8 @@
     streamingParticipant: null,
     ssEvents: [],
     ssEventsLoaded: false,
+    ssEventsVersion: null, // events_version cursor; unchanged ticks skip the payload
+    sheetVersion: null, // sheet_version cursor, same idea for ../studio/api/sheet
     sheetRows: [],
     sheetParticipants: [],
     sheetLoaded: false,
@@ -162,30 +164,51 @@
   // Set after sheet_loaded: false; stops polling the sheet until tab focus re-arms.
   var _sheetXrefIdle = false;
 
+  // The config _buildSheetIndex parses with; a change invalidates the index.
+  function _sheetParseConfigKey() {
+    return JSON.stringify([
+      CLIPGEN_CONFIG.defaultDuration,
+      CLIPGEN_CONFIG.annotationKeyphrases,
+      CLIPGEN_CONFIG.ignoredTimestampTokens,
+    ]);
+  }
+
+  // Both legs echo a version cursor; an unchanged tick skips payload and index rebuild.
   function loadCrossRefData() {
-    apiGet("../screenspace/api/events?excluded=false")
+    var eventsUrl = "../screenspace/api/events?excluded=false";
+    if (state.ssEventsVersion != null) eventsUrl += "&events_version=" + state.ssEventsVersion;
+    apiGet(eventsUrl)
       .then(function (data) {
         _markXrefSource("screenspace", false);
-        if (data.ok) {
-          state.ssEvents = data.events || [];
-          state.ssEventsLoaded = true;
-          _buildEventsIndex();
-        }
+        if (!data.ok) return;
+        if (data.events_version != null) state.ssEventsVersion = data.events_version;
+        if (data.events_unchanged) return;
+        state.ssEvents = data.events || [];
+        state.ssEventsLoaded = true;
+        _buildEventsIndex();
       })
       .catch(function () { _markXrefSource("screenspace", true); });
 
     if (_sheetXrefIdle) return;
-    apiGet("../studio/api/sheet")
+    var sheetUrl = "../studio/api/sheet";
+    if (state.sheetVersion != null) sheetUrl += "?sheet_version=" + state.sheetVersion;
+    apiGet(sheetUrl)
       .then(function (data) {
         _markXrefSource("studio", false);
         if (data.ok && data.sheet_loaded === false) _sheetXrefIdle = true;
-        if (data.ok) {
-          clipgenApplyConfig(data.config);
-          state.sheetRows = data.rows || [];
-          state.sheetParticipants = data.participants || [];
-          state.sheetLoaded = true;
-          _buildSheetIndex();
+        if (!data.ok) return;
+        var parseBefore = _sheetParseConfigKey();
+        clipgenApplyConfig(data.config);
+        if (data.sheet_version != null) state.sheetVersion = data.sheet_version;
+        if (data.sheet_unchanged) {
+          // Same rows, new parse rules: the index is stale even though the sheet is not.
+          if (state.sheetLoaded && _sheetParseConfigKey() !== parseBefore) _buildSheetIndex();
+          return;
         }
+        state.sheetRows = data.rows || [];
+        state.sheetParticipants = data.participants || [];
+        state.sheetLoaded = true;
+        _buildSheetIndex();
       })
       .catch(function () { _markXrefSource("studio", true); });
   }

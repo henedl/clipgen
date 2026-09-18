@@ -119,6 +119,8 @@ _worksheet: Any = None
 _sheet_context: spreadsheet.SheetContext | None = None
 _sheet_payload_cache: tuple[Any, dict[str, Any]] | None = None
 _sheet_payload_cache_lock = threading.Lock()
+# Poll cursor for /api/sheet: bumps with every context swap, never repeats across restarts.
+_sheet_version = 0
 # Drive listing cache: one picker flow reads it three times. Cleared on re-auth.
 _google_sheet_list_cache: tuple[float, list[dict[str, str]]] | None = None
 _google_sheet_list_lock = threading.Lock()
@@ -709,11 +711,12 @@ def _get_sheet_payload(ctx: spreadsheet.SheetContext) -> dict[str, Any]:
 
 def _set_sheet_context(ctx: spreadsheet.SheetContext | None) -> None:
     """Replace the active sheet context and clear derived row payloads atomically."""
-    global _sheet_context, _sheet_payload_cache
+    global _sheet_context, _sheet_payload_cache, _sheet_version
 
     with _sheet_payload_cache_lock:
         _sheet_context = ctx
         _sheet_payload_cache = None
+        _sheet_version = max(_sheet_version + 1, time.time_ns() // 1_000_000)
 
 
 def _sheet_observation_rows() -> list[dict[str, Any]]:
@@ -773,6 +776,13 @@ def _sheet_common_fields() -> dict[str, Any]:
 
 @studio_bp.route("/api/sheet")
 def api_sheet() -> FlaskResponse:
+    """The sheet payload; ``?sheet_version=N`` skips rows when N is current.
+
+    Cross-page pollers (the Transcripts 30 s cross-reference tick) echo the
+    last ``sheet_version`` so an unchanged 200x12 sheet costs ~1 KB instead of
+    ~180 KB and no client-side re-parse. The common fields still ride along so
+    live settings keep flowing.
+    """
     if _sheet_context is None:
         # Consumers pair `participants` with `rows` as sheet columns; a mind-map-only
         # session leaves both empty.
@@ -787,10 +797,20 @@ def api_sheet() -> FlaskResponse:
         )
 
     ctx = _sheet_context
+    version = _sheet_version
+    if request.args.get("sheet_version") == str(version):
+        return ok(
+            sheet_loaded=True,
+            sheet_unchanged=True,
+            sheet_version=version,
+            study=ctx.study_name,
+            **_sheet_common_fields(),
+        )
     sheet_payload = _get_sheet_payload(ctx)
 
     return ok(
         sheet_loaded=True,
+        sheet_version=version,
         study=ctx.study_name,
         **_sheet_common_fields(),
         defaultDuration=config.DEFAULT_DURATION_SECONDS,

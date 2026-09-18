@@ -285,6 +285,30 @@ def test_sheet_xref_leg_stops_polling_an_empty_studio():
     )
 
 
+def test_xref_poll_echoes_both_version_cursors():
+    """Every 30 s tick otherwise re-downloads every event and sheet row (488 KB +
+    182 KB on the benchmark fixtures) and re-parses every cell's timestamps."""
+    start = _JS.index("function loadCrossRefData(")
+    body = _JS[start : _JS.index("\n  function ", start + 1)]
+    assert "&events_version=" in body and "if (data.events_unchanged) return;" in body
+    assert "?sheet_version=" in body and "if (data.sheet_unchanged) {" in body
+    # Config must still apply on an unchanged tick: settings changes ride the poll.
+    unchanged = body.index("if (data.sheet_unchanged) {")
+    assert body.index("clipgenApplyConfig(data.config)") < unchanged
+    # ...and a changed parse config must re-parse the rows the tick did not resend.
+    assert body.index("var parseBefore = _sheetParseConfigKey();") < body.index(
+        "clipgenApplyConfig(data.config)"
+    )
+    assert (
+        "_sheetParseConfigKey() !== parseBefore) _buildSheetIndex();"
+        in body[unchanged:]
+    )
+    key = _JS.index("function _sheetParseConfigKey(")
+    key_body = _JS[key : _JS.index("\n  }", key)]
+    for field in ("defaultDuration", "annotationKeyphrases", "ignoredTimestampTokens"):
+        assert "CLIPGEN_CONFIG." + field in key_body
+
+
 def test_a_failed_boot_fetch_clears_the_placeholders():
     """Without this the pill row shimmers forever and the transcript pane stays
     blank, which reads as "still loading" rather than "server unreachable"."""
