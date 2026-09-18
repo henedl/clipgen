@@ -1,6 +1,6 @@
 # More reliable performance diagnostics
 
-Status: In progress; Phase 1 landed, Phases 2-3 pending.
+Status: In progress; Phases 1-2 landed, Phase 3 pending.
 
 ## Summary
 
@@ -19,7 +19,7 @@ This review used source inspection; it does not establish new performance baseli
 | Phase | Status | Completion criterion |
 | --- | --- | --- |
 | 1. Trustworthy measurements | Done | Reliable structured exports and benchmark comparisons |
-| 2. Browser workloads | Not started | Verified workloads with load, interaction, and idle reports |
+| 2. Browser workloads | Done | Verified workloads with load, interaction, and idle reports |
 | 3. Concurrent work | Not started | Bounded operation records and inspectable deep profiles |
 
 Implement phases in order and ship them independently. Mark checklist items as
@@ -85,15 +85,15 @@ Extend `tests/ui/shot.py` and reuse its browser, fixture, and page-readiness hel
 | Screenspace | 2,000 synthetic events with matching media; load, filter results, switch views |
 | Idle behavior | Sample each of the six app pages while visible, then exercise its existing hidden-page lifecycle |
 
-- [ ] Generate fixtures centrally and assert loaded data counts before measuring. Validate rendered or visible counts according to each page's rendering strategy.
-- [ ] Use readiness and action-completion conditions instead of fixed sleeps to declare success.
-- [ ] Capture initial load separately from repeated interactions.
-- [ ] Save frontend measurements, backend window snapshots, workload metadata, screenshots, and errors in one run artifact.
-- [ ] Add `--perf-output PATH` to save the browser report without scraping stdout.
-- [ ] Replace the two-point soak comparison with samples every five seconds for a default 60-second observation window. Report trajectories and rates for heap, DOM nodes, listeners, polling, and transfer volume.
-- [ ] Treat sustained growth as a diagnostic signal, not proof of a leak.
-- [ ] Record unsupported browser metrics explicitly rather than presenting them as zero.
-- [ ] Make frontend timing safe for nested same-label spans and keep recording bounded and disabled when profiling is off.
+- [x] Generate fixtures centrally and assert loaded data counts before measuring. Validate rendered or visible counts according to each page's rendering strategy.
+- [x] Use readiness and action-completion conditions instead of fixed sleeps to declare success.
+- [x] Capture initial load separately from repeated interactions.
+- [x] Save frontend measurements, backend window snapshots, workload metadata, screenshots, and errors in one run artifact.
+- [x] Add `--perf-output PATH` to save the browser report without scraping stdout.
+- [x] Replace the two-point soak comparison with samples every five seconds for a default 60-second observation window. Report trajectories and rates for heap, DOM nodes, listeners, polling, and transfer volume.
+- [x] Treat sustained growth as a diagnostic signal, not proof of a leak.
+- [x] Record unsupported browser metrics explicitly rather than presenting them as zero.
+- [x] Make frontend timing safe for nested same-label spans and keep recording bounded and disabled when profiling is off.
 
 Acceptance: each scenario proves that its intended workload and actions occurred;
 reports distinguish load cost, interaction cost, and idle churn.
@@ -157,3 +157,35 @@ per-frame recording overhead.
   reporting card-free timings as "carded". The bench now marks those rows
   `invalid` (`0 clips carded, expected 20`) instead of comparing them.
 - Deferred to Phase 3: per-operation records in the export.
+
+### Phase 2 (landed)
+
+- `clipgenPerf` (`assets/web/utils.js`) times spans from a per-label stack, so
+  nested same-label spans each record; labels cap at 512 with a `dropped`
+  count; `record` is gated like the rest; `snapshot().supported.longtask`
+  is `false` on a browser without the observer (printed as `unsupported`,
+  never 0). Node behaviour test: `tests/test_clipgen_perf_js.py`.
+- `tests/perf/bench_fixtures.py` is the single source of benchmark inputs
+  (sheet geometry, testsrc video, synthetic transcripts/screenspace
+  manifests, count helpers); `clip_bench`, `scan_bench`, `ui_bench` and
+  `test_shot` all build from it.
+- `shot.py`: `--perf-output PATH`; `--soak` samples every `--soak-interval`
+  (5 s) and reports per-minute slopes for heap, nodes, listeners, transfer,
+  longtasks and each poll label, split visible/hidden with `--soak-hidden`
+  (`_ui_pages.set_hidden` emulates a background tab); the resource-timing
+  buffer is raised to 10,000 so transfer volume is not truncated.
+- `tests/ui/ui_bench.py`: `studio` / `transcripts` / `screenspace` / `idle`
+  scenarios with asserted workload counts, condition-based actions, per-run
+  artifacts (load, actions with before/after counts and a server profile
+  window each, errors, screenshot), and the shared compare/exit-code rules.
+- Verified (this machine, headless shell, one run each): studio 200 rows
+  loaded, filter 15 ms → 50 rows, restore 33 ms, queue 5 ms; transcripts
+  2400 rows, search 354 ms (300 ms debounce inside), switch 65 ms → 100
+  rows, restore 82 ms; screenspace open-results 130 ms (120-row first
+  chunk), drain 869 ms → 2000 rows, filter 139 ms → 1142 rows. Idle (12 s
+  window, 3 s interval, hidden second half): every poller reads 0/min while
+  hidden (`studio.*Intake`, `workflows.discover` at 10/min visible);
+  transcripts listeners grew ~6/min visible — a signal to look at, not a
+  finding of this plan.
+- Not done: a Composer poller check (Composer has no poller); browser
+  scenarios are opt-in (`CLIPGEN_UI_CHECK=1`) and never run in CI.

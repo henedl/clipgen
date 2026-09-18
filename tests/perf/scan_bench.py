@@ -38,12 +38,12 @@ import argparse
 import functools
 import json
 import shutil
-import subprocess
 import sys
 from pathlib import Path
 from typing import Any
 
 import bench_common as bc
+import bench_fixtures as bf
 
 # Missing required flags refuse the task and report only ffprobe.run.
 TOOL_FLAGS: dict[str, list[str]] = {
@@ -126,27 +126,7 @@ def ensure_fixture(input_dir: Path, duration: int) -> Path:
         was = f"{probed['duration']:.0f}s" if probed else "unreadable"
         print(f"rebuilding {video.name} ({was} → {duration}s)")
         video.unlink()
-    input_dir.mkdir(parents=True, exist_ok=True)
-    subprocess.run(
-        [
-            "ffmpeg",
-            "-y",
-            "-loglevel",
-            "error",
-            "-f",
-            "lavfi",
-            "-i",
-            f"testsrc=duration={duration}:size=1280x720:rate=30",
-            "-pix_fmt",
-            "yuv420p",
-            "-c:v",
-            "libx264",
-            "-g",
-            "30",
-            str(video),
-        ],
-        check=True,
-    )
+    bf.make_testsrc_video(video, duration=duration)
     return video
 
 

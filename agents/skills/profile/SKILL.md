@@ -155,75 +155,22 @@ transcription refuses it before any `transcribe.*` label is recorded.
 2 participants, so `shot.py studio --perf` reports a `studio.renderGrid` of a few
 milliseconds and tells you nothing about the 200×12 case
 [PERFORMANCE-PLAN-2](../../../plans/archive/PERFORMANCE-PLAN-2.md) §4.1 named.
-For grid / Sheets work, generate a real one — geometry mirrors
-`_ui_fixtures._make_workbook`, which is the authoritative layout (`ID` at F2 with
+Real-sized inputs come from **`tests/perf/bench_fixtures.py`**, the one place
+the benchmark geometry is written: `write_sheet(path, study=, rows=,
+participants=)` (the `_ui_fixtures._make_workbook` layout — `ID` at F2 with
 participant columns to its right *on row 2*, `Observation`/`Category` on row 5,
-data from row 6):
-
-```python
-# /tmp/gridbench.xlsx — 200 rows x 12 participants
-import openpyxl
-
-wb = openpyxl.Workbook()
-ws = wb.active
-ws.title = "Observations"
-ws["A1"] = "gridbench"
-ws["F2"] = "ID"
-for i in range(12):
-    ws.cell(2, 7 + i, f"P{i + 1:02d}")
-for col, h in enumerate(
-    ("Count", "Reported", "Severity", "Category", "Observation", "Summary"), 1
-):
-    ws.cell(5, col, h)
-sevs = ("Critical", "Serious", "Moderate", "Minor")
-for r in range(200):
-    ws.cell(6 + r, 3, sevs[r % 4])  # renderGrid paints .sev-* classes, so an
-    ws.cell(6 + r, 4, "Onboarding")  # empty Severity column under-measures it
-    ws.cell(6 + r, 5, f"Observation {r}")
-    for i in range(12):
-        ws.cell(6 + r, 7 + i, "0:01-0:04" if i % 3 == 0 else "")
-wb.save("/tmp/gridbench.xlsx")
-```
-
-Sanity-check it before trusting any number — a drifted layout yields a silently
-small grid, not an error:
+data from row 6, severities cycling so `renderGrid` paints its `.sev-*`
+classes), `make_testsrc_video(path, duration=, audio=)`,
+`transcripts_section({"P01": 2400})` and `screenspace_section(events=2000,
+…)` for the two synthetic manifests (2000 real Whisper segments is hours of
+audio), `write_manifest(out_dir, sections)`, and `sheet_rows` /
+`manifest_counts` to prove what was written. `tests/ui/ui_bench.py` builds
+its workloads from these; for a one-off:
 
 ```bash
-uv run python -c "import sys; sys.path.insert(0,'source'); import excel_io, spreadsheet; \
-  print(spreadsheet.build_sheet_context(excel_io.open_excel_workbook('/tmp/gridbench.xlsx')) is not None)"
-```
-
-For `transcripts.renderSegments` ([PERFORMANCE-PLAN-3](../../../plans/archive/PERFORMANCE-PLAN-3.md)
-§8c gates virtualization on ">2000-segment sessions"), **synthesize the manifest**
-— 2000 real Whisper segments is hours of audio:
-
-```python
-import json, pathlib
-
-segs = [
-    {
-        "id": f"P01:{i}",
-        "start": i * 3.0,
-        "end": i * 3.0 + 2.8,
-        "text": f"Synthetic segment {i} for render benchmarking.",
-    }
-    for i in range(2400)
-]
-out = pathlib.Path("/tmp/tsbench/clipgen.json")
-out.parent.mkdir(parents=True, exist_ok=True)
-out.write_text(
-    json.dumps(
-        {
-            "transcripts": {
-                "source_transcripts": {
-                    "P01": {"segments": segs, "language": "en", "model": "synthetic"}
-                },
-                "corrections": [],
-                "marks": [],
-            }
-        }
-    )
-)
+uv run python -c "import sys; sys.path.insert(0,'tests/perf'); import bench_fixtures as bf, pathlib; \
+  bf.write_sheet(pathlib.Path('/tmp/gridbench.xlsx'), study='gridbench', rows=200, participants=12); \
+  print(bf.sheet_rows(pathlib.Path('/tmp/gridbench.xlsx')))"
 ```
 
 ## Step 3 — Capture a baseline
@@ -286,8 +233,8 @@ uv run python tests/perf/scan_bench.py --tools shape --deep --runs 2
 
 `--tools color,text` narrows the sweep (`text` is off by default: OCR is 10×
 slower and pins ~0.8 GB RSS per pooled engine — 3.3 GB at the default auto
-pool of 4); `--runs 2` keeps the fastest run per tool. For a
-single tool the direct CLI form is still useful (unique `-o` dir per run):
+pool of 4). For a single tool the direct CLI form is still useful (unique
+`-o` dir per run):
 
 ```bash
 uv run clipgen.py --ss-task color P01 --ss-target-color '#FF0000' \
@@ -314,30 +261,48 @@ Live server: launch with `--profile`, then `curl http://127.0.0.1:8089/api/profi
 a window; the label map is under `labels`, see Step 1).
 
 Browser: `uv sync --extra dev --extra ui` (~1 s from cache; `/check` uninstalls the
-ui extra), then
+ui extra). **The workload bench is `tests/ui/ui_bench.py`** — it builds the
+real-sized fixtures, proves each page loaded all of them (a DOM count that
+must equal the fixture's count before anything is timed), and times a fixed
+set of interactions each on its own condition, never a sleep:
 
 ```bash
-CLIPGEN_UI_CHECK=1 uv run --extra ui python tests/ui/shot.py studio --perf --wait 5000
+CLIPGEN_UI_CHECK=1 uv run --extra ui python tests/ui/ui_bench.py --save /tmp/ui.json
+CLIPGEN_UI_CHECK=1 uv run --extra ui python tests/ui/ui_bench.py --compare /tmp/ui.json --fail-on 15
+CLIPGEN_UI_CHECK=1 uv run --extra ui python tests/ui/ui_bench.py --scenarios idle --soak 60
 ```
 
-The UI fixture is 6 rows × 2 participants — `studio.renderGrid` will be a few
-milliseconds and tell you nothing. Point `--sheet` / `--output` at the
-benchmark inputs from Step 2:
+| Scenario | Workload | Timed actions |
+|---|---|---|
+| `studio` | 200 rows × 12 participants | `filter` (severity → 50 rows), `restore` (→ 200), `queue` (ten cells → Generate enabled) |
+| `transcripts` | 2400 segments (P01), 100 (P02) | `search`, `clear-search`, `switch` (→ P02's 100 rows), `restore` |
+| `screenspace` | 2000 events on the fixture video | `open-results` (first chunk), `drain` (scroll the lazy list to all 2000), `filter` (confidence 0.6), `switch-pane`, `switch-back` |
+| `idle` | the six pages, default fixture | a sampled soak per page, second half as a background tab |
+
+The table shows subprocess-free **elapsed** (browser context open → last
+condition met) as median/min/MAD plus each action's median ms; `--fail-metric
+load` switches the thresholds to `domContentLoaded`. Rows, status words, exit
+codes and `--compare` rules are the same as the backend benches. Every run
+writes `<work>/runs/<scenario>-<n>.json` — the load capture, each action's ms
+with the counts observed before and after and the server's
+`/api/profile?reset=1` window for it, the workload counts asserted, page
+errors, and the screenshot in `<work>/shots/` (look at it: a green run that
+photographs an empty page is the failure this harness exists to catch).
+
+For one page and a hand-rolled input, `shot.py --perf` is still the tool;
+`--perf-output PATH` saves the same object the `perf-json:` line prints, plus
+page errors and the screenshot path:
 
 ```bash
 CLIPGEN_UI_CHECK=1 uv run --extra ui python tests/ui/shot.py studio \
-    --perf --sheet /tmp/gridbench.xlsx --wait 2000 \
+    --perf --sheet /tmp/gridbench.xlsx --wait 2000 --perf-output /tmp/studio-perf.json \
     --eval "return document.querySelectorAll('#sheetGrid tbody tr').length"
-CLIPGEN_UI_CHECK=1 uv run --extra ui python tests/ui/shot.py transcripts \
-    --perf --output /tmp/tsbench --wait 2000 \
-    --eval "return document.querySelectorAll('.segment-row').length"
-CLIPGEN_UI_CHECK=1 uv run --extra ui python tests/ui/shot.py screenspace \
-    --perf --input /tmp/ssbench --output /tmp/ssbench/out --wait 2000
 ```
 
-Sanity-check the `--eval` counts before trusting `perf | studio.renderGrid`
-(200 rows) or `transcripts.renderSegments` (2400 rows). A drifted sheet
-layout yields a silently small grid, not an error.
+Sanity-check the `--eval` count before trusting `perf | studio.renderGrid`. A
+drifted sheet layout yields a silently small grid, not an error. A CDP metric
+the build does not report prints as `perf | <name> unsupported`, never as 0;
+the same goes for `longtasks` when the browser lacks the observer.
 
 Each `--perf` run prints `perf | ` lines (CDP layout/script/heap metrics,
 navigation/resource timing, the clipgenPerf measures) plus one `perf-json:`
@@ -364,18 +329,24 @@ indicative; add `--full-chromium` when paint fidelity matters.
 
 **Leaks and idle churn — `--soak SECONDS`.** Load-time numbers say nothing
 about a page that merely sits open: pollers re-rendering into the DOM,
-listeners re-bound per tick, payloads retained per poll. `--perf --soak 20`
-re-samples after the page has idled that long and prints `perf | soak.*`
-deltas — `soak.Nodes` / `soak.JSEventListeners` / `soak.JSHeapUsedSize`
-(growth with nothing happening is a leak; a few nodes for a toast or a clock
-is not), `soak.poll.<page>.<name> n=+N` (ticks during the window — check
-against the poller's interval, and against 0 for a page that should be
-paused), and `soak.longtasks`. Read the server's exit report alongside it:
+listeners re-bound per tick, payloads retained per poll. `--perf --soak 60`
+samples every `--soak-interval` (5 s) for the window and prints one
+trajectory per counter — `soak.Nodes` / `soak.JSEventListeners` /
+`soak.JSHeapUsedSize` / `soak.Documents` / `soak.transferSize` as `first ->
+last (slope/min)`, `soak.poll.<page>.<name> n=a -> b (visible …/min, hidden
+…/min)`, `soak.longtasks`, and a `soak.samples` line with every reading.
+`--soak-hidden` emulates a background tab for the second half (Chromium
+never hides a headless page on its own), so a poller that should pause
+reads as `hidden +0.0/min` and one that does not is caught. **Sustained
+growth is a signal to investigate, not proof of a leak** — a toast or a
+clock moves a few nodes, and the JS heap oscillates with GC; read the slope
+over the whole window, never two points. The `idle` scenario of `ui_bench.py`
+does this for all six pages. Read the server's exit report alongside it:
 `route` lines with a large `bytes=` ÷ `n=` are the polls to slim.
 
 ```bash
 CLIPGEN_UI_CHECK=1 uv run --extra ui python tests/ui/shot.py transcripts \
-    --perf --soak 20 --output /tmp/tsbench
+    --perf --soak 60 --soak-hidden --output /tmp/tsbench
 ```
 
 ## Step 4 — Interpret

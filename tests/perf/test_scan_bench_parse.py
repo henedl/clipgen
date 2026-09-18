@@ -6,12 +6,12 @@ reads change shape, so it is pinned against a real ``profiling.export()``.
 """
 
 import json
-from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
 import bench_common as bc
+import bench_fixtures as bf
 import config
 import profiling
 import scan_bench
@@ -149,7 +149,7 @@ def test_ensure_fixture_rebuilds_on_spec_mismatch(tmp_path, monkeypatch):
         video.write_bytes(b"new")
         return SimpleNamespace(stdout="", stderr="", returncode=0)
 
-    monkeypatch.setattr(scan_bench.subprocess, "run", fake_run)
+    monkeypatch.setattr(bf.subprocess, "run", fake_run)
     assert scan_bench.ensure_fixture(tmp_path, 15) == video
     assert video.read_bytes() == b"new"
     assert calls == ["ffmpeg"]
@@ -163,7 +163,7 @@ def test_ensure_fixture_keeps_a_matching_file(tmp_path, monkeypatch):
     def fail(*_a, **_k):
         raise AssertionError("ffmpeg must not run")
 
-    monkeypatch.setattr(scan_bench.subprocess, "run", fail)
+    monkeypatch.setattr(bf.subprocess, "run", fail)
     scan_bench.ensure_fixture(tmp_path, 15)
     assert video.read_bytes() == b"keep"
 
@@ -176,7 +176,7 @@ def test_ensure_fixture_rebuilds_a_wrong_size(tmp_path, monkeypatch):
     monkeypatch.setattr(bc, "probe_fixture", lambda _p: probed)
     ran = []
     monkeypatch.setattr(
-        scan_bench.subprocess,
+        bf.subprocess,
         "run",
         lambda cmd, **k: ran.append(cmd[0]) or SimpleNamespace(returncode=0),
     )
@@ -204,4 +204,3 @@ def test_build_row_keeps_every_sample(make_doc):
     assert len(row["samples"]) == 3
     assert row["stats"]["elapsed_s"]["median"] == pytest.approx(3.1)
     assert row["stats"]["callback_s"]["median"] == pytest.approx(1.2)
-    assert Path  # keep the import used for future path assertions

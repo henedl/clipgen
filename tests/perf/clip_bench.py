@@ -31,12 +31,12 @@ from __future__ import annotations
 
 import argparse
 import shutil
-import subprocess
 import sys
 from pathlib import Path
 from typing import Any
 
 import bench_common as bc
+import bench_fixtures as bf
 
 DATA_ROWS = 30  # sheet rows with timestamps; row 6 is the first
 RANGE = "6-25"
@@ -131,24 +131,13 @@ def clip_cell_range(row: int, duration: int) -> str:
 
 def _write_clip_sheet(sheet: Path, duration: int) -> None:
     """Write clipbench.xlsx with timestamps that fit *duration*."""
-    import openpyxl
-
-    wb = openpyxl.Workbook()
-    ws = wb.active
-    ws.title = "Observations"
-    ws["A1"] = "clipbench"
-    ws["F2"] = "ID"
-    ws["G2"] = "P01"
-    for col, header in enumerate(
-        ("Count", "Reported", "Severity", "Category", "Observation", "Summary"), 1
-    ):
-        ws.cell(5, col, header)
-    for r in range(DATA_ROWS):
-        ws.cell(6 + r, 3, ("Critical", "Serious", "Moderate", "Minor")[r % 4])
-        ws.cell(6 + r, 4, "Onboarding")
-        ws.cell(6 + r, 5, f"Observation {r}")
-        ws.cell(6 + r, 7, clip_cell_range(r, duration))
-    wb.save(sheet)
+    bf.write_sheet(
+        sheet,
+        study="clipbench",
+        rows=DATA_ROWS,
+        participants=1,
+        cell=lambda r, _p: clip_cell_range(r, duration),
+    )
 
 
 def ensure_fixtures(input_dir: Path, duration: int) -> Path:
@@ -164,33 +153,7 @@ def ensure_fixtures(input_dir: Path, duration: int) -> Path:
             video.unlink()
         if sheet.is_file():
             sheet.unlink()
-        subprocess.run(
-            [
-                "ffmpeg",
-                "-y",
-                "-loglevel",
-                "error",
-                "-f",
-                "lavfi",
-                "-i",
-                f"testsrc=duration={duration}:size=1280x720:rate=30",
-                "-f",
-                "lavfi",
-                "-i",
-                f"sine=frequency=220:duration={duration}",
-                "-pix_fmt",
-                "yuv420p",
-                "-c:v",
-                "libx264",
-                "-g",
-                "30",
-                "-c:a",
-                "aac",
-                "-shortest",
-                str(video),
-            ],
-            check=True,
-        )
+        bf.make_testsrc_video(video, duration=duration, audio=True)
     if not sheet.is_file():
         _write_clip_sheet(sheet, duration)
     return sheet

@@ -128,6 +128,33 @@ def open_and_settle(
     page.wait_for_timeout(_SETTLE_MS + extra_wait_ms)
 
 
+_HIDE_JS = """
+(hidden) => {
+  var proto = Document.prototype;
+  if (hidden) {
+    Object.defineProperty(proto, "hidden", { configurable: true, get: function () { return true; } });
+    Object.defineProperty(proto, "visibilityState", { configurable: true, get: function () { return "hidden"; } });
+  } else {
+    delete proto.hidden;
+    delete proto.visibilityState;
+  }
+  document.dispatchEvent(new Event("visibilitychange"));
+  return document.hidden;
+}
+"""
+
+
+def set_hidden(page: Any, hidden: bool) -> bool:
+    """Make the page believe it is a background tab (or visible again).
+
+    Headless Chromium never hides a page on its own, so the pollers' pause
+    path (``createPoller`` and the per-page ``visibilitychange`` handlers)
+    would otherwise go unmeasured. Overrides the prototype getters and fires
+    the event the app listens to; returns the resulting ``document.hidden``.
+    """
+    return bool(page.evaluate(_HIDE_JS, hidden))
+
+
 def format_failure(name: str, log: PageLog, screenshot: str, report: str) -> str:
     lines = [
         (
