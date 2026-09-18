@@ -439,6 +439,28 @@ def stream_span(body: Iterable[Any], *, rule: str) -> Generator[Any, None, None]
             count(f"stream.{outcome} {rule}")
 
 
+def _window(reset: bool) -> tuple[dict[str, dict[str, float]], int, float | None]:
+    """``(labels, dropped, window_t0)`` read — and optionally cleared — under one lock."""
+    global _DROPPED, _WINDOW_T0
+    with _LOCK:
+        items = [
+            (label, entry[0], int(entry[1]), entry[2], int(entry[3]), entry[4])
+            for label, entry in _TOTALS.items()
+        ]
+        dropped = _DROPPED
+        t0 = _WINDOW_T0
+        if reset:
+            _TOTALS.clear()
+            _DROPPED = 0
+            _WINDOW_T0 = time.perf_counter()
+    items.sort(key=lambda item: (-item[1], item[0]))
+    labels = {
+        label: {"seconds": secs, "count": n, "max": mx, "bytes": nb, "first": first}
+        for label, secs, n, mx, nb, first in items
+    }
+    return labels, dropped, t0
+
+
 def snapshot(*, reset: bool = False) -> dict[str, dict[str, float]]:
     """Return ``{label: {seconds, count, max, bytes, first}}`` sorted by seconds desc.
 
@@ -449,21 +471,7 @@ def snapshot(*, reset: bool = False) -> dict[str, dict[str, float]]:
     ``nbytes=``; ``first`` (the first observation) is 0.0 for batched labels.
     Sorting stays on seconds so none of them reorders the report.
     """
-    global _DROPPED, _WINDOW_T0
-    with _LOCK:
-        items = [
-            (label, entry[0], int(entry[1]), entry[2], int(entry[3]), entry[4])
-            for label, entry in _TOTALS.items()
-        ]
-        if reset:
-            _TOTALS.clear()
-            _DROPPED = 0
-            _WINDOW_T0 = time.perf_counter()
-    items.sort(key=lambda item: (-item[1], item[0]))
-    return {
-        label: {"seconds": secs, "count": n, "max": mx, "bytes": nb, "first": first}
-        for label, secs, n, mx, nb, first in items
-    }
+    return _window(reset)[0]
 
 
 def format_bytes(nbytes: int) -> str:
@@ -586,17 +594,17 @@ def export(*, reset: bool = False) -> dict[str, Any]:
     profiler's own overhead. ``window_seconds`` runs from enable or the last
     reset to now.
     """
-    with _LOCK:
-        t0 = _WINDOW_T0
+    # One lock pass: the dropped count belongs to the window being returned.
+    labels, dropped, t0 = _window(reset)
     now = time.perf_counter()
     return {
         "mode": "deep" if config.PROFILE_DEEP else "profile",
         "deep_label": config.PROFILE_DEEP,
         "window_seconds": (now - t0) if t0 is not None else 0.0,
-        "labels": snapshot(reset=reset),
+        "labels": labels,
         "startup": startup_snapshot(),
         "peak_rss_mb": peak_rss_mb(),
-        "dropped_labels": dropped_labels(),
+        "dropped_labels": dropped,
         "active_spans": active_spans(),
         "operations": operations(),
         "env": environment(),

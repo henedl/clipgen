@@ -1049,6 +1049,18 @@ def test_dropped_labels_are_counted_and_reported(monkeypatch, capsys):
     assert profiling.dropped_labels() == 0
 
 
+def test_export_reset_reports_the_windows_dropped_labels(monkeypatch):
+    """A reset export must carry the overflow of the window it closes."""
+    monkeypatch.setattr(config, "PROFILING", True)
+    monkeypatch.setattr(profiling, "_MAX_LABELS", 1)
+    profiling.add("a", 1.0)
+    profiling.add("b", 1.0)
+    doc = profiling.export(reset=True)
+    assert doc["dropped_labels"] == 1
+    assert list(doc["labels"]) == ["a"]
+    assert profiling.export()["dropped_labels"] == 0
+
+
 def test_export_shape(monkeypatch):
     monkeypatch.setattr(config, "PROFILING", True)
     monkeypatch.setattr(config, "PROFILE_DEEP", "")
