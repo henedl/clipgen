@@ -2919,7 +2919,11 @@
     var overlay = card.querySelector(".card-gen-overlay");
     if (overlay) overlay.remove();
     var thumb = card.querySelector(".queue-card-thumb");
-    if (thumb) thumb.appendChild(createResultBadge(success));
+    if (thumb) {
+      var badge = thumb.appendChild(createResultBadge(success));
+      // Only a live generation pops; restored results just appear.
+      if (overlay && window.ClipgenMotion) ClipgenMotion.animateIn(badge, "pop");
+    }
     var p = card.getAttribute("data-participant");
     var r = card.getAttribute("data-row");
     if (p && r) state.cellResults[cellKey(p, parseInt(r, 10))] = success ? "success" : "fail";

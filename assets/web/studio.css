@@ -284,7 +284,7 @@ body {
 }
 .studio-sidebar-row-count {
   font-family: var(--font-mono);
-  font-feature-settings: "tnum";
+  font-variant-numeric: tabular-nums;
   font-size: var(--text-2xs);
   color: var(--fg-faint);
   flex-shrink: 0;
@@ -299,7 +299,7 @@ body {
 }
 .studio-sidebar-pill {
   font-family: var(--font-mono);
-  font-feature-settings: "tnum";
+  font-variant-numeric: tabular-nums;
   font-size: 9px;
   padding: var(--space-1) 0;
   text-align: center;
@@ -396,7 +396,6 @@ body[data-active-tab]:not([data-active-tab="sheet"]) #studioSidebar {
 
 .intake-tab-badge {
   font-family: var(--font-mono);
-  font-feature-settings: "tnum";
   font-size: 10px;
   padding: 1px var(--space-1-5);
   border-radius: var(--radius-full);
@@ -935,7 +934,7 @@ body.dragging .ts-cell:hover {
   padding: 2px var(--space-1-5);
   border-radius: var(--radius-xs);
   font-family: var(--font-mono);
-  font-feature-settings: "tnum";
+  font-variant-numeric: tabular-nums;
   font-size: var(--text-2xs);
   line-height: 1.4;
   background: var(--cell-data);
@@ -974,7 +973,7 @@ body.dragging .ts-cell:hover {
   align-items: center;
   justify-content: flex-start;
   font-family: var(--font-mono);
-  font-feature-settings: "tnum";
+  font-variant-numeric: tabular-nums;
   font-size: var(--text-2xs);
   line-height: 1.4;
   padding: 2px var(--space-1-5);
@@ -1125,7 +1124,7 @@ body.panel-dragging #bottomPanel {
 
 .bs-count {
   font-family: var(--font-mono);
-  font-feature-settings: "tnum";
+  font-variant-numeric: tabular-nums;
   font-size: var(--text-2xs);
   color: var(--fg-faint);
   white-space: nowrap;
@@ -1150,7 +1149,7 @@ body.panel-dragging #bottomPanel {
 }
 .bs-input {
   font-family: var(--font-mono);
-  font-feature-settings: "tnum";
+  font-variant-numeric: tabular-nums;
   font-size: var(--text-2xs);
   height: 22px;
   text-align: center;
@@ -1556,6 +1555,13 @@ body.dragging #sheetMain {
   padding: 0;
 }
 
+/* Hit slop: the visible control stays small, the target does not. */
+.queue-card-remove::after {
+  content: "";
+  position: absolute;
+  inset: calc(var(--space-1-5) * -1);
+}
+
 .queue-card:hover .queue-card-remove {
   opacity: 1;
 }
@@ -1692,7 +1698,7 @@ html[data-theme="dark"] .queue-card-error .queue-card-thumb {
 #stashedReelsHeader h3 span,
 #stashedArtifactsHeader h3 span {
   font-family: var(--font-mono);
-  font-feature-settings: "tnum";
+  font-variant-numeric: tabular-nums;
   font-size: 10.5px;
   font-weight: 400;
   letter-spacing: 0;
@@ -1798,7 +1804,7 @@ html[data-theme="dark"] .queue-card-error .queue-card-thumb {
   display: inline-flex;
   gap: var(--space-1-5);
   font-family: var(--font-mono);
-  font-feature-settings: "tnum";
+  font-variant-numeric: tabular-nums;
   font-size: 10.5px;
   color: var(--fg-faint);
 }
@@ -1820,6 +1826,13 @@ html[data-theme="dark"] .queue-card-error .queue-card-thumb {
   opacity: 0;
   transition: opacity var(--duration-fast);
   padding: 0;
+}
+
+/* Hit slop: the visible control stays small, the target does not. */
+.stash-card-remove::after {
+  content: "";
+  position: absolute;
+  inset: calc(var(--space-1-5) * -1);
 }
 .stash-card:hover .stash-card-remove {
   opacity: 1;
@@ -1906,7 +1919,7 @@ html[data-theme="dark"] .queue-card-error .queue-card-thumb {
   background: var(--bg-input);
   color: var(--fg);
   font-family: var(--font-mono);
-  font-feature-settings: "tnum";
+  font-variant-numeric: tabular-nums;
   font-size: var(--text-2xs);
   text-align: center;
 }
@@ -1979,7 +1992,7 @@ html[data-theme="dark"] .queue-card-error .queue-card-thumb {
   color: var(--fg);
   font-size: var(--text-2xs);
   font-family: var(--font-mono);
-  font-feature-settings: "tnum";
+  font-variant-numeric: tabular-nums;
 }
 
 /* Gallery configuration dialog — triggered from TopNav Quick Actions. */
@@ -2059,7 +2072,7 @@ html[data-theme="dark"] .queue-card-error .queue-card-thumb {
 }
 .gallery-dialog-input {
   font-family: var(--font-mono);
-  font-feature-settings: "tnum";
+  font-variant-numeric: tabular-nums;
   text-align: center;
 }
 .gallery-dialog-select:focus,
@@ -2525,7 +2538,7 @@ html[data-theme="dark"] .log-panel {
   width: 44px;
   height: 22px;
   font-family: var(--font-mono);
-  font-feature-settings: "tnum";
+  font-variant-numeric: tabular-nums;
   font-size: var(--text-2xs);
   padding: 0 var(--space-1-5);
   text-align: center;
@@ -2744,7 +2757,7 @@ html[data-theme="dark"] .log-panel {
 }
 .queue-card-participant {
   font-family: var(--font-mono);
-  font-feature-settings: "tnum";
+  font-variant-numeric: tabular-nums;
   font-size: var(--text-xs);
   color: var(--fg-muted);
   white-space: nowrap;
@@ -2761,7 +2774,7 @@ html[data-theme="dark"] .log-panel {
 }
 .queue-card-time {
   font-family: var(--font-mono);
-  font-feature-settings: "tnum";
+  font-variant-numeric: tabular-nums;
   font-size: var(--text-xs);
   color: var(--fg-faint);
   white-space: nowrap;

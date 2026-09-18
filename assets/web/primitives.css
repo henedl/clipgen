@@ -63,7 +63,7 @@
 .filter-chip-count {
   margin-left: 2px;
   font-family: var(--font-mono);
-  font-feature-settings: "tnum";
+  font-variant-numeric: tabular-nums;
   font-size: 10px;
   font-weight: 400;
   letter-spacing: 0;
@@ -89,7 +89,7 @@
   border-radius: var(--radius-sm);
   color: var(--fg-muted);
   font-family: var(--font-mono);
-  font-feature-settings: "tnum";
+  font-variant-numeric: tabular-nums;
   font-size: 11px;
   cursor: pointer;
   user-select: none;
@@ -124,7 +124,7 @@
   justify-content: space-between;
   height: 12px;
   font-family: var(--font-mono);
-  font-feature-settings: "tnum";
+  font-variant-numeric: tabular-nums;
   font-size: 10px;
   color: var(--fg-faint);
 }

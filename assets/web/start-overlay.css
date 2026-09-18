@@ -339,7 +339,21 @@
   backdrop-filter: blur(18px) saturate(1.2);
   box-shadow: var(--shadow-xl);
   transform-origin: bottom center;
-  animation: rail-recents-in var(--duration-normal) var(--ease-out);
+  /* A transition, so closing mid-open reverses instead of snapping. */
+  visibility: hidden;
+  opacity: 0;
+  transform: translateY(var(--space-2)) scale(0.98);
+  pointer-events: none;
+  transition: opacity var(--duration-normal) var(--ease-out),
+              transform var(--duration-normal) var(--ease-out),
+              visibility var(--duration-normal);
+}
+
+.start-overlay .rail__recents.is-expanded .rail__recents-overflow {
+  visibility: visible;
+  opacity: 1;
+  transform: none;
+  pointer-events: auto;
 }
 
 @supports not (backdrop-filter: blur(1px)) {
@@ -348,13 +362,9 @@
   }
 }
 
+/* JS still sets [hidden]; visibility does the hiding so the exit can play. */
 .start-overlay .rail__recents-overflow[hidden] {
-  display: none;
-}
-
-@keyframes rail-recents-in {
-  from { opacity: 0; transform: translateY(8px) scale(0.98); }
-  to   { opacity: 1; transform: translateY(0) scale(1); }
+  display: block;
 }
 
 /* Blurs the brand block sitting behind the fold-out. Same three-class depth as
@@ -1144,6 +1154,22 @@
 
 .start-overlay .sheet-picker__menu.hidden {
   display: none;
+}
+
+/* Enter only: the section's z-index lift ends at close, so an exit would be covered. */
+.start-overlay .sheet-picker__menu,
+.start-overlay .recent-pop {
+  transform-origin: top center;
+  transition: opacity var(--duration-instant) var(--ease-out),
+              transform var(--duration-instant) var(--ease-out);
+}
+
+@starting-style {
+  .start-overlay .sheet-picker__menu,
+  .start-overlay .recent-pop {
+    opacity: 0;
+    transform: translateY(calc(var(--space-1) * -1)) scale(0.98);
+  }
 }
 
 .start-overlay .sheet-picker__option {
@@ -2252,11 +2278,13 @@ html[data-theme="light"] .start-overlay .rail__shimmer::before {
   }
   .start-overlay .rail__grid::before,
   .start-overlay .rail__shimmer::before,
-  .start-overlay .rail__recents-overflow,
   .start-overlay .start-tabpanel.is-entering .start-tabpanel__scroll {
     animation: none;
   }
   .start-overlay .start-panel .rail__recents-scrim,
+  .start-overlay .rail__recents-overflow,
+  .start-overlay .sheet-picker__menu,
+  .start-overlay .recent-pop,
   .start-overlay .rail-recents-more__chev {
     transition: none;
   }
