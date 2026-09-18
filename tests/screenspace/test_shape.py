@@ -612,3 +612,14 @@ class TestShapeTool:
             fast_opts={"template_downscale": True},
         )
         assert captured["shape_image"].shape[:2] == (30, 30)
+
+
+def test_frame_edge_map_reuses_caller_gray_bit_identically():
+    """scan_shape hands the static-check grayscale in; the map must not change."""
+    frame = _make_outline_frame(320, 180, 40, 30, 96)
+    frame[:, :, 0] = np.linspace(0, 255, 320, dtype=np.uint8)[None, :]
+    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    assert np.array_equal(
+        screenspace_primitives._frame_edge_map(frame, gray),
+        screenspace_primitives._frame_edge_map(frame),
+    )

@@ -932,8 +932,9 @@ def scan_shape(
                 scale_back = 2
         # Only matches centered inside the run region count (zero-size means anywhere).
         window = region_search_window(region, _cv_scale / scale_back)
+        # The static check already converted the full frame; reuse it unless downscaled.
         matches, _peak = _match_shape_scales(
-            _frame_edge_map(work_frame),
+            _frame_edge_map(work_frame, curr_gray if scale_back == 1 else None),
             _prepared,
             threshold,
             _nms_overlap,

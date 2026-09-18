@@ -2386,6 +2386,54 @@ def test_api_sheet_refresh_invalidates_derived_payload(client, monkeypatch):
     assert parse_calls == {"annotations": 2, "timestamps": 2}
 
 
+def test_api_sheet_version_cursor_skips_rows_until_context_swaps(client):
+    """A matching ?sheet_version= gets a slim unchanged reply; a swap invalidates it."""
+    import types
+
+    def make_context(observation):
+        sheet_data = [
+            ["ID", "P01", "Observation", "Category"],
+            ["1", "0:10-0:20", observation, "catA"],
+        ]
+        return types.SimpleNamespace(
+            header_row=sheet_data[0],
+            id_cell=types.SimpleNamespace(row=1, col=1),
+            num_participants=1,
+            study_name="study",
+            observation_cell=types.SimpleNamespace(col=3),
+            category_cell=types.SimpleNamespace(col=4),
+            severity_cell=None,
+            baseline_row_idx=None,
+            filename_row_idx=None,
+            first_data_row_idx=1,
+            sheet_data=sheet_data,
+        )
+
+    server._set_sheet_context(make_context("old obs"))
+    try:
+        first = client.get("/studio/api/sheet").get_json()
+        version = first["sheet_version"]
+        assert first["rows"][0]["observation"] == "old obs"
+        assert "sheet_unchanged" not in first
+
+        same = client.get(f"/studio/api/sheet?sheet_version={version}").get_json()
+        assert same["ok"] and same["sheet_loaded"] is True
+        assert same["sheet_unchanged"] is True
+        assert same["sheet_version"] == version
+        assert "rows" not in same and "participants" not in same
+        assert "config" in same  # live settings still ride along
+
+        stale = client.get("/studio/api/sheet?sheet_version=not-a-number").get_json()
+        assert stale["rows"][0]["observation"] == "old obs"
+
+        server._set_sheet_context(make_context("new obs"))
+        swapped = client.get(f"/studio/api/sheet?sheet_version={version}").get_json()
+        assert swapped["sheet_version"] != version
+        assert swapped["rows"][0]["observation"] == "new obs"
+    finally:
+        server._set_sheet_context(None)
+
+
 def test_swap_worksheet_rollback_clears_sheet_payload_cache(monkeypatch):
     """A failed sheet swap must not leave the attempted sheet payload cached."""
     import types
