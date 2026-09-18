@@ -615,9 +615,8 @@ def profiled_stream(body: Any) -> Any:
     """
     if not config.PROFILING:
         return body
-    return profiling.stream_span(
-        _profiled_rule("stream"), body, first_label=_profiled_rule("stream.first")
-    )
+    rule = request.url_rule.rule if request.url_rule is not None else "?"
+    return profiling.stream_span(body, rule=rule)
 
 
 # notify() default: wake every client regardless of key.

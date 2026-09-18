@@ -1,150 +1,187 @@
-"""Unit tests for scan_bench's profile-report parser and row reduction.
+"""Unit tests for scan_bench's row reduction, validity and fixture checks.
 
 The bench itself is a subprocess driver (never collected — no test_ prefix);
-the parser is the part that silently rots if the `profile |` line shape
-changes, so it is pinned here against a verbatim report snippet.
+the reduction is the part that silently rots if the profiling labels it
+reads change shape, so it is pinned against a real ``profiling.export()``.
 """
 
 import json
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
+import bench_common as bc
+import config
+import profiling
 import scan_bench
 
-REPORT = """\
-profile | scan color bench_P01.mp4: decode_wait=0.798s/n=962  fast_filter=0.000s/n=962  callback=3.688s/n=962
-profile | scan.callback.color                 3.688s  n=962  avg=3.8ms  max=7.0ms
-profile | scan.decode_wait                    0.798s  n=962  avg=0.8ms
-profile | scan.fast_filter                    0.012s  n=962  avg=0.0ms
-profile | heatmap.gifs                        1.008s  n=1  avg=1007.7ms  max=1007.7ms
-profile | heatmap.grid_layers                 0.001s  n=1  avg=0.5ms  max=0.5ms
-profile | ffprobe.run                         0.039s  n=1  avg=39.0ms  max=39.0ms
-profile | peak_rss                            104.7MB
-"""
 
-SPACED = """\
-profile | route /api/models                   0.120s  n=3  avg=40.0ms  max=80.0ms  bytes=1.2MB  first=80.0ms
-profile | manifest.load clips                 0.010s  n=2  avg=5.0ms  bytes=256B
-profile | stream /studio/api/generate         8.400s  n=1  avg=8400.0ms  bytes=4.0KB
-"""
-
-
-def test_parse_profile_extracts_labels_and_rss():
-    parsed = scan_bench.parse_profile(REPORT)
-    color = parsed["scan.callback.color"]
-    assert color["seconds"] == 3.688
-    assert color["n"] == 962
-    assert color["avg"] == pytest.approx(0.0038)
-    assert color["max"] == pytest.approx(0.007)
-    assert parsed["scan.decode_wait"]["seconds"] == 0.798
-    assert parsed["peak_rss"]["mb"] == 104.7
-    # Per-scan summary lines are not totals and must not parse.
-    assert "scan" not in parsed
-
-
-def test_parse_profile_keeps_spaced_labels_and_extra_fields():
-    parsed = scan_bench.parse_profile(SPACED)
-    route = parsed["route /api/models"]
-    assert route["seconds"] == 0.120
-    assert route["n"] == 3
-    assert route["max"] == pytest.approx(0.080)
-    assert route["first"] == pytest.approx(0.080)
-    assert route["bytes"] == pytest.approx(1.2 * 1024 * 1024)
-    assert parsed["manifest.load clips"]["n"] == 2
-    assert parsed["manifest.load clips"]["bytes"] == 256
-    assert parsed["stream /studio/api/generate"]["bytes"] == pytest.approx(4.0 * 1024)
-
-
-def test_parse_profile_round_trips_report(monkeypatch, capsys):
-    import config
-    import profiling
-
+@pytest.fixture
+def make_doc(monkeypatch):
+    """A real export document seeded with labels; no git/ffmpeg probes."""
     monkeypatch.setattr(config, "PROFILING", True)
-    profiling.reset()
-    profiling.add("route /api/models", 0.08, nbytes=1024)
-    profiling.add("route /api/models", 0.02, nbytes=512)
-    profiling.add("scan.callback.color", 1.5, 100, peak=0.02)
-    profiling.report()
-    parsed = scan_bench.parse_profile(capsys.readouterr().out)
-    assert parsed["route /api/models"]["n"] == 2
-    assert parsed["route /api/models"]["bytes"] > 0
-    assert parsed["scan.callback.color"]["seconds"] == pytest.approx(1.5)
-    assert parsed["scan.callback.color"]["max"] == pytest.approx(0.02)
+    monkeypatch.setattr(profiling, "environment", lambda: {"python": "3.12"})
+
+    def build(seed, *, deep=""):
+        monkeypatch.setattr(config, "PROFILE_DEEP", deep)
+        profiling.reset()
+        for label, (secs, n, peak) in seed.items():
+            profiling.add(label, secs, n, peak=peak)
+        return profiling.export(reset=True)
+
+    yield build
     profiling.reset()
 
 
-def test_summarize_reduces_to_comparison_row():
-    row = scan_bench.summarize("color", scan_bench.parse_profile(REPORT))
-    assert row["callback_s"] == 3.688
+SEED = {
+    "scan.callback.color": (3.688, 962, 0.007),
+    "scan.decode_wait": (0.798, 962, None),
+    "scan.fast_filter": (0.012, 962, None),
+    "heatmap.gifs": (1.008, 1, None),
+    "heatmap.grid_layers": (0.001, 1, None),
+    "ffprobe.run": (0.039, 1, None),
+}
+
+
+def _fake_result(doc, *, valid=True, reasons=(), elapsed=5.0):
+    return {
+        "valid": valid,
+        "reasons": list(reasons),
+        "elapsed_s": elapsed,
+        "returncode": 0 if valid else 1,
+        "doc": doc,
+        "output": "",
+    }
+
+
+def test_summarize_reduces_export_to_row(make_doc):
+    doc = make_doc(SEED)
+    row = scan_bench.summarize("color", doc)
+    assert row["callback_s"] == pytest.approx(3.688)
     assert row["frames"] == 962
-    assert abs(row["callback_avg_ms"] - 3.834) < 0.01
-    assert row["decode_s"] == 0.798
-    assert row["filter_s"] == 0.012
-    assert abs(row["heatmap_s"] - 1.009) < 1e-9
-    assert row["peak_rss_mb"] == 104.7
+    assert row["callback_avg_ms"] == pytest.approx(3.834, abs=0.01)
+    assert row["decode_s"] == pytest.approx(0.798)
+    assert row["filter_s"] == pytest.approx(0.012)
+    assert row["heatmap_s"] == pytest.approx(1.009)
+    assert row["peak_rss_mb"] == doc["peak_rss_mb"]
 
 
-def test_keep_best_prefers_success_over_failed_first_run():
-    failed = {"callback_s": 0.0, "frames": 0}
-    ok = {"callback_s": 0.5, "frames": 962}
-    faster = {"callback_s": 0.4, "frames": 962}
-    # A failed first run must be replaced by any later success...
-    assert scan_bench.keep_best(scan_bench.keep_best(None, failed), ok) is ok
-    # ...a later failure never displaces a success...
-    assert scan_bench.keep_best(scan_bench.keep_best(None, ok), failed) is ok
-    # ...and among successes the minimum callback wins.
-    assert scan_bench.keep_best(scan_bench.keep_best(None, ok), faster) is faster
-    assert scan_bench.keep_best(scan_bench.keep_best(None, faster), ok) is faster
-
-
-def test_summarize_handles_missing_labels():
-    row = scan_bench.summarize("flow", scan_bench.parse_profile(""))
+def test_summarize_handles_missing_labels(make_doc):
+    row = scan_bench.summarize("flow", make_doc({}))
     assert row["callback_s"] == 0.0
     assert row["frames"] == 0
     assert row["callback_avg_ms"] == 0.0
-    assert row["filter_s"] == 0.0
 
 
-def test_regressions_flags_callback_increase():
-    rows = {"color": {"callback_s": 1.2}}
-    base = {"color": {"callback_s": 1.0}}
-    hit = scan_bench.regressions(rows, base, "callback_s", 10)
-    assert hit == [("color", pytest.approx(20.0))]
-    assert scan_bench.regressions(rows, base, "callback_s", 25) == []
+def test_task_completed_reads_manifest(tmp_path):
+    assert scan_bench.task_completed(tmp_path) is False
+    (tmp_path / "clipgen.json").write_text(
+        json.dumps({"screenspace": {"tasks": [{"status": "failed"}]}})
+    )
+    assert scan_bench.task_completed(tmp_path) is False
+    (tmp_path / "clipgen.json").write_text(
+        json.dumps({"screenspace": {"tasks": [{"status": "completed"}]}})
+    )
+    assert scan_bench.task_completed(tmp_path) is True
 
 
-def test_ensure_fixture_rebuilds_on_duration_mismatch(tmp_path, monkeypatch):
+def test_run_tool_seeds_region_and_requires_completion(tmp_path, monkeypatch, make_doc):
+    doc = make_doc({"scan.callback.shape": (1.0, 10, 0.2)})
+    captured = {}
+
+    def fake_run(args, out_dir, *, required_labels, timeout=0):
+        captured["args"] = args
+        captured["required"] = required_labels
+        manifest = json.loads((out_dir / "clipgen.json").read_text())
+        assert manifest["screenspace"]["regions"]["bench"] == scan_bench.BENCH_REGION
+        return _fake_result(doc)
+
+    monkeypatch.setattr(bc, "run_clipgen", fake_run)
+    result = scan_bench.run_tool("shape", tmp_path / "in", tmp_path / "out", 0.1)
+    assert captured["args"][:4] == ["--ss-task", "shape", "P01", "bench"]
+    assert captured["required"] == ["scan.callback.shape"]
+    # The seeded manifest has no completed task, so the run is not valid.
+    assert result["valid"] is False
+    assert "task did not complete" in result["reasons"]
+
+
+def test_run_tool_accepts_a_completed_task(tmp_path, monkeypatch, make_doc):
+    doc = make_doc({"scan.callback.color": (1.0, 10, 0.2)})
+
+    def fake_run(args, out_dir, *, required_labels, timeout=0):
+        (out_dir / "clipgen.json").write_text(
+            json.dumps({"screenspace": {"tasks": [{"status": "completed"}]}})
+        )
+        return _fake_result(doc)
+
+    monkeypatch.setattr(bc, "run_clipgen", fake_run)
+    result = scan_bench.run_tool("color", tmp_path / "in", tmp_path / "out", 0.1)
+    assert result["valid"] is True
+
+
+def test_run_tool_deep_is_diagnostic_not_invalid(tmp_path, monkeypatch, make_doc):
+    doc = make_doc({"scan.callback.color": (1.0, 10, 0.2)}, deep="scan.callback")
+
+    def fake_run(args, out_dir, *, required_labels, timeout=0):
+        assert "--profile-deep" in args
+        (out_dir / "clipgen.json").write_text(
+            json.dumps({"screenspace": {"tasks": [{"status": "completed"}]}})
+        )
+        return _fake_result(doc, valid=False, reasons=["deep run"])
+
+    monkeypatch.setattr(bc, "run_clipgen", fake_run)
+    result = scan_bench.run_tool(
+        "color", tmp_path / "in", tmp_path / "out", 0.1, deep=True
+    )
+    assert result["valid"] is True
+
+
+def test_ensure_fixture_rebuilds_on_spec_mismatch(tmp_path, monkeypatch):
     video = tmp_path / "bench_P01.mp4"
     video.write_bytes(b"old")
+    probes = iter([dict(scan_bench.fixture_spec(120))])
+    monkeypatch.setattr(bc, "probe_fixture", lambda _p: next(probes))
     calls = []
 
     def fake_run(cmd, **kwargs):
         calls.append(cmd[0])
-        if cmd[0] == "ffprobe":
-            return SimpleNamespace(stdout="120.0\n", stderr="", returncode=0)
         video.write_bytes(b"new")
         return SimpleNamespace(stdout="", stderr="", returncode=0)
 
     monkeypatch.setattr(scan_bench.subprocess, "run", fake_run)
-    out = scan_bench.ensure_fixture(tmp_path, 15)
-    assert out == video
+    assert scan_bench.ensure_fixture(tmp_path, 15) == video
     assert video.read_bytes() == b"new"
-    assert calls[0] == "ffprobe"
-    assert "ffmpeg" in calls
+    assert calls == ["ffmpeg"]
 
 
-def test_ensure_fixture_keeps_matching_duration(tmp_path, monkeypatch):
+def test_ensure_fixture_keeps_a_matching_file(tmp_path, monkeypatch):
     video = tmp_path / "bench_P01.mp4"
     video.write_bytes(b"keep")
+    monkeypatch.setattr(bc, "probe_fixture", lambda _p: scan_bench.fixture_spec(15))
 
-    def fake_run(cmd, **kwargs):
-        assert cmd[0] == "ffprobe"
-        return SimpleNamespace(stdout="15.0\n", stderr="", returncode=0)
+    def fail(*_a, **_k):
+        raise AssertionError("ffmpeg must not run")
 
-    monkeypatch.setattr(scan_bench.subprocess, "run", fake_run)
+    monkeypatch.setattr(scan_bench.subprocess, "run", fail)
     scan_bench.ensure_fixture(tmp_path, 15)
     assert video.read_bytes() == b"keep"
+
+
+def test_ensure_fixture_rebuilds_a_wrong_size(tmp_path, monkeypatch):
+    """Duration alone is not identity: a 640x360 leftover must go."""
+    video = tmp_path / "bench_P01.mp4"
+    video.write_bytes(b"old")
+    probed = dict(scan_bench.fixture_spec(15), width=640, height=360)
+    monkeypatch.setattr(bc, "probe_fixture", lambda _p: probed)
+    ran = []
+    monkeypatch.setattr(
+        scan_bench.subprocess,
+        "run",
+        lambda cmd, **k: ran.append(cmd[0]) or SimpleNamespace(returncode=0),
+    )
+    scan_bench.ensure_fixture(tmp_path, 15)
+    assert ran == ["ffmpeg"]
 
 
 def test_shape_is_in_default_sweep():
@@ -157,19 +194,14 @@ def test_shape_is_in_default_sweep():
     ]
 
 
-def test_shape_run_seeds_region(tmp_path, monkeypatch):
-    captured = {}
-    report = REPORT.replace("color", "shape")
-
-    def fake_run(cmd, **kwargs):
-        captured["cmd"] = cmd
-        return SimpleNamespace(stdout=report, stderr="", returncode=0)
-
-    monkeypatch.setattr(scan_bench.subprocess, "run", fake_run)
-    parsed = scan_bench.run_tool("shape", tmp_path / "in", tmp_path / "out", 0.1)
-    manifest_path = tmp_path / "out" / "bench-shape" / "clipgen.json"
-    manifest = json.loads(manifest_path.read_text())
-
-    assert parsed["scan.callback.shape"]["seconds"] == 3.688
-    assert captured["cmd"][3:7] == ["--ss-task", "shape", "P01", "bench"]
-    assert manifest["screenspace"]["regions"]["bench"] == scan_bench.BENCH_REGION
+def test_build_row_keeps_every_sample(make_doc):
+    docs = [make_doc({"scan.callback.color": (s, 100, 0.1)}) for s in (1.0, 1.2, 5.0)]
+    results = [_fake_result(d, elapsed=e) for d, e in zip(docs, (3.0, 3.1, 9.0))]
+    row = bc.build_row(
+        results, lambda d: scan_bench.summarize("color", d), scan_bench.METRICS
+    )
+    assert row["valid"] is True
+    assert len(row["samples"]) == 3
+    assert row["stats"]["elapsed_s"]["median"] == pytest.approx(3.1)
+    assert row["stats"]["callback_s"]["median"] == pytest.approx(1.2)
+    assert Path  # keep the import used for future path assertions

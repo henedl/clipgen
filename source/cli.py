@@ -1303,6 +1303,9 @@ def _apply_config_overrides(args: Any, cli_mode: bool) -> CliModeArgs:
     if getattr(args, "profile_deep", None):
         config.PROFILE_DEEP = args.profile_deep
         profiling.enable()
+    if getattr(args, "profile_output", None):
+        config.PROFILE_OUTPUT = args.profile_output
+        profiling.enable()
 
     if getattr(args, "titlecards", None) is not None:
         config.TITLECARDS_ENABLED = bool(args.titlecards)

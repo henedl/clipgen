@@ -17,6 +17,22 @@ changes what work runs.
 profile | scan.callback                  1.339s  n=962  avg=1.4ms
 ```
 
+**`--profile-output PATH`** (implies `--profile`) also writes the report as
+full-precision JSON — the form every tool below reads; the console lines are for
+eyes only. Keys: `mode` (`profile`, or `deep` when `--profile-deep` is attached —
+a deep run's totals carry cProfile's overhead and the benches refuse to compare
+one), `window_seconds`, `labels` (`{label: {seconds, count, max, bytes,
+first}}`), `startup`, `peak_rss_mb`, `dropped_labels` (labels refused at the
+1024 cap; the console prints `labels_dropped n=K` when non-zero), `active_spans`
+(work still in flight when the report was taken), and `env` — commit + dirty
+state, Python, platform, chip/cores/memory, the ffmpeg version line, package
+versions, and the tuning knobs from [PERFORMANCE.md](../../PERFORMANCE.md) as
+`settings`. `GET /api/profile` on a live server returns the same document;
+`?reset=1` snapshots and clears in one atomic step. A window is defined by
+*completion*: a span that straddles the reset lands in the new window, and
+`active_spans` names what crossed it. Inspecting the profile never appears in
+its own `route` totals.
+
 Label glossary — backend: `scan.decode_wait` / `scan.fast_filter` / `scan.callback.<tool>`
 (the per-frame split for every Screenspace tool, plus a per-scan summary line
 `profile | scan <tool> <file>:`). `scan.callback` without a suffix is only the
@@ -44,7 +60,8 @@ dump+write of that `clipgen.json` section, with its size as `bytes=`) and
 `manifest.save.unchanged <section>` (saves skipped as identical — a debounced
 persister that mostly skips is healthy, a poll path that loads a multi-MB
 section every tick is not),
-`ollama.generate`, `titlecard.wrap` plus
+`llm.generate` (one llama.cpp chat completion, recorded even when the call
+fails), `titlecard.wrap` plus
 `titlecard.copy` / `titlecard.reencode` counts (the concat-demuxer vs filter
 fallback), `workflows.run` / `workflows.node <type>` / `workflows.batch_child` /
 `workflows.batch_wall` (`WORKFLOWS_BATCH_WORKERS` effective parallelism, same
@@ -103,9 +120,10 @@ Four report tokens are easy to misread:
   batched flushes, because a batch's `seconds` is a sum with no per-item max. A
   flusher that tracked its own maximum passes `add(..., peak=)` to populate it —
   `scan.callback.<tool>` and `transcribe.decode` do.
-- **`first=`** is the cold hit: the label's first single-occurrence
+- **`first=`** is the first observation: the label's first single-occurrence
   contribution, printed only when it is at least 5 ms *and* double the average
-  of the calls after it. A route whose first call pays a lazy import or a
+  of the calls after it. Resetting the window clears the number, not the caches
+  that made it slow, so a second window's first observation is usually warm. A route whose first call pays a lazy import or a
   cache fill (`/api/models` imports `huggingface_hub`: measured 80-120 ms
   cold, 1.5 ms warm) otherwise reads as a modest `avg` with a large `max`,
   indistinguishable from an occasional slow request. Absent on batched labels,
@@ -232,10 +250,30 @@ uv run python tests/perf/scan_bench.py --save /tmp/base.json     # baseline
 uv run python tests/perf/scan_bench.py --compare /tmp/base.json --fail-on 10
 ```
 
-`--duration` rebuilds when the existing fixture's probed length does not match.
-A leftover 120 s `/tmp/ssbench/bench_P01.mp4` would otherwise ignore
-`--duration 15` and poison `--compare`. The harness prints `fixture … Ns` at
-the start of a run so a wrong-length file is visible before the table.
+The fixture is rebuilt when its probed duration, size, frame rate or audio
+presence differs from the bench's spec — a leftover 120 s (or 640×360)
+`/tmp/ssbench/bench_P01.mp4` would otherwise ignore `--duration 15` and poison
+`--compare`. The harness prints `fixture … Ns` at the start of a run.
+
+**Reading a bench run.** Each repetition is a fresh `uv run clipgen.py`
+process (the OS file cache is whatever it is — nothing here is "cold").
+`--runs` defaults to 3 and every sample is kept; the table shows the
+**median**, min and median absolute deviation of subprocess elapsed time (the
+primary, end-to-end metric) beside the breakdown columns, and a `status` per
+row: `ok`, `invalid` (a repetition exited non-zero, recorded no work, or left
+its output short — any bad repetition voids the row, so a good run can never
+hide a bad one), `incomparable` (the baseline did a different amount of work,
+e.g. a different frame or clip count), or `regression`. Exit codes follow the
+worst row: 1 regression, 2 usage, 3 invalid, 4 incomparable. `--compare`
+refuses a baseline recorded on another fixture spec or workload, prints every
+environment difference (chip, cores, memory, Python, ffmpeg, tuning settings —
+never the commit), and needs `--allow-env-mismatch` to proceed across them.
+Thresholds: `--fail-on PCT` on the median, `--fail-abs SECONDS`, and
+`--fail-metric elapsed|callback` (`|clip` for clip_bench); with both thresholds
+set a regression must exceed both. `--deep` runs are diagnostics and refuse
+`--save`/`--compare`. `clip_bench`'s carded scenarios are `invalid` on an ffmpeg
+without `drawtext` (clipgen disables cards for the run; the bench reports that
+rather than a faster "carded" row).
 
 Template and Shape use a seeded top-left 20%-frame region. This keeps their
 reference non-degenerate while measuring bounded correlation instead of a
@@ -272,7 +310,8 @@ does not match, and timestamps stay inside that length (an MM:SS with SS > 59
 is dropped at parse). Same `fixture … Ns` line as scan_bench.
 
 Live server: launch with `--profile`, then `curl http://127.0.0.1:8089/api/profile`
-(404 without the flag; `?reset=1` snapshots then clears, bracketing a window).
+(404 without the flag; `?reset=1` snapshots then clears atomically, bracketing
+a window; the label map is under `labels`, see Step 1).
 
 Browser: `uv sync --extra dev --extra ui` (~1 s from cache; `/check` uninstalls the
 ui extra), then
@@ -421,7 +460,11 @@ CLIPGEN_UI_CHECK=1 uv run --extra ui python tests/ui/shot.py transcripts \
   its first cached clip at 10 ms and finishes at 40 s and one that sits silent
   for 20 s then floods have the same total. Optimize `stream.first` for
   time-to-first-response (see the two-pass pattern in
-  [PERFORMANCE.md](../../PERFORMANCE.md)); `stream` for throughput.
+  [PERFORMANCE.md](../../PERFORMANCE.md)); `stream` for throughput. `bytes=` on
+  `stream` is the UTF-8 size that crossed the wire. `stream.complete` /
+  `stream.error` / `stream.disconnect <rule>` count how drains ended — a
+  `disconnect` count climbing on a poll-driven page is a tab closing
+  mid-generate, an `error` count is the route raising after its first chunk.
 - `longtasks` / `cdp.LayoutCount` → render work; check DocumentFragment batching and
   rAF-throttling per [CODE-REVIEW.md](../../CODE-REVIEW.md).
 

@@ -1,9 +1,9 @@
 """Repeatable Screenspace scan benchmark over the standard tool sweep.
 
 Runs each tool through the real CLI (`uv run clipgen.py --ss-task ...
---profile`) against the deterministic testsrc fixture from
-agents/skills/profile/SKILL.md, parses the `profile |` report, and prints one
-table row per tool. This replaces the hand-rolled per-tool command loops that
+--profile-output`) against the deterministic testsrc fixture from
+agents/skills/profile/SKILL.md, reads the JSON report, and prints one table
+row per tool. This replaces the hand-rolled per-tool command loops that
 every profiling session rebuilt (and that zsh's no-word-split quoting broke
 mid-session at least once) and makes before/after comparison a diff of two
 JSON files instead of an eyeball job.
@@ -13,35 +13,37 @@ Usage (from the repo root):
     uv run python tests/perf/scan_bench.py                     # sweep + table
     uv run python tests/perf/scan_bench.py --save base.json    # snapshot
     uv run python tests/perf/scan_bench.py --compare base.json --fail-on 10
-    uv run python tests/perf/scan_bench.py --tools color,text --runs 2
+    uv run python tests/perf/scan_bench.py --tools color,text --runs 5
 
 The fixture video is built on demand (ffmpeg testsrc: constant motion, so
-phash-skip never hides the callback) and rebuilt when `--duration` does not
-match the file already on disk — a leftover 120 s clip would otherwise
-ignore `--duration 15` and poison `--compare`. Each tool writes to its own
-wiped output dir so a cached manifest can never absorb the scan. `--runs N`
-keeps the fastest run per tool (minimum callback seconds), the standard
-treatment for scheduler noise. Template and Shape use a fixed top-left 20%
-region for a non-degenerate reference and bounded search workload. `text` is
-excluded from the default sweep: OCR is an order of magnitude slower than
-every other tool and pins ~0.8 GB of RSS per pooled OCR engine (measured
-3.3 GB at the default auto pool of 4).
+phash-skip never hides the callback) and rebuilt when its probed duration,
+size, frame rate or audio presence differs from `FIXTURE_SPEC` — a leftover
+120 s clip would otherwise ignore `--duration 15` and poison `--compare`.
+Each tool writes to its own wiped output dir so a cached manifest can never
+absorb the scan. `--runs N` (default 3) keeps every fresh-process sample and
+compares medians; a repetition that exits non-zero, records no callback, or
+leaves the task short of `completed` invalidates the tool's row. Template
+and Shape use a fixed top-left 20% region for a non-degenerate reference and
+bounded search workload. `text` is excluded from the default sweep: OCR is an
+order of magnitude slower than every other tool and pins ~0.8 GB of RSS per
+pooled OCR engine (measured 3.3 GB at the default auto pool of 4).
 
-The parser (`parse_profile`) is unit-tested in test_scan_bench_parse.py;
-everything else is a thin subprocess driver kept dependency-free on purpose.
+Row reduction and validity are unit-tested in test_scan_bench_parse.py; the
+shared compare/aggregate logic lives in bench_common.py.
 """
 
 from __future__ import annotations
 
 import argparse
+import functools
 import json
-import re
 import shutil
 import subprocess
 import sys
 from pathlib import Path
+from typing import Any
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
+import bench_common as bc
 
 # Missing required flags refuse the task and report only ffprobe.run.
 TOOL_FLAGS: dict[str, list[str]] = {
@@ -67,155 +69,61 @@ BENCH_REGION = {
     "source_height": 720,
 }
 REGION_TOOLS = {"template", "shape"}
-
-# Label is padded to 32 chars and may contain spaces (`route /api/foo`).
-_PROFILE_RE = re.compile(r"^profile \| (.+?)\s+([\d.]+)s\s+n=(\d+)(.*)$", re.MULTILINE)
-_RSS_RE = re.compile(r"^profile \| peak_rss\s+([\d.]+)MB", re.MULTILINE)
-_MS_RE = re.compile(r"\b(avg|max|first)=([\d.]+)ms")
-_BYTES_RE = re.compile(r"\bbytes=(\S+)")
+METRICS = ("elapsed_s", "callback_s")
 
 
-def _parse_bytes(token: str) -> float:
-    """Invert profiling.format_bytes; one-decimal sizes are approximate."""
-    if token.endswith("MB"):
-        return float(token[:-2]) * 1024 * 1024
-    if token.endswith("KB"):
-        return float(token[:-2]) * 1024
-    if token.endswith("B"):
-        return float(token[:-1])
-    return 0.0
+def fixture_spec(duration: int) -> dict[str, Any]:
+    return {
+        "duration": duration,
+        "width": 1280,
+        "height": 720,
+        "fps": 30.0,
+        "has_audio": False,
+    }
 
 
-def parse_profile(text: str) -> dict[str, dict[str, float]]:
-    """Parse `profile |` report lines into {label: {seconds, n, ...}} (+peak_rss)."""
-    out: dict[str, dict[str, float]] = {}
-    for label, seconds, n, rest in _PROFILE_RE.findall(text):
-        row: dict[str, float] = {"seconds": float(seconds), "n": int(n)}
-        for key, ms in _MS_RE.findall(rest):
-            row[key] = float(ms) / 1000.0
-        nbytes = _BYTES_RE.search(rest)
-        if nbytes:
-            row["bytes"] = _parse_bytes(nbytes.group(1))
-        out[label] = row
-    rss = _RSS_RE.search(text)
-    if rss:
-        out["peak_rss"] = {"seconds": 0.0, "n": 0, "mb": float(rss.group(1))}
-    return out
+def summarize(tool: str, doc: dict[str, Any]) -> dict[str, float]:
+    """Reduce one run's JSON report to the per-tool comparison row."""
+    labels = doc.get("labels", {})
 
+    def get(label: str) -> dict[str, float]:
+        return labels.get(label, {"seconds": 0.0, "count": 0})
 
-def probe_duration(path: Path) -> float | None:
-    """Seconds of *path*, or None if ffprobe cannot say."""
-    try:
-        proc = subprocess.run(
-            [
-                "ffprobe",
-                "-v",
-                "error",
-                "-show_entries",
-                "format=duration",
-                "-of",
-                "csv=p=0",
-                str(path),
-            ],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        return float(proc.stdout.strip())
-    except (OSError, ValueError):
-        return None
-
-
-def delta_pct(current: float, base: float) -> float | None:
-    """Percent change, or None when *base* is 0."""
-    if not base:
-        return None
-    return (current / base - 1.0) * 100.0
-
-
-def regressions(
-    rows: dict[str, dict[str, float]],
-    baseline: dict[str, dict[str, float]],
-    key: str,
-    limit: float,
-) -> list[tuple[str, float]]:
-    """Names whose *key* rose by more than *limit* percent.
-
-    A failed run parses to 0, which would read as a 100% speedup; it is
-    reported as ``inf`` instead so ``--fail-on`` never passes a broken build.
-    """
-    hit: list[tuple[str, float]] = []
-    for name, row in rows.items():
-        base = (baseline.get(name) or {}).get(key, 0.0)
-        current = row.get(key, 0.0)
-        if base and not current:
-            hit.append((name, float("inf")))
-            continue
-        pct = delta_pct(current, base)
-        if pct is not None and pct > limit:
-            hit.append((name, pct))
-    return hit
-
-
-def baseline_rows(
-    ap: argparse.ArgumentParser, path: Path, section: str, duration: int
-) -> dict:
-    """Load a --compare snapshot, refusing one recorded at another fixture length."""
-    snapshot = json.loads(path.read_text())
-    recorded = (snapshot.get("meta") or {}).get("duration")
-    if recorded is not None and recorded != duration:
-        ap.error(f"{path} was recorded at {recorded}s; pass --duration {recorded}")
-    return snapshot[section]
-
-
-def summarize(tool: str, profile: dict[str, dict[str, float]]) -> dict[str, float]:
-    """Reduce one run's parsed report to the per-tool comparison row."""
-    callback = profile.get(f"scan.callback.{tool}", {"seconds": 0.0, "n": 0})
-    decode = profile.get("scan.decode_wait", {"seconds": 0.0, "n": 0})
-    filt = profile.get("scan.fast_filter", {"seconds": 0.0, "n": 0})
+    callback = get(f"scan.callback.{tool}")
+    frames = int(callback["count"])
     heatmap = sum(
-        profile.get(label, {}).get("seconds", 0.0)
-        for label in ("heatmap.gifs", "heatmap.grid_layers")
+        get(label)["seconds"] for label in ("heatmap.gifs", "heatmap.grid_layers")
     )
-    frames = int(callback["n"])
     return {
         "callback_s": callback["seconds"],
         "callback_avg_ms": callback["seconds"] / frames * 1000 if frames else 0.0,
         "frames": frames,
-        "decode_s": decode["seconds"],
-        "filter_s": filt["seconds"],
+        "decode_s": get("scan.decode_wait")["seconds"],
+        "filter_s": get("scan.fast_filter")["seconds"],
         "heatmap_s": heatmap,
-        "peak_rss_mb": profile.get("peak_rss", {}).get("mb", 0.0),
+        "peak_rss_mb": doc.get("peak_rss_mb") or 0.0,
     }
 
 
-def keep_best(
-    best: dict[str, float] | None, summary: dict[str, float]
-) -> dict[str, float]:
-    """Pick the run to keep across --runs: fastest *successful* callback.
-
-    A failed run parses to callback_s == 0.0, which naive min-keeping would
-    hold onto forever (0 < anything), poisoning --compare baselines with a 0s
-    row. A successful run always beats a failed one; among successes the
-    minimum callback wins (standard treatment for scheduler noise).
-    """
-    if best is None:
-        return summary
-    if not summary["callback_s"]:
-        return best
-    if not best["callback_s"] or summary["callback_s"] < best["callback_s"]:
-        return summary
-    return best
+def task_completed(out_dir: Path) -> bool:
+    """True when the run's manifest holds a task that reached ``completed``."""
+    try:
+        doc = json.loads((out_dir / "clipgen.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return False
+    tasks = doc.get("screenspace", {}).get("tasks", [])
+    return any(task.get("status") == "completed" for task in tasks)
 
 
 def ensure_fixture(input_dir: Path, duration: int) -> Path:
-    """Build the benchmark video, rebuilding if its length does not match."""
+    """Build the benchmark video, rebuilding if it does not match the spec."""
     video = input_dir / "bench_P01.mp4"
-    existing = probe_duration(video) if video.is_file() else None
-    if existing is not None and abs(existing - duration) < 0.5:
+    spec = fixture_spec(duration)
+    probed = bc.probe_fixture(video) if video.is_file() else None
+    if bc.fixture_matches(probed, spec):
         return video
     if video.is_file():
-        was = f"{existing:.0f}s" if existing is not None else "unreadable"
+        was = f"{probed['duration']:.0f}s" if probed else "unreadable"
         print(f"rebuilding {video.name} ({was} → {duration}s)")
         video.unlink()
     input_dir.mkdir(parents=True, exist_ok=True)
@@ -248,19 +156,20 @@ def run_tool(
     out_root: Path,
     interval: float,
     deep: bool = False,
-) -> dict[str, dict[str, float]]:
-    """Run one tool through the CLI into a wiped output dir; return the parse.
+) -> dict[str, Any]:
+    """One fresh-process run of *tool* into a wiped output dir.
 
     With *deep*, attach ``--profile-deep scan.callback.<tool>`` and print the
     pstats block verbatim — the harness owns the canonical flag set, so this
-    replaces hand-rolling the tool's CLI command just to drill into it.
+    replaces hand-rolling the tool's CLI command just to drill into it. A
+    deep run is a diagnostic and is never saved or compared.
     """
     out_dir = out_root / f"bench-{tool}"
     if out_dir.exists():
         shutil.rmtree(out_dir)
+    out_dir.mkdir(parents=True)
     region_args: list[str] = []
     if tool in REGION_TOOLS:
-        out_dir.mkdir(parents=True)
         manifest = {
             "screenspace": {
                 "regions": {"bench": BENCH_REGION},
@@ -271,10 +180,7 @@ def run_tool(
         }
         (out_dir / "clipgen.json").write_text(json.dumps(manifest))
         region_args = ["bench"]
-    cmd = [
-        "uv",
-        "run",
-        "clipgen.py",
+    args = [
         "--ss-task",
         tool,
         "P01",
@@ -286,59 +192,64 @@ def run_tool(
         str(input_dir),
         "-o",
         str(out_dir),
-        "--profile",
     ]
     if deep:
-        cmd += ["--profile-deep", f"scan.callback.{tool}"]
-    proc = subprocess.run(
-        cmd, cwd=REPO_ROOT, capture_output=True, text=True, timeout=1800, check=False
-    )
-    output = proc.stdout + proc.stderr
-    parsed = parse_profile(output)
-    if proc.returncode:
-        print(f"  ! {tool}: clipgen exit {proc.returncode}")
-    if f"scan.callback.{tool}" not in parsed:
-        print(f"  ! {tool}: no scan.callback.{tool} in report (task refused?)")
-        tail = "\n".join(output.strip().splitlines()[-5:])
-        print("    " + tail.replace("\n", "\n    "))
+        args += ["--profile-deep", f"scan.callback.{tool}"]
+    result = bc.run_clipgen(args, out_dir, required_labels=[f"scan.callback.{tool}"])
+    if deep:
+        result["reasons"] = [r for r in result["reasons"] if r != "deep run"]
+        result["valid"] = not result["reasons"]
+    if result["valid"] and not task_completed(out_dir):
+        result["valid"] = False
+        result["reasons"].append("task did not complete")
+    if not result["valid"]:
+        bc.print_failure(tool, result)
     if deep:
         in_block = False
-        for line in output.splitlines():
+        for line in result["output"].splitlines():
             if line.startswith("profile-deep |"):
                 in_block = True
             if in_block:
                 print(line)
-    return parsed
+    return result
 
 
 def print_table(
-    rows: dict[str, dict[str, float]], baseline: dict[str, dict[str, float]] | None
+    rows: dict[str, dict[str, Any]],
+    baseline: dict[str, dict[str, Any]] | None,
+    findings: list[tuple[str, str, str]],
+    metric: str = "elapsed_s",
 ) -> None:
-    delta_hdr = "  Δcallback" if baseline else ""
+    delta_hdr = f"  Δ{metric.removesuffix('_s'):<8}" if baseline else ""
     print(
-        f"{'tool':<12}{'callback':>10}{'avg':>9}{'frames':>8}"
-        f"{'decode':>9}{'filter':>9}{'heatmap':>9}{'rss':>9}{delta_hdr}"
+        f"{'tool':<12}{'elapsed':>9}{'min':>9}{'mad':>8}{'callback':>10}{'avg':>9}"
+        f"{'frames':>8}{'decode':>9}{'heatmap':>9}{'rss':>9}{delta_hdr}  status"
     )
     for tool, row in rows.items():
+        status = bc.status_of(tool, findings)
+        if not row["samples"]:
+            print(f"{tool:<12}{'':>92}  {status}")
+            continue
+
+        def med(key: str, samples: list[dict[str, Any]] = row["samples"]) -> float:
+            return bc.aggregate(samples, key)["median"]
+
+        cb = med("callback_s")
+        frames = int(med("frames"))
         line = (
-            f"{tool:<12}{row['callback_s']:>9.3f}s{row['callback_avg_ms']:>7.1f}ms"
-            f"{row['frames']:>8d}{row['decode_s']:>8.3f}s{row['filter_s']:>8.3f}s"
-            f"{row['heatmap_s']:>8.3f}s{row['peak_rss_mb']:>7.0f}MB"
+            f"{tool:<12}{bc.stat_cells(row, 'elapsed_s')}"
+            f"{cb:>9.3f}s{(cb / frames * 1000 if frames else 0.0):>7.1f}ms"
+            f"{frames:>8d}{med('decode_s'):>8.3f}s{med('heatmap_s'):>8.3f}s"
+            f"{med('peak_rss_mb'):>7.0f}MB"
         )
         if baseline:
             base = baseline.get(tool)
-            if base and base.get("callback_s"):
-                pct = delta_pct(row["callback_s"], base["callback_s"])
-                line += f"  {pct:>+8.1f}%" if pct is not None else "  (no base)"
-                if (
-                    row.get("frames")
-                    and base.get("frames")
-                    and row["frames"] != base["frames"]
-                ):
-                    line += " frames≠"
+            if base and base.get("samples"):
+                pct = bc.delta_pct(med(metric), base["stats"][metric]["median"])
+                line += f"  {pct:>+9.1f}%" if pct is not None else "  (no base)"
             else:
-                line += "  (no base)"
-        print(line)
+                line += "   (no base)"
+        print(f"{line}  {status}")
 
 
 def main() -> int:
@@ -367,88 +278,89 @@ def main() -> int:
         type=int,
         help="fixture length in seconds; rebuilds when the existing file differs",
     )
-    ap.add_argument(
-        "--runs",
-        default=1,
-        type=int,
-        help="runs per tool; the fastest (min callback) is kept",
-    )
-    ap.add_argument("--save", type=Path, help="write results JSON here")
-    ap.add_argument("--compare", type=Path, help="baseline JSON to diff against")
-    ap.add_argument(
-        "--fail-on",
-        type=float,
-        default=None,
-        help="with --compare, exit 1 if any Δcallback %% exceeds this",
-    )
+    bc.add_common_args(ap, "callback")
     ap.add_argument(
         "--deep",
         action="store_true",
         help="attach --profile-deep scan.callback.<tool> and print each pstats block",
     )
     args = ap.parse_args()
-    if args.fail_on is not None and not args.compare:
-        ap.error("--fail-on requires --compare")
+    bc.validate_common_args(ap, args)
 
     tools = [t.strip() for t in args.tools.split(",") if t.strip()]
     unknown = [t for t in tools if t not in TOOL_FLAGS]
     if unknown:
         print(f"unknown tools: {', '.join(unknown)} (know: {', '.join(TOOL_FLAGS)})")
-        return 2
+        return bc.EXIT_USAGE
     out_root = args.output or (args.input / "bench-out")
     video = ensure_fixture(args.input, args.duration)
-    probed = probe_duration(video)
+    probed = bc.probe_fixture(video)
     print(
-        f"fixture {video.name}  {probed:.0f}s  interval={args.interval}"
+        f"fixture {video.name}  {probed['duration']:.0f}s  interval={args.interval}"
         if probed is not None
         else f"fixture {video.name}  interval={args.interval}"
     )
 
-    baseline = None
-    if args.compare:
-        baseline = baseline_rows(ap, args.compare, "tools", args.duration)
-
-    rows: dict[str, dict[str, float]] = {}
+    rows: dict[str, dict[str, Any]] = {}
+    env: dict[str, Any] = {}
     for tool in tools:
-        best: dict[str, float] | None = None
+        results = []
         for _ in range(max(1, args.runs)):
-            summary = summarize(
-                tool, run_tool(tool, args.input, out_root, args.interval, args.deep)
+            result = run_tool(tool, args.input, out_root, args.interval, args.deep)
+            results.append(result)
+            env = env or result["doc"].get("env", {})
+            if not result["valid"]:
+                break  # one bad repetition voids the row; no point repeating
+        rows[tool] = bc.build_row(results, functools.partial(summarize, tool), METRICS)
+        if rows[tool]["samples"]:
+            st = rows[tool]["stats"]
+            print(
+                f"  {tool}: elapsed {st['elapsed_s']['median']:.3f}s median"
+                f" (callback {st['callback_s']['median']:.3f}s)"
             )
-            best = keep_best(best, summary)
-        assert best is not None  # loop runs at least once
-        rows[tool] = best
-        print(
-            f"  {tool}: callback {best['callback_s']:.3f}s over {best['frames']} frames"
+
+    meta = {
+        "fixture": {"spec": fixture_spec(args.duration), "probed": probed},
+        "workload": {
+            "interval": args.interval,
+            "region": BENCH_REGION,
+        },
+        "env": env,
+        "runs": args.runs,
+        "metric": args.fail_metric,
+    }
+    baseline = None
+    findings: list[tuple[str, str, str]] = []
+    metric = "elapsed_s" if args.fail_metric == "elapsed" else "callback_s"
+    if args.compare:
+        baseline, problems = bc.load_baseline(
+            args.compare, "tools", meta, allow_env=args.allow_env_mismatch
         )
+        if baseline is None:
+            for line in problems:
+                print(f"incomparable: {line}")
+            return bc.EXIT_INCOMPARABLE
+        findings = bc.compare(
+            rows,
+            baseline,
+            metric=metric,
+            pct=args.fail_on,
+            abs_s=args.fail_abs,
+            count_key="frames",
+        )
+    else:
+        findings = [
+            ("invalid", name, "; ".join(row["reasons"]))
+            for name, row in rows.items()
+            if not row["valid"]
+        ]
 
     print()
-    print_table(rows, baseline)
-
+    print_table(rows, baseline, findings, metric)
+    bc.report_findings(findings)
     if args.save:
-        args.save.write_text(
-            json.dumps(
-                {
-                    "meta": {
-                        "interval": args.interval,
-                        "video": str(args.input / "bench_P01.mp4"),
-                        "duration": args.duration,
-                        "runs": args.runs,
-                    },
-                    "tools": rows,
-                },
-                indent=2,
-            )
-        )
-        print(f"\nsaved -> {args.save}")
-    if args.fail_on is not None and baseline is not None:
-        hit = regressions(rows, baseline, "callback_s", args.fail_on)
-        if hit:
-            for name, pct in hit:
-                change = "failed run" if pct == float("inf") else f"{pct:+.1f}%"
-                print(f"fail-on: {name} {change} (limit {args.fail_on:g}%)")
-            return 1
-    return 0
+        bc.save_results(args.save, meta, "tools", rows)
+    return bc.exit_code(findings)
 
 
 if __name__ == "__main__":

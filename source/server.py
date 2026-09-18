@@ -3497,7 +3497,10 @@ def _profile_request_end(response):
     response size rides along as ``bytes=`` so a cheap-but-bloated poll shows.
     """
     t0 = getattr(g, "_prof_t0", None)
-    if t0 is not None and request.url_rule is not None:
+    if t0 is None or request.url_rule is None:
+        return response
+    # Inspecting the profile must not show up in it.
+    if not request.url_rule.rule.startswith("/api/profile"):
         # content_length is the header only; streamed bodies are counted by stream_span.
         profiling.add(
             f"route {request.url_rule.rule}",
@@ -3604,25 +3607,18 @@ def _init_combined_state(
 
 
 def api_profile() -> FlaskResponse:
-    """Profiling snapshot for agents (``?reset=1`` brackets a window).
+    """Profiling export for agents (``?reset=1`` brackets a window atomically).
 
     404 when profiling is off so a plain launch exposes nothing — the
     endpoint mirrors the ``--profile`` opt-in rather than adding its own.
+    The payload is :func:`profiling.export`: ``labels`` plus the startup
+    marks, peak RSS, dropped-label count, in-flight spans and environment.
+    ``peak_rss_mb`` and ``startup`` record once per process; a reset cannot
+    clear them.
     """
     if not config.PROFILING:
         return err("profiling is off (launch with --profile)", 404)
-    snap = profiling.snapshot()
-    if request.args.get("reset") == "1":
-        profiling.reset()
-    # peak_rss is not a label (monotonic, unaffected by ?reset=1); live-server
-    # knobs need it here.
-    return ok(
-        profile=snap,
-        peak_rss_mb=profiling.peak_rss_mb(),
-        # Like peak_rss: not a label, records once per process, and
-        # ?reset=1 cannot clear it.
-        startup=profiling.startup_snapshot(),
-    )
+    return ok(**profiling.export(reset=request.args.get("reset") == "1"))
 
 
 def status() -> Response:

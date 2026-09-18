@@ -62,6 +62,7 @@ PROFILING: bool = False  # opt-in perf instrumentation (--profile); never change
 PROFILE_DEEP: str = (
     ""  # --profile-deep LABEL: cProfile spans whose label contains this substring
 )
+PROFILE_OUTPUT: str = ""  # --profile-output PATH: write the exit report as JSON
 QUIET: int = 0
 STANDARD: int = 1
 VERBOSE: int = 2

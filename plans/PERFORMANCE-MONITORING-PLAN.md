@@ -1,6 +1,6 @@
 # More reliable performance diagnostics
 
-Status: Planned; implementation has not started.
+Status: In progress; Phase 1 landed, Phases 2-3 pending.
 
 ## Summary
 
@@ -18,7 +18,7 @@ This review used source inspection; it does not establish new performance baseli
 
 | Phase | Status | Completion criterion |
 | --- | --- | --- |
-| 1. Trustworthy measurements | Not started | Reliable structured exports and benchmark comparisons |
+| 1. Trustworthy measurements | Done | Reliable structured exports and benchmark comparisons |
 | 2. Browser workloads | Not started | Verified workloads with load, interaction, and idle reports |
 | 3. Concurrent work | Not started | Bounded operation records and inspectable deep profiles |
 
@@ -36,37 +36,37 @@ CLI argument handling, and `tests/perf/`.
 
 ### Export structured results
 
-- [ ] Add `--profile-output PATH`, implying `--profile`, to write full-precision JSON alongside the existing console report.
-- [ ] Include metrics, startup marks, profiling mode, elapsed time, dropped-label counts, and environment metadata.
-- [ ] Change benchmark runners to consume JSON directly; remove their console-parsing dependency.
-- [ ] Record commit and dirty state, Python/platform, relevant dependency and binary versions, effective tuning settings, and fixture identity.
-- [ ] Treat deep-profile runs as diagnostic artifacts; reject them from ordinary timing comparisons.
+- [x] Add `--profile-output PATH`, implying `--profile`, to write full-precision JSON alongside the existing console report.
+- [x] Include metrics, startup marks, profiling mode, elapsed time, dropped-label counts, and environment metadata.
+- [x] Change benchmark runners to consume JSON directly; remove their console-parsing dependency.
+- [x] Record commit and dirty state, Python/platform, relevant dependency and binary versions, effective tuning settings, and fixture identity.
+- [x] Treat deep-profile runs as diagnostic artifacts; reject them from ordinary timing comparisons.
 
 ### Make benchmark success explicit
 
-- [ ] Require successful process exit, required measurements, expected work counts, and completed outputs.
-- [ ] Invalidate the scenario when any repetition fails; a successful repetition must not hide failure.
-- [ ] Distinguish invalid runs, incomparable workloads, and performance regressions in reports and exit status.
-- [ ] Validate fixture parameters and contents, including dimensions, frame rate, sampling interval, regions, and spreadsheet geometry. Duration alone is insufficient.
-- [ ] Reject workload mismatches. Report environment differences and require an explicit benchmark override to compare across them.
-- [ ] Update persisted result shapes directly, without legacy readers or migrations.
+- [x] Require successful process exit, required measurements, expected work counts, and completed outputs.
+- [x] Invalidate the scenario when any repetition fails; a successful repetition must not hide failure.
+- [x] Distinguish invalid runs, incomparable workloads, and performance regressions in reports and exit status.
+- [x] Validate fixture parameters and contents, including dimensions, frame rate, sampling interval, regions, and spreadsheet geometry. Duration alone is insufficient.
+- [x] Reject workload mismatches. Report environment differences and require an explicit benchmark override to compare across them.
+- [x] Update persisted result shapes directly, without legacy readers or migrations.
 
 ### Retain repeated measurements
 
-- [ ] Default to three measured runs and retain every sample. Report median, minimum, maximum, and median absolute deviation.
-- [ ] Compare medians; keep the minimum as supplementary information.
-- [ ] Measure subprocess elapsed time as the primary end-to-end metric. Preserve callback, pool, encoding, and post-processing timings as diagnostic breakdowns.
-- [ ] Retain `--fail-on` as the percentage threshold; add metric selection and an optional absolute threshold. When both thresholds are supplied, require both to be exceeded.
-- [ ] Describe runs as fresh-process runs; do not imply that operating-system caches are cold.
+- [x] Default to three measured runs and retain every sample. Report median, minimum, maximum, and median absolute deviation.
+- [x] Compare medians; keep the minimum as supplementary information.
+- [x] Measure subprocess elapsed time as the primary end-to-end metric. Preserve callback, pool, encoding, and post-processing timings as diagnostic breakdowns.
+- [x] Retain `--fail-on` as the percentage threshold; add metric selection and an optional absolute threshold. When both thresholds are supplied, require both to be exceeded.
+- [x] Describe runs as fresh-process runs; do not imply that operating-system caches are cold.
 
 ### Correct live collection
 
-- [ ] Make snapshot-and-reset one atomic operation. Define windows by measurement completion; report active spans crossing the boundary.
-- [ ] Exclude profile inspection requests from route totals.
-- [ ] Separate aggregate reset from deep-profiler lifecycle; never discard an active profiler during reset.
-- [ ] Count encoded bytes for text streams, record completion/error/disconnect outcomes, and preserve original exceptions during cleanup.
-- [ ] Report capacity overflow instead of silently dropping labels.
-- [ ] Rename the displayed “cold hit” to “first observation”: resetting counters does not clear caches.
+- [x] Make snapshot-and-reset one atomic operation. Define windows by measurement completion; report active spans crossing the boundary.
+- [x] Exclude profile inspection requests from route totals.
+- [x] Separate aggregate reset from deep-profiler lifecycle; never discard an active profiler during reset.
+- [x] Count encoded bytes for text streams, record completion/error/disconnect outcomes, and preserve original exceptions during cleanup.
+- [x] Report capacity overflow instead of silently dropping labels.
+- [x] Rename the displayed “cold hit” to “first observation”: resetting counters does not clear caches.
 
 Acceptance: failed or incomplete work cannot appear as a speedup, comparisons
 preserve precision, and concurrent recording cannot disappear between snapshot
@@ -129,6 +129,31 @@ per-frame recording overhead.
 
 ## Implementation notes
 
-No implementation or runtime validation has been performed for this plan.
-Record completed work, verification results, deviations, and unresolved issues
-here as each phase lands.
+### Phase 1 (landed)
+
+- `--profile-output PATH` writes `profiling.export()`: labels, startup marks,
+  mode, window seconds, dropped-label count, active spans, and `env` (commit +
+  dirty, Python, platform, `hardware.profile()`, ffmpeg version line, package
+  versions, the PERFORMANCE.md tuning knobs). `/api/profile` returns the same
+  document; `?reset=1` is one atomic snapshot-and-clear, and the label map moved
+  from `profile` to `labels`.
+- `reset()` no longer discards deep profilers (`deep_reset()` exists for tests).
+  `stream_span(body, rule=)` counts UTF-8 bytes and records
+  `stream.complete|error|disconnect <rule>`; a close-time error never masks the
+  body's own exception. Profile inspection requests are excluded from `route`
+  totals. Labels refused at the cap are counted and printed as `labels_dropped`.
+- `tests/perf/bench_common.py` holds the shared run/aggregate/compare logic;
+  both benches read `profile.json`, default to 3 fresh-process runs, keep every
+  sample, compare medians, and exit 3 (invalid) / 4 (incomparable) / 1
+  (regression). Fixture identity covers duration, size, fps and audio; workload
+  and environment mismatches void a compare (`--allow-env-mismatch` for the
+  latter). Deep runs refuse `--save`/`--compare`.
+- Verified: full pytest, ruff, ty; `scan_bench.py --tools color,change
+  --duration 15 --runs 2 --save` and `clip_bench.py --duration 15 --runs 2
+  --save` both produce valid rows and JSON; `--compare` against those baselines
+  passes.
+- Found while validating: on this machine's ffmpeg (no `drawtext`) clipgen
+  disables titlecards for the run, so `clips-cards` and `reel` had been
+  reporting card-free timings as "carded". The bench now marks those rows
+  `invalid` (`0 clips carded, expected 20`) instead of comparing them.
+- Deferred to Phase 3: per-operation records in the export.
