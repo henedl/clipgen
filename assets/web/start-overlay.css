@@ -803,6 +803,7 @@
 
 .start-overlay .sheet-card {
   transition: border-color 150ms, box-shadow 150ms;
+  box-shadow: var(--shadow-card);
 }
 .start-overlay .sheet-card.is-loaded {
   border-color: rgba(52, 211, 153, 0.45);
@@ -1562,6 +1563,7 @@
   position: relative;
   overflow: hidden;
   transition: border-color 200ms;
+  box-shadow: var(--shadow-card);
 }
 
 .start-overlay .tool-tile:hover {

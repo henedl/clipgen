@@ -123,7 +123,7 @@ body {
 
 #themeToggle:active,
 #shortcutsToggle:active {
-  transform: scale(0.96);
+  transform: scale(var(--scale-press));
 }
 
 #themeToggle:focus-visible,
@@ -218,6 +218,8 @@ body {
   aspect-ratio: 16 / 9;
   object-fit: cover;
   background: var(--color-surface-alt);
+  outline: 1px solid var(--outline-media);
+  outline-offset: -1px;
 }
 
 .gallery-card .timestamp-overlay {

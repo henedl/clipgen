@@ -881,6 +881,8 @@ body[data-frontend="screenspace"] {
   height: 48px;
   object-fit: cover;
   background: var(--color-border);
+  outline: 1px solid var(--outline-media);
+  outline-offset: -1px;
 }
 
 .pin-tray-meta {
@@ -1562,7 +1564,7 @@ html[data-theme="light"] .ss-cat-chip.active[data-active-type="numbers"],
   background: var(--color-surface);
   border: 1px solid var(--color-border);
   border-radius: var(--radius-md);
-  box-shadow: var(--shadow-lg);
+  box-shadow: var(--shadow-pop);
   padding: var(--space-1);
   z-index: var(--z-dropdown);
   display: none;
@@ -1755,7 +1757,7 @@ html[data-theme="light"] .ss-cat-chip.active[data-active-type="numbers"],
   background: var(--color-surface);
   border: 1px solid var(--color-border);
   border-radius: var(--radius-md);
-  box-shadow: var(--shadow-md);
+  box-shadow: var(--shadow-pop);
   padding: var(--space-1) 0;
   min-width: 8rem;
   max-width: 16rem;
@@ -3368,7 +3370,7 @@ body.panel-dragging #bottomPanel {
   background: var(--color-surface);
   border: 1px solid var(--color-border);
   border-radius: var(--radius-md);
-  box-shadow: var(--shadow-lg);
+  box-shadow: var(--shadow-pop);
   padding: var(--space-1);
   z-index: var(--z-dropdown);
 }
@@ -3531,6 +3533,7 @@ body.panel-dragging #bottomPanel {
   font-size: var(--text-sm);
   cursor: pointer;
   transition: background var(--duration-fast);
+  box-shadow: var(--shadow-card);
 }
 
 .task-card:hover {
@@ -3896,7 +3899,7 @@ body.panel-dragging #bottomPanel {
   background: var(--color-surface);
   border: 1px solid var(--color-border);
   border-radius: var(--radius-md);
-  box-shadow: var(--shadow-lg);
+  box-shadow: var(--shadow-pop);
   padding: var(--space-1);
   z-index: var(--z-dropdown);
   display: flex;
@@ -4132,6 +4135,8 @@ body.panel-dragging #bottomPanel {
 .timelapse-result img {
   max-width: 100%;
   border-radius: var(--radius);
+  outline: 1px solid var(--outline-media);
+  outline-offset: -1px;
 }
 
 /* Heatmap result */
@@ -4220,6 +4225,8 @@ body.panel-dragging #bottomPanel {
   height: 100%;
   border-radius: var(--radius);
   display: block;
+  outline: 1px solid var(--outline-media);
+  outline-offset: -1px;
 }
 
 .heatmap-thumb-animated {

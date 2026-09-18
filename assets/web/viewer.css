@@ -80,7 +80,7 @@ body {
 .attachment-card video {
   width: 100%;
   height: auto;
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-xs);
   display: block;
 }
 
@@ -211,7 +211,7 @@ body {
 #screenspaceToggle:active,
 #scrubAudioToggle:active,
 #shortcutsToggle:active {
-  transform: scale(0.96);
+  transform: scale(var(--scale-press));
 }
 
 #themeToggle:focus-visible,
@@ -760,6 +760,8 @@ body {
   height: 100%;
   object-fit: cover;
   display: block;
+  outline: 1px solid var(--outline-media);
+  outline-offset: -1px;
 }
 
 .artifact-media.thumb-pending {
