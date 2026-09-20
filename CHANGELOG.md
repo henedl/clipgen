@@ -8,6 +8,29 @@ Notable changes per release. One level-2 heading per version — `## <version> �
 
 `<Tool>` is one of `Core`, `Studio`, `Screenspace`, `Transcripts`, `Workflows`, `Composer`, `Overview`. Write for someone using clipgen, not building it: name the thing by what it is called in the interface, say what changed for them, and leave the internals in the commit. Add a second sentence only when the first leaves an obvious "so what". Lines render as **plain text** in the Start overlay's Recent updates tab — no backticks or markdown inside them, or it shows up literally.
 
+## v0.17.4 — 2026-09-18
+**Core:** Feat: Icons cross-fade when they change, and the command palette, hotkey sheet, and quick-actions menu animate closed.
+**Screenspace:** Feat: Attention scans skip channels you turned off, so they finish faster.
+**Transcripts:** Feat: Cross-reference polling skips unchanged data, so large transcripts stay responsive.
+**Composer:** Fix: Tool tiles no longer jump on hover, and transport icons animate instead of popping.
+
+## v0.17.3 — 2026-09-18
+**Core:** Feat: Settings, Summaries recommends an AI model that fits your RAM and GPU, with Use recommended to pick and download it.
+**Composer:** Fix: Cut and trim reject bad values, and undo/redo keep the same annotation after restore.
+**Workflows:** Fix: Resume re-runs nodes you edited after pausing, and muted or gated nodes stay skipped on batch runs.
+**Transcripts:** Fix: Inline edits and correction rules save reliably and survive reload.
+
+## v0.17.2 — 2026-09-10
+**Core:** Feat: The desktop app checks for updates on launch and installs them from About.
+**Core:** Feat: Clips with title cards build about a fifth faster.
+**Core:** Fix: A CLI run and Studio can share one output folder without overwriting each other's saved state.
+**Transcripts:** Fix: Stopping speaker detection no longer discards a finished transcript, and renamed speakers stick when you turn speakers off and on again.
+
+## v0.17.1 — 2026-09-04
+**Transcripts:** Feat: Turn on speaker attribution per participant to label who said each line, with renameable chips and speaker tags in exports.
+**Screenspace:** Fix: Preview overlays stay tied to their region and no longer show stale step images.
+**Core:** Fix: A failed reel build no longer leaves a half-written output file behind.
+
 ## v0.17.0 — 2026-09-03
 **Screenspace:** Feat: Click a Multitool step to focus it. Model view previews that step's tool, region and reference, and its calibration track is highlighted.
 **Screenspace:** Feat: Template and Shape scans run much faster when the tool has a search region.
