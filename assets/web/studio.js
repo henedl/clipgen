@@ -2252,6 +2252,29 @@
     }
   }
 
+  // Intake items travel whole, tagged with their queue, so the drop can move them.
+  function intakeDragData(item, from, idx) {
+    var data = JSON.parse(JSON.stringify(item));
+    data.dragFrom = from;
+    data.dragIdx = idx;
+    return data;
+  }
+
+  // Queue-to-queue drops move, like sheet cards; drags from an intake panel copy.
+  function takeDragOrigin(info, from) {
+    var dragFrom = info.dragFrom;
+    var idx = info.dragIdx;
+    delete info.dragFrom;
+    delete info.dragIdx;
+    if (dragFrom !== from) return;
+    var queue = from === "reel" ? state.reelQueue : state.artifactQueue;
+    if (!intakeItemsOverlap(queue[idx], info)) idx = findIntakeInQueue(queue, info);
+    if (idx < 0) return;
+    queue.splice(idx, 1);
+    if (from === "reel") renderReelQueue();
+    else renderArtifactQueue();
+  }
+
   function initDropTargets() {
     setupDropTarget(qs("#artifactsList"), function (info) {
       if (isArtifactQueueLocked()) return;
@@ -2262,6 +2285,7 @@
         return;
       }
       if (isIntakeSource(info.source)) {
+        takeDragOrigin(info, "reel");
         addToQueue(state.artifactQueue, info, renderArtifactQueue);
         return;
       }
@@ -2280,6 +2304,7 @@
         return;
       }
       if (isIntakeSource(info.source)) {
+        takeDragOrigin(info, "artifact");
         addToQueue(state.reelQueue, info, renderReelQueue);
         return;
       }
@@ -2349,8 +2374,7 @@
       ev.dataTransfer.setData("text/plain", String(_reelDragIdx));
       var reelItem = state.reelQueue[_reelDragIdx];
       if (reelItem) {
-        // Intake items travel whole under their own source: they have no row to match on.
-        var data = isIntakeSource(reelItem.source) ? reelItem : {
+        var data = isIntakeSource(reelItem.source) ? intakeDragData(reelItem, "reel", _reelDragIdx) : {
           participant: reelItem.participant,
           row: reelItem.row,
           desc: reelItem.desc,
@@ -2601,8 +2625,7 @@
         var idx = parseInt(card.getAttribute("data-queue-idx"), 10);
         var item = state[cfg.queueKey][idx];
         if (!item) return;
-        // Intake items travel whole, so label, text, category and study survive the move.
-        var data = isIntakeSource(item.source) ? item : {
+        var data = isIntakeSource(item.source) ? intakeDragData(item, "artifact", idx) : {
           participant: item.participant,
           desc: item.desc,
           start: item.start,
