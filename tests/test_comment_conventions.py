@@ -270,7 +270,7 @@ _TEST_BASELINE: dict[str, int] = {
     "tests/test_start_endpoints.py": 6,
     "tests/test_start_overlay_source.py": 5,
     "tests/test_start_settings.py": 1,
-    "tests/test_studio_api.py": 18,
+    "tests/test_studio_api.py": 15,
     "tests/test_studio_frontend_source.py": 5,
     "tests/test_thinking_agents.py": 5,
     "tests/test_titlecards.py": 2,

@@ -3960,7 +3960,6 @@ def test_api_generate_persists_artifacts_after_disconnect(
     in the manifest. Validates that _extend_generated_artifacts moved into the
     per-clip worker."""
     import threading
-    import time
     import types
 
     monkeypatch.setattr(server, "_worksheet", object())
@@ -3988,22 +3987,15 @@ def test_api_generate_persists_artifacts_after_disconnect(
     finished_count = [0]
     started_lock = threading.Lock()
 
-    # Hold each worker long enough that the disconnect below lands while the
-    # second pool batch is still in flight. It has to be a plain sleep, not a
-    # wait-for-signal: post() does not return until the *first* batch finishes,
-    # and resp.close() then blocks draining the pool, so there is no point on the
-    # test thread from which the first batch could ever be released. This was a
-    # `proceed.wait(timeout=2)` paired with a `proceed.set()` after close() —
-    # every one of the four workers provably timed out instead, the set() was
-    # unreachable, and the test paid 2 batches x 2 s. The in-flight assertion
-    # after close() is what keeps this constant honest if it is ever too short.
-    HOLD_SECONDS = 0.15
+    # Rows 7 and 8 park until released, so one is provably in flight at disconnect.
+    release = threading.Event()
 
     def fake_process_clips(clip_list, **kwargs):
+        clip = clip_list[0]
         with started_lock:
             started_count[0] += 1
-        time.sleep(HOLD_SECONDS)
-        clip = clip_list[0]
+        if clip["cell"].row in (7, 8):
+            release.wait(5.0)
         artifact = {
             "id": f"a{clip['cell'].row}",
             "type": "clip",
@@ -4024,21 +4016,15 @@ def test_api_generate_persists_artifacts_after_disconnect(
             "format": "clip",
         },
     )
-    # post() returns once the first pool batch has drained and the next one has
-    # been submitted, so some worker is always mid-flight here.
-    assert _poll_until(lambda: started_count[0] >= 2)
+    # A parked row-7/8 worker has started: it is in flight until released.
+    assert _poll_until(lambda: started_count[0] >= 3)
     with started_lock:
         in_flight_at_disconnect = started_count[0] - finished_count[0]
+    # close() drains the pool, so release the parked workers just after it begins.
+    threading.Timer(0.05, release.set).start()
     resp.close()
 
-    # The whole point of the test is that a worker still running at disconnect
-    # gets its artifact persisted. If HOLD_SECONDS is ever cut so fine that every
-    # worker has already finished by now, the row assertion below would still pass
-    # while proving nothing — so fail loudly on that instead.
-    assert in_flight_at_disconnect >= 1, (
-        "no worker was still in flight when the client disconnected; "
-        f"raise HOLD_SECONDS ({started_count[0]} started, {finished_count[0]} done)"
-    )
+    assert in_flight_at_disconnect >= 1
     assert _poll_until(lambda: server._busy_slots["generate"] is False)
     persisted_rows = {a["cellRow"] for a in server._generated_artifacts}
     assert persisted_rows == {5, 6, 7, 8}

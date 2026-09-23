@@ -43,6 +43,22 @@ def _anchor_cwd_outside_repo(tmp_path_factory):
         os.chdir(previous)
 
 
+@pytest.fixture(autouse=True)
+def _no_workflow_watch_daemon(request, monkeypatch):
+    """Keep the workflows watch-dir daemon from starting outside ``tests/ui``.
+
+    ``build_combined_app`` starts it and nothing stops it, so it outlives its
+    test and polls every later test's patched globals every few seconds. A
+    poll landing between a trigger test's setup and its own manual
+    ``_watch_poll_once()`` shifts that test's watcher state by one tick.
+    """
+    if request.node.path.parent.name == "ui":
+        return
+    import workflows_server
+
+    monkeypatch.setattr(workflows_server, "_start_watch_thread", lambda: None)
+
+
 @pytest.fixture(scope="session", autouse=True)
 def _repo_root_stays_clean():
     """Fail the run if the suite wrote anything into the repo root.

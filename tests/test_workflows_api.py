@@ -81,8 +81,15 @@ def _make_blueprint(client, nodes, edges=None):
 def _wait_terminal(client, run_id, timeout=5.0):
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
+        # Status turns terminal before the run thread saves and evicts; wait for eviction.
+        evicted = run_id not in workflows_server._runs
         run = client.get(f"/workflows/api/runs/{run_id}").get_json()["run"]
-        if run["status"] in ("completed", "degraded", "failed", "cancelled"):
+        if evicted and run["status"] in (
+            "completed",
+            "degraded",
+            "failed",
+            "cancelled",
+        ):
             return run
         time.sleep(0.02)
     raise AssertionError(f"run {run_id} did not finish within {timeout}s")
@@ -855,8 +862,10 @@ def _mock_participants(monkeypatch, ids=("P01", "P02", "P03")):
 def _wait_batch_terminal(client, batch_id, timeout=5.0):
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
+        # Children save before the coordinator drops the batch; wait for that drop.
+        done = batch_id not in workflows_server._batches
         batch = client.get(f"/workflows/api/batches/{batch_id}").get_json()["batch"]
-        if batch["status"] in ("completed", "failed", "cancelled"):
+        if done and batch["status"] in ("completed", "failed", "cancelled"):
             return batch
         time.sleep(0.02)
     raise AssertionError(f"batch {batch_id} did not finish within {timeout}s")
