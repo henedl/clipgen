@@ -281,6 +281,50 @@ def test_ignored_token_is_not_description_text(make_bundle):
     assert note["times"] == []
 
 
+@pytest.mark.parametrize(
+    "title",
+    [
+        "Note 3 0:01:00+0:05:00",
+        "Note 3 0:01:00,0:05:00",
+        "Note 3 0:01:00;0:05:00",
+        "Note 3 0:01:00, 0:05:00",
+    ],
+)
+def test_separator_joined_timestamps_leave_the_description(make_bundle, title):
+    """utils._split_timestamp_tokens splits on + ; , as well as whitespace, so
+    all four forms parse to the same two pairs. A whitespace-only split in
+    _describe left the raw times in the description — and desc becomes the
+    intake event_type, so they ended up in the output filename too."""
+    bundle = make_bundle(_node("study", [_node("Q", [_node("P01", [_node(title)])])]))
+    (note,) = mindnode.parse_document(bundle)["notes"]
+    assert note["desc"] == "Note 3"
+    assert note["times"] == [("0:01:00", "0:02:00"), ("0:05:00", "0:06:00")]
+
+
+def test_prose_punctuation_survives_the_timestamp_strip(make_bundle):
+    """Splitting the whole string on , would also eat commas out of real prose,
+    so only tokens that are *entirely* timestamps are dropped."""
+    bundle = make_bundle(
+        _node("study", [_node("Q", [_node("P01", [_node("obs, then this 1:00")])])])
+    )
+    (note,) = mindnode.parse_document(bundle)["notes"]
+    assert note["desc"] == "obs, then this"
+
+
+def test_malformed_xml_plist_raises_value_error(tmp_path):
+    """plistlib raises ExpatError (not ValueError/OSError/InvalidFileException)
+    on a truncated *XML* plist. Every caller catches only ValueError, so
+    without normalizing it here the Start overlay's preview and Open both
+    return a 500 with a stack trace instead of a readable message."""
+    bundle = tmp_path / "broken.mindnode"
+    bundle.mkdir()
+    (bundle / mindnode.CONTENTS_FILENAME).write_bytes(
+        b'<?xml version="1.0"?>\n<!DOCTYPE plist><plist version="1.0"><dict>'
+    )
+    with pytest.raises(ValueError, match="Could not read"):
+        mindnode.parse_document(bundle)
+
+
 def test_node_ids_are_carried_through(make_bundle):
     bundle = make_bundle(
         _node(
@@ -460,6 +504,9 @@ def mn_client(monkeypatch, tmp_path, make_bundle):
         "start_settings.record_recent_spreadsheet", lambda *a, **k: None
     )
     monkeypatch.setattr("start_settings.record_project_session", lambda *a, **k: None)
+    monkeypatch.setattr(
+        "start_settings._settings_path", lambda: tmp_path / "start.json"
+    )
     app = server.build_combined_app(default_page="studio")
     with app.test_client() as client:
         yield client, bundle, server
@@ -487,6 +534,51 @@ def test_route_previews_without_opening(mn_client):
     assert body["categories"] == ["Q1"]
     # Read-only: previewing must not make it the session's document.
     assert server._mindnode_doc is None
+
+
+def test_route_preview_lists_the_source_videos_a_map_needs(mn_client, tmp_path):
+    """A map's participants get the same editable file rows the sheet tabs get."""
+    client, bundle, _ = mn_client
+    (tmp_path / "session two.mp4").write_bytes(b"")
+
+    body = client.get(
+        "/api/spreadsheets/mindnode/preview",
+        query_string={"path": str(bundle), "input_dir": str(tmp_path)},
+    ).get_json()
+
+    assert body["sources"] == [
+        {
+            "id": "P01",
+            "filenames": ["my_study_P01.mp4"],
+            "found": False,
+            "override": False,
+            "override_value": "",
+            "sheet_value": "",
+        }
+    ]
+    assert body["unmatched"] == ["session two.mp4"]
+
+
+def test_route_preview_applies_a_stored_override(mn_client, tmp_path):
+    """A mind map has no Filename row, so this is its only naming fix."""
+    import start_settings
+
+    client, bundle, _ = mn_client
+    (tmp_path / "session two.mp4").write_bytes(b"")
+    start_settings.set_filename_override(
+        "mindnode", str(bundle), "", "P01", "session two.mp4"
+    )
+
+    body = client.get(
+        "/api/spreadsheets/mindnode/preview",
+        query_string={"path": str(bundle), "input_dir": str(tmp_path)},
+    ).get_json()
+
+    entry = body["sources"][0]
+    assert entry["filenames"] == ["session two.mp4"]
+    assert entry["found"] is True
+    assert entry["override_value"] == "session two.mp4"
+    assert body["unmatched"] == []
 
 
 def test_route_preview_rejects_a_bad_path(mn_client):
@@ -653,6 +745,38 @@ def test_document_route_rereads_from_disk(mn_client):
     assert [n["desc"] for n in doc["notes"]] == ["only one"]
 
 
+def test_document_refresh_does_not_resurrect_a_closed_map(mn_client, monkeypatch):
+    """The re-parse runs with _mindnode_lock released (it is slow, and the
+    route re-reads on every request). A close landing in that window must win —
+    otherwise the refresh writes the map back and the server believes it is
+    open while the UI has already shut it."""
+    import server as server_mod
+
+    client, bundle, _ = mn_client
+    client.post(
+        "/api/spreadsheets/open", json={"type": "mindnode", "id_or_path": str(bundle)}
+    )
+    assert server_mod._mindnode_doc is not None
+
+    real_parse = mindnode.parse_document
+
+    def _parse_then_close(path):
+        parsed = real_parse(path)
+        # The close landing mid-parse, applied directly: a nested test-client
+        # request would unwind Flask's request-context stack out of order.
+        # This is exactly the state /api/spreadsheets/close leaves behind.
+        server_mod._mindnode_doc = None
+        return parsed
+
+    # The route imports mindnode function-locally, so patch the module itself.
+    monkeypatch.setattr(mindnode, "parse_document", _parse_then_close)
+
+    body = client.get("/studio/api/mindnode").get_json()
+    assert body["mindnode_loaded"] is False
+    assert body["document"] is None
+    assert server_mod._mindnode_doc is None
+
+
 def test_document_route_404s_when_the_bundle_disappears(mn_client):
     import shutil
 
@@ -739,6 +863,34 @@ def test_document_route_failure_does_not_clear_a_replacement(
 
 
 # ---- Generation plumbing -----------------------------------------------------
+
+
+def test_intake_video_paths_follow_the_input_dir(monkeypatch, tmp_path):
+    """POST /api/dirs moves INPUT_DIR; intake must not keep a boot-time scan.
+
+    The MindNode-only Start overlay never hits /api/participants on Screenspace
+    or Transcripts, so those caches stay empty. Generating from the map would
+    then 404 every clip with "No video for P01" even though the file is there.
+    """
+    import screenspace_server
+    import transcripts_server
+    import server
+
+    boot = tmp_path / "boot"
+    boot.mkdir()
+    chosen = tmp_path / "chosen"
+    chosen.mkdir()
+    video = chosen / "study_P01.mp4"
+    video.write_bytes(b"fake")
+
+    monkeypatch.setattr(config, "INPUT_DIR", str(chosen))
+    monkeypatch.setattr(server, "_sheet_context", None)
+    # Stale caches as after boot, before anyone opens Transcripts/Screenspace.
+    monkeypatch.setattr(screenspace_server, "_participants", [])
+    monkeypatch.setattr(transcripts_server, "_participants", [])
+
+    paths = server._resolve_intake_video_paths("P01")
+    assert paths == [str(video)]
 
 
 def test_effective_study_falls_back_to_the_mind_map(monkeypatch):

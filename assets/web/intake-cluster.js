@@ -29,15 +29,15 @@
     });
     var clusters = [];
     var cur = null;
+    // Running sum; re-summing events on every append is quadratic per cluster.
+    var curSum = 0;
     for (var i = 0; i < sorted.length; i++) {
       var ev = sorted[i];
       if (
         !cur ||
         ev.participant !== cur.participant ||
         ev.event_type !== cur.event_type ||
-        // Navigational (boundary) events render as individual point ticks, so
-        // never merge them — a merged cluster would draw only its first tick and
-        // hide the rest. Each boundary gets its own cluster.
+        // Boundaries are point ticks: merging would hide all but the first.
         ev.navigational ||
         ev.time_in - cur.end > thresholdSec
       ) {
@@ -50,28 +50,23 @@
           event_type: ev.event_type,
           detector: ev.detector,
           region: ev.region,
-          // Clusters group by participant + event_type, so a boundary
-          // cluster's events are uniformly navigational. Carry the flag so
-          // timelines can render them distinctly and exclude them from zones.
+          // Carry the flag so timelines render boundaries distinctly, outside zones.
           navigational: !!ev.navigational,
           events: [ev],
           confidence_avg: ev.confidence,
         };
+        curSum = ev.confidence;
       } else {
         cur.end = Math.max(cur.end, ev.time_out);
         cur.events.push(ev);
-        var sum = 0;
-        for (var j = 0; j < cur.events.length; j++) sum += cur.events[j].confidence;
-        cur.confidence_avg = sum / cur.events.length;
+        curSum += ev.confidence;
+        cur.confidence_avg = curSum / cur.events.length;
       }
     }
     if (cur) clusters.push(cur);
     for (var k = 0; k < clusters.length; k++) {
       var c = clusters[k];
-      // Navigational (boundary) events are precise instants — leave them at the
-      // real time so the density timeline, card ranges, and clip windows don't
-      // sit ±5s off (Viewer and Convergence undo this padding the same way; the
-      // clip window for a navigational point is set in screenspaceClusterToItem).
+      // Boundaries are precise instants: padding would skew card ranges and clip windows.
       if (!c.navigational && c.start === c.end) {
         c.start = Math.max(0, c.start - 5);
         c.end = c.end + 5;

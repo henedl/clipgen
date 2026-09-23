@@ -23,8 +23,6 @@ html {
 
 body {
   font-family: var(--font-sans);
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
   letter-spacing: -0.005em;
   background-color: var(--color-bg);
   color: var(--color-text);
@@ -36,10 +34,6 @@ body {
 }
 
 /* Utility */
-
-.hidden {
-  display: none !important;
-}
 
 /* Task-type icons (mask-image, color follows currentColor).
  * Used in tooltip headers, multitool step badges, and result rows. */
@@ -62,6 +56,7 @@ body {
 .ss-task-icon--text        { mask-image: url(icons/language.svg);            -webkit-mask-image: url(icons/language.svg); }
 .ss-task-icon--numbers     { mask-image: url(icons/hashtag.svg);             -webkit-mask-image: url(icons/hashtag.svg); }
 .ss-task-icon--template    { mask-image: url(icons/viewfinder-circle.svg);   -webkit-mask-image: url(icons/viewfinder-circle.svg); }
+.ss-task-icon--shape       { mask-image: url(icons/star.svg);                -webkit-mask-image: url(icons/star.svg); }
 .ss-task-icon--flow        { mask-image: url(icons/arrows-right-left.svg);   -webkit-mask-image: url(icons/arrows-right-left.svg); }
 .ss-task-icon--scene       { mask-image: url(icons/squares-2x2.svg);         -webkit-mask-image: url(icons/squares-2x2.svg); }
 .ss-task-icon--inactivity  { mask-image: url(icons/pause-circle.svg);        -webkit-mask-image: url(icons/pause-circle.svg); }
@@ -138,14 +133,8 @@ body {
   gap: var(--space-2);
 }
 
-#participantSelect {
-  font-size: var(--text-sm);
-  padding: var(--space-1) var(--space-2);
-  border: 1px solid var(--color-border);
-  border-radius: calc(var(--radius) - 2px);
-  background: var(--color-surface);
-  color: var(--color-text);
-}
+/* #participantSelect carries no rule of its own: the global `select` base in
+ * tokens.css is this picker's look. */
 
 .video-info {
   font-size: var(--text-xs);
@@ -245,6 +234,14 @@ body {
   justify-content: center;
   transition: background var(--duration-fast), color var(--duration-fast),
     border-color var(--duration-fast);
+  position: relative;
+}
+
+/* Hit slop. */
+.ss-info-expand-btn::after {
+  content: "";
+  position: absolute;
+  inset: calc(var(--space-1) * -1);
 }
 
 .ss-info-collapse-btn:hover,
@@ -347,6 +344,7 @@ body {
   display: flex;
   flex-direction: column;
   gap: var(--space-4);
+  text-wrap: pretty;
 }
 
 .ss-info-section[data-collapsed="true"] .ss-info-section-body {
@@ -423,16 +421,8 @@ body {
   height: 8px;
   border-radius: var(--radius-full);
   margin-top: 0.45em;
-  background: var(--color-text-dim);
+  background: var(--sev, var(--color-text-dim)); /* tokens.css severity indirection */
 }
-
-.ss-info-issue-dot.sev-critical { background: var(--sev-critical); }
-.ss-info-issue-dot.sev-high     { background: var(--sev-high); }
-.ss-info-issue-dot.sev-medium   { background: var(--sev-medium); }
-.ss-info-issue-dot.sev-low      { background: var(--sev-low); }
-.ss-info-issue-dot.sev-na       { background: var(--sev-na); }
-.ss-info-issue-dot.sev-positive { background: var(--sev-positive); }
-.ss-info-issue-dot.sev-very-positive { background: var(--sev-very-positive); }
 
 .ss-info-issue-text {
   flex: 1;
@@ -613,6 +603,10 @@ body {
   gap: var(--space-1);
   overflow-x: auto;
   overflow-y: hidden;
+  /* Deliberately barless — the chips scroll by drag/wheel and a bar under them
+   * would crowd the strip. Overrides the global scrollbar rule in tokens.css on
+   * ID specificity; the ::-webkit half below is its old-WebKit counterpart, not
+   * a leftover (modern Chromium honours `scrollbar-width: none` instead). */
   scrollbar-width: none;
   padding: 2px 0;
 }
@@ -715,6 +709,7 @@ body {
   font-size: var(--text-xs);
   color: var(--color-text-dim);
   font-style: italic;
+  text-wrap: pretty;
 }
 
 .region-toggle-btn {
@@ -758,9 +753,9 @@ body {
   grid-template-columns: 1fr;
   align-items: center;
   flex-shrink: 0;
-  transition: grid-template-columns var(--duration-normal) cubic-bezier(0.3, 0.9, 0.35, 1),
-              opacity var(--duration-normal) cubic-bezier(0.3, 0.9, 0.35, 1),
-              margin-left var(--duration-normal) cubic-bezier(0.3, 0.9, 0.35, 1),
+  transition: grid-template-columns var(--duration-normal) var(--ease-slide),
+              opacity var(--duration-normal) var(--ease-slide),
+              margin-left var(--duration-normal) var(--ease-slide),
               visibility var(--duration-normal);
 }
 
@@ -776,7 +771,8 @@ body {
   width: 72px;
 }
 
-#wandToleranceValue {
+#wandToleranceValue,
+#shapeBrushValue {
   font-size: var(--text-xs);
   color: var(--color-text-dim);
   min-width: 2ch;
@@ -893,6 +889,8 @@ body[data-frontend="screenspace"] {
   height: 48px;
   object-fit: cover;
   background: var(--color-border);
+  outline: 1px solid var(--outline-media);
+  outline-offset: -1px;
 }
 
 .pin-tray-meta {
@@ -935,6 +933,13 @@ body[data-frontend="screenspace"] {
   cursor: pointer;
   opacity: 0.72;
   transition: opacity var(--duration-fast), color var(--duration-fast);
+}
+
+/* Hit slop. */
+.pin-tray-remove::after {
+  content: "";
+  position: absolute;
+  inset: calc(var(--space-1) * -1);
 }
 
 .pin-tray-item:hover .pin-tray-remove,
@@ -1012,6 +1017,7 @@ body[data-frontend="screenspace"] {
 .stash-card-count {
   white-space: nowrap;
   flex-shrink: 0;
+  font-variant-numeric: tabular-nums;
 }
 
 .stash-card-dots {
@@ -1166,6 +1172,9 @@ body[data-frontend="screenspace"] {
   top: 0;
   left: 0;
   width: 100%;
+  /* Height comes from the wrapper, not the height attribute: that attribute is
+   * the device-pixel backing store, so on a 2x display it would double. */
+  height: 100%;
   pointer-events: none;
 }
 
@@ -1313,6 +1322,7 @@ body[data-frontend="screenspace"] {
 .wf-tab[data-type="numbers"]   { --wf-tab-hue: var(--color-task-numbers); }
 .wf-tab[data-type="timelapse"] { --wf-tab-hue: var(--color-task-timelapse); }
 .wf-tab[data-type="template"]  { --wf-tab-hue: var(--color-task-template); }
+.wf-tab[data-type="shape"]     { --wf-tab-hue: var(--color-task-shape); }
 .wf-tab[data-type="flow"]      { --wf-tab-hue: var(--color-task-flow); }
 .wf-tab[data-type="scene"]     { --wf-tab-hue: var(--color-task-scene); }
 .wf-tab[data-type="inactivity"]{ --wf-tab-hue: var(--color-task-inactivity); }
@@ -1411,7 +1421,7 @@ body[data-frontend="screenspace"] {
 .ss-grouped-tools #workflowCategories { display: flex; }
 
 .ss-cat-nav {
-  gap: var(--space-1);
+  gap: var(--space-2); /* room for the between-segment hairline */
   flex-wrap: nowrap;
   align-items: stretch;
   border-bottom: 1px solid var(--color-border);
@@ -1420,13 +1430,28 @@ body[data-frontend="screenspace"] {
 
 /* Equal-width segments — a chip's size does not change with selection. Fixed
  * max width (no flex-grow) so chips appear stable and left-packed; they shrink
- * (flex-shrink) only when the row runs short of space. */
+ * (flex-shrink) only when the row runs short of space. The basis fits the
+ * longest label (Classification) beside the category icon and the chevron. */
 .ss-cat-chip {
   position: relative; /* anchor for .ss-cat-menu + z-index lift when open */
-  flex: 0 1 7rem;
+  flex: 0 1 8rem;
   min-width: 0;
 }
 .ss-cat-chip.open { z-index: var(--z-dropdown); } /* lift the menu above the action row */
+
+/* Hairline between segments, centered in the row gap. Dropped on either side of
+ * an active chip so no line touches its filled pill. */
+.ss-cat-chip + .ss-cat-chip::before {
+  content: "";
+  position: absolute;
+  left: calc(var(--space-2) / -2);
+  top: 25%;
+  bottom: 25%;
+  width: 1px;
+  background: var(--color-border);
+}
+.ss-cat-chip.active::before,
+.ss-cat-chip.active + .ss-cat-chip::before { display: none; }
 
 .ss-cat-trigger {
   display: inline-flex;
@@ -1468,9 +1493,10 @@ body[data-frontend="screenspace"] {
   font-weight: 600;
 }
 
-/* The glyph holds a tool's mask-image icon (colored via background-color, so it
- * tracks --cat-ink to contrast the fill). Empty (hidden) on resting chips —
- * except the alwaysIcon chip (Multitool), which keeps its tool-colored icon. */
+/* The glyph holds a mask-image icon (colored via background-color, so it tracks
+ * --cat-ink to contrast the fill): the active tool's when selected, the
+ * category's own otherwise. The alwaysIcon chip (Multitool) keeps its
+ * tool-colored icon at rest. */
 .ss-cat-glyph {
   display: inline-flex;
   align-items: center;
@@ -1482,6 +1508,10 @@ body[data-frontend="screenspace"] {
   flex-shrink: 0;
   opacity: 1;
   background-color: var(--cat-ink, var(--color-text));
+}
+/* A resting category icon reads as a label, so it follows the dim label color. */
+.ss-cat-chip:not(.active) .ss-cat-glyph .ss-task-icon {
+  background-color: currentColor;
 }
 .ss-cat-chip[data-always-icon] .ss-cat-glyph .ss-task-icon {
   background-color: var(--color-task-multitool);
@@ -1518,6 +1548,7 @@ body[data-frontend="screenspace"] {
 .ss-cat-chip[data-active-type="numbers"]    { --cat-fill: var(--color-task-numbers); }
 .ss-cat-chip[data-active-type="timelapse"]  { --cat-fill: var(--color-task-timelapse); }
 .ss-cat-chip[data-active-type="template"]   { --cat-fill: var(--color-task-template); }
+.ss-cat-chip[data-active-type="shape"]      { --cat-fill: var(--color-task-shape); }
 .ss-cat-chip[data-active-type="flow"]       { --cat-fill: var(--color-task-flow); }
 .ss-cat-chip[data-active-type="scene"]      { --cat-fill: var(--color-task-scene); }
 .ss-cat-chip[data-active-type="inactivity"] { --cat-fill: var(--color-task-inactivity); }
@@ -1548,12 +1579,30 @@ html[data-theme="light"] .ss-cat-chip.active[data-active-type="numbers"],
   background: var(--color-surface);
   border: 1px solid var(--color-border);
   border-radius: var(--radius-md);
-  box-shadow: var(--shadow-lg);
+  box-shadow: var(--shadow-pop);
   padding: var(--space-1);
   z-index: var(--z-dropdown);
   display: none;
 }
 .ss-cat-chip.open .ss-cat-menu { display: block; }
+
+/* Category title inside the menu — mirrors .cmdp-section. */
+.ss-cat-menu-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2); /* matches .ss-cat-item, so title and labels line up */
+  padding: var(--space-1) var(--space-2) var(--space-2);
+  color: var(--color-text-dim);
+  font-size: var(--text-2xs);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+.ss-cat-menu-head .ss-task-icon {
+  width: var(--icon-size-xs);
+  height: var(--icon-size-xs);
+  flex-shrink: 0;
+}
 
 .ss-cat-item {
   display: flex;
@@ -1587,6 +1636,7 @@ html[data-theme="light"] .ss-cat-chip.active[data-active-type="numbers"],
 .ss-cat-item[data-type="numbers"]    { --cat-item-hue: var(--color-task-numbers); }
 .ss-cat-item[data-type="timelapse"]  { --cat-item-hue: var(--color-task-timelapse); }
 .ss-cat-item[data-type="template"]   { --cat-item-hue: var(--color-task-template); }
+.ss-cat-item[data-type="shape"]      { --cat-item-hue: var(--color-task-shape); }
 .ss-cat-item[data-type="flow"]       { --cat-item-hue: var(--color-task-flow); }
 .ss-cat-item[data-type="scene"]      { --cat-item-hue: var(--color-task-scene); }
 .ss-cat-item[data-type="inactivity"] { --cat-item-hue: var(--color-task-inactivity); }
@@ -1722,7 +1772,7 @@ html[data-theme="light"] .ss-cat-chip.active[data-active-type="numbers"],
   background: var(--color-surface);
   border: 1px solid var(--color-border);
   border-radius: var(--radius-md);
-  box-shadow: var(--shadow-md);
+  box-shadow: var(--shadow-pop);
   padding: var(--space-1) 0;
   min-width: 8rem;
   max-width: 16rem;
@@ -1906,67 +1956,94 @@ html[data-theme="light"] .ss-cat-chip.active[data-active-type="numbers"],
   overflow-y: auto;
 }
 
-/* Model view panel (preview of preprocessed input per tool) */
+/* Preview tab: the Model view and Calibration sections share this chrome. The
+   tab is the disclosure, so neither section collapses on its own. */
 
-.model-view-panel {
-  border-top: 1px solid var(--color-border);
-  margin-top: var(--space-2);
-  padding-top: var(--space-1);
+#previewPanel {
+  gap: var(--space-3);
+  padding-right: var(--space-1);
+  overflow-y: auto;
+}
+
+.preview-section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
   flex-shrink: 0;
 }
 
-.model-view-toggle {
+.preview-section-header {
   display: flex;
   align-items: center;
   gap: var(--space-1);
-  width: 100%;
-  padding: var(--space-1) var(--space-2);
-  background: transparent;
-  border: none;
+  margin: 0;
+  padding: 0 var(--space-1);
   color: var(--color-text-dim);
   font-size: var(--text-xs);
-  text-align: left;
-  cursor: pointer;
-  border-radius: var(--radius-sm);
+  font-weight: 600;
 }
 
-.model-view-toggle:hover {
-  background: var(--color-surface-alt);
-  color: var(--color-text);
-}
-
-.model-view-icon {
+.preview-section-icon {
   width: var(--icon-size-sm);
   height: var(--icon-size-sm);
   background-color: currentColor;
-  mask-image: url("/screenspace/icons/eye.svg");
   mask-size: contain;
   mask-repeat: no-repeat;
   mask-position: center;
-  -webkit-mask-image: url("/screenspace/icons/eye.svg");
   -webkit-mask-size: contain;
   -webkit-mask-repeat: no-repeat;
   -webkit-mask-position: center;
   flex-shrink: 0;
 }
 
-.model-view-panel.collapsed .model-view-icon {
-  mask-image: url("/screenspace/icons/eye-slash.svg");
-  -webkit-mask-image: url("/screenspace/icons/eye-slash.svg");
+.preview-icon-model {
+  mask-image: url("/screenspace/icons/eye.svg");
+  -webkit-mask-image: url("/screenspace/icons/eye.svg");
 }
 
-.model-view-label {
-  font-weight: 600;
+.preview-icon-cal {
+  mask-image: url("/screenspace/icons/adjustments-horizontal.svg");
+  -webkit-mask-image: url("/screenspace/icons/adjustments-horizontal.svg");
 }
 
-.model-view-hint {
+/* Which tool (and multitool step) the model view shows. */
+.preview-section-focus {
   margin-left: auto;
+  font-weight: 400;
+  color: var(--color-text);
+}
+
+.preview-section-focus:empty {
+  display: none;
+}
+
+.preview-section-hint {
+  font-weight: 400;
   opacity: 0.7;
   font-style: italic;
+  text-wrap: pretty;
+}
+
+.preview-section-focus:empty + .preview-section-hint {
+  margin-left: auto;
+}
+
+/* Shown in place of the strips when the participant has no pinned frames. */
+.preview-empty {
+  padding: var(--space-2);
+  background: var(--color-surface-alt);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  font-size: var(--text-xs);
+  color: var(--color-text-dim);
+  text-wrap: balance;
+}
+
+.preview-empty.hidden {
+  display: none;
 }
 
 .model-view-body {
-  margin-top: var(--space-1);
   padding: var(--space-2);
   background: var(--color-surface-alt);
   border: 1px solid var(--color-border);
@@ -1974,10 +2051,7 @@ html[data-theme="light"] .ss-cat-chip.active[data-active-type="numbers"],
   display: flex;
   flex-direction: column;
   gap: var(--space-1);
-}
-
-.model-view-body.hidden {
-  display: none;
+  text-wrap: pretty;
 }
 
 .model-view-meta {
@@ -1985,9 +2059,11 @@ html[data-theme="light"] .ss-cat-chip.active[data-active-type="numbers"],
   color: var(--color-text-dim);
 }
 
+/* Native resolution, left-aligned. The old 220 px cap was for the narrow left
+   column; upscaling to the tab's full width instead pushes Calibration off the
+   fold, which is the thing this tab exists to surface. */
 #modelViewImage {
   max-width: 100%;
-  max-height: 220px;
   align-self: flex-start;
   image-rendering: pixelated;
   background: var(--color-bg);
@@ -2029,13 +2105,13 @@ html[data-theme="light"] .ss-cat-chip.active[data-active-type="numbers"],
   cursor: not-allowed;
 }
 
+/* Tighter than the shared `select` base in tokens.css — it sits in the dense
+   overlay bar — so the caret is pulled in to match. */
 .model-view-overlay-layer {
+  --select-caret-inset: var(--space-1);
   font-size: var(--text-xs);
-  padding: 2px var(--space-1);
-  background: var(--color-bg);
-  color: var(--color-text);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-sm);
+  padding-block: 2px;
+  padding-inline-start: var(--space-1);
 }
 
 .model-view-overlay-layer.hidden {
@@ -2058,72 +2134,11 @@ html[data-theme="light"] .ss-cat-chip.active[data-active-type="numbers"],
   line-height: 1.4;
 }
 
-/* Calibration panel (per-pin scores vs. threshold) — mirrors the model-view
-   panel chrome; the strip below is a normalized 0–1 "matchiness" axis. */
-
-.cal-panel {
-  border-top: 1px solid var(--color-border);
-  margin-top: var(--space-2);
-  padding-top: var(--space-1);
-  flex-shrink: 0;
-}
-
-/* Visibility gate (no pins) — distinct from the .collapsed open/close state. */
-.cal-panel.hidden {
-  display: none;
-}
-
-.cal-toggle {
-  display: flex;
-  align-items: center;
-  gap: var(--space-1);
-  width: 100%;
-  padding: var(--space-1) var(--space-2);
-  background: transparent;
-  border: none;
-  color: var(--color-text-dim);
-  font-size: var(--text-xs);
-  text-align: left;
-  cursor: pointer;
-  border-radius: var(--radius-sm);
-}
-
-.cal-toggle:hover {
-  background: var(--color-surface-alt);
-  color: var(--color-text);
-}
-
-.cal-icon {
-  width: var(--icon-size-sm);
-  height: var(--icon-size-sm);
-  background-color: currentColor;
-  mask-image: url("/screenspace/icons/adjustments-horizontal.svg");
-  mask-size: contain;
-  mask-repeat: no-repeat;
-  mask-position: center;
-  -webkit-mask-image: url("/screenspace/icons/adjustments-horizontal.svg");
-  -webkit-mask-size: contain;
-  -webkit-mask-repeat: no-repeat;
-  -webkit-mask-position: center;
-  flex-shrink: 0;
-}
-
-.cal-panel.collapsed .cal-icon {
-  opacity: 0.6;
-}
-
-.cal-label {
-  font-weight: 600;
-}
-
-.cal-hint {
-  margin-left: auto;
-  opacity: 0.7;
-  font-style: italic;
-}
+/* Calibration card (per-pin scores vs. threshold) — the strip is a normalized
+   0–1 "matchiness" axis. Hidden by the no-pins gate, which swaps in
+   .preview-empty. */
 
 .cal-body {
-  margin-top: var(--space-1);
   padding: var(--space-2);
   background: var(--color-surface-alt);
   border: 1px solid var(--color-border);
@@ -2131,6 +2146,7 @@ html[data-theme="light"] .ss-cat-chip.active[data-active-type="numbers"],
   display: flex;
   flex-direction: column;
   gap: var(--space-2);
+  text-wrap: pretty;
 }
 
 .cal-body.hidden {
@@ -2142,6 +2158,7 @@ html[data-theme="light"] .ss-cat-chip.active[data-active-type="numbers"],
    and errors). */
 .cal-summary {
   font-size: var(--text-xs);
+  text-wrap: pretty;
 }
 
 .cal-chip {
@@ -2178,6 +2195,20 @@ html[data-theme="light"] .ss-cat-chip.active[data-active-type="numbers"],
   display: flex;
   align-items: center;
   gap: var(--space-1);
+}
+
+/* Multitool: the focused step's track reads full-strength, the rest recede. */
+.cal-strips.has-focus .cal-track {
+  opacity: 0.6;
+  transition: opacity var(--duration-fast);
+}
+
+.cal-strips.has-focus .cal-track.is-focus {
+  opacity: 1;
+}
+
+.cal-track.is-focus .cal-track-label {
+  color: var(--color-text);
 }
 
 .cal-track-logic {
@@ -2311,6 +2342,7 @@ html[data-theme="light"] .ss-cat-chip.active[data-active-type="numbers"],
   font-size: var(--text-xs);
   color: var(--color-text-dim);
   font-style: italic;
+  text-wrap: pretty;
 }
 
 .cal-note.hidden {
@@ -2389,6 +2421,27 @@ html[data-theme="light"] .ss-cat-chip.active[data-active-type="numbers"],
   background: var(--bg-hover);
 }
 
+/* The focused step: model view and calibration follow it. */
+.multitool-step.is-selected {
+  border-color: var(--color-accent);
+}
+
+.multitool-step.is-selected .multitool-step-header {
+  background: var(--bg-hover);
+}
+
+.multitool-step-chevron .ss-icon {
+  transition: transform var(--duration-fast);
+}
+
+.multitool-step.is-collapsed .multitool-step-chevron .ss-icon {
+  transform: rotate(-90deg);
+}
+
+.multitool-step-chevron + .multitool-step-remove {
+  margin-left: 0;
+}
+
 .multitool-step-num {
   font-weight: 600;
   color: var(--color-text-dim);
@@ -2402,7 +2455,8 @@ html[data-theme="light"] .ss-cat-chip.active[data-active-type="numbers"],
   gap: var(--space-1);
 }
 
-.multitool-step-remove {
+.multitool-step-remove,
+.multitool-step-chevron {
   margin-left: auto;
   background: none;
   border: none;
@@ -2414,7 +2468,8 @@ html[data-theme="light"] .ss-cat-chip.active[data-active-type="numbers"],
   align-items: center;
 }
 
-.multitool-step-remove:hover {
+.multitool-step-remove:hover,
+.multitool-step-chevron:hover {
   color: var(--color-text);
   background: var(--bg-hover);
 }
@@ -2451,6 +2506,7 @@ html[data-theme="light"] .ss-cat-chip.active[data-active-type="numbers"],
 .multitool-step-body {
   padding: var(--space-1) var(--space-2) var(--space-2);
   border-top: 1px solid var(--color-border);
+  text-wrap: pretty;
 }
 
 .multitool-step-body.collapsed {
@@ -2614,20 +2670,19 @@ html[data-theme="light"] .ss-cat-chip.active[data-active-type="numbers"],
   padding: var(--space-1) 0;
 }
 
+/* min-width: 0 so a long step name can ellipsise instead of pushing the Add
+   button out of the row. Rest comes from the `select` base in tokens.css. */
 .multitool-add-row select {
   flex: 1;
+  min-width: 0;
   font-size: var(--text-xs);
-  padding: var(--space-1);
-  border-radius: var(--radius-sm);
-  border: 1px solid var(--color-border);
-  background: var(--color-bg);
-  color: var(--color-text);
 }
 
 .multitool-hint {
   font-size: var(--text-xs);
   color: var(--color-text-dim);
   padding: var(--space-1) 0;
+  text-wrap: pretty;
 }
 
 .multitool-type-badge {
@@ -2638,11 +2693,6 @@ html[data-theme="light"] .ss-cat-chip.active[data-active-type="numbers"],
 
 .multitool-step-region-select {
   font-size: var(--text-xs);
-  padding: var(--space-1);
-  border-radius: var(--radius-sm);
-  border: 1px solid var(--color-border);
-  background: var(--color-bg);
-  color: var(--color-text);
   max-width: 10rem;
 }
 
@@ -2740,6 +2790,7 @@ html[data-theme="light"] .ss-cat-chip.active[data-active-type="numbers"],
   color: var(--color-text-dim);
   margin-left: var(--space-1);
   white-space: nowrap;
+  text-wrap: pretty;
 }
 
 .param-value {
@@ -2868,6 +2919,92 @@ html[data-theme="light"] .ss-cat-chip.active[data-active-type="numbers"],
   /* Transparency checkerboard. Inlined rather than var()-wrapped: the token it
    * used to reference was never defined, so this fallback was always the value. */
   background: repeating-conic-gradient(var(--color-border) 0% 25%, transparent 0% 50%) 50% / 8px 8px;
+}
+
+/* Sample thumbnails open the sample modal (view or eraser-edit). */
+.ss-sample-thumb {
+  cursor: pointer;
+}
+
+.ss-sample-thumb:hover {
+  outline: 1px solid var(--color-accent);
+}
+
+.ss-sample-modal__card {
+  width: min(92vw, 46rem);
+  padding: var(--space-4);
+}
+
+.ss-sample-modal__stage {
+  position: relative; /* anchors the brush ghost */
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-sm);
+  /* Same checkerboard as the thumbnails, scaled up for the big surface. */
+  background: repeating-conic-gradient(var(--color-border) 0% 25%, transparent 0% 50%) 50% / 16px 16px;
+}
+
+.ss-sample-modal__img,
+.ss-sample-canvas {
+  display: block;
+  max-width: 100%;
+  max-height: 60vh;
+  width: auto;
+  height: auto;
+}
+
+/* Edit mode: the whole stage is paintable — margin around the bitmap makes
+   edge strokes easy, and the brush ghost is the cursor everywhere on it. */
+.ss-sample-modal__stage--edit {
+  padding: var(--space-6);
+  cursor: none;
+}
+
+/* Brush-size preview ring; a bg-colored halo keeps it legible on any pixel. */
+.ss-sample-modal__ghost {
+  position: absolute;
+  border: 1px solid var(--color-text);
+  outline: 1px solid var(--color-bg);
+  border-radius: 50%;
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+}
+
+.ss-sample-modal__hint {
+  font-size: var(--text-xs);
+  color: var(--color-text-dim);
+  text-wrap: pretty;
+}
+
+.ss-sample-modal__controls {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.ss-sample-modal__brush-val {
+  font-size: var(--text-xs);
+  color: var(--color-text-dim);
+  min-width: 2ch;
+  text-align: right;
+}
+
+.ss-sample-modal__hist:first-of-type {
+  margin-left: auto; /* park undo/redo at the row's right edge */
+}
+
+.ss-sample-modal__hist-icon {
+  display: block;
+  width: var(--icon-size-sm);
+  height: var(--icon-size-sm);
+  background-color: currentColor;
+  mask-size: contain;
+  mask-repeat: no-repeat;
+  mask-position: center;
+  -webkit-mask-size: contain;
+  -webkit-mask-repeat: no-repeat;
+  -webkit-mask-position: center;
 }
 
 .color-preview {
@@ -3022,6 +3159,16 @@ html[data-theme="light"] .ss-cat-chip.active[data-active-type="numbers"],
   -webkit-mask-image: url("/screenspace/icons/arrow-up-tray.svg");
 }
 
+.ss-template-icon-btn--draw .ss-template-icon-btn__glyph {
+  mask-image: url("/screenspace/icons/paint-brush.svg");
+  -webkit-mask-image: url("/screenspace/icons/paint-brush.svg");
+}
+
+.ss-template-icon-btn--draw.active {
+  color: var(--color-accent);
+  border-color: var(--color-accent);
+}
+
 /* Panel divider — full-bleed, matches Studio's bottom-strip drag handle. */
 
 #panelDivider {
@@ -3106,7 +3253,7 @@ body.panel-dragging #bottomPanel {
   transition: none;
 }
 
-/* Right pane: tabbed Task Queue + Results */
+/* Right pane: tabbed Preview + Task Queue + Results */
 
 #rightPane {
   display: flex;
@@ -3165,6 +3312,11 @@ body.panel-dragging #bottomPanel {
   mask-position: center;
   -webkit-mask-position: center;
   flex-shrink: 0;
+}
+
+.rp-tab-icon-preview {
+  mask-image: url("/screenspace/icons/eye.svg");
+  -webkit-mask-image: url("/screenspace/icons/eye.svg");
 }
 
 .rp-tab-icon-queue {
@@ -3233,7 +3385,7 @@ body.panel-dragging #bottomPanel {
   background: var(--color-surface);
   border: 1px solid var(--color-border);
   border-radius: var(--radius-md);
-  box-shadow: var(--shadow-lg);
+  box-shadow: var(--shadow-pop);
   padding: var(--space-1);
   z-index: var(--z-dropdown);
 }
@@ -3247,6 +3399,7 @@ body.panel-dragging #bottomPanel {
   font-size: var(--text-xs);
   color: var(--color-text-dim);
   text-align: center;
+  text-wrap: balance;
 }
 
 .rp-switcher-item {
@@ -3366,6 +3519,7 @@ body.panel-dragging #bottomPanel {
   color: var(--color-text-dim);
   padding: var(--space-5) 0;
   text-align: center;
+  text-wrap: balance;
 }
 
 /* Task cards */
@@ -3394,6 +3548,7 @@ body.panel-dragging #bottomPanel {
   font-size: var(--text-sm);
   cursor: pointer;
   transition: background var(--duration-fast);
+  box-shadow: var(--shadow-card);
 }
 
 .task-card:hover {
@@ -3587,6 +3742,14 @@ body.panel-dragging #bottomPanel {
   flex-shrink: 0;
   display: inline-flex;
   align-items: center;
+  position: relative;
+}
+
+/* Hit slop. Vertical only: edit and dismiss sit side by side. */
+.task-card-edit::after {
+  content: "";
+  position: absolute;
+  inset: calc(var(--space-1-5) * -1) 0;
 }
 
 .task-card-edit:hover {
@@ -3606,6 +3769,14 @@ body.panel-dragging #bottomPanel {
   flex-shrink: 0;
   display: inline-flex;
   align-items: center;
+  position: relative;
+}
+
+/* Hit slop. */
+.task-card-dismiss::after {
+  content: "";
+  position: absolute;
+  inset: calc(var(--space-1-5) * -1) 0;
 }
 
 .task-card-dismiss:hover {
@@ -3670,6 +3841,14 @@ body.panel-dragging #bottomPanel {
   font-size: var(--text-xs);
   color: var(--color-text-dim);
   transition: background var(--duration-fast), color var(--duration-fast);
+  position: relative;
+}
+
+/* Hit slop. Horizontal only: result rows stack. */
+.result-exclude-btn::after {
+  content: "";
+  position: absolute;
+  inset: 0 calc(var(--space-1-5) * -1);
 }
 
 .result-exclude-btn:hover {
@@ -3688,12 +3867,17 @@ body.panel-dragging #bottomPanel {
   border-radius: var(--radius-sm);
   color: var(--color-text-dim);
   cursor: pointer;
-  transition: background var(--duration-fast), color var(--duration-fast);
+  transition: background var(--duration-fast), color var(--duration-fast), transform var(--duration-instant);
 }
 
 .rp-icon-btn:hover {
   background: rgba(59, 130, 246, 0.1);
   color: var(--color-accent);
+}
+
+/* Press feedback; ungated by reduced motion like every press affordance. */
+.rp-icon-btn:active:not(:disabled) {
+  transform: scale(var(--scale-press));
 }
 
 .rp-icon-btn.active {
@@ -3746,11 +3930,15 @@ body.panel-dragging #bottomPanel {
   position: absolute;
   top: calc(100% + 4px);
   right: 0;
+  /* Shrink-to-fit inside a ~2rem icon-button wrapper would squeeze the note down
+     to min-width; size to content instead and cap the wrap width. */
+  width: max-content;
   min-width: 8rem;
+  max-width: 18rem;
   background: var(--color-surface);
   border: 1px solid var(--color-border);
   border-radius: var(--radius-md);
-  box-shadow: var(--shadow-lg);
+  box-shadow: var(--shadow-pop);
   padding: var(--space-1);
   z-index: var(--z-dropdown);
   display: flex;
@@ -3760,6 +3948,19 @@ body.panel-dragging #bottomPanel {
 
 .rp-export-menu.hidden {
   display: none;
+}
+
+/* Scope note above the format items: the exported file is not the filtered
+   list on screen, and nothing else in the UI says so. */
+.rp-export-note {
+  padding: var(--space-1) var(--space-2);
+  margin-bottom: var(--space-1);
+  border-bottom: 1px solid var(--color-border);
+  font-size: var(--text-2xs);
+  line-height: 1.4;
+  color: var(--color-text-dim);
+  pointer-events: none;
+  text-wrap: pretty;
 }
 
 .rp-export-item {
@@ -3973,6 +4174,8 @@ body.panel-dragging #bottomPanel {
 .timelapse-result img {
   max-width: 100%;
   border-radius: var(--radius);
+  outline: 1px solid var(--outline-media);
+  outline-offset: -1px;
 }
 
 /* Heatmap result */
@@ -4061,6 +4264,8 @@ body.panel-dragging #bottomPanel {
   height: 100%;
   border-radius: var(--radius);
   display: block;
+  outline: 1px solid var(--outline-media);
+  outline-offset: -1px;
 }
 
 .heatmap-thumb-animated {
@@ -4158,22 +4363,10 @@ body.panel-dragging #bottomPanel {
   background: var(--color-backdrop);
 }
 
+/* Shell comes from .cg-modal-card (tokens.css); this owns width + padding. */
 .modal-card {
-  background: var(--color-surface);
-  border-radius: var(--radius-lg);
-  border: 1px solid var(--color-panel-border);
-  box-shadow: var(--shadow-xl);
   padding: var(--space-5);
   width: 340px;
-  max-width: 92vw;
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-3);
-}
-
-.modal-card h3 {
-  font-size: var(--text-md);
-  font-weight: 600;
 }
 
 .modal-label {
@@ -4322,6 +4515,7 @@ body.panel-dragging #bottomPanel {
   margin: 0;
   color: var(--color-text-dim);
   font-size: var(--text-xs);
+  text-wrap: pretty;
 }
 
 /* Dark mode — page-specific overrides (shared tokens live in tokens.css). Dark

@@ -1,22 +1,17 @@
-/* Workflows hub — the node-canvas frontend (4th top-level surface).
+/* Workflows hub — the node-canvas frontend.
  *
- * Establishes the window.ClipgenWorkflows (WF) namespace that satellite files
- * (workflows-nodes, workflows-canvas) share state and functions through —
- * mirroring screenspace.js + window.ClipgenScreenspace and transcripts.js +
- * window.ClipgenTranscripts.
+ * Establishes the window.ClipgenWorkflows (WF) namespace the satellite files
+ * share state and functions through, mirroring screenspace.js and transcripts.js.
  *
- * The hub owns: WF.state, boot, the node catalog fetch + palette, the
- * blueprint switcher (create/name/switch/delete), and the debounced autosave.
- * The canvas interaction layer and card rendering live in the satellites, which
- * attach their functions back onto WF. Vanilla JS, ES5-style (no build step).
+ * The hub owns WF.state, boot, the node catalog fetch + palette, the blueprint
+ * switcher, and the debounced autosave. Canvas interaction and card rendering
+ * live in the satellites, which attach their functions back onto WF.
  */
 
 (function () {
   "use strict";
 
-  // Shared mutable state. Routed through WF.state (not bare `var`s) so the
-  // satellites read/write the same object without cross-file ReferenceErrors —
-  // the carve gotcha that bit Screenspace and Transcripts.
+  // Shared through WF.state so satellites never hit cross-file ReferenceErrors.
   var state = {
     catalog: null, // ordered node-type array from /api/catalog
     catalogById: {}, // id -> node type (built once for card lookups)
@@ -25,13 +20,13 @@
     context: { sheet: false, videoDir: false }, // launch context for grey-out
     blueprints: [], // all saved blueprints (full objects)
     nodes: [], // placed cards of the active blueprint: {id, type, params, position}
-    edges: [], // wires (M2): {from, fromPort, to, toPort}
+    edges: [], // wires: {from, fromPort, to, toPort}
     viewport: { x: 0, y: 0, zoom: 1 }, // pan/zoom of the active blueprint
     selection: [], // selected node ids (transient — not persisted)
     selectedEdge: null, // selected wire id (transient — not persisted)
     activeBlueprintId: null,
     ready: false, // false until a blueprint is active; gates canvas edits
-    // ---- Run state (M4; owned by the workflows-runs satellite) ----
+    // ---- Run state (owned by the workflows-runs satellite) ----
     runs: [], // recent run snapshots (newest first)
     activeRunId: null, // the run currently streamed/polled, or null
     nodeRunStatus: {}, // node id -> {status, progress} for canvas tinting
@@ -39,27 +34,24 @@
     runScope: "blueprint", // history scope: this blueprint | all (owned by -runs)
     allRuns: [], // cross-blueprint history for the "All" scope (owned by -runs)
     pendingFocusRunId: null, // history click-through handshake (owned by -runs)
-    // ---- Batch state (P3: whole-study fan-out; owned by workflows-runs) ----
+    // ---- Batch state (whole-study fan-out; owned by workflows-runs) ----
     batches: [], // recent batch summaries (newest first)
     activeBatchId: null, // the batch currently streamed/polled, or null
-    // ---- Stash state (M5; owned by the workflows-stashes satellite) ----
+    // ---- Stash state (owned by the workflows-stashes satellite) ----
     stashes: [], // built-in recipes + saved sub-graph stashes (built-ins first)
-    // ---- Validation (P5; owned by the workflows-validate satellite) ----
+    // ---- Validation (owned by the workflows-validate satellite) ----
     validation: { errors: [], warnings: [] }, // recomputed on every edit
   };
 
   // ---- Catalog + palette ----------------------------------------------------
 
-  // Note: loadCatalog / loadBlueprints deliberately let rejections propagate;
-  // loadWorkspace turns a failure into the persistent error gate (a swallowed
-  // toast would leave a canvas that looks editable but never saves).
+  // Rejections propagate on purpose: loadWorkspace turns them into the error gate.
   function loadCatalog() {
     return apiGet("api/catalog").then(function (res) {
       if (res && res.config) clipgenApplyConfig(res.config);
       state.catalog = (res && res.catalog) || [];
       state.context = (res && res.context) || { sheet: false, videoDir: false };
-      // Adapter pairs the runner coerces across; canConnect consults this Set so
-      // the UI accepts the same wires the runner runs (events→clipRecords, …).
+      // canConnect consults this Set so the UI accepts the wires the runner coerces.
       state.adapters = new Set();
       state.adapterDescriptions = {};
       ((res && res.adapters) || []).forEach(function (pair) {
@@ -76,10 +68,7 @@
     });
   }
 
-  // Every node gets a universal optional `control` input (`__gate__`): a Gate's
-  // `control`-typed `pass` output wires here (exact-match) to gate the node, so a
-  // false gate skips the whole downstream branch. It carries no data — the runner
-  // excludes control edges from a node's inputs (see workflows.py _gather_inputs).
+  // Universal __gate__ control input: a false Gate skips the branch. Carries no data (workflows_runner.py _gather_inputs).
   function injectControlPort(node) {
     node.inputs = node.inputs || [];
     var has = node.inputs.some(function (p) {
@@ -107,9 +96,7 @@
   function buildPaletteItem(node) {
     var item = el("div", "wf-palette-item", node.label);
     item.setAttribute("data-domain", node.domain || "");
-    // Brief description tooltip for every palette row (mirrors the on-card `?`).
-    // Use the [data-tooltip] singleton, not native title — title doesn't render
-    // on draggable=true rows, and the singleton is styled/positioned in-viewport.
+    // data-tooltip, not title: native title doesn't render on draggable rows.
     if (node.description) item.setAttribute("data-tooltip", node.description);
     if (nodeContextMet(node)) {
       item.draggable = true;
@@ -135,12 +122,9 @@
     return item;
   }
 
-  // The ~23 collection-algebra nodes (filter_*/partition_*/merge_*/limit_*/
-  // dedup_*) share one "Collection" category; group them by operation so the
-  // palette shows 5 collapsible sub-groups instead of a long flat list.
+  // Collection nodes are sub-grouped by operation prefix instead of one flat list.
   var _COLLECTION_OPS = [
     ["filter", "Filter"],
-    ["partition", "Partition"],
     ["merge", "Merge"],
     ["limit", "Limit"],
     ["dedup", "Dedup"],
@@ -151,8 +135,7 @@
     return String(node.id || "").split("_")[0];
   }
 
-  // Emit the Collection category as <details> sub-groups by operation. While a
-  // search is active, sub-groups auto-expand so matches aren't hidden.
+  // <details> sub-groups per operation; an active search expands them so matches show.
   function appendCollectionGroups(frag, nodes, query) {
     var byOp = {};
     nodes.forEach(function (n) {
@@ -172,11 +155,11 @@
     });
   }
 
-  // A node matches the palette search when the query is empty or a substring of
-  // its label, description, or category (all case-insensitive).
   function paletteNodeMatches(node, query) {
     if (!query) return true;
     var hay = (
+      (node.id || "") +
+      " " +
       (node.label || "") +
       " " +
       (node.description || "") +
@@ -193,9 +176,7 @@
     palette.innerHTML = "";
     var searchInput = qs("#wfPaletteSearch");
     var query = (searchInput ? searchInput.value : "").trim().toLowerCase();
-    // Group by category, preserving catalog order (per the perf rule, build a
-    // DocumentFragment and append once). A group label is only emitted when at
-    // least one of its nodes survives the search filter.
+    // Catalog order; a category label appears only when one of its nodes survives the filter.
     var order = [];
     var byCat = {};
     state.catalog.forEach(function (node) {
@@ -251,18 +232,14 @@
 
   function syncToolbar() {
     var sel = qs("#wfBlueprintSelect");
-    // The blueprint name is shown as the selected <option> (renamed via the
-    // modal), so there's nothing else to sync here.
+    // The selected <option> already shows the name; nothing else to sync.
     if (sel && state.activeBlueprintId) sel.value = state.activeBlueprintId;
   }
 
-  // Make `bp` the active canvas. Flushes the outgoing blueprint's pending save
-  // first so a debounced edit is never lost or mis-attributed on switch.
+  // Flushes the outgoing blueprint's pending save so no edit is lost or mis-attributed.
   function openBlueprint(bp) {
     if (!bp) return;
-    // Drop any in-flight wire gesture before swapping context — otherwise its
-    // armed listeners survive and the next click could persist an edge that
-    // references a node from the old blueprint.
+    // An in-flight wire gesture would otherwise persist an edge into the old blueprint's node.
     if (WF.cancelConnect) WF.cancelConnect();
     flushSave();
     state.activeBlueprintId = bp.id;
@@ -274,18 +251,12 @@
     if (WF.clearRunPreview) WF.clearRunPreview(); // stale preview classes
     resetHistory(); // history doesn't span blueprints
     syncToolbar();
-    // A corrupt blueprint (e.g. a node missing its `type`) must not hard-fail the
-    // whole page. Without this guard a render throw propagates to loadWorkspace,
-    // which shows the error overlay and disables the ENTIRE toolbar — leaving no
-    // way to switch to, or delete, the offending blueprint. Isolating the
-    // render/validation keeps the blueprint-management controls usable so the
-    // user can always recover (delete it, or pick/create another).
+    // A corrupt blueprint must not throw into loadWorkspace: that disables the whole toolbar.
     try {
       syncTriggerButton();
       if (WF.renderAllNodes) WF.renderAllNodes();
       if (WF.applyViewport) WF.applyViewport();
-      // Refresh the run panel for the newly-active blueprint (reattaches to an
-      // in-flight run if one survived a reload).
+      // Reattaches to an in-flight run that survived a reload.
       if (WF.refreshRuns) WF.refreshRuns();
       // Validate the freshly-loaded graph (gates Run, populates the Issues panel).
       if (WF.refreshValidation) WF.refreshValidation();
@@ -333,8 +304,7 @@
   function deleteBlueprint(id) {
     if (!id) return;
     cancelSave(); // don't resurrect the row we're about to delete
-    // Clear the active id up front so any autosave PUT already in flight for it
-    // is a no-op (flushSave bails on a falsy id), not after the DELETE resolves.
+    // Clear the id first so an in-flight autosave PUT becomes a no-op (flushSave bails).
     state.activeBlueprintId = null;
     apiDelete("api/blueprints/" + encodeURIComponent(id))
       .then(function () {
@@ -355,9 +325,7 @@
 
   // ---- Import / export ------------------------------------------------------
 
-  // Download the active blueprint as JSON (the same {name,nodes,edges,viewport}
-  // shape the autosave PUT sends, so import round-trips losslessly bar the
-  // server-assigned id/createdAt).
+  // Same shape as the autosave PUT, so import round-trips bar id/createdAt.
   function exportBlueprint() {
     var bp = findBlueprint(state.activeBlueprintId);
     if (!bp) return;
@@ -374,8 +342,7 @@
     );
   }
 
-  // Parse a JSON file and create a new blueprint from it. Unknown node types are
-  // accepted as-is (they fail gracefully at run time, like any removed type).
+  // Unknown node types are accepted as-is; they fail at run time like removed types.
   function importBlueprint(file) {
     if (!file) return;
     var reader = new FileReader();
@@ -459,13 +426,8 @@
     });
   }
 
-  // ---- Auto-run triggers (P6 + chaining) ------------------------------------
-  // An armed blueprint auto-runs when its trigger source fires: a new video
-  // lands, a transcript completes, or a Screenspace scan completes. Arming is
-  // single-active PER TRIGGER TYPE (the server disarms same-type triggers on
-  // every other blueprint; mirrored client-side so the toolbar hint is accurate
-  // without a refetch). The button opens a small type-picker menu; the type
-  // list arrives via /api/catalog context (no duplicated constants).
+  // ---- Auto-run triggers ----------------------------------------------------
+  // Single-active per trigger type; server disarms the rest, client mirrors it.
 
   var _triggerMenuCtl = null; // bindMenuToggle handle for the type picker
 
@@ -513,8 +475,7 @@
           showToast((res && res.error) || "Couldn't update auto-run");
           return;
         }
-        // Single-active per type: arming here disarmed same-type triggers on
-        // every other blueprint server-side — mirror that locally.
+        // Mirror the server's disarm of same-type triggers elsewhere.
         if (enabled) {
           state.blueprints.forEach(function (b) {
             if (b.id !== id && b.trigger && b.trigger.type === type) {
@@ -527,14 +488,12 @@
         syncTriggerButton();
       })
       .catch(function () {
-        // apiPut throws on a 4xx (e.g. arming a broken graph); the client gate
-        // below normally prevents this, so a generic message is enough.
+        // 4xx (e.g. arming a broken graph) is normally prevented client-side; generic is enough.
         showToast("Couldn't update auto-run");
       });
   }
 
-  // Rebuild the type-picker items (called from syncTriggerButton, so the
-  // active checkmark and labels are always current when the menu opens).
+  // Called from syncTriggerButton so the active checkmark is current when the menu opens.
   function rebuildTriggerMenu() {
     var menu = qs("#wfTriggerMenu");
     if (!menu) return;
@@ -576,8 +535,7 @@
         ? "Auto-run: " + triggerTypeLabel(activeType)
         : "Auto-run";
     }
-    // Custom [data-tooltip] (not native title) so it doesn't double up with the
-    // singleton tooltip; the message is contextual (armed / blocked / ready).
+    // data-tooltip, not title, or it doubles up with the singleton tooltip.
     if (armed) {
       btn.setAttribute(
         "data-tooltip",
@@ -596,8 +554,7 @@
       );
     }
     rebuildTriggerMenu();
-    // Persistent global cue: which blueprints (if any) are armed — one per
-    // trigger type is possible — even when none is the active canvas.
+    // Global cue listing armed blueprints, even when none is the active canvas.
     var hint = qs("#wfArmedHint");
     if (hint) {
       var armedList = armedBlueprints();
@@ -627,17 +584,14 @@
   }
 
   // ---- Dialogs (prompt / confirm) -------------------------------------------
-  // In-page replacements for the native prompt/confirm dialogs, built on the
-  // shared openBlockingModal primitive (focus trap + Escape + backdrop close +
-  // page-hotkey suppression). One lazily-built singleton overlay, refilled per
-  // open. Consumed here (delete blueprint) and by workflows-stashes.js.
+  // Native-dialog replacements on openBlockingModal; one lazy singleton overlay.
 
   var _dialogOverlay = null;
 
   function openDialog(opts) {
     if (!_dialogOverlay) {
       _dialogOverlay = el("div", "wf-dialog-overlay cg-modal-overlay hidden");
-      _dialogOverlay.appendChild(el("div", "wf-dialog"));
+      _dialogOverlay.appendChild(el("div", "wf-dialog cg-modal-card"));
       document.body.appendChild(_dialogOverlay);
     }
     var overlay = _dialogOverlay;
@@ -716,11 +670,7 @@
   }
 
   // ---- Undo / redo ----------------------------------------------------------
-  //
-  // History is a stack of {nodes, edges} snapshots (the autosave shape; viewport
-  // and selection are excluded so a pan never lands on the undo stack). Capture
-  // hangs off the scheduleSave chokepoint and is coalesced by the same 600 ms
-  // debounce, so a burst of param keystrokes collapses to one undo step.
+  // {nodes, edges} snapshots; save debounce coalesces bursts into one step.
 
   var _undoStack = [];
   var _redoStack = [];
@@ -743,9 +693,7 @@
     syncUndoButtons();
   }
 
-  // Toolbar undo/redo buttons mirror the keyboard stack; disabled when the
-  // canvas isn't ready or the respective stack is empty. Called from every
-  // history mutation so the buttons never lie about what's available.
+  // Called from every history mutation so the buttons never lie.
   function syncUndoButtons() {
     var u = qs("#wfUndo");
     var r = qs("#wfRedo");
@@ -753,8 +701,7 @@
     if (r) r.disabled = !state.ready || !_redoStack.length;
   }
 
-  // On the first mutation of a burst, push the pre-burst baseline; later
-  // keystrokes in the same burst are absorbed (snapPending) into one step.
+  // First mutation of a burst pushes the baseline; the rest are absorbed (snapPending).
   function captureHistory() {
     if (!_baseline) {
       _baseline = cloneGraph();
@@ -803,12 +750,11 @@
 
   var _saveTimer = null;
 
-  // Reflect autosave state in the toolbar: "saving" while the debounce timer is
-  // armed / a PUT is in flight, "saved" once it resolves, "error" on failure.
   function setSaveStatus(mode) {
     var status = qs("#wfSaveStatus");
     if (!status) return;
     status.classList.toggle("wf-save-error", mode === "error");
+    status.classList.toggle("cg-shimmer", mode === "saving");
     status.textContent =
       mode === "saving"
         ? "Saving…"
@@ -836,17 +782,11 @@
       _snapPending = false;
       flushSave();
     }, 600);
-    // Validation is immediate (not debounced) so the Issues panel + Run button
-    // never lag an edit. Every graph mutation funnels through here.
+    // Validation is not debounced, so the Issues panel never lags an edit.
     if (WF.refreshValidation) WF.refreshValidation();
   }
 
-  // Debounced persist for viewport-only changes (pan/zoom/fit/minimap): same
-  // timer and PUT as scheduleSave, but no captureHistory/refreshValidation —
-  // the viewport isn't part of history snapshots, so panning must never push a
-  // no-op undo step (it used to). If a graph-edit burst was pending when the
-  // viewport timer wins the shared _saveTimer slot, settle the burst exactly as
-  // scheduleSave's callback would have.
+  // scheduleSave minus history/validation: a pan must never push an undo step. Settles pending bursts.
   function scheduleViewportSave() {
     cancelSave();
     setSaveStatus("saving");
@@ -859,10 +799,7 @@
     }, 600);
   }
 
-  // Persist the active blueprint now (also syncs working state back into the
-  // in-memory blueprint so switching without a refetch stays correct). Returns
-  // the PUT promise so callers that need the server up to date (e.g. starting a
-  // run) can await it; a resolved promise when there's nothing to save.
+  // Syncs working state into the blueprint, then PUTs; returns the promise for run starts.
   function flushSave() {
     cancelSave();
     var id = state.activeBlueprintId;
@@ -890,11 +827,7 @@
 
   // ---- Load gate ------------------------------------------------------------
 
-  // Load the catalog + blueprints, then mark the canvas ready. Until a blueprint
-  // is active the canvas is gated (overlay + disabled toolbar + interaction
-  // handlers that no-op on !state.ready), so edits can't land in a void and a
-  // load failure shows a persistent, retryable error instead of a canvas that
-  // looks editable but silently never saves.
+  // Canvas stays gated until a blueprint is active; a load failure shows a retryable error.
   function loadWorkspace() {
     setCanvasState("loading");
     return loadCatalog()
@@ -913,9 +846,7 @@
   function setCanvasState(mode) {
     state.ready = mode === "ready";
     if (mode === "error") {
-      // The sidebar ships skeleton rows that only a successful render replaces.
-      // A load failure never reaches renderPalette/renderStashPalette, so clear
-      // them here — shimmer next to "Couldn't load workflows" reads as a bug.
+      // Clear the skeleton rows: a failed load never reaches the renders that replace them.
       ["#wfPalette", "#wfStashList"].forEach(function (sel) {
         var host = qs(sel);
         if (!host) return;
@@ -927,6 +858,7 @@
     if (overlay) overlay.classList.toggle("hidden", state.ready);
     var msg = qs("#wfOverlayMsg");
     if (msg) {
+      msg.classList.toggle("cg-shimmer", mode !== "error");
       msg.textContent =
         mode === "error"
           ? "Couldn't load workflows. Check the server, then retry."
@@ -938,15 +870,11 @@
     var spinner = qs("#wfOverlaySpinner");
     if (spinner) spinner.classList.toggle("hidden", mode === "error");
     setToolbarDisabled(!state.ready);
-    // setToolbarDisabled(false) re-enables every toolbar control, but "Stash
-    // selection" must stay disabled until nodes are selected — re-apply its
-    // selection gate after the blanket enable on entering the ready state.
+    // The blanket enable above ignores the stash button's selection gate; re-apply it.
     if (state.ready && WF.syncStashButton) WF.syncStashButton();
-    // Blanket re-enable above ignores the trigger's nuanced gate (valid graph +
-    // a Video Source); re-apply it after entering the ready state.
+    // Same for the trigger's gate (valid graph + Video Source).
     if (state.ready) syncTriggerButton();
-    // Undo/redo gate on stack contents, not just readiness — re-derive after the
-    // blanket enable so they don't light up on a fresh, history-less canvas.
+    // Same for undo/redo, which gate on stack contents.
     syncUndoButtons();
   }
 
@@ -971,10 +899,9 @@
     });
   }
 
-  // Generic dropdown toggle: wires a trigger button to a menu element with
-  // outside-click + Escape close (shared by the Run split-button and the
-  // shortcuts legend). Returns {open, close} for callers that need them.
-  function bindMenuToggle(btn, menu) {
+  // onOpen fires after unhide (menu is measurable); wrapping {open, close} misses the click path.
+  function bindMenuToggle(btn, menu, opts) {
+    opts = opts || {};
     function onDocDown(e) {
       // Ignore mousedowns on the trigger itself so its click handler toggles (a
       // close-then-reopen race otherwise).
@@ -987,6 +914,7 @@
     function open() {
       menu.classList.remove("hidden");
       btn.setAttribute("aria-expanded", "true");
+      if (opts.onOpen) opts.onOpen();
       document.addEventListener("mousedown", onDocDown, true);
       document.addEventListener("keydown", onKey, true);
     }
@@ -995,6 +923,7 @@
       btn.setAttribute("aria-expanded", "false");
       document.removeEventListener("mousedown", onDocDown, true);
       document.removeEventListener("keydown", onKey, true);
+      if (opts.onClose) opts.onClose();
     }
     btn.addEventListener("click", function () {
       if (menu.classList.contains("hidden")) open();
@@ -1003,13 +932,12 @@
     return { open: open, close: close };
   }
 
-  // Run split-button: the caret opens a small menu whose "Run to here" item runs
-  // the selected node + its ancestors (a partial run). The primary button still
-  // runs the whole graph.
+  // Caret menu: "Run to here" runs the selected node plus its ancestors.
   function initRunMenu() {
     var caret = qs("#wfRunMenuBtn");
     var menu = qs("#wfRunMenu");
     var runTo = qs("#wfRunToItem");
+    var runSample = qs("#wfRunSampleItem");
     if (!caret || !menu) return;
     var ctl = bindMenuToggle(caret, menu);
     if (runTo) {
@@ -1019,11 +947,18 @@
         if (WF.startRun && sel.length === 1) WF.startRun(sel[0]);
       });
     }
+    if (runSample) {
+      runSample.addEventListener("click", function () {
+        ctl.close();
+        var sel = state.selection || [];
+        if (WF.startRun && sel.length === 1) {
+          WF.startRun(sel[0], null, 30);
+        }
+      });
+    }
   }
 
-  // TopNav Quick Actions (mirrors Studio / Screenspace / Transcripts): blueprint
-  // JSON import/export live here, off the toolbar. Export is gated on an active
-  // blueprint; onBeforeOpen refreshes that state each time the menu opens.
+  // Import/export live in TopNav Quick Actions; onBeforeOpen refreshes the export gate.
   function buildQuickActions() {
     if (!window.ClipgenTopNav) return;
     var importFile = qs("#wfImportFile");
@@ -1059,35 +994,15 @@
     window.ClipgenCommandPalette.setParticipants(function () {
       return (state.context && state.context.participants) || [];
     });
+    var palette = window.ClipgenCommandPalette;
     function buttonCommand(id, title, icon, keywords, elId) {
-      return {
-        id: id,
-        title: title,
-        icon: icon,
-        keywords: keywords,
-        section: "Workflows",
-        enabled: function () {
-          var btn = qs("#" + elId);
-          return !!btn && !btn.disabled;
-        },
-        run: function () { qs("#" + elId).click(); },
-      };
+      return palette.buttonCommand("Workflows", id, title, icon, keywords, elId);
     }
-    // Run-history status chips carry data-filter; click the matching chip so
-    // its handler sets state.runFilter and re-renders (initRunFilter).
+    // Click the matching data-filter chip so initRunFilter owns the state change.
     function runFilterCommand(filter, title, icon) {
-      return {
-        id: "workflows:runs-" + filter,
-        title: title,
-        icon: icon,
-        keywords: "run history filter status " + filter,
-        section: "Workflows",
-        visible: function () { return !!qs("#wfRunFilter"); },
-        run: function () {
-          var btn = qs('#wfRunFilter .wf-run-filter-btn[data-filter="' + filter + '"]');
-          if (btn) btn.click();
-        },
-      };
+      return palette.selectorCommand("Workflows", "workflows:runs-" + filter, title, icon,
+        "run history filter status " + filter,
+        '#wfRunFilter .wf-run-filter-btn[data-filter="' + filter + '"]');
     }
     window.ClipgenCommandPalette.register("workflows", function () {
       var stopBtn = qs("#wfStopBtn");
@@ -1126,19 +1041,11 @@
   // ---- Boot -----------------------------------------------------------------
 
   function boot() {
-    // TopNav renders the theme toggle (#themeToggle) and Settings (#settingsBtn)
-    // buttons synchronously before this hub loads, so wire them here as the
-    // other surfaces do. M1 has no page-specific settings, so Settings just
-    // opens the shared modal.
+    // TopNav renders these buttons before the hub loads; wire them here. No page-specific settings.
     if (typeof initThemeToggle === "function") {
       initThemeToggle();
     }
-    var settingsBtn = qs("#settingsBtn");
-    if (settingsBtn && typeof window.openSettingsModal === "function") {
-      settingsBtn.addEventListener("click", function () {
-        window.openSettingsModal({});
-      });
-    }
+    if (window.wireSettingsButton) window.wireSettingsButton({});
 
     // Blueprint switcher toolbar.
     var sel = qs("#wfBlueprintSelect");
@@ -1197,10 +1104,7 @@
       });
     }
 
-    // Blueprint / canvas action hotkeys (the canvas-editing hotkeys — undo/redo,
-    // copy/paste, nudge, etc. — register separately in workflows-canvas.js). All
-    // gate on canvas readiness; page hotkeys are auto-suppressed while typing or
-    // while a modal is open.
+    // Blueprint action hotkeys; canvas-editing ones register in workflows-canvas.js. All gate on readiness.
     function _blueprintReady() {
       return !!state.ready;
     }
@@ -1225,8 +1129,7 @@
         handler: function () { requestDeleteBlueprint(); },
       },
     ]);
-    // Zoom % readout doubles as a reset-to-100% button (canvas satellite keeps
-    // its text current via writeViewport).
+    // Zoom readout doubles as reset-to-100%; writeViewport keeps its text current.
     var zoomLevelBtn = qs("#wfZoomLevel");
     if (zoomLevelBtn) {
       zoomLevelBtn.addEventListener("click", function () {
@@ -1261,10 +1164,7 @@
         if (WF.startRun) WF.startRun();
       });
     }
-    // Dry-run preview: hovering the Run split-button highlights what would
-    // execute (mute/skip-aware). Bound on the CONTAINER, not the button — a
-    // disabled button swallows mouse events. "Run to here" previews the
-    // selected node's ancestor slice.
+    // Hover preview of what would run. On the container: a disabled button swallows mouse events.
     var runSplit = qs(".wf-run-split");
     if (runSplit) {
       runSplit.addEventListener("mouseenter", function () {
@@ -1300,8 +1200,7 @@
     var retryBtn = qs("#wfOverlayRetry");
     if (retryBtn) retryBtn.addEventListener("click", loadWorkspace);
 
-    // Bind canvas + wire interactions (handlers no-op until state.ready), then
-    // load the workspace, which flips the gate once a blueprint is active.
+    // Handlers no-op until state.ready; loadWorkspace flips the gate.
     if (WF.initCanvas) WF.initCanvas();
     if (WF.initWires) WF.initWires();
     if (WF.initRuns) WF.initRuns();
@@ -1310,14 +1209,10 @@
   }
 
   // ---- Satellite interface (window.ClipgenWorkflows) ----
-  // The hub publishes `state` + shared helpers onto this namespace; the
-  // satellites (workflows-nodes, workflows-canvas) attach their own functions
-  // (renderNode, renderAllNodes, initCanvas, applyViewport) back onto it.
+  // Hub publishes state + helpers; satellites attach their functions back.
   var WF = (window.ClipgenWorkflows = window.ClipgenWorkflows || {});
   WF.state = state;
-  // Sentinel a Video Source's participant param holds for "fan out over every
-  // participant"; the Run button turns such a blueprint into a batch. (Frontend-
-  // only — the batch rebinds each video_source to a real participant per run.)
+  // Video Source participant sentinel meaning "every participant"; Run turns it into a batch.
   WF.ALL_PARTICIPANTS = "__all__";
   WF.scheduleSave = scheduleSave;
   WF.scheduleViewportSave = scheduleViewportSave;
@@ -1328,23 +1223,14 @@
   WF.openBlueprint = openBlueprint;
   // Published for the nodes satellite (palette grey-out logic shared, not duped).
   WF.nodeContextMet = nodeContextMet;
-  // Published so the validate satellite re-gates the trigger toggle on every edit
-  // (you can't arm a graph with errors), alongside its WF.syncRunButton call.
+  // The validate satellite re-gates the trigger on every edit: errors block arming.
   WF.syncTriggerButton = syncTriggerButton;
-  // Published for the nodes satellite's participant multi-select popover (same
-  // outside-click/Escape toggle the run + shortcuts menus use).
+  // For the nodes satellite's participant popover.
   WF.bindMenuToggle = bindMenuToggle;
   // In-page prompt/confirm dialogs (workflows-stashes.js consumes them).
   WF.openPromptDialog = openPromptDialog;
   WF.openConfirmDialog = openConfirmDialog;
 
-  // Every workflows script loads with `defer` (see workflows.html), so this hub
-  // runs at readyState "interactive" — after DOM parse but BEFORE DOMContentLoaded
-  // and BEFORE the workflows-*.js satellites execute. boot() invokes the
-  // satellites' WF.initCanvas/initWires/initRuns/initStashes, so it must wait for
-  // DOMContentLoaded (dispatched only once every deferred script has run).
-  // Booting synchronously here would silently skip those init fns (still
-  // undefined) and leave the canvas with no pan/zoom/drag handlers. Mirrors the
-  // sibling hubs (studio/screenspace/transcripts).
+  // Deferred satellites run after this hub; boot() needs their init fns, so wait for DOMContentLoaded.
   document.addEventListener("DOMContentLoaded", boot);
 })();

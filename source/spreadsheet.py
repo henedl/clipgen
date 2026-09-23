@@ -18,6 +18,9 @@ Optional baseline time row:
   by subtracting the per-column baseline via utils.convert_clock_pairs_to_relative().
 - Participant columns without a baseline cell use relative timestamps as-is.
 - If the marker row is absent entirely, all columns are treated as relative.
+- Baseline row placement is tied to header/``id_cell`` row math (offsets from
+  ``id_cell.row``); changing that offset without aligning tests and sheet
+  layout has broken baseline timestamp handling before.
 
 Optional Filename row (source video override):
 - A "Filename" header marks a row whose per-participant cells override the source video
@@ -45,6 +48,7 @@ from typing import Any, NamedTuple
 
 import config
 import google_api
+import profiling
 import utils
 from utils import ClipRecord, ReelInput
 
@@ -160,18 +164,10 @@ def _detect_baseline_row(sheet_data: list[list[str]]) -> int | None:
 def get_num_participants(header_row: list[str], id_cell: Any, col_count: int) -> int:
     """Count the number of participant columns in the worksheet.
 
-    Scans every column after ID and counts those whose header starts with one
-    of ``config.PARTICIPANT_PREFIXES`` (P / G). Layout-agnostic: makes no
-    assumption about where Observation, Category, or other non-participant
-    columns sit relative to ID.
-
-    Args:
-        header_row: List of header cell values
-        id_cell: The ID header cell object (1-based ``col``)
-        col_count: Total number of columns to consider in ``header_row``
-
-    Returns:
-        Number of participant columns found
+    Scans every column after ID and counts those whose header starts with one of
+    ``config.PARTICIPANT_PREFIXES`` (P / G). Layout-agnostic: assumes nothing about
+    where Observation, Category or other non-participant columns sit relative to
+    ID. *id_cell* is the ID header cell (1-based ``col``).
     """
     start_col = (
         id_cell.col
@@ -217,7 +213,9 @@ def build_sheet_context(sheet: Any) -> SheetContext | None:
 
     study_name = sheet_data[0][0]
     if study_name == "":
-        study_name = sheet.spreadsheet.title
+        # Second API round-trip, only when A1 is blank; counted rather than hidden.
+        with profiling.span("sheets.spreadsheet_title"):
+            study_name = sheet.spreadsheet.title
     utils.standard_print(f"\nBeginning work on {study_name}.")
     study_name = utils.normalize_study_name(study_name)
 
@@ -274,7 +272,7 @@ def get_participant_list(
     participants = []
     for j in range(id_cell.col, id_cell.col + num_participants):
         if j < len(header_row):
-            participant_id = utils.normalize_participant_id(header_row[j]).strip()
+            participant_id = utils.normalize_participant_id(header_row[j])
             if participant_id:
                 participants.append(participant_id)
     return participants
@@ -298,18 +296,10 @@ def parse_participant_selection(input_str: str) -> list[str]:
 def parse_cell_specifications(cell_input: str) -> list[tuple[str, int]]:
     """Parse cell specification string into list of (participant_id, row_number) tuples.
 
-    Expected format: "P01.11" (participant_id.row_number). Multiple cells separated by
-    + or , e.g. "P01.11 + P03.11" or "P01.11, P03.09". Participant ID must start with
-    P or G; row_number must be a positive integer (1-based sheet row).
-
-    Args:
-        cell_input: String like "P01.11" or "P01.11 + P03.11 + P03.09"
-
-    Returns:
-        List of (participant_id, row_number) tuples
-
-    Raises:
-        ValueError: If format is invalid
+    Format is "P01.11" (participant_id.row_number), multiple cells separated by +
+    or , — "P01.11 + P03.11", "P01.11, P03.09". Participant ID must start with P or
+    G, row_number must be a positive 1-based sheet row. Raises ValueError on a
+    malformed input.
     """
     # Support both + and , as separators; normalize to + then split
     specs = []
@@ -391,8 +381,7 @@ def parse_reel_input(input_string: str) -> ReelInput:
         result["categories"].append(match.group(1).strip())
         rest = rest[: match.start()] + " " + rest[match.end() :]
 
-    # Split remaining by comma; each part is one token. Token type is inferred in fixed order below.
-    # Order of checks per token (do not reorder): batch, keyword, chronologic, range, line, cell, participant
+    # Comma-split tokens; check order is fixed: batch, keyword, chronologic, range, line, cell, participant.
     parts = [p.strip() for p in rest.split(",") if p.strip()]
     seen_lines = set()
     seen_ranges = set()
@@ -528,36 +517,53 @@ def find_participant_column(
     """
     normalized_target = utils.normalize_participant_id(participant_id).lower()
     for col_idx in range(id_cell.col, len(header_row)):
-        header_value = utils.normalize_participant_id(header_row[col_idx]).strip()
+        header_value = utils.normalize_participant_id(header_row[col_idx])
         if header_value.lower() == normalized_target:
             return col_idx
     return None
 
 
-def participant_filename_overrides(ctx: SheetContext) -> dict[str, str | None]:
-    """Map each participant id to its ``Filename`` row override (or None).
+def participant_filename_overrides(
+    ctx: SheetContext, user_overrides: dict[str, str] | None = None
+) -> dict[str, str | None]:
+    """Map each participant id to its source-video filename override (or None).
 
-    The Filename row (``ctx.filename_row_idx``) holds a per-column source-video
-    override; a cell may list several files plus-separated for a multi-video
-    participant (``morning.mp4 + afternoon.mp4``). Returns ``{}`` when there is no
-    Filename row. Used by the studio/transcripts/screenspace servers to resolve a
-    participant's source video(s) via ``files.resolve_source_video_paths``.
+    Two sources, in increasing precedence:
+
+    1. The sheet's Filename row (``ctx.filename_row_idx``) — a per-column
+       override; a cell may list several files plus-separated for a multi-video
+       participant (``morning.mp4 + afternoon.mp4``).
+    2. The user's own overrides, set from the Start overlay's preview rows and
+       persisted per user in ``start.json``. They win, because clipgen cannot
+       write the sheet back and this is the only fix a user has that does not
+       mean leaving the app. Defaults to ``config.FILENAME_OVERRIDES`` (the
+       *open* source's map); pass *user_overrides* explicitly to resolve against
+       some other source, as the Start overlay's preview route does.
+
+    Returns ``{}`` when there is neither. Used by the studio/transcripts/
+    screenspace servers to resolve a participant's source video(s) via
+    ``files.resolve_source_video_paths``.
     """
+    if user_overrides is None:
+        user_overrides = config.FILENAME_OVERRIDES
     overrides: dict[str, str | None] = {}
-    if ctx.filename_row_idx is None:
-        return overrides
     participants = get_participant_list(
         ctx.header_row, ctx.id_cell, ctx.num_participants
     )
-    row_data = (
-        ctx.sheet_data[ctx.filename_row_idx]
-        if ctx.filename_row_idx < len(ctx.sheet_data)
-        else []
-    )
-    for p_idx, pid in enumerate(participants):
-        col_idx = ctx.id_cell.col + p_idx
-        value = row_data[col_idx].strip() if col_idx < len(row_data) else ""
-        overrides[pid] = value or None
+    if ctx.filename_row_idx is not None:
+        row_data = (
+            ctx.sheet_data[ctx.filename_row_idx]
+            if ctx.filename_row_idx < len(ctx.sheet_data)
+            else []
+        )
+        for p_idx, pid in enumerate(participants):
+            col_idx = ctx.id_cell.col + p_idx
+            value = row_data[col_idx].strip() if col_idx < len(row_data) else ""
+            overrides[pid] = value or None
+    for pid in participants:
+        user_value = user_overrides.get(pid)
+        if user_value:
+            overrides[pid] = user_value
     return overrides
 
 
@@ -574,13 +580,10 @@ def _make_clip_record(
     - category: Category label from the same row (category column).
     'times' is added later when timestamps are resolved to [start, end] ranges.
     """
-    # Lazy import: keeps gspread (and its heavy google.auth/cryptography chain)
-    # off the CLI startup path; only spreadsheet parsing needs the Cell type.
+    # Lazy import keeps gspread's heavy auth chain off CLI startup.
     import gspread
 
-    # Excel cells may yield numbers, datetimes, or None; gspread always returns
-    # strings. Coerce here so downstream timestamp parsing (which calls .lower())
-    # never sees a non-string.
+    # Excel cells may be numbers, datetimes, or None; downstream parsing expects strings.
     cell_value_str = "" if cell_value is None else str(cell_value)
     # gspread Cell uses 1-based coordinates; convert from 0-based list indices
     cell = gspread.cell.Cell(row_idx + 1, col_idx + 1, cell_value_str)
@@ -600,8 +603,7 @@ def _make_clip_record(
             str(ctx.sheet_data[participant_row][col_idx] or "")
         )
     timestamp_baseline = ""
-    # Kept nested (not collapsed) to match the severity_cell guard below: row
-    # presence and row/col bounds are separate checks in this layer.
+    # Nested on purpose, matching the severity_cell guard below.
     if ctx.baseline_row_idx is not None:  # noqa: SIM102
         if 0 <= ctx.baseline_row_idx < len(ctx.sheet_data) and col_idx < len(
             ctx.sheet_data[ctx.baseline_row_idx]
@@ -627,13 +629,17 @@ def _make_clip_record(
     }
     if timestamp_baseline:
         result["timestamp_baseline"] = timestamp_baseline
-    if ctx.filename_row_idx is not None:  # noqa: SIM102 - see baseline_row_idx above
-        if 0 <= ctx.filename_row_idx < len(ctx.sheet_data) and col_idx < len(
-            ctx.sheet_data[ctx.filename_row_idx]
-        ):
-            filename_override = ctx.sheet_data[ctx.filename_row_idx][col_idx].strip()
-            if filename_override:
-                result["source_filename"] = filename_override
+    # Start-overlay override beats the sheet's Filename row, same as participant_filename_overrides.
+    filename_override = config.FILENAME_OVERRIDES.get(participant, "")
+    if (
+        not filename_override
+        and ctx.filename_row_idx is not None
+        and 0 <= ctx.filename_row_idx < len(ctx.sheet_data)
+        and col_idx < len(ctx.sheet_data[ctx.filename_row_idx])
+    ):
+        filename_override = ctx.sheet_data[ctx.filename_row_idx][col_idx].strip()
+    if filename_override:
+        result["source_filename"] = filename_override
     return result
 
 
@@ -721,12 +727,7 @@ def get_line_timestamps(ctx: SheetContext, line_index: int) -> list[ClipRecord]:
     return clips
 
 
-# ---- Sheet-wide collectors ----
-#
-# Discovery helpers that scan the whole sheet to enumerate the unique values of
-# a single dimension (categories, severities, annotation IDs). Used by
-# interactive prompts to populate selection menus before any clip records are
-# generated; not called from the generate_* functions below.
+# ---- Sheet-wide collectors: unique values per dimension for interactive menus ----
 
 
 def collect_categories(ctx: SheetContext) -> list[str]:
@@ -835,24 +836,15 @@ def generate_list(
 ) -> list[ClipRecord]:
     """Generate clip records from a sheet based on mode and resolved parameters.
 
-    This function is pure: it takes resolved parameters (no interactive prompts).
-    Interactive prompts are handled by clipgen.py using functions from interactive.py.
+    Pure: takes resolved parameters and never prompts — interactive.py owns the
+    prompts. *mode* is one of 'batch', 'line', 'range', 'category', 'cell',
+    'participant', 'keyword', 'reel', and each mode reads its own parameter
+    (*line_numbers*, *range_start*/*range_end*, *cell_specs* as
+    ``(participant_id, row_number)`` tuples, *participant_id* as a comma/plus
+    separated string, *reel_input*, *categories*).
 
-    Args:
-        sheet: The gspread worksheet object
-        mode: One of 'batch', 'line', 'range', 'category', 'cell', 'participant', 'keyword', 'reel'
-        ctx: Pre-built SheetContext to reuse (skips the sheet API call when provided)
-        line_numbers: List of line numbers for 'line' mode
-        range_start: Start line for 'range' mode
-        range_end: End line for 'range' mode
-        skip_prompts: If True, skip confirmation prompts (CLI --no-input flag, for batch/keyword)
-        cell_specs: List of (participant_id, row_number) tuples for 'cell' mode
-        participant_id: Participant ID(s) for 'participant' mode (comma/plus-separated string)
-        reel_input: Reel selector string for 'reel' mode
-        categories: List of category names for 'category' mode
-
-    Returns:
-        List of clip records
+    Passing a pre-built *ctx* skips the sheet API call. *skip_prompts* (the CLI
+    ``--no-input`` flag) drops the batch/keyword confirmations.
     """
     if config.DEBUGGING:
         config.debug_ic(mode, line_numbers, range_start, range_end)
@@ -1115,8 +1107,7 @@ def generate_range_timestamps(
     """
     clips = []
     for i in range(start_line - 1, end_line):
-        # Skip the Filename override row like every other generator; its cells
-        # hold per-column source-video names, not timestamps.
+        # Skip the Filename override row; its cells are not timestamps.
         if ctx.filename_row_idx is not None and i == ctx.filename_row_idx:
             continue
         utils.debug_print(f"Batching on line {i}")
@@ -1261,9 +1252,7 @@ def sort_clips_by_severity(clips: list[ClipRecord]) -> None:
 
 # ---- Highlights reel scoring ----
 
-# Largest friction magnitude in the severity scale (critical = -4 → 4), used to
-# normalize highlight severity scores into 0-1. Derived from config so the scale
-# can't drift from the canonical severity labels.
+# Largest severity magnitude (critical = -4 → 4); normalizes highlight scores into 0-1.
 _MAX_SEVERITY_MAGNITUDE = -min(config.SEVERITY_LABEL_TO_NUMERIC.values())
 
 
@@ -1454,11 +1443,6 @@ def generate_reel_timestamps(
         )
     elif selectors.get("severity"):
         sort_clips_by_severity(deduped)
-    # Default: preserve insertion order from the selector generators above.
-    # For the studio reel button, cells arrive in panel/drag order so the
-    # composed reel matches the on-screen card order. Selector-based CLI
-    # inputs (batch/categories/lines/keyword) naturally walk the sheet
-    # row-major, so they keep producing row-major reels without an explicit
-    # sort here.
+    # Default keeps insertion order: Studio reels follow panel order, CLI selectors walk row-major.
 
     return deduped

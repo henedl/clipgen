@@ -1,6 +1,6 @@
 /* Overview Reports tab — per-participant mini-report (overview-reports.js).
  *
- * Feeds three data sources into the local Ollama "report" thinking agent:
+ * Feeds three data sources into the local LLM "report" thinking agent:
  * sheet observations (hub state.sheetData), the transcript summary, and
  * marked transcript lines (hub state.trIntakeMarks). Generation is manual:
  * the backend agent is disabled by default and only runs through the generic
@@ -31,9 +31,7 @@
 
   var REPORT_POLL_MS = 1200;
   var TASK_POLL_MS = 3000;
-  // Consecutive idle participant-poll ticks required before the poll stops:
-  // a just-fired trigger can race the worker/orchestrator claiming its slot,
-  // so one idle reading straight after a POST is not proof nothing runs.
+  // A trigger races the worker's claim, so one idle tick after a POST proves nothing.
   var TASK_IDLE_TICKS_TO_STOP = 2;
 
   var rpState = {
@@ -43,7 +41,7 @@
     participants: [], // ../transcripts/api/participants ∪ sheet-only ids
     selected: null,
     gen: 0, // generation counter — bumped on participant switch
-    ollama: null, // /api/models "ollama" payload (null = not fetched/unknown)
+    llm: null, // /api/models "llm" payload (null = not fetched/unknown)
     report: null, // stored report payload for the selected participant
     reportGenerating: false,
     reportPartial: "",
@@ -143,31 +141,22 @@
     return false;
   }
 
-  // Generate is blocked only when Ollama is positively unreachable or the
-  // report model is positively missing (same stance as the Transcripts page:
-  // an unknown /api/models state never blocks).
-  function ollamaGate() {
-    var o = rpState.ollama;
+  // Block only on a positively missing runtime or model; unknown or stopped never blocks.
+  function llmGate() {
+    var o = rpState.llm;
     if (!o) return null;
-    var status = clipgenOllamaStatus(o);
-    if (status.state !== "ok") {
-      // The install guidance only helps the "missing" case; a stopped server
-      // just needs starting, and this panel's Refresh re-checks either way.
+    var status = clipgenLlmStatus(o);
+    if (status.state === "missing") {
       // The install dialog itself lives on the Transcripts page, so point there.
-      var extra;
-      if (status.state === "missing") {
-        extra = status.canInstall
-          ? " clipgen can download it for you — run any AI action on the Transcripts page."
-          : (status.hint.length ? " " + status.hint[0] : "");
-      } else {
-        extra = " Start it, then Refresh.";
-      }
+      var extra = status.canInstall
+        ? " clipgen can download it for you — run any AI action on the Transcripts page."
+        : (status.hint.length ? " " + status.hint[0] : "");
       return status.message + extra;
     }
     var agents = o.agents || [];
     for (var i = 0; i < agents.length; i++) {
       if (agents[i].key === "report" && agents[i].installed === false) {
-        return "Ollama model " + agents[i].model + " is not installed — install it from the Transcripts page, or pick another in Settings → Summaries.";
+        return "AI model " + agents[i].model + " is not downloaded — download it from the Transcripts page, or pick another in Settings → Summaries.";
       }
     }
     return null;
@@ -219,8 +208,7 @@
     report.appendChild(dom.body);
     dom.content.appendChild(report);
 
-    // Report timestamps are re-rendered wholesale, so clip playback rides one
-    // delegated listener instead of per-span handlers.
+    // Timestamps re-render wholesale, so one delegated listener handles clip playback.
     dom.body.addEventListener("click", function (ev) {
       var target = ev.target && ev.target.closest ? ev.target.closest(".rp-ts--linked") : null;
       if (!target) return;
@@ -297,8 +285,10 @@
     row.appendChild(el("span", "rp-source-dot is-" + kind));
     row.appendChild(el("span", "rp-source-label", labelText));
     var statusEl = el("span", "rp-source-status");
-    if (typeof status === "string") statusEl.textContent = status;
-    else statusEl.appendChild(status);
+    // Shimmer goes on an inner span: .cg-shimmer's transparent text fill inherits onto children.
+    if (typeof status !== "string") statusEl.appendChild(status);
+    else if (kind === "busy") statusEl.appendChild(el("span", "cg-shimmer", status));
+    else statusEl.textContent = status;
     row.appendChild(statusEl);
     if (actionEl) {
       var act = el("span", "rp-source-action");
@@ -417,8 +407,7 @@
     return null;
   }
 
-  // Wrap [M:SS] / [H:MM:SS] stamps in mono chips; ones a generated clip covers
-  // become playable (the delegated dom.body handler). Runs on escaped HTML.
+  // Wrap [M:SS] stamps in chips; clip-covered ones become playable. Runs on escaped HTML.
   function decorateTimestamps(html) {
     return html.replace(/\[(\d{1,2}:\d{2}(?::\d{2})?)\]/g, function (m, ts) {
       var sec = tsToSeconds(ts);
@@ -427,10 +416,7 @@
     });
   }
 
-  // Color severity labels, but only inside tag-free parenthesized groups —
-  // the "(category, severity)" shape the prompt's source lines carry — so a
-  // bare "high" in prose is never painted. Longest label first, one hit per
-  // group ("Very Positive" must not be re-matched by "Positive").
+  // Paint severities only inside "(category, severity)" groups; longest label first, one hit per group.
   function decorateSeverity(html) {
     var sevs = (CLIPGEN_CONFIG.severity || []).slice();
     sevs.sort(function (a, b) { return b.label.length - a.label.length; });
@@ -454,10 +440,7 @@
     return decorateSeverity(decorateTimestamps(clipgenRenderInlineMarkdown(text)));
   }
 
-  // Minimal markdown for the report shape the prompt asks for (## headings,
-  // "- " bullets, paragraphs) plus inline emphasis, timestamp chips, and
-  // severity coloring. Everything passes through escapeHtml (inside
-  // clipgenRenderInlineMarkdown); the model never gets to inject markup.
+  // Minimal markdown (## headings, "- " bullets, paragraphs). Everything passes through escapeHtml.
   function renderReportText(text) {
     var lines = String(text || "").split("\n");
     var html = "";
@@ -495,6 +478,7 @@
   function renderReportArea() {
     if (!dom.actions) return;
     dom.actions.innerHTML = "";
+    dom.meta.classList.remove("cg-shimmer");
     dom.meta.textContent = "";
     var pid = rpState.selected;
     var r = rec();
@@ -506,13 +490,14 @@
 
     if (rpState.reportGenerating) {
       dom.actions.appendChild(P.createBtn({ label: "Stop", icon: "stop", size: "sm", onClick: stopReport }));
+      dom.meta.classList.add("cg-shimmer");
       dom.meta.textContent = "Generating…";
       renderReportBodyPartial();
       return;
     }
 
     var canGenerate = !!r.has_transcript && agentState(r, "summary") === "done";
-    var gate = ollamaGate();
+    var gate = llmGate();
     var genBtn = P.createBtn({
       label: rpState.report ? "Regenerate" : "Generate report",
       icon: "octicon/dependabot-16",
@@ -531,6 +516,7 @@
     }
 
     var hint;
+    var loading = false;
     if (!canGenerate) {
       hint = "Needs a transcript summary first — trigger the missing steps above.";
     } else if (gate) {
@@ -539,9 +525,10 @@
       hint = "No report yet. Generate one from the sources above.";
     } else {
       hint = "Loading…";
+      loading = true;
     }
     dom.body.innerHTML = "";
-    dom.body.appendChild(el("p", "rp-report-hint", hint));
+    dom.body.appendChild(el("p", "rp-report-hint" + (loading ? " cg-shimmer" : ""), hint));
   }
 
   // ---- Notices (transcribe download gate, trigger failures) ----
@@ -613,11 +600,11 @@
   function loadModels() {
     apiGet("/api/models")
       .then(function (data) {
-        rpState.ollama = (data && data.ollama) || null;
+        rpState.llm = (data && data.llm) || null;
         if (rpState.active) renderMain();
       })
       .catch(function () {
-        rpState.ollama = null;
+        rpState.llm = null;
       });
   }
 
@@ -631,12 +618,11 @@
       rpState.reportPartial = "";
       rpState.reportMissing = false;
       renderReportArea();
-      // The pill dot (agents.report) is served by the participants API; a
-      // local nudge keeps it honest until the next refetch.
+      // The participants API serves the pill dot; nudge it locally until the next refetch.
       var r = rec();
       if (r && r.agents) r.agents.report = "done";
       renderParticipants();
-    } else if (data && data.generating) {
+    } else if (isPending(data)) {
       rpState.reportGenerating = true;
       rpState.reportPartial = data.partial || "";
       if (!rpState.reportPoll) {
@@ -659,9 +645,12 @@
         if (g !== rpState.gen || !rpState.active) return;
         applyReportResponse(data, pid, g);
       })
-      .catch(function () {
-        // 404 = no report stored for this participant (apiGet throws on it).
+      .catch(function (err) {
+        // 404 = no stored report (apiGet throws). serverMessage carries the reason when the run failed.
         if (g !== rpState.gen || !rpState.active) return;
+        if (err && err.serverMessage) {
+          showNotice(err.serverMessage, null, null, null);
+        }
         stopReportPoll();
         rpState.reportGenerating = false;
         rpState.reportMissing = true;
@@ -671,19 +660,19 @@
 
   function startReportPoll(pid, g) {
     stopReportPoll();
-    rpState.reportPoll = setInterval(function () {
+    rpState.reportPoll = createPoller(function () {
       if (!rpState.active || g !== rpState.gen) {
         stopReportPoll();
         return;
       }
-      if (document.hidden) return;
       fetchReport(pid, g);
-    }, REPORT_POLL_MS);
+    }, REPORT_POLL_MS, { runImmediately: false, label: "overview.report" });
+    rpState.reportPoll.start();
   }
 
   function stopReportPoll() {
     if (rpState.reportPoll) {
-      clearInterval(rpState.reportPoll);
+      rpState.reportPoll.stop();
       rpState.reportPoll = null;
     }
   }
@@ -772,21 +761,18 @@
     var ctrl = new AbortController();
     rpState.clipsAbort = ctrl;
     renderClips();
-    fetch("../studio/api/generate", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ cells: cells, format: "clip" }),
-      signal: ctrl.signal,
-    })
-      .then(function (resp) {
-        if (resp.status === 409) throw new Error("generate-busy");
-        if (!resp.ok) throw new Error("Server error " + resp.status);
-        return readNDJSONStream(resp, function (line) {
+    apiPostNDJSON(
+      "../studio/api/generate",
+      { cells: cells, format: "clip" },
+      {
+        signal: ctrl.signal,
+        onLine: function (line) {
           if (!line || line.cancelled) return;
           rpState.clipsDone++;
           renderClipsProgress();
-        });
-      })
+        },
+      }
+    )
       .then(function () {
         resetClipsGeneration();
         if (g !== rpState.gen || !rpState.active) return;
@@ -795,7 +781,7 @@
       .catch(function (err) {
         resetClipsGeneration();
         if (g !== rpState.gen || !rpState.active) return;
-        if (err && err.message === "generate-busy") {
+        if (err && err.status === 409) {
           showNotice("Studio is already generating — wait for it to finish, then try again.", null, null, null);
         } else if (!(err && err.name === "AbortError")) {
           showNotice("Clip generation failed.", null, null, null);
@@ -819,6 +805,7 @@
 
   function renderClipsProgress() {
     if (!rpState.clipsGenerating || !dom.clipsMeta) return;
+    dom.clipsMeta.classList.add("cg-shimmer");
     dom.clipsMeta.textContent = rpState.clipsDone + "/" + rpState.clipsTotal + " cells";
     if (dom.clipsGenBtn) {
       var frac = rpState.clipsTotal ? rpState.clipsDone / rpState.clipsTotal : 0;
@@ -886,6 +873,7 @@
         );
         dom.clipsActions.appendChild(genBtn);
       }
+      dom.clipsMeta.classList.remove("cg-shimmer");
       dom.clipsMeta.textContent = rpState.clips.length
         ? clipgenPluralUnit(rpState.clips.length, "clip", "clips")
         : (rpState.clipsLoaded ? "no clips yet" : "");
@@ -946,9 +934,7 @@
     apiPost("../transcripts/api/agent/summary/" + pid + "/regenerate", {})
       .then(function () {
         if (!rpState.active) return;
-        // The backend clears dependent agent results (report included) when
-        // the summary regenerates — drop the in-memory copy too, or the stale
-        // mini-report keeps rendering until the participant is re-selected.
+        // The backend drops the report when the summary regenerates; drop the in-memory copy too.
         stopReportPoll();
         rpState.report = null;
         rpState.reportGenerating = false;
@@ -1001,18 +987,15 @@
       });
   }
 
-  // While a triggered upstream task runs, re-poll the participants list (a
-  // quiet-poll path) so the source rows track transcription → summary → done,
-  // and the Generate button unlocks the moment the summary lands.
+  // Quiet-poll participants while an upstream task runs so rows and Generate track progress.
   function startTaskPoll() {
     rpState.taskIdleTicks = 0;
     if (rpState.taskPoll) return;
-    rpState.taskPoll = setInterval(function () {
+    rpState.taskPoll = createPoller(function () {
       if (!rpState.active) {
         stopTaskPoll();
         return;
       }
-      if (document.hidden) return;
       apiGet("../transcripts/api/participants")
         .then(function (data) {
           if (!rpState.active) return;
@@ -1027,26 +1010,22 @@
           }
         })
         .catch(function () {});
-    }, TASK_POLL_MS);
+    }, TASK_POLL_MS, { runImmediately: false, label: "overview.tasks" });
+    rpState.taskPoll.start();
   }
 
   function stopTaskPoll() {
     if (rpState.taskPoll) {
-      clearInterval(rpState.taskPoll);
+      rpState.taskPoll.stop();
       rpState.taskPoll = null;
     }
   }
 
   // ---- Staleness (hub dataVersion contract) ----
 
-  function takeSnapshot() {
-    rpState._snapshot = { version: state.dataVersion };
-  }
-
-  function checkStaleness() {
-    if (!rpState._snapshot || !rpState.active) return;
-    window.ClipgenOverview.setRefreshStale(rpState._snapshot.version !== state.dataVersion);
-  }
+  var _staleness = window.ClipgenOverview.createStalenessTracker(rpState);
+  var takeSnapshot = _staleness.take;
+  var checkStaleness = _staleness.check;
 
   // ---- Lifecycle ----
 
@@ -1061,8 +1040,7 @@
         if (!rpState.active) return;
         takeSnapshot();
         checkStaleness();
-        // Re-activation keeps the selection, so selectParticipant's clip load
-        // never fires — refresh the strip here (new clips may have landed).
+        // Re-activation keeps the selection, so selectParticipant never reloads clips; refresh here.
         if (rpState.selected) loadClips(rpState.selected, rpState.gen);
       });
     });
@@ -1080,10 +1058,6 @@
   function resize() {
     // Flow layout only — nothing measures the viewport.
   }
-
-  document.addEventListener("visibilitychange", function () {
-    if (!document.hidden && rpState.active) checkStaleness();
-  });
 
   window.addEventListener("pagehide", function () {
     stopReportPoll();

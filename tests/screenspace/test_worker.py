@@ -229,8 +229,8 @@ class TestScreenspaceWorker:
         finally:
             worker.stop()
 
-    def test_text_task_easyocr_importable(self):
-        import easyocr  # noqa: F401
+    def test_text_task_rapidocr_importable(self):
+        import rapidocr  # noqa: F401
 
     def test_reorder(self):
         worker = screenspace.ScreenspaceWorker()
@@ -323,6 +323,38 @@ class TestScreenspaceWorker:
         assert t is not None
         assert t["status"] == "queued"
         assert t.get("parameters", {}).get("start_seconds") == 50.0
+
+    def test_resume_keeps_a_cancel_that_raced_the_probe(self, monkeypatch):
+        """A Cancel landing during resume's duration probe must win."""
+        worker = screenspace.ScreenspaceWorker()
+        task = screenspace.create_task(
+            "color",
+            "P01",
+            "s.mp4",
+            ["/v.mp4"],
+            "r",
+            {"x": 0, "y": 0, "w": 1, "h": 1},
+            parameters={"start_seconds": 0.0},
+        )
+        worker.enqueue(task)
+        with worker._lock:
+            worker._tasks[task["id"]]["status"] = screenspace.TASK_STATUS_PAUSED
+            worker._tasks[task["id"]]["progress"] = 0.5
+
+        def _probe_then_cancel(_paths):
+            worker.cancel(task["id"])
+
+        monkeypatch.setattr(
+            screenspace_worker.video, "timeline_or_none", _probe_then_cancel
+        )
+        monkeypatch.setattr(
+            screenspace_worker, "_probe_video_meta", lambda _p: (30.0, 100.0)
+        )
+        worker.resume()
+        t = worker.get_task(task["id"])
+        assert t is not None
+        assert t["status"] == "cancelled"
+        assert t.get("parameters", {}).get("start_seconds") == 0.0
 
     def test_resume_restarts_offset_multitool_from_scratch(self):
         # Offset chains need every frame from the original start to join, so a
@@ -749,6 +781,33 @@ class TestOcrReaderPool:
             t.join()
 
         # Pool size 1 => exactly one Reader ever built, reused by all callers.
+        assert build_count["n"] == 1
+        screenspace_ocr._ocr_pools.clear()
+
+    def test_sequential_checkouts_reuse_one_reader(self, monkeypatch):
+        """A single-threaded scan reuses the engine it just returned.
+
+        The pool is seeded with pool-size None placeholders; a FIFO queue
+        rotates through them and builds one engine per slot even when only one
+        caller ever holds an engine at a time (measured: a second ~800 MB
+        engine on every sequential text scan). LIFO hands back the engine the
+        caller just returned.
+        """
+        monkeypatch.setattr(config, "SCREENSPACE_OCR_POOL_SIZE", 2)
+        screenspace_ocr._ocr_pools.clear()
+
+        build_count = {"n": 0}
+
+        def fake_build(languages):
+            build_count["n"] += 1
+            return object()
+
+        monkeypatch.setattr(screenspace_ocr, "_build_ocr_reader", fake_build)
+
+        for _ in range(4):
+            with screenspace_ocr._checkout_ocr_reader(["en"]):
+                pass
+
         assert build_count["n"] == 1
         screenspace_ocr._ocr_pools.clear()
 

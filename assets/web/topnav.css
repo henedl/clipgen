@@ -1,9 +1,8 @@
-/* Unified top navigation — shared chrome across Studio, Screenspace, Transcripts.
- * Replaces the per-page frontend-switcher. Mounted by topnav.js into a
- * <topnav-mount> placeholder element.
+/* Unified top navigation — shared chrome across every page. Mounted by topnav.js
+ * into a <topnav-mount> placeholder.
  *
  * Anatomy:
- *   [logo · clipgen]    [Studio | Screenspace | Transcripts]    [Quick actions ▾ | Log | Theme | v0.10.x]
+ *   [logo · clipgen]   [page tabs]   [Quick actions ▾ | Log | Theme | version]
  */
 
 /* Floating glass nav. The translucent background + backdrop-filter let any
@@ -179,7 +178,7 @@ html[data-desktop-chrome="macos"][data-desktop-fullscreen] .topnav-left {
   font-family: inherit;
   font-size: 12.5px;
   cursor: pointer;
-  transition: background-color var(--duration-fast), color var(--duration-fast), border-color var(--duration-fast);
+  transition: background-color var(--duration-fast), color var(--duration-fast), border-color var(--duration-fast), transform var(--duration-instant);
 }
 .topnav-icon-btn {
   width: 30px;
@@ -196,8 +195,29 @@ html[data-desktop-chrome="macos"][data-desktop-fullscreen] .topnav-left {
   box-shadow: var(--shadow-focus);
 }
 
+/* Press feedback; ungated by reduced motion like every press affordance. */
+.topnav-icon-btn:active:not(:disabled),
+.topnav-qa-trigger:active:not(:disabled) {
+  transform: scale(var(--scale-press));
+}
+
 .topnav-qa-trigger {
   gap: 6px;
+}
+
+/* "Update available" dot; ClipgenTopNav.setStartBadge toggles it. */
+.topnav-icon-btn.has-badge {
+  position: relative;
+}
+.topnav-icon-btn.has-badge::after {
+  content: "";
+  position: absolute;
+  top: var(--space-1);
+  right: var(--space-1);
+  width: var(--space-1-5);
+  height: var(--space-1-5);
+  border-radius: var(--radius-full);
+  background: var(--accent);
 }
 .topnav-qa-trigger.is-open {
   background: var(--bg-active);
@@ -263,7 +283,7 @@ html[data-desktop-chrome="macos"][data-desktop-fullscreen] .topnav-left {
   color: var(--fg);
 }
 .topnav-right #themeToggle:active {
-  transform: scale(0.96);
+  transform: scale(var(--scale-press));
 }
 .topnav-right #themeToggle:focus-visible {
   outline: 2px solid var(--accent);
@@ -307,17 +327,6 @@ html[data-desktop-chrome="macos"][data-desktop-fullscreen] .topnav-left {
   transform: translateX(0) scale(1);
 }
 
-/* Version pill — small mono text */
-.topnav-version {
-  margin-left: 6px;
-  padding: 2px 6px;
-  font-family: var(--font-mono);
-  font-feature-settings: "tnum";
-  font-size: 11px;
-  color: var(--fg-faint);
-  border-radius: 4px;
-}
-
 /* ---- Quick Actions menu ---- */
 
 .topnav-qa {
@@ -329,14 +338,30 @@ html[data-desktop-chrome="macos"][data-desktop-fullscreen] .topnav-left {
   position: absolute;
   top: calc(100% + 6px);
   right: 0;
+  /* Shrink-to-fit against a narrow trigger pins the panel at min-width and wraps
+     any label longer than it; size to the longest label instead. */
+  width: max-content;
   min-width: 240px;
+  max-width: 360px;
   padding: var(--space-1-5);
-  display: none;
+  display: flex;
   flex-direction: column;
   font-size: 12.5px;
+  /* Closed state stays in the tree so open and close can both transition. */
+  visibility: hidden;
+  opacity: 0;
+  transform: translateY(-4px) scale(0.98);
+  transform-origin: top right;
+  pointer-events: none;
+  transition: opacity var(--duration-instant) var(--ease-out),
+              transform var(--duration-instant) var(--ease-out),
+              visibility var(--duration-instant);
 }
 .topnav-qa-panel.is-open {
-  display: flex;
+  visibility: visible;
+  opacity: 1;
+  transform: none;
+  pointer-events: auto;
 }
 
 .topnav-qa-item {
@@ -399,6 +424,7 @@ html[data-desktop-chrome="macos"][data-desktop-fullscreen] .topnav-left {
   .topnav-icon-btn,
   .topnav-qa-trigger,
   .topnav-qa-caret,
+  .topnav-qa-panel,
   .topnav-right #themeToggle {
     transition: none;
   }
@@ -422,6 +448,7 @@ html[data-desktop-chrome="macos"][data-desktop-fullscreen] .topnav-left {
   box-shadow: var(--shadow-lg);
   z-index: var(--z-toast, 3000);
   transition: opacity var(--duration-fast);
+  text-wrap: balance;
 }
 
 .toast.hidden {

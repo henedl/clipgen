@@ -1,7 +1,7 @@
 """Tests for Screenspace server API endpoints."""
 
+import json
 import os
-from collections import OrderedDict
 
 import numpy as np
 import pytest
@@ -12,6 +12,7 @@ import config
 import screenspace
 import screenspace_preview
 import screenspace_server
+import server_utils
 
 
 @pytest.fixture(scope="module")
@@ -61,8 +62,12 @@ def client(ss_app, tmp_path, monkeypatch):
     # all it needs — there is no module-level snapshot to seed.
     monkeypatch.setattr(screenspace_server, "_worker", screenspace.ScreenspaceWorker())
     # Fresh module-level calibration/preview caches per test (auto-restored).
-    monkeypatch.setattr(screenspace_server, "_decoded_frame_cache", OrderedDict())
-    monkeypatch.setattr(screenspace_server, "_pin_ocr_cache", OrderedDict())
+    monkeypatch.setattr(
+        screenspace_server, "_decoded_frame_cache", server_utils.MediaCache(8)
+    )
+    monkeypatch.setattr(
+        screenspace_server, "_pin_ocr_cache", server_utils.MediaCache(8)
+    )
 
     monkeypatch.setattr(
         screenspace,
@@ -281,20 +286,32 @@ def test_participant_marks_resolved_and_filtered(client, monkeypatch):
                 },
             ],
             "source_transcripts": {
-                "P01": {"segments": [{"start": 5.0, "end": 7.0, "text": "hello"}]},
-                "P02": {"segments": [{"start": 1.0, "end": 2.0, "text": "x"}]},
+                "P01": {
+                    "segments": [
+                        {"id": "P01:0", "start": 5.0, "end": 7.0, "text": "hello"}
+                    ]
+                },
+                "P02": {
+                    "segments": [{"id": "P02:0", "start": 1.0, "end": 2.0, "text": "x"}]
+                },
             },
             "corrections": [],
         },
     )
-    resp = client.get("/screenspace/api/participants/P01/marks")
-    assert resp.status_code == 200
-    data = resp.get_json()
-    assert data["ok"] is True
-    # P02 filtered out (wrong participant); m3 dropped (out-of-range, unresolved).
-    assert [m["id"] for m in data["marks"]] == ["m1"]
-    assert data["marks"][0]["start"] == 5.0
-    assert data["marks"][0]["text"] == "hello"
+    # Swapping segments must bump, or another test's cached corrected P01
+    # (same version, different segments) resolves the mark to its start.
+    transcripts_server._bump_corrections_version()
+    try:
+        resp = client.get("/screenspace/api/participants/P01/marks")
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert data["ok"] is True
+        # P02 filtered out (wrong participant); m3 dropped (out-of-range, unresolved).
+        assert [m["id"] for m in data["marks"]] == ["m1"]
+        assert data["marks"][0]["start"] == 5.0
+        assert data["marks"][0]["text"] == "hello"
+    finally:
+        transcripts_server._bump_corrections_version()
 
 
 def test_participant_marks_unknown_participant(client):
@@ -1081,7 +1098,60 @@ def test_create_ocr_task_accepts_zero_confidence_threshold(client, monkeypatch):
     assert params["ocr_confidence_threshold"] == 0.0
 
 
-@pytest.mark.parametrize("task_type", ["template", "flow", "scene"])
+@pytest.mark.parametrize("value", [["ch_sim"], [], "en", ["en", 3]])
+def test_create_ocr_task_rejects_invalid_languages(client, monkeypatch, value):
+    """The language set is closed (each code maps onto a bundled recognition
+    model), so an unknown code is refused at task creation instead of dying
+    mid-scan in the engine."""
+    _create_region(client, "r")
+    _enable_video_task_setup(monkeypatch, "P01")
+    resp = client.post(
+        "/screenspace/api/tasks",
+        json={
+            "type": "text",
+            "participant": "P01",
+            "region": "r",
+            "parameters": {"search_string": "score", "languages": value},
+        },
+    )
+    assert resp.status_code == 400
+    assert "languages" in resp.get_json()["error"]
+
+
+def test_create_ocr_task_accepts_known_language(client, monkeypatch):
+    _create_region(client, "r")
+    _enable_video_task_setup(monkeypatch, "P01")
+    resp = client.post(
+        "/screenspace/api/tasks",
+        json={
+            "type": "text",
+            "participant": "P01",
+            "region": "r",
+            "parameters": {"search_string": "score", "languages": ["de"]},
+        },
+    )
+    assert resp.status_code == 200
+    assert resp.get_json()["task"]["parameters"]["languages"] == ["de"]
+
+
+def test_create_ocr_task_rejects_incompatible_languages(client, monkeypatch):
+    """Each code can be known while the pair still needs two rec models."""
+    _create_region(client, "r")
+    _enable_video_task_setup(monkeypatch, "P01")
+    resp = client.post(
+        "/screenspace/api/tasks",
+        json={
+            "type": "text",
+            "participant": "P01",
+            "region": "r",
+            "parameters": {"search_string": "score", "languages": ["ja", "ko"]},
+        },
+    )
+    assert resp.status_code == 400
+    assert "incompatible" in resp.get_json()["error"]
+
+
+@pytest.mark.parametrize("task_type", ["template", "shape", "flow", "scene"])
 def test_create_task_new_types_accepted(client, task_type):
     """New phase-4 types pass type validation (fail at video, not type)."""
     screenspace_server._manifest["regions"]["r"] = {
@@ -1516,6 +1586,173 @@ def test_create_template_task_invalid_reference_timestamp(client, monkeypatch):
     assert "reference_timestamp" in resp.get_json()["error"]
 
 
+@pytest.mark.parametrize(
+    "tool,image_key,mask_key",
+    [
+        ("template", "template_image", "template_mask"),
+        ("shape", "shape_image", "shape_mask"),
+    ],
+)
+def test_extract_media_shaped_region_sets_mask(tool, image_key, mask_key):
+    """A shaped capture region rides along as the reference alpha mask."""
+    from typing import Any
+
+    import numpy as np
+
+    frame = np.zeros((100, 100, 3), dtype=np.uint8)
+    spec: dict[str, Any] = {"reference_timestamp": 0.0}
+    region_coords = {
+        "x": 10,
+        "y": 10,
+        "w": 40,
+        "h": 40,
+        "mask_points": [[[0.5, 0.0], [1.0, 1.0], [0.0, 1.0]]],
+    }
+    screenspace_server._extract_tool_media(spec, tool, lambda ts: frame, region_coords)
+    assert spec[image_key].shape[:2] == (40, 40)
+    assert spec[mask_key] is not None
+    assert spec[mask_key].shape == (40, 40)
+    # Rect-only capture regions keep the unmasked path.
+    rect_spec: dict[str, Any] = {"reference_timestamp": 0.0}
+    screenspace_server._extract_tool_media(
+        rect_spec, tool, lambda ts: frame, {"x": 10, "y": 10, "w": 40, "h": 40}
+    )
+    assert mask_key not in rect_spec
+
+
+@pytest.mark.parametrize(
+    "tool,image_key", [("template", "template_image"), ("shape", "shape_image")]
+)
+def test_prepare_reference_media_uses_reference_region(
+    client, monkeypatch, tool, image_key
+):
+    """The sample is cut from the capture region, not the run region."""
+    from typing import Any
+
+    import numpy as np
+
+    frame = np.zeros((100, 200, 3), dtype=np.uint8)
+    monkeypatch.setattr(
+        screenspace_server,
+        "_participant_frame_extractor",
+        lambda pid: lambda ts: frame,
+    )
+    screenspace_server._manifest["regions"]["btn"] = {
+        "x": 0.1,
+        "y": 0.2,
+        "w": 0.2,
+        "h": 0.3,
+    }
+
+    def resolve(name: str, region_data: dict[str, Any] | None = None) -> dict[str, Any]:
+        rd = region_data or {}
+        return {
+            "x": round(rd["x"] * 200),
+            "y": round(rd["y"] * 100),
+            "w": round(rd["w"] * 200),
+            "h": round(rd["h"] * 100),
+        }
+
+    params: dict[str, Any] = {"reference_timestamp": 0.0, "reference_region": "btn"}
+    out = screenspace_server._prepare_task_media(
+        tool, "P01", params, {}, {"x": 0, "y": 0, "w": 200, "h": 100}, resolve
+    )
+    sample = out[image_key]
+    assert isinstance(sample, np.ndarray)
+    assert sample.shape[:2] == (30, 40)
+
+    # Unknown capture region: a clear 400, not a silent full-frame sample.
+    with pytest.raises(server_utils.ApiError) as excinfo:
+        screenspace_server._prepare_task_media(
+            tool,
+            "P01",
+            {"reference_timestamp": 0.0, "reference_region": "gone"},
+            {},
+            {"x": 0, "y": 0, "w": 200, "h": 100},
+            resolve,
+        )
+    assert excinfo.value.code == 400
+    assert "reference_region" in excinfo.value.message
+
+
+def test_api_preview_shape_ref_region(client, monkeypatch) -> None:
+    """GET shape preview cuts the sample from ref_region, run region optional."""
+    import cv2
+    import numpy as np
+    import video
+
+    _enable_video_task_setup(monkeypatch, "P01")
+    frame = np.zeros((240, 320, 3), dtype=np.uint8)
+    cv2.rectangle(frame, (85, 55, 90, 45), (255, 255, 255), 3)
+    monkeypatch.setattr(
+        video, "extract_frame_at_timestamp", lambda _path, _ts: frame.copy()
+    )
+
+    ref_region = "0.25,0.2083333333,0.3125,0.25"
+    r_noref = client.get("/screenspace/api/preview/P01/0.500?tool=shape")
+    r_with = client.get(
+        f"/screenspace/api/preview/P01/0.500?tool=shape&ref=0.0&ref_region={ref_region}"
+    )
+    assert r_noref.status_code == 200
+    assert r_with.status_code == 200
+    a = cv2.imdecode(np.frombuffer(r_noref.data, np.uint8), cv2.IMREAD_COLOR)
+    b = cv2.imdecode(np.frombuffer(r_with.data, np.uint8), cv2.IMREAD_COLOR)
+    assert a is not None and b is not None
+    assert b.shape[1] > a.shape[1]
+
+
+def test_create_shape_task_no_region_with_upload(client):
+    """Shape task with uploaded image skips region validation, like template."""
+    import base64
+
+    png_b64 = base64.b64encode(
+        b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01"
+        b"\x00\x00\x00\x01\x08\x02\x00\x00\x00\x90wS\xde\x00"
+        b"\x00\x00\x0cIDATx\x9cc\xf8\x0f\x00\x00\x01\x01\x00"
+        b"\x05\x18\xd8N\x00\x00\x00\x00IEND\xaeB`\x82"
+    ).decode()
+    resp = client.post(
+        "/screenspace/api/tasks",
+        json={
+            "type": "shape",
+            "participant": "P01",
+            "parameters": {"shape_image_data": png_b64},
+        },
+    )
+    data = resp.get_json()
+    assert resp.status_code == 400
+    assert "region" not in data["error"].lower()
+    assert "video" in data["error"].lower()
+
+
+@pytest.mark.parametrize(
+    "params,fragment",
+    [
+        ({"reference_timestamp": 0.0, "scale_min": -1}, "scale_min"),
+        ({"reference_timestamp": 0.0, "scale_min": 2.0, "scale_max": 1.0}, "scale_min"),
+        ({"reference_timestamp": 0.0, "scale_steps": "many"}, "scale_steps"),
+        (
+            {"reference_timestamp": 0.0, "scale_y_min": 2.0, "scale_y_max": 1.0},
+            "scale_y_min",
+        ),
+    ],
+)
+def test_create_shape_task_invalid_scale_params(client, monkeypatch, params, fragment):
+    _create_region(client, "r")
+    _enable_video_task_setup(monkeypatch, "P01")
+    resp = client.post(
+        "/screenspace/api/tasks",
+        json={
+            "type": "shape",
+            "participant": "P01",
+            "region": "r",
+            "parameters": params,
+        },
+    )
+    assert resp.status_code == 400
+    assert fragment in resp.get_json()["error"]
+
+
 def test_create_scene_task_invalid_scene_references(client, monkeypatch):
     _create_region(client, "r")
     _enable_video_task_setup(monkeypatch, "P01")
@@ -1942,6 +2179,59 @@ def test_video_info_participant_without_video(client):
     assert resp.status_code == 404
 
 
+def test_video_info_sanitizes_non_finite_duration(client, tmp_path, monkeypatch):
+    """ffprobe can report nan; the response must still parse as JSON."""
+    import video as video_mod
+
+    video_file = tmp_path / "study_P05.mp4"
+    video_file.write_bytes(b"\x00v1")
+    monkeypatch.setattr(
+        screenspace_server,
+        "_participants",
+        [{"id": "P05", "video_paths": [str(video_file)], "has_video": True}],
+    )
+    monkeypatch.setattr(screenspace_server, "_video_metadata_cache", {})
+    monkeypatch.setattr(
+        video_mod,
+        "probe_video_properties",
+        lambda _p: {"width": 1, "height": 1, "fps": 30.0, "duration": float("nan")},
+    )
+
+    resp = client.get("/screenspace/api/video/info/P05")
+    data = json.loads(resp.data)
+    assert data["ok"] is True
+    assert data["info"]["duration"] == 0
+    assert data["info"]["duration_seconds"] is None
+
+
+def test_participant_timeline_does_not_cache_a_failed_probe(
+    client, tmp_path, monkeypatch
+):
+    """One transient probe failure must not read as 'single video' forever."""
+    import video as video_mod
+
+    parts = [tmp_path / "study_P07_1.mp4", tmp_path / "study_P07_2.mp4"]
+    for part in parts:
+        part.write_bytes(b"\x00")
+    monkeypatch.setattr(
+        screenspace_server,
+        "_participant_video_paths",
+        lambda _pid: [str(p) for p in parts],
+    )
+    monkeypatch.setattr(screenspace_server, "_participant_timeline_cache", {})
+    calls = []
+
+    def _probe(paths):
+        calls.append(paths)
+        return None if len(calls) == 1 else [(paths[0], 10, 0), (paths[1], 10, 10)]
+
+    monkeypatch.setattr(video_mod, "build_source_timeline", _probe)
+
+    assert screenspace_server._participant_timeline("P07") is None
+    assert screenspace_server._participant_timeline("P07") is not None
+    assert len(calls) == 2
+
+
 def test_participants_payload_includes_version(client, tmp_path, monkeypatch):
     """/api/participants enriches has_video entries with the file's mtime_ns."""
     video_file = tmp_path / "study_P03.mp4"
@@ -1973,9 +2263,7 @@ def test_video_frame_cache_invalidates_on_mtime_change(client, tmp_path, monkeyp
         "_participants",
         [{"id": "P04", "video_paths": [str(video_file)], "has_video": True}],
     )
-    monkeypatch.setattr(
-        screenspace_server, "_frame_cache", type(screenspace_server._frame_cache)()
-    )
+    monkeypatch.setattr(screenspace_server, "_frame_cache", server_utils.MediaCache(8))
 
     calls = []
 
@@ -2132,7 +2420,15 @@ def test_video_info_reprobes_on_mtime_change(client, tmp_path, monkeypatch):
             "width": 1920,
             "height": 1080,
             "video_codec": "h264",
-            "audio_codec": "aac",
+            "audio_tracks": [
+                {
+                    "index": 0,
+                    "codec": "aac",
+                    "channels": 2,
+                    "sample_rate": 48000,
+                    "channel_layout": "stereo",
+                }
+            ],
             "fps": 30.0,
             "duration": duration,
             "nb_frames": int(duration * 30),
@@ -2755,11 +3051,16 @@ def test_export_events_json(client):
     ]
     resp = client.get("/screenspace/api/export/events?format=json")
     assert resp.status_code == 200
+    assert 'attachment; filename="screenspace_events.json"' in resp.headers.get(
+        "Content-Disposition", ""
+    )
     data = resp.get_json()
-    assert data["ok"] is True
-    assert len(data["events"]) == 2
+    # The bundle export's envelope, not the API's ok() envelope.
+    assert "ok" not in data
+    assert data["exported_at"] and data["version"]
+    assert len(data["records"]) == 2
     # Metadata should be hoisted to top-level "magnitude"
-    assert any("magnitude" in e for e in data["events"])
+    assert any("magnitude" in e for e in data["records"])
 
 
 def test_export_events_csv(client):
@@ -2793,8 +3094,8 @@ def test_export_events_filter_excluded_false(client):
     ]
     resp = client.get("/screenspace/api/export/events?format=json&excluded=false")
     data = resp.get_json()
-    assert len(data["events"]) == 1
-    assert data["events"][0]["id"] == "ev_1"
+    assert len(data["records"]) == 1
+    assert data["records"][0]["id"] == "ev_1"
 
 
 def test_export_events_filter_participant(client):
@@ -2804,8 +3105,8 @@ def test_export_events_filter_participant(client):
     ]
     resp = client.get("/screenspace/api/export/events?format=json&participant=P02")
     data = resp.get_json()
-    assert len(data["events"]) == 1
-    assert data["events"][0]["participant"] == "P02"
+    assert len(data["records"]) == 1
+    assert data["records"][0]["participant"] == "P02"
 
 
 def test_export_events_unsupported_format(client):
@@ -3243,8 +3544,8 @@ def test_calibrate_text_ocr_cache_rescores_threshold(calib_client, monkeypatch):
     monkeypatch.setattr(video, "extract_frame_at_timestamp", lambda p, ts: frame)
     calls = []
 
-    def fake_ocr(frame_arg, region, tool_type, params):
-        calls.append((tool_type, params.get("fuzzy_threshold")))
+    def fake_ocr(frame_arg, region, params):
+        calls.append(params.get("fuzzy_threshold"))
         return [(None, "hellx", 0.9)]
 
     monkeypatch.setattr(screenspace, "run_calibration_ocr", fake_ocr)
@@ -3266,7 +3567,7 @@ def test_calibrate_text_ocr_cache_rescores_threshold(calib_client, monkeypatch):
     second = calib_client.post("/screenspace/api/calibrate", json=body)
     assert second.status_code == 200
     assert second.get_json()["pins"][0]["passed"] is False
-    assert calls == [("text", 0.7)]
+    assert calls == [0.7]
 
 
 def test_sanitize_floats_handles_numpy_scalars():
@@ -3462,3 +3763,36 @@ def test_media_route_follows_a_mid_session_output_dir_change(
         assert c.get("/screenspace/media/heatmap_ss_abc.png").status_code == 404
         monkeypatch.setattr(config, "OUTPUT_DIR", str(second))
         assert c.get("/screenspace/media/heatmap_ss_abc.png").status_code == 200
+
+
+def test_regions_create_rejects_non_string_name(client):
+    resp = client.post("/screenspace/api/regions", json={"name": 5})
+    assert resp.status_code == 400
+
+
+def test_regions_create_rejects_non_object_body(client):
+    resp = client.post("/screenspace/api/regions", json=[1])
+    assert resp.status_code == 400
+
+
+def test_event_exclude_tolerates_an_id_less_event(client):
+    screenspace_server._manifest["events"] = [
+        {"task_id": "t1"},
+        {"id": "e1", "task_id": "t1", "excluded": False},
+    ]
+    resp = client.put("/screenspace/api/events/e1/exclude")
+    assert resp.status_code == 200
+    assert screenspace_server._manifest["events"][1]["excluded"] is True
+
+
+def test_tools_catalog_mirrors_the_registry(client):
+    """Fast-scan and confidence facts come from the AnalysisTool classes, not JS tables."""
+    body = client.get("/screenspace/api/tools").get_json()
+    assert body["ok"] is True
+    tools = body["tools"]
+    assert set(tools) == set(screenspace.TOOLS)
+    for name, facts in tools.items():
+        assert facts["supports_fast_scan"] == bool(facts["fast_scan_description"]), name
+    assert not tools["timelapse"]["has_confidence"]
+    assert not tools["color"]["has_confidence"]
+    assert tools["boundary"]["has_confidence"]

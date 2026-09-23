@@ -4,7 +4,7 @@ Missing mode-detection is the most common integration bug when adding new flags.
 
 ## Checklist
 
-1. **Argparse definition** (`cli.py`)
+1. **Argparse definition** (`cli_args.py`, in the matching `_add_<group>_args`)
    - Add the argument with help text and appropriate `action`/`type`/`nargs`
    - If mutually exclusive with other modes, add to the correct `add_mutually_exclusive_group()`
 

@@ -1,9 +1,10 @@
 /* clipgen Screenspace — model-view (preprocessed preview) satellite.
  *
  * Carved out of screenspace.js (the hub) following the hub+satellite convention
- * (see screenspace-overlay/timeline/...). Owns the "Model view" panel: the live
- * preprocessed-frame preview (api/preview), the overlay-layer catalog + toggle/
- * dropdown UI, the preview-region resolvers, and the color "Min area %" readout.
+ * (see screenspace-overlay/timeline/...). Owns the "Model view" section of the
+ * right pane's Preview tab: the live preprocessed-frame preview (api/preview),
+ * the overlay-layer catalog + toggle/dropdown UI, the preview-region resolvers,
+ * and the color "Min area %" readout.
  *
  * It is a read of the hub's shared `state` plus a few hub helpers, all reached
  * through window.ClipgenScreenspace (SS). apiGet / qs / numberOrDefault /
@@ -25,9 +26,7 @@
 
   var SS = window.ClipgenScreenspace;
   var state = SS.state;
-  // Hub helpers (published synchronously during the hub's load, before this
-  // file runs). apiGet / qs / numberOrDefault / _formatMinAreaReadout are
-  // ambient utils.js / screenspace-utils.js globals.
+  // Hub helpers, published before this file loads; other helpers are ambient globals.
   var normalizeRegionRef = SS.normalizeRegionRef,
     activeRegionRef = SS.activeRegionRef;
 
@@ -44,18 +43,16 @@
     numbers: "Grayscale region fed to OCR.",
     timelapse: "Region crop. FFmpeg encodes this unmodified.",
     template: "Gray-blurred frame, template, and normalized match heatmap.",
+    shape: "Edge ridges and scale-swept match heatmap.",
     flow: "Prev + current gray frames with dense optical-flow vectors.",
     scene: "Region (≤128 px), Canny edges, and 8-bin hue histogram.",
     inactivity: "Region and pHash bit grid (white = 1, black = 0).",
     boundary: "Full frame; Auto/Scene/Hybrid use a content fingerprint vs. the current period, pHash compares consecutive samples.",
     attention: "Full frame (\u2264256 px): spectral residual, Lab contrast, frame-diff motion, and the combined center-weighted saliency map.",
-    multitool: "Preview of the first tool step.",
+    multitool: "Preview of the focused tool step.",
   };
 
   function initModelView() {
-    var btn = qs("#modelViewToggle");
-    if (btn) btn.addEventListener("click", toggleModelView);
-
     // Restore persisted overlay preferences (sessionStorage, per-tab).
     try {
       var stored = sessionStorage.getItem("ss_overlayEnabled");
@@ -73,7 +70,7 @@
         state.overlayEnabled = !!toggle.checked;
         try { sessionStorage.setItem("ss_overlayEnabled", state.overlayEnabled ? "1" : "0"); } catch (_) { /* ignore */ }
         var curTs = Number(state.currentTimestamp || 0).toFixed(3);
-        if (state.overlayEnabled && (!state.overlayImage || state.overlayImageTimestamp !== curTs || state.overlayImageTool !== state.activeWorkflow)) {
+        if (state.overlayEnabled && (!state.overlayImage || state.overlayImageTimestamp !== curTs || state.overlayImageTool !== _previewToolKey())) {
           refreshModelView();
         }
         SS.renderOverlay();
@@ -91,6 +88,8 @@
           state.overlayImageObjectUrl = null;
         }
         state.overlayImage = null;
+        state.overlayImageScope = null;
+        state.overlayImageRegion = null;
         state.overlayImageTimestamp = null;
         state.overlayImageTool = null;
         refreshModelView();
@@ -109,13 +108,57 @@
       .catch(function () { /* leave catalog empty; toggle stays disabled */ });
   }
 
+  // The multitool step the preview follows: clamped state.multitoolFocus, or null when empty.
+  function _focusStep() {
+    var steps = state.multitoolSteps || [];
+    if (!steps.length) return null;
+    var idx = Math.min(Math.max(state.multitoolFocus || 0, 0), steps.length - 1);
+    return { idx: idx, step: steps[idx] };
+  }
+
+  // Identity of what the preview shows; overlay staleness guards compare against it.
+  function _previewToolKey() {
+    if (state.activeWorkflow !== "multitool") return state.activeWorkflow;
+    var f = _focusStep();
+    return f ? "multitool:" + f.idx + ":" + f.step.type : "multitool";
+  }
+
   function _activeOverlayTool() {
     var tool = state.activeWorkflow;
     if (tool === "multitool") {
-      var first = (state.multitoolSteps || [])[0];
-      tool = first && first.type ? first.type : null;
+      var f = _focusStep();
+      tool = f && f.step.type ? f.step.type : null;
     }
     return tool;
+  }
+
+  function _capitalize(s) {
+    return s ? s.charAt(0).toUpperCase() + s.slice(1) : "";
+  }
+
+  // "Color" for plain tools, "Multitool · 2. Change" for the focused step.
+  function _updateFocusLabel() {
+    var label = qs("#modelViewFocus");
+    if (!label) return;
+    var text = _capitalize(state.activeWorkflow || "");
+    if (state.activeWorkflow === "multitool") {
+      var f = _focusStep();
+      if (f) text += " · " + (f.idx + 1) + ". " + _capitalize(f.step.type);
+    }
+    label.textContent = text;
+  }
+
+  // Single writer of the focus; every caller's card highlight stays in sync here.
+  function setMultitoolFocus(idx) {
+    state.multitoolFocus = idx;
+    qsa(".multitool-step").forEach(function (card) {
+      card.classList.toggle("is-selected", parseInt(card.dataset.stepIdx, 10) === idx);
+    });
+    _updateOverlayUi();
+    _updateFocusLabel();
+    refreshModelView();
+    SS.renderOverlay();
+    if (SS.calRender) SS.calRender();
   }
 
   function _activeOverlayLayers() {
@@ -126,6 +169,16 @@
 
   function _overlayEligibleForActiveTool() {
     return _activeOverlayLayers().length > 0;
+  }
+
+  // Drive the <select> so its change handler stays the one persist + refetch path.
+  function cycleOverlayLayer() {
+    var sel = qs("#modelViewOverlayLayer");
+    if (!sel || sel.options.length < 2) return;
+    sel.selectedIndex = (sel.selectedIndex + 1) % sel.options.length;
+    sel.dispatchEvent(new Event("change", { bubbles: true }));
+    // The picker lives in the Preview tab; name the layer for everyone else.
+    showToast(sel.options[sel.selectedIndex].textContent);
   }
 
   function _resolveOverlayLayer() {
@@ -182,25 +235,9 @@
     }
   }
 
-  function toggleModelView() {
-    state.modelViewOpen = !state.modelViewOpen;
-    var panel = qs("#modelViewPanel");
-    var body = qs("#modelViewBody");
-    var btn = qs("#modelViewToggle");
-    if (state.modelViewOpen) {
-      panel.classList.remove("collapsed");
-      body.classList.remove("hidden");
-      btn.setAttribute("aria-expanded", "true");
-      refreshModelView();
-    } else {
-      panel.classList.add("collapsed");
-      body.classList.add("hidden");
-      btn.setAttribute("aria-expanded", "false");
-    }
-  }
-
+  // Inactive Preview tab hides the image; overlay and B-blink draw on the video instead.
   function refreshModelView(opts) {
-    if (!state.modelViewOpen && !state.overlayEnabled && !state.overlayBlinkActive) return;
+    if (state.rightPaneTab !== "preview" && !state.overlayEnabled && !state.overlayBlinkActive) return;
     if (_modelViewTimer) {
       clearTimeout(_modelViewTimer);
       _modelViewTimer = 0;
@@ -214,9 +251,7 @@
 
   var _FULL_FRAME_REGION_STRING = "0.000000,0.000000,1.000000,1.000000";
 
-  // Serialize a region data object ({x,y,w,h}, normalized when source_width is
-  // set, otherwise canvas pixels) into the comma-joined fraction string the
-  // preview/calibration endpoints expect.
+  // Region {x,y,w,h} (normalized when source_width is set, else canvas pixels) → fraction string.
   function _regionDataToString(r) {
     if (r.source_width) {
       return [r.x, r.y, r.w, r.h]
@@ -230,8 +265,7 @@
       .join(",");
   }
 
-  // Resolve any region ref (active / stash / full-frame) to its coordinate
-  // string, or null when the referenced region data can't be found.
+  // Any region ref (active / stash / full-frame) → coordinate string, or null if unresolved.
   function _regionStringForRef(ref) {
     var r = normalizeRegionRef(ref);
     if (!r) return null;
@@ -251,20 +285,19 @@
     return _regionDataToString(data);
   }
 
-  // The region the preview/calibration should target: the last region toggled
-  // on in the run-region picker (the dropdown), falling back to the highlighted
-  // chip. Multitool/boundary hide the picker (see renderWorkflowParams), so
-  // their stale runRegions are ignored and they keep using the active region.
-  // The template tool needs a real captured region — full frame can't be a
-  // template — so full frame is skipped there in favor of the last named/stash
-  // region selected (otherwise full frame toggled on last would block the
-  // template preview/calibration even with a named region still selected).
+  // Preview target: last run-region toggled on, else the active chip. Multitool/boundary hide the picker.
   function _previewRegionRef() {
-    var skipFullFrame = state.activeWorkflow === "template";
-    if (state.activeWorkflow !== "multitool" && state.activeWorkflow !== "boundary") {
+    if (state.activeWorkflow === "multitool") {
+      var f = _focusStep();
+      var step = f ? f.step : null;
+      if (step && step.region_ref) return normalizeRegionRef(step.region_ref);
+      if (step && step.region && state.regions[step.region]) return activeRegionRef(step.region);
+      return null;
+    }
+    if (state.activeWorkflow !== "boundary") {
       for (var i = state.runRegions.length - 1; i >= 0; i--) {
         var ref = normalizeRegionRef(state.runRegions[i]);
-        if (!ref || (skipFullFrame && ref.source === "full_frame")) continue;
+        if (!ref) continue;
         return ref;
       }
     }
@@ -293,11 +326,18 @@
     return !!(ref && ref.source !== "full_frame");
   }
 
-  // Bbox-relative contours of the previewed region as "u1,v1;u2,v2;…" (one
-  // segment per contour, joined with "|") for the preview endpoint's optional
-  // mask= param, or null for rect regions. A pending shaped draw carries
-  // canvas-pixel absolute contours — convert them against its own bbox; saved
-  // regions already store bbox-relative contours.
+  function _encodeMaskContours(contours) {
+    if (!contours || !contours.length) return null;
+    return contours
+      .map(function (contour) {
+        return contour
+          .map(function (pt) { return pt[0].toFixed(4) + "," + pt[1].toFixed(4); })
+          .join(";");
+      })
+      .join("|");
+  }
+
+  // Bbox-relative contours as "u,v;u,v|…" for mask=, or null for rects. Pending draws are canvas-absolute.
   function _regionMaskString() {
     var contours = null;
     if (state.pendingRegion) {
@@ -313,18 +353,10 @@
       var data = _regionObjectForRef(_previewRegionRef());
       if (data && data.points && data.points.length > 0) contours = data.points;
     }
-    if (!contours) return null;
-    return contours
-      .map(function (contour) {
-        return contour
-          .map(function (pt) { return pt[0].toFixed(4) + "," + pt[1].toFixed(4); })
-          .join(";");
-      })
-      .join("|");
+    return _encodeMaskContours(contours);
   }
 
-  // True when the previewed region is shaped but the active tool can only
-  // analyze its bounding rect (config-mirrored list).
+  // Shaped region but the tool only analyzes its bounding rect (config-mirrored list).
   function _maskFallbackActive() {
     if (CLIPGEN_CONFIG.screenspaceMaskFallbackTools.indexOf(state.activeWorkflow) === -1) {
       return false;
@@ -336,8 +368,7 @@
     return !!(data && data.points && data.points.length > 0);
   }
 
-  // Resolve a region ref to its stored {x,y,w,h} object (fractions of the
-  // frame). Returns null for full-frame / unresolved refs.
+  // Stored {x,y,w,h} (frame fractions) for a region ref; null for full-frame / unresolved.
   function _regionObjectForRef(ref) {
     var r = normalizeRegionRef(ref);
     if (!r || r.source === "full_frame") return null;
@@ -352,10 +383,7 @@
     return state.regions[r.name] || null;
   }
 
-  // Approximate pixel area (source resolution) of the region a color tool /
-  // multitool color step will analyze. `sfx` is "" for the single-tool panel or
-  // "_mt{idx}" for a multitool step. Returns null when the video size is unknown
-  // (caller then shows just the percentage). Full-frame / no region → frame area.
+  // Source-pixel area the color step analyzes; null when video size is unknown.
   function _colorRegionPixelArea(sfx) {
     var info = state.videoInfo;
     if (!info || !info.width || !info.height) return null;
@@ -379,9 +407,7 @@
     return Math.max(1, Math.round((r.w * info.width) * (r.h * info.height)));
   }
 
-  // Readout shown beside the "Min area %" slider: percentage plus the
-  // approximate matching-pixel count for the current region, or an explicit
-  // "any presence" note at 0% (no minimum size).
+  // "Min area %" readout: percentage plus approximate pixel count, or the 0% "any presence" note.
   function _updateMinAreaReadout(sfx) {
     sfx = sfx || "";
     var slider = qs("#paramColorMinArea" + sfx);
@@ -392,25 +418,46 @@
     );
   }
 
-  function _collectPreviewParams(tool) {
+  function _collectPreviewParams(tool, sfx) {
+    sfx = sfx || "";
     var out = {};
     if (tool === "color") {
-      var c = SS.getColorHiddenInputs();
-      if (c) {
+      var c = sfx
+        ? { h: qs("#paramColorH" + sfx), s: qs("#paramColorS" + sfx), v: qs("#paramColorV" + sfx) }
+        : SS.getColorHiddenInputs();
+      if (c && c.h && c.s && c.v) {
         out.h = c.h.value; out.s = c.s.value; out.v = c.v.value;
       }
     } else if (tool === "change") {
-      var n = qs("#paramChangeNoise");
+      var n = qs("#paramChangeNoise" + sfx);
       if (n) out.noise = n.value;
     } else if (tool === "flow") {
-      var m = qs("#paramFlowMag");
+      var m = qs("#paramFlowMag" + sfx);
       if (m) out.magnitude = m.value;
     } else if (tool === "text") {
-      var tp = qs("#paramTextOcrPreprocess");
+      var tp = qs("#paramTextOcrPreprocess" + sfx);
       if (tp && tp.checked) out.ocr_preprocess = "1";
     } else if (tool === "numbers") {
-      var np = qs("#paramNumOcrPreprocess");
+      var np = qs("#paramNumOcrPreprocess" + sfx);
       if (np && np.checked) out.ocr_preprocess = "1";
+    } else if (tool === "shape") {
+      var st = qs("#paramShapeThresh" + sfx);
+      if (st) out.threshold = st.value;
+      var smin = qs("#paramShapeScaleMin" + sfx);
+      if (smin) out.scale_min = (parseFloat(smin.value) || 0) / 100;
+      var smax = qs("#paramShapeScaleMax" + sfx);
+      if (smax) out.scale_max = (parseFloat(smax.value) || 0) / 100;
+      var sst = qs("#paramShapeSteps" + sfx);
+      if (sst) out.scale_steps = sst.value;
+      var slink = qs("#paramShapeLinkAxes" + sfx);
+      if (slink && !slink.checked) {
+        var symin = qs("#paramShapeScaleYMin" + sfx);
+        if (symin) out.scale_y_min = (parseFloat(symin.value) || 0) / 100;
+        var symax = qs("#paramShapeScaleYMax" + sfx);
+        if (symax) out.scale_y_max = (parseFloat(symax.value) || 0) / 100;
+        var systeps = qs("#paramShapeStepsY" + sfx);
+        if (systeps) out.scale_y_steps = systeps.value;
+      }
     } else if (tool === "attention") {
       var attnIds = {
         weight_spectral: "paramAttnWSpectral",
@@ -420,7 +467,7 @@
         center_bias: "paramAttnCenterBias",
       };
       Object.keys(attnIds).forEach(function (key) {
-        var input = qs("#" + attnIds[key]);
+        var input = qs("#" + attnIds[key] + sfx);
         if (input) out[key] = input.value;
       });
     }
@@ -432,6 +479,9 @@
     var meta = qs("#modelViewMeta");
     var img = qs("#modelViewImage");
     if (!meta || !img) return;
+    _updateFocusLabel();
+    // Clear the shimmer first so every early return starts flat; the fetch branch re-adds it.
+    meta.classList.remove("cg-shimmer");
 
     if (!state.selectedParticipant) {
       meta.textContent = "Select a participant to preview.";
@@ -440,26 +490,59 @@
     }
 
     var tool = state.activeWorkflow;
+    var toolKey = _previewToolKey();
+    var sfx = "";
+    var stepIdx = -1;
+    // Reference frame / upload: hub state for plain tools, per-step fields for multitool.
+    var refTs = state.referenceTimestamp;
+    var upload = state.uploadedTemplate;
+    if (tool === "multitool") {
+      // The server previews a plain tool; send the focused step as that tool.
+      var focus = _focusStep();
+      if (!focus || !focus.step.type) {
+        meta.textContent = "Add a step to see its preview.";
+        img.removeAttribute("src");
+        return;
+      }
+      tool = focus.step.type;
+      stepIdx = focus.idx;
+      sfx = "_mt" + stepIdx;
+      refTs = focus.step._refTs;
+      upload = focus.step._upload || null;
+    }
     var regionStr = _normalizedRegionString();
     var hasRegion = _hasActiveOrPendingRegion();
+    var overlayRegion = null;
+    if (hasRegion) {
+      var regionParts = regionStr.split(",").map(Number);
+      overlayRegion = {
+        x: regionParts[0], y: regionParts[1],
+        w: regionParts[2], h: regionParts[3],
+        source_width: 1,
+      };
+    }
 
-    if (tool === "template") {
-      if (state.uploadedTemplate && state.uploadedTemplate.data) {
-        // POST with template_image_data — region optional
-      } else if (state.referenceTimestamp != null) {
-        if (!hasRegion) {
-          meta.textContent = "Select or draw a region to preview the captured template.";
+    if (tool === "template" || tool === "shape") {
+      var snapRegion = !sfx && state.capturedRefPreview
+        && state.capturedRefPreview.ts === refTs
+        && state.capturedRefPreview.region;
+      if (upload && upload.data) {
+        // POST with the upload — region optional
+      } else if (refTs != null) {
+        // Shape's sample rides its capture region, so a Full-frame run target still previews.
+        if (!hasRegion && !snapRegion) {
+          meta.textContent = "Select or draw a region to preview the captured reference.";
           img.removeAttribute("src");
           return;
         }
       } else {
-        meta.textContent = "Capture a template region or upload a PNG to preview.";
+        meta.textContent = "Capture a reference region or upload a PNG to preview.";
         img.removeAttribute("src");
         return;
       }
     }
 
-    var params = _collectPreviewParams(tool);
+    var params = _collectPreviewParams(tool, sfx);
     var qsParts = ["tool=" + encodeURIComponent(tool)];
     if (regionStr) qsParts.push("region=" + regionStr);
     var maskStr = _regionMaskString();
@@ -474,15 +557,24 @@
       var prevTs = Math.max(0, (state.currentTimestamp || 0) - prevGap);
       qsParts.push("prev=" + prevTs.toFixed(3));
     }
-    if (tool === "similarity" && state.referenceTimestamp != null) {
-      qsParts.push("ref=" + Number(state.referenceTimestamp).toFixed(3));
+    if (tool === "similarity" && refTs != null) {
+      qsParts.push("ref=" + Number(refTs).toFixed(3));
     }
     if (
-      tool === "template" &&
-      state.referenceTimestamp != null &&
-      !(state.uploadedTemplate && state.uploadedTemplate.data)
+      (tool === "template" || tool === "shape") &&
+      refTs != null &&
+      !(upload && upload.data)
     ) {
-      qsParts.push("ref=" + Number(state.referenceTimestamp).toFixed(3));
+      qsParts.push("ref=" + Number(refTs).toFixed(3));
+      if (snapRegion) {
+        var capRect = (state.previewRegions || state.regions)[snapRegion];
+        if (capRect) {
+          qsParts.push("ref_region=" + [capRect.x, capRect.y, capRect.w, capRect.h]
+            .map(function (v) { return Number(v).toFixed(6); }).join(","));
+          var capMask = _encodeMaskContours(capRect.points);
+          if (capMask) qsParts.push("ref_mask=" + encodeURIComponent(capMask));
+        }
+      }
     }
     Object.keys(params).forEach(function (k) {
       qsParts.push(encodeURIComponent(k) + "=" + encodeURIComponent(params[k]));
@@ -493,10 +585,12 @@
     var url = "api/preview/" + encodeURIComponent(state.selectedParticipant)
       + "/" + ts + "?" + qsParts.join("&");
 
+    meta.classList.add("cg-shimmer");
     meta.textContent = "Loading preview…";
 
     function applyPreviewError() {
       if (gen !== _modelViewGen) return;
+      meta.classList.remove("cg-shimmer");
       meta.textContent = "Preview unavailable.";
       img.removeAttribute("src");
     }
@@ -510,14 +604,20 @@
       var u = URL.createObjectURL(blob);
       img._modelViewObjectUrl = u;
       img.src = u;
+      meta.classList.remove("cg-shimmer");
+      meta.textContent = previewMetaText();
+    }
+
+    function previewMetaText() {
       var metaText = MODEL_VIEW_META[tool] || "";
+      if (sfx) metaText = "Step " + (stepIdx + 1) + " · " + _capitalize(tool) + ". " + metaText;
       if (!hasRegion) {
         metaText = (metaText ? metaText + " " : "") + "(Full frame — no region selected.)";
       } else if (_maskFallbackActive()) {
         metaText = (metaText ? metaText + " " : "")
           + "(Shaped region: this tool analyzes the bounding box.)";
       }
-      meta.textContent = metaText;
+      return metaText;
     }
 
     function _refetchOverlayLayer() {
@@ -529,6 +629,8 @@
           state.overlayImageObjectUrl = null;
         }
         state.overlayImage = null;
+        state.overlayImageScope = null;
+        state.overlayImageRegion = null;
         state.overlayImageTimestamp = null;
         state.overlayImageTool = null;
         return;
@@ -549,14 +651,15 @@
           if (gen !== _modelViewGen) return;
           state.overlayImage = oi;
           state.overlayImageScope = resolved.scope;
+          state.overlayImageRegion = overlayRegion;
           state.overlayImageTimestamp = ts;
-          state.overlayImageTool = tool;
+          state.overlayImageTool = toolKey;
           SS.renderOverlay();
         };
         oi.src = ou;
       }
       if (useTemplatePost) {
-        apiPostBlob(layerUrl, { template_image_data: state.uploadedTemplate.data })
+        apiPostBlob(layerUrl, uploadPostBody())
           .then(fetchAsImage)
           .catch(function () { /* leave previous overlay image */ });
       } else {
@@ -566,9 +669,15 @@
       }
     }
 
-    var useTemplatePost = tool === "template" && state.uploadedTemplate && state.uploadedTemplate.data;
+    var useTemplatePost = (tool === "template" || tool === "shape") && upload && upload.data;
+    // Shape uploads ride their own field so the server routes them correctly.
+    function uploadPostBody() {
+      var body = {};
+      body[tool === "shape" ? "shape_image_data" : "template_image_data"] = upload.data;
+      return body;
+    }
     if (useTemplatePost) {
-      apiPostBlob(url, { template_image_data: state.uploadedTemplate.data })
+      apiPostBlob(url, uploadPostBody())
         .then(function (blob) {
           if (gen !== _modelViewGen) return;
           applyPreviewOkFromBlob(blob);
@@ -588,7 +697,8 @@
         img._modelViewObjectUrl = null;
       }
       img.src = tmp.src;
-      meta.textContent = MODEL_VIEW_META[tool] || "";
+      meta.classList.remove("cg-shimmer");
+      meta.textContent = previewMetaText();
       _refetchOverlayLayer();
     };
     tmp.onerror = function () {
@@ -597,13 +707,12 @@
     tmp.src = url;
   }
 
-  // ---- Publish to the hub + sibling satellites ----
-  // Entry points the hub calls through same-named delegators; the helpers below
-  // are destructured at load time by overlay (_overlayEligibleForActiveTool),
-  // multitool-params + tasks (_updateMinAreaReadout) and calibration
-  // (_previewRegionRef) — all of which load after this file.
+  // ---- Published to the hub; later satellites destructure the helpers at load ----
   SS.initModelView = initModelView;
+  SS.cycleOverlayLayer = cycleOverlayLayer;
   SS.refreshModelView = refreshModelView;
+  SS.setMultitoolFocus = setMultitoolFocus;
+  SS._previewToolKey = _previewToolKey;
   SS._updateOverlayUi = _updateOverlayUi;
   SS._overlayEligibleForActiveTool = _overlayEligibleForActiveTool;
   SS._updateMinAreaReadout = _updateMinAreaReadout;

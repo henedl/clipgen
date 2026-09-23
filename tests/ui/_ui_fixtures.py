@@ -68,7 +68,7 @@ def require_ffmpeg() -> None:
         raise UiUnavailable(
             f"{' and '.join(missing)} not found on PATH — the UI harness needs them "
             "to build its fixture videos.\n"
-            "  brew install ffmpeg    (or scripts/install-ffmpeg-ollama.sh)"
+            "  brew install ffmpeg    (or scripts/install-deps.sh)"
         )
 
 
@@ -257,8 +257,9 @@ def ensure_run_dirs() -> None:
     reseed cost nor loses state it just poked in through ``--eval``.
     """
     _make_run_dirs()
+    present = _read_manifest()
     for name in _MANIFESTS:
-        if not (OUTPUT_DIR / f"{name}_manifest.json").is_file():
+        if name not in present:
             _SEEDERS[name]()
 
 
@@ -312,27 +313,36 @@ def _seed_start_settings() -> None:
     )
 
 
-def _write(name: str, payload: dict[str, Any]) -> None:
-    """Write a manifest by absolute path.
+def _read_manifest() -> dict[str, Any]:
+    path = OUTPUT_DIR / "clipgen.json"
+    if not path.is_file():
+        return {}
+    return json.loads(path.read_text(encoding="utf-8"))
 
-    Not ``utils.save_json_manifest``: that resolves against
+
+def _write(section: str, payload: dict[str, Any]) -> None:
+    """Merge one section into the unified manifest by absolute path.
+
+    Not ``manifest.save_manifest_section``: that resolves against
     ``config.OUTPUT_DIR``, which would make seeding order-dependent on when the
     caller patched config.
     """
-    (OUTPUT_DIR / name).write_text(
-        json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8"
+    doc = _read_manifest()
+    doc[section] = payload
+    (OUTPUT_DIR / "clipgen.json").write_text(
+        json.dumps(doc, ensure_ascii=False, indent=2), encoding="utf-8"
     )
 
 
-# Every manifest below must be non-empty. Each subsystem's `_init_*_state` runs a
-# guarded persist on startup that DELETES a manifest it considers empty, and an
+# Every section below must be non-empty. Each subsystem's `_init_*_state` runs a
+# guarded persist on startup that DROPS a section it considers empty, and an
 # empty one also means the page renders its zero-state — which is not what a
 # smoke check wants to photograph.
 
 
 def _seed_screenspace() -> None:
     _write(
-        "screenspace_manifest.json",
+        "screenspace",
         {
             "regions": {
                 "toolbar": {
@@ -344,10 +354,36 @@ def _seed_screenspace() -> None:
                     "source_height": 240,
                 }
             },
-            # Empty on purpose: an active task makes the page open an SSE stream,
-            # which both defeats any settle heuristic and risks hanging teardown
-            # on the server's connection-thread join.
-            "tasks": [],
+            # Completed only, never queued/running/paused: an *active* task makes
+            # the page open an SSE stream, which both defeats any settle heuristic
+            # and risks hanging teardown on the server's connection-thread join.
+            # A completed task starts neither SSE nor the fallback poller (both
+            # gate on queued/running/paused) and restore_tasks keeps it verbatim,
+            # so the journeys can click it and read real results.
+            "tasks": [
+                {
+                    "id": "ss-ui-task-1",
+                    "type": "change",
+                    "name": "Change · toolbar",
+                    "participant": "P01",
+                    "source_video": f"{STUDY}_P01.mp4",
+                    "video_paths": [str(INPUT_DIR / f"{STUDY}_P01.mp4")],
+                    "region": "toolbar",
+                    # Pixel-space copy of the normalized region above (320×240).
+                    "region_coords": {"x": 16, "y": 12, "w": 128, "h": 48},
+                    "parameters": {},
+                    "status": "completed",
+                    "progress": 1.0,
+                    "priority": 100,
+                    "result": [
+                        {"timestamp": 2.0, "magnitude": 0.62},
+                        {"timestamp": 3.5, "magnitude": 0.47},
+                    ],
+                    "error": None,
+                    "created_at": "2026-01-05T12:00:00+00:00",
+                    "completed_at": "2026-01-05T12:01:00+00:00",
+                },
+            ],
             "events": [
                 {
                     "id": "ui-evt-1",
@@ -360,7 +396,10 @@ def _seed_screenspace() -> None:
                     "confidence": 0.82,
                     "metadata": {},
                     "excluded": False,
-                    "task_id": "",
+                    # Attached to the completed task so its results view and the
+                    # event agree; ui-evt-2 stays detached (it belongs to P02, and
+                    # a task is per-participant).
+                    "task_id": "ss-ui-task-1",
                     "region": "toolbar",
                 },
                 {
@@ -387,7 +426,7 @@ def _seed_screenspace() -> None:
 
 def _seed_transcripts() -> None:
     _write(
-        "transcripts_manifest.json",
+        "transcripts",
         {
             "source_transcripts": {
                 "P01": {
@@ -397,6 +436,16 @@ def _seed_transcripts() -> None:
                             "start": 0.0,
                             "end": 2.5,
                             "text": "Where is the export button.",
+                            # Per-word timing on one segment so the smoke renders
+                            # the karaoke path (data-ws spans); the others cover
+                            # the words-absent fallback.
+                            "words": [
+                                {"start": 0.0, "end": 0.4, "text": "Where"},
+                                {"start": 0.4, "end": 0.7, "text": "is"},
+                                {"start": 0.7, "end": 1.0, "text": "the"},
+                                {"start": 1.0, "end": 1.7, "text": "export"},
+                                {"start": 1.7, "end": 2.5, "text": "button."},
+                            ],
                         },
                         {
                             "id": "P01:1",
@@ -435,11 +484,11 @@ def _seed_transcripts() -> None:
 
 def _seed_composer() -> None:
     # composer_server never persists on init, so this one is not at risk of
-    # deletion — it exists purely so the cuts track renders non-empty.
+    # removal — it exists purely so the cuts track renders non-empty.
     # `markerSources` is left out and backfilled from the server's defaults
     # rather than hard-coding its private source list here.
     _write(
-        "composer_manifest.json",
+        "composer",
         {
             "cuts": [
                 {
@@ -458,10 +507,10 @@ def _seed_composer() -> None:
 
 def _seed_workflows() -> None:
     # BUILTIN_STASHES already make the stash library non-empty, but a *user*
-    # blueprint needs >=1 node or _is_empty_workflows_manifest deletes the file
+    # blueprint needs >=1 node or _is_empty_workflows_manifest drops the section
     # on init. Seeding one also suppresses the page's auto-POST of an "Untitled".
     _write(
-        "workflows_manifest.json",
+        "workflows",
         {
             "blueprints": [
                 {

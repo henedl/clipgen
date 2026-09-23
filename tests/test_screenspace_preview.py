@@ -134,6 +134,11 @@ def test_build_overlay_layer_shape_matches_scope(
         # Use a slice that includes the gradient (non-zero std) so the
         # heatmap layer can be computed.
         params["template_image"] = synthetic_frame[10:50, 10:50].copy()
+    elif tool == "shape":
+        # A drawn outline guarantees enough Canny edges at every ladder scale.
+        ref = np.zeros((40, 40, 3), dtype=np.uint8)
+        cv2.rectangle(ref, (5, 5), (35, 35), (255, 255, 255), 2)
+        params["shape_image"] = ref
     elif tool == "similarity":
         # The SSIM-diff layer needs a region-sized reference crop.
         params["reference_frame"] = prev_frame[
@@ -505,3 +510,16 @@ def test_overlay_scene_edges_thicken_with_region() -> None:
         f"larger region edges should be substantially denser due to dilation "
         f"(small={small_density:.3f}, large={large_density:.3f})"
     )
+
+
+def test_boundary_previews_the_phash_grid(
+    synthetic_frame: np.ndarray, region: dict[str, int]
+) -> None:
+    """Boundary is a valid task type; it shows the same bits pHash compares."""
+    boundary = screenspace_preview.build_preview(
+        synthetic_frame, None, region, "boundary", {}
+    )
+    inactivity = screenspace_preview.build_preview(
+        synthetic_frame, None, region, "inactivity", {}
+    )
+    assert np.array_equal(boundary, inactivity)

@@ -8,7 +8,7 @@
  *   .participant-pill     monospace participant toggle
  *   .density-timeline     SVG bars with tick labels + optional marker
  *   .spark-bars           flex bar chart, hue-driven
- *   .cg-btn               base button: ghost / solid / bare; sm / md / lg
+ *   .cg-btn               base button: ghost / solid / bare; sm / md / lg (Studio-only)
  *   .skeleton-grid        responsive skeleton row layout (pair with .skeleton cells)
  *
  * All transitions: var(--duration-instant) ease-out on bg/border/color only. Hit targets ≥28px.
@@ -34,7 +34,7 @@
   cursor: pointer;
   user-select: none;
   white-space: nowrap;
-  transition: background-color var(--duration-instant) ease-out, border-color var(--duration-instant) ease-out, color var(--duration-instant) ease-out;
+  transition: background-color var(--duration-instant) ease-out, border-color var(--duration-instant) ease-out, color var(--duration-instant) ease-out, transform var(--duration-instant);
 }
 .filter-chip:hover {
   border-color: var(--border-strong);
@@ -63,7 +63,7 @@
 .filter-chip-count {
   margin-left: 2px;
   font-family: var(--font-mono);
-  font-feature-settings: "tnum";
+  font-variant-numeric: tabular-nums;
   font-size: 10px;
   font-weight: 400;
   letter-spacing: 0;
@@ -89,11 +89,11 @@
   border-radius: var(--radius-sm);
   color: var(--fg-muted);
   font-family: var(--font-mono);
-  font-feature-settings: "tnum";
+  font-variant-numeric: tabular-nums;
   font-size: 11px;
   cursor: pointer;
   user-select: none;
-  transition: background-color var(--duration-instant) ease-out, border-color var(--duration-instant) ease-out, color var(--duration-instant) ease-out;
+  transition: background-color var(--duration-instant) ease-out, border-color var(--duration-instant) ease-out, color var(--duration-instant) ease-out, transform var(--duration-instant);
 }
 .participant-pill:hover {
   background: var(--bg-hover);
@@ -124,7 +124,7 @@
   justify-content: space-between;
   height: 12px;
   font-family: var(--font-mono);
-  font-feature-settings: "tnum";
+  font-variant-numeric: tabular-nums;
   font-size: 10px;
   color: var(--fg-faint);
 }
@@ -203,7 +203,7 @@
   line-height: 1;
   cursor: pointer;
   user-select: none;
-  transition: background-color var(--duration-instant) ease-out, border-color var(--duration-instant) ease-out, color var(--duration-instant) ease-out;
+  transition: background-color var(--duration-instant) ease-out, border-color var(--duration-instant) ease-out, color var(--duration-instant) ease-out, transform var(--duration-instant);
 }
 .cg-btn:hover { background: var(--bg-hover); }
 .cg-btn:focus-visible {
@@ -213,6 +213,13 @@
 .cg-btn:disabled {
   opacity: 0.5;
   cursor: not-allowed;
+}
+
+/* Press feedback; ungated by reduced motion like every press affordance. */
+.cg-btn:active:not(:disabled),
+.filter-chip:active:not(:disabled),
+.participant-pill:active:not(:disabled) {
+  transform: scale(var(--scale-press));
 }
 
 .cg-btn-sm { height: 24px; padding: 0 8px; font-size: 11.5px; }

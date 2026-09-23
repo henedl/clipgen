@@ -15,6 +15,7 @@ import pytest
 Flask = pytest.importorskip("flask").Flask
 
 import config
+import manifest as manifest_io
 import utils
 import workflows
 import workflows_server
@@ -42,7 +43,8 @@ def wf_client(wf_app, tmp_path, monkeypatch):
     monkeypatch.setattr(
         workflows_server, "_manifest", workflows.empty_workflows_manifest()
     )
-    monkeypatch.setattr(workflows_server, "_input_dir", str(tmp_path))
+    # The input dir is read live from config, not snapshotted on the module.
+    monkeypatch.setattr(config, "INPUT_DIR", str(tmp_path), raising=False)
     monkeypatch.setattr(workflows_server, "_sheet_context", None)
     monkeypatch.setattr(workflows_server, "_worksheet", None)
     # Reset run state so runners/SSE clients never leak across tests.
@@ -59,8 +61,7 @@ def wf_client(wf_app, tmp_path, monkeypatch):
     # Chaining-trigger baselines + mtime caches (W7).
     monkeypatch.setattr(workflows_server, "_watch_transcript_baseline", {})
     monkeypatch.setattr(workflows_server, "_watch_scan_seen", set())
-    monkeypatch.setattr(workflows_server, "_watch_transcript_cache", (-1.0, {}))
-    monkeypatch.setattr(workflows_server, "_watch_scan_cache", (-1.0, {}))
+    monkeypatch.setattr(workflows_server, "_watch_memo", {})
     # Sandbox save_workflows_manifest's write into tmp (it targets the output dir).
     monkeypatch.setattr(config, "OUTPUT_DIR", str(tmp_path), raising=False)
 
@@ -81,7 +82,7 @@ def _wait_terminal(client, run_id, timeout=5.0):
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         run = client.get(f"/workflows/api/runs/{run_id}").get_json()["run"]
-        if run["status"] in ("completed", "failed", "cancelled"):
+        if run["status"] in ("completed", "degraded", "failed", "cancelled"):
             return run
         time.sleep(0.02)
     raise AssertionError(f"run {run_id} did not finish within {timeout}s")
@@ -95,6 +96,22 @@ def test_page_serves(wf_client):
     body = resp.get_data(as_text=True)
     assert 'data-frontend="workflows"' in body
     assert "workflows.js" in body
+
+
+def test_node_context_follows_the_live_input_dir(wf_client, tmp_path, monkeypatch):
+    """Both dirs resolve per run, not at blueprint init.
+
+    _init_workflows_state runs once, from build_combined_app, and the Start
+    overlay's folder picker moves config.INPUT_DIR long afterwards — a snapshot
+    taken at init pointed every run at the process's launch directory.
+    """
+    picked = tmp_path / "picked-later"
+    picked.mkdir()
+    monkeypatch.setattr(config, "INPUT_DIR", str(picked))
+
+    ctx = workflows_server._build_node_context(threading.Event())
+
+    assert ctx.input_dir == picked
 
 
 def test_blueprints_empty_by_default(wf_client):
@@ -139,8 +156,9 @@ def test_catalog_returns_serializable_node_types(wf_client):
     # ss_scan with ten per-detector nodes; ss_scan must be gone).
     assert {"transcribe", "ss_text", "ss_color", "make_clips", "gate"} <= ids
     assert "ss_scan" not in ids
-    # P2 catalog tranche additions.
-    assert {"highlights", "multitool", "timelapse", "heatmap", "measure"} <= ids
+    # P2 catalog tranche additions (measure was later folded into gate_collection).
+    assert {"highlights", "multitool", "timelapse", "heatmap", "gate_collection"} <= ids
+    assert "measure" not in ids
     # P2 follow-ups: manual time-range source + the clipRecords→timeRange adapter.
     assert "time_range" in ids
     assert ("clipRecords", "timeRange") in workflows.ADAPTERS
@@ -152,6 +170,7 @@ def test_catalog_returns_serializable_node_types(wf_client):
         "sheet",
         "videoDir",
         "participants",
+        "regions",
         "outputDir",
         "triggerTypes",
     }
@@ -222,6 +241,106 @@ def test_catalog_serves_artifact_padding_params(wf_client):
         assert max_spec["min"] == 0
 
 
+def test_catalog_serves_param_editor_metadata(wf_client):
+    # The parameter-quality layer: conditional visibility (showIf), numeric
+    # field metadata for filter/partition value editors, the region picker
+    # param type, and completion sources for free-text params.
+    catalog = wf_client.get("/workflows/api/catalog").get_json()["catalog"]
+    by_id = {n["id"]: n for n in catalog}
+
+    def _param(node_id, name):
+        return next(p for p in by_id[node_id]["params"] if p["name"] == name)
+
+    # showIf hides knobs that don't apply to the current selection.
+    assert _param("heatmap", "frames")["showIf"] == {"param": "output", "not": "image"}
+    assert _param("heatmap", "window")["showIf"] == {
+        "param": "output",
+        "equals": "rolling_gif",
+    }
+    assert _param("make_clips", "titlecard_duration")["showIf"] == {
+        "param": "titlecards",
+        "equals": True,
+    }
+    assert _param("interval_captures", "gif_duration")["showIf"] == {
+        "param": "output_format",
+        "equals": "gif",
+    }
+    assert _param("ss_numbers", "range_min")["showIf"] == {
+        "param": "operator",
+        "equals": "range",
+    }
+    for name in ("field2", "op2", "value2"):
+        assert _param("filter_events", name)["showIf"] == {
+            "param": "combine",
+            "not": "off",
+        }
+
+    # Predicate field enums carry their numeric subset; the value editor points
+    # at its field enum. Text-first kinds default the op to "contains" so a
+    # fresh node doesn't order-compare text (which drops everything).
+    assert _param("filter_events", "field")["numericChoices"] == [
+        "confidence",
+        "duration",
+        "start",
+    ]
+    assert _param("filter_segments", "field")["numericChoices"] == [
+        "duration",
+        "start",
+    ]
+    assert _param("filter_events", "value")["numericFor"] == "field"
+    assert _param("filter_segments", "op")["default"] == "contains"
+    assert _param("filter_events", "op")["default"] == ">="
+
+    # Region picker type + free-text completion sources.
+    assert _param("region", "name")["type"] == "region"
+    assert "auto" in _param("transcribe", "language")["suggestions"]
+    assert _param("summarize", "model")["datalist"] == "llm-models"
+
+
+def test_catalog_serves_coverage_gap_nodes(wf_client):
+    # PR 3 of the workflows review: every app capability with backend support
+    # gets a node — the attention detector (+ heatmap style), the report agent,
+    # transcript marks, post-processing, and the gallery viewer.
+    catalog = wf_client.get("/workflows/api/catalog").get_json()["catalog"]
+    by_id = {n["id"]: n for n in catalog}
+
+    def _param(node_id, name):
+        return next(p for p in by_id[node_id]["params"] if p["name"] == name)
+
+    assert {
+        "ss_attention",
+        "report",
+        "transcript_marks",
+        "post_process",
+        "gallery_viewer",
+    } <= set(by_id)
+    assert "attention" in _param("detect", "detector")["choices"]
+    assert "attention" in _param("heatmap", "style")["choices"]
+    assert by_id["ss_attention"].get("multitoolStep") is False
+    assert by_id["report"]["outputs"] == [{"name": "report", "type": "report"}]
+    # Marks category enum stays in lockstep with config.MARK_CATEGORIES.
+    assert set(_param("transcript_marks", "category")["choices"]) == {""} | set(
+        config.MARK_CATEGORIES
+    )
+    # Post-process op-specific knobs hide behind their operation.
+    assert _param("post_process", "target_mb")["showIf"] == {
+        "param": "operation",
+        "equals": "compress",
+    }
+
+
+def test_catalog_context_serves_region_names(wf_client, monkeypatch):
+    import screenspace
+
+    monkeypatch.setattr(
+        screenspace,
+        "load_screenspace_manifest",
+        lambda: {"regions": {"timer": {"x": 0.1}, "chat": {"x": 0.2}}},
+    )
+    ctx = wf_client.get("/workflows/api/catalog").get_json()["context"]
+    assert ctx["regions"] == ["chat", "timer"]
+
+
 def test_catalog_flags_multitool_step_detectors(wf_client):
     # The Multitool step editor derives its step types from the catalog's
     # multitoolStep flag (no hardcoded JS list): the six per-frame detectors carry
@@ -234,7 +353,7 @@ def test_catalog_flags_multitool_step_detectors(wf_client):
 
 
 def test_catalog_serves_collection_ops(wf_client):
-    # The collection-algebra control nodes (filter/merge/partition/limit/dedup) are
+    # The collection-algebra control nodes (filter/merge/limit/dedup) are
     # per-type families grouped under "Collection". Ports must be exact-typed
     # (same wire type in/out) so no adapter is needed, and the predicate value /
     # limit take params carry required:true for the validation panel.
@@ -243,7 +362,7 @@ def test_catalog_serves_collection_ops(wf_client):
 
     expected = {
         f"{op}_{k}"
-        for op in ("filter", "partition", "merge", "limit")
+        for op in ("filter", "merge", "limit")
         for k in ("events", "clips", "segments", "timerange", "artifacts")
     }
     # dedup is span-based -> events + clips + time ranges (no segments/artifacts).
@@ -261,15 +380,14 @@ def test_catalog_serves_collection_ops(wf_client):
     assert by_id["filter_timerange"]["outputs"][0]["type"] == "timeRange"
 
     # filter_events: events -> events (exact type, no coercion), value required.
+    # The second `unmatched` output is the old partition family folded in — the
+    # gate's data-level else branch, same type as the input.
     fe = by_id["filter_events"]
     assert [p["type"] for p in fe["inputs"]] == ["events"]
-    assert [p["type"] for p in fe["outputs"]] == ["events"]
+    assert [p["name"] for p in fe["outputs"]] == ["out", "unmatched"]
+    assert {p["type"] for p in fe["outputs"]} == {"events"}
     assert next(p for p in fe["params"] if p["name"] == "value")["required"] is True
-
-    # partition emits two outputs of the input's type (the gate's data-level else).
-    pc = by_id["partition_clips"]
-    assert [p["name"] for p in pc["outputs"]] == ["matched", "unmatched"]
-    assert {p["type"] for p in pc["outputs"]} == {"clipRecords"}
+    assert "partition_clips" not in by_id
 
     # merge takes 2-3 same-typed inputs (in2/in3 optional) into one output.
     ms = by_id["merge_segments"]
@@ -357,17 +475,17 @@ def test_zero_interaction_launch_writes_no_manifest(wf_client, tmp_path):
     # node-less blueprint must not drop a manifest file in the output dir.
     resp = wf_client.post("/workflows/api/blueprints", json={})
     assert resp.status_code == 200
-    assert not (tmp_path / config.WORKFLOWS_MANIFEST_FILENAME).exists()
+    assert not (tmp_path / config.MANIFEST_FILENAME).exists()
 
 
 def test_blueprint_with_node_persists_manifest(wf_client, tmp_path):
     _make_blueprint(wf_client, nodes=[{"id": "n1", "type": "video_source"}])
-    assert (tmp_path / config.WORKFLOWS_MANIFEST_FILENAME).is_file()
+    assert (tmp_path / config.MANIFEST_FILENAME).is_file()
 
 
 def test_emptying_blueprint_removes_manifest(wf_client, tmp_path):
     bp_id = _make_blueprint(wf_client, nodes=[{"id": "n1", "type": "video_source"}])
-    manifest = tmp_path / config.WORKFLOWS_MANIFEST_FILENAME
+    manifest = tmp_path / config.MANIFEST_FILENAME
     assert manifest.is_file()
     # Clear the graph back to empty (the autosave PUT shape) → file reclaimed.
     wf_client.put(f"/workflows/api/blueprints/{bp_id}", json={"nodes": [], "edges": []})
@@ -415,7 +533,7 @@ def test_blueprint_update_and_delete_404_on_missing(wf_client):
     assert wf_client.delete("/workflows/api/blueprints/bp_missing").status_code == 404
 
 
-# ---- Stash CRUD (M5) + built-in recipes (P4) ----
+# ---- Stash CRUD + built-in recipes ----
 
 
 def test_stashes_default_to_builtins_only(wf_client):
@@ -554,12 +672,12 @@ def test_stash_write_preserves_blueprints_and_runs(wf_client):
 
 
 def test_run_executes_small_dag(wf_client, monkeypatch):
-    # No real media/Whisper/Ollama: empty video paths short-circuit transcribe to
-    # a stub, and Ollama is forced unavailable so summarize returns "".
+    # No real media/Whisper/LLM: empty video paths short-circuit transcribe to
+    # a stub, and the AI server is forced unavailable so summarize returns "".
     monkeypatch.setattr(config, "DEBUGGING", True, raising=False)
-    import ollama_client
+    import llm_client
 
-    monkeypatch.setattr(ollama_client, "is_available", lambda: False)
+    monkeypatch.setattr(llm_client, "ensure_server", lambda: False)
 
     bp_id = _make_blueprint(
         wf_client,
@@ -580,8 +698,34 @@ def test_run_executes_small_dag(wf_client, monkeypatch):
     assert run["blueprintId"] == bp_id
 
     final = _wait_terminal(wf_client, run["id"])
-    assert final["status"] == "completed"
-    assert {n["status"] for n in final["nodeStates"].values()} == {"completed"}
+    # ensure_server is mocked down, so the summary node is degraded.
+    assert final["status"] == "degraded"
+    assert final["nodeStates"]["s"]["status"] == "degraded"
+
+
+def test_run_is_an_operation_record(wf_client, monkeypatch):
+    """The run's id, outcome and node spans land in one operation record."""
+    import profiling
+
+    monkeypatch.setattr(config, "DEBUGGING", True, raising=False)
+    monkeypatch.setattr(config, "PROFILING", True)
+    profiling.ops_reset()
+    bp_id = _make_blueprint(
+        wf_client,
+        nodes=[{"id": "v", "type": "video_source", "params": {"participant": "P01"}}],
+        edges=[],
+    )
+    run = wf_client.post("/workflows/api/runs", json={"blueprintId": bp_id}).get_json()[
+        "run"
+    ]
+    final = _wait_terminal(wf_client, run["id"])
+    recent = {r["id"]: r for r in profiling.operations()["recent"]}
+    rec = recent[run["id"]]
+    assert rec["kind"] == "workflow_run"
+    assert rec["outcome"] == final["status"]
+    assert "workflows.run" in rec["measures"]
+    assert "workflows.node video_source" in rec["measures"]
+    profiling.ops_reset()
 
 
 def test_run_rejects_cycle_with_400(wf_client):
@@ -1026,7 +1170,7 @@ def test_batch_children_survive_run_history_cap(wf_client, monkeypatch):
     assert wf_client.get(f"/workflows/api/runs/{loose_ids[0]}").status_code == 404
 
 
-# ---- Per-node result sidecars (P5) ----
+# ---- Per-node result sidecars ----
 
 
 def test_node_result_endpoint_serves_sidecar(wf_client, monkeypatch):
@@ -1079,7 +1223,7 @@ def test_node_result_sidecars_pruned_with_history(wf_client, monkeypatch):
     )
 
 
-# ---- Watch-dir triggers (P6) ----
+# ---- Auto-run triggers ----
 
 
 def _video_source_blueprint(client, participant="P01"):
@@ -1113,7 +1257,7 @@ def _mock_discovery(monkeypatch, entries, stats):
     monkeypatch.setattr(utils, "discover_participant_videos", lambda *a, **k: entries)
     monkeypatch.setattr(
         workflows_server,
-        "_stat_first_video",
+        "_stat_videos",
         lambda paths: stats.get(paths[0]) if paths else None,
     )
 
@@ -1218,9 +1362,7 @@ def test_watch_unstable_stat_does_not_fire(wf_client, monkeypatch):
     monkeypatch.setattr(
         utils, "discover_participant_videos", lambda *a, **k: [_entry("P01")]
     )
-    monkeypatch.setattr(
-        workflows_server, "_stat_first_video", lambda paths: next(sizes)
-    )
+    monkeypatch.setattr(workflows_server, "_stat_videos", lambda paths: next(sizes))
     workflows_server._watch_poll_once()
     workflows_server._watch_poll_once()
     assert calls == []  # never stable across two polls
@@ -1248,6 +1390,34 @@ def test_arming_reseeds_so_backlog_never_fires(wf_client, monkeypatch):
     workflows_server._watch_poll_once()
     workflows_server._watch_poll_once()
     assert calls == []
+
+
+def test_arming_one_type_leaves_another_types_pending_arrival_alone(
+    wf_client, monkeypatch
+):
+    # Arming re-baselines only the type being armed. A blanket re-seed marked a
+    # video that was mid-partial-copy (pending its second stable stat for the
+    # already-armed new_video trigger) as seen, so it never fired.
+    calls = _record_launches(monkeypatch)
+    watcher = _video_source_blueprint(wf_client)
+    chained = _video_source_blueprint(wf_client)
+    _mock_discovery(monkeypatch, [_entry("P01")], {"P01": (100, 1.0)})
+
+    wf_client.put(
+        f"/workflows/api/blueprints/{watcher}/trigger",
+        json={"enabled": True, "type": "new_video"},
+    )
+    _mock_discovery(monkeypatch, [_entry("P02")], {"P02": (100, 1.0)})
+    workflows_server._watch_poll_once()  # P02 recorded as pending, not yet fired
+    assert calls == []
+
+    wf_client.put(
+        f"/workflows/api/blueprints/{chained}/trigger",
+        json={"enabled": True, "type": "transcript_complete"},
+    )
+
+    workflows_server._watch_poll_once()  # P02 still pending -> now stable -> fires
+    assert [c[1] for c in calls] == ["P02"]
 
 
 def test_watch_two_armed_is_ambiguous_and_skips(wf_client, monkeypatch):
@@ -1305,9 +1475,9 @@ def test_watch_multipart_fires_once(wf_client, monkeypatch):
 
 def test_resume_seeds_completed_nodes_and_reruns_failed(wf_client, monkeypatch):
     monkeypatch.setattr(config, "DEBUGGING", True, raising=False)
-    import ollama_client
+    import llm_client
 
-    monkeypatch.setattr(ollama_client, "is_available", lambda: False)
+    monkeypatch.setattr(llm_client, "ensure_server", lambda: False)
 
     calls = {"transcribe": 0, "summarize": 0}
     real_transcribe = workflows.NODE_TYPES["transcribe"]["execute"]
@@ -1318,7 +1488,7 @@ def test_resume_seeds_completed_nodes_and_reruns_failed(wf_client, monkeypatch):
 
     def failing_summarize(ctx, inputs, params):
         calls["summarize"] += 1
-        raise RuntimeError("ollama exploded")
+        raise RuntimeError("llm exploded")
 
     monkeypatch.setitem(
         workflows.NODE_TYPES["transcribe"], "execute", counting_transcribe
@@ -1406,8 +1576,8 @@ def _arm(client, bp_id, trigger_type):
 
 def _write_transcripts_manifest(entries):
     """Write a minimal transcripts manifest: {pid: transcribed_at}."""
-    utils.save_json_manifest(
-        config.TRANSCRIPTS_MANIFEST_FILENAME,
+    manifest_io.save_manifest_section(
+        "transcripts",
         {
             "source_transcripts": {
                 pid: {"segments": [], "transcribed_at": stamp}
@@ -1419,8 +1589,8 @@ def _write_transcripts_manifest(entries):
 
 def _write_screenspace_manifest(tasks):
     """Write a minimal screenspace manifest: [(task_id, participant, status)]."""
-    utils.save_json_manifest(
-        config.SCREENSPACE_MANIFEST_FILENAME,
+    manifest_io.save_manifest_section(
+        "screenspace",
         {
             "tasks": [
                 {"id": tid, "participant": pid, "status": status}
@@ -1508,21 +1678,23 @@ def test_transcript_markers_mtime_gate_skips_reparse(wf_client, monkeypatch):
     _write_transcripts_manifest({"P01": "2026-07-19T09:00:00+00:00"})
 
     parses = {"n": 0}
-    real_load = utils.load_json_manifest
+    real_load = manifest_io.load_manifest_section
 
-    def counting_load(filename, **kw):
-        if filename == config.TRANSCRIPTS_MANIFEST_FILENAME:
+    def counting_load(section, **kw):
+        if section == "transcripts":
             parses["n"] += 1
-        return real_load(filename, **kw)
+        return real_load(section, **kw)
 
-    monkeypatch.setattr(utils, "load_json_manifest", counting_load)
+    monkeypatch.setattr(manifest_io, "load_manifest_section", counting_load)
     workflows_server._watch_poll_once()
-    first = parses["n"]
-    assert first >= 1
-    # Unchanged file → the next polls never re-parse it.
+    assert parses["n"] >= 1
+    # The fired trigger persisted a run, so one more poll may re-read the file;
+    # after that, an unchanged manifest is never re-parsed.
+    workflows_server._watch_poll_once()
+    settled = parses["n"]
     workflows_server._watch_poll_once()
     workflows_server._watch_poll_once()
-    assert parses["n"] == first
+    assert parses["n"] == settled
 
 
 def test_disarm_uses_blueprints_current_type(wf_client):
@@ -1667,8 +1839,8 @@ def test_legacy_trigger_types_load_as_disarmed(wf_client):
     # A Phase-2 manifest can carry {"type": "watch_dir", "enabled": true}; the
     # watcher only fires known TRIGGER_TYPES, so the loader must read unknown
     # types as disarmed — an "armed" toolbar state that never fires is a lie.
-    utils.save_json_manifest(
-        config.WORKFLOWS_MANIFEST_FILENAME,
+    manifest_io.save_manifest_section(
+        "workflows",
         {
             "blueprints": [
                 {
@@ -1694,3 +1866,163 @@ def test_legacy_trigger_types_load_as_disarmed(wf_client):
     by_id = {b["id"]: b for b in manifest["blueprints"]}
     assert by_id["bp_old"]["trigger"] is None
     assert by_id["bp_new"]["trigger"] == {"type": "scan_event", "enabled": True}
+
+
+def test_watch_waits_for_every_part_to_stabilize(wf_client, monkeypatch, tmp_path):
+    """A later recording part still being copied must hold the trigger.
+
+    Real stat calls on temp files: part 1 sits still while part 2 keeps growing,
+    then everything settles and exactly one launch fires.
+    """
+    import os
+
+    calls = _record_launches(monkeypatch)
+    bp = _video_source_blueprint(wf_client)
+    wf_client.put(f"/workflows/api/blueprints/{bp}/trigger", json={"enabled": True})
+    part1 = tmp_path / "study_P01-1.mp4"
+    part2 = tmp_path / "study_P01-2.mp4"
+    part1.write_bytes(b"a" * 100)
+    part2.write_bytes(b"b" * 10)
+    entry = {"id": "P01", "has_video": True, "video_paths": [str(part1), str(part2)]}
+    monkeypatch.setattr(utils, "discover_participant_videos", lambda *a, **k: [entry])
+
+    workflows_server._watch_poll_once()  # first sight
+    with part2.open("ab") as fh:
+        fh.write(b"b" * 50)
+    os.utime(part2, (1, 2))  # a distinct mtime whatever the clock resolution
+    workflows_server._watch_poll_once()  # part 2 changed -> not stable
+    assert calls == []
+    workflows_server._watch_poll_once()  # both still -> fires once
+    assert [c[1] for c in calls] == ["P01"]
+    workflows_server._watch_poll_once()
+    assert len(calls) == 1
+
+
+def test_watch_new_part_appearing_resets_stability(wf_client, monkeypatch, tmp_path):
+    calls = _record_launches(monkeypatch)
+    bp = _video_source_blueprint(wf_client)
+    wf_client.put(f"/workflows/api/blueprints/{bp}/trigger", json={"enabled": True})
+    part1 = tmp_path / "study_P01-1.mp4"
+    part1.write_bytes(b"a" * 100)
+    paths = [str(part1)]
+    entry = {"id": "P01", "has_video": True, "video_paths": paths}
+    monkeypatch.setattr(utils, "discover_participant_videos", lambda *a, **k: [entry])
+
+    workflows_server._watch_poll_once()
+    part2 = tmp_path / "study_P01-2.mp4"
+    part2.write_bytes(b"b" * 10)
+    paths.append(str(part2))  # membership changed between polls
+    workflows_server._watch_poll_once()
+    assert calls == []
+    workflows_server._watch_poll_once()
+    assert len(calls) == 1
+
+
+def test_batch_precompute_skips_gated_sheet_selection(wf_client, monkeypatch):
+    """A Sheet Selection behind a gate is left to the children; an ungated one
+    is still computed exactly once for the whole batch."""
+    calls: list[str] = []
+
+    def counting(ctx, inputs, params):
+        calls.append(params.get("tag", ""))
+        return {"clips": {"records": [], "study": "s"}}
+
+    monkeypatch.setitem(workflows.NODE_TYPES["sheet_selection"], "execute", counting)
+    blueprint = {
+        "id": "bp",
+        "nodes": [
+            {"id": "g", "type": "gate_collection", "params": {"threshold": 1}},
+            {"id": "gated", "type": "sheet_selection", "params": {"tag": "gated"}},
+            {"id": "free", "type": "sheet_selection", "params": {"tag": "free"}},
+        ],
+        "edges": [
+            {"from": "g", "fromPort": "pass", "to": "gated", "toPort": "__gate__"}
+        ],
+    }
+    seeds = workflows_server._precompute_shared_nodes(
+        blueprint, workflows_server._build_node_context(threading.Event())
+    )
+    assert set(seeds) == {"free"}
+    assert calls == ["free"]
+
+
+def test_batch_child_honours_closed_gate_like_a_normal_run(wf_client, monkeypatch):
+    """The same graph must skip a gated Sheet Selection in both execution modes."""
+    monkeypatch.setattr(config, "DEBUGGING", True, raising=False)
+    monkeypatch.setitem(
+        workflows.NODE_TYPES["sheet_selection"],
+        "execute",
+        lambda ctx, inputs, params: {"clips": {"records": [], "study": "s"}},
+    )
+    blueprint = {
+        "id": "bp",
+        "nodes": [
+            {"id": "g", "type": "gate_collection", "params": {"threshold": 1}},
+            {"id": "sel", "type": "sheet_selection", "params": {}},
+        ],
+        "edges": [{"from": "g", "fromPort": "pass", "to": "sel", "toPort": "__gate__"}],
+    }
+    ctx = workflows_server._build_node_context(threading.Event())
+    normal = workflows.WorkflowRunner("run_n", blueprint, ctx)
+    normal.run()
+    seeds = workflows_server._precompute_shared_nodes(blueprint, ctx)
+    child = workflows.WorkflowRunner("run_c", blueprint, ctx, seed_results=seeds)
+    child.run()
+    assert normal.node_states["sel"]["status"] == "skipped"
+    assert child.node_states["sel"]["status"] == "skipped"
+    assert "sel" not in child._results
+    # Open the gate: both run it.
+    blueprint["nodes"][0]["params"]["threshold"] = 0
+    open_run = workflows.WorkflowRunner("run_o", blueprint, ctx)
+    open_run.run()
+    assert open_run.node_states["sel"]["status"] == "completed"
+
+
+def test_resume_reruns_an_upstream_node_edited_since(wf_client, monkeypatch):
+    """Editing a completed upstream node before resuming invalidates its seed."""
+    monkeypatch.setattr(config, "DEBUGGING", True, raising=False)
+    calls = {"transcribe": 0, "summarize": 0}
+    real_transcribe = workflows.NODE_TYPES["transcribe"]["execute"]
+
+    def counting_transcribe(ctx, inputs, params):
+        calls["transcribe"] += 1
+        return real_transcribe(ctx, inputs, params)
+
+    def summarize(ctx, inputs, params):
+        calls["summarize"] += 1
+        if calls["summarize"] == 1:
+            raise RuntimeError("llm exploded")
+        return {"summary": {"text": "ok", "bullets": []}}
+
+    monkeypatch.setitem(
+        workflows.NODE_TYPES["transcribe"], "execute", counting_transcribe
+    )
+    monkeypatch.setitem(workflows.NODE_TYPES["summarize"], "execute", summarize)
+    nodes = [
+        {"id": "v", "type": "video_source", "params": {"participant": "P01"}},
+        {"id": "t", "type": "transcribe", "params": {"model": "tiny"}},
+        {"id": "s", "type": "summarize", "params": {}},
+    ]
+    edges = [
+        {"from": "v", "fromPort": "video", "to": "t", "toPort": "video"},
+        {"from": "t", "fromPort": "transcript", "to": "s", "toPort": "transcript"},
+    ]
+    bp = _make_blueprint(wf_client, nodes=nodes, edges=edges)
+    first = wf_client.post("/workflows/api/runs", json={"blueprintId": bp}).get_json()[
+        "run"
+    ]
+    assert _wait_terminal(wf_client, first["id"])["status"] == "failed"
+    assert calls["transcribe"] == 1
+
+    nodes[1]["params"] = {"model": "base"}  # the user edits the upstream node
+    wf_client.put(
+        f"/workflows/api/blueprints/{bp}", json={"nodes": nodes, "edges": edges}
+    )
+    resumed = wf_client.post(
+        "/workflows/api/runs", json={"blueprintId": bp, "resumeFromRunId": first["id"]}
+    ).get_json()["run"]
+    final = _wait_terminal(wf_client, resumed["id"])
+    assert final["status"] == "completed"
+    assert calls["transcribe"] == 2  # re-ran with the new params
+    assert "Reused from run" in (final["nodeStates"]["v"]["note"] or "")
+    assert "Reused from run" not in (final["nodeStates"]["t"]["note"] or "")

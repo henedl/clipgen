@@ -32,10 +32,6 @@
   var SNAP_KEY = "clipgenWfSnap";
   var SNAP_TOL = 8; // screen px within which a dragged edge snaps to a neighbor
 
-  function clamp(v, lo, hi) {
-    return v < lo ? lo : v > hi ? hi : v;
-  }
-
   function randomId() {
     return Math.random().toString(36).slice(2, 10);
   }
@@ -67,16 +63,12 @@
     });
   }
 
-  // Synchronously write the world transform + grid offset from the current
-  // viewport. Split out of applyViewport so the node-drag flush (already in a
-  // RAF) can apply an auto-pan transform in the SAME frame it positions the
-  // cards — deferring it would paint cards one pan-step ahead of the world.
+  // Synchronous twin of applyViewport: the drag flush must pan and place cards in one frame.
   function writeViewport() {
     var world = qs("#wfWorld");
     var canvas = qs("#wfCanvas");
     var vp = state.viewport;
-    // One transform on #wfWorld pans/zooms both the cards and the nested wire
-    // layer in lockstep (no per-path recompute on pan/zoom — only on node move).
+    // One transform on #wfWorld moves cards and wires together; wires recompute only on node move.
     var t = "translate(" + vp.x + "px," + vp.y + "px) scale(" + vp.zoom + ")";
     if (world) world.style.transform = t;
     if (canvas) {
@@ -84,12 +76,11 @@
       canvas.style.backgroundSize = g + "px " + g + "px";
       canvas.style.backgroundPosition = vp.x + "px " + vp.y + "px";
     }
-    // The wire-delete button is screen-positioned, so reposition it when the
-    // viewport changes (wires themselves move with the SVG transform).
+    // The wire-delete button is screen-positioned; wires move with the SVG transform.
     if (WF.refreshWireDelete) WF.refreshWireDelete();
-    // Zoom % readout beside the minimap zoom buttons (click resets to 100%).
-    // writeViewport is the single chokepoint every pan/zoom path funnels
-    // through, so the readout can never go stale.
+    // The participant menu is mounted on <body> and would stay behind; close it here.
+    if (WF.closeParticipantMenu) WF.closeParticipantMenu();
+    // Zoom readout. Every pan/zoom path funnels through writeViewport, so it never goes stale.
     var zoomLevel = qs("#wfZoomLevel");
     if (zoomLevel) zoomLevel.textContent = Math.round(vp.zoom * 100) + "%";
     // Pan/zoom moved the viewport rectangle — redraw the minimap to match.
@@ -122,8 +113,7 @@
 
   function onDrop(e) {
     if (!state.ready) return;
-    // A stash drop instantiates a whole sub-graph (the stashes satellite remaps
-    // ids); a node-type drop creates one card. Try the stash MIME first.
+    // A stash drop instantiates a sub-graph, a node-type drop one card; try stash first.
     var stashId = e.dataTransfer.getData("application/x-wf-stash");
     if (stashId) {
       e.preventDefault();
@@ -163,16 +153,14 @@
 
   function onCanvasMouseDown(e) {
     if (!state.ready) return;
-    // Middle button → pan (grab to navigate), anywhere on the canvas — a
-    // navigation gesture shouldn't depend on hitting empty space.
+    // Middle button pans anywhere, not only on empty space.
     if (e.button === 1) {
       e.preventDefault(); // suppress middle-click autoscroll
       startPan(e);
       return;
     }
     if (e.button !== 0) return;
-    // Space-hold turns left-drag into a pan (trackpad-friendly navigation);
-    // marquee keeps owning bare left-drag on empty canvas.
+    // Space-hold turns left-drag into a pan; bare left-drag stays marquee.
     if (_spaceHeld) {
       e.preventDefault();
       startPan(e);
@@ -183,13 +171,10 @@
       startMarquee(e);
       return;
     }
-    // The floating wire-delete button handles its own click — don't let the
-    // mousedown fall through to a gesture handler (startNodeDrag/startMarquee),
-    // whose e.preventDefault() would swallow the button's click.
+    // The floating wire-delete button handles its own click; a gesture handler's
+    // e.preventDefault() would swallow it.
     if (t.closest("#wfWireDelete")) return;
-    // Likewise the floating minimap + its zoom controls: let them handle their
-    // own clicks (the minimap canvas also stops propagation) rather than starting
-    // a marquee that would clear the selection.
+    // Likewise the minimap and zoom controls: a marquee here would clear the selection.
     if (t.closest("#wfMinimapWrap")) return;
     // 1. Port dot → start a typed wire drag (wires satellite owns the gesture).
     var dot = t.closest(".wf-port-dot");
@@ -203,8 +188,7 @@
       if (WF.selectEdge) WF.selectEdge(wireGroup.getAttribute("data-edge-id"));
       return;
     }
-    // 3. A param control → let it focus natively; do not drag/select/re-render,
-    //    so typing into a card input isn't interrupted by a card rebuild.
+    // 3. A param control focuses natively; a card rebuild would interrupt typing.
     if (
       t.tagName === "INPUT" ||
       t.tagName === "SELECT" ||
@@ -217,8 +201,7 @@
     if (card) {
       startNodeDrag(e, card);
     } else {
-      // Empty canvas → drag-select (marquee). Shift makes it additive; a bare
-      // click is a zero-area non-additive marquee, which clears the selection.
+      // Empty canvas → marquee. Shift is additive; a bare click clears the selection.
       startMarquee(e);
     }
   }
@@ -241,9 +224,7 @@
       document.removeEventListener("mousemove", move);
       document.removeEventListener("mouseup", up);
       canvas.classList.remove("panning");
-      // Pan is a navigation gesture — it never changes the selection
-      // (deselect-on-empty-click is handled by left-click → marquee) and never
-      // lands on the undo stack (viewport-only save).
+      // Pan never changes the selection and never lands on the undo stack.
       if (moved) WF.scheduleViewportSave();
     }
     document.addEventListener("mousemove", move);
@@ -252,8 +233,7 @@
 
   function startNodeDrag(e, card) {
     var id = card.getAttribute("data-node-id");
-    // Selecting a node clears any wire selection (mirror selectEdge clearing the
-    // node selection), so Delete targets the node, not the previously-picked wire.
+    // Clear any wire selection so Delete targets the node (selectEdge mirrors this).
     state.selectedEdge = null;
     // Update selection on mousedown so a plain drag moves what you grabbed.
     if (e.shiftKey) {
@@ -265,11 +245,7 @@
     }
     if (WF.renderAllNodes) WF.renderAllNodes();
 
-    // Anchor the drag in world space: store each selected node's offset from the
-    // cursor's world point at grab time, then on every frame set its position to
-    // (cursorWorld + offset). World-anchoring (vs a screen-pixel delta) is what
-    // lets the node keep trailing the cursor while auto-pan scrolls the viewport
-    // — a pure screen delta would drift the node away from the cursor by the pan.
+    // Drag in world space (cursor point + per-node offset); screen deltas drift under auto-pan.
     var canvasEl = qs("#wfCanvas");
     _dragRect = canvasEl ? canvasEl.getBoundingClientRect() : null;
     _dragCursorX = e.clientX;
@@ -310,13 +286,7 @@
     e.preventDefault(); // suppress text selection / native drag
   }
 
-  // When a node drag reaches an edge band of the canvas, scroll the viewport
-  // away from that edge so the drag can continue past the visible bounds.
-  // Returns true if it nudged (the flush re-arms next frame while it does, so a
-  // drag held still at the edge keeps scrolling). Uses the rect cached at drag
-  // start per the canvas-perf rule. Only mutates the viewport; the caller writes
-  // the transform synchronously (see scheduleNodePositionFlush) so it stays in
-  // step with the card positions painted the same frame.
+  // Nudge the viewport while a drag sits in an edge band; returns true if nudged.
   var EDGE_BAND = 40; // px from the canvas edge that arms auto-pan
   var EDGE_STEP = 12; // px/frame the viewport scrolls
   function autoPanWhileDragging() {
@@ -340,27 +310,20 @@
     return nudged;
   }
 
-  // RAF-throttled per-card style update (cf. the code-review canvas perf rule).
-  // Recomputes dragged-node positions from the live cursor world point so they
-  // track the cursor across auto-pan; updates only the moved cards + wires.
+  // RAF-throttled card style update; recomputes dragged positions from the live cursor so they track auto-pan.
   function scheduleNodePositionFlush() {
     if (_moveRaf) return;
     _moveRaf = requestAnimationFrame(function () {
       _moveRaf = 0;
       var panned = autoPanWhileDragging();
-      // Apply the auto-panned transform now, in this same frame, so the world
-      // transform and the card positions below are computed from one viewport
-      // value. Deferring via applyViewport() would lag the world a frame behind
-      // the cards, leaving dragged nodes a pan-step (EDGE_STEP) off the cursor.
+      // Write the panned transform now: applyViewport would lag the world a frame behind.
       if (panned) writeViewport();
       if (_dragRect && _dragOffsets) {
         var vp = state.viewport;
-        // Cursor world point (post-pan), using the cached rect to avoid a layout
-        // read; mirrors clientToWorld's math.
+        // Cursor world point after the pan; cached rect avoids a layout read (cf. clientToWorld).
         var curX = (_dragCursorX - _dragRect.left - vp.x) / vp.zoom;
         var curY = (_dragCursorY - _dragRect.top - vp.y) / vp.zoom;
-        // Snap the grabbed node's corner (alignment to neighbors first, else
-        // the grid) and translate the whole selection by the same delta.
+        // Snap the grabbed node's corner, then move the whole selection by the same delta.
         var anchor = _dragAnchorId && _dragOffsets[_dragAnchorId];
         if (_snapEnabled && anchor) {
           var snap = applySnap(curX + anchor.x, curY + anchor.y);
@@ -386,12 +349,10 @@
           }
         });
       }
-      // Wires read live node.position (offsets stay cached — card internals are
-      // unchanged), so a moved node's wires track it without a full re-render.
+      // Wires read live node.position; a moved node's wires track without a full re-render.
       if (WF.renderWires) WF.renderWires();
       renderMinimap();
-      // Keep panning while a drag is held inside the edge band even if the
-      // cursor isn't moving (move() won't re-fire). Bounded to the drag.
+      // Keep panning while held still in the edge band; move() won't re-fire.
       if (panned && _draggingNode) scheduleNodePositionFlush();
     });
   }
@@ -423,8 +384,7 @@
     e.preventDefault();
   }
 
-  // Select cards whose rendered rect intersects the marquee (client-coord test —
-  // robust to zoom/pan without re-deriving world geometry).
+  // Client-coord intersection test: robust to zoom/pan without re-deriving world geometry.
   function selectInMarquee(rect, ax, ay, bx, by, additive) {
     var ml = Math.min(ax, bx);
     var mt = Math.min(ay, by);
@@ -450,10 +410,7 @@
 
   // ---- Snap & alignment guides ----
 
-  // Snap a world point (the grabbed card's top-left corner): prefer aligning to
-  // another card's left/top edge within SNAP_TOL screen px (showing a guide
-  // line), else round to the background grid. Only consulted while the snap
-  // toggle is on.
+  // Snap the grabbed card's corner to a neighbor edge within SNAP_TOL, else the grid.
   function applySnap(x, y) {
     var out = { x: x, y: y, gx: null, gy: null };
     var tol = SNAP_TOL / (state.viewport.zoom || 1);
@@ -487,9 +444,7 @@
     return out;
   }
 
-  // The two guide lines live inside #wfWorld so they inherit the world
-  // transform; renderAllNodes preserves only the wire <svg>, so re-append
-  // whenever a rebuild dropped them.
+  // Guides live inside #wfWorld for the transform; renderAllNodes drops them, so re-append.
   var _guideV = null;
   var _guideH = null;
 
@@ -583,9 +538,7 @@
     return true;
   }
 
-  // Move the selection by (dx, dy) world px with direct style writes (mirrors
-  // the drag flush — cheap under key repeat); the scheduleSave debounce
-  // coalesces a nudge burst into one undo step.
+  // Nudge the selection with direct style writes; scheduleSave coalesces a burst into one undo step.
   function nudgeSelection(dx, dy) {
     if (!state.selection.length) return false;
     state.selection.forEach(function (sid) {
@@ -614,9 +567,7 @@
 
   // ---- Sticky notes ----
 
-  // Drop a fresh note pseudo-node at the viewport centre and focus its
-  // textarea so typing can start immediately. Notes live in state.nodes (the
-  // runner ignores them), so save/undo/copy/delete need no special casing.
+  // Add a note pseudo-node at the viewport centre. Notes are plain state.nodes the runner ignores.
   function addNote() {
     if (!state.ready) return;
     var canvas = qs("#wfCanvas");
@@ -644,9 +595,7 @@
     if (!state.ready) return;
     e.preventDefault();
     var vp = state.viewport;
-    // Node-editor wheel convention: plain wheel / two-finger scroll pans;
-    // pinch (which browsers deliver as ctrl+wheel) or an explicit Ctrl/⌘+wheel
-    // zooms about the cursor.
+    // Plain wheel pans; pinch (delivered as ctrl+wheel) or Ctrl/⌘+wheel zooms about the cursor.
     if (!e.ctrlKey && !e.metaKey) {
       vp.x -= e.deltaX;
       vp.y -= e.deltaY;
@@ -670,9 +619,7 @@
     WF.scheduleViewportSave();
   }
 
-  // Zoom by `factor` about the canvas centre (the minimap +/- buttons; mirrors
-  // onWheel's re-pin math but anchored to the viewport centre rather than the
-  // cursor). > 1 zooms in, < 1 out; clamped to [ZOOM_MIN, ZOOM_MAX].
+  // Zoom about the canvas centre (minimap +/- buttons); onWheel's re-pin math, clamped.
   function zoomAtCenter(factor) {
     if (!state.ready) return;
     var canvas = qs("#wfCanvas");
@@ -694,12 +641,10 @@
 
   // ---- Clipboard (copy / paste / duplicate) ----
 
-  // In-memory clipboard ({nodes, edges}); not the system clipboard (vanilla JS,
-  // no async-clipboard permission dance, and node graphs aren't text anyway).
+  // In-memory clipboard, not the system one: no permission dance, and graphs aren't text.
   var _clipboard = null;
 
-  // Capture the current selection + induced edges (both endpoints selected) as a
-  // deep-cloned sub-graph. Returns false when nothing is selected.
+  // Deep-clone the selection plus edges with both endpoints selected. False when nothing is selected.
   function copySelection() {
     var sel = state.selection || [];
     if (!sel.length) return false;
@@ -726,8 +671,7 @@
     return true;
   }
 
-  // Stamp the clipboard onto the canvas (fresh ids, cascaded offset). The stashes
-  // satellite owns the id-remap; call it late-bound so load order doesn't matter.
+  // Paste with fresh ids and a cascaded offset; the stashes satellite owns the id-remap.
   function pasteClipboard() {
     if (!_clipboard || !_clipboard.nodes.length || !WF.instantiateSubgraph) {
       return false;
@@ -745,8 +689,7 @@
   }
 
   function deleteSelection() {
-    // A selected wire takes priority over node selection (wires satellite owns
-    // single-edge removal, shared with the floating × button).
+    // A selected wire wins over node selection; the wires satellite owns edge removal.
     if (state.selectedEdge) {
       if (WF.removeEdge) WF.removeEdge(state.selectedEdge);
       return;
@@ -767,9 +710,7 @@
     WF.scheduleSave();
   }
 
-  // Clipboard/undo handlers return their function's boolean so a false (empty
-  // selection / empty clipboard / empty history) declines the event and native
-  // copy/paste stays intact. The hub owns the history stack; call late-bound.
+  // Handlers return false on empty selection/clipboard/history so native copy/paste stays intact.
   function initCanvasHotkeys() {
     window.ClipgenHotkeys.register([
       { id: "workflows.copy", when: _canvasReady, handler: function () { return copySelection(); } },
@@ -825,21 +766,15 @@
 
   // ---- Auto-arrange ("Clean up") ----
 
-  // Lay the graph out left→right in dependency layers: a node sits one column
-  // right of its deepest upstream node, stacked by current vertical order within
-  // the column. Bounded relaxation keeps it cycle-safe (validation blocks Run on
-  // cycles, but Clean up can fire on an unvalidated graph). Resets the viewport
-  // so the tidied graph is visible from the origin.
+  // Layer left→right by deepest upstream node, stacked by current vertical order. Bounded relaxation stays cycle-safe.
   function autoArrange() {
     if (!state.ready) return;
-    // Sticky notes are free-floating annotations — leave them where the user
-    // put them and lay out only the executable cards.
+    // Notes are free-floating; lay out only the executable cards.
     var nodes = (state.nodes || []).filter(function (n) {
       return n.type !== "note";
     });
     if (!nodes.length) return;
-    // Re-layout rebuilds every card and moves the source node, so cancel any
-    // in-flight wire gesture rather than leave it armed with a stale highlight.
+    // Re-layout rebuilds every card; cancel any in-flight wire gesture first.
     if (WF.cancelConnect) WF.cancelConnect();
     var edges = state.edges || [];
 
@@ -891,8 +826,7 @@
 
   // ---- Focus a node (from the validation panel) ----
 
-  // Select a node and pan it to the canvas centre — the Issues-panel rows call
-  // this so clicking a finding reveals the offending card.
+  // Select a node and centre it; Issues-panel rows call this to reveal a finding.
   function focusNode(id) {
     var node = findNode(id);
     if (!node) return;
@@ -915,9 +849,7 @@
 
   // ---- Fit to view ----
 
-  // World-space bounding box of every node card. Card pixel size is read the way
-  // focusNode does (offsetWidth/Height, default 200×120 for an unrendered card).
-  // Shared by fitToView and the minimap. Returns null when there are no nodes.
+  // World-space bounding box of all cards (unrendered cards count as 200×120). Null when empty.
   function nodesBoundingBox() {
     var nodes = state.nodes || [];
     if (!nodes.length) return null;
@@ -947,9 +879,7 @@
     };
   }
 
-  // Frame all nodes in the viewport: zoom to fit the bounding box (with padding,
-  // clamped) and centre it. Mirrors focusNode's centring math. No-op when not
-  // ready or empty (cf. autoArrange's guards).
+  // Zoom to fit the bounding box (padded, clamped) and centre it; mirrors focusNode.
   function fitToView() {
     if (!state.ready) return;
     var box = nodesBoundingBox();
@@ -976,14 +906,7 @@
 
   // ---- Minimap ----
 
-  // Draw the corner minimap: a scaled-down, zoomed-out mirror of the canvas view.
-  // Node rects scale with vp.zoom (contents zoom with the canvas), but the minimap
-  // shows OVERVIEW_FACTOR× the visible area so nodes just outside the frame stay
-  // visible, and the view frame is free to drift toward the graph edges — the
-  // camera clamps to the graph bounds, so when the whole graph fits the frame
-  // roams freely and when zoomed in it follows the viewport with edge drift rather
-  // than staying pinned centre. RAF-throttled (mirrors applyViewport's _vpRaf).
-  // Hidden when there are no nodes or the tab is backgrounded (canvas perf rule).
+  // Minimap spanning OVERVIEW_FACTOR viewports so nearby off-screen nodes show. RAF-throttled; hidden when empty or backgrounded.
   var OVERVIEW_FACTOR = 2.5; // how many viewports the minimap spans (zoom-out)
   var GRAPH_MARGIN = 60; // world px of breathing room kept around the graph
   function renderMinimap() {
@@ -992,8 +915,7 @@
       _minimapRaf = 0;
       var mm = qs("#wfMinimap");
       if (!mm) return;
-      // The wrap (minimap + zoom controls) owns visibility; fall back to the
-      // minimap canvas if the wrap markup is absent.
+      // The wrap (minimap + zoom controls) owns visibility; fall back to the canvas alone.
       var hideEl = qs("#wfMinimapWrap") || mm;
       var canvas = qs("#wfCanvas");
       var nodes = state.nodes || [];
@@ -1016,18 +938,11 @@
 
       var vp = state.viewport;
       var pad = 8;
-      // world → minimap scale: mirror the canvas (∝ vp.zoom so node rects zoom
-      // with it), then divide by OVERVIEW_FACTOR to zoom the whole minimap out.
+      // world → minimap scale: ∝ vp.zoom so node rects zoom too, divided by OVERVIEW_FACTOR.
       var mFit = Math.min((mmW - pad * 2) / rect.width, (mmH - pad * 2) / rect.height);
       var scale = (vp.zoom * mFit) / OVERVIEW_FACTOR;
 
-      // Camera: follow the viewport centre, clamped in two passes.
-      // 1. Soft — keep the minimap window over the graph (+ margin) for context
-      //    and "play": clampCenter centres on the graph when the window is larger
-      //    than it (frame roams freely), else follows with drift near the edges.
-      // 2. Hard — keep the view frame fully inside the minimap: clampFrameInside
-      //    pans the camera so the frame never clips the minimap edge, overriding
-      //    the graph clamp at the outermost edges (showing a little empty space).
+      // Camera: clampCenter keeps the window over the graph (soft); clampFrameInside keeps the frame on-screen (hard).
       var halfWx = mmW / (2 * scale);
       var halfWy = mmH / (2 * scale);
       var viewCx = (rect.width / 2 - vp.x) / vp.zoom;
@@ -1060,8 +975,7 @@
         ctx.fillRect(nx, ny, Math.max(2, nw), Math.max(2, nh));
       }
 
-      // View frame: the visible world rect mapped through the minimap transform.
-      // Kept fully on-screen (never clipping the edge) by the camera clamp above.
+      // View frame: the visible world rect in minimap coords; the camera clamp keeps it on-screen.
       var wx = -vp.x / vp.zoom;
       var wy = -vp.y / vp.zoom;
       ctx.strokeStyle = vpStroke;
@@ -1070,17 +984,13 @@
     });
   }
 
-  // Centre a minimap camera on `c`, clamped so a window of half-size `half` stays
-  // within [lo, hi]; if that window is wider than the span, centre on the span.
+  // Clamp `c` so a ±`half` window stays in [lo, hi]; if wider, centre the span.
   function clampCenter(c, lo, hi, half) {
     if (hi - lo <= 2 * half) return (lo + hi) / 2;
     return clamp(c, lo + half, hi - half);
   }
 
-  // Constrain a minimap camera `cam` so the view frame ([viewC ± frameW/2], world)
-  // stays fully inside the window ([cam ± half], minus a `padW` world margin). If
-  // the frame is wider than the window, just centre it. This is the hard rule that
-  // prevents the view frame from drifting off the edge of the minimap.
+  // Keep the frame (viewC ± frameW/2) inside cam ± half − padW; centre if wider.
   function clampFrameInside(cam, viewC, frameW, half, padW) {
     var lo = viewC + frameW / 2 - half + padW;
     var hi = viewC - frameW / 2 + half - padW;
@@ -1109,8 +1019,7 @@
   function onMinimapMouseDown(e) {
     if (!state.ready) return;
     e.preventDefault();
-    // The minimap sits inside #wfCanvas — stop the mousedown bubbling to
-    // onCanvasMouseDown, which would otherwise start a marquee selection.
+    // The minimap sits inside #wfCanvas; stop the bubble that would start a marquee.
     e.stopPropagation();
     _mmDragging = true;
     minimapRecenter(e);
@@ -1165,8 +1074,7 @@
   WF.initCanvas = initCanvas;
   WF.applyViewport = applyViewport;
   WF.autoArrange = autoArrange;
-  // Consumed by the hub toolbar (button + "F" shortcut) and the minimap sync
-  // hook in the nodes satellite (renderAllNodes → structural changes).
+  // Consumed by the hub toolbar ("F" shortcut) and the nodes satellite's minimap sync.
   WF.fitToView = fitToView;
   // Consumed by the hub's minimap zoom +/- buttons.
   WF.zoomAtCenter = zoomAtCenter;

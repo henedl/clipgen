@@ -1,11 +1,13 @@
 import os
 from argparse import Namespace
+from pathlib import Path
 from unittest.mock import Mock
 
 import pytest
 
 import cli
 import app
+import utils
 
 
 def _base_args(**overrides):
@@ -108,6 +110,61 @@ def test_export_conflicts_with_studio(monkeypatch):
 
 
 @pytest.mark.parametrize(
+    "argv",
+    [
+        ["clipgen.py", "--profile", "--ss-task", "change", "P01"],
+        ["clipgen.py", "--profile", "--screenspace"],
+        ["clipgen.py", "--profile-output", "/tmp/p.json", "--screenspace"],
+    ],
+)
+def test_profile_combines_with_modes(monkeypatch, argv):
+    """--profile is a run option like -v: never a mode conflict."""
+    monkeypatch.setattr("sys.argv", argv)
+    args = cli.parse_arguments()
+    assert args.profile is True or args.profile_output
+    cli._validate_mode_conflicts(args)  # must not SystemExit
+
+
+def test_profile_flag_enables_profiling(monkeypatch):
+    import atexit
+
+    import config
+    import profiling
+
+    monkeypatch.setattr(config, "PROFILING", False)
+    monkeypatch.setattr(atexit, "register", lambda fn: fn)  # no process-exit hook
+    args = _base_args(profile=True)
+    cli._apply_config_overrides(args, cli_mode=True)
+    assert config.PROFILING is True
+    profiling.reset()
+
+
+def test_profile_output_enables_profiling(monkeypatch, tmp_path):
+    import atexit
+
+    import config
+    import profiling
+
+    monkeypatch.setattr(config, "PROFILING", False)
+    monkeypatch.setattr(config, "PROFILE_OUTPUT", "")
+    monkeypatch.setattr(atexit, "register", lambda fn: fn)  # no process-exit hook
+    args = _base_args(profile_output=str(tmp_path / "p.json"))
+    cli._apply_config_overrides(args, cli_mode=True)
+    assert config.PROFILING is True
+    assert config.PROFILE_OUTPUT == str(tmp_path / "p.json")
+    profiling.reset()
+
+
+def test_profile_flag_default_leaves_profiling_off(monkeypatch):
+    import config
+
+    monkeypatch.setattr(config, "PROFILING", False)
+    args = _base_args()
+    cli._apply_config_overrides(args, cli_mode=True)
+    assert config.PROFILING is False
+
+
+@pytest.mark.parametrize(
     "flag,expected_default_page",
     [
         ("studio", "studio"),
@@ -125,17 +182,30 @@ def test_web_mode_without_spreadsheet_dispatches_standalone(
     captured = {}
 
     def fake_start(
-        *, worksheet=None, port=None, default_page="studio", gspread_client=None
+        *,
+        worksheet=None,
+        port=None,
+        default_page="studio",
+        gspread_client=None,
+        gspread_client_factory=None,
+        worksheet_factory=None,
     ):
         captured["worksheet"] = worksheet
         captured["default_page"] = default_page
         captured["gspread_client"] = gspread_client
+        captured["gspread_client_factory"] = gspread_client_factory
+        captured["worksheet_factory"] = worksheet_factory
 
     monkeypatch.setattr(server, "start_combined_server", fake_start)
     # Skip persisted-dir application in this isolated test
     monkeypatch.setattr(cli, "_maybe_apply_persisted_dirs", lambda _args: None)
-    # Force the silent-auth helper to return None (no cached token to reuse).
-    monkeypatch.setattr(cli, "_try_silent_google_auth", lambda: None)
+
+    # Silent auth is deferred to the boot-build thread: dispatch must forward
+    # the helper as a factory, never call it on the launch path.
+    def fail_silent_auth():
+        pytest.fail("silent auth must not run during dispatch")
+
+    monkeypatch.setattr(cli, "_try_silent_google_auth", fail_silent_auth)
 
     args = _base_args(**{flag: True})
     result = cli._dispatch_standalone_mode(args, cli_mode=False, gallery_arg=None)
@@ -144,6 +214,9 @@ def test_web_mode_without_spreadsheet_dispatches_standalone(
     assert captured["worksheet"] is None
     assert captured["default_page"] == expected_default_page
     assert captured["gspread_client"] is None
+    assert captured["gspread_client_factory"] is fail_silent_auth
+    # No -s argument → nothing for the boot thread to open.
+    assert captured["worksheet_factory"] is None
 
 
 def test_studio_with_spreadsheet_does_not_short_circuit(monkeypatch):
@@ -374,7 +447,14 @@ def test_frozen_no_args_threads_into_standalone_branch(monkeypatch, tmp_path):
             "frozen-no-args path must not reach Excel fallback prompt"
         ),
     )
-    monkeypatch.setattr(cli, "_try_silent_google_auth", lambda: None)
+    monkeypatch.setattr(
+        cli,
+        "_try_silent_google_auth",
+        lambda: pytest.fail(
+            "silent auth is deferred to the boot-build thread; the launch path "
+            "must not call it"
+        ),
+    )
     monkeypatch.setattr("sys.argv", ["clipgen"])
     monkeypatch.setattr("sys.frozen", True, raising=False)
 
@@ -625,6 +705,77 @@ def test_settings_flag_parses(monkeypatch, argv_extra, expected):
     assert args.settings is expected
 
 
+# ---- --version flag ----
+
+
+def test_version_flag_prints_bare_version_and_exits(monkeypatch, capsys):
+    monkeypatch.setattr("sys.argv", ["clipgen.py", "--version"])
+    with pytest.raises(SystemExit) as exc:
+        cli.parse_arguments()
+    assert exc.value.code == 0
+    assert capsys.readouterr().out.strip() == utils.get_version()
+
+
+def test_help_text_reports_version(monkeypatch, capsys):
+    monkeypatch.setattr("sys.argv", ["clipgen.py", "--help"])
+    with pytest.raises(SystemExit) as exc:
+        cli.parse_arguments()
+    assert exc.value.code == 0
+    assert f"clipgen v{utils.get_version()}" in capsys.readouterr().out
+
+
+# ---- --licenses flag ----
+
+
+def test_licenses_flag_prints_the_notice_and_exits(monkeypatch, capsys):
+    monkeypatch.setattr("sys.argv", ["clipgen.py", "--licenses"])
+    with pytest.raises(SystemExit) as exc:
+        cli.parse_arguments()
+    assert exc.value.code == 0
+    out = capsys.readouterr().out
+    assert "THIRD-PARTY SOFTWARE NOTICES AND LICENSES" in out
+    # Attribution for the copyleft components is the whole point of the file;
+    # a notice that lost its GPL sections would still pass a length check.
+    assert "GNU GENERAL PUBLIC LICENSE" in out
+
+
+def test_licenses_flag_fails_loudly_when_the_notice_is_missing(
+    monkeypatch, capsys, tmp_path
+):
+    """A stripped installation must say so, not print an empty notice."""
+    monkeypatch.setattr(utils, "get_bundled_assets_root", lambda: tmp_path)
+    monkeypatch.setattr("sys.argv", ["clipgen.py", "--licenses"])
+    with pytest.raises(SystemExit) as exc:
+        cli.parse_arguments()
+    assert exc.value.code == 1
+    assert "THIRD-PARTY-LICENSES is missing" in capsys.readouterr().err
+
+
+def test_licenses_notice_is_only_read_when_the_flag_is_passed(monkeypatch):
+    """The custom action exists solely so the ~78 KB read stays lazy.
+
+    Reverting to `action="version"` would silently reintroduce a file read into
+    every single clipgen invocation, which no other test would catch.
+    """
+    calls = 0
+
+    def counting_get_licenses_text():
+        nonlocal calls
+        calls += 1
+        return "stub"
+
+    monkeypatch.setattr(utils, "get_licenses_text", counting_get_licenses_text)
+
+    monkeypatch.setattr("sys.argv", ["clipgen.py", "--no-input"])
+    cli.parse_arguments()
+    assert calls == 0
+
+    monkeypatch.setattr("sys.argv", ["clipgen.py", "--licenses"])
+    with pytest.raises(SystemExit):
+        cli.parse_arguments()
+    assert calls == 1
+
+
 def test_settings_rejected_with_no_input(monkeypatch, capsys):
     import os
 
@@ -649,7 +800,7 @@ def test_settings_rejected_with_no_input(monkeypatch, capsys):
     "flag,attr,value",
     [
         ("--whisper-model", "whisper_model", "medium"),
-        ("--ollama-model", "ollama_model", "gemma3:4b"),
+        ("--llm-model", "llm_model", "gemma3:4b"),
     ],
 )
 def test_model_flag_parses(monkeypatch, flag, attr, value):
@@ -696,7 +847,7 @@ def test_whisper_hallucination_silence_flag_applies_to_config(monkeypatch):
     "flag,value,config_attr",
     [
         ("--whisper-model", "small", "TRANSCRIBE_MODEL"),
-        ("--ollama-model", "gemma3:4b", "OLLAMA_SUMMARY_MODEL"),
+        ("--llm-model", "gemma3:4b", "LLM_SUMMARY_MODEL"),
     ],
 )
 def test_model_flag_applies_to_config(monkeypatch, flag, value, config_attr):
@@ -819,18 +970,44 @@ def test_frozen_onefile_temp_meipass_is_ignored(monkeypatch):
 
 
 def test_frozen_onedir_resolves_beside_the_payload_folder(monkeypatch):
-    """One-dir puts the exe inside clipgen/ next to _internal/.
+    """One-dir puts the exe inside clipgen/ next to lib/.
 
     "Next to the application" is then the folder *containing* clipgen/, which is
     what the user dragged out of the archive and where they will drop
-    credentials.json — not the folder holding _internal.
+    credentials.json — not the folder holding lib.
     """
     monkeypatch.setattr("sys.frozen", True, raising=False)
     monkeypatch.setattr("sys.executable", "/Users/me/Apps/clipgen/clipgen.exe")
-    monkeypatch.setattr(
-        "sys._MEIPASS", "/Users/me/Apps/clipgen/_internal", raising=False
-    )
+    monkeypatch.setattr("sys._MEIPASS", "/Users/me/Apps/clipgen/lib", raising=False)
     assert cli.get_runtime_working_dir() == "/Users/me/Apps"
+
+
+def test_frozen_onedir_installer_keeps_cwd_in_app_dir(monkeypatch):
+    """Inno installs the one-dir layout under .../Programs/clipgen, not a zip."""
+    monkeypatch.setattr("sys.frozen", True, raising=False)
+    monkeypatch.setattr(
+        "sys.executable",
+        "/Users/me/AppData/Local/Programs/clipgen/clipgen.exe",
+    )
+    monkeypatch.setattr(
+        "sys._MEIPASS",
+        "/Users/me/AppData/Local/Programs/clipgen/lib",
+        raising=False,
+    )
+    assert cli.get_runtime_working_dir() == ("/Users/me/AppData/Local/Programs/clipgen")
+
+
+def test_frozen_onedir_uninstaller_marker_keeps_cwd_in_app_dir(monkeypatch, tmp_path):
+    app = tmp_path / "clipgen"
+    lib = app / "lib"
+    lib.mkdir(parents=True)
+    (app / "unins000.exe").write_bytes(b"")
+    exe = app / "clipgen.exe"
+    exe.write_bytes(b"")
+    monkeypatch.setattr("sys.frozen", True, raising=False)
+    monkeypatch.setattr("sys.executable", str(exe))
+    monkeypatch.setattr("sys._MEIPASS", str(lib), raising=False)
+    assert Path(cli.get_runtime_working_dir()) == app.resolve()
 
 
 def test_frozen_macos_app_wins_over_onedir_branch(monkeypatch):
@@ -1052,3 +1229,99 @@ class TestInstallGuidance:
         lines = self._lines(monkeypatch, platform="linux", has_brew=False)
         assert lines[-1] == "  ffmpeg -version"
         assert lines[-2] == "Then verify in a new terminal:"
+
+
+# ---- Window-first `-s` desktop launches -------------------------------------
+
+
+def test_desktop_with_spreadsheet_defers_auth_and_selection(monkeypatch, tmp_path):
+    """`-s` + --desktop must launch the window path immediately: no Google auth
+    and no worksheet selection on the main thread."""
+    import desktop
+
+    captured = _mock_main_side_effects(monkeypatch, tmp_path)
+
+    def fake_launch(**kw):
+        captured["launcher"] = "desktop"
+        captured.update(kw)
+
+    monkeypatch.setattr(desktop, "launch", fake_launch)
+    monkeypatch.setattr(
+        cli,
+        "authenticate_google",
+        lambda: pytest.fail("desktop -s must not authenticate on the main thread"),
+    )
+    monkeypatch.setattr(
+        cli,
+        "select_worksheet",
+        lambda *_a, **_kw: pytest.fail(
+            "desktop -s must not select a worksheet on the main thread"
+        ),
+    )
+    monkeypatch.setattr(
+        "sys.argv", ["clipgen.py", "--studio", "--desktop", "-s", "mystudy"]
+    )
+
+    with pytest.raises(SystemExit) as exc:
+        cli.main()
+
+    assert exc.value.code == 0
+    assert captured["launcher"] == "desktop"
+    assert captured["worksheet"] is None
+    assert callable(captured["worksheet_factory"])
+    assert captured["gspread_client_factory"] is cli._try_silent_google_auth
+
+
+def test_worksheet_factory_needs_google_signin_without_client():
+    factory = cli._make_worksheet_factory(_base_args(spreadsheet="mystudy"))
+    worksheet, notice = factory(None)
+    assert worksheet is None
+    assert "Google sign-in is needed" in notice["message"]
+    assert "mystudy" in notice["message"]
+    assert notice["source_type"] == "google"
+
+
+def test_worksheet_factory_turns_select_exit_into_notice(monkeypatch):
+    monkeypatch.setattr(
+        cli, "select_worksheet", lambda *_a, **_kw: (_ for _ in ()).throw(SystemExit(1))
+    )
+    factory = cli._make_worksheet_factory(_base_args(spreadsheet="mystudy"))
+    worksheet, notice = factory("client")
+    assert worksheet is None
+    assert "Could not open spreadsheet 'mystudy'" in notice["message"]
+    assert notice["source_type"] == "google"
+
+
+def test_worksheet_factory_passes_through_success(monkeypatch):
+    monkeypatch.setattr(cli, "select_worksheet", lambda *_a, **_kw: "the-ws")
+    factory = cli._make_worksheet_factory(_base_args(spreadsheet="mystudy"))
+    assert factory("client") == ("the-ws", None)
+
+
+def test_worksheet_factory_excel_needs_no_client(monkeypatch, tmp_path):
+    """A local .xlsx opens without any Google client."""
+    seen = {}
+
+    def fake_select(client, args, cli_mode):
+        seen["client"] = client
+        return "excel-ws"
+
+    monkeypatch.setattr(cli, "select_worksheet", fake_select)
+    xlsx = tmp_path / "study.xlsx"
+    xlsx.write_bytes(b"")
+    factory = cli._make_worksheet_factory(_base_args(spreadsheet=str(xlsx)))
+    assert factory(None) == ("excel-ws", None)
+    assert seen["client"] is None
+
+
+def test_speakers_flag_enables_speaker_attribution(monkeypatch):
+    import config
+
+    original = config.TRANSCRIBE_SPEAKERS
+    try:
+        monkeypatch.setattr("sys.argv", ["clipgen.py", "--speakers"])
+        args = cli.parse_arguments()
+        cli._apply_config_overrides(args, cli_mode=True)
+        assert config.TRANSCRIBE_SPEAKERS is True
+    finally:
+        config.TRANSCRIBE_SPEAKERS = original

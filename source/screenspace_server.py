@@ -58,50 +58,97 @@ import binascii
 import copy
 import json
 import math
+import sys
 import threading
 import uuid
-from collections import OrderedDict
 from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, TypeGuard, cast
+from typing import Any, cast
 
-from flask import Blueprint, Response, jsonify, request, send_file
+from flask import Blueprint, Response, request, send_file
 
 import config
 import files
 import remux_server
 import screenspace
 import spreadsheet
+import server_utils
 import utils
 import video
 from server_utils import (
+    ApiError,
     MediaCache,
     err,
+    err_no_video,
+    find_by_id,
     json_endpoint,
     make_debounced_persist,
+    make_participant_cache,
     make_sse_channel,
+    mtime_or_zero,
     ok,
+    opt_number,
     parse_number_arg,
+    remove_by_id,
+    require_json_body,
 )
+
+
+# Per-tool optional float overrides api_preview reads straight into params.
+def _preview_ref_rect(
+    region_coords: dict[str, Any] | None, frame_w: int, frame_h: int
+) -> dict[str, Any] | None:
+    """Pixel rect the preview cuts its template/shape sample from.
+
+    ``ref_region`` (normalized x,y,w,h in the query string) is the capture
+    region; without it the run region doubles as the sample rect — the
+    CLI/workflows single-region semantics.
+    """
+    ref_region_str = request.args.get("ref_region", "").strip()
+    if ref_region_str:
+        rr_parts = ref_region_str.split(",")
+        if len(rr_parts) == 4:
+            try:
+                rrx, rry, rrw, rrh = (float(p) for p in rr_parts)
+            except ValueError:
+                pass
+            else:
+                region_coords = {
+                    "x": round(rrx * frame_w),
+                    "y": round(rry * frame_h),
+                    "w": round(rrw * frame_w),
+                    "h": round(rrh * frame_h),
+                }
+    ref_mask = _parse_mask_points(request.args.get("ref_mask", "").strip())
+    if region_coords is not None and ref_mask:
+        region_coords = dict(region_coords)
+        region_coords["mask_points"] = ref_mask
+    return region_coords
+
+
+def _parse_mask_points(raw: str) -> list[list[list[float]]]:
+    """Parse bbox-relative contours from a preview mask query."""
+    if not raw:
+        return []
+    try:
+        mask_points = [
+            [
+                [float(u), float(v)]
+                for u, v in (pair.split(",") for pair in part.split(";"))
+            ]
+            for part in raw.split("|")
+            if part
+        ]
+    except ValueError:
+        return []
+    return [c for c in mask_points if len(c) >= 3]
+
 
 FlaskResponse = Response | tuple[Response, int]
 
-_VALID_TASK_TYPES = (
-    "multitool",
-    "color",
-    "change",
-    "similarity",
-    "text",
-    "numbers",
-    "timelapse",
-    "template",
-    "flow",
-    "scene",
-    "inactivity",
-    "boundary",
-    "attention",
-)
+# Every engine tool is creatable here; tests/test_shared_constants guards the parallel lists.
+_VALID_TASK_TYPES = tuple(screenspace.TOOLS)
 _VALID_STEP_TYPES = (
     "color",
     "change",
@@ -147,16 +194,12 @@ def _template_bgr_and_mask_from_b64(upload_b64: str) -> tuple[Any, Any]:
 _manifest: dict[str, Any] = {}
 _worker: "screenspace.ScreenspaceWorker | None" = None
 _participants: list[dict[str, Any]] = []
-# What the current _participants list was built from: {"sheet_context", "dir",
-# "mtime"}, or None before _init_screenspace_state has run (same "not configured
-# yet" state _worker = None expresses). While None, _refresh_participants() is a
-# no-op, so a directly-assigned _participants survives.
+# Source of _participants, or None before _init_screenspace_state; while None,
+# _refresh_participants() is a no-op.
 _participant_source: dict[str, Any] | None = None
 _participants_lock = threading.Lock()
-# Per-participant source timeline for multi-video participants (one continuous
-# recording across several files). Keyed by participant id; value is
-# (parts_mtimes, timeline) so a re-encoded part invalidates the cached offsets.
-# Single-video participants are never cached here (mapping is a no-op).
+# Multi-video timelines keyed by participant as (parts_mtimes, timeline); a re-encoded
+# part invalidates. Single-video never cached.
 _participant_timeline_cache: dict[
     str, tuple[tuple[int, ...], list[tuple[str, int, int]] | None]
 ] = {}
@@ -164,42 +207,27 @@ _participant_timeline_lock = threading.Lock()
 # Values are (mtime_ns, info) so a stale file is re-probed automatically.
 _video_metadata_cache: dict[str, tuple[int, dict[str, Any]]] = {}
 _video_metadata_cache_lock = threading.Lock()
-# Bounded LRU so long scrub sessions don't grow unbounded; entries are
-# JPEG bytes (tens of KB each), so a few hundred is plenty. Cache key
-# includes ``mtime_ns`` so a re-encoded source file is treated as a
-# distinct entry rather than served from stale bytes.
-_FRAME_CACHE_MAX = 256
-_frame_cache: "OrderedDict[tuple[str, int, float, int], bytes]" = OrderedDict()
-_frame_cache_lock = threading.Lock()
+# Bounded LRUs keyed on ``mtime_ns``, so a re-encoded source is a new entry.
+_frame_cache = MediaCache(256, stat_prefix="screenspace.frame_cache")
+# BGR frames for calibration/preview, which re-run on every parameter nudge.
+_decoded_frame_cache = MediaCache(
+    max(8, 2 * config.SCREENSPACE_MAX_PINS),
+    stat_prefix="screenspace.decoded_frame_cache",
+)
+_pin_ocr_cache = MediaCache(64, stat_prefix="screenspace.pin_ocr_cache")
 
-# Decoded-frame cache for synchronous CV helpers. Calibration and preview are
-# re-run on every parameter nudge, so decoded BGR frames are memoized separately
-# from the JPEG byte cache above. Keys include ``mtime_ns`` so re-encoded source
-# videos invalidate naturally.
-_DECODED_FRAME_CACHE_MAX = max(8, 2 * config.SCREENSPACE_MAX_PINS)
-_decoded_frame_cache: "OrderedDict[tuple[str, int, float], Any]" = OrderedDict()
-_decoded_frame_cache_lock = threading.Lock()
-_PIN_OCR_CACHE_MAX = 64
-_pin_ocr_cache: "OrderedDict[tuple[Any, ...], list[Any]]" = OrderedDict()
-_pin_ocr_cache_lock = threading.Lock()
-
-# Heatmap hover-scrub sprite sheets, re-tiled from the heatmap GIFs on demand and
-# never written to the output directory (sprites are a derived view everywhere
-# else in clipgen too — see studio's /api/sprite). At most a handful of tasks are
-# on screen at once, and each sheet is a small PNG. Keyed with ``mtime_ns`` so a
-# regenerated GIF invalidates naturally.
+# Sprite sheets re-tiled from heatmap GIFs on demand, never written to disk; keyed
+# with ``mtime_ns``.
 _heatmap_sprite_cache = MediaCache(32)
 
 # ---- SSE (Server-Sent Events) client registry ----
 
-# Broadcast channel (all task-stream clients registered under the None key);
-# ``_sse_clients`` is the channel's live registry list. See make_sse_channel.
+# Broadcast channel; all task-stream clients register under None. See make_sse_channel.
 _sse_notify, _sse_stream, _sse_clients = make_sse_channel()
 _manifest_lock = threading.Lock()
 
-# Monotonic counter bumped (under _manifest_lock) on every _manifest["events"]
-# mutation — append via drain and per-event exclude/include. The poll routes
-# echo it so an unchanged tick short-circuits the deep-copy + sanitize + ship.
+# Bumped under _manifest_lock on every events mutation; poll routes short-circuit on
+# an unchanged tick.
 _events_version = 0
 
 
@@ -237,14 +265,11 @@ def _sse_task_payload() -> str:
 
 screenspace_bp = Blueprint("screenspace", __name__)
 
-utils.register_static_routes(
+server_utils.register_static_routes(
     screenspace_bp,
     "screenspace.html",
-    # Resolved per request, never snapshotted: POST /api/dirs moves
-    # config.OUTPUT_DIR mid-session without re-running _init_screenspace_state
-    # (the Start overlay's "no spreadsheet" path closes without a reload), and a
-    # snapshot then served heatmaps/timelapses from the previous directory —
-    # every artifact URL a dead link until something re-inited the blueprint.
+    # Resolved per request: POST /api/dirs moves OUTPUT_DIR without re-init, and a
+    # snapshot served dead links.
     media_dir_getter=lambda: str(utils.get_effective_output_dir()),
     media_error="Output directory not configured",
     icons=True,
@@ -262,45 +287,23 @@ remux_server.register_remux_routes(
 _NOTES_MAX_BYTES = 64 * 1024
 
 
-def _refresh_participants() -> None:
-    """Rebuild ``_participants`` when the input directory changed since the last build.
-
-    Keyed on the input dir's ``st_mtime_ns`` (which advances on add/remove/rename),
-    mirroring ``utils.discover_participant_videos``' own memo — the steady-state
-    cost is one ``stat()``. This is what lets a video dropped into ``-i`` mid-session
-    show up without a server restart.
-
-    No-op until :func:`_init_screenspace_state` has configured the source. The
-    rebuild rebinds ``_participants`` (atomic under the GIL), so a concurrent
-    reader sees either the old list or the new one, never a torn one.
-    """
-    global _participants
-
-    source = _participant_source
-    if source is None:
-        return
-    input_dir = str(Path(utils.get_effective_input_dir()))
-    try:
-        mtime: int | None = Path(input_dir).stat().st_mtime_ns
-    except OSError:
-        mtime = None
-    if source["dir"] == input_dir and source["mtime"] == mtime:
-        return
-    with _participants_lock:
-        # A racing request may have rebuilt, or a sheet swap may have replaced the
-        # source entirely, while we waited on the lock.
-        if _participant_source is not source:
-            return
-        if source["dir"] == input_dir and source["mtime"] == mtime:
-            return
-        _participants = files.resolve_participant_videos(source["sheet_context"])
-        source["dir"] = input_dir
-        source["mtime"] = mtime
+# Reads _participants globals as module attributes so _init_screenspace_state and
+# monkeypatching tests work. See server_utils.make_participant_cache.
+_refresh_participants, _find_participant_record = make_participant_cache(
+    sys.modules[__name__],
+    input_dir_getter=utils.get_effective_input_dir,
+    resolve=files.resolve_participant_videos,
+)
 
 
 def _participant_exists(pid: str) -> bool:
-    _refresh_participants()
-    return any(p["id"] == pid for p in _participants)
+    return _find_participant_record(pid) is not None
+
+
+@screenspace_bp.route("/api/tools")
+def api_tools() -> FlaskResponse:
+    """Per-tool client facts (fast scan, confidence); the pickers derive from this."""
+    return ok(tools=screenspace.tool_catalog())
 
 
 @screenspace_bp.route("/api/participants")
@@ -317,9 +320,8 @@ def api_participants() -> FlaskResponse:
         entry = dict(p)
         if p.get("has_video"):
             entry["version"] = _participant_video_version(p["id"])
-            # Multi-video: expose the timeline so the frontend can switch the
-            # <video> source per part and seek the local offset. Omitted for a
-            # single video (no probe) → frontend keeps its one-file path.
+            # Multi-video only: the frontend switches <video> source per part. Single-video
+            # omits it (no probe).
             timeline = _participant_timeline(p["id"])
             if timeline is not None:
                 entry["timeline"] = [
@@ -331,10 +333,8 @@ def api_participants() -> FlaskResponse:
                     for path, dur, cum in timeline
                 ]
         payload.append(entry)
-    # Bootstrap channel for shared frontend config (hotkey overrides etc.);
-    # this page has no sheet-data fetch, so the config rides along here.
-    # ``has_sheet`` gates the off-sheet badge: with no sheet loaded every entry
-    # is ``in_sheet: False`` and marking them all would be noise.
+    # Config rides along here (no sheet fetch on this page). ``has_sheet`` gates the
+    # off-sheet badge.
     return ok(
         participants=payload,
         has_sheet=bool(_participant_source and _participant_source["sheet_context"]),
@@ -432,9 +432,7 @@ def api_participant_issues(pid: str) -> FlaskResponse:
             }
         )
 
-    # Sort ascending on severity score so the most-negative (Critical = -4)
-    # comes first; positives (Positive = 1, Very Positive = 2) and unranked
-    # rows fall to the end. Tie-break by row order for stability.
+    # Ascending score: Critical (-4) first, positives and unranked last; row order breaks ties.
     candidates.sort(
         key=lambda c: (utils.severity_sort_key(c["severity"]), c["_row_idx"])
     )
@@ -461,14 +459,7 @@ def api_participant_marks(pid: str) -> FlaskResponse:
 
 
 # ---- Calibration pins ----
-#
-# A pin is a tool-agnostic, region-agnostic marker that "this frame matters",
-# carrying only a timestamp and a polarity (``positive`` = the condition is
-# true here / ``negative`` = it must not fire here). Pins are stored per
-# participant under the manifest ``pins`` key and drive synchronous detector
-# calibration (Phase 2). Frames themselves are never stored — they are fetched
-# on demand through the frame API, so a re-encoded source invalidates naturally
-# via ``mtime_ns`` versioning.
+# Timestamp + polarity markers under manifest ``pins``; frames fetched, never stored.
 
 _PIN_POLARITIES = ("positive", "negative")
 _PIN_LABEL_MAX_CHARS = 120
@@ -601,7 +592,7 @@ def api_pins_update(pin_id: str) -> FlaskResponse:
                 return err("label must be a string")
             pin["label"] = data["label"].strip()[:_PIN_LABEL_MAX_CHARS]
         _do_persist(drain_events=False)
-    return ok(pin=pin)
+        return ok(pin=copy.deepcopy(pin))
 
 
 @screenspace_bp.route("/api/pins/<pin_id>", methods=["DELETE"])
@@ -645,19 +636,9 @@ def _decoded_video_frame(video_path: str, mtime_ns: int, ts: float) -> "Any | No
     extraction fails.
     """
     key = (video_path, mtime_ns, round(ts, 3))
-    with _decoded_frame_cache_lock:
-        cached = _decoded_frame_cache.get(key)
-        if cached is not None:
-            _decoded_frame_cache.move_to_end(key)
-            return cached
-    frame = video.extract_frame_at_timestamp(video_path, ts)
-    if frame is None:
-        return None
-    with _decoded_frame_cache_lock:
-        _decoded_frame_cache[key] = frame
-        while len(_decoded_frame_cache) > _DECODED_FRAME_CACHE_MAX:
-            _decoded_frame_cache.popitem(last=False)
-    return frame
+    return _decoded_frame_cache.get_or_compute(
+        key, lambda: video.extract_frame_at_timestamp(video_path, ts)
+    )
 
 
 def _make_pin_ocr_reader(
@@ -665,14 +646,17 @@ def _make_pin_ocr_reader(
 ) -> "Callable[[str, dict[str, Any], dict[str, Any]], list[Any]]":
     """Build the cached OCR reader passed to the score functions for one pin.
 
-    Memoizes raw EasyOCR readings per (video, mtime, ts, region, tool, langs,
-    preprocess, integers_only) so changing only the fuzzy/confidence threshold
-    re-scores from cached readings without re-running OCR.
+    Memoizes raw OCR readings per (video, mtime, ts, region, langs, preprocess)
+    so changing only the fuzzy/confidence threshold re-scores from cached
+    readings without re-running OCR. Text and numbers pins on the same region
+    share readings — integers_only and the numeric operators are applied at
+    scoring time, which is exactly what this cache exists for.
     """
 
     def _reader(
         tool_type: str, region_coords: dict[str, Any], params: dict[str, Any]
     ) -> list[Any]:
+        del tool_type  # readings are tool-independent; scoring applies the tool
         langs = tuple(params.get("languages") or ["en"])
         key = (
             video_path,
@@ -687,24 +671,12 @@ def _make_pin_ocr_reader(
                 # must not share cached readings.
                 screenspace.mask_points_key(region_coords.get("mask_points")),
             ),
-            tool_type,
             langs,
             bool(params.get("ocr_preprocess", False)),
-            bool(params.get("integers_only", False)),
         )
-        with _pin_ocr_cache_lock:
-            cached = _pin_ocr_cache.get(key)
-            if cached is not None:
-                _pin_ocr_cache.move_to_end(key)
-                return cached
-        readings = screenspace.run_calibration_ocr(
-            frame, region_coords, tool_type, params
+        return _pin_ocr_cache.get_or_compute(
+            key, lambda: screenspace.run_calibration_ocr(frame, region_coords, params)
         )
-        with _pin_ocr_cache_lock:
-            _pin_ocr_cache[key] = readings
-            while len(_pin_ocr_cache) > _PIN_OCR_CACHE_MAX:
-                _pin_ocr_cache.popitem(last=False)
-        return readings
 
     return _reader
 
@@ -733,6 +705,7 @@ def _calibratable_tool(tool: str) -> bool:
 
 
 @screenspace_bp.route("/api/calibrate", methods=["POST"])
+@json_endpoint
 def api_calibrate() -> FlaskResponse:
     """Score a participant's pins against a tool + parameters, synchronously.
 
@@ -741,16 +714,21 @@ def api_calibrate() -> FlaskResponse:
     per pin (multitool entries also carry ``steps`` and a chain ``passed``). This
     is per-frame only — temporal params (consecutive/interval) are not validated.
     """
-    data = request.get_json(silent=True)
-    if not data:
-        return err("JSON body required")
+    data = require_json_body()
 
     tool = (data.get("tool") or "").strip()
     if not _calibratable_tool(tool):
         return err(f"Tool '{tool}' is not calibratable")
 
     # Reuse task-creation validation by reshaping the body into a task request.
-    validated = _validate_task_request(
+    (
+        task_type,
+        participant,
+        region_name,
+        parameters,
+        all_known_regions,
+        requested_region,
+    ) = _validate_task_request(
         {
             "type": tool,
             "participant": data.get("participant", ""),
@@ -759,25 +737,10 @@ def api_calibrate() -> FlaskResponse:
             "parameters": data.get("parameters"),
         }
     )
-    if _is_flask_error_response(validated):
-        return validated
-    if not (isinstance(validated, tuple) and len(validated) == 6):
-        return err("Invalid calibration request")
-    (
-        task_type,
-        participant,
-        region_name,
-        parameters,
-        all_known_regions,
-        requested_region,
-    ) = cast(
-        tuple[str, str, str, dict[str, Any], dict[str, Any], dict[str, Any] | None],
-        validated,
-    )
 
     resolved = _find_participant_video_with_mtime(participant)
     if resolved is None:
-        return err(f"No video for participant {participant}", 404)
+        return err_no_video(participant)
     video_path, _mtime_ns = resolved
 
     props = video.probe_video_properties(video_path)
@@ -788,7 +751,7 @@ def api_calibrate() -> FlaskResponse:
     else:
         region_coords = {"x": 0, "y": 0, "w": 0, "h": 0}
 
-    prepared = _prepare_task_media(
+    parameters = _prepare_task_media(
         task_type,
         participant,
         parameters,
@@ -796,9 +759,6 @@ def api_calibrate() -> FlaskResponse:
         region_coords,
         resolve_region,
     )
-    if isinstance(prepared, tuple):
-        return prepared
-    parameters = cast(dict[str, Any], prepared)
 
     pin_ids = data.get("pin_ids")
     if pin_ids is not None and not isinstance(pin_ids, list):
@@ -835,20 +795,20 @@ def api_calibrate() -> FlaskResponse:
                 results.append(entry)
                 continue
             sub_path, local_ts = mapped
-            sub_mtime = _mtime_or_zero(sub_path)
+            sub_mtime = mtime_or_zero(sub_path)
             frame = _decoded_video_frame(sub_path, sub_mtime, local_ts)
             if frame is None:
                 entry["status"] = "not_evaluable"
                 results.append(entry)
                 continue
-            # Companion frame for temporal tools; ts < interval ⇒ no companion
-            # (the score path then reports not_evaluable for that step/tool).
+            # Companion frame for temporal tools; ts < interval leaves none and the score
+            # reports not_evaluable.
             prev_frame = None
             if needs_prev and ts >= interval:
                 mapped_prev = _map_participant_time(participant, ts - interval)
                 if mapped_prev is not None:
                     prev_frame = _decoded_video_frame(
-                        mapped_prev[0], _mtime_or_zero(mapped_prev[0]), mapped_prev[1]
+                        mapped_prev[0], mtime_or_zero(mapped_prev[0]), mapped_prev[1]
                     )
             ocr_reader = _make_pin_ocr_reader(sub_path, sub_mtime, local_ts, frame)
             if task_type == "multitool":
@@ -870,7 +830,7 @@ def api_calibrate() -> FlaskResponse:
             entry["status"] = "not_evaluable"
         results.append(entry)
 
-    return jsonify(utils.sanitize_floats({"ok": True, "tool": tool, "pins": results}))
+    return ok(**utils.sanitize_floats({"tool": tool, "pins": results}))
 
 
 # ---- Video frame extraction ----
@@ -888,11 +848,8 @@ def _participant_video_paths(participant_id: str) -> list[str]:
     The refresh is one ``stat()`` in the steady state — nothing against the
     ffmpeg work these callers are about to do.
     """
-    _refresh_participants()
-    for p in _participants:
-        if p["id"] == participant_id:
-            return list(p["video_paths"]) if p.get("has_video") else []
-    return []
+    record = _find_participant_record(participant_id)
+    return list(record["video_paths"]) if record and record.get("has_video") else []
 
 
 def _part_mtimes(paths: list[str]) -> tuple[int, ...] | None:
@@ -924,17 +881,12 @@ def _participant_timeline(participant_id: str) -> list[tuple[str, int, int]] | N
         if cached is not None and cached[0] == mtimes:
             return cached[1]
     timeline = video.build_source_timeline(paths)
+    if timeline is None:
+        # A failed probe must not stick as "single video".
+        return None
     with _participant_timeline_lock:
         _participant_timeline_cache[participant_id] = (mtimes, timeline)
     return timeline
-
-
-def _mtime_or_zero(path: str) -> int:
-    """Return a path's ``mtime_ns`` for cache keys, or 0 if it can't be stat'd."""
-    try:
-        return Path(path).stat().st_mtime_ns
-    except OSError:
-        return 0
 
 
 def _map_participant_time(
@@ -946,7 +898,7 @@ def _map_participant_time(
     no stat). Multi-video participants resolve which sub-video owns *global_ts*
     and the local offset within it. Returns None when the participant has no
     video or (multi-video) the timestamp is out of range. Callers needing the
-    file's mtime for a cache key obtain it via :func:`_mtime_or_zero`.
+    file's mtime for a cache key obtain it via :func:`mtime_or_zero`.
     """
     paths = _participant_video_paths(participant_id)
     if not paths:
@@ -972,7 +924,7 @@ def _participant_frame_extractor(
         mapped = _map_participant_time(participant_id, global_ts)
         if mapped is None:
             return None
-        return _decoded_video_frame(mapped[0], _mtime_or_zero(mapped[0]), mapped[1])
+        return _decoded_video_frame(mapped[0], mtime_or_zero(mapped[0]), mapped[1])
 
     return _extract
 
@@ -1032,8 +984,7 @@ def _participant_video_duration(participant_id: str) -> float | None:
     video_path, mtime_ns = resolved
     with _video_metadata_cache_lock:
         cached = _video_metadata_cache.get(participant_id)
-    # Use the unrounded duration: the cached ``duration`` is rounded for display
-    # and would mis-flag pins within ~0.5s of the true end.
+    # Unrounded duration; the display-rounded ``duration`` mis-flags pins within ~0.5s of the end.
     if cached is not None and cached[0] == mtime_ns:
         return cached[1].get("duration_seconds") or None
     props = video.probe_video_properties(video_path)
@@ -1043,6 +994,7 @@ def _participant_video_duration(participant_id: str) -> float | None:
 
 
 @screenspace_bp.route("/api/video/frame/<participant>/<timestamp>")
+@json_endpoint
 def api_video_frame(participant: str, timestamp: str) -> FlaskResponse:
     """Extract and return a single JPEG frame at the given timestamp.
 
@@ -1054,53 +1006,35 @@ def api_video_frame(participant: str, timestamp: str) -> FlaskResponse:
     browser HTTP cache invalidates on the same boundary, enabling the long
     ``immutable`` ``Cache-Control`` below.
     """
-    try:
-        ts = float(timestamp)
-    except (ValueError, TypeError):
-        return err("Invalid timestamp")
+    ts = parse_number_arg(timestamp, "timestamp")
 
-    # Map the global timestamp into the owning sub-video (multi-video) so the
-    # frontend can keep requesting frames by global time; single-video unchanged.
+    # Map the global time into the owning sub-video; single-video is unchanged.
     mapped = _map_participant_time(participant, ts)
     if mapped is None:
-        return err(f"No video for participant {participant}", 404)
+        return err_no_video(participant)
     video_path, local_ts = mapped
-    mtime_ns = _mtime_or_zero(video_path)
+    mtime_ns = mtime_or_zero(video_path)
 
     width = request.args.get("w", 0, type=int)
     cache_key = (video_path, mtime_ns, round(local_ts, 3), width)
-    with _frame_cache_lock:
-        cached = _frame_cache.get(cache_key)
-        if cached is not None:
-            # Refresh LRU recency.
-            _frame_cache.move_to_end(cache_key)
-    if cached is not None:
-        return Response(
-            cached,
-            mimetype="image/jpeg",
-            headers={"Cache-Control": "public, max-age=86400, immutable"},
-        )
+    failure = "Could not extract frame"
 
-    if width > 0:
-        jpeg_bytes = video.extract_thumbnail_bytes(video_path, local_ts, width=width)
-    else:
+    def _encode() -> bytes | None:
+        nonlocal failure
+        if width > 0:
+            return video.extract_thumbnail_bytes(video_path, local_ts, width=width)
         frame = video.extract_frame_at_timestamp(video_path, local_ts)
         if frame is None:
-            return err("Could not read frame at timestamp")
+            failure = "Could not read frame at timestamp"
+            return None
         import cv2
 
         success, jpeg = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
-        if not success:
-            return err("Could not extract frame")
-        jpeg_bytes = jpeg.tobytes()
+        return jpeg.tobytes() if success else None
 
+    jpeg_bytes = _frame_cache.get_or_compute(cache_key, _encode)
     if jpeg_bytes is None:
-        return err("Could not extract frame")
-
-    with _frame_cache_lock:
-        _frame_cache[cache_key] = jpeg_bytes
-        while len(_frame_cache) > _FRAME_CACHE_MAX:
-            _frame_cache.popitem(last=False)
+        return err(failure)
     return Response(
         jpeg_bytes,
         mimetype="image/jpeg",
@@ -1134,7 +1068,7 @@ def api_heatmap_sprite(filename: str) -> FlaskResponse:
     cols = max(1, min(int(cols or 1), 64))
 
     sprite_bytes = _heatmap_sprite_cache.get_or_compute(
-        (str(gif_path), _mtime_or_zero(str(gif_path)), cols),
+        (str(gif_path), mtime_or_zero(str(gif_path)), cols),
         lambda: screenspace.build_gif_sprite_bytes(str(gif_path), cols),
     )
     if sprite_bytes is None:
@@ -1146,7 +1080,44 @@ def api_heatmap_sprite(filename: str) -> FlaskResponse:
     )
 
 
+def _preview_reference_params(
+    reference: tuple[str, str, str],
+    params: dict[str, Any],
+    frame_at: Callable[[float], Any],
+    region_coords: dict[str, Any] | None,
+    frame_w: int,
+    frame_h: int,
+) -> str | None:
+    """Fill a reference-image tool's image + mask from an upload or a captured rect."""
+    body_key, image_param, mask_param = reference
+    upload_b64: str | None = None
+    if request.method == "POST":
+        body = request.get_json(silent=True)
+        if isinstance(body, dict):
+            raw = body.get(body_key)
+            if isinstance(raw, str) and raw.strip():
+                upload_b64 = raw.strip()
+    if upload_b64:
+        try:
+            bgr, mask = _template_bgr_and_mask_from_b64(upload_b64)
+        except ValueError:
+            return "Could not decode uploaded image"
+        params[image_param] = bgr
+        if mask is not None:
+            params[mask_param] = mask
+        return None
+    ref_ts = opt_number(request.args, "ref")
+    rect = _preview_ref_rect(region_coords, frame_w, frame_h)
+    if ref_ts is not None and rect is not None and rect.get("w"):
+        ref_frame = frame_at(ref_ts)
+        if ref_frame is not None:
+            params[image_param] = screenspace.extract_region(ref_frame, rect)
+            screenspace.attach_capture_mask(params, image_param, mask_param, rect)
+    return None
+
+
 @screenspace_bp.route("/api/preview/<participant>/<timestamp>", methods=["GET", "POST"])
+@json_endpoint
 def api_preview(participant: str, timestamp: str) -> FlaskResponse:
     """Render what the selected tool's CV pipeline sees at ``timestamp``.
 
@@ -1154,7 +1125,7 @@ def api_preview(participant: str, timestamp: str) -> FlaskResponse:
     vectors, pHash bit grid, etc.) tailored to the active tool.  Optional query
     params:
 
-      tool=<name>          one of the 11 screenspace tool types
+      tool=<name>          one of the screenspace tool types
       region=x,y,w,h       normalized 0–1 region coordinates (required for most tools)
       prev=<seconds>       prior timestamp for change/flow (defaults to ts-1s)
       ref=<seconds>        reference timestamp for similarity (region crop) or template
@@ -1168,20 +1139,18 @@ def api_preview(participant: str, timestamp: str) -> FlaskResponse:
                            composite. See ``screenspace_preview.OVERLAY_LAYERS``
                            for valid (tool, layer) pairs.
 
-    For **template** with an **uploaded** PNG, send ``POST`` with JSON body
-    ``{"template_image_data": "<base64>"}`` (same field as task enqueue); query
-    string still supplies ``tool``, ``region`` (optional), and ``_`` cache-bust.
+    For **template** / **shape** with an **uploaded** PNG, send ``POST`` with a
+    JSON body ``{"template_image_data": "<base64>"}`` (shape:
+    ``shape_image_data``; same fields as task enqueue); query string still
+    supplies ``tool``, ``region`` (optional), and ``_`` cache-bust.
     """
     import screenspace_preview
 
-    try:
-        ts = float(timestamp)
-    except (ValueError, TypeError):
-        return err("Invalid timestamp")
+    ts = parse_number_arg(timestamp, "timestamp")
 
     video_path = _find_participant_video(participant)
     if video_path is None:
-        return err(f"No video for participant {participant}", 404)
+        return err_no_video(participant)
 
     tool = (request.args.get("tool") or "").strip() or "color"
     if tool not in _VALID_TASK_TYPES:
@@ -1208,138 +1177,56 @@ def api_preview(participant: str, timestamp: str) -> FlaskResponse:
                 "w": round(rw * frame_w),
                 "h": round(rh * frame_h),
             }
-            # Optional shaped-region contours: "u1,v1;u2,v2;..." bbox-relative
-            # fractions, multiple contours joined with "|". Malformed values
-            # are ignored (preview falls back to the plain rect) rather than
-            # failing the whole preview.
-            mask_str = request.args.get("mask", "").strip()
-            if mask_str:
-                try:
-                    mask_points = [
-                        [
-                            [float(u), float(v)]
-                            for u, v in (pair.split(",") for pair in part.split(";"))
-                        ]
-                        for part in mask_str.split("|")
-                        if part
-                    ]
-                except ValueError:
-                    mask_points = []
-                mask_points = [c for c in mask_points if len(c) >= 3]
-                if mask_points:
-                    region_coords["mask_points"] = mask_points
+            # Optional contours "u1,v1;u2,v2|..." as bbox-relative fractions; malformed
+            # values fall back to the plain rect.
+            mask_points = _parse_mask_points(request.args.get("mask", "").strip())
+            if mask_points:
+                region_coords["mask_points"] = mask_points
 
-    # Prev frame for tools that consume a temporal pair. Attention's motion
-    # channel compares at its own (shorter) sampling interval by default.
+    tool_spec = screenspace.TOOLS.get(tool)
+    # Prev frame for temporal-pair tools; the tool names its own gap setting.
     prev_frame = None
-    if tool in ("change", "flow", "attention"):
+    if tool_spec is not None and tool_spec.needs_prev_frame:
         default_gap = (
-            config.SCREENSPACE_ATTENTION_INTERVAL if tool == "attention" else 1.0
+            float(getattr(config, tool_spec.prev_gap_setting))
+            if tool_spec.prev_gap_setting
+            else 1.0
         )
-        prev_ts_raw = request.args.get("prev")
-        if prev_ts_raw is not None:
-            try:
-                prev_ts = float(prev_ts_raw)
-            except ValueError:
-                prev_ts = max(0.0, ts - default_gap)
-        else:
-            prev_ts = max(0.0, ts - default_gap)
+        prev_raw = opt_number(request.args, "prev")
+        prev_ts = prev_raw if prev_raw is not None else max(0.0, ts - default_gap)
         if prev_ts < ts:
             prev_frame = frame_at(prev_ts)
 
     # Build params dict for the preview (subset of task parameters)
     params: dict[str, Any] = {}
-    if tool == "color":
-        for key in ("h", "s", "v"):
-            raw = request.args.get(key)
-            if raw is not None:
-                try:
-                    params[key] = float(raw)
-                except ValueError:
-                    pass
-    elif tool == "change":
-        raw = request.args.get("noise")
-        if raw is not None:
-            try:
-                params["noise_threshold"] = int(float(raw))
-            except ValueError:
-                pass
-    elif tool == "flow":
-        raw = request.args.get("magnitude")
-        if raw is not None:
-            try:
-                params["magnitude_threshold"] = float(raw)
-            except ValueError:
-                pass
-    elif tool == "attention":
-        # Channel-weight / center-bias overrides so the Model view tunes the
-        # same math the scan runs (saliency_kwargs_from_params on both paths).
-        for key in (
-            "weight_spectral",
-            "weight_contrast",
-            "weight_motion",
-            "weight_face",
-            "center_bias",
-        ):
-            raw = request.args.get(key)
-            if raw is not None:
-                try:
-                    params[key] = float(raw)
-                except ValueError:
-                    pass
-    elif tool in ("text", "numbers"):
-        raw = (request.args.get("ocr_preprocess") or "").strip().lower()
-        if raw in ("1", "true", "yes", "on"):
-            params["ocr_preprocess"] = True
-    elif tool == "similarity":
-        ref_ts_raw = request.args.get("ref")
-        if ref_ts_raw is not None and region_coords is not None:
-            ref_ts: float | None = None
-            try:
-                ref_ts = float(ref_ts_raw)
-            except ValueError:
-                pass
-            if ref_ts is not None:
-                ref_frame = frame_at(ref_ts)
-                if ref_frame is not None:
-                    import screenspace as _ss
-
-                    params["reference_frame"] = _ss.extract_region(
-                        ref_frame, region_coords
-                    )
-
-    elif tool == "template":
-        import screenspace as _ss_tpl
-
-        upload_b64: str | None = None
-        if request.method == "POST":
-            body = request.get_json(silent=True)
-            if isinstance(body, dict):
-                raw = body.get("template_image_data")
-                if isinstance(raw, str) and raw.strip():
-                    upload_b64 = raw.strip()
-        if upload_b64:
-            try:
-                bgr, mask = _template_bgr_and_mask_from_b64(upload_b64)
-            except ValueError:
-                return err("Could not decode uploaded image")
-            params["template_image"] = bgr
-            if mask is not None:
-                params["template_mask"] = mask
-        else:
-            ref_ts_raw = request.args.get("ref")
-            if ref_ts_raw is not None and region_coords is not None:
-                ref_ts_tpl: float | None = None
-                try:
-                    ref_ts_tpl = float(ref_ts_raw)
-                except ValueError:
-                    pass
-                if ref_ts_tpl is not None:
-                    ref_frame_tpl = frame_at(ref_ts_tpl)
-                    if ref_frame_tpl is not None:
-                        params["template_image"] = _ss_tpl.extract_region(
-                            ref_frame_tpl, region_coords
-                        )
+    for key in tool_spec.preview_float_args if tool_spec else ():
+        value = opt_number(request.args, key)
+        if value is not None:
+            params[key] = value
+    for arg, param, kind in tool_spec.preview_args if tool_spec else ():
+        if kind == "bool":
+            raw = (request.args.get(arg) or "").strip().lower()
+            if raw in ("1", "true", "yes", "on"):
+                params[param] = True
+            continue
+        value = opt_number(request.args, arg)
+        if value is None or (kind == "int" and not math.isfinite(value)):
+            continue
+        params[param] = int(value) if kind == "int" else value
+    if tool_spec is not None and tool_spec.reference_region_param:
+        ref_ts = opt_number(request.args, "ref")
+        if ref_ts is not None and region_coords is not None:
+            ref_frame = frame_at(ref_ts)
+            if ref_frame is not None:
+                params[tool_spec.reference_region_param] = screenspace.extract_region(
+                    ref_frame, region_coords
+                )
+    if tool_spec is not None and tool_spec.reference is not None:
+        error = _preview_reference_params(
+            tool_spec.reference, params, frame_at, region_coords, frame_w, frame_h
+        )
+        if error:
+            return err(error)
 
     layer = (request.args.get("layer") or "").strip()
     if layer:
@@ -1414,8 +1301,8 @@ def api_video_info(participant: str) -> FlaskResponse:
     The frontend appends ``?v=<version>`` to frame and stream URLs so HTTP,
     backend, and blob caches all invalidate together when the file changes.
     """
-    # Multi-video participant: report the total timeline duration + the per-part
-    # breakdown so the frontend can switch the <video> source per part.
+    # Multi-video: total timeline duration plus per-part breakdown so the frontend
+    # switches <video> per part.
     timeline = _participant_timeline(participant)
     if timeline is not None:
         props = video.probe_video_properties(timeline[0][0]) or {}
@@ -1437,11 +1324,11 @@ def api_video_info(participant: str) -> FlaskResponse:
                 for p, d, c in timeline
             ],
         }
-        return ok(info=info)
+        return ok(info=utils.sanitize_floats(info))
 
     resolved = _find_participant_video_with_mtime(participant)
     if resolved is None:
-        return err(f"No video for participant {participant}", 404)
+        return err_no_video(participant)
     video_path, mtime_ns = resolved
 
     with _video_metadata_cache_lock:
@@ -1462,8 +1349,7 @@ def api_video_info(participant: str) -> FlaskResponse:
     info: dict[str, Any] = {
         "participant": participant,
         "duration": duration,
-        # Unrounded duration retained for precise comparisons (e.g. pin
-        # staleness); the rounded ``duration`` above stays the display value.
+        # Unrounded, for precise comparisons like pin staleness; ``duration`` above is for display.
         "duration_seconds": duration_seconds,
         "fps": vid_fps,
         "width": width if width > 0 else None,
@@ -1477,7 +1363,7 @@ def api_video_info(participant: str) -> FlaskResponse:
     with _video_metadata_cache_lock:
         _video_metadata_cache[participant] = (mtime_ns, info)
 
-    return ok(info=info)
+    return ok(info=utils.sanitize_floats(info))
 
 
 @screenspace_bp.route("/api/video/stream/<participant>")
@@ -1493,10 +1379,8 @@ def api_video_stream(participant: str) -> FlaskResponse:
     """
     paths = _participant_video_paths(participant)
     if not paths:
-        return err(f"No video for participant {participant}", 404)
-    # Multi-video participants: ?part=N selects the sub-video; the frontend swaps
-    # the <video> source per part as it scrubs the global timeline. Defaults to
-    # part 0 (and is the only file for single-video participants).
+        return err_no_video(participant)
+    # ?part=N selects the sub-video for multi-video participants; defaults to part 0.
     part = request.args.get("part", type=int)
     video_path = (
         paths[part] if part is not None and 0 <= part < len(paths) else paths[0]
@@ -1511,7 +1395,7 @@ def api_video_audio_track(participant: str, idx: int) -> FlaskResponse:
     """Stream one demuxed audio track for the browser's per-track volume mixer."""
     paths = _participant_video_paths(participant)
     if not paths:
-        return err(f"No video for participant {participant}", 404)
+        return err_no_video(participant)
     part = request.args.get("part", type=int)
     video_path = (
         paths[part] if part is not None and 0 <= part < len(paths) else paths[0]
@@ -1567,8 +1451,7 @@ def _normalize_region(
     return region
 
 
-# "combo" marks shapes produced by boolean region edits (shift-add /
-# alt-subtract / merge) rather than a single drawing tool.
+# "combo" = shapes from boolean region edits (shift-add / alt-subtract / merge).
 _REGION_SHAPES = ("lasso", "wand", "combo")
 _REGION_MAX_POINTS = 400  # total vertices across all contours
 _REGION_MAX_CONTOURS = 32
@@ -1650,22 +1533,17 @@ def _combined_region_lookup() -> dict[str, Any]:
 def _resolve_region_request(
     region_name: str,
     region_ref: Any,
-) -> tuple[str, dict[str, Any]] | FlaskResponse:
+) -> tuple[str, dict[str, Any]]:
     """Resolve a task region request without flattening active/stashed duplicates.
 
-    Thin Flask wrapper over the shared, pure ``screenspace.resolve_region_request`` so the
-    server and the CLI re-run path can never drift on region semantics.
+    Thin wrapper over the shared, pure ``screenspace.resolve_region_request`` so the
+    server and the CLI re-run path can never drift on region semantics. Raises
+    ``ApiError`` (400); call under ``@json_endpoint``.
     """
     try:
         return screenspace.resolve_region_request(region_name, region_ref, _manifest)
     except ValueError as exc:
-        return err(str(exc))
-
-
-def _is_flask_error_response(value: Any) -> TypeGuard[FlaskResponse]:
-    return isinstance(value, Response) or (
-        isinstance(value, tuple) and len(value) == 2 and isinstance(value[1], int)
-    )
+        raise ApiError(str(exc)) from exc
 
 
 # ---- Regions CRUD ----
@@ -1680,20 +1558,17 @@ def api_regions_list() -> FlaskResponse:
 
 
 @screenspace_bp.route("/api/regions", methods=["POST"])
+@json_endpoint
 def api_regions_create() -> FlaskResponse:
     """Create or update a named region."""
-    data = request.get_json(silent=True)
-    if not data:
-        return err("JSON body required")
+    data = require_json_body()
 
-    name = data.get("name", "").strip()
+    name = str(data.get("name") or "").strip()
     if not name:
         return err("Region name is required")
 
     for field in ("x", "y", "w", "h"):
-        val = data.get(field)
-        if val is None or not isinstance(val, (int, float)):
-            return err(f"'{field}' must be a number")
+        data[field] = parse_number_arg(data.get(field), field, finite=True)
 
     canvas_w = data.get("canvas_width")
     canvas_h = data.get("canvas_height")
@@ -1711,6 +1586,7 @@ def api_regions_create() -> FlaskResponse:
         error = _validate_region_points(points, shape, canvas_w, canvas_h)
         if error:
             return err(error)
+        assert isinstance(points, list)  # _validate_region_points rejected the rest
         points = [
             [
                 [
@@ -1766,10 +1642,11 @@ def api_regions_delete_all() -> FlaskResponse:
 
 
 @screenspace_bp.route("/api/regions/reorder", methods=["PUT"])
+@json_endpoint
 def api_regions_reorder() -> FlaskResponse:
     """Reorder active regions to match the given name order."""
-    data = request.get_json(silent=True)
-    if not data or not isinstance(data.get("names"), list):
+    data = require_json_body("names list required")
+    if not isinstance(data.get("names"), list):
         return err("names list required")
 
     with _manifest_lock:
@@ -1818,33 +1695,29 @@ def api_stashes_create() -> FlaskResponse:
 
 
 @screenspace_bp.route("/api/stashes/<stash_id>", methods=["PUT"])
+@json_endpoint
 def api_stashes_update(stash_id: str) -> FlaskResponse:
     """Update a stash (rename)."""
-    data = request.get_json(silent=True)
-    if not data:
-        return err("JSON body required")
+    data = require_json_body()
 
-    name = data.get("name", "").strip()
+    name = str(data.get("name") or "").strip()
     with _manifest_lock:
         stashes = _manifest.get("stashes", [])
-        stash = next((s for s in stashes if s["id"] == stash_id), None)
+        stash = find_by_id(stashes, stash_id)
         if stash is None:
             return err("Stash not found", 404)
         if name:
             stash["name"] = name
         _do_persist(drain_events=False)
-    return ok(stash=stash)
+        return ok(stash=copy.deepcopy(stash))
 
 
 @screenspace_bp.route("/api/stashes/<stash_id>", methods=["DELETE"])
 def api_stashes_delete(stash_id: str) -> FlaskResponse:
     """Dismiss a region stash."""
     with _manifest_lock:
-        stashes = _manifest.get("stashes", [])
-        idx = next((i for i, s in enumerate(stashes) if s["id"] == stash_id), None)
-        if idx is None:
+        if remove_by_id(_manifest.get("stashes", []), stash_id) is None:
             return err("Stash not found", 404)
-        stashes.pop(idx)
         _do_persist(drain_events=False)
     return ok()
 
@@ -1853,26 +1726,25 @@ def api_stashes_delete(stash_id: str) -> FlaskResponse:
 def api_stashes_restore(stash_id: str) -> FlaskResponse:
     """Restore a stash: replace active regions with stashed ones (stash is kept)."""
     with _manifest_lock:
-        stashes = _manifest.get("stashes", [])
-        stash = next((s for s in stashes if s["id"] == stash_id), None)
+        stash = find_by_id(_manifest.get("stashes", []), stash_id)
         if stash is None:
             return err("Stash not found", 404)
-        _manifest["regions"] = copy.deepcopy(stash["regions"])
+        regions = copy.deepcopy(stash["regions"])
+        _manifest["regions"] = regions
         _do_persist(drain_events=False)
-    return ok(regions=_manifest["regions"])
+    return ok(regions=copy.deepcopy(regions))
 
 
 @screenspace_bp.route("/api/stashes/<stash_id>/regions", methods=["POST"])
+@json_endpoint
 def api_stashes_add_region(stash_id: str) -> FlaskResponse:
     """Copy one active region into an existing stash (active set unchanged).
 
     If the stash already holds a region with that name, the active definition
     overwrites it (last-write-wins, matching api_regions_create's upsert).
     """
-    data = request.get_json(silent=True)
-    if not data:
-        return err("JSON body required")
-    name = data.get("name", "").strip()
+    data = require_json_body()
+    name = str(data.get("name") or "").strip()
     if not name:
         return err("Region name is required")
 
@@ -1880,15 +1752,12 @@ def api_stashes_add_region(stash_id: str) -> FlaskResponse:
         regions = _manifest.get("regions", {})
         if name not in regions:
             return err(f"Region '{name}' not found", 404)
-        stash = next(
-            (s for s in _manifest.get("stashes", []) if s["id"] == stash_id), None
-        )
+        stash = find_by_id(_manifest.get("stashes", []), stash_id)
         if stash is None:
             return err("Stash not found", 404)
         stash.setdefault("regions", {})[name] = copy.deepcopy(regions[name])
         _do_persist(drain_events=False)
-
-    return ok(stash=stash)
+        return ok(stash=copy.deepcopy(stash))
 
 
 # ---- Tasks CRUD ----
@@ -1923,33 +1792,26 @@ def api_tasks_get(task_id: str) -> FlaskResponse:
 
 
 # ---- Task creation helpers ----
-#
-# Private helpers for api_tasks_create below: validation, parameter coercion,
-# media extraction, and multitool step preparation. Placed between the read-side
-# task routes above and the create/mutate routes below so the create endpoint's
-# dependencies are immediately visible when reading top-down.
+# api_tasks_create's private helpers, placed just above it to read top-down.
 
 
 def _validate_task_request(
     data: dict[str, Any],
-) -> (
-    tuple[str, str, str, dict[str, Any], dict[str, Any], dict[str, Any] | None]
-    | FlaskResponse
-):
+) -> tuple[str, str, str, dict[str, Any], dict[str, Any], dict[str, Any] | None]:
     """Validate the task creation request body.
 
     Returns (task_type, participant, region_name, parameters, all_known_regions,
-    requested_region) on success, or a Flask error response on failure.
+    requested_region); raises ``ApiError`` (400) on a bad request.
     """
-    task_type = data.get("type", "").strip()
+    task_type = str(data.get("type") or "").strip()
     if task_type not in _VALID_TASK_TYPES:
-        return err(f"type must be one of: {', '.join(_VALID_TASK_TYPES)}")
+        raise ApiError(f"type must be one of: {', '.join(_VALID_TASK_TYPES)}")
 
-    participant = data.get("participant", "").strip()
+    participant = str(data.get("participant") or "").strip()
     if not participant:
-        return err("participant is required")
+        raise ApiError("participant is required")
 
-    region_name = data.get("region", "").strip()
+    region_name = str(data.get("region") or "").strip()
     region_ref = data.get("region_ref")
     raw_parameters = data.get("parameters")
     if raw_parameters is None:
@@ -1957,49 +1819,49 @@ def _validate_task_request(
     elif isinstance(raw_parameters, dict):
         parameters = raw_parameters
     else:
-        return err("parameters must be an object")
+        raise ApiError("parameters must be an object")
 
-    # Template tasks with an uploaded image scan the full frame; no region needed
-    has_uploaded_template = task_type == "template" and parameters.get(
-        "template_image_data"
-    )
+    # Template/shape tasks with an uploaded image scan the full frame; no
+    # region needed.
+    has_uploaded_template = (
+        task_type == "template" and parameters.get("template_image_data")
+    ) or (task_type == "shape" and parameters.get("shape_image_data"))
 
-    # Multitool uses per-step regions; others need a global region (unless
-    # template upload). Boundary always arrives with a forced full_frame
-    # region_ref (set in api_tasks_create), so it satisfies this check.
+    # Multitool uses per-step regions; others need a region unless template upload.
+    # Boundary arrives full_frame.
     has_region_request = bool(region_name) or region_ref is not None
     if (
         not has_region_request
         and not has_uploaded_template
         and task_type != "multitool"
     ):
-        return err("region is required")
+        raise ApiError("region is required")
 
     # Early validation for multitool steps
     if task_type == "multitool":
         mt_steps = parameters.get("steps")
         if not mt_steps or not isinstance(mt_steps, list) or len(mt_steps) < 2:
-            return err("Multitool requires at least 2 steps")
+            raise ApiError("Multitool requires at least 2 steps")
         for i, step_raw in enumerate(mt_steps):
             if not isinstance(step_raw, dict):
-                return err(f"Step {i}: must be an object")
+                raise ApiError(f"Step {i}: must be an object")
             step_v = cast(dict[str, Any], step_raw)
             stype = step_v.get("type", "")
             if stype not in _VALID_STEP_TYPES:
-                return err(f"Step {i}: invalid type '{stype}'")
+                raise ApiError(f"Step {i}: invalid type '{stype}'")
             logic = step_v.get("logic")
             if logic is not None and logic not in ("AND", "NOT"):
-                return err(f"Step {i}: logic must be 'AND' or 'NOT'")
+                raise ApiError(f"Step {i}: logic must be 'AND' or 'NOT'")
             offset = step_v.get("offset")
             if offset is not None:
                 if i == 0:
-                    return err("Step 0: offset is not allowed on the first step")
+                    raise ApiError("Step 0: offset is not allowed on the first step")
                 if (
                     not isinstance(offset, dict)
                     or offset.get("min") is None
                     or offset.get("max") is None
                 ):
-                    return err(f"Step {i}: offset requires numeric min and max")
+                    raise ApiError(f"Step {i}: offset requires numeric min and max")
 
     all_known_regions = _combined_region_lookup()
     requested_region: dict[str, Any] | None = None
@@ -2010,26 +1872,21 @@ def _validate_task_request(
         for i, step in enumerate(mt_steps_early):
             step_region = (step.get("region") or "").strip()
             step_region_ref = step.get("region_ref")
-            # A template step with an uploaded image scans the full frame and
-            # needs no region (mirrors the top-level has_uploaded_template path).
+            # An uploaded-image template step scans the full frame; no region needed
+            # (mirrors has_uploaded_template).
             step_uploaded_template = step.get("type") == "template" and step.get(
                 "template_image_data"
             )
             if not step_region and step_region_ref is None:
                 if step_uploaded_template:
                     continue
-                return err(f"Step {i}: region is required")
+                raise ApiError(f"Step {i}: region is required")
             if step_region_ref is not None:
-                resolved = _resolve_region_request(step_region, step_region_ref)
-                if _is_flask_error_response(resolved):
-                    return resolved
+                _resolve_region_request(step_region, step_region_ref)  # validate only
             elif step_region not in all_known_regions:
-                return err(f"Step {i}: region '{step_region}' not found")
+                raise ApiError(f"Step {i}: region '{step_region}' not found")
     elif has_region_request:
-        resolved = _resolve_region_request(region_name, region_ref)
-        if _is_flask_error_response(resolved):
-            return resolved
-        region_name, requested_region = cast(tuple[str, dict[str, Any]], resolved)
+        region_name, requested_region = _resolve_region_request(region_name, region_ref)
 
     return (
         task_type,
@@ -2047,11 +1904,12 @@ def _coerce_tool_spec(spec: dict[str, Any], tool_type: str, context: str = "") -
     Mutates *spec* in place; raises ``ValueError`` on bad input. *context* prefixes
     error messages (e.g. ``"Step 0: "``). Shared by the task-level and per-step paths.
     """
-    if (
-        tool_type == "similarity"
-        or tool_type == "template"
-        and not spec.get("template_image_data")
-    ):
+    tool_spec = screenspace.TOOLS.get(tool_type)
+    needs_reference_ts = tool_spec is not None and (
+        bool(tool_spec.reference_region_param)
+        or (tool_spec.reference is not None and not spec.get(tool_spec.reference[0]))
+    )
+    if needs_reference_ts:
         spec["reference_timestamp"] = _coerce_float(
             spec.get("reference_timestamp"),
             "reference_timestamp",
@@ -2069,14 +1927,14 @@ def _coerce_tool_spec(spec: dict[str, Any], tool_type: str, context: str = "") -
         _coerce_color_controls(spec, context=context)
     if tool_type == "template":
         _coerce_template_controls(spec)
+    elif tool_type == "shape":
+        _coerce_shape_controls(spec, context=context)
 
 
-def _coerce_task_params(
-    task_type: str, parameters: dict[str, Any]
-) -> dict[str, Any] | FlaskResponse:
+def _coerce_task_params(task_type: str, parameters: dict[str, Any]) -> dict[str, Any]:
     """Coerce and validate type-specific parameter values.
 
-    Returns the updated parameters on success, or a Flask error response on failure.
+    Returns the updated parameters; raises ``ApiError`` (400) on a bad value.
     """
     try:
         if task_type == "multitool":
@@ -2089,7 +1947,7 @@ def _coerce_task_params(
             if task_type in ("text", "numbers", "change", "flow"):
                 _coerce_consecutive(parameters)
     except ValueError as exc:
-        return err(str(exc))
+        raise ApiError(str(exc)) from exc
 
     return parameters
 
@@ -2100,37 +1958,44 @@ def _extract_tool_media(
     frame_at: Callable[[float], "Any | None"],
     region_coords: dict[str, Any],
     context: str = "",
-) -> None | FlaskResponse:
+) -> None:
     """Extract the reference frame / template image into one spec.
 
     Mutates *spec* in place (task params or a multitool step). *frame_at* maps a
     GLOBAL reference timestamp into the owning sub-video. *context* prefixes error
-    messages (e.g. ``"Step 0: "``). Returns a Flask error response on failure, else
-    ``None``. Shared by the task-level and per-step multitool paths.
+    messages (e.g. ``"Step 0: "``). Raises ``ApiError`` (400) on failure. Shared
+    by the task-level and per-step multitool paths.
     """
-    if tool_type == "similarity":
+    tool_spec = screenspace.TOOLS.get(tool_type)
+    if tool_spec is not None and tool_spec.reference_region_param:
         ref_ts = cast(float, spec["reference_timestamp"])
         frame = frame_at(float(ref_ts))
         if frame is None:
-            return err(f"{context}could not read reference frame")
-        spec["reference_frame"] = screenspace.extract_region(frame, region_coords)
+            raise ApiError(f"{context}could not read reference frame")
+        spec[tool_spec.reference_region_param] = screenspace.extract_region(
+            frame, region_coords
+        )
 
-    elif tool_type == "template":
-        upload_b64 = spec.pop("template_image_data", None)
+    elif tool_spec is not None and tool_spec.reference is not None:
+        body_key, image_param, mask_param = tool_spec.reference
+        upload_b64 = spec.pop(body_key, None)
         if upload_b64:
             try:
                 bgr, mask = _template_bgr_and_mask_from_b64(upload_b64)
-            except ValueError:
-                return err(f"{context}could not decode uploaded image")
-            spec["template_image"] = bgr
+            except ValueError as exc:
+                raise ApiError(f"{context}could not decode uploaded image") from exc
+            spec[image_param] = bgr
             if mask is not None:
-                spec["template_mask"] = mask
+                spec[mask_param] = mask
         else:
             ref_ts = cast(float, spec["reference_timestamp"])
             frame = frame_at(float(ref_ts))
             if frame is None:
-                return err(f"{context}could not read template frame")
-            spec["template_image"] = screenspace.extract_region(frame, region_coords)
+                raise ApiError(f"{context}could not read {tool_type} reference frame")
+            spec[image_param] = screenspace.extract_region(frame, region_coords)
+            screenspace.attach_capture_mask(
+                spec, image_param, mask_param, region_coords
+            )
 
     elif tool_type == "scene":
         scene_refs = cast(list[dict[str, Any]], spec["scene_references"])
@@ -2138,7 +2003,9 @@ def _extract_tool_media(
         for ref in scene_refs:
             frame = frame_at(float(ref["timestamp"]))
             if frame is None:
-                return err(f"{context}could not read frame for scene '{ref['name']}'")
+                raise ApiError(
+                    f"{context}could not read frame for scene '{ref['name']}'"
+                )
             ref_region = screenspace.extract_region(frame, region_coords)
             scene_entry: dict = {"name": ref["name"], "frame": ref_region}
             if "threshold" in ref:
@@ -2146,38 +2013,17 @@ def _extract_tool_media(
             reference_scenes.append(scene_entry)
         spec["reference_scenes"] = reference_scenes
 
-    return None
-
-
-def _extract_task_media(
-    task_type: str,
-    parameters: dict[str, Any],
-    frame_at: Callable[[float], "Any | None"],
-    region_coords: dict[str, Any],
-) -> dict[str, Any] | FlaskResponse:
-    """Extract reference frames / template images for non-multitool tasks.
-
-    *frame_at* maps a GLOBAL reference timestamp into the owning sub-video and
-    returns the frame (single-video participants extract unchanged). Returns the
-    updated parameters on success, or a Flask error response on failure.
-    """
-    error = _extract_tool_media(parameters, task_type, frame_at, region_coords)
-    if error is not None:
-        return error
-    return parameters
-
 
 def _prepare_multitool_steps(
     parameters: dict[str, Any],
-    all_known_regions: dict[str, Any],
     frame_at: Callable[[float], "Any | None"],
     region_coords: dict[str, Any],
     resolve_region_fn: Any,
-) -> dict[str, Any] | FlaskResponse:
+) -> dict[str, Any]:
     """Resolve per-step regions and extract media for multitool tasks.
 
     *frame_at* maps a GLOBAL reference timestamp into the owning sub-video.
-    Returns the updated parameters on success, or a Flask error response on failure.
+    Returns the updated parameters; raises ``ApiError`` (400) on failure.
     """
     steps = parameters.get("steps", [])
     for i, step in enumerate(steps):
@@ -2187,10 +2033,9 @@ def _prepare_multitool_steps(
         step_region_name = (step.get("region") or "").strip()
         step_region_ref = step.get("region_ref")
         if step_region_name or step_region_ref is not None:
-            resolved = _resolve_region_request(step_region_name, step_region_ref)
-            if _is_flask_error_response(resolved):
-                return resolved
-            resolved_name, resolved_region = cast(tuple[str, dict[str, Any]], resolved)
+            resolved_name, resolved_region = _resolve_region_request(
+                step_region_name, step_region_ref
+            )
             step["region"] = resolved_name
             step["region_coords"] = resolve_region_fn(resolved_name, resolved_region)
         else:
@@ -2198,11 +2043,7 @@ def _prepare_multitool_steps(
 
         step_rc = step["region_coords"]
 
-        error = _extract_tool_media(
-            step, stype, frame_at, step_rc, context=f"Step {i}: "
-        )
-        if error is not None:
-            return error
+        _extract_tool_media(step, stype, frame_at, step_rc, context=f"Step {i}: ")
 
     return parameters
 
@@ -2240,63 +2081,57 @@ def _prepare_task_media(
     all_known_regions: dict[str, Any],
     region_coords: dict[str, Any],
     resolve_region_fn: Callable[..., dict[str, Any]],
-) -> dict[str, Any] | FlaskResponse:
+) -> dict[str, Any]:
     """Coerce params, extract reference media, and resolve multitool steps.
 
     Shared preparation pipeline for the task-creation and calibration routes: each
     resolves ``region_coords`` its own way (their region-naming rules differ) then
-    hands off here. Returns the enriched parameters, or a Flask error response.
+    hands off here. Returns the enriched parameters; raises ``ApiError`` (400).
     """
-    coerced = _coerce_task_params(task_type, parameters)
-    if isinstance(coerced, tuple):
-        return coerced
-    parameters = cast(dict[str, Any], coerced)
+    parameters = _coerce_task_params(task_type, parameters)
 
     frame_at = _participant_frame_extractor(participant)
-    extracted = _extract_task_media(task_type, parameters, frame_at, region_coords)
-    if isinstance(extracted, tuple):
-        return extracted
-    parameters = cast(dict[str, Any], extracted)
+    # Template/shape cut the sample from ``reference_region`` (persisted for re-runs) while
+    # ``region_coords`` stays the run window.
+    extract_coords = region_coords
+    if task_type in ("template", "shape"):
+        ref_region = str(parameters.get("reference_region") or "").strip()
+        if ref_region:
+            parameters["reference_region"] = ref_region
+            try:
+                _ref_name, ref_norm = screenspace.resolve_region_request(
+                    ref_region, None, _manifest
+                )
+            except ValueError as exc:
+                raise ApiError(f"reference_region: {exc}") from exc
+            extract_coords = resolve_region_fn(ref_region, ref_norm)
+        else:
+            parameters.pop("reference_region", None)
+    _extract_tool_media(parameters, task_type, frame_at, extract_coords)
 
     if task_type == "multitool":
-        prepared = _prepare_multitool_steps(
-            parameters, all_known_regions, frame_at, region_coords, resolve_region_fn
+        parameters = _prepare_multitool_steps(
+            parameters, frame_at, region_coords, resolve_region_fn
         )
-        if isinstance(prepared, tuple):
-            return prepared
-        parameters = cast(dict[str, Any], prepared)
 
     return parameters
 
 
 @screenspace_bp.route("/api/tasks", methods=["POST"])
+@json_endpoint
 def api_tasks_create() -> FlaskResponse:
     """Enqueue a new analysis task."""
     if not _worker:
         return err("Worker not initialized", 500)
 
-    data = request.get_json(silent=True)
-    if not data:
-        return err("JSON body required")
+    data = require_json_body()
 
-    # Boundary and Attention are full-frame only by contract: ignore any
-    # caller-supplied region so events and manifest metadata are never labeled
-    # with a region the scan didn't use (both scanners always analyze the whole
-    # frame). Forcing it here — before validation and before task["region_ref"]
-    # is recorded — keeps the stored region_name/coords and region_ref
-    # consistently full-frame.
+    # Boundary/Attention are full-frame by contract; force it before validation so stored
+    # region fields agree.
     if (data.get("type") or "").strip() in ("boundary", "attention"):
         data["region"] = ""
         data["region_ref"] = {"source": "full_frame"}
 
-    validated = _validate_task_request(data)
-    if isinstance(validated, Response) or (
-        isinstance(validated, tuple) and len(validated) == 2
-    ):
-        # cast() needed for older ty (<=0.0.33) which doesn't narrow `len == 2`;
-        # newer ty flags this as redundant but only as a non-failing warning.
-        return cast(FlaskResponse, validated)
-    assert isinstance(validated, tuple) and len(validated) == 6  # success tuple
     (
         task_type,
         participant,
@@ -2304,18 +2139,14 @@ def api_tasks_create() -> FlaskResponse:
         parameters,
         all_known_regions,
         requested_region,
-    ) = cast(
-        tuple[str, str, str, dict[str, Any], dict[str, Any], dict[str, Any] | None],
-        validated,
-    )
+    ) = _validate_task_request(data)
 
     video_paths = _participant_video_paths(participant)
     if not video_paths:
-        return err(f"No video for participant {participant}")
+        return err_no_video(participant, 400)
     video_path = video_paths[0]
 
-    # Default per-task source label; the per-part scan tags each event with the
-    # specific sub-video it came from for multi-video participants.
+    # Default source label; per-part scans tag each event with its own sub-video.
     source_video = Path(video_paths[0]).name
 
     # Region coords come from the first part's resolution (parts share it).
@@ -2336,7 +2167,7 @@ def api_tasks_create() -> FlaskResponse:
         region_name = "full_frame"
         region_coords = {"x": 0, "y": 0, "w": 0, "h": 0}
 
-    prepared = _prepare_task_media(
+    parameters = _prepare_task_media(
         task_type,
         participant,
         parameters,
@@ -2344,13 +2175,8 @@ def api_tasks_create() -> FlaskResponse:
         region_coords,
         resolve_region,
     )
-    if isinstance(prepared, tuple):
-        return prepared  # Flask error response
-    parameters = cast(dict[str, Any], prepared)
 
-    # Snapshot the global CV resolution scale into the task so the manifest
-    # records what scale produced each result (useful when re-running with
-    # a different scale to compare outputs).
+    # Record the CV scale on the task so the manifest shows what produced each result.
     parameters.setdefault("cv_resolution_scale", config.SCREENSPACE_CV_RESOLUTION_SCALE)
 
     task = screenspace.create_task(
@@ -2396,12 +2222,13 @@ def api_tasks_cancel(task_id: str) -> FlaskResponse:
 
 
 @screenspace_bp.route("/api/tasks/reorder", methods=["PUT"])
+@json_endpoint
 def api_tasks_reorder() -> FlaskResponse:
     """Reorder queued tasks by priority."""
     if not _worker:
         return err("Worker not initialized", 500)
-    data = request.get_json(silent=True)
-    if not data or "task_ids" not in data:
+    data = require_json_body("task_ids list required")
+    if "task_ids" not in data:
         return err("task_ids list required")
     _worker.reorder(data["task_ids"])
     _schedule_persist()
@@ -2546,6 +2373,10 @@ def api_intake_poll() -> FlaskResponse:
 def api_export_events() -> FlaskResponse:
     """Export Screenspace events as analysis-ready JSON or CSV.
 
+    Both formats return a downloadable file body (not the ``ok()`` envelope):
+    CSV rows, or the ``{exported_at, version, records}`` JSON envelope
+    :func:`data_export.to_json` also writes for the bundle export.
+
     Query params:
       format:      "json" (default) or "csv"
       excluded:    "true" to keep only excluded, "false" to drop excluded; default keeps both
@@ -2588,72 +2419,65 @@ def api_export_events() -> FlaskResponse:
         )
         return response
     if fmt == "json":
-        return ok(events=utils.sanitize_floats(records))
+        # Same {exported_at, version, records} envelope as the bundle export, so the saved
+        # file is self-describing.
+        body = data_export.to_json(utils.sanitize_floats(records))
+        response = Response(body, mimetype="application/json")
+        response.headers["Content-Disposition"] = (
+            'attachment; filename="screenspace_events.json"'
+        )
+        return response
     return err(f"Unsupported format: {fmt}")
+
+
+def _set_event_excluded(event_id: str, excluded: bool) -> FlaskResponse:
+    """Set one event's excluded flag; 404 when the id is unknown."""
+    with _manifest_lock:
+        for e in _manifest.get("events", []):
+            if e.get("id") == event_id:
+                e["excluded"] = excluded
+                _bump_events_version()
+                _do_persist(drain_events=False)
+                return ok()
+    return err("Event not found", 404)
+
+
+def _bulk_set_excluded(excluded: bool) -> FlaskResponse:
+    """Set the excluded flag on every event named in the request's id list."""
+    data = request.get_json(silent=True) or {}
+    ids = set(data.get("ids", []))
+    if not ids:
+        return err("ids list required")
+    with _manifest_lock:
+        count = 0
+        for e in _manifest.get("events", []):
+            if e.get("id") in ids:
+                e["excluded"] = excluded
+                count += 1
+        if count:
+            _bump_events_version()
+        _do_persist(drain_events=False)
+    return ok(updated=count)
 
 
 @screenspace_bp.route("/api/events/<event_id>/exclude", methods=["PUT"])
 def api_event_exclude(event_id: str) -> FlaskResponse:
-    """Set an event as excluded."""
-    with _manifest_lock:
-        for e in _manifest.get("events", []):
-            if e["id"] == event_id:
-                e["excluded"] = True
-                _bump_events_version()
-                _do_persist(drain_events=False)
-                return ok()
-    return err("Event not found", 404)
+    return _set_event_excluded(event_id, True)
 
 
 @screenspace_bp.route("/api/events/<event_id>/include", methods=["PUT"])
 def api_event_include(event_id: str) -> FlaskResponse:
-    """Set an event as included."""
-    with _manifest_lock:
-        for e in _manifest.get("events", []):
-            if e["id"] == event_id:
-                e["excluded"] = False
-                _bump_events_version()
-                _do_persist(drain_events=False)
-                return ok()
-    return err("Event not found", 404)
+    return _set_event_excluded(event_id, False)
 
 
 @screenspace_bp.route("/api/events/bulk-exclude", methods=["PUT"])
 def api_events_bulk_exclude() -> FlaskResponse:
-    """Bulk-exclude events by ID list."""
-    data = request.get_json(silent=True) or {}
-    ids = set(data.get("ids", []))
-    if not ids:
-        return err("ids list required")
-    with _manifest_lock:
-        count = 0
-        for e in _manifest.get("events", []):
-            if e["id"] in ids:
-                e["excluded"] = True
-                count += 1
-        if count:
-            _bump_events_version()
-        _do_persist(drain_events=False)
-    return ok(updated=count)
+    return _bulk_set_excluded(True)
 
 
 @screenspace_bp.route("/api/events/bulk-include", methods=["PUT"])
 def api_events_bulk_include() -> FlaskResponse:
-    """Bulk-include events by ID list."""
-    data = request.get_json(silent=True) or {}
-    ids = set(data.get("ids", []))
-    if not ids:
-        return err("ids list required")
-    with _manifest_lock:
-        count = 0
-        for e in _manifest.get("events", []):
-            if e["id"] in ids:
-                e["excluded"] = False
-                count += 1
-        if count:
-            _bump_events_version()
-        _do_persist(drain_events=False)
-    return ok(updated=count)
+    return _bulk_set_excluded(False)
 
 
 # ---- Helpers ----
@@ -2724,8 +2548,56 @@ def _coerce_template_controls(params: dict[str, Any], *, context: str = "") -> N
         params["template_scale"] = max(lo, min(hi, scale))
 
 
+def _coerce_shape_controls(params: dict[str, Any], *, context: str = "") -> None:
+    """Validate shape-tool controls: the horizontal + optional vertical ladders."""
+    for min_key, max_key, steps_key in (
+        ("scale_min", "scale_max", "scale_steps"),
+        ("scale_y_min", "scale_y_max", "scale_y_steps"),
+    ):
+        for key in (min_key, max_key):
+            if params.get(key) is None:
+                params.pop(key, None)
+                continue
+            val = _coerce_float(params[key], key, context=context)
+            if val is None or val <= 0:
+                raise ValueError(f"{context}{key} must be a positive number")
+            params[key] = max(0.1, min(4.0, val))
+        if (
+            min_key in params
+            and max_key in params
+            and params[min_key] > params[max_key]
+        ):
+            raise ValueError(f"{context}{min_key} must not exceed {max_key}")
+        if params.get(steps_key) is None:
+            params.pop(steps_key, None)
+            continue
+        try:
+            steps = int(params[steps_key])
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"{context}{steps_key} must be an integer") from exc
+        params[steps_key] = max(1, min(12, steps))
+
+
 def _coerce_ocr_controls(params: dict[str, Any], *, context: str = "") -> None:
     """Validate optional OCR controls shared by Text and Numbers tools."""
+    langs = params.get("languages")
+    if langs is not None:
+        # Closed set (screenspace_ocr._OCR_LANG_TO_MODEL): unknown codes used to die mid-scan;
+        # refuse at creation.
+        valid = tuple(screenspace._OCR_LANG_TO_MODEL)
+        if (
+            not isinstance(langs, list)
+            or not langs
+            or any(lang not in valid for lang in langs)
+        ):
+            raise ValueError(
+                f"{context}languages must be a non-empty list drawn from {valid}"
+            )
+        # Known codes can still need two rec models (ja+ko); refuse before queueing.
+        try:
+            screenspace._resolve_ocr_model([str(lang) for lang in langs])
+        except ValueError as exc:
+            raise ValueError(f"{context}{exc}") from exc
     if "ocr_confidence_threshold" not in params:
         return
     threshold = _coerce_float(
@@ -2800,8 +2672,7 @@ def _validate_scene_references(
     validated_refs = []
     for i, ref_raw in enumerate(scene_refs):
         if not isinstance(ref_raw, dict):
-            # ValueError, not TypeError: this validator's contract is that any bad
-            # payload raises ValueError, which the calling route turns into a 400.
+            # ValueError by contract: the calling route turns it into a 400.
             raise ValueError(f"{context}scene_references[{i}] must be an object")  # noqa: TRY004
         ref_data = cast(dict[str, Any], ref_raw)
         name = str(ref_data.get("name", "")).strip()
@@ -2894,6 +2765,13 @@ def _init_screenspace_state(sheet_context: Any = None) -> None:
 
     global _manifest, _worker, _participant_source
 
+    # Old worker callbacks resolve globals late and would pollute the new manifest; retire it first.
+    if _worker is not None:
+        _worker.on_task_complete = None
+        _worker.on_progress_update = None
+        _worker.cancel_all()
+        _worker.stop(join_timeout=2.0)
+
     _manifest = screenspace.load_screenspace_manifest()
     _backfill_missing_events(_manifest)
 
@@ -2908,8 +2786,7 @@ def _init_screenspace_state(sheet_context: Any = None) -> None:
     _worker.restore_tasks(_manifest.get("tasks", []))
     _worker.start()
 
-    # Reclaim a stale empty manifest left by a prior abandoned session: the
-    # guarded save removes the file when empty, idempotent rewrite otherwise.
+    # Reclaims a stale empty manifest from an abandoned session; the guarded save deletes when empty.
     _persist_manifest()
 
 
@@ -2934,12 +2811,8 @@ def _do_persist(*, drain_events: bool = True) -> None:
     )
 
 
-# Manifest-write debounce: rapid UI mutations (enqueue / cancel / reorder /
-# pause / resume) coalesce into one disk write after a short quiet period.
-# atexit fires the pending flush on normal exit / SIGINT / SIGTERM, but not
-# on SIGKILL or hard power-loss — accepted because screenspace manifest is
-# recreatable analysis state. The lambda looks up _do_persist at call time so
-# tests monkeypatching it are seen.
+# Debounced manifest writes; atexit flushes on exit, not SIGKILL (recreatable state).
+# Lambda keeps _do_persist monkeypatchable.
 (_schedule_persist, _flush_pending_persist, _cancel_pending_persist_timer) = (
     make_debounced_persist(lambda: _do_persist(drain_events=False), _manifest_lock)
 )

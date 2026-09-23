@@ -17,10 +17,18 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # release_glob is per-leg on purpose: each leg lists exactly the
+          # files it produces, so fail_on_unmatched_files (see the publish
+          # step) holds every pattern to account. A shared cross-platform list
+          # would fail whichever leg didn't produce the other OS's file.
           - os: macos-latest
             artifact_name: clipgen-macos
+            release_glob: dist/*.dmg
           - os: windows-latest
             artifact_name: clipgen-windows
+            release_glob: |
+              dist/*.zip
+              dist/*-setup.exe
 
     runs-on: ${{ matrix.os }}
 
@@ -47,24 +55,89 @@ jobs:
           python-version: "3.12"
 
       - name: Install dependencies
-        run: |
-          uv venv
-          uv pip install . --torch-backend cpu
-          uv pip install pyinstaller==6.19.0
+        # uv sync --locked (not `uv pip install .`) so the env exactly matches
+        # uv.lock, and every later `uv run` in this workflow passes --no-sync.
+        # A plain `uv run` re-syncs the project env against the lock first,
+        # which would silently replace the force-reinstalled no-FFmpeg cv2
+        # wheel (below) with the official GPL-tainted one from PyPI — the
+        # pre-PyInstaller assert caught exactly that on the first CI run.
+        # --extra build: PyInstaller, pinned once in pyproject.toml.
+        run: uv sync --locked --extra build
 
-      - name: Cache pinned ffmpeg binaries
+      # The official opencv-python-headless macOS arm64 wheels bundle a
+      # GPL-3-configured Homebrew FFmpeg (upstream bug opencv/opencv-python#1260,
+      # open as of 2026-08-16), which would force the whole DMG to be conveyed
+      # GPL-3.0-or-later. The dylibs cannot be stripped post-hoc, so the macOS
+      # leg rebuilds the same version from its published sdist with FFmpeg off:
+      # zero bundled dylibs (Apple system frameworks only), all image codecs
+      # static in-tree, and −76 MB unpacked. clipgen never uses cv2's video I/O.
+      # Research + local repro recipe: plans/archive/OPENCV-SELF-COMPILE-PLAN.md.
+      - name: Restore no-FFmpeg OpenCV wheel (macOS)
+        if: matrix.os == 'macos-latest'
+        id: opencv-wheel
+        uses: actions/cache@v6
+        with:
+          path: build/opencv-wheel
+          # Bump the trailing -v1 to force a rebuild without a version change.
+          key: opencv-noffmpeg-4.14.0.94-cp312-macos13-arm64-v1
+
+      - name: Build OpenCV without FFmpeg (macOS, cache miss)
+        if: matrix.os == 'macos-latest' && steps.opencv-wheel.outputs.cache-hit != 'true'
+        run: |
+          set -euo pipefail
+          # ~2 min on 12 cores locally; expect ~10 min on the 3-vCPU runner.
+          # The sdist's PEP 517 backend fetches cmake itself; no brew needed.
+          curl -fsSL -o /tmp/opencv-sdist.tar.gz \
+            "https://files.pythonhosted.org/packages/67/8a/51ff1c6287be0b6cd3070cf095875da4ff7d6eda38507e6ada5608786a78/opencv_python_headless-4.14.0.94.tar.gz"
+          echo "4afa2ea1214453648be88259f035712454faa9039b686de7753569ba8eec1577  /tmp/opencv-sdist.tar.gz" \
+            | shasum -a 256 -c
+          tar -xzf /tmp/opencv-sdist.tar.gz -C /tmp
+          mkdir -p build/opencv-wheel
+          # MACOSX_DEPLOYMENT_TARGET matches the official wheel's macosx_13_0
+          # floor. The CXXFLAGS -isystem works around CommandLineTools installs
+          # that ship no toolchain libc++ headers (harmless under full Xcode,
+          # where the SDK copy matches the toolchain).
+          env ENABLE_HEADLESS=1 \
+              CMAKE_ARGS="-DWITH_FFMPEG=OFF -DPYTHON3_LIMITED_API=ON" \
+              MACOSX_DEPLOYMENT_TARGET=13.0 \
+              CMAKE_BUILD_PARALLEL_LEVEL="$(sysctl -n hw.ncpu)" \
+              CXXFLAGS="-isystem $(xcrun --show-sdk-path)/usr/include/c++/v1" \
+            uv build --wheel --python 3.12 \
+              --out-dir build/opencv-wheel /tmp/opencv_python_headless-4.14.0.94
+          ls -la build/opencv-wheel
+
+      - name: Install the no-FFmpeg OpenCV wheel (macOS)
+        if: matrix.os == 'macos-latest'
+        run: |
+          set -euo pipefail
+          uv pip install --force-reinstall --no-deps build/opencv-wheel/opencv_python_headless-*.whl
+          # Fail here, before PyInstaller, if the wheel somehow carries FFmpeg
+          # (e.g. a cached wheel built before a flag change). Deliberately
+          # .venv/bin/python, not `uv run python`: a syncing uv run would
+          # reinstall the official wheel from the lock and defeat this step.
+          .venv/bin/python -c "import cv2; bi = cv2.getBuildInformation(); \
+            assert 'FFMPEG' not in bi, 'self-built cv2 unexpectedly enables FFMPEG'; \
+            print('cv2', cv2.__version__, '- no FFmpeg')"
+          if find .venv -type d -name ".dylibs" -path "*cv2*" | grep -q .; then
+            echo "::error::self-built cv2 wheel still bundles dylibs"; exit 1
+          fi
+
+      - name: Cache pinned vendor files (ffmpeg + llama-server + OCR models)
         uses: actions/cache@v6
         with:
           path: build/vendor
           key: ffmpeg-vendor-${{ runner.os }}-${{ hashFiles('build/fetch_binaries.py') }}
 
-      - name: Fetch pinned ffmpeg binaries
+      - name: Fetch pinned vendor files (ffmpeg + llama-server + OCR models)
         # Idempotent: a cache hit makes this a hash-check no-op. The spec
-        # refuses to build without these files.
-        run: uv run build/fetch_binaries.py
+        # refuses to build without these files. --no-sync: see Install
+        # dependencies.
+        run: uv run --no-sync build/fetch_binaries.py
 
       - name: Build executable
-        run: uv run pyinstaller --clean --noconfirm build/clipgen.spec
+        # --no-sync: a syncing uv run would swap the no-FFmpeg cv2 back to the
+        # official GPL wheel right before bundling (see Install dependencies).
+        run: uv run --no-sync pyinstaller --clean --noconfirm build/clipgen.spec
 
       - name: Verify bundled ffmpeg features (macOS)
         if: matrix.os == 'macos-latest'
@@ -83,24 +156,156 @@ jobs:
           done
           "$FF" -hide_banner -filters | grep -q " drawtext " \
             || { echo "::error::bundled ffmpeg lacks the drawtext filter"; exit 1; }
+          # The bundled AI runtime must run from the bundle — a missing dylib
+          # in its closure (fetch_binaries member drift) dies right here.
+          LS="$(find dist/clipgen.app -type f -name llama-server -path "*/bin/*" | head -1)"
+          test -n "$LS" || { echo "::error::bundle lacks llama-server"; exit 1; }
+          "$LS" --version 2>&1 | grep -q "build" \
+            || { echo "::error::bundled llama-server does not run"; exit 1; }
+          # faster-whisper's Silero VAD model must ship, or every default
+          # (VAD-on) transcription dies with NO_SUCHFILE. Match *.onnx, not the
+          # current filename, so an upstream rename doesn't require a CI edit.
+          find dist/clipgen.app -path "*faster_whisper/assets/*.onnx" | grep -q . \
+            || { echo "::error::bundle lacks the faster_whisper VAD .onnx asset"; exit 1; }
+          # OCR must work offline: rapidocr's default models (from the wheel)
+          # and the vendored non-default recognition models must both ship.
+          find dist/clipgen.app -path "*rapidocr*" -name "*.onnx" | grep -q . \
+            || { echo "::error::bundle lacks rapidocr's default models"; exit 1; }
+          for rec in latin_rec.onnx japan_rec.onnx korean_rec.onnx; do
+            find dist/clipgen.app -path "*ocr_models/$rec" | grep -q . \
+              || { echo "::error::bundle lacks the vendored OCR rec model $rec"; exit 1; }
+          done
+          find dist/clipgen.app -path "*speaker_models/speaker_embed.onnx" | grep -q . \
+            || { echo "::error::bundle lacks the vendored speaker model"; exit 1; }
+
+      - name: Verify no in-process FFmpeg libraries (macOS)
+        if: matrix.os == 'macos-latest'
+        run: |
+          set -euo pipefail
+          # cv2 is self-built with -DWITH_FFMPEG=OFF (wheel step above), so the
+          # only GPL FFmpeg allowed in the bundle is the pinned ffmpeg/ffprobe
+          # executables under bin/ — separate programs, mere aggregation, and
+          # THIRD-PARTY-LICENSES says exactly that. Any FFmpeg *library* in the
+          # bundle would be loaded in-process and silently turn the DMG's
+          # licensing text false, so fail the build instead. This also catches
+          # the official GPL-tainted wheel (opencv/opencv-python#1260) leaking
+          # back in via a dependency-resolution change.
+          # BUNDLE renames dot-directories (cv2/.dylibs -> cv2/__dot__dylibs),
+          # so match both spellings.
+          if find dist/clipgen.app \( -type d -o -type l \) \
+            \( -name ".dylibs" -o -name "__dot__dylibs" \) -path "*cv2*" | grep -q .; then
+            echo "::error::cv2 ships bundled dylibs — the no-FFmpeg self-built wheel was not used."
+            exit 1
+          fi
+          # Exact FFmpeg family names, not a libav*/libsw* glob: Pillow ships
+          # libavif (the BSD AV1 *image* codec, no FFmpeg relation), which a
+          # glob would flag — it did, on this guard's first green-wheel run.
+          offenders="$(find dist/clipgen.app -type f \
+            \( -name "libavcodec*.dylib" -o -name "libavformat*.dylib" \
+               -o -name "libavutil*.dylib" -o -name "libavdevice*.dylib" \
+               -o -name "libavfilter*.dylib" -o -name "libswscale*.dylib" \
+               -o -name "libswresample*.dylib" -o -name "libpostproc*.dylib" \
+               -o -name "libx264*.dylib" -o -name "libx265*.dylib" \) \
+            ! -path "*/bin/*")"
+          if [ -n "$offenders" ]; then
+            printf '%s\n' "$offenders"
+            echo "::error::FFmpeg/x264/x265 shared libraries found outside bin/;"
+            echo "::error::the macOS app is conveyed as MIT and must not link GPL code."
+            exit 1
+          fi
+          echo "no in-process FFmpeg libraries in the bundle"
+          # PyAV was overridden out of the dependency tree (its wheel carried a
+          # third FFmpeg; transcription feeds whisper ffmpeg-decoded ndarrays
+          # instead). Its LGPL notice section is gone from THIRD-PARTY-LICENSES,
+          # so its dylibs sneaking back into the bundle would ship unattributed.
+          if find dist/clipgen.app -type d \( -name "av" -o -name "av.libs" \) | grep -q .; then
+            echo "::error::PyAV is back in the bundle; restore its THIRD-PARTY-LICENSES sections."
+            exit 1
+          fi
+          # imagehash and scikit-image were replaced by in-tree code
+          # (screenspace_primitives.PHash / structural_similarity); scipy and
+          # pywt only ever rode in as their transitive dependencies. Their
+          # notice sections are gone from THIRD-PARTY-LICENSES, so any of them
+          # reappearing in the bundle would ship ~110 MB unattributed.
+          if find dist/clipgen.app -type d \
+            \( -name "imagehash" -o -name "skimage" -o -name "scipy" -o -name "pywt" \) \
+            | grep -q .; then
+            echo "::error::imagehash/skimage/scipy/pywt are back in the bundle;"
+            echo "::error::restore their THIRD-PARTY-LICENSES sections or drop the new import."
+            exit 1
+          fi
 
       - name: Verify bundled ffmpeg features (Windows)
         if: matrix.os == 'windows-latest'
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          $ff = "dist/clipgen/_internal/bin/ffmpeg.exe"
-          & dist/clipgen/_internal/bin/ffprobe.exe -version | Select-Object -First 1
+          $ff = "dist/clipgen/lib/bin/ffmpeg.exe"
+          & dist/clipgen/lib/bin/ffprobe.exe -version | Select-Object -First 1
           $encoders = & $ff -hide_banner -encoders
           foreach ($name in "libx264", "libwebp", "libvpx-vp9") {
             if (-not ($encoders | Select-String -Quiet " $name ")) {
               throw "bundled ffmpeg lacks encoder $name"
             }
           }
+          & dist/clipgen/lib/bin/llama-server.exe --version
+          if ($LASTEXITCODE -ne 0) { throw "bundled llama-server.exe does not run" }
           $filters = & $ff -hide_banner -filters
           if (-not ($filters | Select-String -Quiet " drawtext ")) {
             throw "bundled ffmpeg lacks the drawtext filter"
           }
+          # faster-whisper's Silero VAD model must ship, or every default
+          # (VAD-on) transcription dies with NO_SUCHFILE. Match *.onnx, not the
+          # current filename, so an upstream rename doesn't require a CI edit.
+          $vad = Get-ChildItem -Recurse dist/clipgen/lib/faster_whisper -Filter *.onnx -ErrorAction SilentlyContinue
+          if (-not $vad) {
+            throw "bundle lacks the faster_whisper VAD .onnx asset"
+          }
+          # OCR must work offline: rapidocr's default models (from the wheel)
+          # and the vendored non-default recognition models must both ship.
+          $ocr = Get-ChildItem -Recurse dist/clipgen/lib/rapidocr -Filter *.onnx -ErrorAction SilentlyContinue
+          if (-not $ocr) {
+            throw "bundle lacks rapidocr's default models"
+          }
+          foreach ($rec in @("latin_rec.onnx", "japan_rec.onnx", "korean_rec.onnx")) {
+            if (-not (Test-Path "dist/clipgen/lib/ocr_models/$rec")) {
+              throw "bundle lacks the vendored OCR rec model $rec"
+            }
+          }
+          if (-not (Test-Path "dist/clipgen/lib/speaker_models/speaker_embed.onnx")) {
+            throw "bundle lacks the vendored speaker model"
+          }
+
+      - name: Smoke-launch the frozen exe (Windows)
+        if: matrix.os == 'windows-latest'
+        shell: pwsh
+        run: |
+          # The bootloader loads python312.dll before any Python runs, so even
+          # `--help` catches a bundle whose DLLs were corrupted at build time
+          # (GNU strip on the runner's PATH did exactly that once: LoadLibrary
+          # error 998 at launch, green build). Not a startup-time proxy — just
+          # "does it launch at all".
+          $ErrorActionPreference = 'Stop'
+          # Capture first, trim after. Piping a native command straight into
+          # `Select-Object -First N` stops the pipeline early, which kills the
+          # process and leaves $LASTEXITCODE empty — the check then "fails" on a
+          # perfectly good build.
+          $out = & dist/clipgen/clipgen.exe --help
+          if ($LASTEXITCODE -ne 0) { throw "clipgen.exe --help exited with $LASTEXITCODE" }
+          $out | Select-Object -First 5
+
+      - name: Smoke-launch the frozen binary (macOS)
+        if: matrix.os == 'macos-latest'
+        run: |
+          set -euo pipefail
+          # Same guard as the Windows leg: proves the frozen interpreter loads.
+          # Captured rather than piped into `head`, which would close the pipe
+          # early and SIGPIPE the binary under `pipefail`. The excerpt uses
+          # sed -n (reads all input) instead of head for the same reason:
+          # head's early exit SIGPIPEs printf, and pipefail turns that into a
+          # step failure — racy, so it passes or fails by output-size luck.
+          out=$(./dist/clipgen.app/Contents/MacOS/clipgen --help)
+          printf '%s\n' "$out" | sed -n '1,5p'
 
       - name: Ad-hoc codesign the .app bundle (macOS)
         if: matrix.os == 'macos-latest'
@@ -128,14 +333,21 @@ jobs:
              clipgen.app and it opens in its own window. You won't see this
              message again.
 
-          Nothing else to install: ffmpeg and ffprobe, which clipgen uses to cut
-          and inspect video, are bundled inside the app. They are GPL-licensed
-          free software — see the THIRD-PARTY-LICENSES file next to this one for
-          the license text and where to get their source code.
+          Nothing else to install: ffmpeg and ffprobe (video cutting and
+          inspection) and llama-server (the local AI runtime behind summaries
+          and reports) are bundled inside the app. AI models download on
+          first use, with your confirmation.
 
-          Ollama (https://ollama.com/download) is optional — it powers the AI
-          summaries and reports. Everything else works without it, and clipgen
-          offers to download it for you the first time you use those features.
+          LICENSING
+
+          clipgen is MIT-licensed and lives at https://github.com/henedl/clipgen.
+          The bundled ffmpeg and ffprobe executables are GPL-3.0-or-later free
+          software that clipgen runs strictly as separate programs, so they do
+          not change the license of the app itself. See the THIRD-PARTY-LICENSES
+          file next to this one for the full notices and for where to get the
+          corresponding source code. You can also print it with:
+
+              /Applications/clipgen.app/Contents/MacOS/clipgen --licenses
 
           clipgen also still works as a command-line tool. Run the binary inside
           the bundle directly:
@@ -158,10 +370,13 @@ jobs:
           mkdir -p dmg-staging
           cp -R dist/clipgen.app dmg-staging/
           cp dist/INSTALL.txt dmg-staging/
-          cp build/THIRD-PARTY-LICENSES dmg-staging/ 2>/dev/null || true
+          # Hard failure, not `|| true`: the bundle ships GPL/LGPL/MPL software,
+          # so a DMG without this file is a distribution defect, not a cosmetic
+          # one. The Windows copy below has always failed hard; match it.
+          cp build/THIRD-PARTY-LICENSES dmg-staging/
           ln -s /Applications dmg-staging/Applications
           hdiutil create -volname "clipgen" -srcfolder dmg-staging \
-            -ov -format UDZO "dist/clipgen-${{ github.ref_type == 'tag' && github.ref_name || 'dev' }}.dmg"
+            -ov -format UDZO "dist/clipgen-${{ github.ref_type == 'tag' && github.ref_name || 'dev' }}-macos.dmg"
           rm -rf dmg-staging
           ls -la dist/*.dmg
 
@@ -169,7 +384,7 @@ jobs:
         if: matrix.os == 'windows-latest'
         shell: pwsh
         run: |
-          # One-dir emits dist/clipgen/ (clipgen.exe + _internal/). Ship one file.
+          # One-dir emits dist/clipgen/ (clipgen.exe + lib/). Ship one file.
           $ErrorActionPreference = 'Stop'
           # A GPL ffmpeg now ships inside the folder, so the license text must
           # travel with it (the DMG has carried it since the LGPL-via-cv2 days).
@@ -177,14 +392,23 @@ jobs:
           Set-Content -Path dist/clipgen/INSTALL.txt -Value @"
           clipgen for Windows
 
-          Unzip this folder anywhere and run clipgen.exe. Nothing else to
-          install: ffmpeg and ffprobe, which clipgen uses to cut and inspect
-          video, are bundled (in _internal/bin/). They are GPL-licensed free
-          software - see THIRD-PARTY-LICENSES in this folder for the license
-          text and where to get their source code.
+          Two ways to get clipgen onto a machine:
 
-          Ollama (https://ollama.com/download) is optional - it powers the AI
-          summaries and reports. Everything else works without it.
+          * clipgen-<version>-setup.exe - recommended. Installs for the current
+            user (no admin rights needed) into %LOCALAPPDATA%\Programs\clipgen,
+            adds a Start Menu shortcut, and registers an uninstaller.
+          * This zip - portable. Unzip the folder anywhere (a USB stick works)
+            and run clipgen.exe. Keep clipgen.exe and lib\ together.
+
+          Nothing else to install: ffmpeg and ffprobe (video cutting and
+          inspection, GPL-licensed, run as separate programs) and llama-server
+          (the MIT-licensed local AI runtime behind summaries and reports) are
+          bundled in lib\bin\. AI models download on first use, with your
+          confirmation. See THIRD-PARTY-LICENSES in this folder for license
+          text and source locations, or run: clipgen.exe --licenses
+
+          clipgen's own source code is MIT-licensed and lives at
+          https://github.com/henedl/clipgen.
 
           clipgen.exe also works from a terminal: clipgen.exe --help
           "@
@@ -192,18 +416,60 @@ jobs:
           Compress-Archive -Path dist/clipgen -DestinationPath "dist/clipgen-$ver-windows.zip" -Force
           Get-ChildItem dist/*.zip
 
+      - name: Build installer (Windows)
+        if: matrix.os == 'windows-latest'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          # Inno Setup 6 is preinstalled on the windows-latest runner image
+          # (see actions/runner-images); choco is only a fallback should a
+          # future image drop it.
+          $iscc = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) {
+            choco install innosetup -y --no-progress
+          }
+          if ($env:GITHUB_REF_TYPE -eq 'tag') { $ver = $env:GITHUB_REF_NAME } else { $ver = 'dev' }
+          & $iscc /DAppVer=$ver build\clipgen.iss
+          if ($LASTEXITCODE -ne 0) { throw "ISCC exited with $LASTEXITCODE" }
+          if (-not (Test-Path "dist/clipgen-$ver-setup.exe")) { throw "installer not found in dist/" }
+          Get-ChildItem dist/*-setup.exe
+
+      - name: Smoke-install the installer (Windows)
+        if: matrix.os == 'windows-latest'
+        shell: pwsh
+        run: |
+          # A clean ISCC exit proves the script compiled, not that the result
+          # installs or that the installed exe launches. Install silently, then
+          # reuse the --help smoke from above (the bootloader loads
+          # python312.dll before argv, so this catches a broken payload too).
+          $ErrorActionPreference = 'Stop'
+          if ($env:GITHUB_REF_TYPE -eq 'tag') { $ver = $env:GITHUB_REF_NAME } else { $ver = 'dev' }
+          # Start-Process -Wait is required: setup.exe is a GUI-subsystem
+          # binary, so invoking it with `&` returns immediately and
+          # $LASTEXITCODE would be stale.
+          $p = Start-Process -FilePath "dist/clipgen-$ver-setup.exe" `
+            -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART' -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw "installer exited with $($p.ExitCode)" }
+          $exe = "$env:LOCALAPPDATA\Programs\clipgen\clipgen.exe"
+          $out = & $exe --help
+          if ($LASTEXITCODE -ne 0) { throw "installed clipgen.exe --help exited with $LASTEXITCODE" }
+          $out | Select-Object -First 5
+
+      # Only the upload steps below consume this, and they are non-tag-only, so
+      # the short sha is the whole answer — a tag branch here would be dead.
+      # GitHub expressions have no substring function, hence the step.
       - name: Compute artifact suffix
         id: suffix
         shell: bash
-        run: |
-          if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
-            echo "suffix=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
-          else
-            echo "suffix=${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
-          fi
+        run: echo "suffix=${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
 
+      # Non-tag builds only. upload-artifact always zips its payload (no opt-out
+      # — Actions has stored artifacts as zips since v4), so on a tag these would
+      # be a redundant double-zipped copy of assets the Release already carries,
+      # at ~800 MB of artifact storage per release. Dev builds keep them because
+      # the Actions tab is the only way to get one.
       - name: Upload artifact (macOS)
-        if: matrix.os == 'macos-latest'
+        if: matrix.os == 'macos-latest' && github.ref_type != 'tag'
         uses: actions/upload-artifact@v6
         with:
           name: ${{ matrix.artifact_name }}-${{ steps.suffix.outputs.suffix }}
@@ -212,20 +478,31 @@ jobs:
           if-no-files-found: error
 
       - name: Upload artifact (Windows)
-        if: matrix.os == 'windows-latest'
+        if: matrix.os == 'windows-latest' && github.ref_type != 'tag'
         uses: actions/upload-artifact@v6
         with:
           name: ${{ matrix.artifact_name }}-${{ steps.suffix.outputs.suffix }}
           # The .zip, not the raw folder: upload-artifact re-zips its payload and
           # drops Unix permissions, and a loose folder is not a Release asset.
-          path: dist/*.zip
+          # The installer rides along; its own existence is asserted in the
+          # build-installer step (if-no-files-found only guards a total miss).
+          path: |
+            dist/*.zip
+            dist/*-setup.exe
           if-no-files-found: error
 
+      # Assets only. release-notes.yml owns the body and runs on the same tag in
+      # parallel; this action falls back to the existing body when the `body`
+      # input is empty, which is what makes either ordering safe. Never add a
+      # `body:` here — it would clobber the generated notes.
       - name: Publish to GitHub Releases (tags only)
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
-          files: |
-            dist/*.dmg
-            dist/*.zip
-          fail_on_unmatched_files: false
+          # This leg's own artifact only — the other leg uploads its own.
+          files: ${{ matrix.release_glob }}
+          # On a tag this is the only guard left that packaging produced anything
+          # (the upload-artifact steps above, which carry if-no-files-found:
+          # error, are skipped there) — a silent miss would otherwise publish a
+          # release with a platform absent.
+          fail_on_unmatched_files: true

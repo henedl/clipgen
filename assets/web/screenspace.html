@@ -101,6 +101,15 @@
               <span id="wandToleranceValue">32</span>
             </span>
           </span>
+          <!-- Shape-draw controls; shown while the Shape tool's draw mode is on. -->
+          <span id="shapeDrawWrap" class="wand-tolerance collapsed">
+            <span class="wand-tolerance-inner">
+              <input id="shapeBrushInput" type="range" min="4" max="96" step="1" value="24" title="Brush size">
+              <span id="shapeBrushValue">24</span>
+              <button id="shapeDrawApplyBtn" class="btn btn-small btn-primary" type="button">Use shape</button>
+              <button id="shapeDrawCancelBtn" class="btn btn-small" type="button">Cancel</button>
+            </span>
+          </span>
           <span class="region-actions-sep"></span>
           <button id="saveRegionBtn" class="btn btn-small hidden">Save Region</button>
           <button id="clearSelectionBtn" class="btn btn-small hidden">Clear</button>
@@ -164,7 +173,7 @@
 <div class="divider-handle" data-hotkey="screenspace.togglePanel"></div></div>
 
   <div id="bottomPanel">
-  <!-- Bottom: workflow, run row, task queue + results -->
+  <!-- Bottom: workflow, run row, preview + task queue + results -->
     <section id="workflowSection">
       <div id="workflowTabs">
         <button class="wf-tab" data-type="multitool">
@@ -198,6 +207,10 @@
         <button class="wf-tab" data-type="template">
           <span class="ss-task-icon ss-task-icon--template"></span>
           Template
+        </button>
+        <button class="wf-tab" data-type="shape">
+          <span class="ss-task-icon ss-task-icon--shape"></span>
+          Shape
         </button>
         <button class="wf-tab" data-type="flow">
           <span class="ss-task-icon ss-task-icon--flow"></span>
@@ -237,43 +250,16 @@
       </div>
       <div id="workflowBody">
         <div id="workflowParams"></div>
-        <div id="modelViewPanel" class="model-view-panel collapsed">
-          <button id="modelViewToggle" class="model-view-toggle" type="button" aria-expanded="false">
-            <span class="model-view-icon"></span>
-            <span class="model-view-label">Model view</span>
-            <span class="model-view-hint">what the CV model sees</span>
-          </button>
-          <div id="modelViewBody" class="model-view-body hidden">
-            <div id="modelViewMeta" class="model-view-meta">Select a region to preview.</div>
-            <div id="modelViewOverlayRow" class="model-view-overlay-row">
-              <label class="model-view-overlay-toggle">
-                <input id="modelViewOverlayToggle" type="checkbox" />
-                <span>Overlay on frame</span>
-              </label>
-              <select id="modelViewOverlayLayer" class="model-view-overlay-layer hidden" aria-label="Overlay layer"></select>
-              <span class="model-view-overlay-hint">hold <kbd>B</kbd> to blink</span>
-            </div>
-            <img id="modelViewImage" alt="Preprocessed preview" />
-          </div>
-        </div>
-        <div id="calibrationPanel" class="cal-panel collapsed hidden">
-          <button id="calibrationToggle" class="cal-toggle" type="button" aria-expanded="false">
-            <span class="cal-icon"></span>
-            <span class="cal-label">Calibration</span>
-            <span class="cal-hint">score against pinned frames</span>
-          </button>
-          <div id="calibrationBody" class="cal-body hidden">
-            <div id="calibrationSummary" class="cal-summary" aria-live="polite"></div>
-            <div id="calibrationStrips" class="cal-strips"></div>
-            <div id="calibrationNote" class="cal-note hidden"></div>
-            <div id="calibrationStatus" class="cal-status hidden"></div>
-          </div>
-        </div>
       </div>
     </section>
     <div id="rightPane">
       <div id="rightPaneTabs">
-        <button class="rp-tab active" data-tab="queue" type="button">
+        <button class="rp-tab active" data-tab="preview" type="button">
+          <span class="rp-tab-icon rp-tab-icon-preview"></span>
+          <span class="rp-tab-label">Preview</span>
+        </button>
+        <span class="rp-tab-sep">/</span>
+        <button class="rp-tab" data-tab="queue" type="button">
           <span class="rp-tab-icon rp-tab-icon-queue"></span>
           <span class="rp-tab-label">Task Queue</span>
           <span class="rp-tab-count" id="taskCount">(0)</span>
@@ -282,10 +268,11 @@
         <button class="rp-tab" data-tab="results" type="button">
           <span class="rp-tab-icon rp-tab-icon-results"></span>
           <span class="rp-tab-label">Results</span>
+          <span class="rp-tab-count" id="resultCount"></span>
           <span class="rp-tab-crumb" id="resultsTabCrumb"></span>
           <span class="rp-tab-chevron"></span>
         </button>
-        <div class="rp-tab-actions" data-for="queue">
+        <div class="rp-tab-actions hidden" data-for="queue">
           <button id="taskFilterDoneBtn" class="panel-header-btn task-filter-btn" title="Show completed" data-filter="completed"></button>
           <button id="taskFilterFailedBtn" class="panel-header-btn task-filter-btn" title="Show failed" data-filter="failed"></button>
           <button id="taskQueuePauseBtn" class="panel-header-btn" title="Pause queue"></button>
@@ -301,24 +288,61 @@
             <span class="rp-icon-btn-icon rp-icon-scissors"></span>
           </button>
           <div id="exportEventsWrap" class="rp-export-wrap">
-            <button id="exportEventsBtn" class="rp-icon-btn" type="button" aria-label="Export events" aria-haspopup="menu" aria-expanded="false">
+            <button id="exportEventsBtn" class="rp-icon-btn" type="button" aria-label="Export detected events" aria-haspopup="menu" aria-expanded="false">
               <span class="rp-icon-btn-icon rp-icon-download"></span>
             </button>
             <div id="exportEventsMenu" class="rp-export-menu hidden" role="menu">
-              <button class="rp-export-item" type="button" role="menuitem" data-format="csv">CSV</button>
-              <button class="rp-export-item" type="button" role="menuitem" data-format="json">JSON</button>
+              <div class="rp-export-note">Every event from every task. Excluded events follow the eye toggle; the certainty slider filters this list only, not the file.</div>
+              <button class="rp-export-item" type="button" role="menuitem" data-format="csv">Save as CSV</button>
+              <button class="rp-export-item" type="button" role="menuitem" data-format="json">Save as JSON</button>
             </div>
           </div>
         </div>
         <div id="resultsSwitcherPanel" class="rp-switcher-panel hidden"></div>
       </div>
       <div id="rightPaneBody">
-        <div id="taskQueuePanel" class="rp-tab-panel">
+        <div id="previewPanel" class="rp-tab-panel" data-tab="preview">
+          <section class="preview-section">
+            <h3 class="preview-section-header">
+              <span class="preview-section-icon preview-icon-model"></span>
+              Model view
+              <span id="modelViewFocus" class="preview-section-focus"></span>
+              <span class="preview-section-hint">what the CV model sees</span>
+            </h3>
+            <div id="modelViewBody" class="model-view-body">
+              <div id="modelViewMeta" class="model-view-meta">Select a region to preview.</div>
+              <div id="modelViewOverlayRow" class="model-view-overlay-row">
+                <label class="model-view-overlay-toggle">
+                  <input id="modelViewOverlayToggle" type="checkbox" />
+                  <span>Overlay on frame</span>
+                </label>
+                <select id="modelViewOverlayLayer" class="model-view-overlay-layer hidden" aria-label="Overlay layer"></select>
+                <span class="model-view-overlay-hint"><kbd>B</kbd> peek / toggle · <kbd>N</kbd> next layer</span>
+              </div>
+              <img id="modelViewImage" alt="Preprocessed preview" />
+            </div>
+          </section>
+          <section class="preview-section">
+            <h3 class="preview-section-header">
+              <span class="preview-section-icon preview-icon-cal"></span>
+              Calibration
+              <span class="preview-section-hint">score against pinned frames</span>
+            </h3>
+            <div id="calibrationEmpty" class="preview-empty">Pin frames above the video to score thresholds.</div>
+            <div id="calibrationBody" class="cal-body hidden">
+              <div id="calibrationSummary" class="cal-summary" aria-live="polite"></div>
+              <div id="calibrationStrips" class="cal-strips"></div>
+              <div id="calibrationNote" class="cal-note hidden"></div>
+              <div id="calibrationStatus" class="cal-status hidden"></div>
+            </div>
+          </section>
+        </div>
+        <div id="taskQueuePanel" class="rp-tab-panel hidden" data-tab="queue">
           <div id="taskList">
             <div class="panel-empty">No tasks yet. Configure a workflow and click Run.</div>
           </div>
         </div>
-        <div id="resultsPanel" class="rp-tab-panel hidden">
+        <div id="resultsPanel" class="rp-tab-panel hidden" data-tab="results">
           <div id="confHistogram" class="conf-hist hidden"></div>
           <div id="resultsList">
             <div class="panel-empty">Click a completed task to view results.</div>
@@ -329,7 +353,7 @@
   </div>
 
   <div id="regionNameModal" class="modal-overlay cg-modal-overlay hidden">
-    <div class="modal-card">
+    <div class="modal-card cg-modal-card">
       <h3>Save Region</h3>
       <label class="modal-label">Name
         <input id="regionNameInput" type="text" placeholder="e.g. healthbar" spellcheck="false" autocomplete="off">
@@ -366,13 +390,17 @@
   <script src="card-scrubber.js" defer></script>
   <script src="screenspace.js" defer></script>
   <script src="screenspace-model-view.js" defer></script>
+  <script src="screenspace-params.js" defer></script>
+  <script src="screenspace-regions.js" defer></script>
   <script src="screenspace-overlay-interaction.js" defer></script>
   <script src="screenspace-overlay.js" defer></script>
+  <script src="screenspace-sample-editor.js" defer></script>
   <script src="screenspace-timeline.js" defer></script>
   <script src="screenspace-tasks.js" defer></script>
   <script src="screenspace-multitool-params.js" defer></script>
   <script src="screenspace-calibration.js" defer></script>
   <script src="screenspace-color.js" defer></script>
   <script src="screenspace-results.js" defer></script>
+  <script src="screenspace-run.js" defer></script>
 </body>
 </html>

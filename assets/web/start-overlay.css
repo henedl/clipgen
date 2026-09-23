@@ -73,8 +73,8 @@
   opacity: 0;
   transform: translateY(12px) scale(0.985);
   transition:
-    opacity 460ms cubic-bezier(.22, 1, .36, 1),
-    transform 460ms cubic-bezier(.22, 1, .36, 1);
+    opacity 460ms var(--ease-out),
+    transform 460ms var(--ease-out);
 }
 
 .start-panel.is-in {
@@ -109,10 +109,11 @@
  * passing behind it. The blur keeps the separation even mid-scroll. */
 .start-overlay .panel-close {
   position: absolute;
-  top: 18px;
+  /* Centers on the tab labels and stays above the strip's hairline. */
+  top: 17px;
   right: 18px;
-  width: 32px;
-  height: 32px;
+  width: 28px;
+  height: 28px;
   border-radius: 8px;
   border: 1px solid var(--border);
   background: var(--bg-input);
@@ -135,7 +136,7 @@
 }
 
 .start-overlay .panel-close:active {
-  transform: scale(0.94);
+  transform: scale(var(--scale-press));
 }
 
 /* ---- Cascade-in animation ------------------------------------------ */
@@ -144,8 +145,8 @@
   opacity: 0;
   transform: translateY(8px);
   transition:
-    opacity 420ms cubic-bezier(.22, 1, .36, 1),
-    transform 420ms cubic-bezier(.22, 1, .36, 1);
+    opacity 420ms var(--ease-out),
+    transform 420ms var(--ease-out);
 }
 
 .start-overlay .cascade-in.is-in {
@@ -293,7 +294,7 @@
   line-height: 1;
   color: var(--fg);
   opacity: 0;
-  animation: start-overlay-wordmark 500ms cubic-bezier(.22, 1, .36, 1) 360ms forwards;
+  animation: start-overlay-wordmark 500ms var(--ease-out) 360ms forwards;
 }
 
 @keyframes start-overlay-wordmark {
@@ -338,7 +339,21 @@
   backdrop-filter: blur(18px) saturate(1.2);
   box-shadow: var(--shadow-xl);
   transform-origin: bottom center;
-  animation: rail-recents-in var(--duration-normal) cubic-bezier(.22, 1, .36, 1);
+  /* A transition, so closing mid-open reverses instead of snapping. */
+  visibility: hidden;
+  opacity: 0;
+  transform: translateY(var(--space-2)) scale(0.98);
+  pointer-events: none;
+  transition: opacity var(--duration-normal) var(--ease-out),
+              transform var(--duration-normal) var(--ease-out),
+              visibility var(--duration-normal);
+}
+
+.start-overlay .rail__recents.is-expanded .rail__recents-overflow {
+  visibility: visible;
+  opacity: 1;
+  transform: none;
+  pointer-events: auto;
 }
 
 @supports not (backdrop-filter: blur(1px)) {
@@ -347,13 +362,9 @@
   }
 }
 
+/* JS still sets [hidden]; visibility does the hiding so the exit can play. */
 .start-overlay .rail__recents-overflow[hidden] {
-  display: none;
-}
-
-@keyframes rail-recents-in {
-  from { opacity: 0; transform: translateY(8px) scale(0.98); }
-  to   { opacity: 1; transform: translateY(0) scale(1); }
+  display: block;
 }
 
 /* Blurs the brand block sitting behind the fold-out. Same three-class depth as
@@ -576,13 +587,107 @@
 
 /* ---- Right column --------------------------------------------------- */
 
+/* The column itself never scrolls: the tab strip is pinned at the top and each
+ * tab panel owns its own scroller, so the Open tab's action footer stays put no
+ * matter how long the spreadsheet card gets. */
 .start-overlay .start-main {
-  padding: 28px 32px 22px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  min-width: 0;
+}
+
+/* ---- Right column: tab strip ---------------------------------------- */
+/* Mirrors the .panel-tab family in transcripts.css (icon + uppercase label +
+ * accent underline), re-declared here against this file's tokens so nothing
+ * leaks onto the host page. */
+
+.start-overlay .start-tabs {
+  display: flex;
+  align-items: stretch;
+  gap: var(--space-1);
+  /* The right pad clears .panel-close, which floats over this row. */
+  padding: 18px 56px 0 32px;
+  border-bottom: 1px solid var(--hairline);
+  flex-shrink: 0;
+}
+
+.start-overlay .start-tab {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: var(--fg-faint);
+  font-family: inherit;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  padding: 6px 8px 10px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1-5);
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+  transition: color 150ms;
+}
+
+.start-overlay .start-tab:hover {
+  color: var(--fg-muted);
+}
+
+/* "Update available" dot on the About tab; syncUpdateBadges toggles it. */
+.start-overlay .start-tab.has-badge::after {
+  content: "";
+  width: var(--space-1-5);
+  height: var(--space-1-5);
+  border-radius: var(--radius-full);
+  background: var(--accent);
+}
+
+.start-overlay .start-tab.is-active {
+  color: var(--fg);
+  border-bottom-color: var(--accent);
+}
+
+/* ---- Right column: tab panels --------------------------------------- */
+
+.start-overlay .start-tabbody {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+}
+
+.start-overlay .start-tabpanel {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.start-overlay .start-tabpanel[hidden] {
+  display: none;
+}
+
+.start-overlay .start-tabpanel__scroll {
+  flex: 1;
+  min-height: 0;
   overflow-y: auto;
+  padding: 22px 32px;
   display: flex;
   flex-direction: column;
   gap: 18px;
-  min-width: 0;
+}
+
+/* Same idea as overview.css .tab-slide-enter: the newly revealed panel eases
+ * in, so switching tabs reads as a move rather than a repaint. */
+.start-overlay .start-tabpanel.is-entering .start-tabpanel__scroll {
+  animation: so-tab-enter 220ms var(--ease-out);
+}
+
+@keyframes so-tab-enter {
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: none; }
 }
 
 .start-overlay .start-section {
@@ -629,12 +734,6 @@
   color: var(--fg-faint);
   font-weight: 400;
   font-size: 11px;
-}
-
-/* .panel-close floats over the top-right of the main column, right where the
- * first section's trailing hint lands. Keep the label clear of it. */
-.start-overlay [data-role="name-field"] > label {
-  padding-right: var(--space-6);
 }
 
 /* The cascade transform creates a stacking context that traps the recent-pop;
@@ -714,6 +813,7 @@
 
 .start-overlay .sheet-card {
   transition: border-color 150ms, box-shadow 150ms;
+  box-shadow: var(--shadow-card);
 }
 .start-overlay .sheet-card.is-loaded {
   border-color: rgba(52, 211, 153, 0.45);
@@ -851,6 +951,7 @@
   padding: 12px 10px;
   color: var(--fg-faint);
   font-size: 12.5px;
+  text-wrap: balance;
 }
 
 /* ---- Spreadsheet card ----------------------------------------------- */
@@ -1055,6 +1156,22 @@
   display: none;
 }
 
+/* Enter only: the section's z-index lift ends at close, so an exit would be covered. */
+.start-overlay .sheet-picker__menu,
+.start-overlay .recent-pop {
+  transform-origin: top center;
+  transition: opacity var(--duration-instant) var(--ease-out),
+              transform var(--duration-instant) var(--ease-out);
+}
+
+@starting-style {
+  .start-overlay .sheet-picker__menu,
+  .start-overlay .recent-pop {
+    opacity: 0;
+    transform: translateY(calc(var(--space-1) * -1)) scale(0.98);
+  }
+}
+
 .start-overlay .sheet-picker__option {
   width: 100%;
   text-align: left;
@@ -1101,6 +1218,7 @@
   font-size: 12.5px;
   color: var(--fg-faint);
   font-style: italic;
+  text-wrap: balance;
 }
 
 /* Second dropdown: appears only when the chosen spreadsheet has 2+ tabs. */
@@ -1171,8 +1289,15 @@
   display: none;
 }
 
+/* The mind-map tab reuses the whole block inside its own preview card. */
+.start-overlay .source-preview--inline {
+  margin-top: 8px;
+  padding: 8px 10px;
+}
+
 .start-overlay .source-preview__list {
-  max-height: 140px;
+  /* Deep enough for an editing row (input + buttons) not to be clipped. */
+  max-height: 180px;
   overflow-y: auto;
   margin-top: 8px;
 }
@@ -1247,6 +1372,77 @@
 
 .start-overlay .source-preview__row.is-missing .source-preview__name {
   color: var(--fg-faint);
+}
+
+/* The name is the only elastic cell in the row; the buttons sit at its end. */
+.start-overlay .source-preview__name {
+  flex: 1;
+  min-width: 0;
+}
+
+/* An overridden row says so: this filename came from the user, not the sheet. */
+.start-overlay .source-preview__row.is-override .source-preview__name {
+  color: var(--accent);
+}
+
+.start-overlay .source-preview__btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  flex-shrink: 0;
+  border: none;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--fg-faint);
+  cursor: pointer;
+  /* Muted rather than hover-only: this is a first-run surface, and a fix the
+     user cannot see is a fix they do not know exists. */
+  opacity: 0.5;
+  transition: opacity 0.12s ease, color 0.12s ease, background 0.12s ease;
+}
+
+.start-overlay .source-preview__row:hover .source-preview__btn,
+.start-overlay .source-preview__btn:focus-visible {
+  opacity: 1;
+}
+
+.start-overlay .source-preview__btn:hover {
+  background: var(--so-hover-tint);
+  color: var(--fg);
+}
+
+/* Restore has nothing to restore until an override is set. Listed after the
+   hover rules so it wins over them — a dimmed button must not brighten. */
+.start-overlay .source-preview__btn:disabled,
+.start-overlay .source-preview__row:hover .source-preview__btn:disabled {
+  cursor: default;
+  color: var(--fg-faint);
+  opacity: 0.22;
+}
+
+.start-overlay .source-preview__input {
+  flex: 1;
+  min-width: 0;
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  color: var(--fg);
+  background: var(--so-field-bg);
+  border: 1px solid var(--border-strong);
+  border-radius: 5px;
+  padding: 2px 6px;
+  outline: none;
+}
+
+.start-overlay .source-preview__input:focus {
+  border-color: var(--accent);
+  background: var(--so-field-bg-focus);
+}
+
+.start-overlay .source-preview__row.is-saving {
+  opacity: 0.55;
 }
 
 .start-overlay .so-spinner {
@@ -1374,75 +1570,6 @@
   border-color: var(--accent-hover);
 }
 
-/* ---- Extras tabs ---------------------------------------------------- */
-
-.start-overlay .extras-tabs {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-}
-
-.start-overlay .extras-tabs__strip {
-  display: flex;
-  align-items: stretch;
-  border-bottom: 1px solid var(--hairline);
-  gap: 4px;
-}
-
-.start-overlay .extras-tabs__tab {
-  appearance: none;
-  border: 0;
-  background: transparent;
-  color: var(--fg-faint);
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  padding: 6px 2px 10px;
-  cursor: pointer;
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  font-family: inherit;
-  border-bottom: 2px solid transparent;
-  margin-bottom: -1px;
-  margin-right: 18px;
-  transition: color 150ms;
-}
-
-.start-overlay .extras-tabs__tab:hover {
-  color: var(--fg-muted);
-}
-
-.start-overlay .extras-tabs__tab.is-active {
-  color: var(--fg);
-  border-bottom-color: var(--accent);
-}
-
-.start-overlay .extras-tabs__badge {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  min-width: 17px;
-  height: 17px;
-  padding: 0 5px;
-  border-radius: 999px;
-  background: var(--color-selected);
-  color: #9ec0ff;
-  font-size: 10px;
-  font-weight: 600;
-  letter-spacing: 0;
-  text-transform: none;
-}
-
-.start-overlay .extras-tabs__badge[hidden] {
-  display: none;
-}
-
-.start-overlay .extras-tabs__body > div[hidden] {
-  display: none;
-}
-
 /* ---- Tool tiles + hover animations --------------------------------- */
 
 .start-overlay .tool-tiles {
@@ -1462,6 +1589,7 @@
   position: relative;
   overflow: hidden;
   transition: border-color 200ms;
+  box-shadow: var(--shadow-card);
 }
 
 .start-overlay .tool-tile:hover {
@@ -1520,21 +1648,22 @@
   line-height: 1.5;
 }
 
-/* Studio: playhead sweep + clip pulse. Default state explicit so the
- * transition on mouseleave has a target to ease back to. */
+/* Studio: playhead sweep + clip pulse. Loops sit paused on the base rule and run
+ * on hover, so leaving freezes them in place; removing one snaps it to frame 0. */
 .start-overlay .art-studio__playhead {
   transform-origin: 0 0;
   transform: translateX(0);
   opacity: 0;
   transition:
-    transform 700ms cubic-bezier(.22, 1, .36, 1),
+    transform 700ms var(--ease-out),
     opacity 500ms ease-out;
+  animation: so-studio-sweep 2.2s cubic-bezier(.45, .05, .55, .95) infinite paused;
 }
 
 .start-overlay .tool-tile:hover .art-studio__playhead {
   opacity: 1;
   transition: opacity 200ms ease-in;
-  animation: so-studio-sweep 2.2s cubic-bezier(.45, .05, .55, .95) infinite;
+  animation-play-state: running;
 }
 
 @keyframes so-studio-sweep {
@@ -1545,10 +1674,11 @@
 .start-overlay .art-studio__clip {
   opacity: 0.6;
   transition: opacity 600ms ease-out;
+  animation: so-studio-flash 2.2s linear infinite paused;
 }
 
 .start-overlay .tool-tile:hover .art-studio__clip {
-  animation: so-studio-flash 2.2s linear infinite;
+  animation-play-state: running;
 }
 
 @keyframes so-studio-flash {
@@ -1560,11 +1690,12 @@
 .start-overlay .art-screenspace__box {
   stroke-dasharray: 4 3;
   stroke-dashoffset: 0;
-  transition: stroke-dashoffset 700ms cubic-bezier(.22, 1, .36, 1);
+  transition: stroke-dashoffset 700ms var(--ease-out);
+  animation: so-screenspace-march 1.2s linear infinite paused;
 }
 
 .start-overlay .tool-tile:hover .art-screenspace__box {
-  animation: so-screenspace-march 1.2s linear infinite;
+  animation-play-state: running;
 }
 
 @keyframes so-screenspace-march {
@@ -1574,13 +1705,13 @@
 .start-overlay .art-screenspace__solid {
   opacity: 0.55;
   transition: opacity 600ms ease-out;
+  /* Starts at the trough (-0.8s, half a cycle), which matches the resting opacity. */
+  --pulse-trough: .55;
+  animation: cg-pulse 1.6s ease-in-out -0.8s infinite paused;
 }
 
 .start-overlay .tool-tile:hover .art-screenspace__solid {
-  /* Shared breathe from tokens.css. The -0.8s (half the duration) starts it at
-   * the trough, matching the .55 resting opacity above. */
-  --pulse-trough: .55;
-  animation: cg-pulse 1.6s ease-in-out -0.8s infinite;
+  animation-play-state: running;
 }
 
 /* Geometry-property animation on width/height needs the un-prefixed values
@@ -1589,8 +1720,8 @@
   width: 68px;
   height: 20px;
   transition:
-    width 700ms cubic-bezier(.22, 1, .36, 1),
-    height 700ms cubic-bezier(.22, 1, .36, 1),
+    width 700ms var(--ease-out),
+    height 700ms var(--ease-out),
     opacity 500ms ease-out;
 }
 
@@ -1613,7 +1744,7 @@
   opacity: 0;
   pointer-events: none;
   transition:
-    transform 700ms cubic-bezier(.22, 1, .36, 1),
+    transform 700ms var(--ease-out),
     opacity 500ms ease-out;
 }
 
@@ -1635,14 +1766,15 @@
   transform: translateX(-6px);
   opacity: 0;
   transition:
-    transform 700ms cubic-bezier(.22, 1, .36, 1),
+    transform 700ms var(--ease-out),
     opacity 500ms ease-out;
+  animation: so-transcripts-scrub 2.4s cubic-bezier(.45, .05, .55, .95) infinite paused;
 }
 
 .start-overlay .tool-tile:hover .art-transcripts__cursor {
   opacity: 1;
   transition: opacity 200ms ease-in;
-  animation: so-transcripts-scrub 2.4s cubic-bezier(.45, .05, .55, .95) infinite;
+  animation-play-state: running;
 }
 
 @keyframes so-transcripts-scrub {
@@ -1653,11 +1785,12 @@
 .start-overlay .art-transcripts__line-fill {
   transform-origin: left;
   transform: scaleX(0);
-  transition: transform 700ms cubic-bezier(.22, 1, .36, 1);
+  transition: transform 700ms var(--ease-out);
+  animation: so-transcripts-fill 2.4s cubic-bezier(.45, .05, .55, .95) infinite paused;
 }
 
 .start-overlay .tool-tile:hover .art-transcripts__line-fill {
-  animation: so-transcripts-fill 2.4s cubic-bezier(.45, .05, .55, .95) infinite;
+  animation-play-state: running;
 }
 
 @keyframes so-transcripts-fill {
@@ -1668,6 +1801,8 @@
 
 /* ---- Changelog ------------------------------------------------------ */
 
+/* No max-height / scroller of its own: the enclosing .start-tabpanel__scroll
+ * gives the whole tab to the changelog. */
 .start-overlay .changelog {
   list-style: none;
   padding: 0;
@@ -1675,15 +1810,13 @@
   display: flex;
   flex-direction: column;
   gap: 14px;
-  max-height: 180px;
-  overflow-y: auto;
-  padding-right: 4px;
 }
 
 .start-overlay .changelog__empty {
   font-size: 12px;
   color: var(--fg-faint);
   padding: 8px 0;
+  text-wrap: balance;
 }
 
 .start-overlay .changelog__entry {
@@ -1717,6 +1850,24 @@
   letter-spacing: 0;
 }
 
+.start-overlay .changelog__version--current {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+.start-overlay .changelog__current {
+  font-size: var(--text-2xs);
+  color: var(--accent);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.start-overlay .changelog__change {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
 .start-overlay .changelog__tag {
   display: inline-flex;
   align-items: center;
@@ -1724,6 +1875,9 @@
   font-size: 11px;
   color: var(--fg-muted);
   font-weight: 500;
+  /* One release lists several tools down a column; a fixed width keeps their
+     text left-aligned with each other instead of ragged. */
+  flex: 0 0 84px;
 }
 
 .start-overlay .changelog__tag-dot {
@@ -1737,6 +1891,9 @@
 .start-overlay .changelog__tag[data-tool="Screenspace"] .changelog__tag-dot { background: #22d3ee; }
 .start-overlay .changelog__tag[data-tool="Transcripts"] .changelog__tag-dot { background: #34d399; }
 .start-overlay .changelog__tag[data-tool="Core"]        .changelog__tag-dot { background: #a78bfa; }
+.start-overlay .changelog__tag[data-tool="Composer"]    .changelog__tag-dot { background: #f472b6; }
+.start-overlay .changelog__tag[data-tool="Workflows"]   .changelog__tag-dot { background: #fbbf24; }
+.start-overlay .changelog__tag[data-tool="Overview"]    .changelog__tag-dot { background: #fb923c; }
 
 .start-overlay .changelog__when {
   margin-left: auto;
@@ -1744,17 +1901,18 @@
   font-size: 11px;
 }
 
-.start-overlay .changelog__title {
-  font-size: 13px;
-  font-weight: 500;
-  color: var(--fg);
-  letter-spacing: -0.005em;
-}
-
 .start-overlay .changelog__body {
   font-size: 12px;
   color: var(--fg-muted);
   line-height: 1.5;
+  flex: 1;
+  min-width: 0;
+}
+
+.start-overlay .changelog__kind {
+  color: var(--fg);
+  font-weight: 500;
+  margin-right: 5px;
 }
 
 /* ---- About ---------------------------------------------------------- */
@@ -1763,9 +1921,6 @@
   display: flex;
   flex-direction: column;
   gap: 12px;
-  max-height: 180px;
-  overflow-y: auto;
-  padding-right: 4px;
 }
 
 
@@ -1840,15 +1995,141 @@
   letter-spacing: 0.04em;
 }
 
+/* ---- Self-update row ------------------------------------------------ */
+
+.start-overlay .about__update {
+  color: var(--fg);
+}
+
+.start-overlay .about__auto {
+  margin-top: var(--space-1);
+  font-size: var(--text-xs);
+}
+
+.start-overlay .about__update-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2-5);
+  margin-top: var(--space-1);
+}
+
+.start-overlay .so-btn--sm {
+  height: var(--space-6);
+  padding: 0 var(--space-3);
+  border-radius: var(--radius-md);
+  font-size: var(--text-xs);
+}
+
+.start-overlay .about__progress {
+  height: var(--space-1);
+  margin-top: var(--space-1-5);
+  border-radius: var(--radius-full);
+  background: var(--bg-hover);
+  overflow: hidden;
+}
+
+.start-overlay .about__progress-fill {
+  height: 100%;
+  border-radius: inherit;
+  background: var(--accent);
+  transition: width var(--duration-normal);
+}
+
+/* ---- Third-party attribution ---------------------------------------- */
+
+/* The 10.5px/11.5px sizes below are deliberately raw rather than tokenized:
+   this section sits directly under the About rows and has to read as the same
+   typographic rank, so the group headings mirror .about__label and the muted
+   text mirrors .about__sub exactly. Nearest tokens (--text-2xs, 11px) would
+   make the two blocks disagree by half a pixel down the same column. */
+
+.start-overlay .attribution__intro {
+  font-size: 11.5px;
+  color: var(--fg-muted);
+  line-height: 1.5;
+  margin-bottom: var(--space-3);
+}
+
+.start-overlay .attribution {
+  display: flex;
+  flex-direction: column;
+}
+
+.start-overlay .attribution__group {
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-weight: 600;
+  color: var(--fg-faint);
+  margin-top: var(--space-3);
+  margin-bottom: var(--space-1-5);
+}
+
+.start-overlay .attribution__group:first-child {
+  margin-top: 0;
+}
+
+.start-overlay .attribution__row {
+  display: grid;
+  grid-template-columns: 1fr auto minmax(0, 40%);
+  align-items: baseline;
+  gap: var(--space-2-5);
+  padding: var(--space-1) 0;
+  border-bottom: 1px solid var(--hairline);
+  font-size: var(--text-xs);
+}
+
+.start-overlay .attribution__row:last-child {
+  border-bottom: 0;
+}
+
+/* Sub-components (the cv2 FFmpeg DLL, the PP-OCR models) hang off the row
+   above; the indent is the only thing marking the relationship. */
+.start-overlay .attribution__row--nested {
+  padding-left: var(--space-3);
+}
+
+.start-overlay .attribution__name {
+  color: var(--fg);
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.start-overlay .attribution__row--nested .attribution__name {
+  color: var(--fg-muted);
+}
+
+.start-overlay .attribution__version {
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  color: var(--fg-faint);
+  white-space: nowrap;
+}
+
+.start-overlay .attribution__license {
+  color: var(--fg-muted);
+  font-size: 11.5px;
+  text-align: right;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.start-overlay .attribution__more {
+  margin-top: var(--space-3);
+}
+
 /* ---- Footer --------------------------------------------------------- */
 
+/* Sits outside the Open tab's scroller (a flex sibling of it), so the action
+ * button stays visible however far the form is scrolled. It carries its own
+ * horizontal padding because .start-main no longer has any. */
 .start-overlay .start-footer {
-  margin-top: auto;
+  flex-shrink: 0;
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 16px;
-  padding-top: 14px;
+  padding: 14px 32px 20px;
   border-top: 1px solid var(--hairline);
 }
 
@@ -1987,15 +2268,6 @@ html[data-theme="light"] .start-overlay .rail__shimmer::before {
   );
 }
 
-/* Scrollbar thumbs default to white-on-dark; darken for light bg. */
-html[data-theme="light"] .start-overlay .changelog::-webkit-scrollbar-thumb,
-html[data-theme="light"] .start-overlay .about::-webkit-scrollbar-thumb {
-  background: rgba(20, 21, 26, 0.16);
-}
-html[data-theme="light"] .start-overlay .changelog::-webkit-scrollbar-thumb:hover {
-  background: rgba(20, 21, 26, 0.28);
-}
-
 /* ---- Reduced motion ------------------------------------------------- */
 
 @media (prefers-reduced-motion: reduce) {
@@ -2011,13 +2283,22 @@ html[data-theme="light"] .start-overlay .changelog::-webkit-scrollbar-thumb:hove
   }
   .start-overlay .rail__grid::before,
   .start-overlay .rail__shimmer::before,
-  .start-overlay .rail__recents-overflow {
+  .start-overlay .start-tabpanel.is-entering .start-tabpanel__scroll {
     animation: none;
   }
   .start-overlay .start-panel .rail__recents-scrim,
+  .start-overlay .rail__recents-overflow,
+  .start-overlay .sheet-picker__menu,
+  .start-overlay .recent-pop,
   .start-overlay .rail-recents-more__chev {
     transition: none;
   }
+  .start-overlay .art-studio__playhead,
+  .start-overlay .art-studio__clip,
+  .start-overlay .art-screenspace__box,
+  .start-overlay .art-screenspace__solid,
+  .start-overlay .art-transcripts__cursor,
+  .start-overlay .art-transcripts__line-fill,
   .start-overlay .tool-tile:hover .art-studio__playhead,
   .start-overlay .tool-tile:hover .art-studio__clip,
   .start-overlay .tool-tile:hover .art-screenspace__box,

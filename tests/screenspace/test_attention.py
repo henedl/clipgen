@@ -1,10 +1,17 @@
 """Tests for the Attention tool: saliency primitives, scan, heatmaps, events."""
 
+import itertools
+from unittest.mock import Mock
+
+import cv2
 import numpy as np
+import pytest
 
 import config
 import screenspace
 import screenspace_frames
+import screenspace_heatmap
+import screenspace_primitives
 import screenspace_scans
 
 
@@ -16,14 +23,18 @@ def _bright_patch_frame(w=160, h=120, px=120, py=80, size=20):
 
 
 class TestSpectralResidual:
-    def test_shape_range_and_determinism(self):
+    def test_shape_range_and_repeatability(self):
         gray = np.random.RandomState(3).randint(0, 255, (90, 120), dtype=np.uint8)
         sal_a = screenspace.compute_spectral_residual(gray)
         sal_b = screenspace.compute_spectral_residual(gray.copy())
         assert sal_a.shape == gray.shape
         assert sal_a.dtype == np.float32
         assert float(sal_a.min()) >= 0.0 and float(sal_a.max()) <= 1.0
-        assert np.array_equal(sal_a, sal_b)
+        # Repeatable to float32 noise rather than bit-identical: cv2.dft is not
+        # bit-reproducible across calls on every OpenCV build (see
+        # compute_spectral_residual). Anything that actually broke the transform
+        # would move the map by orders of magnitude more than this.
+        assert np.allclose(sal_a, sal_b, rtol=0, atol=1e-6)
 
     def test_flat_frame_does_not_crash(self):
         gray = np.full((60, 80), 128, dtype=np.uint8)
@@ -32,7 +43,84 @@ class TestSpectralResidual:
         assert np.all(np.isfinite(sal))
 
 
+def _numpy_spectral_residual(gray):
+    """The complex128 numpy transform, as the cv2.dft path's oracle."""
+    fft = np.fft.fft2(gray.astype(np.float32))
+    log_amp = np.log1p(np.abs(fft)).astype(np.float32)
+    phase = np.angle(fft)
+    residual = log_amp - cv2.blur(log_amp, (3, 3))
+    sal = np.abs(np.fft.ifft2(np.exp(residual) * np.exp(1j * phase))) ** 2
+    sal = cv2.GaussianBlur(sal.astype(np.float32), (9, 9), 2.5)
+    peak = float(sal.max())
+    return sal / peak if peak > 0 else sal
+
+
+class TestSpectralResidualTransforms:
+    """cv2.dft is a faster transform of the same math, not different math."""
+
+    @pytest.mark.parametrize("shape", [(144, 256), (90, 120), (64, 64)])
+    def test_dft_path_agrees_with_numpy(self, shape):
+        assert screenspace_primitives._dft_friendly(shape)
+        gray = np.random.RandomState(7).randint(0, 256, shape, dtype=np.uint8)
+        assert np.allclose(
+            screenspace.compute_spectral_residual(gray),
+            _numpy_spectral_residual(gray),
+            atol=1e-5,
+        )
+
+    def test_uniform_frame_agrees_with_numpy(self):
+        # Every AC coefficient is exactly zero here, so the dft path's
+        # "no direction" fallback (angle(0) == 0) is the whole result.
+        for fill in (0, 7, 255):
+            gray = np.full((64, 64), fill, dtype=np.uint8)
+            assert np.allclose(
+                screenspace.compute_spectral_residual(gray),
+                _numpy_spectral_residual(gray),
+                atol=1e-5,
+            )
+
+    def test_prime_dimensions_take_the_numpy_fallback(self):
+        # cv2.dft is several times *slower* than numpy on these, so the gate
+        # must reject them; the fallback is then bit-identical by definition.
+        assert not screenspace_primitives._dft_friendly((151, 257))
+        gray = np.random.RandomState(9).randint(0, 256, (151, 257), dtype=np.uint8)
+        assert np.array_equal(
+            screenspace.compute_spectral_residual(gray),
+            _numpy_spectral_residual(gray),
+        )
+
+    def test_gate_accepts_only_2_3_5_smooth_sizes(self):
+        assert screenspace_primitives._dft_friendly((120, 160))
+        assert not screenspace_primitives._dft_friendly((139, 256))
+
+
 class TestChannels:
+    def test_color_contrast_surround_is_half_scale(self):
+        # The surround blur is deliberately computed at half resolution (see
+        # compute_color_contrast); pin it so it is not "corrected" back to the
+        # full-scale kernel, which cost 5x more for a <=0.012 map difference.
+        frame = _bright_patch_frame()
+        lab = cv2.cvtColor(frame, cv2.COLOR_BGR2LAB).astype(np.float32)
+        height, width = lab.shape[:2]
+        sigma = max(3.0, max(height, width) / 8.0)
+        small = cv2.resize(lab, (width // 2, height // 2), interpolation=cv2.INTER_AREA)
+        surround = cv2.resize(
+            cv2.GaussianBlur(small, (0, 0), sigma / 2.0),
+            (width, height),
+            interpolation=cv2.INTER_LINEAR,
+        )
+        diff = cv2.absdiff(lab, surround)
+        expected = diff[:, :, 0] + diff[:, :, 1] + diff[:, :, 2]
+        expected /= float(expected.max())
+        assert np.array_equal(screenspace.compute_color_contrast(frame), expected)
+
+    def test_color_contrast_handles_single_pixel_frame(self):
+        contrast = screenspace.compute_color_contrast(
+            np.full((1, 1, 3), 200, dtype=np.uint8)
+        )
+        assert contrast.shape == (1, 1)
+        assert np.all(np.isfinite(contrast))
+
     def test_color_contrast_highlights_patch(self):
         frame = _bright_patch_frame()
         contrast = screenspace.compute_color_contrast(frame)
@@ -99,10 +187,68 @@ class TestChannels:
         with_face_on, _ = screenspace.compute_saliency_map(
             frame, None, center_bias=0.0, include_face=True
         )
-        assert np.array_equal(with_face_off, with_face_on)
+        # Closeness, not bit-equality: cv2.dft is not bit-reproducible call to
+        # call on every OpenCV build (Linux CI produced 1-ulp differences at
+        # float32 where macOS produced none), and the two maps here are two
+        # independent computations of the same math. The regression this guards
+        # -- a zeros-only face channel joining the denominator -- scales the
+        # whole map by 3/4: measured at 1.25e-1, five orders of magnitude above
+        # this bound, against an observed wobble of 6.0e-8.
+        assert np.allclose(with_face_off, with_face_on, rtol=0, atol=1e-6)
 
 
 class TestSaliencyMap:
+    @pytest.mark.parametrize("enabled", itertools.product((False, True), repeat=4))
+    def test_disabled_channels_match(self, monkeypatch, enabled):
+        """Skipping channels preserves the previous weighted calculation exactly."""
+        rng = np.random.default_rng(23)
+        frame = rng.integers(0, 256, (31, 43, 3), dtype=np.uint8)
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        prev = rng.integers(0, 256, gray.shape, dtype=np.uint8)
+        maps = {
+            "spectral": screenspace.compute_spectral_residual(gray),
+            "contrast": screenspace.compute_color_contrast(frame),
+            "motion": screenspace.compute_motion_saliency(prev, gray),
+            "face": rng.random(gray.shape, dtype=np.float32),
+        }
+        weights = {
+            key: weight if active else 0.0
+            for key, weight, active in zip(
+                maps, (1.0, 0.7, 1.2, 0.8), enabled, strict=True
+            )
+        }
+        expected = weights["spectral"] * maps["spectral"]
+        for key in ("contrast", "motion", "face"):
+            expected += weights[key] * maps[key]
+        if sum(weights.values()) > 0:
+            expected /= sum(weights.values())
+        expected *= screenspace_primitives._center_prior(gray.shape, 0.25)
+        expected = np.clip(expected, 0.0, 1.0).astype(np.float32)
+
+        callbacks = {}
+        for key, name in (
+            ("spectral", "compute_spectral_residual"),
+            ("contrast", "compute_color_contrast"),
+            ("motion", "compute_motion_saliency"),
+            ("face", "compute_face_saliency"),
+        ):
+            callbacks[key] = Mock(return_value=maps[key])
+            monkeypatch.setattr(screenspace_primitives, name, callbacks[key])
+        available = Mock(return_value=True)
+        monkeypatch.setattr(
+            screenspace_primitives, "face_detection_available", available
+        )
+
+        actual, actual_gray = screenspace.compute_saliency_map(
+            frame, prev, weights=weights, center_bias=0.25, include_face=True
+        )
+        np.testing.assert_array_equal(actual, expected)
+        np.testing.assert_array_equal(actual_gray, gray)
+        assert actual.dtype == np.float32
+        for key, callback in callbacks.items():
+            assert callback.call_count == int(weights[key] != 0.0)
+        assert available.call_count == int(weights["face"] != 0.0)
+
     def test_peak_lands_on_bright_patch(self):
         frame = _bright_patch_frame()
         sal, curr_gray = screenspace.compute_saliency_map(
@@ -149,6 +295,27 @@ class TestSaliencyGrid:
             assert 0.0 <= cell["x"] <= 1.0
             assert 0.0 <= cell["y"] <= 1.0
             assert 0.15 <= cell["mag"] <= 1.0
+
+    def test_sparse_grid_cells_bit_identical_to_inline_rounding(self):
+        """The memoized-center fast path must emit byte-identical cells.
+
+        Reference is the formula it replaced: Python round() applied inline
+        per cell (hot-path rule: exact equality, not tolerance).
+        """
+        rng = np.random.default_rng(7)
+        for grid_n in (5, 16, 24):
+            cells = rng.random((grid_n, grid_n), dtype=np.float32)
+            got = screenspace.sparse_grid_cells(cells, 0.3)
+            ys, xs = np.nonzero(cells >= 0.3)
+            expected = [
+                {
+                    "x": round((int(x) + 0.5) / grid_n, 3),
+                    "y": round((int(y) + 0.5) / grid_n, 3),
+                    "mag": round(float(cells[y, x]), 3),
+                }
+                for y, x in zip(ys, xs)
+            ]
+            assert got == expected
 
     def test_grid_empty_on_zero_map(self):
         sal = np.zeros((60, 80), dtype=np.float32)
@@ -325,6 +492,30 @@ def _grid_results(n=8):
     ]
 
 
+def _varied_grid_results(n):
+    """Per-frame results whose grids overlap and *differ* frame to frame.
+
+    ``_grid_results`` repeats one grid, so every draw order produces the same
+    pixels — useless for proving that bucketed layers replay in the right order.
+    These cells move and change magnitude, so an out-of-order fold shows up.
+    """
+    rng = np.random.RandomState(11)
+    results = []
+    for i in range(n):
+        cells = [
+            {
+                "x": round(float((gx + 0.5) / 8), 3),
+                "y": round(float((gy + 0.5) / 8), 3),
+                "mag": round(float(rng.rand()), 3),
+            }
+            for gy in range(8)
+            for gx in range(8)
+            if rng.rand() > 0.3
+        ]
+        results.append({"timestamp": float(i), "saliency_grid": cells})
+    return results
+
+
 class TestAttentionHeatmap:
     def test_static_png_generated(self, tmp_path):
         out = str(tmp_path / "heatmap.png")
@@ -352,6 +543,94 @@ class TestAttentionHeatmap:
         )
         assert cum_info is not None and cum_info["path"] == cum
         assert roll_info is not None and roll_info["path"] == roll
+
+
+class TestSharedGridLayers:
+    """The prebuilt-layers fast path must be byte-identical to replaying results.
+
+    The worker draws each GIF bucket's grid cells once and hands the layers to
+    the PNG and both GIFs instead of letting all three replay the results
+    (measured 2.84 s → 1.23 s of post-scan work on a 962-result attention scan).
+    That is only sound because ``cv2.circle`` sets rather than accumulates, so
+    equality here is exact — a tolerance would hide exactly the drift this
+    guards.
+    """
+
+    def _artifacts(self, tmp_path, results, tag, layers):
+        import screenspace_heatmap
+
+        png = tmp_path / f"{tag}.png"
+        cum = tmp_path / f"{tag}_cum.gif"
+        roll = tmp_path / f"{tag}_roll.gif"
+        screenspace.generate_attention_heatmap(
+            results, 320, 240, str(png), layers=layers
+        )
+        screenspace_heatmap.generate_heatmap_gif(
+            results, 320, 240, str(cum), heatmap_type="attention", layers=layers
+        )
+        screenspace_heatmap.generate_rolling_heatmap_gif(
+            results,
+            320,
+            240,
+            str(roll),
+            heatmap_type="attention",
+            window_frames=3,
+            layers=layers,
+        )
+        return [p.read_bytes() if p.exists() else None for p in (png, cum, roll)]
+
+    @pytest.mark.parametrize("count", [1, 2, 8, 37])
+    def test_layers_path_is_byte_identical_to_replay(self, tmp_path, count):
+        results = _varied_grid_results(count)
+        layers = screenspace.build_grid_layers(
+            results, "attention", screenspace.grid_layer_count(results)
+        )
+        replayed = self._artifacts(tmp_path, results, "replay", None)
+        shared = self._artifacts(tmp_path, results, "shared", layers)
+        assert replayed[0] is not None  # the PNG always lands
+        assert shared == replayed
+
+    def test_layer_count_matches_gif_buckets(self):
+        assert (
+            screenspace.grid_layer_count(_grid_results(100)) == screenspace.GIF_FRAMES
+        )
+        assert screenspace.grid_layer_count(_grid_results(5)) == 5
+
+    def test_layers_tile_every_result(self):
+        """Folding all buckets equals a full replay — the PNG depends on it."""
+        results = _varied_grid_results(37)
+        layers = screenspace.build_grid_layers(
+            results, "attention", screenspace.grid_layer_count(results)
+        )
+        assert layers is not None
+        drawn = np.zeros((256, 256), dtype=bool)
+        for _vals, mask in layers:
+            drawn |= mask
+        replay = np.zeros((256, 256), dtype=np.float32)
+        for r in results:
+            screenspace_heatmap._accumulate_heatmap_result(replay, r, "attention")
+        assert np.array_equal(
+            screenspace_heatmap._fold_grid_layers(layers, len(layers) - 1), replay
+        )
+        assert drawn.any()
+
+    def test_non_grid_type_has_no_layers(self):
+        """Template accumulates additively and frame-native — never bucketed."""
+        assert screenspace.build_grid_layers([{"matches": []}], "template", 4) is None
+
+    def test_stale_layers_are_rejected_not_trusted(self, tmp_path):
+        """A layer set bucketed for a different result count must not be used."""
+        results = _varied_grid_results(24)
+        wrong = screenspace.build_grid_layers(results[:6], "attention", 6)
+        out = tmp_path / "cum.gif"
+        ref = tmp_path / "ref.gif"
+        screenspace_heatmap.generate_heatmap_gif(
+            results, 320, 240, str(out), heatmap_type="attention", layers=wrong
+        )
+        screenspace_heatmap.generate_heatmap_gif(
+            results, 320, 240, str(ref), heatmap_type="attention"
+        )
+        assert out.read_bytes() == ref.read_bytes()
 
 
 class TestAttentionEvents:

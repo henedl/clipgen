@@ -5,12 +5,19 @@
  * rotatable rect/ellipse shapes whose visibility span contains the playhead.
  * Owns the tool state machine (select / text / draw / rect / ellipse), pointer
  * capture for drawing, text placement, shape drag-create and corner/rotation
- * handles, the positioned text <input>, the color swatches + picker, and
- * screen↔normalized coordinate mapping (geometry is normalized 0..1 to the
- * frame so the browser preview matches the server's PIL burn-in at any
- * resolution; shape rotation is degrees clockwise, applied in pixel space).
- * Multi-select (shift-click + marquee), the stroke width/style menus, and
+ * handles, the positioned text <input>, and screen↔normalized coordinate
+ * mapping (geometry is normalized 0..1 to the frame so the browser preview
+ * matches the server's PIL burn-in at any resolution; shape rotation is degrees
+ * clockwise, applied in pixel space). Multi-select (shift-click + marquee) and
  * hold-Shift proportion locking live here too.
+ *
+ * It also builds the #coPalette rail's dynamic half: the two-slot color widget
+ * and the three style chips. The color model is Photoshop's — a primary and a
+ * secondary slot that X swaps, where the *primary* is always the live
+ * annotation color (state.annColor) and the secondary is just the other half of
+ * the pair. Nothing about the secondary reaches an annotation record, so the
+ * server's four-key style schema is untouched. The six presets live inside the
+ * shared ClipgenColorPicker popover rather than as rail swatches.
  *
  * CRUD + undo/redo + selection live in the hub (CO.createAnnotation /
  * deleteAnnotation / commitAnnotationField(Group) / selectAnnotation /
@@ -28,10 +35,11 @@
     "#f05a3c", "#f0b429", "#3ecf8e", "#38bdf8", "#a78bfa", "#f8fafc",
   ];
 
-  // Stroke width presets (fraction of frame width; 0.004 == the config default).
-  // The menu labels each as Math.round(v * 1000) — a stable weight number.
+  // Stroke width presets, fraction of frame width; menu labels are Math.round(v * 1000).
   var STROKE_WIDTHS = [0.002, 0.004, 0.006, 0.010, 0.016];
   var STROKE_STYLES = ["solid", "dashed", "dotted"];
+  // Text size presets, fraction of frame height; labelled like stroke widths.
+  var FONT_SIZES = [0.022, 0.028, 0.035, 0.045, 0.060];
 
   var _hitBoxes = [];  // screen-space bboxes from the last render (topmost last)
   var _drawing = null; // {points: [[nx, ny], ...]} while a stroke is captured
@@ -49,8 +57,7 @@
 
   // ---- Content-box math (object-fit: contain letterboxing) ----
 
-  // Position + size the overlay canvas exactly over the video's displayed
-  // content area, so canvas pixels map linearly onto normalized frame coords.
+  // Fit the canvas over the video's displayed content box; pixels map to frame coords.
   function syncCanvasToVideo() {
     var video = qs("#coVideo");
     var frame = qs("#coVideoFrame");
@@ -86,11 +93,7 @@
 
   // ---- Rendering ----
 
-  // Span edges round-trip through the server's round(…, 3): a span started
-  // at the un-rounded playhead can come back up to 0.5 ms LATER than it, so a
-  // strict comparison made a just-created annotation vanish on mouse-up about
-  // half the time. The tolerance also absorbs the <video> settling a frame
-  // shy of a requested seek when a span was snapped to a cut edge.
+  // Absorbs the server's round(…, 3) on span edges. Its export window stays strict.
   var SPAN_EPS = 0.005;
 
   function spanContainsPlayhead(a) {
@@ -102,9 +105,7 @@
     return CO.participantAnnotations().filter(spanContainsPlayhead);
   }
 
-  // Rotated-frame math for shape annotations, shared by rendering, handles,
-  // and hit tests. All outputs in canvas px; rotation is degrees clockwise
-  // (the canvas y-down ctx.rotate convention — the server mirrors it).
+  // Rotated-frame math for shapes, in canvas px; rotation is degrees clockwise (server mirrors).
   function shapeFrame(ann, w, h) {
     var g = ann.geometry;
     var rad = ((g.rotation || 0) * Math.PI) / 180;
@@ -125,9 +126,7 @@
     };
   }
 
-  // Configure ctx dash + line cap for a stroke style, scaling the pattern to
-  // the stroke width so it holds at any resolution (mirrors the server's PIL
-  // dash segmentation). Solid clears the dash and leaves the cap untouched.
+  // Dash pattern scales with stroke width, mirroring the server's PIL dash segmentation.
   function applyDashForStyle(ctx, strokeStyle, strokePx) {
     if (strokeStyle === "dashed") {
       ctx.setLineDash([strokePx * 2.5, strokePx * 2]);
@@ -203,7 +202,7 @@
         y2: Math.max.apply(null, ys) + stroke,
       };
     }
-    // text — mirrors the server's PIL render: dark backing box + colored text.
+    // KNOWN DIVERGENCE: the burn uses a system font (_ANNOTATION_FONT_PATHS), so backing-box widths differ.
     var text = ann.geometry.text || "";
     if (!text) return null;
     var size = Math.max(8,
@@ -232,10 +231,10 @@
     var w = canvas.width;
     var h = canvas.height;
     ctx.clearRect(0, 0, w, h);
+    // The hub re-renders on selection change, the chip gate's other input.
+    syncPaletteChips();
     _hitBoxes = [];
-    // Hidden layer: nothing drawn, nothing hit-testable (select/erase find
-    // nothing), but an in-flight stroke preview still renders below so the
-    // draw tool keeps working.
+    // Hidden layer draws and hit-tests nothing; the in-flight stroke preview still renders.
     var soleShape = CO.singleSelectedAnnotation();
     if (!state.annHidden) visibleAnnotations().forEach(function (ann) {
       var selected = CO.isAnnotationSelected(ann.id);
@@ -289,8 +288,7 @@
       }
       ctx.setLineDash([]);
     }
-    // Box-select marquee: dashed rect + a faint highlight on the shapes it
-    // currently covers (a live preview of what mouse-up will select).
+    // Marquee: dashed rect plus a faint highlight on the shapes it covers.
     if (_marquee) {
       var mx1 = Math.min(_marquee.x0, _marquee.x1) * w;
       var my1 = Math.min(_marquee.y0, _marquee.y1) * h;
@@ -369,8 +367,7 @@
     return null;
   }
 
-  // Apply a handle drag to the shape's geometry (mutates in place; the orig
-  // snapshot backs the undoable commit on pointer-up).
+  // Handle drag mutates geometry in place; orig backs the undo commit on pointer-up.
   function updateShapeEdit(pos, e) {
     var canvas = canvasEl();
     var w = canvas.width;
@@ -388,8 +385,7 @@
       g.rotation = ((deg % 360) + 360) % 360;
       return;
     }
-    // Corner resize in the shape's local (rotated) frame; the corner opposite
-    // the grabbed one stays fixed.
+    // Corner resize in the shape's rotated frame; the opposite corner stays fixed.
     var rad = ((orig.rotation || 0) * Math.PI) / 180;
     var cos = Math.cos(rad);
     var sin = Math.sin(rad);
@@ -400,8 +396,7 @@
     var signs = [[-1, -1], [1, -1], [1, 1], [-1, 1]][_shapeEdit.corner];
     var fx = -signs[0] * (orig.w * w) / 2;
     var fy = -signs[1] * (orig.h * h) / 2;
-    // Shift locks the original visual aspect ratio: snap the moving corner so
-    // the opposite (fixed) corner stays put and w/h keep their pixel ratio.
+    // Shift locks the original pixel aspect ratio around the fixed corner.
     if (e.shiftKey && orig.h > 0 && orig.w > 0) {
       var aspect = (orig.w * w) / (orig.h * h);
       var side = Math.max(Math.abs(lx - fx), Math.abs(ly - fy) * aspect);
@@ -418,9 +413,7 @@
     g.h = Math.min(newH / h, 1);
   }
 
-  // Delete whatever sits under the eraser, once per annotation per gesture
-  // (the hit boxes rebuild async after each delete; the dedupe map keeps a
-  // slow response from double-deleting → 404 toasts).
+  // Erase once per annotation per gesture; hit boxes rebuild async, so dedupe avoids 404s.
   function eraseAt(pos) {
     var ann = hitTestAnnotation(pos.x, pos.y);
     if (!ann || _erasing[ann.id]) return;
@@ -444,9 +437,7 @@
   // ---- Tools ----
 
   function defaultSpan() {
-    // Creation-only: an annotation placed while the playhead sits inside a cut
-    // adopts that cut's span (the selected cut wins over an earlier overlap),
-    // so it travels with the clip. Span edits afterwards are free-form.
+    // New annotations inside a cut adopt its span (selected cut wins); later edits are free-form.
     var cuts = (CO.participantCuts ? CO.participantCuts() : []).filter(function (c) {
       return c.start <= state.playhead && state.playhead <= c.end;
     });
@@ -462,16 +453,14 @@
       return { start: cut.start, end: cut.end };
     }
     var span = CLIPGEN_CONFIG.composerAnnotationSpanSeconds;
-    // Back the start off by a few frames: the <video> can settle a frame
-    // before a requested seek and the server rounds span edges, so opening
-    // the span exactly at the playhead risks it starting just out of view.
+    // Start 0.1s early: seeks settle a frame short and the server rounds edges.
     var start = Math.max(0, state.playhead - 0.1);
     var end = Math.min(
       state.duration || start + span, start + span);
     return { start: start, end: Math.max(end, start + 0.5) };
   }
 
-  // Style for a newly drawn shape/freehand — the current toolbar defaults.
+  // Style for a newly drawn shape/freehand — the current palette defaults.
   function newStyle() {
     return {
       color: state.annColor,
@@ -492,6 +481,30 @@
       btn.classList.toggle("active", btn.getAttribute("data-tool") === tool);
     });
     if (tool !== "text") hideTextInput();
+    syncPaletteChips();
+  }
+
+  // Chip gate depends on tool AND selection, so both setAnnotateTool and renderAnnotations call this.
+  var _chipGate = "";
+
+  function syncPaletteChips() {
+    var selected = CO.selectedAnnotations ? CO.selectedAnnotations() : [];
+    var hasText = selected.some(function (a) { return a.type === "text"; });
+    var hasStroke = selected.some(function (a) {
+      return a.type === "shape" || a.type === "freehand";
+    });
+    // Nothing selected: chips set defaults for the active tool, so gate on it.
+    var textLive = selected.length ? hasText : state.annTool === "text";
+    var strokeLive = selected.length ? hasStroke : state.annTool !== "text";
+    var signature = (textLive ? "1" : "0") + (strokeLive ? "1" : "0");
+    if (signature === _chipGate) return;
+    _chipGate = signature;
+    ["#coStrokeWidthBtn", "#coStrokeStyleBtn"].forEach(function (sel) {
+      var btn = qs(sel);
+      if (btn) btn.disabled = !strokeLive;
+    });
+    var fontBtn = qs("#coFontSizeBtn");
+    if (fontBtn) fontBtn.disabled = !textLive;
   }
 
   // ---- Text input flow ----
@@ -499,13 +512,14 @@
   function showTextInput(pos) {
     var input = qs("#coAnnotateText");
     var canvas = canvasEl();
+    // The text tool's pointerdown preventDefaults, so no blur commits; flush typed text here.
+    flushTextInput();
     _pendingText = pos;
     input.style.left = (canvas.offsetLeft + pos.x * canvas.width) + "px";
     input.style.top = (canvas.offsetTop + pos.y * canvas.height) + "px";
     input.value = "";
     input.classList.remove("hidden");
-    // Focus on the next frame — belt-and-braces with the caller's
-    // preventDefault against the default mousedown focus steal.
+    // Focus next frame, past the default mousedown focus steal.
     requestAnimationFrame(function () { input.focus(); });
   }
 
@@ -515,39 +529,50 @@
     _pendingText = null;
   }
 
-  function commitTextInput() {
+  // Create the label for the open text input; true when one was created.
+  function flushTextInput() {
     var input = qs("#coAnnotateText");
     var text = input.value.trim();
     var pos = _pendingText;
-    hideTextInput();
-    if (!text || !pos) return;
+    if (!text || !pos) return false;
+    input.value = "";
     CO.createAnnotation({
       participant: state.participant,
       type: "text",
       span: defaultSpan(),
       geometry: { x: pos.x, y: pos.y, text: text },
-      style: { color: state.annColor },
+      style: { color: state.annColor, fontSize: state.annFontSize },
     });
-    setAnnotateTool("select");
+    return true;
   }
 
-  // ---- Stroke width / style controls ----
+  function commitTextInput() {
+    var created = flushTextInput();
+    hideTextInput();
+    if (created) setAnnotateTool("select");
+  }
 
-  // Scale a frame-fraction stroke width to a small on-chip pixel weight (1..5)
-  // for the trigger + menu sample lines.
+  // ---- Style chip controls (stroke width / stroke style / text size) ----
+
+  // Frame-fraction stroke width to an on-chip pixel weight (1..5).
   function strokeDisplayPx(frac) {
     return Math.max(1, Math.min(5, Math.round((frac * 1000) / 3)));
   }
 
-  // Apply a style patch to the current selection as one undo step. Stroke
-  // width/style only touch shapes + freehand; color applies to every type.
-  // Annotations already carrying the patched value are skipped (no no-op undo).
+  // Frame-fraction font size to a legible on-chip "Aa" (8..20 px).
+  function fontDisplayPx(frac) {
+    return Math.max(8, Math.min(20, Math.round(frac * 300)));
+  }
+
+  // Patch the selection as one undo step; skips types the patch can't touch and no-ops.
   function applyStyleToSelection(patch) {
     var strokeOnly =
       patch.strokeWidth !== undefined || patch.strokeStyle !== undefined;
+    var textOnly = patch.fontSize !== undefined;
     var edits = [];
     CO.selectedAnnotations().forEach(function (a) {
       if (strokeOnly && a.type !== "shape" && a.type !== "freehand") return;
+      if (textOnly && a.type !== "text") return;
       a.style = a.style || {};
       var changed = Object.keys(patch).some(function (k) {
         return a.style[k] !== patch[k];
@@ -560,63 +585,75 @@
     if (edits.length) CO.commitAnnotationFieldGroup("style", edits);
   }
 
-  // Minimal popover menu (no generic primitive exists): one row per option, each
-  // drawing a sample line. Click-outside / Escape closes; only one open at once.
-  var _strokeMenuCleanup = null;
+  // Popover menu for the style chips; opens rightward since the rail is left-docked.
+  var _paletteMenuCleanup = null;
 
-  function closeStrokeMenu() {
-    if (_strokeMenuCleanup) _strokeMenuCleanup();
+  function closePaletteMenu() {
+    if (_paletteMenuCleanup) _paletteMenuCleanup();
   }
 
-  function openStrokeMenu(anchor, items, current, onPick) {
-    closeStrokeMenu();
-    var menu = el("div", "co-stroke-menu");
+  function openPaletteMenu(anchor, items, current, onPick) {
+    closePaletteMenu();
+    var menu = el("div", "co-palette-menu");
     items.forEach(function (item) {
       var row = el("button",
-        "co-stroke-option" + (item.value === current ? " active" : ""));
+        "co-palette-option" + (item.value === current ? " active" : ""));
       row.type = "button";
       if (item.title) row.setAttribute("data-tooltip", item.title);
-      var line = el("span", "co-stroke-sample");
-      item.style(line);
-      row.appendChild(line);
+      var cell = el("span", item.sampleClass || "co-palette-sample");
+      item.render(cell);
+      row.appendChild(cell);
       if (item.label != null) {
-        var lbl = el("span", "co-stroke-label");
+        var lbl = el("span", "co-palette-label");
         lbl.textContent = item.label;
         row.appendChild(lbl);
       }
       row.addEventListener("click", function () {
-        closeStrokeMenu();
+        closePaletteMenu();
         onPick(item.value);
       });
       menu.appendChild(row);
     });
     document.body.appendChild(menu);
     var r = anchor.getBoundingClientRect();
-    menu.style.left = Math.round(r.left) + "px";
-    menu.style.top = Math.round(r.bottom + 4) + "px";
+    // Measure after mounting; flip left or lift to stay inside the viewport.
+    var box = menu.getBoundingClientRect();
+    var left = r.right + 4;
+    if (left + box.width > window.innerWidth - 4) {
+      left = Math.max(4, r.left - box.width - 4);
+    }
+    var top = Math.min(r.top, Math.max(4, window.innerHeight - box.height - 4));
+    menu.style.left = Math.round(left) + "px";
+    menu.style.top = Math.round(top) + "px";
     anchor.setAttribute("aria-expanded", "true");
 
     function onDocDown(ev) {
       if (menu.contains(ev.target) || anchor.contains(ev.target)) return;
-      closeStrokeMenu();
+      closePaletteMenu();
     }
     function onKey(ev) {
-      if (ev.key === "Escape") { ev.stopPropagation(); closeStrokeMenu(); }
+      if (ev.key === "Escape") { ev.stopPropagation(); closePaletteMenu(); }
     }
-    // Defer the outside-click listener so the opening click doesn't close it.
-    // Track the timer so a close before it fires (fast reopen / immediate
-    // Escape) can cancel it — otherwise the listener orphans on document.
+    // The menu is fixed from the open-time rect; scroll or resize would detach it.
+    function onReposition() {
+      closePaletteMenu();
+    }
+    // Defer so the opening click doesn't close it; cleanup cancels the timer.
     var openTimer = setTimeout(function () {
       document.addEventListener("pointerdown", onDocDown, true);
     }, 0);
     document.addEventListener("keydown", onKey, true);
-    _strokeMenuCleanup = function () {
+    window.addEventListener("scroll", onReposition, true);
+    window.addEventListener("resize", onReposition);
+    _paletteMenuCleanup = function () {
       clearTimeout(openTimer);
       document.removeEventListener("pointerdown", onDocDown, true);
       document.removeEventListener("keydown", onKey, true);
+      window.removeEventListener("scroll", onReposition, true);
+      window.removeEventListener("resize", onReposition);
       if (menu.parentNode) menu.parentNode.removeChild(menu);
       anchor.setAttribute("aria-expanded", "false");
-      _strokeMenuCleanup = null;
+      _paletteMenuCleanup = null;
     };
   }
 
@@ -626,52 +663,93 @@
     var canvas = canvasEl();
     var video = qs("#coVideo");
 
-    // Color swatches + custom-color picker. A picked color that matches no
-    // preset leaves every preset inactive; the picker button always shows the
-    // current color.
-    var swatchHost = qs("#coAnnotateColors");
+    // ---- Two-color swatch pair; color model in the file header ----
+    var pairHost = qs("#coSwatchPair");
+
+    var primaryBtn = el("button", "co-swatch-slot co-swatch-primary");
+    primaryBtn.type = "button";
+    var secondaryBtn = el("button", "co-swatch-slot co-swatch-secondary");
+    secondaryBtn.type = "button";
+
+    function paintSwatches() {
+      primaryBtn.style.setProperty("--co-swatch-color", state.annColor);
+      primaryBtn.setAttribute("aria-label", "Primary color " + state.annColor);
+      primaryBtn.setAttribute("data-tooltip", "Primary color " + state.annColor);
+      secondaryBtn.style.setProperty("--co-swatch-color", state.annColorSecondary);
+      secondaryBtn.setAttribute(
+        "aria-label", "Secondary color " + state.annColorSecondary);
+      secondaryBtn.setAttribute(
+        "data-tooltip", "Secondary color " + state.annColorSecondary);
+    }
 
     function applyAnnColor(color) {
       state.annColor = color;
-      qsa(".co-color-swatch").forEach(function (s) {
-        s.classList.toggle("active", s.getAttribute("data-color") === color);
-      });
-      var custom = qs(".co-color-custom");
-      if (custom) custom.style.setProperty("--co-swatch-color", color);
+      paintSwatches();
       // Recolor the current selection (all selected, any type) in one step.
       applyStyleToSelection({ color: color });
     }
 
-    SWATCH_COLORS.forEach(function (color, idx) {
-      var swatch = el("button", "co-color-swatch" + (idx === 0 ? " active" : ""));
-      swatch.type = "button";
-      swatch.setAttribute("data-tooltip", "Annotation color " + color);
-      swatch.setAttribute("aria-label", "Annotation color " + color);
-      swatch.setAttribute("data-color", color);
-      swatch.style.setProperty("--co-swatch-color", color);
-      swatch.addEventListener("click", function () { applyAnnColor(color); });
-      swatchHost.appendChild(swatch);
-    });
+    function applyAnnColorSecondary(color) {
+      state.annColorSecondary = color;
+      paintSwatches();
+    }
 
-    var custom = el("button", "co-color-swatch co-color-custom");
-    custom.type = "button";
-    custom.setAttribute("data-tooltip", "Custom color…");
-    custom.setAttribute("aria-label", "Custom color…");
-    custom.style.setProperty("--co-swatch-color", state.annColor || SWATCH_COLORS[0]);
-    custom.appendChild(el("span", "co-btn-icon co-icon-eye-dropper"));
-    custom.addEventListener("click", function () {
+    // Swap goes through applyAnnColor, so a live selection recolors as one undo step.
+    function swapAnnotationColors() {
+      var parked = state.annColorSecondary;
+      state.annColorSecondary = state.annColor;
+      applyAnnColor(parked);
+    }
+
+    function openSlotPicker(anchor, current, onChange) {
       window.ClipgenColorPicker.open({
-        anchor: custom,
-        value: state.annColor || SWATCH_COLORS[0],
+        anchor: anchor,
+        value: current,
         swatches: SWATCH_COLORS,
-        onChange: applyAnnColor,
+        onChange: onChange,
       });
-    });
-    swatchHost.appendChild(custom);
+    }
 
-    // Stroke width + style menus. Like the color control, each sets the default
-    // for new annotations and retro-applies to the current selection.
-    function updateStrokeTriggers() {
+    primaryBtn.addEventListener("click", function () {
+      openSlotPicker(primaryBtn, state.annColor, applyAnnColor);
+    });
+    secondaryBtn.addEventListener("click", function () {
+      openSlotPicker(secondaryBtn, state.annColorSecondary, applyAnnColorSecondary);
+    });
+
+    var swapBtn = el("button", "co-swatch-chip co-swatch-swap");
+    swapBtn.type = "button";
+    swapBtn.setAttribute("data-hotkey", "composer.swapColors");
+    swapBtn.setAttribute("aria-label", "Swap primary and secondary color");
+    swapBtn.setAttribute("data-tooltip", "Swap primary and secondary color");
+    swapBtn.appendChild(el("span", "co-btn-icon co-icon-swap"));
+    swapBtn.addEventListener("click", swapAnnotationColors);
+
+    var resetBtn = el("button", "co-swatch-chip co-swatch-reset");
+    resetBtn.type = "button";
+    resetBtn.setAttribute("aria-label", "Reset to the default colors");
+    resetBtn.setAttribute("data-tooltip", "Reset to the default colors");
+    var resetGlyph = el("span", "co-swatch-reset-glyph");
+    resetGlyph.style.setProperty(
+      "--co-swatch-default", CLIPGEN_CONFIG.composerAnnotationColor);
+    resetGlyph.style.setProperty(
+      "--co-swatch-default-secondary",
+      CLIPGEN_CONFIG.composerAnnotationColorSecondary);
+    resetBtn.appendChild(resetGlyph);
+    resetBtn.addEventListener("click", function () {
+      state.annColorSecondary = CLIPGEN_CONFIG.composerAnnotationColorSecondary;
+      applyAnnColor(CLIPGEN_CONFIG.composerAnnotationColor);
+    });
+
+    pairHost.appendChild(secondaryBtn);
+    pairHost.appendChild(primaryBtn);
+    pairHost.appendChild(swapBtn);
+    pairHost.appendChild(resetBtn);
+    paintSwatches();
+    CO.swapAnnotationColors = swapAnnotationColors;
+
+    // Style chips set defaults for new annotations and retro-apply to the selection.
+    function updateChipPreviews() {
       var wp = qs(".co-stroke-width-preview");
       if (wp) {
         wp.style.borderTopWidth = strokeDisplayPx(state.annStrokeWidth) + "px";
@@ -682,29 +760,37 @@
         sp.style.borderTopWidth = "2px";
         sp.style.borderTopStyle = state.annStrokeStyle;  // solid | dashed | dotted
       }
+      var fp = qs(".co-font-preview");
+      if (fp) fp.textContent = String(Math.round(state.annFontSize * 1000));
     }
 
     function applyAnnStrokeWidth(v) {
       state.annStrokeWidth = v;
-      updateStrokeTriggers();
+      updateChipPreviews();
       applyStyleToSelection({ strokeWidth: v });
     }
 
     function applyAnnStrokeStyle(s) {
       state.annStrokeStyle = s;
-      updateStrokeTriggers();
+      updateChipPreviews();
       applyStyleToSelection({ strokeStyle: s });
+    }
+
+    function applyAnnFontSize(v) {
+      state.annFontSize = v;
+      updateChipPreviews();
+      applyStyleToSelection({ fontSize: v });
     }
 
     var widthBtn = qs("#coStrokeWidthBtn");
     if (widthBtn) widthBtn.addEventListener("click", function () {
-      openStrokeMenu(widthBtn, STROKE_WIDTHS.map(function (v) {
+      openPaletteMenu(widthBtn, STROKE_WIDTHS.map(function (v) {
         var weight = Math.round(v * 1000);
         return {
           value: v,
           label: String(weight),
           title: "Stroke weight " + weight,
-          style: function (line) {
+          render: function (line) {
             line.style.borderTopWidth = strokeDisplayPx(v) + "px";
             line.style.borderTopStyle = "solid";
           },
@@ -714,12 +800,12 @@
 
     var styleBtn = qs("#coStrokeStyleBtn");
     if (styleBtn) styleBtn.addEventListener("click", function () {
-      openStrokeMenu(styleBtn, STROKE_STYLES.map(function (s) {
+      openPaletteMenu(styleBtn, STROKE_STYLES.map(function (s) {
         return {
           value: s,
           label: s.charAt(0).toUpperCase() + s.slice(1),
           title: s + " stroke",
-          style: function (line) {
+          render: function (line) {
             line.style.borderTopWidth = "2px";
             line.style.borderTopStyle = s;
           },
@@ -727,7 +813,41 @@
       }), state.annStrokeStyle, applyAnnStrokeStyle);
     });
 
-    updateStrokeTriggers();
+    var fontBtn = qs("#coFontSizeBtn");
+    if (fontBtn) fontBtn.addEventListener("click", function () {
+      openPaletteMenu(fontBtn, FONT_SIZES.map(function (v) {
+        var weight = Math.round(v * 1000);
+        return {
+          value: v,
+          label: String(weight),
+          title: "Text size " + weight,
+          sampleClass: "co-palette-sample-text",
+          render: function (cell) {
+            cell.textContent = "Aa";
+            cell.style.fontSize = fontDisplayPx(v) + "px";
+          },
+        };
+      }), state.annFontSize, applyAnnFontSize);
+    });
+
+    updateChipPreviews();
+    syncPaletteChips();
+
+    // The palette paints before the config fetch lands; the hub calls this after clipgenApplyConfig.
+    CO.syncAnnotationDefaults = function () {
+      state.annColor = CLIPGEN_CONFIG.composerAnnotationColor;
+      state.annColorSecondary = CLIPGEN_CONFIG.composerAnnotationColorSecondary;
+      state.annStrokeWidth = CLIPGEN_CONFIG.composerAnnotationStrokeWidth;
+      state.annStrokeStyle = CLIPGEN_CONFIG.composerAnnotationStrokeStyle;
+      state.annFontSize = CLIPGEN_CONFIG.composerAnnotationFontSize;
+      resetGlyph.style.setProperty(
+        "--co-swatch-default", CLIPGEN_CONFIG.composerAnnotationColor);
+      resetGlyph.style.setProperty(
+        "--co-swatch-default-secondary",
+        CLIPGEN_CONFIG.composerAnnotationColorSecondary);
+      paintSwatches();
+      updateChipPreviews();
+    };
 
     // Tool buttons ([data-tool] excludes the independent #coToolHide toggle).
     qsa(".co-tool-btn[data-tool]").forEach(function (btn) {
@@ -767,9 +887,7 @@
         _drawing = { points: [[pos.x, pos.y]] };
         canvas.setPointerCapture(e.pointerId);
       } else if (state.annTool === "text") {
-        // preventDefault: the browser's default mousedown action would move
-        // focus off the just-focused input, blur-committing it empty before
-        // the user can type.
+        // Default mousedown would steal focus from the input and blur-commit it empty.
         e.preventDefault();
         showTextInput(pos);
       } else if (state.annTool === "erase") {
@@ -795,8 +913,7 @@
             // Toggle this annotation in/out of the selection; no drag.
             CO.toggleAnnotationSelection(ann.id);
           } else {
-            // Plain click keeps an existing multi-selection (so the whole group
-            // can be dragged); otherwise it selects just this one.
+            // Plain click keeps a multi-selection so the group drags; otherwise select this one.
             if (!CO.isAnnotationSelected(ann.id)) CO.selectAnnotation(ann.id);
             _dragging = {
               anns: CO.selectedAnnotations().map(function (a) {
@@ -818,12 +935,23 @@
       }
     });
 
+    // One update per frame: pointer events arrive at 120–240 Hz and each branch renders.
+    var _moveRaf = 0;
+    var _lastMove = null;
     canvas.addEventListener("pointermove", function (e) {
+      _lastMove = e;
+      if (_moveRaf) return;
+      _moveRaf = requestAnimationFrame(function () {
+        _moveRaf = 0;
+        handlePointerMove(_lastMove);
+      });
+    });
+
+    function handlePointerMove(e) {
       var pos = eventToNormalized(e);
       if (!pos) return;
       if (_shaping) {
-        // Shift retains proportions: equalize the pixel extents so a rect draws
-        // square and an ellipse draws circular (canvas box matches frame aspect).
+        // Shift equalizes pixel extents: square rect, circular ellipse.
         if (e.shiftKey) {
           var canvas2 = canvasEl();
           var dxPx = (pos.x - _shaping.x0) * canvas2.width;
@@ -864,14 +992,24 @@
             geometry.x = clamp(orig.x + dx, 0, 1);
             geometry.y = clamp(orig.y + dy, 0, 1);
           } else {
+            // Clamp the delta by the bounding box; per-point clamping would deform the stroke.
+            var minX = 1, minY = 1, maxX = 0, maxY = 0;
+            orig.points.forEach(function (p) {
+              if (p[0] < minX) minX = p[0];
+              if (p[0] > maxX) maxX = p[0];
+              if (p[1] < minY) minY = p[1];
+              if (p[1] > maxY) maxY = p[1];
+            });
+            var cdx = clamp(dx, -minX, 1 - maxX);
+            var cdy = clamp(dy, -minY, 1 - maxY);
             geometry.points = orig.points.map(function (p) {
-              return [clamp(p[0] + dx, 0, 1), clamp(p[1] + dy, 0, 1)];
+              return [p[0] + cdx, p[1] + cdy];
             });
           }
         });
         renderAnnotations();
       }
-    });
+    }
 
     function endGesture(e) {
       if (canvas.hasPointerCapture && canvas.hasPointerCapture(e.pointerId)) {
@@ -893,13 +1031,14 @@
           return hb.ann.id;
         });
         if (m.additive) {
-          // Union with the existing selection.
+          // One selection write; a per-id toggle re-renders the timeline per hit.
+          var union = state.selectedAnnotationIds.slice();
           hitIds.forEach(function (id) {
-            if (!CO.isAnnotationSelected(id)) CO.toggleAnnotationSelection(id);
+            if (union.indexOf(id) === -1) union.push(id);
           });
+          CO.setAnnotationSelection(union);
         } else {
-          // A near-zero drag is a click on empty space (selection already
-          // cleared on pointerdown); a real drag replaces the selection.
+          // A near-zero drag is an empty-space click (already cleared); a real drag replaces.
           CO.setAnnotationSelection(hitIds);
         }
         renderAnnotations();
@@ -958,8 +1097,7 @@
             return { ann: entry.ann, before: entry.orig };
           }));
         } else if (d.anns.length > 1) {
-          // A plain click (no drag) on a member of a multi-selection collapses
-          // the selection to just that annotation.
+          // A plain click on a multi-selection member collapses the selection to it.
           CO.selectAnnotation(d.clickedId);
         }
       }
@@ -971,5 +1109,4 @@
   CO.initAnnotate = initAnnotate;
   CO.renderAnnotations = renderAnnotations;
   CO.setAnnotateTool = setAnnotateTool;
-  CO.syncAnnotateCanvas = syncCanvasToVideo;
 })();

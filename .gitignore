@@ -25,12 +25,14 @@ htmlcov/
 # PyInstaller artifacts
 build/*
 !build/clipgen.spec
+!build/clipgen.iss
 !build/THIRD-PARTY-LICENSES
 !build/VERSION
 !build/clipgen.icns
 !build/clipgen.ico
 !build/render_icons.py
 !build/fetch_binaries.py
+!build/release_notes.py
 dist/
 
 # Working docs

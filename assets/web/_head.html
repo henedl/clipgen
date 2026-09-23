@@ -9,3 +9,17 @@
        fonts.googleapis.com: the desktop shell and any offline run would block on
        the CDN and fall back to system fonts. See assets/web/fonts.css. -->
   <link rel="stylesheet" href="fonts.css">
+  <script>
+    // Pre-paint theme bootstrap, mirroring boot.html: tokens.css defaults to
+    // dark and utils.js only applies the stored preference at DOMContentLoaded
+    // (initThemeToggle), so without this a light-theme user gets a dark flash
+    // on every navigation. utils.js applyStoredThemePreference re-applies the
+    // same value later and syncs the toggle button.
+    (function () {
+      var stored = null;
+      try { stored = window.localStorage.getItem("clipgen-theme"); } catch (e) {}
+      if (stored === "light") {
+        document.documentElement.setAttribute("data-theme", "light");
+      }
+    })();
+  </script>

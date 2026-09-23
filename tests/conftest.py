@@ -1,4 +1,6 @@
 import os
+import shutil
+import subprocess
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -22,7 +24,7 @@ def _anchor_cwd_outside_repo(tmp_path_factory):
     cwd on teardown — the repo root, since that is where pytest is invoked. Any
     write that lands after that teardown therefore hits the repo: a
     ``workflows_server`` run thread outliving its test persisted
-    ``workflows_manifest.json`` into the root exactly that way, and being
+    ``clipgen.json`` into the root exactly that way, and being
     gitignored it accumulated unnoticed.
 
     Anchoring the session cwd to a tmp directory makes that restore point
@@ -48,12 +50,12 @@ def _repo_root_stays_clean():
     ``_sandbox_cwd`` below is the *prevention*; this is the detection. Both the
     artifacts it describes and the manifests a late worker thread persists are
     gitignored (``*.json``, ``*.mp4``), so an escape leaves no trace in
-    ``git status`` and accumulates unnoticed — ``workflows_manifest.json`` did
+    ``git status`` and accumulates unnoticed — ``clipgen.json`` did
     exactly that. Comparing a before/after listing of the root turns the next
     one into a red run instead of silent litter.
 
     Scoped to *product* writes, which in this codebase are all plainly named
-    (``*_manifest.json``, ``*.mp4``, ``*.png``). Test-runner artifacts are a
+    (``clipgen.json``, ``*.mp4``, ``*.png``). Test-runner artifacts are a
     different category and legitimately belong at the rootdir: under CI's
     ``-n auto``, ``pytest-cov`` writes one
     ``.coverage.<host>.<pid>.<random>`` per xdist worker there by design, and
@@ -94,6 +96,56 @@ def _sandbox_cwd(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
 
 
+@pytest.fixture(scope="session", autouse=True)
+def _sandbox_user_config(tmp_path_factory):
+    """Keep per-user clipgen state out of the developer's real home.
+
+    ``start_settings.config_dir()`` resolves from ``Path.home()`` (or
+    ``LOCALAPPDATA`` on Windows), and it now holds ``studio_settings.json`` as
+    well as ``start.json`` — so an unsandboxed run would read the maintainer's
+    real preferences and, on any settings PUT, overwrite them.
+
+    Deliberately patching the *inputs* rather than ``config_dir`` itself:
+    ``test_start_settings.py`` asserts the per-platform resolution by patching
+    ``Path.home``/``LOCALAPPDATA`` in the test body, which runs after this
+    fixture and therefore still wins. Stubbing ``config_dir`` would break it.
+    """
+    home = tmp_path_factory.mktemp("user-home")
+    with pytest.MonkeyPatch.context() as monkeypatch:
+        monkeypatch.setattr(Path, "home", lambda: home)
+        monkeypatch.setenv("LOCALAPPDATA", str(home / "Local"))
+        yield
+
+
+@pytest.fixture(autouse=True)
+def _clear_user_config():
+    """Empty the sandboxed config dir around every test.
+
+    ``_sandbox_user_config`` is session-scoped for speed, so nothing else throws
+    this state away between tests. Everything written under ``config_dir()``
+    would otherwise outlive its test and reach the next one: ``start.json``,
+    ``studio_settings.json``, ``model_failures.json``, the ``models`` dir, the
+    webview profile, ``credentials.json``. Clearing the whole directory rather
+    than a named allowlist covers each new state file the day it is added.
+    """
+    import start_settings
+
+    def _empty() -> None:
+        root = start_settings.config_dir()
+        if not root.is_dir():
+            return
+        for entry in root.iterdir():
+            # Symlinked dirs: unlink the link, never walk into its target.
+            if entry.is_dir() and not entry.is_symlink():
+                shutil.rmtree(entry, ignore_errors=True)
+            else:
+                entry.unlink(missing_ok=True)
+
+    _empty()
+    yield
+    _empty()
+
+
 @pytest.fixture(autouse=True)
 def _reset_gui_launch():
     """Restore ``utils.GUI_LAUNCH`` after every test.
@@ -118,6 +170,24 @@ def _reset_gui_launch():
         yield
     finally:
         utils.GUI_LAUNCH = original
+
+
+@pytest.fixture(autouse=True)
+def _reset_filename_overrides():
+    """Restore ``config.FILENAME_OVERRIDES`` after every test.
+
+    ``server._seed_filename_overrides`` reassigns it whenever a spreadsheet or
+    mind map is opened, so a test that drives ``/api/spreadsheets/open`` would
+    otherwise leave one study's overrides pointing every later test's
+    participants at files that are not there.
+    """
+    import config
+
+    original = config.FILENAME_OVERRIDES
+    try:
+        yield
+    finally:
+        config.FILENAME_OVERRIDES = original
 
 
 @pytest.fixture(autouse=True)
@@ -225,6 +295,35 @@ def _reset_thinking_agents_getters():
     finally:
         thinking_agents._observation_rows_getter = original_rows
         thinking_agents._participant_marks_getter = original_marks
+
+
+@pytest.fixture(autouse=True)
+def _no_real_llama_server(monkeypatch):
+    """Never spawn a real ``llama-server`` from the suite.
+
+    ``ensure_server()`` starts one whenever the runtime is installed, so a test
+    that only stubs ``is_available`` would fork a 15-second orphan on a
+    developer machine that has llama.cpp. ``start_server`` catches OSError and
+    degrades to False, which is the answer such a test wants anyway. The
+    start-server tests patch ``subprocess.Popen`` themselves, and a decorator
+    patch is applied after fixtures, so they still see their own mock.
+    """
+    import llm_client
+
+    class _NoPopen:
+        """Stands in for the ``subprocess`` module inside llm_client only.
+
+        Patching ``llm_client.subprocess.Popen`` would hit the shared stdlib
+        module and break every ``subprocess.run`` in the suite (ffmpeg).
+        """
+
+        def Popen(self, *args, **kwargs):
+            raise OSError("llama-server spawning is disabled under pytest")
+
+        def __getattr__(self, name):
+            return getattr(subprocess, name)
+
+    monkeypatch.setattr(llm_client, "subprocess", _NoPopen())
 
 
 @pytest.fixture

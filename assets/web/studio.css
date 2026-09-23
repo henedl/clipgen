@@ -37,6 +37,7 @@ html {
   -webkit-mask-position: center;
 }
 .cg-icon--x-mark      { mask-image: url(icons/x-mark.svg);      -webkit-mask-image: url(icons/x-mark.svg); }
+.cg-icon--folder-open { mask-image: url(icons/folder-open.svg); -webkit-mask-image: url(icons/folder-open.svg); }
 .cg-icon--check       { mask-image: url(icons/check.svg);       -webkit-mask-image: url(icons/check.svg); }
 .cg-icon--bars-3      { mask-image: url(icons/bars-3.svg);      -webkit-mask-image: url(icons/bars-3.svg); }
 .cg-icon--squares-2x2 { mask-image: url(icons/squares-2x2.svg); -webkit-mask-image: url(icons/squares-2x2.svg); }
@@ -54,8 +55,6 @@ html {
 
 body {
   font-family: var(--font-sans);
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
   letter-spacing: -0.005em;
   background-color: var(--color-bg);
   color: var(--color-text);
@@ -64,47 +63,6 @@ body {
   display: flex;
   flex-direction: column;
   overflow: hidden;
-}
-
-.hidden {
-  display: none !important;
-}
-
-/* Theme toggle (matches viewer.css) */
-
-#tooltipToggle {
-  position: relative;
-  width: 32px;
-  height: 32px;
-  border-radius: var(--radius-full);
-  border: 1px solid var(--color-border);
-  background: var(--color-surface-alt);
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  padding: 0;
-  cursor: pointer;
-  transition: background var(--duration-fast) ease, border-color var(--duration-fast) ease, transform var(--duration-fast) ease, box-shadow var(--duration-normal) ease;
-  flex-shrink: 0;
-  color: var(--color-text);
-}
-
-#tooltipToggle:hover {
-  background: var(--color-surface);
-  box-shadow: 0 0 0 1px rgba(148, 163, 184, 0.3);
-}
-
-#tooltipToggle:active {
-  transform: scale(0.96);
-}
-
-#tooltipToggle:focus-visible {
-  outline: 2px solid var(--color-accent);
-  outline-offset: 2px;
-}
-
-#tooltipToggle[aria-pressed="false"] {
-  opacity: 0.4;
 }
 
 /* Transcript intake tooltip */
@@ -126,11 +84,11 @@ body {
 
 /* Sheet preview
  *
- * Floating-nav scroll-under: TopNav (48px) + subheader (44px) are
- * `position: fixed`. #sheetPreview fills body's flex column from viewport y:0
- * down — chrome overlays its top edge. Each scrollable sub-tab below carries
- * its own `padding-top: 92px` so visible content starts below the chrome
- * strip while scrolled content slides *under* the glass. */
+ * Floating-nav scroll-under: TopNav (48px) + subheader (44px) are fixed, and
+ * #sheetPreview fills body's flex column from viewport y:0 down, so the chrome
+ * overlays its top edge. Each scrollable sub-tab carries its own
+ * `padding-top: 92px`, putting visible content below the chrome strip while
+ * scrolled content slides *under* the glass. */
 #sheetPreview {
   flex: 1 1 auto;
   min-width: 0;
@@ -149,15 +107,11 @@ body {
   overflow: hidden;
 }
 
-/* Intake sub-tabs need their own breathing room since
- * #sheetMain is now flush. Sheet sub-tab keeps its table flush to viewport
- * edges (matches prototype).
- *
- * The 92px top inset comes from the floating-nav scroll-under: TopNav +
- * subheader are fixed, so each sub-tab needs to push its visible content
- * below the chrome strip. The intake panels override this with a tighter
- * `padding: 92px var(--space-1) 0` further down. (`--space-0` doesn't exist;
- * use a bare `0` so the shorthand stays valid.) */
+/* Intake sub-tabs need their own breathing room since #sheetMain is flush; the
+ * Sheet sub-tab keeps its table flush to the viewport edges. The 92px top inset
+ * is the scroll-under offset described above, which the intake panels override
+ * with a tighter `padding: 92px var(--space-1) 0` further down. (`--space-0`
+ * doesn't exist — use a bare `0` so the shorthand stays valid.) */
 #intakePanel,
 #trIntakePanel,
 #coIntakePanel,
@@ -190,7 +144,7 @@ body {
   border-right: 1px solid var(--hairline);
   overflow-x: hidden;
   overflow-y: auto;
-  /* Thin themed scrollbar from .cg-scroll-thin (class on the element). */
+  /* Scrollbar styling is global (see "Scrollbars" in tokens.css) — no opt-in. */
 }
 /* Transition is gated on `tx-ready`, applied by studio.js after the first
  * paint. Otherwise the attribute flip from the persisted-collapsed state
@@ -318,17 +272,9 @@ body {
   width: 6px;
   height: 6px;
   border-radius: var(--radius-full);
-  background: currentColor;
+  background: var(--sev, currentColor); /* tokens.css severity indirection */
   flex-shrink: 0;
 }
-.studio-sidebar-row-dot.sev-critical      { background: var(--sev-critical); }
-.studio-sidebar-row-dot.sev-high          { background: var(--sev-high); }
-.studio-sidebar-row-dot.sev-medium        { background: var(--sev-medium); }
-.studio-sidebar-row-dot.sev-low           { background: var(--sev-low); }
-.studio-sidebar-row-dot.sev-na            { background: var(--sev-na); }
-.studio-sidebar-row-dot.sev-positive      { background: var(--sev-positive); }
-.studio-sidebar-row-dot.sev-very-positive { background: var(--sev-very-positive); }
-.studio-sidebar-row-dot.sev-unknown       { background: var(--sev-unknown); }
 .studio-sidebar-row-label {
   flex: 1 1 auto;
   min-width: 0;
@@ -338,7 +284,7 @@ body {
 }
 .studio-sidebar-row-count {
   font-family: var(--font-mono);
-  font-feature-settings: "tnum";
+  font-variant-numeric: tabular-nums;
   font-size: var(--text-2xs);
   color: var(--fg-faint);
   flex-shrink: 0;
@@ -353,7 +299,7 @@ body {
 }
 .studio-sidebar-pill {
   font-family: var(--font-mono);
-  font-feature-settings: "tnum";
+  font-variant-numeric: tabular-nums;
   font-size: 9px;
   padding: var(--space-1) 0;
   text-align: center;
@@ -428,7 +374,7 @@ body[data-active-tab]:not([data-active-tab="sheet"]) #studioSidebar {
 #trIntakePanel,
 #coIntakePanel,
 #mnIntakePanel {
-  transition: opacity 180ms ease-out, transform 220ms cubic-bezier(0.2, 0.7, 0.3, 1);
+  transition: opacity 180ms ease-out, transform 220ms var(--ease-out-soft);
 }
 .tab-slide-enter {
   opacity: 0 !important;
@@ -450,7 +396,6 @@ body[data-active-tab]:not([data-active-tab="sheet"]) #studioSidebar {
 
 .intake-tab-badge {
   font-family: var(--font-mono);
-  font-feature-settings: "tnum";
   font-size: 10px;
   padding: 1px var(--space-1-5);
   border-radius: var(--radius-full);
@@ -458,6 +403,7 @@ body[data-active-tab]:not([data-active-tab="sheet"]) #studioSidebar {
   color: var(--accent-fg);
   font-weight: 500;
   margin-left: var(--space-1);
+  font-variant-numeric: tabular-nums;
 }
 
 .tab-status-dot {
@@ -565,6 +511,7 @@ body[data-active-tab]:not([data-active-tab="sheet"]) #studioSidebar {
   font-size: var(--text-sm);
   line-height: 1.55;
   text-align: center;
+  text-wrap: balance;
 }
 
 #sheetLoading .sheet-loading-caption {
@@ -774,22 +721,20 @@ body.bottom-animating #stashedArtifactsArea {
   gap: 2px;
 }
 
+/* Caret-less by design (see the cg-select-nocaret class in studio.js) and
+   transparent, because it sits inside the sheet's sticky table header. */
 .fn-select {
-  appearance: none;
-  -webkit-appearance: none;
   background: transparent;
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-sm);
   padding: 0.15rem 0.3rem;
   font-size: var(--text-xs);
-  color: var(--color-text);
-  cursor: pointer;
   flex: 1;
   min-width: 0;
   text-align: center;
 }
 
-.fn-select:hover {
+/* Element-qualified so this accent border still beats the shared
+   select:not([multiple]):hover in tokens.css. */
+select.fn-select:hover {
   border-color: var(--color-accent);
 }
 
@@ -854,33 +799,17 @@ body.bottom-animating #stashedArtifactsArea {
   flex-shrink: 0;
 }
 
-.sev-pill.sev-critical {
-  color: var(--severity-critical);
-  background: color-mix(in srgb, var(--severity-critical) 18%, transparent);
-}
-.sev-pill.sev-high {
-  color: var(--severity-high);
-  background: color-mix(in srgb, var(--severity-high) 18%, transparent);
-}
-.sev-pill.sev-medium,
-.sev-pill.sev-low {
-  color: var(--severity-medium);
-  background: color-mix(in srgb, var(--severity-medium) 18%, transparent);
+/* One rule per property via the tokens.css --sev indirection; na/unknown
+ * (below) and the light-theme positive overrides out-specify it. */
+.sev-pill {
+  color: var(--sev, var(--fg-muted));
+  background: color-mix(in srgb, var(--sev, var(--fg-muted)) 18%, transparent);
 }
 .sev-pill.sev-na,
 .sev-pill.sev-unknown {
   color: var(--fg-muted);
   background: rgba(255, 255, 255, 0.06);
 }
-.sev-pill.sev-positive {
-  color: var(--severity-positive);
-  background: color-mix(in srgb, var(--severity-positive) 18%, transparent);
-}
-.sev-pill.sev-very-positive {
-  color: var(--severity-very-positive);
-  background: color-mix(in srgb, var(--severity-very-positive) 18%, transparent);
-}
-
 html[data-theme="light"] .sev-pill.sev-na,
 html[data-theme="light"] .sev-pill.sev-unknown,
 .theme-light .sev-pill.sev-na,
@@ -889,18 +818,18 @@ html[data-theme="light"] .sev-pill.sev-unknown,
 }
 
 /* Positive pill in light mode — match the cell-data-positive override
- * (#16a34a) since the dark-theme positive token (#4ade80) washes out on a
+ * (--success) since the dark-theme positive token (--severity-positive) washes out on a
  * light background. Very-positive uses a slightly darker green so it stays
  * distinct from positive (mirrors the dark-theme differentiation). */
 html[data-theme="light"] .sev-pill.sev-positive,
 .theme-light .sev-pill.sev-positive {
-  color: #16a34a;
-  background: color-mix(in srgb, #16a34a 18%, transparent);
+  color: var(--success);
+  background: color-mix(in srgb, var(--success) 18%, transparent);
 }
 html[data-theme="light"] .sev-pill.sev-very-positive,
 .theme-light .sev-pill.sev-very-positive {
-  color: #15803d;
-  background: color-mix(in srgb, #15803d 18%, transparent);
+  color: var(--success-strong);
+  background: color-mix(in srgb, var(--success-strong) 18%, transparent);
 }
 
 /* Clickable header cells */
@@ -1005,7 +934,7 @@ body.dragging .ts-cell:hover {
   padding: 2px var(--space-1-5);
   border-radius: var(--radius-xs);
   font-family: var(--font-mono);
-  font-feature-settings: "tnum";
+  font-variant-numeric: tabular-nums;
   font-size: var(--text-2xs);
   line-height: 1.4;
   background: var(--cell-data);
@@ -1044,7 +973,7 @@ body.dragging .ts-cell:hover {
   align-items: center;
   justify-content: flex-start;
   font-family: var(--font-mono);
-  font-feature-settings: "tnum";
+  font-variant-numeric: tabular-nums;
   font-size: var(--text-2xs);
   line-height: 1.4;
   padding: 2px var(--space-1-5);
@@ -1174,6 +1103,17 @@ body.panel-dragging #bottomPanel {
   }
 }
 
+/* Same trade, one step earlier: the mid-run "N / M artifacts · elapsed" readout
+ * and its spinner add ~215px to a row that only just fits at rest, so at typical
+ * column widths they pushed Generate / Stash / Clear off the end. The format and
+ * titlecard inputs configure the *next* run, so they are what gives way. */
+@container artifacts-toolbar (max-width: 920px) {
+  #artifactsToolbar:has(#generateProgress:not(.hidden)) #artifactFormat,
+  #artifactsToolbar:has(#generateProgress:not(.hidden)) #titlecardGroup {
+    display: none;
+  }
+}
+
 .bs-label {
   font-size: 12.5px;
   font-weight: 500;
@@ -1184,7 +1124,7 @@ body.panel-dragging #bottomPanel {
 
 .bs-count {
   font-family: var(--font-mono);
-  font-feature-settings: "tnum";
+  font-variant-numeric: tabular-nums;
   font-size: var(--text-2xs);
   color: var(--fg-faint);
   white-space: nowrap;
@@ -1209,7 +1149,7 @@ body.panel-dragging #bottomPanel {
 }
 .bs-input {
   font-family: var(--font-mono);
-  font-feature-settings: "tnum";
+  font-variant-numeric: tabular-nums;
   font-size: var(--text-2xs);
   height: 22px;
   text-align: center;
@@ -1270,15 +1210,29 @@ body.dragging #sheetMain {
   color: var(--color-text-dim);
   font-size: var(--text-sm);
   text-align: center;
+  text-wrap: balance;
 }
 
-/* Cell drag ghost — fixed-position cascade preview shown while dragging
- * timestamp cells from the sheet. The native drag image is replaced by a
- * transparent 1×1 GIF in studio.js, so this overlay is the only visual.
- *
- * The wrapper itself translates to follow the cursor (RAF-coalesced in
- * studio.js). Cards stack down-right inside; card --i=0 is on top so it
- * appears at/near the cursor with the rest of the stack peeking out behind. */
+/* The empty element studio.js hands to setDragImage() to blank out the native
+ * drag preview. Raw px rather than spacing tokens on purpose: this is an
+ * offscreen sentinel, not layout (same reasoning as setCardDragImage's inline
+ * -9999px). It must keep a rendered box — WebKit snapshots the element, and a
+ * display:none / visibility:hidden node has no renderer to snapshot, which
+ * yields a null drag image and stops the drag session from starting at all. */
+.drag-image-blank {
+  position: fixed;
+  top: 0;
+  left: -10000px;
+  width: 1px;
+  height: 1px;
+  pointer-events: none;
+}
+
+/* Cell drag ghost — fixed-position cascade preview while dragging timestamp
+ * cells from the sheet. studio.js replaces the native drag image with a blank
+ * 1×1 element, so this overlay is the only visual. The wrapper
+ * translates to follow the cursor (RAF-coalesced); cards stack down-right
+ * inside, with --i=0 on top so it sits at the cursor and the rest peek out. */
 .cell-drag-ghost {
   position: fixed;
   top: 0;
@@ -1306,8 +1260,8 @@ body.dragging #sheetMain {
   opacity: 0;
   box-shadow: var(--shadow-lg);
   transition:
-    opacity var(--duration-instant) cubic-bezier(0.2, 0.8, 0.2, 1),
-    transform var(--duration-instant) cubic-bezier(0.2, 0.8, 0.2, 1);
+    opacity var(--duration-instant) var(--ease-out),
+    transform var(--duration-instant) var(--ease-out);
   transition-delay: calc(var(--i) * 40ms);
 }
 
@@ -1331,14 +1285,12 @@ body.dragging #sheetMain {
 
 #artifactsList {
   display: grid;
-  /* Fixed 160px tracks (no 1fr stretch) keep cards compact and gaps tight,
-   * even when only a couple of cards are queued. Excess row width becomes
-   * a trailing gutter, matching the prototype's spacing.
-   *
-   * grid-auto-rows: max-content + align-content:start pins rows to their
-   * intrinsic content height and packs them at the top — without these,
-   * Chrome distributes free space across rows when the container shrinks
-   * below its content, which squishes the cards vertically. */
+  /* Fixed 160px tracks (no 1fr stretch) keep cards compact and gaps tight even
+   * with only a couple queued, leaving excess row width as a trailing gutter.
+   * grid-auto-rows: max-content + align-content: start pin rows to their
+   * intrinsic height and pack them at the top — without both, Chrome distributes
+   * free space across rows when the container shrinks below its content and
+   * squishes the cards vertically. */
   grid-template-columns: repeat(auto-fill, 160px);
   grid-auto-rows: max-content;
   gap: var(--space-2);
@@ -1404,6 +1356,7 @@ body.dragging #sheetMain {
   position: relative;
   transition: box-shadow var(--duration-fast), border-color var(--duration-fast);
   user-select: none;
+  box-shadow: var(--shadow-card);
 }
 
 /* No will-change on .queue-card. The original always-on rule promoted every
@@ -1417,7 +1370,7 @@ body.dragging #sheetMain {
 
 .queue-card:hover {
   border-color: var(--color-accent);
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+  box-shadow: var(--shadow-md);
 }
 
 .queue-card-thumb {
@@ -1433,6 +1386,8 @@ body.dragging #sheetMain {
   height: 100%;
   object-fit: cover;
   display: block;
+  outline: 1px solid var(--outline-media);
+  outline-offset: -1px;
 }
 
 /* Card scrubber (opt-in): the sprite sheet is painted as the thumb's
@@ -1488,7 +1443,7 @@ body.dragging #sheetMain {
   font-family: var(--font-mono);
   font-variant-numeric: tabular-nums;
   font-size: var(--text-xs);
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-md);
   box-shadow: var(--shadow-pop);
   user-select: none;
 }
@@ -1600,12 +1555,19 @@ body.dragging #sheetMain {
   padding: 0;
 }
 
+/* Hit slop: the visible control stays small, the target does not. */
+.queue-card-remove::after {
+  content: "";
+  position: absolute;
+  inset: calc(var(--space-1-5) * -1);
+}
+
 .queue-card:hover .queue-card-remove {
   opacity: 1;
 }
 
 .queue-card-remove:hover {
-  background: #dc2626;
+  background: var(--danger);
 }
 
 .queue-card-remove .cg-icon {
@@ -1614,15 +1576,15 @@ body.dragging #sheetMain {
 }
 
 .queue-card-error {
-  border-color: #dc2626;
-  background: #fef2f2;
+  border-color: var(--danger);
+  background: var(--danger-bg);
 }
 
 .queue-card-error .queue-card-thumb {
   display: flex;
   align-items: center;
   justify-content: center;
-  color: #dc2626;
+  color: var(--danger);
   font-size: var(--text-2xl);
   font-weight: 700;
 }
@@ -1669,11 +1631,11 @@ body.dragging #sheetMain {
 }
 
 html[data-theme="dark"] .queue-card-error {
-  background: #451a1a;
+  background: var(--danger-bg-dark);
 }
 
 html[data-theme="dark"] .queue-card-error .queue-card-thumb {
-  color: #f87171;
+  color: var(--severity-high);
 }
 
 /* Stashed reels */
@@ -1718,6 +1680,7 @@ html[data-theme="dark"] .queue-card-error .queue-card-thumb {
   padding: var(--space-1) var(--space-2) 2px;
   font-size: var(--text-2xs);
   color: var(--fg-faint);
+  text-wrap: pretty;
 }
 
 #stashedReelsHeader h3,
@@ -1735,7 +1698,7 @@ html[data-theme="dark"] .queue-card-error .queue-card-thumb {
 #stashedReelsHeader h3 span,
 #stashedArtifactsHeader h3 span {
   font-family: var(--font-mono);
-  font-feature-settings: "tnum";
+  font-variant-numeric: tabular-nums;
   font-size: 10.5px;
   font-weight: 400;
   letter-spacing: 0;
@@ -1841,7 +1804,7 @@ html[data-theme="dark"] .queue-card-error .queue-card-thumb {
   display: inline-flex;
   gap: var(--space-1-5);
   font-family: var(--font-mono);
-  font-feature-settings: "tnum";
+  font-variant-numeric: tabular-nums;
   font-size: 10.5px;
   color: var(--fg-faint);
 }
@@ -1863,6 +1826,13 @@ html[data-theme="dark"] .queue-card-error .queue-card-thumb {
   opacity: 0;
   transition: opacity var(--duration-fast);
   padding: 0;
+}
+
+/* Hit slop: the visible control stays small, the target does not. */
+.stash-card-remove::after {
+  content: "";
+  position: absolute;
+  inset: calc(var(--space-1-5) * -1);
 }
 .stash-card:hover .stash-card-remove {
   opacity: 1;
@@ -1910,14 +1880,12 @@ html[data-theme="dark"] .queue-card-error .queue-card-thumb {
 /* Old layout helpers removed: #generateBtn now sits inside .bs-actions
  * and #addToReelBtn floats centered below the artifact list (.bs-add-to-reel). */
 
+/* Taller than the shared `select` base in tokens.css so it lines up with the
+   .area-controls .btn beside it. padding-block rather than the shorthand, which
+   would clear the base's caret gutter. Duplicated verbatim in overview.css,
+   which has its own .area-controls; keep the two in step. */
 .area-controls select {
-  padding: var(--space-2) var(--space-2);
-  border: 1px solid var(--color-border);
-  border-radius: calc(var(--radius) - 2px);
-  background: var(--color-surface);
-  color: var(--color-text);
-  font-size: var(--text-sm);
-  cursor: pointer;
+  padding-block: var(--space-2);
 }
 
 /* Titlecard toggle group */
@@ -1951,7 +1919,7 @@ html[data-theme="dark"] .queue-card-error .queue-card-thumb {
   background: var(--bg-input);
   color: var(--fg);
   font-family: var(--font-mono);
-  font-feature-settings: "tnum";
+  font-variant-numeric: tabular-nums;
   font-size: var(--text-2xs);
   text-align: center;
 }
@@ -2024,7 +1992,7 @@ html[data-theme="dark"] .queue-card-error .queue-card-thumb {
   color: var(--fg);
   font-size: var(--text-2xs);
   font-family: var(--font-mono);
-  font-feature-settings: "tnum";
+  font-variant-numeric: tabular-nums;
 }
 
 /* Gallery configuration dialog — triggered from TopNav Quick Actions. */
@@ -2063,6 +2031,7 @@ html[data-theme="dark"] .queue-card-error .queue-card-thumb {
   font-size: var(--text-xs);
   color: var(--fg-muted);
   margin: 0;
+  text-wrap: pretty;
 }
 .gallery-dialog-fields {
   display: flex;
@@ -2103,7 +2072,7 @@ html[data-theme="dark"] .queue-card-error .queue-card-thumb {
 }
 .gallery-dialog-input {
   font-family: var(--font-mono);
-  font-feature-settings: "tnum";
+  font-variant-numeric: tabular-nums;
   text-align: center;
 }
 .gallery-dialog-select:focus,
@@ -2171,13 +2140,13 @@ html[data-theme="dark"] .queue-card-error .queue-card-thumb {
 }
 
 .queue-card-success {
-  border-color: #16a34a;
+  border-color: var(--success);
   background: #f0fdf4;
 }
 
 .queue-card-fail {
-  border-color: #dc2626;
-  background: #fef2f2;
+  border-color: var(--danger);
+  background: var(--danger-bg);
 }
 
 .card-gen-badge {
@@ -2194,11 +2163,11 @@ html[data-theme="dark"] .queue-card-error .queue-card-thumb {
 }
 
 .card-gen-badge-ok {
-  background: #16a34a;
+  background: var(--success);
 }
 
 .card-gen-badge-fail {
-  background: #dc2626;
+  background: var(--danger);
 }
 
 .card-gen-badge .cg-icon {
@@ -2227,18 +2196,17 @@ html[data-theme="dark"] .queue-card-error .queue-card-thumb {
   font-size: var(--text-sm);
   color: var(--fg-faint);
   white-space: nowrap;
+  font-variant-numeric: tabular-nums;
 }
 
 /* Status overlay */
 
-/* Studio overlay cards (.status-card / .confirm-card / .gallery-card / .log-panel
- * / .build-status-card) pop in and out via utils.js's popModalIn/popModalOut,
- * which also ramps the shared .cg-modal-veil backdrop (tokens.css) — hence no
- * background and no transition on the overlay shells here. The former
- * cg-overlay-pop @keyframes was retired to keep a single animation system;
- * motion.js handles the prefers-reduced-motion fallback (a short opacity fade).
- * #buildStatus is the one exception: a non-blocking corner card, so it carries no
- * veil and only its card animates. */
+/* Studio overlay cards pop via utils.js's popModalIn/popModalOut, which also ramps
+ * the shared .cg-modal-veil backdrop (tokens.css) — hence no background and no
+ * transition on the overlay shells here. A separate cg-overlay-pop @keyframes was
+ * retired to keep one animation system, and motion.js owns the
+ * prefers-reduced-motion fallback. #buildStatus is the exception: a non-blocking
+ * corner card, so no veil and only its card animates. */
 
 #statusOverlay {
   position: fixed;
@@ -2270,6 +2238,7 @@ html[data-theme="dark"] .queue-card-error .queue-card-thumb {
 .status-card h3 {
   font-size: var(--text-md);
   font-weight: 600;
+  text-wrap: balance;
 }
 
 .status-card p {
@@ -2279,7 +2248,7 @@ html[data-theme="dark"] .queue-card-error .queue-card-thumb {
 }
 
 .status-card .error-text {
-  color: #dc2626;
+  color: var(--danger);
 }
 
 .status-actions {
@@ -2325,7 +2294,7 @@ html[data-theme="dark"] .queue-card-error .queue-card-thumb {
 }
 
 .build-status-msg.error-text {
-  color: #dc2626;
+  color: var(--danger);
 }
 
 /* Live elapsed clock in the non-blocking build-status card. */
@@ -2333,6 +2302,7 @@ html[data-theme="dark"] .queue-card-error .queue-card-thumb {
   font-size: var(--text-sm);
   color: var(--fg-faint);
   white-space: nowrap;
+  font-variant-numeric: tabular-nums;
 }
 .build-elapsed:empty {
   display: none;
@@ -2358,28 +2328,17 @@ html[data-theme="dark"] .queue-card-error .queue-card-thumb {
   display: none;
 }
 
+/* Shell comes from .cg-modal-card (tokens.css) — which normalizes the old
+ * hand-rolled shadow onto --shadow-xl and adds the shared 1px border. This
+ * rule owns the centered layout; its gap out-cascades the base's space-3
+ * (equal specificity, page CSS loads after tokens.css). */
 .confirm-card {
-  background: var(--color-surface);
-  border-radius: var(--radius-lg);
   padding: var(--space-6) var(--space-8);
   max-width: 420px;
   width: 90%;
-  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.25);
   text-align: center;
-  display: flex;
-  flex-direction: column;
   align-items: center;
   gap: var(--space-4);
-}
-
-.confirm-card h3 {
-  font-size: var(--text-md);
-  font-weight: 600;
-}
-
-.confirm-card p {
-  font-size: var(--text-sm);
-  color: var(--color-text-dim);
 }
 
 .confirm-actions {
@@ -2424,12 +2383,12 @@ html[data-theme="dark"] .queue-card-error .queue-card-thumb {
   background: rgba(0, 0, 0, 0.45);
 }
 :root:not([data-theme="light"]) .queue-card-success {
-  border-color: #4ade80;
+  border-color: var(--severity-positive);
   background: #052e16;
 }
 :root:not([data-theme="light"]) .queue-card-fail {
-  border-color: #f87171;
-  background: #451a1a;
+  border-color: var(--severity-high);
+  background: var(--danger-bg-dark);
 }
 :root:not([data-theme="light"]) .stash-card-name-input {
   background: var(--color-surface-alt);
@@ -2453,82 +2412,6 @@ html[data-theme="dark"] .queue-card-error .queue-card-thumb {
 
 #logOverlay.hidden {
   display: none;
-}
-
-.log-panel {
-  background: var(--color-surface);
-  border-radius: var(--radius-lg);
-  border: 1px solid var(--color-panel-border);
-  box-shadow: var(--shadow-xl);
-  width: 520px;
-  max-width: 92vw;
-  max-height: 80vh;
-  display: flex;
-  flex-direction: column;
-}
-
-.log-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: var(--space-4) var(--space-5);
-  border-bottom: 1px solid var(--color-border);
-}
-
-.log-header h3 {
-  font-size: var(--text-md);
-  font-weight: 600;
-}
-
-#logContent {
-  flex: 1;
-  overflow-y: auto;
-  padding: var(--space-3) var(--space-5);
-}
-
-.log-footer {
-  display: flex;
-  align-items: center;
-  padding: var(--space-3) var(--space-5);
-  border-top: 1px solid var(--color-border);
-}
-
-.log-footer span {
-  font-size: var(--text-xs);
-  color: var(--color-text-dim);
-}
-
-.log-empty {
-  text-align: center;
-  color: var(--color-text-dim);
-  font-size: var(--text-sm);
-  padding: var(--space-6) 0;
-}
-
-.log-entry {
-  display: flex;
-  align-items: baseline;
-  gap: var(--space-2);
-  padding: var(--space-2) 0;
-  border-bottom: 1px solid var(--color-border);
-  font-size: var(--text-sm);
-  line-height: 1.4;
-}
-
-.log-entry:last-child {
-  border-bottom: none;
-}
-
-.log-type-badge {
-  flex-shrink: 0;
-  font-size: var(--text-xs);
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.03em;
-  padding: 1px var(--space-2);
-  border-radius: var(--radius);
-  background: var(--color-border);
-  color: var(--color-text-dim);
 }
 
 .log-type-badge[data-type="clip"] {
@@ -2581,20 +2464,27 @@ html[data-theme="dark"] .log-type-badge[data-type="viewer"] {
   color: #a5f3fc;
 }
 
-.log-entry-file {
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-family: var(--font-mono);
-  font-size: var(--text-xs);
+.log-entry-reveal {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  padding: var(--space-1);
+  border: none;
+  background: none;
+  color: var(--color-text-dim);
+  cursor: pointer;
+  transition: color var(--duration-fast);
 }
 
-.log-entry-meta {
-  flex-shrink: 0;
-  font-size: var(--text-xs);
-  color: var(--color-text-dim);
+.log-entry-reveal:hover,
+.log-entry-reveal:focus-visible {
+  color: var(--color-accent);
+  outline: none;
+}
+
+.log-entry-reveal .cg-icon {
+  width: var(--icon-size-sm);
+  height: var(--icon-size-sm);
 }
 
 html[data-theme="dark"] .log-panel {
@@ -2648,7 +2538,7 @@ html[data-theme="dark"] .log-panel {
   width: 44px;
   height: 22px;
   font-family: var(--font-mono);
-  font-feature-settings: "tnum";
+  font-variant-numeric: tabular-nums;
   font-size: var(--text-2xs);
   padding: 0 var(--space-1-5);
   text-align: center;
@@ -2822,6 +2712,7 @@ html[data-theme="dark"] .log-panel {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  text-wrap: pretty;
 }
 
 /* Asterisk chip on a card whose timestamp has a Composer trim override —
@@ -2866,7 +2757,7 @@ html[data-theme="dark"] .log-panel {
 }
 .queue-card-participant {
   font-family: var(--font-mono);
-  font-feature-settings: "tnum";
+  font-variant-numeric: tabular-nums;
   font-size: var(--text-xs);
   color: var(--fg-muted);
   white-space: nowrap;
@@ -2883,7 +2774,7 @@ html[data-theme="dark"] .log-panel {
 }
 .queue-card-time {
   font-family: var(--font-mono);
-  font-feature-settings: "tnum";
+  font-variant-numeric: tabular-nums;
   font-size: var(--text-xs);
   color: var(--fg-faint);
   white-space: nowrap;
@@ -2906,15 +2797,15 @@ html[data-theme="dark"] .log-panel {
 .queue-card[data-severity="very-positive"] .queue-card-time { color: var(--severity-very-positive); }
 
 /* Light theme — darker greens for the positive buckets (mirrors .sev-pill);
- * the dark-theme green tokens wash out on the light #ffffff card surface. */
+ * the dark-theme green tokens wash out on the light white card surface. */
 html[data-theme="light"] .queue-card[data-severity="positive"] .queue-card-ref,
 html[data-theme="light"] .queue-card[data-severity="positive"] .queue-card-time,
 .theme-light .queue-card[data-severity="positive"] .queue-card-ref,
-.theme-light .queue-card[data-severity="positive"] .queue-card-time { color: #16a34a; }
+.theme-light .queue-card[data-severity="positive"] .queue-card-time { color: var(--success); }
 html[data-theme="light"] .queue-card[data-severity="very-positive"] .queue-card-ref,
 html[data-theme="light"] .queue-card[data-severity="very-positive"] .queue-card-time,
 .theme-light .queue-card[data-severity="very-positive"] .queue-card-ref,
-.theme-light .queue-card[data-severity="very-positive"] .queue-card-time { color: #15803d; }
+.theme-light .queue-card[data-severity="very-positive"] .queue-card-time { color: var(--success-strong); }
 
 .queue-card-text {
   font-size: var(--text-xs);

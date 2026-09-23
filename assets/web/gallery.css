@@ -19,6 +19,8 @@ html {
 
 body {
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
   background-color: var(--color-bg);
   color: var(--color-text);
   line-height: 1.5;
@@ -71,6 +73,26 @@ body {
 #sourceVideo:not(:empty)::before { content: "Source:"; font-weight: 600; }
 #generatedAt:not(:empty)::before { content: "Generated:"; font-weight: 600; }
 
+/* Export credit: version + repo, muted below the last panel. */
+
+#pageFooter {
+  max-width: var(--layout-max-width);
+  margin: var(--space-4) auto var(--space-6);
+  padding: 0 var(--layout-padding-x);
+  font-size: var(--text-xs);
+  color: var(--color-text-dim);
+  text-align: center;
+}
+
+#pageFooter a {
+  color: inherit;
+  text-decoration: underline;
+}
+
+#pageFooter a:hover {
+  color: var(--color-accent);
+}
+
 /* Theme Toggle + header shortcuts button */
 
 #shortcutsToggle {
@@ -101,7 +123,7 @@ body {
 
 #themeToggle:active,
 #shortcutsToggle:active {
-  transform: scale(0.96);
+  transform: scale(var(--scale-press));
 }
 
 #themeToggle:focus-visible,
@@ -196,6 +218,8 @@ body {
   aspect-ratio: 16 / 9;
   object-fit: cover;
   background: var(--color-surface-alt);
+  outline: 1px solid var(--outline-media);
+  outline-offset: -1px;
 }
 
 .gallery-card .timestamp-overlay {
@@ -219,6 +243,7 @@ body {
   text-align: center;
   color: var(--color-text-dim);
   font-size: var(--text-lg);
+  text-wrap: balance;
 }
 
 .hidden {

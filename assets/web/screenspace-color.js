@@ -16,9 +16,7 @@
     refreshCalibration = SS.refreshCalibration,
     updateCalibrationThresholdLine = SS.updateCalibrationThresholdLine;
 
-  // The hidden H/S/V/hex <input>s the single-tool color panel builds. Owned
-  // here so the render math reads them directly; the hub's renderColorParams
-  // populates them via SS.setColorHiddenInputs and reads back via getter.
+  // Hidden H/S/V/hex inputs; the hub fills them via SS.setColorHiddenInputs.
   var _colorHiddenInputs = null;
 
   function updateColorPreview() {
@@ -42,10 +40,7 @@
     updateColorPreview();
     renderColorPalette();
     renderBrightnessStrip();
-    // The H/S/V hidden inputs are set programmatically (no DOM input event), so
-    // the #workflowParams delegated listener never fires — nudge calibration
-    // directly. The color target drives the score, so palette / pipette / "From
-    // Region" must re-evaluate. refreshCalibration self-guards on panel state.
+    // Programmatic input changes fire no DOM event, so nudge calibration directly.
     updateCalibrationThresholdLine();
     refreshCalibration({ debounce: true });
   }
@@ -147,9 +142,7 @@
     ctx.stroke();
   }
 
-  // The sampler reads the highlighted chip, not the run-picker selection, so the
-  // button says which region that is. Called on every renderRegionChips() (the
-  // chokepoint for state.activeRegion changes) and once when the panel renders.
+  // Labels the highlighted chip, not the run-picker selection; renderRegionChips() calls this.
   function updateColorSampleBtnLabel() {
     var btn = qs("#colorSampleBtn");
     if (!btn) return;

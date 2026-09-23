@@ -2,33 +2,37 @@
 
 Each scan sweeps a video via the frame-extraction drivers and applies one
 analysis primitive (color, change, similarity, text, numbers, timelapse,
-template, flow, scene, inactivity, boundary, attention). Scans never call
-each other.
-Imports primitives, OCR helpers, and frame extractors from sibling modules.
+template, shape, flow, scene, inactivity, boundary, attention). Scans never
+call each other.
 """
 
+import os
 import subprocess
 from collections.abc import Callable
-from typing import TYPE_CHECKING, Any
+from concurrent.futures import ThreadPoolExecutor
+from typing import Any
 
 import cv2
 import numpy as np
-
-if TYPE_CHECKING:
-    import imagehash
 
 import config
 import utils
 import video
 from screenspace_primitives import (
+    PHash,
     _ConsecutiveBuffer,
-    _frame_diff_mask,
+    _frame_diff_mask_gray,
     _frame_is_static,
     _is_static_skip,
+    _match_shape_scales,
+    blur_gray,
+    _frame_edge_map,
     _match_template_prepared,
     _merge_timestamp_spans,
+    _prepare_shape_reference,
     _prepare_template,
     _scale_template,
+    region_search_window,
     color_matches,
     color_present,
     compare_scene_fingerprints,
@@ -38,14 +42,16 @@ from screenspace_primitives import (
     compute_scene_fingerprint,
     face_detection_available,
     filter_matches_by_region_mask,
+    flow_downscale,
     region_masker,
     saliency_grid_from_map,
     saliency_peak,
+    sparse_grid_cells,
+    structural_similarity,
 )
 from screenspace_ocr import (
     _VALID_OPERATORS,
     _effective_ocr_confidence_threshold,
-    _numbers_ocr_allowlist,
     _ocr_region_readings,
     _score_numbers_readings,
     _score_text_readings,
@@ -91,7 +97,7 @@ def scan_color(
     window = _resolve_scan_window(video_path, start_seconds, end_seconds)
     if window is None:
         return []
-    vid_fps, vid_duration, end_seconds, total_range = window
+    _, vid_duration, end_seconds, total_range = window
 
     matches: list[float] = []
     mask_for = region_masker(region)
@@ -121,9 +127,9 @@ def scan_color(
         _cb,
         start_seconds=start_seconds,
         end_seconds=end_seconds,
-        fps=vid_fps,
         duration=vid_duration,
         fast_opts=fast_opts,
+        profile_kind="color",
     )
 
     if on_progress:
@@ -160,13 +166,13 @@ def scan_changes(
     window = _resolve_scan_window(video_path, start_seconds, end_seconds)
     if window is None:
         return []
-    vid_fps, vid_duration, end_seconds, total_range = window
+    _, vid_duration, end_seconds, total_range = window
 
     results: list[dict[str, Any]] = []
-    prev_pixels: list[np.ndarray | None] = [None]
+    # Reuse frame N's blur+gray as frame N+1's previous side.
+    prev_gray: list[np.ndarray | None] = [None]
     buf = _ConsecutiveBuffer(require_consecutive)
-    # change_grid feeds only the Change heatmap; skip the per-frame downsample
-    # entirely when heatmaps are disabled (the data would just be discarded).
+    # change_grid only feeds the Change heatmap; skip it when heatmaps are off.
     build_grid = config.SCREENSPACE_GENERATE_CHANGE_HEATMAP
     grid = config.SCREENSPACE_CHANGE_HEATMAP_GRID
     min_frac = config.SCREENSPACE_CHANGE_HEATMAP_MIN_FRAC
@@ -176,14 +182,12 @@ def scan_changes(
     def _cb(ts: float, pixels: np.ndarray) -> bool | None:
         if cancel_flag and cancel_flag():
             return False
-        if prev_pixels[0] is not None:
-            mask = _frame_diff_mask(prev_pixels[0], pixels, noise_threshold)
+        gray = blur_gray(pixels)
+        if prev_gray[0] is not None:
+            mask = _frame_diff_mask_gray(prev_gray[0], gray, noise_threshold)
             region_mask = mask_for(pixels)
             if region_mask is not None:
-                # Shaped region: only changes inside the polygon count, and the
-                # magnitude is relative to the polygon's area. The ANDed mask
-                # also feeds change_grid below, so heatmap cells outside the
-                # polygon are suppressed for free.
+                # Shaped region: count changes inside the polygon only, relative to its area.
                 mask = cv2.bitwise_and(mask, region_mask)
                 denom = float(np.count_nonzero(region_mask))
             else:
@@ -192,25 +196,14 @@ def scan_changes(
             if mag >= threshold:
                 rd: dict[str, Any] = {"timestamp": ts, "magnitude": round(mag, 4)}
                 if build_grid:
-                    # Downsample the change mask to a small, thresholded grid
-                    # (mirrors flow_grid) recording the fraction of pixels changed
-                    # per cell, so the Change heatmap can show where pixels move
-                    # without bloating the per-frame results.
+                    # Per-cell changed fractions (like flow_grid) so the Change heatmap shows where.
                     cells = (
                         cv2.resize(
                             mask, (grid, grid), interpolation=cv2.INTER_AREA
                         ).astype(np.float32)
                         / 255.0
                     )
-                    ys, xs = np.nonzero(cells >= min_frac)
-                    rd["change_grid"] = [
-                        {
-                            "x": round((int(x) + 0.5) / grid, 3),
-                            "y": round((int(y) + 0.5) / grid, 3),
-                            "mag": round(float(cells[y, x]), 3),
-                        }
-                        for y, x in zip(ys, xs)
-                    ]
+                    rd["change_grid"] = sparse_grid_cells(cells, min_frac)
                 emitted = buf.push(ts, rd)
                 if emitted is not None:
                     results.append(emitted)
@@ -218,7 +211,7 @@ def scan_changes(
                         on_result(emitted)
             else:
                 buf.reset()
-        prev_pixels[0] = pixels
+        prev_gray[0] = gray
         if on_progress and total_range > 0:
             on_progress((ts - start_seconds) / total_range)
         return None
@@ -230,9 +223,9 @@ def scan_changes(
         _cb,
         start_seconds=start_seconds,
         end_seconds=end_seconds,
-        fps=vid_fps,
         duration=vid_duration,
         fast_opts=fast_opts,
+        profile_kind="change",
     )
 
     if on_progress:
@@ -259,8 +252,6 @@ def scan_similarity(
     Returns list of ``{timestamp, score}`` dicts, sorted by score
     descending.
     """
-    from skimage.metrics import structural_similarity as ssim
-
     if threshold <= 0:
         threshold = config.SCREENSPACE_SSIM_THRESHOLD
     if interval_seconds <= 0:
@@ -269,7 +260,7 @@ def scan_similarity(
     window = _resolve_scan_window(video_path, start_seconds, end_seconds)
     if window is None:
         return []
-    vid_fps, vid_duration, end_seconds, total_range = window
+    _, vid_duration, end_seconds, total_range = window
 
     results: list[dict[str, Any]] = []
     ref_phash = compute_phash(reference_frame)
@@ -305,7 +296,7 @@ def scan_similarity(
             return None
         prev_skip_gray[0] = gray
 
-        frame_phash = compute_phash(pixels)
+        frame_phash = compute_phash(pixels, gray=gray)
         if ref_phash - frame_phash <= phash_threshold:
             # Always resize candidate to match reference dimensions for SSIM
             ph, pw = pixels.shape[:2]
@@ -316,7 +307,7 @@ def scan_similarity(
             cand_gray = cv2.cvtColor(
                 cv2.GaussianBlur(cand, (bk, bk), 0), cv2.COLOR_BGR2GRAY
             )
-            score = float(ssim(ref_gray, cand_gray))
+            score, _ = structural_similarity(ref_gray, cand_gray)
             if score >= threshold:
                 rd = {"timestamp": ts, "score": round(score, 4)}
                 results.append(rd)
@@ -333,9 +324,9 @@ def scan_similarity(
         _cb,
         start_seconds=start_seconds,
         end_seconds=end_seconds,
-        fps=vid_fps,
         duration=vid_duration,
         fast_opts=fast_opts,
+        profile_kind="similarity",
     )
 
     if on_progress:
@@ -344,51 +335,38 @@ def scan_similarity(
     return results
 
 
-def scan_text(
+def _run_ocr_scan(
     video_path: str,
     region: dict[str, Any],
-    search_string: str,
-    interval_seconds: float = 2.0,
+    interval_seconds: float,
     *,
-    fuzzy_threshold: float = 0.0,
-    ocr_confidence_threshold: float | None = None,
-    ocr_preprocess: bool = False,
-    ocr_normalize: str = "off",
-    require_consecutive: int = 1,
-    languages: list[str] | None = None,
-    start_seconds: float = 0.0,
-    end_seconds: float | None = None,
-    on_progress: Callable[[float], None] | None = None,
-    cancel_flag: Callable[[], bool] | None = None,
-    on_result: Callable[[dict[str, Any]], None] | None = None,
-    fast_opts: dict[str, Any] | None = None,
+    scorer: Callable[[list[Any], dict[str, Any]], tuple[bool, dict[str, Any]]],
+    params: dict[str, Any],
+    profile_kind: str,
+    ocr_preprocess: bool,
+    require_consecutive: int,
+    languages: list[str] | None,
+    start_seconds: float,
+    end_seconds: float | None,
+    on_progress: Callable[[float], None] | None,
+    cancel_flag: Callable[[], bool] | None,
+    on_result: Callable[[dict[str, Any]], None] | None,
+    fast_opts: dict[str, Any] | None,
 ) -> list[dict[str, Any]]:
-    """Scan for text appearances in a region using EasyOCR.
+    """OCR every sampled frame of *region* and keep the ones *scorer* passes.
 
-    EasyOCR is lazy-imported. Raises ``ImportError`` with install
-    instructions if missing.
+    Shared body of :func:`scan_text` and :func:`scan_numbers`: static-frame
+    skipping, the consecutive-hit buffer, and progress/cancel plumbing.
     """
-    if fuzzy_threshold <= 0:
-        fuzzy_threshold = config.SCREENSPACE_OCR_FUZZY_THRESHOLD
-    ocr_confidence_threshold = _effective_ocr_confidence_threshold(
-        ocr_confidence_threshold
-    )
-    utils.require_optional("easyocr", "text scan")
     if languages is None:
         languages = ["en"]
 
     window = _resolve_scan_window(video_path, start_seconds, end_seconds)
     if window is None:
         return []
-    vid_fps, vid_duration, end_seconds, total_range = window
+    _, vid_duration, end_seconds, total_range = window
 
     results: list[dict[str, Any]] = []
-    text_params: dict[str, Any] = {
-        "search_string": search_string,
-        "fuzzy_threshold": fuzzy_threshold,
-        "ocr_confidence_threshold": ocr_confidence_threshold,
-        "ocr_normalize": ocr_normalize,
-    }
     prev_gray: list[np.ndarray | None] = [None]
     buf = _ConsecutiveBuffer(require_consecutive)
     mask_points = region.get("mask_points")
@@ -414,10 +392,9 @@ def scan_text(
             preprocess=ocr_preprocess,
             mask_points=mask_points,
         )
-        passed, detail = _score_text_readings(readings, text_params)
-        matched_rd = {"timestamp": ts, **detail} if passed else None
-        if matched_rd is not None:
-            emitted = buf.push(ts, matched_rd)
+        passed, detail = scorer(readings, params)
+        if passed:
+            emitted = buf.push(ts, {"timestamp": ts, **detail})
             if emitted is not None:
                 results.append(emitted)
                 if on_result:
@@ -435,14 +412,69 @@ def scan_text(
         _cb,
         start_seconds=start_seconds,
         end_seconds=end_seconds,
-        fps=vid_fps,
         duration=vid_duration,
         fast_opts=fast_opts,
+        profile_kind=profile_kind,
     )
 
     if on_progress:
         on_progress(1.0)
     return results
+
+
+def scan_text(
+    video_path: str,
+    region: dict[str, Any],
+    search_string: str,
+    interval_seconds: float = 2.0,
+    *,
+    fuzzy_threshold: float = 0.0,
+    ocr_confidence_threshold: float | None = None,
+    ocr_preprocess: bool = False,
+    ocr_normalize: str = "off",
+    require_consecutive: int = 1,
+    languages: list[str] | None = None,
+    start_seconds: float = 0.0,
+    end_seconds: float | None = None,
+    on_progress: Callable[[float], None] | None = None,
+    cancel_flag: Callable[[], bool] | None = None,
+    on_result: Callable[[dict[str, Any]], None] | None = None,
+    fast_opts: dict[str, Any] | None = None,
+) -> list[dict[str, Any]]:
+    """Scan for text appearances in a region using RapidOCR.
+
+    RapidOCR is lazy-imported. Raises ``ImportError`` with install
+    instructions if missing.
+    """
+    if fuzzy_threshold <= 0:
+        fuzzy_threshold = config.SCREENSPACE_OCR_FUZZY_THRESHOLD
+    ocr_confidence_threshold = _effective_ocr_confidence_threshold(
+        ocr_confidence_threshold
+    )
+    utils.require_optional("rapidocr", "text scan")
+    text_params: dict[str, Any] = {
+        "search_string": search_string,
+        "fuzzy_threshold": fuzzy_threshold,
+        "ocr_confidence_threshold": ocr_confidence_threshold,
+        "ocr_normalize": ocr_normalize,
+    }
+    return _run_ocr_scan(
+        video_path,
+        region,
+        interval_seconds,
+        scorer=_score_text_readings,
+        params=text_params,
+        profile_kind="text",
+        ocr_preprocess=ocr_preprocess,
+        require_consecutive=require_consecutive,
+        languages=languages,
+        start_seconds=start_seconds,
+        end_seconds=end_seconds,
+        on_progress=on_progress,
+        cancel_flag=cancel_flag,
+        on_result=on_result,
+        fast_opts=fast_opts,
+    )
 
 
 def scan_numbers(
@@ -468,7 +500,7 @@ def scan_numbers(
 ) -> list[dict[str, Any]]:
     """Scan for numeric values in a region and apply a comparison.
 
-    Uses EasyOCR to detect text, parses numbers from it, and returns
+    Uses RapidOCR to detect text, parses numbers from it, and returns
     timestamps where the detected number satisfies the comparison.
     """
     if operator not in _VALID_OPERATORS:
@@ -479,80 +511,34 @@ def scan_numbers(
     ocr_confidence_threshold = _effective_ocr_confidence_threshold(
         ocr_confidence_threshold
     )
-    utils.require_optional("easyocr", "numbers scan")
-    if languages is None:
-        languages = ["en"]
-
-    window = _resolve_scan_window(video_path, start_seconds, end_seconds)
-    if window is None:
-        return []
-    vid_fps, vid_duration, end_seconds, total_range = window
-
-    results: list[dict[str, Any]] = []
-    prev_gray: list[np.ndarray | None] = [None]
+    utils.require_optional("rapidocr", "numbers scan")
     numbers_params: dict[str, Any] = {
         "operator": operator,
         "target_value": target_value,
         "range_min": range_min,
         "range_max": range_max,
         "ocr_confidence_threshold": ocr_confidence_threshold,
+        # Post-filter in _score_numbers_readings (the engine has no
+        # recognition allowlist): decimals and signed values are rejected.
+        "integers_only": integers_only,
     }
-    # Hoisted out of the per-frame callback: constrain English OCR to digits.
-    numbers_allowlist = _numbers_ocr_allowlist(languages, integers_only)
-    buf = _ConsecutiveBuffer(require_consecutive)
-    mask_points = region.get("mask_points")
-
-    def _cb(ts: float, pixels: np.ndarray) -> bool | None:
-        if cancel_flag and cancel_flag():
-            return False
-        if _is_static_skip(
-            ts,
-            pixels,
-            prev_gray,
-            buf,
-            results,
-            on_result,
-            on_progress,
-            start_seconds,
-            total_range,
-        ):
-            return None
-        readings = _ocr_region_readings(
-            pixels,
-            languages=languages,
-            allowlist=numbers_allowlist,
-            preprocess=ocr_preprocess,
-            mask_points=mask_points,
-        )
-        passed, detail = _score_numbers_readings(readings, numbers_params)
-        matched_rd = {"timestamp": ts, **detail} if passed else None
-        if matched_rd is not None:
-            emitted = buf.push(ts, matched_rd)
-            if emitted is not None:
-                results.append(emitted)
-                if on_result:
-                    on_result(emitted)
-        else:
-            buf.reset()
-        if on_progress and total_range > 0:
-            on_progress((ts - start_seconds) / total_range)
-        return None
-
-    scan_video_frames(
+    return _run_ocr_scan(
         video_path,
         region,
         interval_seconds,
-        _cb,
+        scorer=_score_numbers_readings,
+        params=numbers_params,
+        profile_kind="numbers",
+        ocr_preprocess=ocr_preprocess,
+        require_consecutive=require_consecutive,
+        languages=languages,
         start_seconds=start_seconds,
         end_seconds=end_seconds,
-        fps=vid_fps,
-        duration=vid_duration,
+        on_progress=on_progress,
+        cancel_flag=cancel_flag,
+        on_result=on_result,
         fast_opts=fast_opts,
     )
-
-    if on_progress:
-        on_progress(1.0)
-    return results
 
 
 def generate_timelapse(
@@ -623,8 +609,7 @@ def generate_timelapse(
         # Use Popen with -progress to get real-time encoding updates
         cmd = build(enc) + ["-progress", "pipe:1"]
         try:
-            # stderr → DEVNULL: only stdout (progress lines) is read, so a PIPE'd
-            # stderr could fill its 64 KB OS buffer and deadlock ffmpeg.
+            # stderr DEVNULL: an unread PIPE would fill its buffer and deadlock ffmpeg.
             proc = subprocess.Popen(
                 cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL
             )
@@ -663,22 +648,16 @@ def generate_timelapse(
 
     returncode = encode(encoder)
     if returncode is not None and returncode != 0 and encoder != "libx264":
-        # Same one-shot hardware fallback as video.run_ffmpeg_encode; this path
-        # can't reuse it because progress parsing needs its own Popen loop.
+        # One-shot hardware fallback like video.run_ffmpeg_encode; progress parsing needs its own Popen loop.
         video.note_hw_encode_failure(encoder)
         returncode = encode("libx264")
 
-    # A cancel must not report completion: encode() returns None for it, and the
-    # caller's progress bar would otherwise jump to 100% on a task the user just
-    # stopped. A failed spawn no longer arrives here — encode() raises for that.
+    # None is a cancel: return before on_progress(1.0).
     if returncode is None:
         return None
 
     if returncode != 0:
-        # The worker only inspects its cancel flag when deciding a task's final
-        # status, so returning None here would mark a failed encode "completed"
-        # with no output. Raise so it lands in the failure branch with a reason —
-        # and before on_progress(1.0), so the bar never fills on a failed encode.
+        # Raise before on_progress(1.0); None here would read as a cancel (see docstring).
         raise RuntimeError(f"ffmpeg exited with code {returncode} encoding timelapse")
 
     if on_progress:
@@ -707,7 +686,8 @@ def scan_template(
     *template_scale* resizes the uploaded template before matching
     (e.g. ``0.5`` for a template captured at 2x the in-video scale).  An
     optional *template_mask* restricts matching to non-transparent regions
-    of an uploaded PNG.
+    of an uploaded PNG. A real *region* rect scopes the search to matches
+    centered inside it — pick Full frame to search anywhere.
 
     Returns list of ``{timestamp, matches, best_score, match_count}`` dicts.
     """
@@ -719,7 +699,7 @@ def scan_template(
     window = _resolve_scan_window(video_path, start_seconds, end_seconds)
     if window is None:
         return []
-    vid_fps, vid_duration, end_seconds, total_range = window
+    _, vid_duration, end_seconds, total_range = window
 
     results: list[dict[str, Any]] = []
 
@@ -729,9 +709,7 @@ def scan_template(
         template_image, template_mask, template_scale
     )
 
-    # Hoist the constant template prep (blur + grayscale + variance check)
-    # out of the per-frame callback. A degenerate template yields [] every
-    # frame, so bail early before even opening the ffmpeg pipe.
+    # Task-constant template prep, hoisted out of the callback. Degenerate templates never match.
     _prepared = _prepare_template(scaled_template, scaled_mask)
     if _prepared[2]:  # degenerate template
         if on_progress:
@@ -739,19 +717,14 @@ def scan_template(
         return results
 
     _nms_overlap = config.SCREENSPACE_TEMPLATE_NMS_OVERLAP
-    # Frame is already at cv_scale * original due to ffmpeg scaling. We need
-    # to undo both the user-set cv_scale and the fast-scan internal 2x
-    # downscale to report match boxes in original-frame pixels.
+    # Match boxes must undo both the ffmpeg cv_scale and the fast-scan 2x downscale.
     _cv_scale = (
         config.SCREENSPACE_CV_RESOLUTION_SCALE
         if config.SCREENSPACE_CV_RESOLUTION_SCALE > 0
         else 1.0
     )
 
-    # Static-frame carry: template results are per-frame rows with no consecutive
-    # buffer, so a naive skip would drop a persistent match's rows and make the
-    # detection flicker. Cache the last processed frame's result and, on a static
-    # frame, re-emit it (re-stamped) instead of re-running the expensive match.
+    # Static-frame carry: re-emit the last row re-stamped. Skipping would flicker a persistent match.
     prev_skip_gray: list[np.ndarray | None] = [None]
     last_rd: list[dict[str, Any] | None] = [None]
 
@@ -760,9 +733,7 @@ def scan_template(
             return False
         curr_gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         if _frame_is_static(prev_skip_gray[0], curr_gray):
-            # Near-duplicate of the last matched frame — matches (already in
-            # original-frame coords) still hold. Carry the row forward; keep
-            # prev_skip_gray as the baseline so drift out of the run recomputes.
+            # Near-duplicate frame: carry the row; keep prev_skip_gray so drift recomputes.
             if last_rd[0] is not None:
                 carried = dict(last_rd[0])
                 carried["timestamp"] = ts
@@ -789,12 +760,13 @@ def scan_template(
                     work_frame, (nw, nh), interpolation=cv2.INTER_AREA
                 )
                 scale_back = 2
+        # Only matches centered inside the run region count (zero-size means anywhere).
+        window = region_search_window(region, _cv_scale / scale_back)
         matches = _match_template_prepared(
-            work_frame, _prepared, threshold, _nms_overlap
+            work_frame, _prepared, threshold, _nms_overlap, window=window
         )
         if matches:
-            # Undo fast-scan downscale, then undo cv_scale, so reported
-            # coords are in the original (un-scaled) frame coordinate space.
+            # Undo fast-scan downscale, then cv_scale: coords land in original frame pixels.
             inv = scale_back / _cv_scale
             if abs(inv - 1.0) > 1e-6:
                 for m in matches:
@@ -802,12 +774,7 @@ def scan_template(
                     m["y"] = round(m["y"] * inv)
                     m["w"] = round(m["w"] * inv)
                     m["h"] = round(m["h"] * inv)
-            # Shaped region: the match itself runs full-frame (as for rects,
-            # which don't restrict template search either), but detections
-            # whose center falls outside the polygon are dropped. Runs before
-            # the static-frame carry caches last_rd, so carried rows are
-            # already filtered. This mask is the *region's* shape — distinct
-            # from template_mask, the template's own alpha channel.
+            # The region polygon (not template_mask) drops outside matches before last_rd caches them.
             matches = filter_matches_by_region_mask(matches, region)
         if matches:
             best = max(m["score"] for m in matches)
@@ -840,10 +807,190 @@ def scan_template(
         _cb,
         start_seconds=start_seconds,
         end_seconds=end_seconds,
-        fps=vid_fps,
         duration=vid_duration,
         fast_opts=fast_opts,
+        profile_kind="template",
     )
+
+    if on_progress:
+        on_progress(1.0)
+    return results
+
+
+def scan_shape(
+    video_path: str,
+    region: dict[str, int],
+    shape_image: np.ndarray,
+    threshold: float = 0.0,
+    interval_seconds: float = 0.0,
+    *,
+    shape_mask: np.ndarray | None = None,
+    scale_min: float = 0.0,
+    scale_max: float = 0.0,
+    scale_steps: int = 0,
+    scale_y_min: float = 0.0,
+    scale_y_max: float = 0.0,
+    scale_y_steps: int = 0,
+    start_seconds: float = 0.0,
+    end_seconds: float | None = None,
+    on_progress: Callable[[float], None] | None = None,
+    cancel_flag: Callable[[], bool] | None = None,
+    on_result: Callable[[dict[str, Any]], None] | None = None,
+    fast_opts: dict[str, Any] | None = None,
+) -> list[dict[str, Any]]:
+    """Scan video for frames containing the reference shape's outline.
+
+    Edge-based matching swept across a geometric scale ladder
+    (*scale_min*..*scale_max*, *scale_steps* rungs): color/theme changes and
+    size drift survive where template matching misses. An optional
+    *shape_mask* restricts the reference to non-transparent PNG regions.
+    *scale_y_min*/*scale_y_max* unlink the axes into an independent vertical
+    ladder (see :func:`_prepare_shape_reference`). A real *region* rect scopes
+    the search to matches centered inside it — pick Full frame to search
+    anywhere (template's always-full-frame semantics).
+
+    Returns list of ``{timestamp, matches, best_score, match_count}`` dicts.
+    """
+    if threshold <= 0:
+        threshold = config.SCREENSPACE_SHAPE_MATCH_THRESHOLD
+    if interval_seconds <= 0:
+        interval_seconds = config.SCREENSPACE_DEFAULT_INTERVAL
+
+    window = _resolve_scan_window(video_path, start_seconds, end_seconds)
+    if window is None:
+        return []
+    _, vid_duration, end_seconds, total_range = window
+
+    results: list[dict[str, Any]] = []
+
+    _shape_downscale = bool(fast_opts and fast_opts.get("template_downscale"))
+
+    # Task-constant reference prep, hoisted out of the callback. A degenerate reference never matches.
+    _prepared = _prepare_shape_reference(
+        shape_image,
+        shape_mask,
+        scale_min,
+        scale_max,
+        scale_steps,
+        scale_y_min,
+        scale_y_max,
+        scale_y_steps,
+    )
+    if not _prepared:
+        if on_progress:
+            on_progress(1.0)
+        return results
+
+    _nms_overlap = config.SCREENSPACE_TEMPLATE_NMS_OVERLAP
+    outer_workers = max(1, config.SCREENSPACE_PARALLEL_WORKERS)
+    cpu_capacity = max(1, (os.cpu_count() or 1) // outer_workers)
+    rung_workers = min(4, cpu_capacity, len(_prepared))
+    executor = (
+        ThreadPoolExecutor(max_workers=rung_workers) if rung_workers > 1 else None
+    )
+    # Match boxes must undo both the ffmpeg cv_scale and the fast-scan 2x downscale.
+    _cv_scale = (
+        config.SCREENSPACE_CV_RESOLUTION_SCALE
+        if config.SCREENSPACE_CV_RESOLUTION_SCALE > 0
+        else 1.0
+    )
+
+    # Static-frame carry, as in scan_template: re-emit the last row re-stamped.
+    prev_skip_gray: list[np.ndarray | None] = [None]
+    last_rd: list[dict[str, Any] | None] = [None]
+
+    def _cb(ts: float, frame: np.ndarray) -> bool | None:
+        if cancel_flag and cancel_flag():
+            return False
+        curr_gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        if _frame_is_static(prev_skip_gray[0], curr_gray):
+            if last_rd[0] is not None:
+                carried = dict(last_rd[0])
+                carried["timestamp"] = ts
+                results.append(carried)
+                if on_result:
+                    on_result(
+                        {
+                            "timestamp": ts,
+                            "best_score": carried["best_score"],
+                            "match_count": carried["match_count"],
+                        }
+                    )
+            if on_progress and total_range > 0:
+                on_progress((ts - start_seconds) / total_range)
+            return None
+        prev_skip_gray[0] = curr_gray
+        work_frame = frame
+        scale_back = 1
+        if _shape_downscale:
+            fh, fw = work_frame.shape[:2]
+            nw, nh = fw // 2, fh // 2
+            if nw > 0 and nh > 0:
+                work_frame = cv2.resize(
+                    work_frame, (nw, nh), interpolation=cv2.INTER_AREA
+                )
+                scale_back = 2
+        # Only matches centered inside the run region count (zero-size means anywhere).
+        window = region_search_window(region, _cv_scale / scale_back)
+        # The static check already converted the full frame; reuse it unless downscaled.
+        matches, _peak = _match_shape_scales(
+            _frame_edge_map(work_frame, curr_gray if scale_back == 1 else None),
+            _prepared,
+            threshold,
+            _nms_overlap,
+            window,
+            executor,
+        )
+        if matches:
+            # Undo fast-scan downscale, then cv_scale: coords land in original frame pixels.
+            inv = scale_back / _cv_scale
+            if abs(inv - 1.0) > 1e-6:
+                for m in matches:
+                    m["x"] = round(m["x"] * inv)
+                    m["y"] = round(m["y"] * inv)
+                    m["w"] = round(m["w"] * inv)
+                    m["h"] = round(m["h"] * inv)
+            # Region polygon drops matches centered outside it, before last_rd caches them.
+            matches = filter_matches_by_region_mask(matches, region)
+        if matches:
+            best = max(m["score"] for m in matches)
+            rd = {
+                "timestamp": ts,
+                "matches": matches,
+                "best_score": round(best, 4),
+                "match_count": len(matches),
+            }
+            results.append(rd)
+            last_rd[0] = rd
+            if on_result:
+                on_result(
+                    {
+                        "timestamp": ts,
+                        "best_score": rd["best_score"],
+                        "match_count": rd["match_count"],
+                    }
+                )
+        else:
+            # No match this frame — a subsequent static frame has nothing to carry.
+            last_rd[0] = None
+        if on_progress and total_range > 0:
+            on_progress((ts - start_seconds) / total_range)
+        return None
+
+    try:
+        scan_video_full_frames(
+            video_path,
+            interval_seconds,
+            _cb,
+            start_seconds=start_seconds,
+            end_seconds=end_seconds,
+            duration=vid_duration,
+            fast_opts=fast_opts,
+            profile_kind="shape",
+        )
+    finally:
+        if executor is not None:
+            executor.shutdown()
 
     if on_progress:
         on_progress(1.0)
@@ -877,10 +1024,12 @@ def scan_flow(
     window = _resolve_scan_window(video_path, start_seconds, end_seconds)
     if window is None:
         return []
-    vid_fps, vid_duration, end_seconds, total_range = window
+    _, vid_duration, end_seconds, total_range = window
 
     results: list[dict[str, Any]] = []
     prev_gray: list[np.ndarray | None] = [None]
+    # prev_gray's <=256px flow downscale, carried so each frame resizes once. None when uncomputed.
+    prev_small: list[np.ndarray | None] = [None]
     buf = _ConsecutiveBuffer(require_consecutive)
     mask_for = region_masker(region)
 
@@ -888,19 +1037,27 @@ def scan_flow(
         if cancel_flag and cancel_flag():
             return False
         curr_gray = cv2.cvtColor(pixels, cv2.COLOR_BGR2GRAY)
-        # Static-frame skip: a near-duplicate of the previous frame produces
-        # ~zero optical flow, so the expensive Farneback pass would only confirm
-        # magnitude < threshold and reset the run anyway. Short-circuit to that
-        # outcome, still advancing prev_gray (flow is measured frame-to-frame).
+        # Static frame: ~zero flow would reset the run anyway. Short-circuit; still advance prev_gray.
         if _frame_is_static(prev_gray[0], curr_gray):
             buf.reset()
             prev_gray[0] = curr_gray
+            prev_small[0] = None
             if on_progress and total_range > 0:
                 on_progress((ts - start_seconds) / total_range)
             return None
+        small_curr: np.ndarray | None = None
         if prev_gray[0] is not None:
+            small_prev = prev_small[0]
+            if small_prev is None:
+                small_prev, _ = flow_downscale(prev_gray[0])
+            small_curr, small_mask = flow_downscale(curr_gray, mask_for(pixels))
+            # grid_min_magnitude defers the grid to frames that pass the threshold below.
             flow_result = compute_optical_flow(
-                prev_gray[0], curr_gray, return_grid=True, mask=mask_for(pixels)
+                small_prev,
+                small_curr,
+                return_grid=True,
+                mask=small_mask,
+                grid_min_magnitude=magnitude_threshold,
             )
             if flow_result["magnitude"] >= magnitude_threshold:
                 rd: dict[str, Any] = {
@@ -924,6 +1081,7 @@ def scan_flow(
             else:
                 buf.reset()
         prev_gray[0] = curr_gray
+        prev_small[0] = small_curr
         if on_progress and total_range > 0:
             on_progress((ts - start_seconds) / total_range)
         return None
@@ -935,9 +1093,9 @@ def scan_flow(
         _cb,
         start_seconds=start_seconds,
         end_seconds=end_seconds,
-        fps=vid_fps,
         duration=vid_duration,
         fast_opts=fast_opts,
+        profile_kind="flow",
     )
 
     if on_progress:
@@ -974,10 +1132,7 @@ def scan_scene(
     if interval_seconds <= 0:
         interval_seconds = config.SCREENSPACE_DEFAULT_INTERVAL
 
-    # Pre-compute fingerprints for reference scenes (with per-scene thresholds).
-    # Shaped regions: fingerprints are only comparable when both sides use the
-    # mask, so each reference crop gets the mask rasterized at its own size
-    # (references are source-resolution; scan crops may be rescaled).
+    # Shaped regions must mask both sides; each reference rasterizes the mask at its own size.
     mask_for = region_masker(region)
     ref_fps: list[tuple[str, dict[str, Any], float]] = []
     for ref in reference_scenes:
@@ -991,7 +1146,7 @@ def scan_scene(
     window = _resolve_scan_window(video_path, start_seconds, end_seconds)
     if window is None:
         return []
-    vid_fps, vid_duration, end_seconds, total_range = window
+    _, vid_duration, end_seconds, total_range = window
 
     results: list[dict[str, Any]] = []
     prev_skip_gray: list[np.ndarray | None] = [None]
@@ -1039,9 +1194,9 @@ def scan_scene(
         _cb,
         start_seconds=start_seconds,
         end_seconds=end_seconds,
-        fps=vid_fps,
         duration=vid_duration,
         fast_opts=fast_opts,
+        profile_kind="scene",
     )
 
     if on_progress:
@@ -1081,10 +1236,10 @@ def scan_inactivity(
     window = _resolve_scan_window(video_path, start_seconds, end_seconds)
     if window is None:
         return []
-    vid_fps, vid_duration, end_seconds, total_range = window
+    _, vid_duration, end_seconds, total_range = window
 
     results: list[dict[str, Any]] = []
-    prev_hash: list[imagehash.ImageHash | None] = [None]
+    prev_hash: list[PHash | None] = [None]
     prev_skip_gray: list[np.ndarray | None] = [None]
     span_start: list[float | None] = [None]
     span_distances: list[list[int]] = [[]]
@@ -1093,9 +1248,7 @@ def scan_inactivity(
     def _extend_span(ts: float, dist: int) -> None:
         # Frame is similar — extend or start span.
         if span_start[0] is None:
-            # Clamp to the scan start so a match early in the video
-            # (ts < interval_seconds, or start_seconds > 0) can't begin
-            # the span before 0:00 / the requested start.
+            # Clamp so an early match can't start the span before the scan start.
             span_start[0] = max(start_seconds, ts - interval_seconds)
         span_distances[0].append(dist)
 
@@ -1123,12 +1276,7 @@ def scan_inactivity(
 
         last_ts[0] = ts
 
-        # Static-frame fast-path: a gray mean-diff below the static threshold
-        # implies a phash Hamming distance of ~0 — well within the (always ≥1)
-        # inactivity threshold — so the frame is provably inactive. Extend the
-        # span with a nominal 0 distance and skip the much heavier compute_phash.
-        # prev_hash/prev_skip_gray are left as the run baseline so slow drift is
-        # still measured against the start of the frozen run.
+        # Static frame: phash distance is ~0. Extend the span at 0; keep baselines for drift.
         curr_gray = cv2.cvtColor(pixels, cv2.COLOR_BGR2GRAY)
         if _frame_is_static(prev_skip_gray[0], curr_gray):
             _extend_span(ts, 0)
@@ -1137,7 +1285,7 @@ def scan_inactivity(
             return None
         prev_skip_gray[0] = curr_gray
 
-        curr_hash = compute_phash(pixels)
+        curr_hash = compute_phash(pixels, gray=curr_gray)
 
         if prev_hash[0] is not None:
             dist = int(curr_hash - prev_hash[0])
@@ -1159,9 +1307,9 @@ def scan_inactivity(
         _cb,
         start_seconds=start_seconds,
         end_seconds=end_seconds,
-        fps=vid_fps,
         duration=vid_duration,
         fast_opts=fast_opts,
+        profile_kind="inactivity",
     )
 
     # Flush final span if video ended during an inactive period
@@ -1303,17 +1451,10 @@ def _consolidate_boundary_periods(
         periods = [periods[0]] + [
             p for p in periods[1:] if float(p["entry_dist"]) >= cutoff
         ]
-        # Dropping a weak middle period can leave two same-scene neighbors
-        # adjacent; re-run the merge passes to collapse the duplicate boundary.
+        # Pruning can leave same-scene neighbors adjacent; merge again to collapse them.
         periods = _run_merge_passes(periods)
 
-    # Hierarchical scene labels (Scene A1, A2, B1, …): the letter is the *type*
-    # (similar scenes grouped at the looser type_threshold), the number is the
-    # distinct *scene* within that type (exact recurrence at merge_threshold). A
-    # revisited scene reuses its full label; a similar-but-distinct scene shares
-    # the letter with a new number.
-    #
-    # 1. Tight clustering → a distinct scene id per period (exact recurrence).
+    # Scene labels (A1, B1): tight clustering here picks the number, loose clustering below the letter.
     scene_reps: list[dict[str, Any]] = []
     for p in periods:
         scene_id = None
@@ -1326,8 +1467,7 @@ def _consolidate_boundary_periods(
             scene_reps.append(_fp(p))
         p["_scene_id"] = scene_id
 
-    # 2. Loose clustering over the scene representatives → a type id per scene,
-    #    so every period of one scene shares a type.
+    # Type per scene: cluster the scene representatives at the looser type_threshold.
     type_of_scene: list[int] = []
     type_reps: list[dict[str, Any]] = []
     for rep in scene_reps:
@@ -1375,28 +1515,26 @@ def scan_boundaries(
 
     Three metrics (``metric``):
 
-    - ``"phash"`` (v1): a boundary fires when the perceptual-hash Hamming
-      distance to the *previous* sampled frame is ≥ *threshold*, debounced by
-      *min_gap* seconds. Streams each boundary live via *on_result*.
-    - ``"scene"``: each sample's content fingerprint is measured against the
-      *current period's* reference (not the previous frame); a boundary fires
-      only when the fingerprint distance crosses
-      ``SCREENSPACE_BOUNDARY_SCENE_THRESHOLD`` and *holds* for
-      ``SCREENSPACE_BOUNDARY_CONFIRM_WINDOW`` samples. Robust to motion.
-    - ``"hybrid"``: a confirmed scene shift that is *also* corroborated by a
-      phash spike — catches hard cuts and rejects both motion (phash spikes
-      that don't sustain) and slow fades (drift with no spike).
+    - ``"phash"``: fires when the perceptual-hash Hamming distance to the
+      *previous* sampled frame is ≥ *threshold*, debounced by *min_gap* seconds.
+      Streams each boundary live via *on_result*.
+    - ``"scene"``: measures each sample's content fingerprint against the
+      *current period's* reference rather than the previous frame, firing only
+      when the distance crosses ``SCREENSPACE_BOUNDARY_SCENE_THRESHOLD`` and
+      *holds* for ``SCREENSPACE_BOUNDARY_CONFIRM_WINDOW`` samples. Motion-robust.
+    - ``"hybrid"``: a confirmed scene shift also corroborated by a phash spike —
+      catches hard cuts while rejecting motion (spikes that don't sustain) and
+      slow fades (drift with no spike).
 
-    ``scene``/``hybrid`` run a post-run consolidation pass
+    ``scene``/``hybrid`` consolidate afterwards
     (:func:`_consolidate_boundary_periods`) and emit ``on_result`` only for the
-    *final* boundaries (the worker derives events from the stream), so the
-    progress bar advances live but ticks appear together at completion. The
-    function param defaults to ``"phash"``; the tool layer applies the policy
-    default (``config.SCREENSPACE_BOUNDARY_METRIC``).
+    *final* boundaries, so the progress bar advances live but ticks all appear at
+    completion. This param defaults to ``"phash"``; the tool layer applies the
+    policy default (``config.SCREENSPACE_BOUNDARY_METRIC``).
 
-    Region is ignored (full-frame only); the parameter exists for signature
-    parity. Returns ``{timestamp, distance, _confidence}`` dicts (scene/hybrid
-    also carry ``period_start``/``period_end``).
+    Region is ignored (full-frame only) and exists for signature parity. Returns
+    ``{timestamp, distance, _confidence}`` dicts, scene/hybrid also carrying
+    ``period_start``/``period_end``.
     """
     if threshold <= 0:
         threshold = config.SCREENSPACE_BOUNDARY_PHASH_THRESHOLD
@@ -1413,12 +1551,9 @@ def scan_boundaries(
     window = _resolve_scan_window(video_path, start_seconds, end_seconds)
     if window is None:
         return []
-    vid_fps, vid_duration, end_seconds, total_range = window
+    _, vid_duration, end_seconds, total_range = window
 
-    # Downscale frames at the ffmpeg pipe. Scene/hybrid fingerprinting needs more
-    # detail than the coarse phash dim (the HSV histogram is too sparse at 64 px).
-    # We pass only ``max_region_dim`` (no ``phash_skip``) so the pipe downsizes
-    # without dropping frames — this scanner samples every interval itself.
+    # Downscale at the pipe without phash_skip: this scanner samples every interval itself.
     boundary_opts = dict(fast_opts or {})
     boundary_opts.setdefault(
         "max_region_dim",
@@ -1429,7 +1564,7 @@ def scan_boundaries(
     boundary_opts.pop("phash_skip", None)
 
     results: list[dict[str, Any]] = []
-    prev_hash: list[imagehash.ImageHash | None] = [None]
+    prev_hash: list[PHash | None] = [None]
     last_boundary_ts: list[float | None] = [None]
     eps = config.SCREENSPACE_BOUNDARY_CONFIDENCE_EPSILON
 
@@ -1440,17 +1575,14 @@ def scan_boundaries(
         def _cb_phash(ts: float, pixels: np.ndarray) -> bool | None:
             if cancel_flag and cancel_flag():
                 return False
-            # Static-frame skip: a near-duplicate frame yields a phash distance
-            # ~0, far below the boundary threshold, so it can never be a scene
-            # boundary. Skip the heavy compute_phash and keep prev_hash as the
-            # run baseline (a real spike is never gray-static, so none is missed).
+            # Static frame: phash distance ~0 can't be a boundary. Skip compute_phash; keep prev_hash as baseline.
             curr_gray = cv2.cvtColor(pixels, cv2.COLOR_BGR2GRAY)
             if _frame_is_static(prev_skip_gray[0], curr_gray):
                 if on_progress and total_range > 0:
                     on_progress((ts - start_seconds) / total_range)
                 return None
             prev_skip_gray[0] = curr_gray
-            curr_hash = compute_phash(pixels)
+            curr_hash = compute_phash(pixels, gray=curr_gray)
             if prev_hash[0] is not None:
                 dist = int(curr_hash - prev_hash[0])
                 within_gap = (
@@ -1466,8 +1598,7 @@ def scan_boundaries(
                         "timestamp": round(ts, 2),
                         "distance": dist,
                         "_confidence": round(conf, 4),
-                        # phash has no fingerprints to cluster, so labels are
-                        # sequential: the Nth boundary opens the (N+1)th segment.
+                        # phash has nothing to cluster; labels run sequentially per boundary.
                         "scene_label": _scene_label(len(results) + 1),
                     }
                     results.append(rd)
@@ -1485,9 +1616,9 @@ def scan_boundaries(
             _cb_phash,
             start_seconds=start_seconds,
             end_seconds=end_seconds,
-            fps=vid_fps,
             duration=vid_duration,
             fast_opts=boundary_opts,
+            profile_kind="boundary",
         )
         if on_progress:
             on_progress(1.0)
@@ -1540,14 +1671,7 @@ def scan_boundaries(
                 if phash_spike:
                     pending["phash_seen"] = True
                 if pending["count"] >= confirm_window:
-                    # A sustained shift — we have entered a new scene. Advance the
-                    # period reference NOW, regardless of whether we emit a
-                    # boundary: min_gap (and hybrid's phash gate) only suppress the
-                    # boundary *event*, not the fact that the content moved on.
-                    # Tying reference advancement to emission would leave ref_fp
-                    # stuck on the old scene for the rest of the clip when a
-                    # transition lands within min_gap, silently dropping every
-                    # later boundary.
+                    # Advance the reference on every sustained shift; a suppressed event must not freeze ref_fp.
                     within_gap = (
                         last_boundary_ts[0] is not None
                         and pending["start_ts"] - last_boundary_ts[0] < min_gap
@@ -1584,9 +1708,9 @@ def scan_boundaries(
         _cb_scene,
         start_seconds=start_seconds,
         end_seconds=end_seconds,
-        fps=vid_fps,
         duration=vid_duration,
         fast_opts=boundary_opts,
+        profile_kind="boundary",
     )
 
     final = _consolidate_boundary_periods(
@@ -1667,10 +1791,9 @@ def scan_attention(
     window = _resolve_scan_window(video_path, start_seconds, end_seconds)
     if window is None:
         return []
-    vid_fps, vid_duration, end_seconds, total_range = window
+    _, vid_duration, end_seconds, total_range = window
 
-    # Downsize at the ffmpeg pipe without dropping frames (see docstring for
-    # why phash-skip is disabled); the saliency math runs at ≤ WORKING_DIM.
+    # Downsize at the pipe without dropping frames (docstring says why); saliency runs at WORKING_DIM.
     attention_opts = dict(fast_opts or {})
     attention_opts.setdefault(
         "max_region_dim", config.SCREENSPACE_ATTENTION_WORKING_DIM
@@ -1680,8 +1803,7 @@ def scan_attention(
     results: list[dict[str, Any]] = []
     prev_gray: list[np.ndarray | None] = [None]
     smoothed: list[np.ndarray | None] = [None]
-    # Shift state machine: the last *emitted* focus plus a pending candidate
-    # that must persist near its anchor for shift_confirm samples.
+    # Shift state: last emitted focus plus a candidate that must persist shift_confirm samples.
     last_emitted: list[tuple[float, float] | None] = [None]
     pending: list[dict[str, Any] | None] = [None]
 
@@ -1728,8 +1850,7 @@ def scan_attention(
             cand = pending[0]
             anchor: tuple[float, float] = cand["anchor"] if cand else peak
             if cand is None or _dist(peak, anchor) > 0.5 * shift_threshold:
-                # New (or wandered-off) jump target: restart confirmation at
-                # this frame, remembering its result dict to stamp on emit.
+                # New or wandered-off target: restart confirmation, keeping its result to stamp on emit.
                 new_cand: dict[str, Any] = {
                     "count": 1,
                     "anchor": peak,
@@ -1776,9 +1897,9 @@ def scan_attention(
         _cb,
         start_seconds=start_seconds,
         end_seconds=end_seconds,
-        fps=vid_fps,
         duration=vid_duration,
         fast_opts=attention_opts,
+        profile_kind="attention",
     )
     if on_progress:
         on_progress(1.0)

@@ -4,7 +4,7 @@ REM Requires winget (App Installer). Re-open the terminal after install if PATH 
 echo Installing ffmpeg (Gyan.FFmpeg)...
 winget install -e --id Gyan.FFmpeg --accept-package-agreements --accept-source-agreements
 
-echo Installing Ollama...
-winget install -e --id Ollama.Ollama --accept-package-agreements --accept-source-agreements
+echo Installing llama.cpp (llama-server)...
+winget install -e --id ggml.llamacpp --accept-package-agreements --accept-source-agreements
 
 echo Done.

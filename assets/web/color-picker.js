@@ -233,8 +233,7 @@
     }
     function onKey(ev) {
       if (ev.key !== "Escape") return;
-      // The picker owns this Escape: a host modal (e.g. Settings) must not
-      // also close underneath it.
+      // Stop here so a host modal (Settings) doesn't also close.
       ev.preventDefault();
       ev.stopPropagation();
       close();

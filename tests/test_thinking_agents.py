@@ -1,11 +1,14 @@
 """Tests for thinking_agents module.
 
 Covers the built-in summary and citation agents plus registry invariants.
-Transport-layer tests live in tests/test_ollama_client.py.
+Transport-layer tests live in tests/test_llm_client.py.
 """
 
 import threading
+from pathlib import Path
 from unittest.mock import patch
+
+import config
 
 import thinking_agents
 
@@ -58,11 +61,30 @@ class TestRegistry:
         assert "friction" in keys
         assert "report" in keys
 
+    def test_config_keys_exist_with_right_types(self):
+        """new-thinking-agent/SKILL.md: enabled/model settings live in config.py."""
+        for agent in thinking_agents.AGENTS:
+            enabled = getattr(config, agent["enabled_config_key"])
+            assert isinstance(enabled, bool), agent["key"]
+            model = getattr(config, agent["model_config_key"])
+            assert isinstance(model, str), agent["key"]
+
+    def test_on_upstream_change_is_a_known_mode(self):
+        for agent in thinking_agents.AGENTS:
+            assert agent["on_upstream_change"] in ("clear", "stale"), agent["key"]
+
+    def test_every_agent_has_a_frontend_surface(self):
+        """Each agent's api/agent/<key> routes must be wired somewhere in JS."""
+        web = Path(thinking_agents.__file__).resolve().parent.parent / "assets" / "web"
+        corpus = "".join(p.read_text(encoding="utf-8") for p in web.glob("*.js"))
+        for agent in thinking_agents.AGENTS:
+            assert f"api/agent/{agent['key']}" in corpus, agent["key"]
+
     def test_resolve_model_uses_agent_model(self, monkeypatch):
         import config
 
-        monkeypatch.setattr(config, "OLLAMA_SUMMARY_MODEL", "qwen3.5:9b")
-        monkeypatch.setattr(config, "OLLAMA_FRICTION_MODEL", "gemma4:latest")
+        monkeypatch.setattr(config, "LLM_SUMMARY_MODEL", "qwen3.5:9b")
+        monkeypatch.setattr(config, "LLM_FRICTION_MODEL", "gemma4:latest")
         summary = thinking_agents.get_agent("summary")
         friction = thinking_agents.get_agent("friction")
         assert summary is not None and friction is not None
@@ -72,8 +94,8 @@ class TestRegistry:
     def test_resolve_model_blank_friction_inherits_summary(self, monkeypatch):
         import config
 
-        monkeypatch.setattr(config, "OLLAMA_SUMMARY_MODEL", "llama3.1:8b")
-        monkeypatch.setattr(config, "OLLAMA_FRICTION_MODEL", "")
+        monkeypatch.setattr(config, "LLM_SUMMARY_MODEL", "llama3.1:8b")
+        monkeypatch.setattr(config, "LLM_FRICTION_MODEL", "")
         friction = thinking_agents.get_agent("friction")
         assert friction is not None
         assert thinking_agents.resolve_model(friction) == "llama3.1:8b"
@@ -81,8 +103,8 @@ class TestRegistry:
     def test_resolve_model_blank_report_inherits_summary(self, monkeypatch):
         import config
 
-        monkeypatch.setattr(config, "OLLAMA_SUMMARY_MODEL", "llama3.1:8b")
-        monkeypatch.setattr(config, "OLLAMA_REPORT_MODEL", "")
+        monkeypatch.setattr(config, "LLM_SUMMARY_MODEL", "llama3.1:8b")
+        monkeypatch.setattr(config, "LLM_REPORT_MODEL", "")
         report = thinking_agents.get_agent("report")
         assert report is not None
         assert thinking_agents.resolve_model(report) == "llama3.1:8b"
@@ -97,7 +119,7 @@ class TestSummarizeTranscript:
         result = thinking_agents.summarize_transcript([{"text": "Hi"}])
         assert result is None
 
-    @patch("thinking_agents.ollama_client.generate")
+    @patch("thinking_agents.llm_client.generate")
     def test_concatenates_segment_text(self, mock_generate):
         mock_generate.return_value = "A summary."
         segments = [
@@ -117,8 +139,8 @@ class TestSummarizeTranscript:
         Settings → Summaries takes effect on the next run."""
         import config
 
-        monkeypatch.setattr(config, "OLLAMA_SUMMARY_PROMPT", "CUSTOM-MARKER\n{text}")
-        with patch("thinking_agents.ollama_client.generate") as mock_generate:
+        monkeypatch.setattr(config, "LLM_SUMMARY_PROMPT", "CUSTOM-MARKER\n{text}")
+        with patch("thinking_agents.llm_client.generate") as mock_generate:
             mock_generate.return_value = "ok"
             thinking_agents.summarize_transcript(
                 [{"text": "A sufficiently long segment of text for the length check."}]
@@ -127,7 +149,7 @@ class TestSummarizeTranscript:
         assert prompt.startswith("CUSTOM-MARKER")
         assert "A sufficiently long segment of text" in prompt
 
-    @patch("thinking_agents.ollama_client.generate")
+    @patch("thinking_agents.llm_client.generate")
     def test_returns_generate_result(self, mock_generate):
         mock_generate.return_value = "This is a summary.\n- Point one\n- Point two"
         segments = [
@@ -138,7 +160,7 @@ class TestSummarizeTranscript:
         result = thinking_agents.summarize_transcript(segments)
         assert result == "This is a summary.\n- Point one\n- Point two"
 
-    @patch("thinking_agents.ollama_client.generate")
+    @patch("thinking_agents.llm_client.generate")
     def test_returns_none_when_generate_fails(self, mock_generate):
         mock_generate.return_value = None
         segments = [
@@ -149,7 +171,7 @@ class TestSummarizeTranscript:
         result = thinking_agents.summarize_transcript(segments)
         assert result is None
 
-    @patch("thinking_agents.ollama_client.generate")
+    @patch("thinking_agents.llm_client.generate")
     def test_strips_think_block_from_result(self, mock_generate):
         # Transport now returns raw text; the summary agent owns <think> stripping.
         mock_generate.return_value = "<think>reasoning</think>\n\nActual summary."
@@ -161,7 +183,7 @@ class TestSummarizeTranscript:
         result = thinking_agents.summarize_transcript(segments)
         assert result == "Actual summary."
 
-    @patch("thinking_agents.ollama_client.generate")
+    @patch("thinking_agents.llm_client.generate")
     def test_returns_none_when_only_think_block(self, mock_generate):
         mock_generate.return_value = "<think>Thinking but producing nothing.</think>"
         segments = [
@@ -172,7 +194,7 @@ class TestSummarizeTranscript:
         result = thinking_agents.summarize_transcript(segments)
         assert result is None
 
-    @patch("thinking_agents.ollama_client.generate")
+    @patch("thinking_agents.llm_client.generate")
     def test_passes_model_override(self, mock_generate):
         mock_generate.return_value = "ok"
         segments = [
@@ -183,7 +205,7 @@ class TestSummarizeTranscript:
         thinking_agents.summarize_transcript(segments, model="llama3.1:8b")
         assert mock_generate.call_args[1]["model"] == "llama3.1:8b"
 
-    @patch("thinking_agents.ollama_client.generate")
+    @patch("thinking_agents.llm_client.generate")
     def test_uses_default_model_when_no_override(self, mock_generate):
         mock_generate.return_value = "ok"
         segments = [
@@ -192,9 +214,9 @@ class TestSummarizeTranscript:
             },
         ]
         thinking_agents.summarize_transcript(segments)
-        assert mock_generate.call_args[1]["model"] == "qwen3.5:9b"
+        assert mock_generate.call_args[1]["model"] == config.LLM_SUMMARY_MODEL
 
-    @patch("thinking_agents.ollama_client.generate")
+    @patch("thinking_agents.llm_client.generate")
     def test_passes_cancel_event_to_generate(self, mock_generate):
         mock_generate.return_value = "ok"
         evt = threading.Event()
@@ -206,21 +228,7 @@ class TestSummarizeTranscript:
         thinking_agents.summarize_transcript(segments, cancel_event=evt)
         assert mock_generate.call_args[1]["cancel_event"] is evt
 
-    @patch("thinking_agents.ollama_client.generate")
-    def test_disables_thinking(self, mock_generate):
-        # Summaries run with think=False (like citations/friction): a reasoning
-        # model would otherwise stall in a silent think phase with no response
-        # text to stream and pure added latency.
-        mock_generate.return_value = "ok"
-        segments = [
-            {
-                "text": "A sufficiently long segment of text for the minimum length check."
-            },
-        ]
-        thinking_agents.summarize_transcript(segments)
-        assert mock_generate.call_args[1]["think"] is False
-
-    @patch("thinking_agents.ollama_client.generate")
+    @patch("thinking_agents.llm_client.generate")
     def test_forwards_on_token_to_generate(self, mock_generate):
         mock_generate.return_value = "ok"
         sink = lambda _tok: None
@@ -232,7 +240,7 @@ class TestSummarizeTranscript:
         thinking_agents.summarize_transcript(segments, on_token=sink)
         assert mock_generate.call_args[1]["on_token"] is sink
 
-    @patch("thinking_agents.ollama_client.generate")
+    @patch("thinking_agents.llm_client.generate")
     def test_run_summary_forwards_on_token(self, mock_generate):
         mock_generate.return_value = "ok"
         sink = lambda _tok: None
@@ -375,14 +383,14 @@ class TestFindCitations:
     def test_returns_none_for_empty_segments(self):
         assert thinking_agents.find_citations("A summary.", []) is None
 
-    @patch("thinking_agents.ollama_client.generate")
+    @patch("thinking_agents.llm_client.generate")
     def test_uses_default_model(self, mock_generate):
         mock_generate.return_value = "1: NONE"
         segments = [{"start": 0, "end": 5, "text": "Some text here"}]
         thinking_agents.find_citations("A summary sentence.", segments)
-        assert mock_generate.call_args[1]["model"] == "qwen3.5:9b"
+        assert mock_generate.call_args[1]["model"] == config.LLM_SUMMARY_MODEL
 
-    @patch("thinking_agents.ollama_client.generate")
+    @patch("thinking_agents.llm_client.generate")
     def test_returns_citations_on_success(self, mock_generate):
         mock_generate.return_value = "1: 0:00\n2: 0:10"
         segments = [
@@ -398,7 +406,7 @@ class TestFindCitations:
         assert result[1]["sentence"] == "Bullet claim"
         assert result[1]["refs"][0]["start"] == 10
 
-    @patch("thinking_agents.ollama_client.generate")
+    @patch("thinking_agents.llm_client.generate")
     def test_returns_none_when_generate_fails(self, mock_generate):
         # A failed model call must not return the success sentinel: a full list
         # of empty-ref claims is indistinguishable from "the model found no
@@ -407,7 +415,7 @@ class TestFindCitations:
         segments = [{"start": 0, "end": 5, "text": "Some text"}]
         assert thinking_agents.find_citations("A sentence.", segments) is None
 
-    @patch("thinking_agents.ollama_client.generate")
+    @patch("thinking_agents.llm_client.generate")
     def test_returns_empty_refs_when_model_finds_no_sources(self, mock_generate):
         # The genuine empty case still persists one entry per claim, so the UI
         # can tell it apart from the failure above.
@@ -417,7 +425,7 @@ class TestFindCitations:
         assert result is not None
         assert [c["refs"] for c in result] == [[], []]
 
-    @patch("thinking_agents.ollama_client.generate")
+    @patch("thinking_agents.llm_client.generate")
     def test_multiple_refs_per_claim(self, mock_generate):
         mock_generate.return_value = "1: 0:00, 0:10"
         segments = [
@@ -430,7 +438,7 @@ class TestFindCitations:
         assert result[0]["refs"][0]["start"] == 0
         assert result[0]["refs"][1]["start"] == 10
 
-    @patch("thinking_agents.ollama_client.generate")
+    @patch("thinking_agents.llm_client.generate")
     def test_passes_cancel_event_to_generate(self, mock_generate):
         mock_generate.return_value = "1: NONE"
         evt = threading.Event()
@@ -476,7 +484,7 @@ class TestAgentRunCallables:
         result = agent["run"](entry, None)
         assert result == [{"sentence": "s", "refs": []}]
         mock_find.assert_called_once_with(
-            entry["summary"], entry["segments"], cancel_event=None
+            entry["summary"], entry["segments"], cancel_event=None, speaker_labels=None
         )
 
     @patch("thinking_agents.find_citations")
@@ -525,13 +533,13 @@ class TestRunReport:
         assert agent is not None
         assert agent["run"]({"participant": "P01", "segments": []}, None) is None
 
-    @patch("thinking_agents.ollama_client.generate")
+    @patch("thinking_agents.llm_client.generate")
     def test_happy_path_result_shape_and_prompt(self, mock_generate, monkeypatch):
         import config
 
         mock_generate.return_value = "## Overview\nWent fine."
-        monkeypatch.setattr(config, "OLLAMA_SUMMARY_MODEL", "m1")
-        monkeypatch.setattr(config, "OLLAMA_REPORT_MODEL", "")
+        monkeypatch.setattr(config, "LLM_SUMMARY_MODEL", "m1")
+        monkeypatch.setattr(config, "LLM_REPORT_MODEL", "")
         monkeypatch.setattr(
             thinking_agents,
             "_observation_rows_getter",
@@ -587,10 +595,9 @@ class TestRunReport:
         assert "Someone else's note" not in prompt
         assert "P01" in prompt
         kwargs = mock_generate.call_args[1]
-        assert kwargs["system"] == config.OLLAMA_REPORT_SYSTEM
-        assert kwargs["think"] is False
+        assert kwargs["system"] == config.LLM_REPORT_SYSTEM
 
-    @patch("thinking_agents.ollama_client.generate")
+    @patch("thinking_agents.llm_client.generate")
     def test_mark_label_wins_over_category_bucket(self, mock_generate, monkeypatch):
         mock_generate.return_value = "report"
         monkeypatch.setattr(thinking_agents, "_observation_rows_getter", None)
@@ -610,7 +617,7 @@ class TestRunReport:
         prompt = mock_generate.call_args[0][0]
         assert "[0:00] (Friction · frustration) Ugh" in prompt
 
-    @patch("thinking_agents.ollama_client.generate")
+    @patch("thinking_agents.llm_client.generate")
     def test_degrades_to_placeholders_without_getters(self, mock_generate, monkeypatch):
         self._clear_getters(monkeypatch)
         mock_generate.return_value = "report text"
@@ -622,7 +629,7 @@ class TestRunReport:
         prompt = mock_generate.call_args[0][0]
         assert "(none recorded)" in prompt
 
-    @patch("thinking_agents.ollama_client.generate")
+    @patch("thinking_agents.llm_client.generate")
     def test_marks_getter_receives_participant(self, mock_generate, monkeypatch):
         mock_generate.return_value = "r"
         monkeypatch.setattr(thinking_agents, "_observation_rows_getter", None)
@@ -636,7 +643,7 @@ class TestRunReport:
         thinking_agents._run_report({"participant": "P07", "summary": "S."}, None)
         assert calls == ["P07"]
 
-    @patch("thinking_agents.ollama_client.generate")
+    @patch("thinking_agents.llm_client.generate")
     def test_returns_none_when_generate_fails(self, mock_generate, monkeypatch):
         self._clear_getters(monkeypatch)
         mock_generate.return_value = None
@@ -645,7 +652,7 @@ class TestRunReport:
         )
         assert result is None
 
-    @patch("thinking_agents.ollama_client.generate")
+    @patch("thinking_agents.llm_client.generate")
     def test_returns_none_when_cancelled_before_generate(
         self, mock_generate, monkeypatch
     ):
@@ -658,7 +665,7 @@ class TestRunReport:
         assert result is None
         mock_generate.assert_not_called()
 
-    @patch("thinking_agents.ollama_client.generate")
+    @patch("thinking_agents.llm_client.generate")
     def test_forwards_cancel_event_and_on_token(self, mock_generate, monkeypatch):
         self._clear_getters(monkeypatch)
         mock_generate.return_value = "r"
@@ -671,3 +678,37 @@ class TestRunReport:
         kwargs = mock_generate.call_args[1]
         assert kwargs["cancel_event"] is evt
         assert kwargs["on_token"] is sink
+
+
+class TestCitationParseHardening:
+    @patch("thinking_agents.llm_client.generate")
+    def test_unparseable_format_returns_none(self, mock_generate):
+        """A non-empty answer with zero "N: ts" lines (markdown bolding, "1."
+        numbering) is a parse failure — committing all-empty refs would read
+        as "no sources exist"."""
+        mock_generate.return_value = "**1:** 0:05\n2. 0:10\nClaim 3 - 0:15"
+        segments = [{"start": 0, "end": 5, "text": "Some text"}]
+        assert thinking_agents.find_citations("A claim.", segments) is None
+
+    @patch("thinking_agents.llm_client.generate")
+    def test_duplicate_segment_refs_are_deduped(self, mock_generate):
+        """Two timestamps resolving to one segment must not eat the per-claim
+        ref budget as two entries."""
+        mock_generate.return_value = "1: 0:00, 0:02, 0:10"
+        segments = [
+            {"start": 0, "end": 5, "text": "Part A"},
+            {"start": 10, "end": 15, "text": "Part B"},
+        ]
+        result = thinking_agents.find_citations("A claim.", segments)
+        assert result is not None
+        assert [r["segment_index"] for r in result[0]["refs"]] == [0, 1]
+
+
+class TestFindClosestSegmentTolerance:
+    def test_distance_beyond_tolerance_is_rejected(self):
+        # 5.9 s away with the default 5.0 s tolerance: the old
+        # `best_dist = tolerance + 1` bound effectively accepted up to 6.0 s.
+        assert thinking_agents._find_closest_segment(5.9, [0.0], [0]) is None
+
+    def test_distance_at_tolerance_is_accepted(self):
+        assert thinking_agents._find_closest_segment(5.0, [0.0], [0]) == 0

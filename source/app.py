@@ -26,14 +26,14 @@ import config
 import files
 import google_api
 import interactive
+import profiling
 import spreadsheet
 import utils
 import video
 import viewer
 from utils import ClipRecord
 
-# Re-exported from pipeline.py so `app.process_clips` keeps resolving: cli.py
-# and tests/test_cli_args.py reach these through this module's namespace.
+# Re-exported so cli.py and tests/test_cli_args.py can reach app.process_clips.
 from pipeline import (
     is_excel_worksheet as _is_excel_worksheet,
     process_clips,
@@ -107,9 +107,7 @@ FORMAT_MODE_ALIASES = {
     }
 }
 
-# Dispatch table for standard interactive modes: mode -> (prompt_fn, generate_fn).
-# prompt_fn(ctx) returns a result or None/False to cancel.
-# generate_fn(ctx, result) returns a list of clip records.
+# mode -> (prompt_fn, generate_fn); prompt_fn returns None/False to cancel.
 _STANDARD_MODES = {
     "batch": (
         lambda ctx: interactive.prompt_batch_confirm(ctx),
@@ -162,7 +160,10 @@ def _open_worksheet(
     import gspread
 
     try:
-        return google_api.get_worksheet(open_callable(), preferred_name=worksheet_name)
+        # open_by_url / open bypass google_api._call_with_api_retry, so count them here.
+        with profiling.span("sheets.open"):
+            ss = open_callable()
+        return google_api.get_worksheet(ss, preferred_name=worksheet_name)
     except (
         gspread.SpreadsheetNotFound,
         gspread.exceptions.APIError,
@@ -269,16 +270,21 @@ def list_worksheet_titles(
     import gspread
 
     try:
+        # Same accounting as _open_worksheet: both branches and the worksheets()
+        # listing are round-trips outside _call_with_api_retry.
         if id_or_path.startswith(config.COMMAND_HTTP_PREFIX):
-            ss = gspread_client.open_by_url(id_or_path)
+            with profiling.span("sheets.open"):
+                ss = gspread_client.open_by_url(id_or_path)
         else:
             if doc_list is None:
                 doc_list = google_api.get_all_spreadsheets(gspread_client)
             chosen_index = google_api.find_spreadsheet_by_name(id_or_path, doc_list)
             if chosen_index < 0:
                 return [], ""
-            ss = gspread_client.open(doc_list[chosen_index].strip())
-        titles = [ws.title for ws in ss.worksheets()]
+            with profiling.span("sheets.open"):
+                ss = gspread_client.open(doc_list[chosen_index].strip())
+        with profiling.span("sheets.worksheets"):
+            titles = [ws.title for ws in ss.worksheets()]
     except (
         gspread.SpreadsheetNotFound,
         gspread.exceptions.APIError,
@@ -317,9 +323,7 @@ def _handle_spreadsheet_command(
         return None
     # Handle 'last' command
     if input_name.startswith(config.COMMAND_OPEN_LAST):
-        # doc_list is already the get_all_spreadsheets() result (newest first,
-        # same source the 'new' command reads); reuse it rather than paying
-        # another rate-limited Google Sheets round-trip for data in hand.
+        # doc_list is already newest-first from get_all_spreadsheets(); skip another rate-limited call.
         latest_spreadsheet_name = doc_list[0]
         return open_spreadsheet_by_name(
             gspread_client, doc_list, latest_spreadsheet_name, use_spinner=True
@@ -501,6 +505,24 @@ def _run_standard_mode(mode: str, worksheet: Any) -> list[ClipRecord] | None:
     return gen_fn(ctx, result)
 
 
+def _record_interactive_artifacts(
+    artifacts: list[dict[str, Any]], worksheet: Any, *, mode: str = "interactive"
+) -> None:
+    """Append this run's artifacts to the session list and persist the manifest."""
+    if not artifacts:
+        return
+    viewer.INTERACTIVE_ARTIFACTS.extend(artifacts)
+    if config.MANIFEST_ENABLED:
+        viewer.save_manifest(
+            viewer.INTERACTIVE_ARTIFACTS,
+            new_reels=viewer.INTERACTIVE_REELS,
+            study=artifacts[0].get("study", ""),
+            worksheet_title=getattr(worksheet, "title", ""),
+            is_excel=_is_excel_worksheet(worksheet),
+            mode=mode,
+        )
+
+
 def _print_run_summary(message: str) -> None:
     """Print a run summary block with newlines and a Summary header."""
     utils.info_print("")
@@ -527,7 +549,11 @@ def _print_completion_message(
     """Print a summary of generated outputs tailored to format and reel mode."""
     output_dir = utils.get_effective_output_dir()
     if is_reel:
-        _print_run_summary(f"All done, created 1 reel!\nFiles are in {output_dir}")
+        # process_reel returns 0 on abort; the error is already printed.
+        if outputs_generated > 0:
+            _print_run_summary(f"All done, created 1 reel!\nFiles are in {output_dir}")
+        else:
+            _print_run_summary("No reel was created.")
         return
     noun = {"screen": "screenshots", "gif": "GIFs"}.get(output_format, "videos")
     _print_run_summary(
@@ -627,8 +653,7 @@ def _run_reel_mode_interactive(
         utils.info_print("No input. Skipping reel.")
         return ([], False, None)
 
-    # Reused by generate_list below when the chronologic prompt builds it; stays
-    # None for every other reel path (generate_list then fetches once itself).
+    # Set only by the chronologic prompt; generate_list fetches its own otherwise.
     reel_ctx: spreadsheet.SheetContext | None = None
     parsed_reel = spreadsheet.parse_reel_input(reel_input)
     if parsed_reel.get("highlights") and (
@@ -719,15 +744,10 @@ def _run_reel_mode_interactive(
     output_file = utils.read_user_input(
         f"\nOutput filename (Enter for default {default_filename}):\n>> "
     )
-    reel_output_file = None
-    if output_file:
-        reel_output_file = (
-            output_file
-            if output_file.endswith(config.FILEFORMAT)
-            else output_file + config.FILEFORMAT
-        )
-    else:
-        reel_output_file = files.get_unique_filename(default_filename)
+    if output_file and not output_file.endswith(config.FILEFORMAT):
+        output_file += config.FILEFORMAT
+    # Reserve in the output dir either way; process_reel releases it on abort.
+    reel_output_file = files.get_unique_filename(output_file or default_filename)
     return (clips_list, True, reel_output_file)
 
 
@@ -815,10 +835,9 @@ def _run_reellate_mode_interactive() -> tuple[bool, str | None]:
     output_file = utils.read_user_input(
         '\nOutput filename (Enter for default "reel.mp4"):\n>> '
     )
-    if not output_file:
-        output_file = files.get_unique_filename(f"reel{config.FILEFORMAT}")
-    elif not output_file.endswith(config.FILEFORMAT):
-        output_file = output_file + config.FILEFORMAT
+    if output_file and not output_file.endswith(config.FILEFORMAT):
+        output_file += config.FILEFORMAT
+    output_file = files.get_unique_filename(output_file or f"reel{config.FILEFORMAT}")
 
     resolved_clips = [str(utils.resolve_output_path(name)) for name in selected_clips]
 
@@ -827,14 +846,19 @@ def _run_reellate_mode_interactive() -> tuple[bool, str | None]:
             resolved_clips, output_file, reencode_on_fail=True
         )
 
-    ok = (
-        utils.run_with_spinner(
-            f"Concatenating {len(selected_clips)} clips into {output_file}...",
-            _concat_reellate,
+    ok = False
+    try:
+        ok = (
+            utils.run_with_spinner(
+                f"Concatenating {len(selected_clips)} clips into {output_file}...",
+                _concat_reellate,
+            )
+            if utils.use_progress()
+            else _concat_reellate()
         )
-        if utils.use_progress()
-        else _concat_reellate()
-    )
+    finally:
+        if not ok:
+            files.release_reservation(output_file)
 
     if ok:
         return (True, output_file)
@@ -883,17 +907,7 @@ def _run_format_mode_interactive(worksheet: Any, output_format: str) -> None:
     outputs_generated, artifacts = process_clips(
         clips_list, output_format=output_format, include_severity=(mode == "severity")
     )
-    if artifacts:
-        viewer.INTERACTIVE_ARTIFACTS.extend(artifacts)
-        if config.MANIFEST_ENABLED:
-            viewer.save_manifest(
-                viewer.INTERACTIVE_ARTIFACTS,
-                new_reels=viewer.INTERACTIVE_REELS,
-                study=artifacts[0].get("study", ""),
-                worksheet_title=getattr(worksheet, "title", ""),
-                is_excel=_is_excel_worksheet(worksheet),
-                mode="interactive",
-            )
+    _record_interactive_artifacts(artifacts, worksheet)
     _print_run_summary(
         f"All done, created {outputs_generated} {output_label}!\nFiles are in {utils.get_effective_output_dir()}"
     )
@@ -1070,17 +1084,7 @@ def _dispatch_interactive_mode(
             outputs_generated, artifacts = process_clips(
                 clips_list, output_format=output_format
             )
-            if artifacts:
-                viewer.INTERACTIVE_ARTIFACTS.extend(artifacts)
-                if config.MANIFEST_ENABLED:
-                    viewer.save_manifest(
-                        viewer.INTERACTIVE_ARTIFACTS,
-                        new_reels=viewer.INTERACTIVE_REELS,
-                        study=artifacts[0].get("study", ""),
-                        worksheet_title=getattr(worksheet, "title", ""),
-                        is_excel=_is_excel_worksheet(worksheet),
-                        mode="interactive",
-                    )
+            _record_interactive_artifacts(artifacts, worksheet)
             if not config.REENCODING:
                 _print_reencoding_warning(utils.info_print)
             return (outputs_generated, artifacts)
@@ -1135,16 +1139,7 @@ def _dispatch_interactive_mode(
             _print_reencoding_warning(utils.info_print)
         _print_completion_message(outputs_generated, "clip", is_reel=False)
         if artifacts:
-            viewer.INTERACTIVE_ARTIFACTS.extend(artifacts)
-            if config.MANIFEST_ENABLED:
-                viewer.save_manifest(
-                    viewer.INTERACTIVE_ARTIFACTS,
-                    new_reels=viewer.INTERACTIVE_REELS,
-                    study=artifacts[0].get("study", ""),
-                    worksheet_title=getattr(worksheet, "title", ""),
-                    is_excel=_is_excel_worksheet(worksheet),
-                    mode="timeline-viewer",
-                )
+            _record_interactive_artifacts(artifacts, worksheet, mode="timeline-viewer")
             study = artifacts[0].get("study", "")
             ss_events = viewer.load_screenspace_events_for_viewer()
             data = viewer.finalize_timeline_data(
@@ -1279,17 +1274,7 @@ def run_interactive_mode(worksheet: Any, gspread_client: Any = None) -> None:
                 outputs_generated, artifacts = process_clips(
                     clips_list, include_severity=(resolved_mode == "severity")
                 )
-                if artifacts:
-                    viewer.INTERACTIVE_ARTIFACTS.extend(artifacts)
-                    if config.MANIFEST_ENABLED:
-                        viewer.save_manifest(
-                            viewer.INTERACTIVE_ARTIFACTS,
-                            new_reels=viewer.INTERACTIVE_REELS,
-                            study=artifacts[0].get("study", ""),
-                            worksheet_title=getattr(worksheet, "title", ""),
-                            is_excel=_is_excel_worksheet(worksheet),
-                            mode="interactive",
-                        )
+                _record_interactive_artifacts(artifacts, worksheet)
 
             if not config.REENCODING:
                 _print_reencoding_warning(utils.info_print)

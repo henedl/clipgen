@@ -27,6 +27,8 @@ from pathlib import Path
 from typing import Any
 
 import config
+import speakers
+import manifest as manifest_io
 import utils
 
 
@@ -246,6 +248,7 @@ def build_transcript_segments(manifest: dict[str, Any]) -> list[dict[str, Any]]:
         model = entry.get("model", "")
         source_file = entry.get("source_file", "")
         transcribed_at = entry.get("transcribed_at", "")
+        speaker_labels = (entry.get("speakers") or {}).get("labels") or {}
         for idx, seg in enumerate(entry.get("segments", []) or []):
             if not isinstance(seg, dict):
                 continue
@@ -265,6 +268,12 @@ def build_transcript_segments(manifest: dict[str, Any]) -> list[dict[str, Any]]:
                     "end": utils.sanitize_floats(end),
                     "duration": utils.sanitize_floats(round(end - start, 4)),
                     "text": seg.get("text", ""),
+                    "speaker": seg.get("speaker", ""),
+                    "speaker_name": (
+                        speakers.speaker_display_name(seg["speaker"], speaker_labels)
+                        if seg.get("speaker")
+                        else ""
+                    ),
                     "language": language,
                     "model": model,
                     "source_file": source_file,
@@ -384,76 +393,61 @@ _SURFACES: tuple[tuple[str, _SurfaceBuilder, str, tuple[str, ...]], ...] = (
     (
         "screenspace_events",
         build_screenspace_events,
-        config.SCREENSPACE_MANIFEST_FILENAME,
+        "screenspace",
         SCREENSPACE_EVENT_COLUMNS,
     ),
     (
         "screenspace_pins",
         build_screenspace_pins,
-        config.SCREENSPACE_MANIFEST_FILENAME,
+        "screenspace",
         SCREENSPACE_PIN_COLUMNS,
     ),
     (
         "transcripts",
         build_transcript_segments,
-        config.TRANSCRIPTS_MANIFEST_FILENAME,
+        "transcripts",
         _TRANSCRIPT_SEGMENT_BASE_COLS,
     ),
     (
         "friction_moments",
         build_friction_moments,
-        config.TRANSCRIPTS_MANIFEST_FILENAME,
+        "transcripts",
         _FRICTION_MOMENT_COLS,
     ),
     (
         "friction_segments",
         build_friction_segments,
-        config.TRANSCRIPTS_MANIFEST_FILENAME,
+        "transcripts",
         _FRICTION_SEGMENT_COLS,
     ),
 )
 
 
-def write_export_bundle(output_dir: Path | None = None) -> list[Path]:
-    """Write JSON+CSV exports for every manifest present in *output_dir*.
+def write_export_bundle() -> list[Path]:
+    """Write JSON+CSV exports for every manifest section present in the output dir.
 
-    Manifests that don't exist on disk are silently skipped. Returns the
-    list of files actually written.
+    Sections that don't exist are silently skipped. Returns the list of files
+    actually written.
     """
-    base = Path(output_dir) if output_dir else Path(utils.get_effective_output_dir())
+    base = Path(utils.get_effective_output_dir())
     written: list[Path] = []
     summaries: list[str] = []
-    # Several surfaces share a manifest (e.g. transcripts + friction_moments +
-    # friction_segments all read the transcripts manifest), so read+parse each
-    # file at most once per export. ``None`` records a missing/unreadable file.
+    # Sections are shared across surfaces; parse each once. None records an absent one.
     manifest_cache: dict[str, dict[str, Any] | None] = {}
 
-    def _load_manifest(manifest_filename: str) -> dict[str, Any] | None:
-        if manifest_filename in manifest_cache:
-            return manifest_cache[manifest_filename]
-        manifest_path = base / manifest_filename
-        parsed: dict[str, Any] | None = None
-        if manifest_path.is_file():
-            try:
-                parsed = json.loads(manifest_path.read_text(encoding="utf-8"))
-            except (OSError, json.JSONDecodeError) as err:
-                utils.warning_print(
-                    f"Skipping {manifest_filename}: could not read manifest.",
-                    [f"Error: {err}"],
-                )
-                parsed = None
-        manifest_cache[manifest_filename] = parsed
-        return parsed
-
-    progress = utils.create_progress_bar()
+    def _load_manifest(section: str) -> dict[str, Any] | None:
+        if section not in manifest_cache:
+            parsed = manifest_io.load_manifest_section(section)
+            manifest_cache[section] = parsed if isinstance(parsed, dict) else None
+        return manifest_cache[section]
 
     def _process_surface(
         output_basename: str,
         builder: _SurfaceBuilder,
-        manifest_filename: str,
+        section: str,
         preferred_cols: tuple[str, ...],
     ) -> None:
-        manifest = _load_manifest(manifest_filename)
+        manifest = _load_manifest(section)
         if manifest is None:
             return
         records = builder(manifest)
@@ -474,30 +468,11 @@ def write_export_bundle(output_dir: Path | None = None) -> list[Path]:
             f"Exported {len(records)} record(s) to {json_path.name} and {csv_path.name}"
         )
 
-    if progress:
-        with progress:
-            ptask = progress.add_task("Exporting", total=len(_SURFACES))
-            for (
-                output_basename,
-                builder,
-                manifest_filename,
-                preferred_cols,
-            ) in _SURFACES:
-                progress.update(ptask, description=f"Exporting {output_basename}")
-                _process_surface(
-                    output_basename, builder, manifest_filename, preferred_cols
-                )
-                progress.update(ptask, advance=1)
-    else:
-        for (
-            output_basename,
-            builder,
-            manifest_filename,
-            preferred_cols,
-        ) in _SURFACES:
-            _process_surface(
-                output_basename, builder, manifest_filename, preferred_cols
-            )
+    with utils.progress_scope("Exporting", len(_SURFACES)) as ps:
+        for output_basename, builder, section, preferred_cols in _SURFACES:
+            ps.update(description=f"Exporting {output_basename}")
+            _process_surface(output_basename, builder, section, preferred_cols)
+            ps.update(advance=1)
 
     for line in summaries:
         utils.info_print(line)
@@ -512,17 +487,11 @@ def run_cli_export() -> int:
     """
     output_dir = Path(utils.get_effective_output_dir())
     utils.info_print(f"Exporting analysis data from manifests in {output_dir}")
-    written = write_export_bundle(output_dir)
+    written = write_export_bundle()
     if not written:
         utils.warning_print(
             "No exports written.",
-            [
-                "No manifest files were found in the output directory.",
-                (
-                    f"Expected one or more of: {config.SCREENSPACE_MANIFEST_FILENAME}, "
-                    f"{config.TRANSCRIPTS_MANIFEST_FILENAME}"
-                ),
-            ],
+            [f"No screenspace or transcripts data in {config.MANIFEST_FILENAME}."],
         )
         return 1
     utils.info_print(f"Wrote {len(written)} export file(s).")

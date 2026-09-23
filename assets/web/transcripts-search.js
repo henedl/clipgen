@@ -22,6 +22,9 @@
 
   var SEARCH_DEBOUNCE = 300;
   var _searchTimer = null;
+  // Request generation: a stale response must not overwrite searchResults, which
+  // Mark All persists.
+  var _searchVer = 0;
 
   function markAllSearchResults() {
     if (!state.searchResults || !state.searchResults.results) return;
@@ -38,14 +41,12 @@
         showToast("Marked " + clipgenPluralUnit(data.marks.length, "segment", "segments"));
         if (state.selectedParticipant) loadTranscript(state.selectedParticipant);
       }
-    });
+    }).catch(toastError("Could not mark results"));
   }
 
   function initSearch() {
     var input = qs("#searchInput");
 
-    // Static markup now, so it is wired once here rather than re-created on
-    // every render (which is what the old inject-on-first-result path did).
     qs("#searchMarkAllBtn").addEventListener("click", function () {
       markAllSearchResults();
     });
@@ -54,6 +55,7 @@
       clearTimeout(_searchTimer);
       var q = input.value.trim();
       if (q.length < 2) {
+        _searchVer++; // invalidate any in-flight response so it can't re-show
         hideSearchResults();
         return;
       }
@@ -88,7 +90,9 @@
 
   function doSearch(query) {
     state.searchQuery = query;
+    var reqVer = ++_searchVer;
     apiGet("api/search?q=" + encodeURIComponent(query)).then(function (data) {
+      if (reqVer !== _searchVer) return; // a newer query superseded this one
       if (!data || !data.ok) { _renderSearchError(); return; }
       // Merge client-side search of partial segments for the streaming participant
       if (state.streamingParticipant) {
@@ -102,15 +106,16 @@
       }
       state.searchResults = data;
       renderSearchResults(data);
-    }).catch(function () { _renderSearchError(); });
+    }).catch(function () {
+      if (reqVer !== _searchVer) return;
+      _renderSearchError();
+    });
   }
 
   function _searchPartialSegments(query, pid) {
     var results = [];
     var lowerQ = query.toLowerCase();
-    // Status polls carry partial_count, not the segment array; the streaming
-    // participant's accumulated segments live in the hub (fetched via the tail
-    // cursor). This is only called for state.streamingParticipant.
+    // Status polls carry only partial_count; the hub holds the streaming segments.
     var segments = TS.streamingSegmentsFor(pid);
     for (var i = 0; i < segments.length; i++) {
       var seg = segments[i];
@@ -133,8 +138,7 @@
     var list = qs("#searchResultsList");
     var header = qs("#searchResultsHeader");
 
-    // No header on an empty result set: the "No matches found" row already says
-    // it, and a Mark All button with nothing to mark is a dead control.
+    // No header on empty results: a Mark All with nothing to mark is dead.
     if (data.total_count === 0) {
       header.classList.add("hidden");
       list.innerHTML = '<div class="search-result-row" style="justify-content:center;color:var(--color-text-dim)">No matches found</div>';
@@ -163,7 +167,11 @@
       groups[pid].forEach(function (r) {
         html += '<div class="search-result-row" data-participant="' + escapeHtml(r.participant) + '" data-start="' + r.start + '">';
         html += '<span class="search-result-time">' + formatTime(r.start) + '</span>';
-        html += '<span class="search-result-text">' + highlightQuery(r.text, state.searchQuery) + '</span>';
+        // Labels are only loaded for the selected participant; others show the server name.
+        if (r.speaker && TS.speakerChipHtml) {
+          html += TS.speakerChipHtml(r.speaker, { inert: true, name: r.speaker_name || null });
+        }
+        html += '<span class="search-result-text">' + clipgenHighlightMatches(r.text, state.searchQuery, "search-highlight") + '</span>';
         html += '</div>';
       });
     });
@@ -184,13 +192,6 @@
     }
   }
 
-  function highlightQuery(text, query) {
-    if (!query) return escapeHtml(text);
-    var escaped = escapeHtml(text);
-    var queryEscaped = escapeHtml(query);
-    var regex = new RegExp("(" + queryEscaped.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + ")", "gi");
-    return escaped.replace(regex, '<span class="search-highlight">$1</span>');
-  }
 
   function hideSearchResults() {
     qs("#searchResults").classList.add("hidden");

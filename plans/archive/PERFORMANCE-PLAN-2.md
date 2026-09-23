@@ -128,7 +128,33 @@ Three medium-sized improvements that each unlock a parallel path.
 
 Two larger frontend changes. Each is its own session.
 
-### 4.1 Studio grid: incremental filter, then virtualization (gated on profiling)
+### 4.1 Studio grid: incremental filter, then virtualization (gated on profiling) — ❌ MEASURED, NOT WORTH IT
+
+**Closed 2026-08-16.** The gate is satisfied: `studio.renderGrid` is instrumented
+(`90d111c`) and the baseline was taken on a synthetic 200 rows × 12 participants
+sheet (3400 grid cells), headless Chromium, two runs:
+
+| | run 1 | run 2 |
+|---|---|---|
+| first paint | 27.0 ms | 26.0 ms |
+| severity filter toggle (×8) | avg 28.9 ms | avg 29.2 ms |
+| category filter toggle (×8) | avg 26.0 ms | avg 31.3 ms |
+| participant column hide (×8) | avg 24.5 ms | avg 22.8 ms |
+| longtasks (>50 ms) over 24 re-renders | 0 | 2 (max 51 ms) |
+
+Step 2 of the ladder below is confirmed in *shape* — every filter toggle costs a
+full re-render, the same ~27 ms as first paint, so incremental `.hidden` updates
+would genuinely eliminate it. It is just not worth it at this size: ~27 ms is
+imperceptible and only grazes the 50 ms longtask threshold at worst. Steps 3 and
+4 are unjustified outright.
+
+**Revisit if** a real sheet reaches roughly 2× this (≈400 rows × 12), where the
+linear scaling puts a toggle at ~55 ms — past the longtask line on every
+re-render rather than occasionally. Recipe for regenerating the benchmark sheet
+is in [profile/SKILL.md](../../agents/skills/profile/SKILL.md) Step 2; do not use
+the UI fixture, which is 6 rows × 2 participants and would falsely close this gate.
+
+Original plan follows.
 
 - **File:** `assets/web/studio.js`, `renderGrid()` around line 1024.
 - **Today:** `grid.innerHTML = ""` + full rebuild on filter, baseline, participant visibility, sheet load.

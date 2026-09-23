@@ -10,13 +10,18 @@ dependencies = [
     "flask>=3.0.0",
     "werkzeug>=3.0.0",
     "faster-whisper>=1.2.0",
-    "av>=11.0.0",
-    "opencv-python-headless>=4.8.0",
+    # 4.14.0.94 floor: the oldest 4.x that publishes an sdist, which the macOS
+    # CI leg builds with -DWITH_FFMPEG=OFF to keep GPL FFmpeg out of the DMG
+    # (plans/archive/OPENCV-SELF-COMPILE-PLAN.md). <5 keeps CascadeClassifier and the
+    # 4.x API this codebase is tested against.
+    "opencv-python-headless>=4.14.0.94,<5",
     "numpy>=1.26.0",
     "Pillow>=10.0.0",
-    "imagehash>=4.3.0",
-    "scikit-image>=0.22.0",
-    "easyocr>=1.7.0",
+    "rapidocr>=3.9,<4",
+    # Direct, not just transitive via faster-whisper: rapidocr runs its ONNX
+    # models on whatever onnxruntime is installed (the engine is decoupled
+    # from the package), so the Screenspace OCR tools depend on it directly.
+    "onnxruntime>=1.24",
     "pywebview>=6.2.1",
 ]
 
@@ -32,6 +37,10 @@ dev = ["pytest", "pytest-randomly"]
 # barely matters: the harness always passes `executable_path` explicitly rather
 # than letting playwright resolve the browser build it expects.
 ui = ["playwright>=1.55"]
+# PyInstaller for the desktop bundle (agents/skills/build/SKILL.md). Pinned
+# exactly, and only here: CI and the build docs install it with
+# `uv sync --extra build`, so a bump is a one-line change plus `uv lock`.
+build = ["pyinstaller==6.19.0"]
 
 [tool.setuptools]
 packages = []
@@ -40,22 +49,36 @@ packages = []
 # tests/test_packaging.py.
 package-dir = {"" = "source"}
 py-modules = [
-    "app", "changelog", "cli", "composer_server", "config", "data_export",
-    "desktop", "desktop_chrome", "excel_io",
-    "files", "friction", "google_api", "interactive", "mindnode", "ollama_client",
-    "overview", "pipeline", "remux_server",
+    "app", "changelog", "cli", "cli_args", "cli_event_clips", "cli_screenspace", "composer_server", "config", "data_export",
+    "desktop", "desktop_chrome", "desktop_menu", "excel_io",
+    "files", "friction", "google_api", "hardware", "interactive", "licenses", "mindnode",
+    "llm_client", "manifest", "native_dialogs",
+    "overview", "pipeline", "profiling", "remux_server",
     "screenspace", "screenspace_frames", "screenspace_heatmap",
     "screenspace_manifest", "screenspace_multitool", "screenspace_ocr",
     "screenspace_preview", "screenspace_primitives", "screenspace_scans",
     "screenspace_server", "screenspace_tools", "screenspace_worker", "server",
-    "server_utils", "spreadsheet", "start_settings", "thinking_agents",
-    "titlecards",
+    "server_utils", "speakers", "spreadsheet", "start_settings", "thinking_agents",
+    "titlecards", "updater",
     "transcripts", "transcripts_server", "utils", "video", "viewer",
     "workflows", "workflows_catalog", "workflows_runner", "workflows_server",
 ]
 
 [tool.uv]
 required-version = ">=0.11.0"
+# rapidocr declares non-headless opencv-python; clipgen ships
+# opencv-python-headless, which provides every cv2 API rapidocr uses.
+# Without this override uv would install both wheels into the same cv2/
+# tree, where they clobber each other file-by-file.
+override-dependencies = [
+    "opencv-python ; sys_platform == 'never'",
+    # faster-whisper declares av (PyAV) but only calls it inside decode_audio(),
+    # which clipgen never reaches: transcripts.py feeds transcribe() ndarrays
+    # decoded by the ffmpeg CLI and stubs the module-scope `import av`
+    # (transcripts._ensure_av_stub). Overriding it out drops PyAV's bundled
+    # second FFmpeg (~45 MB of wheel dylibs on macOS, ~69 MB on Windows).
+    "av ; sys_platform == 'never'",
+]
 
 [tool.ty.environment]
 # ty auto-detects a module root only when it is literally named `src`
@@ -63,7 +86,8 @@ required-version = ">=0.11.0"
 # and is not a package"). Our directory is `source`, so say it explicitly or
 # every first-party import comes back unresolved. `.` stays on the list so the
 # root `clipgen.py` launcher is still checked.
-root = [".", "./source"]
+# `tests/perf` holds the bench modules `tests/ui/ui_bench.py` imports by bare name.
+root = [".", "./source", "./tests/perf"]
 
 [tool.ruff]
 # Ruff 0.16 enables ~413 rules by default (up from 59 in 0.15). We run those defaults
@@ -73,13 +97,18 @@ root = [".", "./source"]
 required-version = ">=0.16.0"
 
 [tool.ruff.lint]
+# T201: user-facing messages go through utils.error_print / warning_print /
+# info_print / verbose_print (AGENTS.md), never bare print(). The per-file
+# carve-outs below hold every sanctioned raw-print site.
+extend-select = ["T201"]
 ignore = [
     # ~50 `except Exception:` handlers at ffmpeg / OCR / worker-thread / HTTP
     # boundaries. Narrowing them is semantic work, tracked as "Narrow
     # `except Exception`" in agents/CODE-REVIEW.md. Drop this once that pass lands.
     "BLE001",
     # Import sorting. Module import order in the screenspace.py / workflows.py
-    # re-export facades is a deliberate deepest-first DAG (agents/ARCHITECTURE.md).
+    # re-export facades is a deliberate deepest-first DAG (agents/ARCHITECTURE.md;
+    # the layer order itself is enforced by tests/test_import_layering.py).
     "I001",
     # Timestamps here are local wall-clock times for video/session metadata, never
     # cross-timezone instants. Naive datetimes are the correct representation.
@@ -94,7 +123,18 @@ ignore = [
 # B018   — bare `resp.data` expressions that intentionally consume a streamed
 #          response so the generator's finally-block runs.
 # RUF012 — mutable class attributes on throwaway test doubles; ClassVar noise.
-"tests/**" = ["B018", "RUF012"]
+"tests/**" = ["B018", "RUF012", "T201"]
+# Sanctioned bare-print sites (everything else routes through utils *_print):
+# utils.py     — the *_print helpers' own plain-terminal fallbacks.
+# profiling.py — profile report output, verbatim table rendering.
+# interactive.py — raw-terminal browse UI (rich fallback branches, key echo).
+# cli_args.py  — verbatim license text; see the comment at the call site.
+# build/**     — standalone build scripts, no utils import.
+"source/utils.py" = ["T201"]
+"source/profiling.py" = ["T201"]
+"source/interactive.py" = ["T201"]
+"source/cli_args.py" = ["T201"]
+"build/**" = ["T201"]
 
 [tool.coverage.run]
 source = ["."]

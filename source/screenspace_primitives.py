@@ -1,7 +1,8 @@
 """Screenspace image-analysis primitives (pure cv2/numpy).
 
 Region cropping/denormalization/resolution, HSV color math, frame-diff, SSIM,
-perceptual hashing, template matching, optical flow, and scene fingerprinting,
+perceptual hashing, template matching, scale-swept edge (shape) matching,
+optical flow, and scene fingerprinting,
 plus the small scan-support helpers (morphology kernel cache, consecutive-match
 buffer, static-frame skip). No file or ffmpeg I/O lives here.
 """
@@ -10,21 +11,16 @@ import functools
 import math
 import statistics
 from collections.abc import Callable
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 import cv2
 
 try:
-    # cv2.data.haarcascades is a submodule attribute; ty needs the explicit
-    # import. Absent on cv2 builds without the bundled cascade data (the face
-    # channel feature-detects it and degrades to a zeros map).
+    # ty needs the explicit submodule import. Missing cascade data degrades the face channel to zeros.
     import cv2.data
 except ImportError:  # pragma: no cover - depends on the installed cv2 build
     pass
 import numpy as np
-
-if TYPE_CHECKING:
-    import imagehash
 
 import config
 
@@ -68,10 +64,7 @@ class _ConsecutiveBuffer:
         self._timestamps.append(ts)
         if len(self._events) >= self.size:
             median_ts = statistics.median(self._timestamps)
-            # Pair the median timestamp with the payload of the frame closest to
-            # it. For odd-length runs this is the exact middle frame; for even
-            # lengths (the median is interpolated between two frames) it picks
-            # the nearer real frame instead of an arbitrary upper-middle one.
+            # Stamp the median timestamp on the nearest frame's payload (even runs interpolate the median).
             nearest = min(
                 range(len(self._timestamps)),
                 key=lambda i: abs(self._timestamps[i] - median_ts),
@@ -85,12 +78,11 @@ class _ConsecutiveBuffer:
     def carry(self, ts: float) -> dict[str, Any] | None:
         """Extend an active run when a frame is skipped as static.
 
-        A static frame is near-identical to the last processed frame, so a match
-        that was on screen is still there -- the run should continue, not break.
-        Re-pushes the most recent matched event under *ts* (returning an emit if
-        that completes the run). No-op when no run is active (nothing to carry),
-        which keeps ``size == 1`` -- where ``push`` emits and resets every frame
-        -- on its legacy path.
+        A static frame is near-identical to the last processed one, so a match
+        that was on screen still is — the run continues rather than breaking.
+        Re-pushes the most recent matched event under *ts*, emitting if that
+        completes the run. No-op when no run is active, which leaves ``size == 1``
+        (where ``push`` emits and resets every frame) on its original path.
         """
         if not self._events:
             return None
@@ -114,17 +106,17 @@ def _is_static_skip(
 ) -> bool:
     """Decide whether *pixels* is a near-duplicate of the previous frame.
 
-    Returns True when the mean grayscale diff from the last processed frame is
-    below ``SCREENSPACE_STATIC_FRAME_SKIP_THRESHOLD`` -- the caller should then
-    ``return None`` from its per-frame callback. The content (and any active
-    match) is unchanged, so carry the consecutive-match run via ``buf.carry``
-    (emitting through *results*/*on_result*) and report progress rather than
-    breaking the run. Otherwise records *pixels* as the new baseline and returns
-    False so the caller runs its real analysis. Shared by scan_text/scan_numbers.
+    True when the mean grayscale diff from the last processed frame is below
+    ``SCREENSPACE_STATIC_FRAME_SKIP_THRESHOLD``; the caller then returns from its
+    per-frame callback. Content and any active match are unchanged, so this
+    carries the consecutive-match run via ``buf.carry`` (emitting through
+    *results*/*on_result*) and reports progress instead of breaking it. Otherwise
+    records *pixels* as the new baseline and returns False. Shared by
+    scan_text/scan_numbers.
     """
     gray = cv2.cvtColor(pixels, cv2.COLOR_BGR2GRAY)
     if prev_gray[0] is not None:
-        diff = float(np.mean(cv2.absdiff(prev_gray[0], gray)))
+        diff = mean_gray_diff(prev_gray[0], gray)
         if diff < config.SCREENSPACE_STATIC_FRAME_SKIP_THRESHOLD:
             emitted = buf.carry(ts)
             if emitted is not None:
@@ -141,20 +133,31 @@ def _is_static_skip(
 def _frame_is_static(prev_gray: np.ndarray | None, curr_gray: np.ndarray) -> bool:
     """True when *curr_gray* is a near-duplicate of the last processed gray frame.
 
-    A frame is "static" when its mean grayscale diff from *prev_gray* is below
-    ``SCREENSPACE_STATIC_FRAME_SKIP_THRESHOLD``. Returns False when *prev_gray*
-    is ``None`` (no baseline yet). Unlike :func:`_is_static_skip`, this is a bare
-    predicate with no consecutive-buffer/progress side effects, so callers apply
-    whatever skip semantics fit their scan (reset a motion run, extend a span,
-    skip a per-frame op, or carry the last result). Shared by scan_similarity,
-    scan_flow, scan_inactivity, scan_boundaries, scan_scene, and scan_template.
+    "Static" means a mean grayscale diff below
+    ``SCREENSPACE_STATIC_FRAME_SKIP_THRESHOLD``; False when *prev_gray* is
+    ``None`` (no baseline yet). Unlike :func:`_is_static_skip` this is a bare
+    predicate with no buffer/progress side effects, so each caller applies the
+    skip semantics its scan needs (reset a motion run, extend a span, carry the
+    last result). Shared by scan_similarity, scan_flow, scan_inactivity,
+    scan_boundaries, scan_scene, and scan_template.
     """
     if prev_gray is None:
         return False
     return (
-        float(np.mean(cv2.absdiff(prev_gray, curr_gray)))
+        mean_gray_diff(prev_gray, curr_gray)
         < config.SCREENSPACE_STATIC_FRAME_SKIP_THRESHOLD
     )
+
+
+def mean_gray_diff(a: np.ndarray, b: np.ndarray) -> float:
+    """Mean absolute difference between two same-shaped uint8 arrays.
+
+    Equals ``float(np.mean(cv2.absdiff(a, b)))`` exactly (both accumulate the
+    integer L1 sum in double), but ``cv2.norm`` fuses absdiff+sum in one SIMD
+    pass with no full-size temporaries — and this line runs on every tool's
+    per-frame path via the static-frame skip above.
+    """
+    return cv2.norm(a, b, cv2.NORM_L1) / a.size
 
 
 # ---------------------------------------------------------------------------
@@ -204,14 +207,45 @@ def region_mask_for(region: dict[str, Any], h: int, w: int) -> np.ndarray | None
     return mask
 
 
+def attach_capture_mask(
+    params: dict[str, Any],
+    image_key: str,
+    mask_key: str,
+    region: dict[str, Any],
+) -> None:
+    """Set the reference alpha mask from a shaped capture region."""
+    image = params.get(image_key)
+    if not isinstance(image, np.ndarray) or image.size == 0:
+        return
+    mask = region_mask_for(region, int(image.shape[0]), int(image.shape[1]))
+    if mask is not None:
+        params[mask_key] = mask
+
+
+_mask_points_keys: dict[int, tuple[Any, tuple[Any, ...]]] = {}
+
+
 def mask_points_key(contours: Any) -> tuple[Any, ...]:
     """Hashable key for a region's ``mask_points`` contour list (or None/[]).
 
     Cache keys (per-frame memos, pin-OCR readings) must distinguish same-bbox/
     different-shape regions; nested lists aren't hashable, so every keyed cache
     routes through this helper instead of hand-rolled ``tuple(map(tuple, …))``.
+
+    Interned per contour-list object: multitool memos rebuild region keys every
+    frame, and the O(vertices) tuple build dominated the lookup. The strong ref
+    pins the id; contour lists are never mutated in place, only replaced.
     """
-    return tuple(tuple(tuple(p) for p in contour) for contour in contours or ())
+    if not contours:
+        return ()
+    entry = _mask_points_keys.get(id(contours))
+    if entry is not None and entry[0] is contours:
+        return entry[1]
+    key = tuple(tuple(tuple(p) for p in contour) for contour in contours)
+    if len(_mask_points_keys) > 512:
+        _mask_points_keys.clear()
+    _mask_points_keys[id(contours)] = (contours, key)
+    return key
 
 
 def filter_matches_by_region_mask(
@@ -293,17 +327,11 @@ def _point_in_polygon(u: float, v: float, points: list[Any]) -> bool:
 def denormalize_region(
     region: dict[str, Any], target_w: int, target_h: int
 ) -> dict[str, Any]:
-    """Convert a normalized region (0–1 floats) to pixel coordinates.
+    """Convert a normalized region (0–1 floats) to integer pixel coordinates.
 
-    Args:
-        region: Dict with normalized ``x``, ``y``, ``w``, ``h`` keys and,
-            for shaped regions, bbox-relative ``points`` + ``shape``.
-        target_w: Target frame width in pixels.
-        target_h: Target frame height in pixels.
-
-    Returns:
-        Dict with integer pixel ``x``, ``y``, ``w``, ``h`` keys, plus
-        ``mask_points``/``shape`` passed through for shaped regions.
+    *region* carries normalized ``x``/``y``/``w``/``h`` plus, for shaped regions,
+    bbox-relative ``points`` + ``shape``; those pass through to the result as
+    ``mask_points``/``shape``.
     """
     out: dict[str, Any] = {
         "x": round(region["x"] * target_w),
@@ -311,10 +339,7 @@ def denormalize_region(
         "w": round(region["w"] * target_w),
         "h": round(region["h"] * target_h),
     }
-    # Shaped regions: contour vertices are bbox-relative (0-1 of the region's
-    # own rect), so they pass through denormalization verbatim. Copying them
-    # here threads the mask into every region_coords consumer (task snapshots,
-    # multitool steps, workflows, calibration) without further plumbing.
+    # Contour points are bbox-relative, so they pass through denormalization unchanged into every region_coords consumer.
     points = region.get("points")
     if points:
         out["mask_points"] = points
@@ -366,9 +391,7 @@ def resolve_region_request(
         raise ValueError(f"Region '{region_name}' not found")
 
     if not isinstance(region_ref, dict):
-        # ValueError, not TypeError: this resolver's contract is "ValueError means
-        # bad request", and every caller (cli.py, screenspace_server's
-        # _resolve_region_request) catches ValueError to render a hint or a 400.
+        # ValueError, not TypeError: callers catch ValueError to render a hint or a 400.
         raise ValueError("region_ref must be an object")  # noqa: TRY004
 
     source = str(region_ref.get("source", "")).strip()
@@ -401,6 +424,27 @@ def resolve_region_request(
     raise ValueError("region_ref.source must be 'active', 'stash', or 'full_frame'")
 
 
+def _area_resize(img: np.ndarray, new_w: int, new_h: int) -> np.ndarray:
+    """INTER_AREA resize that hits cv2's integer-ratio fast path when it can.
+
+    cv2.INTER_AREA only has a fast path when *both* scale ratios are integer.
+    1280×720 → 64×64 (fx=20, fy=11.25) or 32×32 (fx=40, fy=22.5) takes the
+    generic path at several milliseconds per frame. When one axis divides
+    evenly by the target, that axis is reduced first (fast) and the remaining
+    strip takes a tiny second pass. Odd sizes keep the one-step path.
+    """
+    h, w = img.shape[:2]
+    if w == new_w and h == new_h:
+        return img
+    if w > new_w and w % new_w == 0:
+        img = cv2.resize(img, (new_w, h), interpolation=cv2.INTER_AREA)
+    elif h > new_h and h % new_h == 0:
+        img = cv2.resize(img, (w, new_h), interpolation=cv2.INTER_AREA)
+    if img.shape[1] != new_w or img.shape[0] != new_h:
+        img = cv2.resize(img, (new_w, new_h), interpolation=cv2.INTER_AREA)
+    return img
+
+
 def average_color_hsv(
     region_pixels: np.ndarray, mask: np.ndarray | None = None
 ) -> dict[str, float]:
@@ -415,22 +459,14 @@ def average_color_hsv(
         Dict with keys ``h`` (0-180), ``s`` (0-255), ``v`` (0-255).
     """
     if region_pixels.size == 0:
-        # A region cropped fully off-frame: np.mean on the empty crop would
-        # yield NaN (same guard as color_present).
+        # Off-frame crop: a mean over zero pixels is NaN (same guard as color_present).
         return {"h": 0.0, "s": 0.0, "v": 0.0}
-    h, w = region_pixels.shape[:2]
-    if h > 64 or w > 64:
-        new_w, new_h = min(w, 64), min(h, 64)
-        region_pixels = cv2.resize(
-            region_pixels, (new_w, new_h), interpolation=cv2.INTER_AREA
-        )
-        if mask is not None:
-            mask = cv2.resize(mask, (new_w, new_h), interpolation=cv2.INTER_NEAREST)
+    # Convert at full resolution: a BGR downsample before converting desaturates textured regions.
     hsv = cv2.cvtColor(region_pixels, cv2.COLOR_BGR2HSV)
     if mask is not None and np.any(mask):
-        mean = hsv[mask > 0].mean(axis=0)
+        mean = cv2.mean(hsv, mask=mask)
     else:
-        mean = np.mean(hsv, axis=(0, 1))
+        mean = cv2.mean(hsv)
     return {"h": float(mean[0]), "s": float(mean[1]), "v": float(mean[2])}
 
 
@@ -469,6 +505,45 @@ def color_matches(
     return matched, conf
 
 
+def _channel_runs(flags: np.ndarray) -> tuple[tuple[int, int], ...]:
+    """Contiguous ``(lo, hi)`` index runs of a 256-entry boolean table."""
+    idx = np.flatnonzero(flags)
+    if idx.size == 0:
+        return ()
+    breaks = np.flatnonzero(np.diff(idx) > 1)
+    starts = np.concatenate(([idx[0]], idx[breaks + 1]))
+    ends = np.concatenate((idx[breaks], [idx[-1]]))
+    return tuple(zip(starts.tolist(), ends.tolist(), strict=True))
+
+
+@functools.cache
+def _hsv_match_bands(
+    h: float, s: float, v: float, tol_h: float, tol_s: float, tol_v: float
+) -> tuple[tuple[tuple[int, int, int], tuple[int, int, int]], ...]:
+    """``cv2.inRange`` (lower, upper) HSV bands equivalent to the per-pixel test.
+
+    Each of the three per-channel predicates depends only on that channel's
+    ``uint8`` value, so evaluating the *same float32 expressions* over all 256
+    possible values yields exact membership tables — the bands below are those
+    tables, not an approximation of them. Hue wraparound splits into two bands;
+    everything else is one. Empty result means no pixel value can match.
+
+    Cached per (target, tolerance): constant for a whole scan, and bounded by
+    the number of distinct color configurations a user has set up.
+    """
+    vals = np.arange(256, dtype=np.float32)
+    hue_diff = np.abs(vals - h)
+    hue_ok = np.minimum(hue_diff, 180.0 - hue_diff) <= tol_h
+    sat_ok = np.abs(vals - s) <= tol_s
+    val_ok = np.abs(vals - v) <= tol_v
+    return tuple(
+        ((h_lo, s_lo, v_lo), (h_hi, s_hi, v_hi))
+        for h_lo, h_hi in _channel_runs(hue_ok)
+        for s_lo, s_hi in _channel_runs(sat_ok)
+        for v_lo, v_hi in _channel_runs(val_ok)
+    )
+
+
 def color_present(
     region_pixels: np.ndarray,
     target_color: dict[str, float],
@@ -478,38 +553,38 @@ def color_present(
 ) -> tuple[bool, float]:
     """Check whether the target color appears *anywhere* in the region.
 
-    Unlike :func:`color_matches` (which averages the whole region), this builds
-    a per-pixel HSV match mask and fires when the fraction of matching pixels
-    reaches ``min_coverage``. A small element of the target color in an
-    otherwise neutral region is detected here but averaged away by
-    :func:`color_matches`. Hue wraparound (red at the 0/180 boundary) is handled
-    the same way as :func:`color_matches`.
+    Where :func:`color_matches` averages the whole region, this builds a per-pixel
+    HSV match mask and fires once the matching fraction reaches ``min_coverage``
+    — so a small patch of target color in an otherwise neutral region is caught
+    here but averaged away there. Hue wraparound is handled identically.
 
-    The region is scanned at full resolution (no ``INTER_AREA`` downscale) so
-    small patches survive; callers running in fast-scan mode must avoid the
-    ``max_region_dim`` downscale for this path.
+    Scanned at full resolution (no ``INTER_AREA`` downscale) so small patches
+    survive; fast-scan callers must skip ``max_region_dim`` on this path.
 
     Returns:
-        Tuple of (matches, coverage) where ``coverage`` is the 0.0–1.0 fraction
-        of pixels matching the target. With ``min_coverage <= 0`` a single
-        matching pixel fires; otherwise ``coverage >= min_coverage`` is required.
+        ``(matches, coverage)``, coverage being the 0.0–1.0 matching fraction.
+        ``min_coverage <= 0`` fires on a single pixel.
     """
     if region_pixels.size == 0:
         return False, 0.0
     hsv = cv2.cvtColor(region_pixels, cv2.COLOR_BGR2HSV)
-    h = hsv[..., 0].astype(np.float32)
-    s = hsv[..., 1].astype(np.float32)
-    v = hsv[..., 2].astype(np.float32)
-    hue_diff = np.abs(h - float(target_color["h"]))
-    hue_dist = np.minimum(hue_diff, 180.0 - hue_diff)
-    match = (
-        (hue_dist <= tolerance["h"])
-        & (np.abs(s - float(target_color["s"])) <= tolerance["s"])
-        & (np.abs(v - float(target_color["v"])) <= tolerance["v"])
+    # uint8 band tests, not float32 casts: identical mask (see _hsv_match_bands), ~12x faster at full resolution.
+    bands = _hsv_match_bands(
+        float(target_color["h"]),
+        float(target_color["s"]),
+        float(target_color["v"]),
+        float(tolerance["h"]),
+        float(tolerance["s"]),
+        float(tolerance["v"]),
     )
-    # Shaped regions: only pixels inside the polygon count, both in the match
-    # numerator and the coverage denominator. A mask emptied by extreme
-    # downscale falls back to the full rect (matching average_color_hsv).
+    hits: np.ndarray | None = None
+    for lower, upper in bands:
+        band = cv2.inRange(hsv, np.array(lower, np.uint8), np.array(upper, np.uint8))
+        hits = band if hits is None else cv2.bitwise_or(hits, band)
+    match = (
+        hits.astype(bool) if hits is not None else np.zeros(hsv.shape[:2], dtype=bool)
+    )
+    # Polygon pixels only, in numerator and denominator; an emptied mask falls back to the rect.
     if mask is not None and not np.any(mask):
         mask = None
     denom = match.size
@@ -522,23 +597,27 @@ def color_present(
     return matched, float(coverage)
 
 
-def _frame_diff_mask(
-    region_a: np.ndarray,
-    region_b: np.ndarray,
+def blur_gray(region: np.ndarray) -> np.ndarray:
+    """The frame-diff front-end: Gaussian blur then grayscale one BGR region.
+
+    Split out of the diff so per-frame callers (``scan_changes``,
+    ``ChangeTool``) can compute it once per frame and carry it forward —
+    frame N is otherwise blurred twice, as ``region_b`` at step N and again
+    as ``region_a`` at step N+1, and this 3-channel blur is the most
+    expensive op on the Change hot path.
+    """
+    k = config.SCREENSPACE_BLUR_KERNEL
+    return cv2.cvtColor(cv2.GaussianBlur(region, (k, k), 0), cv2.COLOR_BGR2GRAY)
+
+
+def _frame_diff_mask_gray(
+    a_gray: np.ndarray,
+    b_gray: np.ndarray,
     noise_threshold: int = 0,
 ) -> np.ndarray:
-    """Blur, grayscale, absdiff, threshold and morph-open two same-sized BGR regions.
-
-    Returns the binary change mask; callers derive a change ratio from it or
-    downsample it to a grid (the Change heatmap). Single source of truth for the
-    frame-diff computation shared by ``compute_frame_diff``, ``ChangeTool`` and
-    ``scan_changes``.
-    """
+    """Diff back-end: absdiff, threshold and morph-open two ``blur_gray`` outputs."""
     if noise_threshold <= 0:
         noise_threshold = config.SCREENSPACE_NOISE_THRESHOLD
-    k = config.SCREENSPACE_BLUR_KERNEL
-    a_gray = cv2.cvtColor(cv2.GaussianBlur(region_a, (k, k), 0), cv2.COLOR_BGR2GRAY)
-    b_gray = cv2.cvtColor(cv2.GaussianBlur(region_b, (k, k), 0), cv2.COLOR_BGR2GRAY)
     diff = cv2.absdiff(a_gray, b_gray)
     _, mask = cv2.threshold(diff, noise_threshold, 255, cv2.THRESH_BINARY)
     kernel = _morph_kernel(config.SCREENSPACE_MORPH_KERNEL)
@@ -560,7 +639,19 @@ def compute_frame_diff(
     Returns:
         Change ratio 0.0-1.0 (fraction of pixels that changed).
     """
-    diff = _frame_diff_mask(region_a, region_b, noise_threshold)
+    return compute_frame_diff_gray(
+        blur_gray(region_a), blur_gray(region_b), noise_threshold, mask
+    )
+
+
+def compute_frame_diff_gray(
+    a_gray: np.ndarray,
+    b_gray: np.ndarray,
+    noise_threshold: int = 0,
+    mask: np.ndarray | None = None,
+) -> float:
+    """``compute_frame_diff`` on precomputed ``blur_gray`` outputs (hot paths)."""
+    diff = _frame_diff_mask_gray(a_gray, b_gray, noise_threshold)
     if diff.size == 0:
         return 0.0
     if mask is not None and np.any(mask):
@@ -592,6 +683,43 @@ def _ssim_preprocess(
     return a_gray, b_gray
 
 
+def structural_similarity(
+    a_gray: np.ndarray, b_gray: np.ndarray
+) -> tuple[float, np.ndarray]:
+    """Wang et al. SSIM over two same-shaped 2-D uint8 grayscale arrays.
+
+    In-tree replacement for ``skimage.metrics.structural_similarity`` at its
+    default parameters, which is all this codebase ever used: 7×7 uniform
+    window, K1=0.01, K2=0.03, data_range=255, sample covariance (N/(N-1)),
+    scalar score = mean of the map with the 3-px filter border cropped.
+    Returns ``(score, ssim_map)``; the uncropped float64 map is a byproduct of
+    the score, so returning it costs nothing (``cv2.BORDER_REFLECT`` matches
+    scipy's ``reflect`` mode, keeping even its border pixels skimage-equal).
+    """
+    win = 7
+    if min(a_gray.shape) < win:
+        raise ValueError("image is smaller than the 7x7 SSIM window")
+    c1 = (0.01 * 255.0) ** 2
+    c2 = (0.03 * 255.0) ** 2
+    x = a_gray.astype(np.float64)
+    y = b_gray.astype(np.float64)
+
+    def _mean(img: np.ndarray) -> np.ndarray:
+        return cv2.boxFilter(img, -1, (win, win), borderType=cv2.BORDER_REFLECT)
+
+    ux, uy = _mean(x), _mean(y)
+    cov_norm = win * win / (win * win - 1.0)
+    vx = cov_norm * (_mean(x * x) - ux * ux)
+    vy = cov_norm * (_mean(y * y) - uy * uy)
+    vxy = cov_norm * (_mean(x * y) - ux * uy)
+    smap = ((2.0 * ux * uy + c1) * (2.0 * vxy + c2)) / (
+        (ux * ux + uy * uy + c1) * (vx + vy + c2)
+    )
+    pad = win // 2
+    score = float(smap[pad:-pad, pad:-pad].mean())
+    return score, smap
+
+
 def regions_are_similar(
     region_a: np.ndarray,
     region_b: np.ndarray,
@@ -605,9 +733,7 @@ def regions_are_similar(
     if threshold <= 0.0:
         threshold = config.SCREENSPACE_SSIM_THRESHOLD
     a_gray, b_gray = _ssim_preprocess(region_a, region_b)
-    from skimage.metrics import structural_similarity as ssim
-
-    score = float(ssim(a_gray, b_gray))
+    score, _ = structural_similarity(a_gray, b_gray)
     return score >= threshold, score
 
 
@@ -616,39 +742,69 @@ def ssim_diff_map(
 ) -> tuple[float, np.ndarray]:
     """SSIM score plus the per-pixel structural-similarity map.
 
-    Runs ``structural_similarity(..., full=True)`` over the same <=256/blur/gray
-    preprocessing as ``regions_are_similar``. Preview-only (off the scan hot
-    path), so the extra full-map cost never touches per-frame scanning. Returns
+    Runs ``structural_similarity`` over the same <=256/blur/gray preprocessing
+    as ``regions_are_similar``. Preview-only (off the scan hot path). Returns
     ``(score, ssim_map)`` where ``ssim_map`` is float in roughly [-1, 1] at the
     preprocessed (<=256 px) resolution (higher = more similar).
     """
     a_gray, b_gray = _ssim_preprocess(region_a, region_b)
-    from skimage.metrics import structural_similarity as ssim
-
-    score, smap = ssim(a_gray, b_gray, full=True)
-    return float(score), np.asarray(smap, dtype=np.float32)
+    score, smap = structural_similarity(a_gray, b_gray)
+    return score, np.asarray(smap, dtype=np.float32)
 
 
-def compute_phash(region_pixels: np.ndarray) -> "imagehash.ImageHash":
+class PHash:
+    """Perceptual-hash bit array (in-tree replacement for ``imagehash.ImageHash``).
+
+    Consumers use exactly three things: ``a - b`` (Hamming distance, the only
+    quantity the scans compare), ``==`` (test determinism checks), and ``.hash``
+    (the 2-D bool ndarray the inactivity preview renders as a bit grid).
+    Hashes live only for the duration of one scan run and are never persisted.
+    """
+
+    __slots__ = ("hash",)
+
+    def __init__(self, bits: np.ndarray) -> None:
+        self.hash = bits
+
+    def __sub__(self, other: "PHash") -> int:
+        return int(np.count_nonzero(self.hash != other.hash))
+
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, PHash):
+            return NotImplemented
+        return bool(np.array_equal(self.hash, other.hash))
+
+
+def compute_phash(region_pixels: np.ndarray, gray: np.ndarray | None = None) -> PHash:
     """Compute perceptual hash of a region for fast similarity scanning.
 
-    Mirrors ``imagehash.phash`` (grayscale → 32×32 → 2D DCT → top-left 8×8 →
-    median threshold) natively in cv2, skipping the per-frame BGR→RGB +
-    ``PIL.Image`` round-trip that dominates this hot scan-callback path.
-    """
-    import imagehash
+    Implements the standard phash recipe (grayscale → 32×32 → 2D DCT →
+    top-left 8×8 → median threshold, as in ``imagehash.phash``) natively in
+    cv2, skipping the per-frame BGR→RGB + ``PIL.Image`` round-trip that
+    dominated this hot scan-callback path.
+    Callers that already hold the unblurred grayscale (every scan whose
+    static-skip check converts the frame) pass it as *gray* to skip the
+    second conversion.
 
-    gray = cv2.cvtColor(region_pixels, cv2.COLOR_BGR2GRAY)
-    small = cv2.resize(gray, (32, 32), interpolation=cv2.INTER_AREA).astype(np.float32)
+    cv2's INTER_AREA has a fast path only when both scale ratios are integer;
+    1280×720 → 32×32 (fx=40, fy=22.5) takes the generic path at ~3 ms/frame.
+    When one axis divides evenly by 32, an integer-ratio pass over that axis
+    (fast path) followed by a second pass on the resulting 32-px strip is ~14×
+    faster. The intermediate uint8 rounding shifts hash distances by ≤2/64
+    bits on real frames — hashes are only ever compared against hashes from
+    the same scan run (never persisted), and every within-run comparison sees
+    a fixed region size, so both sides always take the same branch.
+    """
+    if gray is None:
+        gray = cv2.cvtColor(region_pixels, cv2.COLOR_BGR2GRAY)
+    small = _area_resize(gray, 32, 32).astype(np.float32)
     dct = cv2.dct(small)
     dctlowfreq = dct[:8, :8]
     diff = dctlowfreq > np.median(dctlowfreq)
-    return imagehash.ImageHash(diff)
+    return PHash(diff)
 
 
-# Prepared template payload shared across frames in a scan: grayscale blurred
-# template, grayscale blurred mask (or None), and a "degenerate" flag set when
-# the template has near-zero variance (TM_CCOEFF_NORMED is undefined there).
+# (blurred gray template, binarized mask or None, degenerate flag); see _prepare_template.
 _PreparedTemplate = tuple[np.ndarray, "np.ndarray | None", bool]
 
 
@@ -698,19 +854,12 @@ def _prepare_template(
     """
     k = config.SCREENSPACE_BLUR_KERNEL
     tmpl_gray = cv2.cvtColor(cv2.GaussianBlur(template, (k, k), 0), cv2.COLOR_BGR2GRAY)
-    # Binarize the alpha mask (>= 128 -> 255, else 0) instead of blurring it.
-    # Soft-blurred masks let semi-transparent edge pixels contribute partially
-    # to cv2.matchTemplate, which inflates TM_CCOEFF_NORMED scores for
-    # mostly-transparent PNG icons and produces false positives.
+    # Binarize, don't blur: soft edges inflate TM_CCOEFF_NORMED for mostly-transparent PNG icons.
     if mask is not None:
         _, gray_mask = cv2.threshold(mask, 127, 255, cv2.THRESH_BINARY)
     else:
         gray_mask = None
-    # Degenerate if the pixels that will actually contribute to matching have
-    # no variance. TM_CCOEFF_NORMED normalizes by the masked template std —
-    # when that is ~0 (e.g. a mostly-transparent PNG with a flat opaque patch,
-    # especially after scaling down) the denominator underflows and every
-    # position gets a near-1.0 score.
+    # Degenerate when contributing pixels have ~0 std: TM_CCOEFF_NORMED then scores ~1.0 everywhere.
     if gray_mask is not None:
         masked = tmpl_gray[gray_mask > 0]
         contributing_std = float(masked.std()) if masked.size else 0.0
@@ -718,6 +867,54 @@ def _prepare_template(
         contributing_std = float(np.std(tmpl_gray))
     degenerate = contributing_std < 1.0
     return (tmpl_gray, gray_mask, degenerate)
+
+
+def _match_corr_window(
+    source: np.ndarray,
+    template: np.ndarray,
+    window: tuple[float, float, float, float] | None,
+) -> tuple[np.ndarray, int, int] | None:
+    """Correlate only source pixels producing centers inside *window*.
+
+    OpenCV may shift raw scores below 5e-5 when crop dimensions change.
+    """
+    sh, sw = source.shape[:2]
+    th, tw = template.shape[:2]
+    if th > sh or tw > sw:
+        return None
+    rw, rh = sw - tw + 1, sh - th + 1
+    if window is None:
+        xa, ya, xb, yb = 0, 0, rw, rh
+    else:
+        xa = max(0, math.floor(window[0] - tw / 2.0))
+        ya = max(0, math.floor(window[1] - th / 2.0))
+        xb = min(rw, math.ceil(window[2] - tw / 2.0) + 1)
+        yb = min(rh, math.ceil(window[3] - th / 2.0) + 1)
+    if xa >= xb or ya >= yb:
+        return None
+    cropped = source[ya : yb + th - 1, xa : xb + tw - 1]
+    result = cv2.matchTemplate(cropped, template, cv2.TM_CCOEFF_NORMED)
+    return result, xa, ya
+
+
+def _neutralize_nonfinite(result: np.ndarray) -> np.ndarray:
+    """Flat windows normalize by ~0 std; treat NaN/inf correlations as -1."""
+    if not np.all(np.isfinite(result)):
+        return np.where(np.isfinite(result), result, -1.0)
+    return result
+
+
+def _template_frame_gray(frame: np.ndarray) -> np.ndarray:
+    """Blur and grayscale a frame for template correlation."""
+    k = config.SCREENSPACE_BLUR_KERNEL
+    return cv2.cvtColor(cv2.GaussianBlur(frame, (k, k), 0), cv2.COLOR_BGR2GRAY)
+
+
+def _template_is_evaluable(frame: np.ndarray, prepared: _PreparedTemplate) -> bool:
+    """Whether correlation is defined: a non-degenerate template that fits the frame."""
+    tmpl_gray, _gray_mask, degenerate = prepared
+    th, tw = tmpl_gray.shape[:2]
+    return not degenerate and th <= frame.shape[0] and tw <= frame.shape[1]
 
 
 def _template_correlation_map(
@@ -730,22 +927,32 @@ def _template_correlation_map(
     patches) are neutralized to ``-1.0`` so callers can safely threshold the map
     or read its peak (the threshold-independent scalar used by calibration).
     """
-    tmpl_gray, gray_mask, degenerate = prepared
-    if degenerate:
-        # A constant (zero-variance) template produces undefined TM_CCOEFF_NORMED
-        # results — every position may score ~1.0.  Bail out.
+    tmpl_gray, gray_mask, _degenerate = prepared
+    # Degenerate or oversized: see _prepare_template's degeneracy note.
+    if not _template_is_evaluable(frame, prepared):
         return None
-    k = config.SCREENSPACE_BLUR_KERNEL
-    frame_gray = cv2.cvtColor(cv2.GaussianBlur(frame, (k, k), 0), cv2.COLOR_BGR2GRAY)
-    th, tw = tmpl_gray.shape[:2]
-    if th > frame_gray.shape[0] or tw > frame_gray.shape[1]:
-        return None
+    frame_gray = _template_frame_gray(frame)
     result = cv2.matchTemplate(
         frame_gray, tmpl_gray, cv2.TM_CCOEFF_NORMED, mask=gray_mask
     )
-    if not np.all(np.isfinite(result)):
-        result = np.where(np.isfinite(result), result, -1.0)
-    return result
+    return _neutralize_nonfinite(result)
+
+
+def _template_corr_window(
+    frame: np.ndarray,
+    prepared: _PreparedTemplate,
+    window: tuple[float, float, float, float],
+) -> tuple[np.ndarray, int, int] | None:
+    """Compute an unmasked template correlation ROI."""
+    tmpl_gray, gray_mask, degenerate = prepared
+    if degenerate or gray_mask is not None:
+        return None
+    packed = _match_corr_window(_template_frame_gray(frame), tmpl_gray, window)
+    if packed is None:
+        return None
+    result, x_offset, y_offset = packed
+    result = _neutralize_nonfinite(result)
+    return result, x_offset, y_offset
 
 
 def _match_template_prepared(
@@ -753,21 +960,41 @@ def _match_template_prepared(
     prepared: _PreparedTemplate,
     threshold: float,
     nms_overlap: float,
+    corr: np.ndarray | None = None,
+    window: tuple[float, float, float, float] | None = None,
+    origin: tuple[int, int] = (0, 0),
 ) -> list[dict[str, Any]]:
-    """Match a frame against an already-prepared template payload."""
-    result = _template_correlation_map(frame, prepared)
+    """Match a frame against an already-prepared template payload.
+
+    Callers that already computed this frame's correlation map (to read its
+    threshold-independent peak) pass it as *corr* — the map is the single most
+    expensive op in the tool and recomputing it here doubled the cost of every
+    passing frame. *window* (see :func:`region_search_window`) restricts
+    matching to positions whose match center falls inside the rect.
+    """
+    tmpl_gray, gray_mask, _degenerate = prepared
+    if corr is None and window is not None and gray_mask is None:
+        packed = _template_corr_window(frame, prepared, window)
+        if packed is None:
+            return []
+        result, x_offset, y_offset = packed
+        origin = (x_offset, y_offset)
+        window = None
+    else:
+        result = _template_correlation_map(frame, prepared) if corr is None else corr
     if result is None:
         return []
-    tmpl_gray, _gray_mask, _degenerate = prepared
     th, tw = tmpl_gray.shape[:2]
+    if window is not None:
+        masked = _mask_corr_outside_window(result, tw, th, window)
+        if masked is None:
+            return []
+        result = masked
     locs = np.where(result >= threshold)
     if len(locs[0]) == 0:
         return []
 
-    # Guard against pathological matchTemplate outputs (e.g. low-variance
-    # masked templates at certain scales) that can produce tens of thousands
-    # of above-threshold candidates. The O(n^2) NMS below would otherwise
-    # freeze the worker. Cap to the top _MAX_CANDIDATES by raw score.
+    # Low-variance templates can yield thousands of candidates; cap by score or O(n^2) NMS freezes.
     _MAX_CANDIDATES = 5000
     scores = result[locs]
     if len(locs[0]) > _MAX_CANDIDATES:
@@ -777,35 +1004,37 @@ def _match_template_prepared(
     else:
         ys, xs = locs[0], locs[1]
 
-    detections: list[dict[str, Any]] = []
-    for pt_y, pt_x, raw in zip(ys, xs, scores):
-        score = float(raw)
-        if not math.isfinite(score):
-            continue
-        detections.append(
-            {"x": int(pt_x), "y": int(pt_y), "w": tw, "h": th, "score": score}
-        )
-    detections.sort(key=lambda d: d["score"], reverse=True)
-
-    # Non-maximum suppression
+    # Vectorized greedy NMS; same-size boxes make inter = max(0, tw-|dx|) * max(0, th-|dy|).
+    finite = np.isfinite(scores)
+    if not finite.all():
+        ys, xs, scores = ys[finite], xs[finite], scores[finite]
+    if scores.size == 0:
+        return []
+    # Stable sort keeps candidate order on ties, like the dict sort it replaced.
+    order = np.argsort(-scores, kind="stable")
+    ys = ys[order].astype(np.int64)
+    xs = xs[order].astype(np.int64)
+    scores = scores[order]
+    area = tw * th
     kept: list[dict[str, Any]] = []
-    for det in detections:
-        overlaps = False
-        for k_det in kept:
-            # Compute IoU
-            xa = max(det["x"], k_det["x"])
-            ya = max(det["y"], k_det["y"])
-            xb = min(det["x"] + det["w"], k_det["x"] + k_det["w"])
-            yb = min(det["y"] + det["h"], k_det["y"] + k_det["h"])
-            inter = max(0, xb - xa) * max(0, yb - ya)
-            area_a = det["w"] * det["h"]
-            area_b = k_det["w"] * k_det["h"]
-            union = area_a + area_b - inter
-            if union > 0 and inter / union > nms_overlap:
-                overlaps = True
-                break
-        if not overlaps:
-            kept.append(det)
+    while xs.size:
+        x0, y0 = int(xs[0]), int(ys[0])
+        kept.append(
+            {
+                "x": x0 + origin[0],
+                "y": y0 + origin[1],
+                "w": tw,
+                "h": th,
+                "score": float(scores[0]),
+            }
+        )
+        if xs.size == 1:
+            break
+        inter = np.maximum(0, tw - np.abs(xs[1:] - x0)) * np.maximum(
+            0, th - np.abs(ys[1:] - y0)
+        )
+        keep = inter / (2 * area - inter) <= nms_overlap
+        xs, ys, scores = xs[1:][keep], ys[1:][keep], scores[1:][keep]
     return kept
 
 
@@ -817,21 +1046,22 @@ def match_template(
     mask: np.ndarray | None = None,
     *,
     prepared: _PreparedTemplate | None = None,
+    corr: np.ndarray | None = None,
 ) -> list[dict[str, Any]]:
     """Find all locations where template appears in frame.
 
-    Uses ``cv2.matchTemplate`` with ``TM_CCOEFF_NORMED``.  Non-maximum
-    suppression removes overlapping detections.  An optional *mask*
-    (same size as *template*, single-channel) restricts matching to
-    non-transparent regions — useful for uploaded PNGs with alpha.
+    ``cv2.matchTemplate`` with ``TM_CCOEFF_NORMED``, then non-maximum suppression
+    to drop overlapping detections. An optional *mask* (template-sized,
+    single-channel) restricts matching to non-transparent regions — for uploaded
+    PNGs with alpha.
 
-    When calling repeatedly with the same *template* / *mask* (e.g. one
-    scan over many frames), build a *prepared* tuple once with
-    :func:`_prepare_template` and pass it in to skip the per-call blur
-    and grayscale conversion of the template.
+    Across many frames with one template, build *prepared* once via
+    :func:`_prepare_template` to skip the per-call blur and grayscale conversion.
+    A caller that already holds this frame's correlation map (from
+    :func:`_template_correlation_map`) passes it as *corr* to skip recomputing it.
 
     Returns:
-        List of ``{x, y, w, h, score}`` dicts for each match above *threshold*.
+        ``{x, y, w, h, score}`` dicts for each match above *threshold*.
     """
     if threshold <= 0.0:
         threshold = config.SCREENSPACE_TEMPLATE_MATCH_THRESHOLD
@@ -840,7 +1070,327 @@ def match_template(
 
     if prepared is None:
         prepared = _prepare_template(template, mask)
-    return _match_template_prepared(frame, prepared, threshold, nms_overlap)
+    return _match_template_prepared(frame, prepared, threshold, nms_overlap, corr)
+
+
+def canny_edges(gray: np.ndarray) -> np.ndarray:
+    """Canny edge map with the shared config thresholds."""
+    return cv2.Canny(
+        gray, config.SCREENSPACE_EDGE_CANNY_LOW, config.SCREENSPACE_EDGE_CANNY_HIGH
+    )
+
+
+def _edge_blur(edges: np.ndarray) -> np.ndarray:
+    """Dilate + blur an edge map into smooth ~5px ridges.
+
+    Raw edge-map correlation dies on 1-2px misalignment; the ridge makes
+    TM_CCOEFF_NORMED degrade gracefully instead (a fixed chamfer-like
+    tolerance, deliberately not a user knob). The 5px kernel is measured:
+    3px lost a rescaled true match to stroke-thickness drift (0.41 at the
+    right rung) while letting edge-dense noise score 0.54; 5px scores the
+    true match 0.62 and saturates noise into a flat, neutralized map.
+    """
+    k = config.SCREENSPACE_BLUR_KERNEL
+    dilated = cv2.dilate(edges, _morph_kernel(5))
+    return cv2.GaussianBlur(dilated, (k, k), 0).astype(np.float32)
+
+
+def _frame_edge_map(frame: np.ndarray, gray: np.ndarray | None = None) -> np.ndarray:
+    """Per-frame edge ridge map that every shape-matching surface shares.
+
+    Scan, check_frame, and previews must all call this — matching against
+    anything else would show users a different model than reality. Computed
+    once per frame; the scale sweep only rescales the reference side. A caller
+    that already holds *frame*'s BGR2GRAY conversion passes it as *gray*.
+    """
+    if gray is None:
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    return _edge_blur(canny_edges(gray))
+
+
+# One edge-ridge template per usable ladder scale; empty means degenerate (too few edge pixels).
+_PreparedShape = list[dict[str, Any]]
+
+_MIN_SHAPE_EDGE_PIXELS = 20  # raw Canny pixels a ladder scale needs to be matchable
+
+
+def _scale_ladder(lo: float, hi: float, steps: int) -> list[float]:
+    """Geometric ladder from *lo* to *hi* with *steps* rungs."""
+    if steps < 2 or hi <= lo:
+        return [lo]
+    ratio = (hi / lo) ** (1.0 / (steps - 1))
+    return [lo * ratio**i for i in range(steps)]
+
+
+def _prepare_shape_reference(
+    reference: np.ndarray,
+    mask: np.ndarray | None = None,
+    scale_min: float = 0.0,
+    scale_max: float = 0.0,
+    scale_steps: int = 0,
+    scale_y_min: float = 0.0,
+    scale_y_max: float = 0.0,
+    scale_y_steps: int = 0,
+) -> _PreparedShape:
+    """Build the per-scan-constant edge templates across the scale ladder.
+
+    Canny is not scale-commutative, so each ladder scale resizes the grayscale
+    reference and re-runs Canny rather than resizing one edge map. The ladder
+    is geometric from *scale_min* to *scale_max*, each rung folded with the
+    global CV resolution scale like :func:`_scale_template`.
+
+    By default the sweep is uniform (height follows width per rung). Passing
+    *scale_y_min*/*scale_y_max* unlinks the axes into an independent vertical
+    ladder, crossed with the horizontal one — for content-stretched UI like
+    buttons that keep their height but vary in width. Cost multiplies
+    (x-steps × y-steps templates per frame).
+    """
+    if scale_min <= 0:
+        scale_min = config.SCREENSPACE_SHAPE_SCALE_MIN
+    if scale_max <= 0:
+        scale_max = config.SCREENSPACE_SHAPE_SCALE_MAX
+    if scale_steps <= 0:
+        scale_steps = config.SCREENSPACE_SHAPE_SCALE_STEPS
+    cv_scale = (
+        config.SCREENSPACE_CV_RESOLUTION_SCALE
+        if config.SCREENSPACE_CV_RESOLUTION_SCALE > 0
+        else 1.0
+    )
+    scales_x = _scale_ladder(scale_min, scale_max, scale_steps)
+    if scale_y_min > 0 and scale_y_max > 0:
+        scales_y = _scale_ladder(scale_y_min, scale_y_max, scale_y_steps or scale_steps)
+        pairs = [(sx, sy) for sy in scales_y for sx in scales_x]
+    else:
+        pairs = [(s, s) for s in scales_x]
+    gray = cv2.cvtColor(reference, cv2.COLOR_BGR2GRAY)
+    if mask is not None:
+        _, mask = cv2.threshold(mask, 127, 255, cv2.THRESH_BINARY)
+        # Transparency decodes as zeros, so Canny rings the alpha edge; erode it away.
+        mask = cv2.erode(mask, _morph_kernel(3), iterations=2)
+        if not np.any(mask):
+            return []
+    h, w = gray.shape[:2]
+    prepared: _PreparedShape = []
+    for sx, sy in pairs:
+        ex, ey = sx * cv_scale, sy * cv_scale
+        if ex <= 0 or ey <= 0:
+            continue
+        nw = max(8, round(w * ex))
+        nh = max(8, round(h * ey))
+        interp = cv2.INTER_AREA if ex * ey < 1.0 else cv2.INTER_CUBIC
+        gray_s = cv2.resize(gray, (nw, nh), interpolation=interp)
+        edges = canny_edges(gray_s)
+        if mask is not None:
+            mask_s = cv2.resize(mask, (nw, nh), interpolation=cv2.INTER_NEAREST)
+            edges = cv2.bitwise_and(edges, mask_s)
+        if np.count_nonzero(edges) < _MIN_SHAPE_EDGE_PIXELS:
+            continue
+        prepared.append(
+            {
+                "edges": _edge_blur(edges),
+                "w": nw,
+                "h": nh,
+                "scale": round(sx, 4),
+                "scale_y": round(sy, 4),
+            }
+        )
+    return prepared
+
+
+def nms_boxes_iou(boxes: list[dict[str, Any]], overlap: float) -> list[dict[str, Any]]:
+    """Greedy IoU NMS over variable-size boxes, highest score first.
+
+    The template NMS assumes one shared box size; shape matches mix sizes
+    across ladder scales, so this computes real IoU. A box ≥80% contained in
+    a better-scoring one is also suppressed: a nested sub-scale hit on the
+    same instance can sit under the IoU cutoff on area ratio alone.
+    """
+    if len(boxes) <= 1:
+        return list(boxes)
+    order = sorted(range(len(boxes)), key=lambda i: -boxes[i]["score"])
+    xs1 = np.array([boxes[i]["x"] for i in order], dtype=np.float64)
+    ys1 = np.array([boxes[i]["y"] for i in order], dtype=np.float64)
+    ws = np.array([boxes[i]["w"] for i in order], dtype=np.float64)
+    hs = np.array([boxes[i]["h"] for i in order], dtype=np.float64)
+    xs2, ys2, areas = xs1 + ws, ys1 + hs, ws * hs
+    kept: list[dict[str, Any]] = []
+    idx = np.arange(len(order))
+    while idx.size:
+        i = idx[0]
+        kept.append(boxes[order[i]])
+        if idx.size == 1:
+            break
+        rest = idx[1:]
+        ix = np.maximum(
+            0.0, np.minimum(xs2[i], xs2[rest]) - np.maximum(xs1[i], xs1[rest])
+        )
+        iy = np.maximum(
+            0.0, np.minimum(ys2[i], ys2[rest]) - np.maximum(ys1[i], ys1[rest])
+        )
+        inter = ix * iy
+        iou = inter / (areas[i] + areas[rest] - inter)
+        contained = inter / np.minimum(areas[i], areas[rest])
+        idx = rest[(iou <= overlap) & (contained <= 0.8)]
+    return kept
+
+
+def region_search_window(
+    region: dict[str, Any], coord_scale: float = 1.0
+) -> tuple[float, float, float, float] | None:
+    """Center-inclusion window for :func:`match_shape` from a region rect.
+
+    Unlike template, a shape run's region restricts *where matches count* —
+    "Full frame" (zero-size rect) is the explicit search-anywhere choice.
+    *coord_scale* maps region pixels into the searched frame's space (CV
+    resolution scale / fast-mode downscale). Returns None for no restriction.
+    """
+    w, h = region.get("w", 0), region.get("h", 0)
+    if w <= 0 or h <= 0:
+        return None
+    x, y = region.get("x", 0), region.get("y", 0)
+    return (
+        x * coord_scale,
+        y * coord_scale,
+        (x + w) * coord_scale,
+        (y + h) * coord_scale,
+    )
+
+
+def _mask_corr_outside_window(
+    result: np.ndarray,
+    tw: int,
+    th: int,
+    window: tuple[float, float, float, float],
+) -> np.ndarray | None:
+    """Neutralize correlation cells whose match center falls outside *window*.
+
+    A match centers at (x + tw/2, y + th/2); the center-inclusion rect
+    translates into per-scale top-left index bounds. Returns None when no
+    position of this scale can center inside the window. Shared by
+    :func:`match_shape` and the preview so both see the same restriction.
+    """
+    xa = max(0, math.floor(window[0] - tw / 2.0))
+    ya = max(0, math.floor(window[1] - th / 2.0))
+    xb = min(result.shape[1], math.ceil(window[2] - tw / 2.0) + 1)
+    yb = min(result.shape[0], math.ceil(window[3] - th / 2.0) + 1)
+    if xa >= xb or ya >= yb:
+        return None
+    if xa == 0 and ya == 0 and xb == result.shape[1] and yb == result.shape[0]:
+        # A full-frame window (e.g. the "Full frame" run target) masks nothing;
+        # skip the per-scale copy.
+        return result
+    masked = np.full_like(result, -1.0)
+    masked[ya:yb, xa:xb] = result[ya:yb, xa:xb]
+    return masked
+
+
+def match_shape(
+    frame_edges: np.ndarray,
+    prepared: _PreparedShape,
+    threshold: float = 0.0,
+    nms_overlap: float = 0.0,
+    window: tuple[float, float, float, float] | None = None,
+) -> tuple[list[dict[str, Any]], float]:
+    """Match a frame's edge ridge map against a prepared shape reference.
+
+    *frame_edges* comes from :func:`_frame_edge_map`. The reference's mask was
+    already ANDed into its edge maps, so matching runs unmasked — sidestepping
+    masked TM_CCOEFF_NORMED instability entirely.
+
+    *window* (from :func:`region_search_window`) restricts matching to
+    positions whose match *center* falls inside the rect; everything outside
+    is treated as unmatchable, so ``best_peak`` stays honest for the region
+    a run is scoped to.
+
+    Returns:
+        ``(matches, best_peak)`` — surviving ``{x, y, w, h, score, scale}``
+        boxes plus the best cross-scale correlation peak, the
+        threshold-independent scalar calibration reads even on a miss
+        (``-1.0`` when no scale was matchable).
+    """
+    return _match_shape_scales(
+        frame_edges, prepared, threshold, nms_overlap, window=window
+    )
+
+
+def _match_shape_scales(
+    frame_edges: np.ndarray,
+    prepared: _PreparedShape,
+    threshold: float = 0.0,
+    nms_overlap: float = 0.0,
+    window: tuple[float, float, float, float] | None = None,
+    executor: Any = None,
+) -> tuple[list[dict[str, Any]], float]:
+    """Match prepared Shape rungs, optionally through an ordered executor."""
+    if threshold <= 0.0:
+        threshold = config.SCREENSPACE_SHAPE_MATCH_THRESHOLD
+    if nms_overlap <= 0.0:
+        nms_overlap = config.SCREENSPACE_TEMPLATE_NMS_OVERLAP
+    _MAX_CANDIDATES = 5000
+    best_peak = -1.0
+    candidates: list[dict[str, Any]] = []
+
+    def _one(entry: dict[str, Any]) -> tuple[dict[str, Any], Any]:
+        return entry, _match_corr_window(frame_edges, entry["edges"], window)
+
+    rows = executor.map(_one, prepared) if executor is not None else map(_one, prepared)
+    for entry, packed in rows:
+        if packed is None:
+            continue
+        result, x_offset, y_offset = packed
+        tw, th = entry["w"], entry["h"]
+        # Flat windows normalize by ~0 std; neutralize like template matching.
+        result = _neutralize_nonfinite(result)
+        np.clip(result, -1.0, 1.0, out=result)
+        if result.size:
+            best_peak = max(best_peak, float(result.max()))
+        locs = np.where(result >= threshold)
+        if len(locs[0]) == 0:
+            continue
+        ys, xs = locs[0], locs[1]
+        scores = result[locs]
+        if scores.size > _MAX_CANDIDATES:
+            top_idx = np.argpartition(scores, -_MAX_CANDIDATES)[-_MAX_CANDIDATES:]
+            ys, xs, scores = ys[top_idx], xs[top_idx], scores[top_idx]
+        candidates.extend(
+            {
+                "x": int(x) + x_offset,
+                "y": int(y) + y_offset,
+                "w": tw,
+                "h": th,
+                "score": float(sc),
+                "scale": entry["scale"],
+                "scale_y": entry["scale_y"],
+            }
+            for y, x, sc in zip(ys, xs, scores, strict=True)
+        )
+    # Several scales can flood NMS at once; cap the pool like the per-scale template cap.
+    if len(candidates) > _MAX_CANDIDATES:
+        candidates.sort(key=lambda c: -c["score"])
+        del candidates[_MAX_CANDIDATES:]
+    return nms_boxes_iou(candidates, nms_overlap), best_peak
+
+
+def flow_downscale(
+    gray: np.ndarray, mask: np.ndarray | None = None
+) -> tuple[np.ndarray, np.ndarray | None]:
+    """The <=256px downscale ``compute_optical_flow`` applies to its inputs.
+
+    Exposed so per-frame callers can downscale each frame once and carry the
+    result forward as the next pair's "previous" side — otherwise every frame
+    is INTER_AREA-resized twice (as curr at step N, as prev at step N+1).
+    No-op (returns the inputs) when *gray* already fits.
+    """
+    max_dim = 256
+    h, w = gray.shape[:2]
+    if h <= max_dim and w <= max_dim:
+        return gray, mask
+    scale = max_dim / max(h, w)
+    new_w, new_h = int(w * scale), int(h * scale)
+    small = cv2.resize(gray, (new_w, new_h), interpolation=cv2.INTER_AREA)
+    if mask is not None:
+        mask = cv2.resize(mask, (new_w, new_h), interpolation=cv2.INTER_NEAREST)
+    return small, mask
 
 
 def compute_optical_flow(
@@ -849,33 +1399,29 @@ def compute_optical_flow(
     pyr_scale: float = 0.0,
     return_grid: bool = False,
     mask: np.ndarray | None = None,
+    grid_min_magnitude: float | None = None,
 ) -> dict[str, Any]:
     """Compute dense optical flow between two grayscale frames.
 
-    Farneback has no mask parameter, so for shaped regions the flow is computed
-    over the full rect and *mask* (uint8, crop-sized) restricts the statistics:
-    mean magnitude, the circular-mean angle, and which ``flow_grid`` cells are
-    emitted. Vectors within ~one window of the polygon edge still see outside
-    pixels — acceptable contamination for motion detection.
+    Farneback takes no mask, so shaped regions compute flow over the full rect and
+    *mask* (uint8, crop-sized) restricts the statistics instead. Vectors within
+    ~one window of the polygon edge still see outside pixels — acceptable
+    contamination for motion detection.
+
+    *grid_min_magnitude* skips the grid (angles and the per-cell loop) when the
+    mean magnitude lands below it — scan_flow discards those rows anyway, and
+    they are the common case on quiet footage. The key is absent, not empty.
 
     Returns:
-        Dict with ``magnitude`` (mean flow vector length),
-        ``angle`` (dominant direction in degrees, 0-360), and optionally
-        ``flow_grid`` (sparse grid of motion vectors for visualization).
+        ``magnitude`` (mean vector length), ``angle`` (dominant direction, 0-360),
+        and optionally ``flow_grid`` (sparse vectors for visualization).
     """
     if pyr_scale <= 0.0:
         pyr_scale = config.SCREENSPACE_FLOW_PYR_SCALE
 
-    # Resize to max 256px for speed
-    max_dim = 256
-    h, w = prev_gray.shape[:2]
-    if h > max_dim or w > max_dim:
-        scale = max_dim / max(h, w)
-        new_w, new_h = int(w * scale), int(h * scale)
-        prev_gray = cv2.resize(prev_gray, (new_w, new_h), interpolation=cv2.INTER_AREA)
-        curr_gray = cv2.resize(curr_gray, (new_w, new_h), interpolation=cv2.INTER_AREA)
-        if mask is not None:
-            mask = cv2.resize(mask, (new_w, new_h), interpolation=cv2.INTER_NEAREST)
+    # Cap at 256px; scan_flow pre-downscales and carries prev forward, so these are then no-ops.
+    prev_gray, _ = flow_downscale(prev_gray)
+    curr_gray, mask = flow_downscale(curr_gray, mask)
     if mask is not None and not np.any(mask):
         mask = None
 
@@ -883,19 +1429,24 @@ def compute_optical_flow(
     flow = cv2.calcOpticalFlowFarneback(
         prev_gray, curr_gray, flow_out, pyr_scale, 3, 15, 3, 5, 1.2, 0
     )
-    mag, ang = cv2.cartToPolar(flow[..., 0], flow[..., 1], angleInDegrees=True)
+    dx, dy = flow[..., 0], flow[..., 1]
     inside = mask > 0 if mask is not None else None
+
+    # Angles wait for the grid branch. Both paths track cartToPolar within last-ulp drift (test_flow.py).
+    mag = cv2.magnitude(dx, dy)
+
     mean_mag = (
         float(np.mean(mag[inside])) if inside is not None else float(np.mean(mag))
     )
 
-    # Dominant angle: weighted mean by magnitude
+    # Weighted circular mean reduces to atan2(sum(dy), sum(dx)) since mag*sin(a) = dy, mag*cos(a) = dx.
     if mean_mag > 0:
-        # Use circular mean to avoid wraparound issues
-        rad = np.deg2rad(ang)
-        weights = mag if inside is None else mag * inside
-        sin_sum = float(np.sum(weights * np.sin(rad)))
-        cos_sum = float(np.sum(weights * np.cos(rad)))
+        if inside is not None:
+            sin_sum = float(np.sum(dy[inside]))
+            cos_sum = float(np.sum(dx[inside]))
+        else:
+            sin_sum = float(np.sum(dy))
+            cos_sum = float(np.sum(dx))
         dominant_angle = float(np.rad2deg(np.arctan2(sin_sum, cos_sum))) % 360.0
     else:
         dominant_angle = 0.0
@@ -905,9 +1456,13 @@ def compute_optical_flow(
         "angle": round(dominant_angle, 1),
     }
 
-    if return_grid:
+    # Gate on the rounded magnitude — the value callers threshold against.
+    if return_grid and (
+        grid_min_magnitude is None or result["magnitude"] >= grid_min_magnitude
+    ):
+        ang = cv2.phase(dx, dy, angleInDegrees=True)
         grid_size = config.SCREENSPACE_FLOW_GRID_SIZE
-        min_mag = config.SCREENSPACE_FLOW_GRID_MIN_MAG
+        min_mag_thresh = config.SCREENSPACE_FLOW_GRID_MIN_MAG
         gh, gw = mag.shape[:2]
         step_y = max(1, gh // grid_size)
         step_x = max(1, gw // grid_size)
@@ -922,7 +1477,7 @@ def compute_optical_flow(
                 ):
                     continue
                 cell_mag = float(np.mean(mag[gy : gy + step_y, gx : gx + step_x]))
-                if cell_mag < min_mag:
+                if cell_mag < min_mag_thresh:
                     continue
                 cell_ang = float(np.mean(ang[gy : gy + step_y, gx : gx + step_x]))
                 grid.append(
@@ -971,7 +1526,7 @@ def compute_scene_fingerprint(
 
     bins = config.SCREENSPACE_SCENE_HISTOGRAM_BINS
     hsv = cv2.cvtColor(region_pixels, cv2.COLOR_BGR2HSV)
-    # 3D histogram flattened
+    # Pre-flattened 1D float32 so compare_scene_fingerprints passes it to cv2.compareHist without copying.
     hist = cv2.calcHist(
         [hsv],
         [0, 1, 2],
@@ -980,10 +1535,11 @@ def compute_scene_fingerprint(
         [0, 180, 0, 256, 0, 256],
     )
     cv2.normalize(hist, hist)
+    hist_flat = hist.ravel().astype(np.float32)
 
     # Edge density
     gray = cv2.cvtColor(region_pixels, cv2.COLOR_BGR2GRAY)
-    edges = cv2.Canny(gray, 100, 200)
+    edges = canny_edges(gray)
     if mask is not None:
         masked_edges = cv2.bitwise_and(edges, mask)
         denom = float(np.count_nonzero(mask))
@@ -995,17 +1551,22 @@ def compute_scene_fingerprint(
             else 0.0
         )
 
-    # Color stats per channel
+    # Color stats: [mean_ch0, std_ch0, mean_ch1, std_ch1, mean_ch2, std_ch2].
+    # Vectorized to avoid per-channel float64 copies.
     inside = mask > 0 if mask is not None else None
-    color_stats: list[float] = []
-    for ch in range(3):
-        channel = region_pixels[:, :, ch].astype(np.float64)
-        if inside is not None:
-            channel = channel[inside]
-        color_stats.extend([float(np.mean(channel)), float(np.std(channel))])
+    if inside is not None:
+        pixels_f = region_pixels[inside].astype(np.float64)
+        means = pixels_f.mean(axis=0)
+        stds = pixels_f.std(axis=0)
+    else:
+        means = region_pixels.mean(axis=(0, 1), dtype=np.float64)
+        stds = region_pixels.std(axis=(0, 1), dtype=np.float64)
+    color_stats = np.empty(6, dtype=np.float64)
+    color_stats[0::2] = means
+    color_stats[1::2] = stds
 
     return {
-        "histogram": hist,
+        "histogram": hist_flat,
         "edge_density": edge_density,
         "color_stats": color_stats,
     }
@@ -1019,12 +1580,10 @@ def compare_scene_fingerprints(
 
     Returns similarity score 0.0–1.0.
     """
-    # Histogram correlation: range [-1, 1] → [0, 1]
-    # Flatten 3D histograms to 1D — cv2.compareHist returns incorrect
-    # results for multidimensional arrays.
+    # Histogram correlation mapped [-1, 1] → [0, 1]; histograms arrive pre-flattened 1D float32.
     hist_corr = cv2.compareHist(
-        fp_a["histogram"].flatten().astype(np.float32),
-        fp_b["histogram"].flatten().astype(np.float32),
+        fp_a["histogram"],
+        fp_b["histogram"],
         cv2.HISTCMP_CORREL,
     )
     hist_sim = (hist_corr + 1.0) / 2.0
@@ -1032,16 +1591,15 @@ def compare_scene_fingerprints(
     # Edge density similarity
     edge_sim = 1.0 - abs(fp_a["edge_density"] - fp_b["edge_density"])
 
-    # Color stats similarity (normalized Euclidean distance)
-    stats_a = np.array(fp_a["color_stats"], dtype=np.float64)
-    stats_b = np.array(fp_b["color_stats"], dtype=np.float64)
+    # Color stats similarity (normalized Euclidean distance).
+    # color_stats is a float64 ndarray from compute_scene_fingerprint.
+    stats_a = fp_a["color_stats"]
+    stats_b = fp_b["color_stats"]
     max_dist = np.sqrt(len(stats_a)) * 255.0  # theoretical max
     dist = float(np.linalg.norm(stats_a - stats_b))
     color_sim = 1.0 - (dist / max_dist) if max_dist > 0 else 1.0
 
-    # Weighted average. cv2.compareHist can return NaN on degenerate
-    # (e.g. all-zero) histograms; clamp would not catch it because
-    # NaN comparisons return False.
+    # Weighted average. compareHist can return NaN on all-zero histograms; clamp misses NaN.
     score = 0.6 * hist_sim + 0.2 * edge_sim + 0.2 * color_sim
     if not math.isfinite(score):
         return 0.0
@@ -1085,10 +1643,21 @@ def _merge_timestamp_spans(
 
 
 # ── Attention (computational saliency) ───────────────────────────────
-# Classic bottom-up composite (no learned model, no contrib modules):
-# spectral residual + Lab center-surround contrast + frame-diff motion
-# [+ optional Haar faces], multiplied by a center-weighted prior. The
-# per-frame map feeds the same grid/heatmap pipeline as flow/change.
+# Bottom-up: spectral residual, contrast, motion, optional Haar faces, center prior.
+
+
+@functools.cache
+def _dft_friendly(shape: tuple[int, int]) -> bool:
+    """Whether ``cv2.dft`` is the faster transform for this frame shape.
+
+    cv2's DFT is fastest on sizes that factor into 2/3/5 and is markedly
+    *slower* than numpy on awkward ones — measured on this project's benchmark
+    frames: 0.163 ms vs 0.400 ms at 144x256, but 4.021 ms vs 1.254 ms at
+    151x257. The attention working dim pins only the longest axis to 256; the
+    other follows the source aspect ratio and can land on a prime, so the fast
+    path is gated rather than unconditional.
+    """
+    return all(cv2.getOptimalDFTSize(n) == n for n in shape)
 
 
 def compute_spectral_residual(gray: np.ndarray) -> np.ndarray:
@@ -1097,12 +1666,45 @@ def compute_spectral_residual(gray: np.ndarray) -> np.ndarray:
     The log-amplitude spectrum minus its local average isolates the
     "unexpected" frequency content; recombining it with the original phase
     highlights the spatial locations responsible for it.
+
+    Two transforms, same math: on DFT-friendly shapes cv2 runs it in float32
+    (the numpy branch promotes to complex128 and allocates four more full-size
+    complex temporaries), recovering the phase term as ``z/|z|`` from the
+    magnitude already in hand rather than through ``angle`` + a complex ``exp``.
+    Agreement between the branches is ~1e-6 and is asserted in the tests.
+
+    **This function is repeatable, not bit-reproducible.** ``cv2.dft`` returns
+    results differing by ~1 ulp between two identical calls on some OpenCV
+    builds — reproducibly so on Linux CI, never observed on macOS — so tests
+    over the cv2 branch (and over anything downstream of it, such as
+    :func:`compute_saliency_map`) must assert closeness, not ``array_equal``.
+    Irrelevant downstream: the attention scan thresholds peak *distances* at
+    0.15, and the half-scale surround in :func:`compute_color_contrast` already
+    moves the composed map ~6 orders of magnitude more than this.
     """
-    fft = np.fft.fft2(gray.astype(np.float32))
-    log_amp = np.log1p(np.abs(fft)).astype(np.float32)
-    phase = np.angle(fft)
-    residual = log_amp - cv2.blur(log_amp, (3, 3))
-    sal = np.abs(np.fft.ifft2(np.exp(residual) * np.exp(1j * phase))) ** 2
+    f32 = gray.astype(np.float32)
+    if _dft_friendly(f32.shape[:2]):
+        spectrum = cv2.dft(f32, flags=cv2.DFT_COMPLEX_OUTPUT)
+        real, imag = spectrum[:, :, 0], spectrum[:, :, 1]
+        mag = cv2.magnitude(real, imag)
+        log_amp = np.log1p(mag)
+        residual = log_amp - cv2.blur(log_amp, (3, 3))
+        scale = np.exp(residual)
+        unit = np.divide(scale, mag, out=np.zeros_like(scale), where=mag > 0)
+        out_real = real * unit
+        out_imag = imag * unit
+        # A zero coefficient has no direction; match numpy's angle(0) = 0, unit vector 1+0j.
+        flat = mag <= 0
+        np.copyto(out_real, scale, where=flat)
+        np.copyto(out_imag, np.float32(0.0), where=flat)
+        inverse = cv2.idft(cv2.merge([out_real, out_imag]), flags=cv2.DFT_SCALE)
+        sal = inverse[:, :, 0] ** 2 + inverse[:, :, 1] ** 2
+    else:
+        fft = np.fft.fft2(f32)
+        log_amp = np.log1p(np.abs(fft)).astype(np.float32)
+        phase = np.angle(fft)
+        residual = log_amp - cv2.blur(log_amp, (3, 3))
+        sal = np.abs(np.fft.ifft2(np.exp(residual) * np.exp(1j * phase))) ** 2
     sal = cv2.GaussianBlur(sal.astype(np.float32), (9, 9), 2.5)
     peak = float(sal.max())
     return sal / peak if peak > 0 else sal
@@ -1113,12 +1715,32 @@ def compute_color_contrast(bgr: np.ndarray) -> np.ndarray:
 
     Sum over L/a/b of |channel − wide Gaussian blur of channel|: bright/colored
     elements that differ from their surround score high regardless of hue.
+
+    The surround is deliberately computed at **half scale**. Its sigma is
+    ``max_dim / 8``, which on a float32 input asks OpenCV for a ~8σ+1 tap
+    kernel — wider than the image itself at the attention working dim, and 66%
+    of the whole attention callback. Halving the resolution costs 5x less
+    (3.22 ms → 0.61 ms per frame) and moves the normalized map by at most
+    0.012; a blur that broad is smooth enough that the downscale loses nothing
+    it was measuring. Blurring the interleaved 3-channel Lab in one call is the
+    obvious alternative and was measured *slower* (3.66 ms) — the kernel width
+    is the cost, not the call count.
     """
     lab = cv2.cvtColor(bgr, cv2.COLOR_BGR2LAB).astype(np.float32)
-    sigma = max(3.0, max(lab.shape[:2]) / 8.0)
-    contrast = np.zeros(lab.shape[:2], dtype=np.float32)
-    for ch in cv2.split(lab):
-        contrast += np.abs(ch - cv2.GaussianBlur(ch, (0, 0), sigma))
+    height, width = lab.shape[:2]
+    sigma = max(3.0, max(height, width) / 8.0)
+    small = cv2.resize(
+        lab,
+        (max(1, width // 2), max(1, height // 2)),
+        interpolation=cv2.INTER_AREA,
+    )
+    surround = cv2.resize(
+        cv2.GaussianBlur(small, (0, 0), sigma / 2.0),
+        (width, height),
+        interpolation=cv2.INTER_LINEAR,
+    )
+    diff = cv2.absdiff(lab, surround)
+    contrast = diff[:, :, 0] + diff[:, :, 1] + diff[:, :, 2]
     peak = float(contrast.max())
     return contrast / peak if peak > 0 else contrast
 
@@ -1140,9 +1762,7 @@ def compute_motion_saliency(
     return cv2.GaussianBlur(diff, (9, 9), 2.5)
 
 
-# Lazy Haar-cascade singleton. Typed Any because the legacy CascadeClassifier
-# API only exists on OpenCV 4.x wheels — opencv-python-headless 5.x removed it,
-# so it must never be named in annotations or called unguarded.
+# Lazy Haar-cascade singleton, typed Any: opencv 5.x wheels drop CascadeClassifier; never annotate or call unguarded.
 _face_cascade: Any | None = None
 
 
@@ -1236,23 +1856,27 @@ def compute_saliency_map(
         center_bias = config.SCREENSPACE_ATTENTION_CENTER_BIAS
     if include_face is None:
         include_face = config.SCREENSPACE_ATTENTION_FACE_CHANNEL
+    if include_face and weights.get("face", 0.0) == 0.0:
+        include_face = False
     if include_face and not face_detection_available():
-        # No CascadeClassifier in this cv2 build (opencv 5.x wheels): keep the
-        # face weight out of the denominator so the map isn't dimmed by a
-        # channel that can only ever contribute zeros.
+        # Unavailable face detection must not dilute the other channels.
         include_face = False
 
     curr_gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
-    combined = weights.get("spectral", 0.0) * compute_spectral_residual(curr_gray)
-    combined += weights.get("contrast", 0.0) * compute_color_contrast(bgr)
-    combined += weights.get("motion", 0.0) * compute_motion_saliency(
-        prev_gray, curr_gray
+    spectral = weights.get("spectral", 0.0)
+    contrast = weights.get("contrast", 0.0)
+    motion = weights.get("motion", 0.0)
+    # Zero-weight channels contribute nothing; avoid their filters and model loading.
+    combined = (
+        spectral * compute_spectral_residual(curr_gray)
+        if spectral != 0.0
+        else np.zeros(curr_gray.shape, dtype=np.float32)
     )
-    total = (
-        weights.get("spectral", 0.0)
-        + weights.get("contrast", 0.0)
-        + weights.get("motion", 0.0)
-    )
+    if contrast != 0.0:
+        combined += contrast * compute_color_contrast(bgr)
+    if motion != 0.0:
+        combined += motion * compute_motion_saliency(prev_gray, curr_gray)
+    total = spectral + contrast + motion
     if include_face:
         combined += weights.get("face", 0.0) * compute_face_saliency(curr_gray)
         total += weights.get("face", 0.0)
@@ -1296,6 +1920,37 @@ def saliency_kwargs_from_params(params: dict[str, Any]) -> dict[str, Any]:
     return kwargs
 
 
+# grid_n -> cell-center coordinates; bounded by the few grid sizes in use.
+_grid_center_cache: dict[int, list[float]] = {}
+
+
+def sparse_grid_cells(cells: np.ndarray, min_mag: float) -> list[dict[str, float]]:
+    """Threshold a small square cell grid to sparse ``{"x","y","mag"}`` dicts.
+
+    The shared tail of attention's saliency grid and change's ``change_grid``:
+    coordinates are cell centers normalized 0-1 (3 decimals), ``mag`` is the
+    cell value (3 decimals). Cell-center coordinates depend only on the grid
+    size but this runs per frame (~256 cells at the default grid), so the
+    rounded centers are memoized rather than re-rounded per cell per frame
+    (measured 740k round() calls, 0.13s, across one 962-frame attention scan).
+    Python round, not np.round, so emitted values stay bit-identical.
+    """
+    grid_n = int(cells.shape[0])
+    ys, xs = np.nonzero(cells >= min_mag)
+    if ys.size == 0:
+        return []
+    centers = _grid_center_cache.get(grid_n)
+    if centers is None:
+        inv_n = 1.0 / grid_n
+        centers = [round((i + 0.5) * inv_n, 3) for i in range(grid_n)]
+        _grid_center_cache[grid_n] = centers
+    mags = cells[ys, xs].tolist()
+    return [
+        {"x": centers[x], "y": centers[y], "mag": round(mag, 3)}
+        for y, x, mag in zip(ys.tolist(), xs.tolist(), mags, strict=True)
+    ]
+
+
 def saliency_grid_from_map(
     sal: np.ndarray, grid_n: int, min_mag: float
 ) -> list[dict[str, float]]:
@@ -1311,20 +1966,7 @@ def saliency_grid_from_map(
     peak = float(cells.max())
     if peak <= 0:
         return []
-    grid: list[dict[str, float]] = []
-    for gy in range(grid_n):
-        for gx in range(grid_n):
-            mag = float(cells[gy, gx]) / peak
-            if mag < min_mag:
-                continue
-            grid.append(
-                {
-                    "x": round((gx + 0.5) / grid_n, 3),
-                    "y": round((gy + 0.5) / grid_n, 3),
-                    "mag": round(mag, 3),
-                }
-            )
-    return grid
+    return sparse_grid_cells(cells / peak, min_mag)
 
 
 def saliency_peak(sal: np.ndarray) -> tuple[float, float, float]:

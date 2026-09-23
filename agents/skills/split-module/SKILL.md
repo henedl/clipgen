@@ -10,7 +10,7 @@ Splitting a large module (e.g. `screenspace.py` → 9 `screenspace_*` modules be
 
 3. **Patch the owning module, not the facade.** Re-exporting only **rebinds** a name on the facade. It does not propagate. `mock.patch("screenspace.foo")` patches the facade's binding, which the sibling that actually calls `foo` never sees. Point patch targets at the owning sibling (`screenspace_frames.foo`). Fix existing tests' patch targets when moving a function.
 
-4. **Keep the import DAG acyclic, deepest-first.** Wire siblings in the order documented in `agents/ARCHITECTURE.md` (e.g. `primitives` → `ocr` → `frames` → `scans` → `tools` → `multitool`/`manifest` → `worker`). Break any cycle with a function-local import (as `MultitoolTool.scan` does for `scan_multitool`), not a top-level one.
+4. **Keep the import DAG acyclic, deepest-first.** Wire siblings in the order documented in `agents/ARCHITECTURE.md` (e.g. `primitives` → `ocr` → `frames` → `scans` → `tools` → `multitool`/`manifest` → `worker`). Break any cycle with a function-local import (as `MultitoolTool.scan` does for `scan_multitool`), not a top-level one. `tests/test_import_layering.py` enforces the screenspace layer order.
 
 ## Verify
 

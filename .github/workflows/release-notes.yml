@@ -1,11 +1,25 @@
-# Creates a GitHub Release for a version tag v*, with notes generated from merged
-# PRs and commits (same backend as the Releases UI).
+# Publishes the GitHub Release body for a version tag v*: curated Highlights from
+# CHANGELOG.md plus a git-derived What's Changed, rendered by build/release_notes.py.
 #
-# Trigger: push of tag v*, or Actions → Run workflow (supply an existing remote tag).
+# Trigger: push of a tag v*, or Actions → Run workflow with an existing tag.
 #
-# Does not update the build/VERSION file — keep the tag aligned with the version you ship.
-# Runs in parallel with build-binaries.yml on the same tag; attach artifacts to this
-# release in a follow-up change if needed.
+# Checks out the DEFAULT BRANCH, never the tag. Two reasons, both load-bearing:
+# build/release_notes.py does not exist at v0.15.1 or v0.16.0, so a tag checkout
+# would have no script to run and neither release could ever be backfilled; and
+# CHANGELOG.md is rewritten in place — at v0.15.1 it is still in the obsolete
+# three-part heading format and stops at v0.14.74, so the tag's copy would yield
+# empty Highlights *and* mis-parse every heading it did find. Everything
+# tag-specific is read through git plumbing instead.
+#
+# fetch-depth: 0 is mandatory. A shallow checkout silently renders an empty
+# What's Changed rather than failing.
+#
+# Runs in parallel with build-binaries.yml on the same tag; safe in either order.
+# This job creates-or-updates the body only and never touches assets, and
+# softprops/action-gh-release passes no `body` input, so it keeps whatever body
+# is already there. .github/release.yml was deleted with this change: it only
+# shaped `gh --generate-notes`, which is no longer used, and its label categories
+# matched no PR in this repo.
 name: release-notes
 
 on:
@@ -15,50 +29,89 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Existing git tag to publish (e.g. v0.10.43). Must match v* and exist on the remote."
+        description: "Existing git tag to publish (e.g. v0.16.0). Must match v* and exist on the remote."
         required: true
+        type: string
+      prev_tag:
+        description: "Range start. Blank auto-detects the previous tag; the first tag has none and takes the short form."
+        required: false
         type: string
 
 permissions:
   contents: write
 
+# Two runs against one tag (a force-repush, or a dispatch racing a push) would
+# otherwise interleave view/create/edit on the same release.
+concurrency:
+  group: release-notes-${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
 jobs:
   release-notes:
     runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      REPO: ${{ github.repository }}
+      TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+      PREV_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.prev_tag || '' }}
     steps:
+      # On a dispatch, use the branch the run was launched from, so the renderer
+      # can be exercised from a PR branch before it reaches master.
       - name: Checkout
         uses: actions/checkout@v6
         with:
-          ref: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.tag || github.ref }}
+          ref: ${{ github.event_name == 'workflow_dispatch' && github.ref_name || github.event.repository.default_branch }}
+          fetch-depth: 0
 
-      - name: Verify build/VERSION matches tag
-        env:
-          TAG: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.tag || github.ref_name }}
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Verify the tag and its build/VERSION
         run: |
           set -euo pipefail
-          FILE_VERSION=$(cat build/VERSION)
-          TAG_VERSION="${TAG#v}"
-          if [[ "$FILE_VERSION" != "$TAG_VERSION" ]]; then
-            echo "::error::build/VERSION ($FILE_VERSION) does not match tag ($TAG_VERSION)"
+          if ! git rev-parse -q --verify "refs/tags/${TAG}^{commit}" >/dev/null; then
+            echo "::error::tag ${TAG} does not exist"
             exit 1
           fi
-          echo "build/VERSION and tag agree on $FILE_VERSION"
+          # From the tag's own tree, not the checked-out branch: master has moved
+          # on to the next patch by the time a backfill runs.
+          FILE_VERSION=$(git show "${TAG}:build/VERSION")
+          TAG_VERSION="${TAG#v}"
+          if [[ "$FILE_VERSION" != "$TAG_VERSION" ]]; then
+            echo "::error::build/VERSION at ${TAG} is ${FILE_VERSION}, tag says ${TAG_VERSION}"
+            exit 1
+          fi
+          echo "build/VERSION and tag agree on ${FILE_VERSION}"
 
-      - name: Create GitHub Release with generated notes
-        env:
-          GH_TOKEN: ${{ github.token }}
-          TAG: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.tag || github.ref_name }}
+      - name: Render the release body
         run: |
           set -euo pipefail
-          REPO="${{ github.repository }}"
+          ARGS=(--tag "$TAG" --repo "$REPO" --output "$RUNNER_TEMP/notes.md")
+          if [[ -n "$PREV_TAG" ]]; then ARGS+=(--prev-tag "$PREV_TAG"); fi
+          python build/release_notes.py "${ARGS[@]}"
+          echo "----- rendered body -----"
+          cat "$RUNNER_TEMP/notes.md"
+
+      - name: Create or update the release
+        run: |
+          set -euo pipefail
+          NOTES="$RUNNER_TEMP/notes.md"
+
+          # Only the highest v* tag may hold "Latest" — a backfill of an older tag
+          # must not steal the badge from the current release.
+          NEWEST=$(git tag --list 'v*' --sort=-v:refname | head -n1)
+          if [[ "$NEWEST" == "$TAG" ]]; then LATEST=(--latest); else LATEST=(--latest=false); fi
 
           if gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1; then
-            echo "Release ${TAG} already exists — skipping (idempotent rerun)."
-            exit 0
+            gh release edit "$TAG" --repo "$REPO" --verify-tag \
+              --title "$TAG" --notes-file "$NOTES" "${LATEST[@]}"
+          elif ! gh release create "$TAG" --repo "$REPO" --verify-tag \
+                 --title "$TAG" --notes-file "$NOTES" "${LATEST[@]}"; then
+            # build-binaries.yml can create the release in the window between the
+            # view above and this create. Edit rather than fail the run.
+            echo "create failed — the release appeared mid-flight; editing instead"
+            gh release edit "$TAG" --repo "$REPO" --verify-tag \
+              --title "$TAG" --notes-file "$NOTES" "${LATEST[@]}"
           fi
-
-          gh release create "$TAG" \
-            --repo "$REPO" \
-            --title "$TAG" \
-            --generate-notes \
-            --verify-tag

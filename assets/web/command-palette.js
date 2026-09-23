@@ -11,7 +11,8 @@
  * tests/test_hotkeys_frontend_source.py's registered-id scan.
  *
  * Exposes exactly one global:
- *   window.ClipgenCommandPalette = { register, setParticipants, open, close, toggle }
+ *   window.ClipgenCommandPalette = { register, setParticipants, open, close, toggle,
+ *                                    buttonCommand, selectorCommand, participantJumps }
  *
  * register(sourceId, providerOrArray) — pages contribute commands. A provider
  * is a function returning an array of commands, called on every open so
@@ -65,9 +66,7 @@
     overview: "chart-bar",
   };
 
-  // Cross-page tab deep links, consumed as /PAGE/#tab=KEY by clipgenHashTab()
-  // on the receiving page (Studio + Overview route it through their stored
-  // active-tab restore; Transcripts clicks the panel-tab button).
+  // /PAGE/#tab=KEY deep links, read by clipgenHashTab() on the receiving page.
   var NAV_TABS = {
     studio: [
       { key: "intake", label: "Screenspace Intake" },
@@ -97,6 +96,7 @@
   var participantSource = null; // page-set fn returning participant id strings
   var els = null;     // { overlay, panel, input, list, empty }
   var isOpen = false;
+  var closeTimer = 0;
   var commands = [];  // prepared visible commands for the current open
   var rendered = [];  // commands currently in the list, in DOM order
   var selectedIndex = -1;
@@ -117,10 +117,7 @@
     providers.push({ id: sourceId, fn: fn });
   }
 
-  // setParticipants(fn) — each hub hands the palette its participant-id list
-  // (a function returning an array of id strings, read on every open). Feeds
-  // the built-in cross-page "Open Pxx in <Page>" commands so participant
-  // jumps exist on every page, not just the ones that hold participants.
+  // Hubs hand over a participant-id getter (read per open) feeding cross-page "Open Pxx" commands.
   function setParticipants(fn) {
     participantSource = typeof fn === "function" ? fn : null;
   }
@@ -161,9 +158,7 @@
     return out;
   }
 
-  // Cross-page participant jumps ("Open P07 in Transcripts"). Same-page jumps
-  // ("Jump to P07 in <Page>") stay page-registered — they select in place
-  // instead of navigating.
+  // Cross-page jumps ("Open P07 in Transcripts"); same-page jumps stay page-registered and select in place.
   function participantNavCommands() {
     if (!participantSource) return [];
     var pids = [];
@@ -226,13 +221,13 @@
         run: function () { window.ClipgenStartOverlay.open(); },
       },
       {
-        id: "global:tooltips",
-        title: "Toggle cross-reference tooltips",
+        id: "global:crossrefs",
+        title: "Toggle cross-references",
         icon: "chat-bubble-left-ellipsis",
-        keywords: "xref hover badges",
+        keywords: "xref hover badges overlap tooltips",
         section: "Global",
-        visible: function () { return !!document.getElementById("tooltipToggle"); },
-        run: function () { document.getElementById("tooltipToggle").click(); },
+        visible: function () { return typeof setCrossReferences === "function"; },
+        run: function () { setCrossReferences(!CLIPGEN_CONFIG.crossReferences); },
       },
     ];
   }
@@ -269,9 +264,7 @@
 
   function collectCommands() {
     var out = [];
-    // Participant nav runs last so its "Participants" section lands directly
-    // after the page's own participant jumps (the page provider lists them
-    // last) — the browse view then shows one contiguous Participants group.
+    // Participant nav runs last so its section follows the page's own participant jumps contiguously.
     var sources = [
       { id: "nav", fn: navCommands },
       { id: "global", fn: globalCommands },
@@ -559,8 +552,7 @@
   }
 
   function onListMousemove(e) {
-    // mousemove, not mouseover: hover must not steal the selection while the
-    // list scrolls under a keyboard-driven cursor.
+    // mousemove, not mouseover: hover must not steal selection while keyboard scrolling moves the list.
     var btn = e.target.closest ? e.target.closest(".cmdp-item") : null;
     if (!btn || btn.disabled) return;
     var idx = parseInt(btn.getAttribute("data-idx"), 10);
@@ -578,8 +570,7 @@
     if (!cmd._enabled) return;
     pushRecent(cmd.id);
     close();
-    // Run after close so restore-focus can't clobber commands that set focus
-    // themselves (e.g. "Focus transcript search").
+    // Run after close so restore-focus cannot clobber commands that set focus themselves.
     setTimeout(function () {
       try { cmd.run(); } catch (e) { console.error("Command palette action error:", e); }
     }, 0);
@@ -589,16 +580,14 @@
 
   function open() {
     if (isOpen) return;
-    // openBlockingModal is a singleton; never steal an existing trap. Two
-    // checks because the overlays split: the settings modal sets
-    // body.modal-open but doesn't use openBlockingModal, while Studio's
-    // gallery/status/confirm and Transcripts' install dialog do the reverse.
+    // Never steal an existing trap. Settings sets body.modal-open only; Studio/Transcripts dialogs use openBlockingModal only.
     if (document.body.classList.contains("modal-open")) return;
     if (isBlockingModalOpen()) return;
     if (!els) buildDom();
     commands = collectCommands();
     els.input.value = "";
     isOpen = true;
+    clearTimeout(closeTimer);
     els.overlay.classList.remove("hidden");
     render();
     openBlockingModal(els.overlay, {
@@ -608,6 +597,8 @@
       onBackdropClick: close,
     });
     requestAnimationFrame(function () {
+      if (!isOpen) return;
+      els.overlay.classList.add("is-open");
       els.panel.classList.add("is-in");
     });
   }
@@ -617,8 +608,14 @@
     isOpen = false;
     closeBlockingModal(els.overlay);
     els.panel.classList.remove("is-in");
-    els.overlay.classList.add("hidden");
+    els.overlay.classList.remove("is-open");
     els.input.value = "";
+    // Hide after the exit transition; its length is read from CSS so they cannot drift.
+    var ms = parseFloat(getComputedStyle(els.panel).transitionDuration) * 1000 || 0;
+    clearTimeout(closeTimer);
+    closeTimer = setTimeout(function () {
+      if (!isOpen) els.overlay.classList.add("hidden");
+    }, ms);
   }
 
   function toggle() {
@@ -628,14 +625,7 @@
 
   // ---- Summon chord ----
   //
-  // The chord lives in the shared hotkey registry (hotkeys.js catalog id
-  // "global.palette", default Mod+Shift+P / Mod+K, rebindable in Settings →
-  // Hotkeys). allowInInput keeps the Spotlight behavior: the chord is
-  // deliberate, so it fires even while typing in a page input. The registry
-  // dispatcher suppresses all combos while a blocking modal is open — which
-  // includes the palette itself — so toggling *closed* is handled by the
-  // palette input's own keydown handler (isToggleChord in onInputKeydown),
-  // mirroring how the hotkeys cheatsheet passes its own toggle back through.
+  // Hotkey "global.palette", allowInInput. Modals mute the dispatcher, so isToggleChord closes.
 
   function isToggleChord(e) {
     if (!window.ClipgenHotkeys) return false;
@@ -650,11 +640,71 @@
     ]);
   }
 
+  // ---- Command factories shared by every hub's provider ----
+
+  function _visibleEl(el) {
+    return !!el && !el.classList.contains("hidden");
+  }
+
+  // Clicks #elId; gate "enabled" (default) or "visible" decides when it shows.
+  function buttonCommand(section, id, title, icon, keywords, elId, gate) {
+    var cmd = {
+      id: id,
+      title: title,
+      icon: icon,
+      keywords: keywords,
+      section: section,
+      run: function () { document.getElementById(elId).click(); },
+    };
+    if (gate === "visible") {
+      cmd.visible = function () { return _visibleEl(document.getElementById(elId)); };
+    } else {
+      cmd.enabled = function () {
+        var btn = document.getElementById(elId);
+        return !!btn && !btn.disabled;
+      };
+    }
+    return cmd;
+  }
+
+  // Clicks the first `selector` match so its own handler owns the state change.
+  function selectorCommand(section, id, title, icon, keywords, selector) {
+    return {
+      id: id,
+      title: title,
+      icon: icon,
+      keywords: keywords,
+      section: section,
+      visible: function () { return _visibleEl(document.querySelector(selector)); },
+      run: function () {
+        var target = document.querySelector(selector);
+        if (target) target.click();
+      },
+    };
+  }
+
+  // In-place "Jump to <pid>" commands; the built-in provider adds cross-page "Open …".
+  function participantJumps(idPrefix, pageLabel, keywords, ids, onSelect) {
+    return ids.map(function (pid) {
+      return {
+        id: idPrefix + pid,
+        title: "Jump to " + pid + " in " + pageLabel,
+        icon: "user",
+        keywords: keywords,
+        section: "Participants",
+        run: function () { onSelect(pid); },
+      };
+    });
+  }
+
   window.ClipgenCommandPalette = {
     register: register,
     setParticipants: setParticipants,
     open: open,
     close: close,
     toggle: toggle,
+    buttonCommand: buttonCommand,
+    selectorCommand: selectorCommand,
+    participantJumps: participantJumps,
   };
 })();

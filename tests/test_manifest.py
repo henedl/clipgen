@@ -1,8 +1,11 @@
 import json
+import multiprocessing
 import threading
 import time
+from pathlib import Path
 
 import config
+import manifest
 import viewer
 
 
@@ -93,7 +96,7 @@ def test_manifest_contains_valid_timeline_data_structure(tmp_path, monkeypatch):
         mode="batch",
     )
 
-    raw = json.loads((tmp_path / config.MANIFEST_FILENAME).read_text())
+    raw = json.loads((tmp_path / config.MANIFEST_FILENAME).read_text())["clips"]
     assert "meta" in raw
     assert "artifacts" in raw
     assert "timeline" in raw
@@ -145,7 +148,7 @@ def test_save_and_load_reels_roundtrip(tmp_path, monkeypatch):
     assert len(loaded_reels[0]["components"]) == 2
 
     # Verify reels key is in raw JSON
-    raw = json.loads((tmp_path / config.MANIFEST_FILENAME).read_text())
+    raw = json.loads((tmp_path / config.MANIFEST_FILENAME).read_text())["clips"]
     assert "reels" in raw
     assert len(raw["reels"]) == 1
 
@@ -269,3 +272,126 @@ def test_save_manifest_concurrent_writes_keep_every_id(tmp_path, monkeypatch):
     reel_ids = {r["id"] for r in viewer.load_manifest_both()[1]}
     assert artifact_ids == {f"a{i}" for i in range(n)}
     assert reel_ids == {f"reel{i}" for i in range(n)}
+
+
+# ---- Section store (utils.load/save_manifest_section) ----
+
+
+def test_store_sections_round_trip_and_sorted(tmp_path, monkeypatch):
+    monkeypatch.setattr(config, "OUTPUT_DIR", str(tmp_path))
+    manifest.save_manifest_section("zeta", {"n": 1, "s": "multi\nline"})
+    manifest.save_manifest_section("alpha", [1, 2])
+    raw = json.loads((tmp_path / config.MANIFEST_FILENAME).read_text())
+    assert list(raw) == ["alpha", "zeta"]
+    assert raw["zeta"] == {"n": 1, "s": "multi\nline"}
+    assert manifest.load_manifest_section("alpha") == [1, 2]
+    assert manifest.load_manifest_section("missing", default="d") == "d"
+    assert manifest.manifest_sections() == {"alpha", "zeta"}
+
+
+def test_store_load_returns_fresh_objects(tmp_path, monkeypatch):
+    monkeypatch.setattr(config, "OUTPUT_DIR", str(tmp_path))
+    manifest.save_manifest_section("one", {"items": []})
+    manifest.load_manifest_section("one")["items"].append("leak")
+    assert manifest.load_manifest_section("one") == {"items": []}
+
+
+def test_store_picks_up_external_rewrite(tmp_path, monkeypatch):
+    monkeypatch.setattr(config, "OUTPUT_DIR", str(tmp_path))
+    manifest.save_manifest_section("one", 1)
+    path = tmp_path / config.MANIFEST_FILENAME
+    path.write_text(json.dumps({"one": 2, "two": 3}))
+    assert manifest.load_manifest_section("one") == 2
+    assert manifest.manifest_sections() == {"one", "two"}
+
+
+def test_store_identical_save_skips_the_write(tmp_path, monkeypatch):
+    """An idempotent save must not rewrite the file or bump its mtime.
+
+    Startup rewrites and debounced persists with no delta fire often; a
+    phantom mtime bump would also force every mtime-gated consumer
+    (workflow triggers, viewer events cache) to re-parse for nothing.
+    """
+    monkeypatch.setattr(config, "OUTPUT_DIR", str(tmp_path))
+    path = tmp_path / config.MANIFEST_FILENAME
+    manifest.save_manifest_section("one", {"a": 1})
+    manifest.save_manifest_section("two", [1, 2])
+    stamp = path.stat().st_mtime_ns
+    assert manifest.save_manifest_section("one", {"a": 1}) == path
+    assert path.stat().st_mtime_ns == stamp
+    # Removing a section that is not stored is equally a no-op.
+    assert manifest.save_manifest_section("ghost", None) == path
+    assert path.stat().st_mtime_ns == stamp
+    # A real change still writes.
+    manifest.save_manifest_section("one", {"a": 2})
+    assert manifest.load_manifest_section("one") == {"a": 2}
+    assert json.loads(path.read_text())["one"] == {"a": 2}
+
+
+def test_store_reindent_cache_yields_identical_file(tmp_path, monkeypatch):
+    """Cached re-indented section texts must produce the same bytes as a cold write."""
+    monkeypatch.setattr(config, "OUTPUT_DIR", str(tmp_path))
+    path = tmp_path / config.MANIFEST_FILENAME
+    big = {"rows": [{"i": i, "text": "line\nbreak"} for i in range(50)]}
+    manifest.save_manifest_section("big", big)
+    manifest.save_manifest_section("small", 1)  # re-indents "big" via the cache
+    warm = path.read_text()
+    manifest._reset_manifest_cache()  # cold path: no cached indent texts
+    manifest.save_manifest_section("small", 2)
+    manifest.save_manifest_section("small", 1)
+    assert path.read_text() == warm
+
+
+def test_store_corrupt_file_reads_as_empty_and_blocks_saves(tmp_path, monkeypatch):
+    """A bad read must never let the next save wipe the other sections."""
+    monkeypatch.setattr(config, "OUTPUT_DIR", str(tmp_path))
+    path = tmp_path / config.MANIFEST_FILENAME
+    path.write_text("not json")
+    assert manifest.load_manifest_section("one", default=0) == 0
+    assert manifest.manifest_sections() == set()
+    assert manifest.save_manifest_section("one", {"a": 1}) is None
+    assert manifest.save_manifest_section("one", None) is None
+    assert path.read_text() == "not json"
+    # Fixing the file on disk re-enables saves.
+    path.write_text(json.dumps({"two": 2}))
+    assert manifest.save_manifest_section("one", 1) is not None
+    assert manifest.manifest_sections() == {"one", "two"}
+
+
+_SOURCE_DIR = str(Path(__file__).resolve().parent.parent / "source")
+
+
+def _manifest_writer(out_dir: str, cfg_dir: str, section: str, count: int) -> None:
+    """Spawned worker: save one section *count* times into a shared output dir."""
+    import sys
+
+    sys.path.insert(0, _SOURCE_DIR)
+    import config as _config
+    import start_settings as _start_settings
+    import manifest as _manifest
+
+    setattr(_start_settings, "config_dir", lambda: Path(cfg_dir))  # noqa: B010
+    _config.OUTPUT_DIR = out_dir
+    for i in range(count):
+        _manifest.save_manifest_section(section, {"i": i})
+
+
+def test_concurrent_processes_keep_each_others_sections(tmp_path):
+    """Two processes writing different sections never clobber each other."""
+    out = tmp_path / "out"
+    out.mkdir()
+    count = 80
+    ctx = multiprocessing.get_context("spawn")
+    procs = [
+        ctx.Process(
+            target=_manifest_writer, args=(str(out), str(tmp_path / "cfg"), sec, count)
+        )
+        for sec in ("alpha", "beta")
+    ]
+    for p in procs:
+        p.start()
+    for p in procs:
+        p.join(120)
+    assert [p.exitcode for p in procs] == [0, 0]
+    doc = json.loads((out / config.MANIFEST_FILENAME).read_text(encoding="utf-8"))
+    assert doc == {"alpha": {"i": count - 1}, "beta": {"i": count - 1}}

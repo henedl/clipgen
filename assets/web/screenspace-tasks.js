@@ -38,14 +38,10 @@
     updateRegionButtons = SS.updateRegionButtons,
     updateRunButton = SS.updateRunButton;
 
-  // ---- ETA tracking + poll fingerprint (moved from the hub module scope) ----
-  // Structural gate (id:status:heatmap) rebuilds the task list only on
-  // transitions — progress + the result-count badge move in place via
-  // tickTaskProgress, and new detections redraw the timeline through
-  // _syncTaskResults, so neither needs to force a full list rebuild.
+  // ---- ETA tracking + poll fingerprint ----
+  // Structural fingerprint (id:status:heatmap); handleTaskData owns the rebuild gate.
   var _lastTaskFp = "";
-  // Per-task elapsed/ETA trackers, keyed by task id. Screenspace progress is a
-  // linear fraction of scanned duration, so the ETA extrapolation is meaningful.
+  // Per-task ETA trackers by id; progress is linear in scanned duration.
   var _etaTrackers = {};
   var _etaTicker = createIntervalTicker(tickEtas, {
     gateHidden: true,
@@ -63,6 +59,7 @@
     numbers: "hashtag",
     timelapse: "forward",
     template: "viewfinder-circle",
+    shape: "star",
     flow: "arrows-right-left",
     scene: "squares-2x2",
     inactivity: "pause-circle",
@@ -84,25 +81,9 @@
     });
   }
 
-  var TOOL_LABELS = {
-    multitool: "Multitool",
-    color: "Color",
-    change: "Change",
-    similarity: "Similarity",
-    text: "Text",
-    numbers: "Numbers",
-    timelapse: "Timelapse",
-    template: "Template",
-    flow: "Flow",
-    scene: "Scene",
-    inactivity: "Inactivity",
-    boundary: "Boundary",
-    attention: "Attention",
-  };
-
   function selectableTasks() {
     return state.tasks.filter(function (t) {
-      return t.status === "completed" || t.status === "paused" || t.status === "running";
+      return isTaskRestorable(t);
     });
   }
 
@@ -112,14 +93,18 @@
     qsa("#rightPaneTabs .rp-tab").forEach(function (b) {
       b.classList.toggle("active", b.dataset.tab === tab);
     });
-    var qp = qs("#taskQueuePanel");
-    var rp = qs("#resultsPanel");
-    if (qp) qp.classList.toggle("hidden", tab !== "queue");
-    if (rp) rp.classList.toggle("hidden", tab !== "results");
+    qsa("#rightPaneBody .rp-tab-panel").forEach(function (p) {
+      p.classList.toggle("hidden", p.dataset.tab !== tab);
+    });
     qsa("#rightPaneTabs .rp-tab-actions").forEach(function (a) {
       a.classList.toggle("hidden", a.dataset.for !== tab);
     });
     closeResultsSwitcher();
+    // Hidden preview tabs skip work; entering refetches. calRefresh is late-bound (calibration loads later).
+    if (tab === "preview") {
+      SS.refreshModelView();
+      if (SS.calRefresh) SS.calRefresh();
+    }
   }
 
   function updateResultsCrumb() {
@@ -133,18 +118,17 @@
     }
     var label = (task.parameters || {}).event_label || task.name;
     if (!label) {
-      // Old manifests: tasks persisted before names existed get the legacy
-      // "Color 3" tool + live ordinal form.
+      // Unnamed tasks from old manifests fall back to "Color 3" style labels.
       var sameType = state.tasks
         .filter(function (t) {
           return t.type === task.type &&
-            (t.status === "completed" || t.status === "paused" || t.status === "running");
+            isTaskRestorable(t);
         });
       var idx = -1;
       for (var i = 0; i < sameType.length; i++) {
         if (sameType[i].id === task.id) { idx = i; break; }
       }
-      label = (TOOL_LABELS[task.type] || task.type) + " " + (idx >= 0 ? idx + 1 : 1);
+      label = toolLabel(task.type) + " " + (idx >= 0 ? idx + 1 : 1);
     }
     var participant = task.participant || "";
     crumbEl.textContent = ": " + label + (participant ? " \u00b7 " + participant : "");
@@ -169,7 +153,7 @@
         var badge = el("span", "rp-switcher-item-badge");
         badge.style.background = taskTypeColor(t.type);
         item.appendChild(badge);
-        var label = (t.parameters || {}).event_label || t.name || TOOL_LABELS[t.type] || t.type;
+        var label = (t.parameters || {}).event_label || t.name || toolLabel(t.type);
         var primary = el("span", null, label + " \u00b7 " + (t.participant || ""));
         item.appendChild(primary);
         if (t.region) {
@@ -221,8 +205,8 @@
       btn.addEventListener("click", function (e) {
         e.stopPropagation();
         var tab = btn.dataset.tab;
-        if (tab === "queue") {
-          setRightPaneTab("queue");
+        if (tab === "queue" || tab === "preview") {
+          setRightPaneTab(tab);
           return;
         }
         if (tab === "results") {
@@ -285,7 +269,7 @@
 
       // Select completed/paused/running task to view results; click again to deselect
       task = findTask(taskId);
-      if (task && (task.status === "completed" || task.status === "paused" || task.status === "running")) {
+      if (task && isTaskRestorable(task)) {
         if (state.selectedTaskId === taskId) {
           state.resultsRequestVersion += 1;
           state.selectedTaskId = null;
@@ -336,7 +320,7 @@
       if (!card) { e.preventDefault(); return; }
       var task = findTask(card.dataset.taskId);
       if (!task) { e.preventDefault(); return; }
-      var allowed = task.status === "queued" || task.status === "completed" || task.status === "failed";
+      var allowed = task.status === "queued" || isTaskFinished(task);
       if (!allowed) { e.preventDefault(); return; }
       card.classList.add("dragging");
       e.dataTransfer.setData("text/plain", card.dataset.taskId);
@@ -371,16 +355,15 @@
       var finishedCount = 0;
       for (var i = 0; i < cards.length; i++) {
         var t = findTask(cards[i].dataset.taskId);
-        if (t && (t.status === "completed" || t.status === "failed")) finishedCount++;
+        if (t && isTaskFinished(t)) finishedCount++;
         else break;
       }
 
-      // Find the dragging card to determine its status (we can't read the
-      // status payload off dataTransfer during dragover for security reasons).
+      // dataTransfer payloads are unreadable during dragover; read status off the card.
       var draggingCard = taskListEl.querySelector(".task-card.dragging");
       var draggingTask = draggingCard ? findTask(draggingCard.dataset.taskId) : null;
       var isQueuedDrag = draggingTask && draggingTask.status === "queued";
-      var isFinishedDrag = draggingTask && (draggingTask.status === "completed" || draggingTask.status === "failed");
+      var isFinishedDrag = draggingTask && isTaskFinished(draggingTask);
 
       // Queued tasks can't go above finished tasks
       if (isQueuedDrag && insertIdx < finishedCount) return;
@@ -448,7 +431,7 @@
         // Reorder finished tasks visually via created_at swapping
         var finishedTasks = [];
         state.tasks.forEach(function (t) {
-          if (t.status === "completed" || t.status === "failed") finishedTasks.push(t);
+          if (isTaskFinished(t)) finishedTasks.push(t);
         });
         var fromIdx2 = -1;
         for (var j = 0; j < finishedTasks.length; j++) {
@@ -488,7 +471,7 @@
       var t = findTask(cards[i].dataset.taskId);
       if (!t) continue;
       if (t.status === "queued") queued.push(mid);
-      else if (t.status === "completed" || t.status === "failed") finished.push(mid);
+      else if (isTaskFinished(t)) finished.push(mid);
     }
     _taskDragCache = { all: all, queued: queued, finished: finished };
   }
@@ -517,10 +500,7 @@
     container.classList.remove("drag-over-append");
   }
 
-  // Writes the value only — no event is dispatched, so nothing downstream of an
-  // `input` listener updates (value readouts, the model view, the calibration
-  // mark/tint). Callers that need those to follow must dispatch a bubbling
-  // `input` themselves, as the calibration Apply badge does.
+  // Sets value without dispatching input; callers needing listeners must dispatch it themselves.
   function setInputValue(selector, value) {
     var inp = qs(selector);
     if (inp) inp.value = value;
@@ -530,8 +510,7 @@
     var inputs = qsa(".param-control input[type='range']");
     for (var i = 0; i < inputs.length; i++) {
       var valSpan = inputs[i].parentNode.querySelector(".param-value");
-      // The "Min area %" readout is region-aware (worded, not the raw value), so
-      // skip it here — _updateMinAreaReadout owns it.
+      // _updateMinAreaReadout owns the worded "Min area %" readout.
       if (valSpan && !valSpan.classList.contains("param-value--minarea")) {
         valSpan.textContent = inputs[i].value;
       }
@@ -544,8 +523,7 @@
     qsa(".wf-tab").forEach(function (t) { t.classList.remove("active"); });
     var targetTab = qs('.wf-tab[data-type="' + task.type + '"]');
     if (targetTab) targetTab.classList.add("active");
-    // This selection path moves the tab manually (no .click()), so mirror the
-    // change into the grouped category nav. Late-bound: the hub owns it.
+    // No .click() here, so mirror the tab into the category nav (late-bound).
     if (SS.syncToolCategoryNav) SS.syncToolCategoryNav();
 
     // Select participant
@@ -559,8 +537,7 @@
     if (task.region_ref) {
       var restoredRef = normalizeRegionRef(task.region_ref);
       state.runRegions = restoredRef ? [restoredRef] : [];
-      // Restoring a task is an explicit region choice — pin it so the
-      // implicit chip-follow seed doesn't replace it (see renderRunRegionPicker).
+      // Explicit region choice; keep the chip-follow seed from replacing it (renderRunRegionPicker).
       state.runRegionsSeeded = false;
       state.pendingRegion = null;
       if (restoredRef && restoredRef.source === "active" && state.regions[restoredRef.name]) {
@@ -601,11 +578,10 @@
       });
     }
 
-    // For multitool, rebuild steps state before rendering. `_initial` carries the saved
-    // per-step config so the _mtRender* functions can set input values at element creation
-    // time (rather than via a post-render setInputValue pass).
+    // Rebuild multitool steps first; step._initial lets _mtRender* set values at creation.
     if (task.type === "multitool") {
       var mtParams = task.parameters || {};
+      state.multitoolFocus = 0;
       state.multitoolSteps = (mtParams.steps || []).map(function (s) {
         var step = { type: s.type, collapsed: true };
         step.logic = (s.logic || "AND").toUpperCase();
@@ -623,13 +599,7 @@
       });
     }
 
-    // Rebuild param controls then set values. Suppress the calibration re-eval
-    // this triggers — it would run on the just-reset default params; the
-    // refreshCalibration() at the end of restore evaluates the real values.
-    // {defaults: true} keeps the session's remembered values out of the panel:
-    // this must show the task's own parameters, and a param the task doesn't
-    // carry (an absent event label) has to read as absent, not as whatever was
-    // last typed.
+    // Calibration waits for refreshCalibration() below; {defaults: true} so absent params read absent.
     state.suppressCalibrationRefresh = true;
     renderWorkflowParams({ defaults: true });
     state.suppressCalibrationRefresh = false;
@@ -647,8 +617,7 @@
       setInputValue("#paramColorInterval", numberOrDefault(params.interval, 1.0));
       var savedColorMode = _colorMode(params.color_mode);
       applyColorMode("paramColorMode", savedColorMode);
-      // In presence mode an absent min_coverage means "any presence" (the server
-      // drops it when 0), so restore the slider to 0 — not the 1% fresh default.
+      // Server drops min_coverage at 0 ("any presence"); restore 0, not the default.
       if (savedColorMode === "presence") {
         setInputValue("#paramColorMinArea", params.min_coverage != null ? params.min_coverage * 100 : 0);
       }
@@ -703,12 +672,48 @@
     } else if (task.type === "template") {
       if (params.reference_timestamp !== undefined) {
         state.referenceTimestamp = params.reference_timestamp;
+        // Re-arm the capture region (name only) so a re-run samples the same region.
+        state.capturedRefPreview = params.reference_region
+          ? { region: params.reference_region, ts: params.reference_timestamp, dataUrl: null }
+          : null;
       }
       setInputValue("#paramTemplateThresh", numberOrDefault(params.threshold, 0.70));
       setInputValue("#paramTemplateInterval", numberOrDefault(params.interval, 1.0));
       if (params.template_scale) {
         setInputValue("#paramTemplateScale", Math.round(params.template_scale * 100));
       }
+    } else if (task.type === "shape") {
+      if (params.reference_timestamp !== undefined) {
+        state.referenceTimestamp = params.reference_timestamp;
+        // Re-arm the capture region (name only) so a re-run samples the same region.
+        state.capturedRefPreview = params.reference_region
+          ? { region: params.reference_region, ts: params.reference_timestamp, dataUrl: null }
+          : null;
+      }
+      setInputValue("#paramShapeThresh", numberOrDefault(params.threshold, 0.55));
+      if (params.scale_min) {
+        setInputValue("#paramShapeScaleMin", Math.round(params.scale_min * 100));
+      }
+      if (params.scale_max) {
+        setInputValue("#paramShapeScaleMax", Math.round(params.scale_max * 100));
+      }
+      setInputValue("#paramShapeSteps", intOrDefault(params.scale_steps, 7));
+      if (params.scale_y_min || params.scale_y_max) {
+        var linkEl = qs("#paramShapeLinkAxes");
+        if (linkEl) {
+          linkEl.checked = false;
+          // The change handler owns the V-row visibility sync.
+          linkEl.dispatchEvent(new Event("change", { bubbles: true }));
+        }
+        if (params.scale_y_min) {
+          setInputValue("#paramShapeScaleYMin", Math.round(params.scale_y_min * 100));
+        }
+        if (params.scale_y_max) {
+          setInputValue("#paramShapeScaleYMax", Math.round(params.scale_y_max * 100));
+        }
+        setInputValue("#paramShapeStepsY", intOrDefault(params.scale_y_steps, 3));
+      }
+      setInputValue("#paramShapeInterval", numberOrDefault(params.interval, 1.0));
     } else if (task.type === "flow") {
       setInputValue("#paramFlowMag", numberOrDefault(params.magnitude_threshold, 2.0));
       setInputValue("#paramFlowInterval", numberOrDefault(params.interval, 1.0));
@@ -726,8 +731,7 @@
       setInputValue("#paramBoundaryInterval", numberOrDefault(params.interval, 1.0));
     }
 
-    // event_label and detect_first apply to every non-timelapse task type
-    // (see gatherWorkflowParams for the symmetric save path).
+    // Shared by every non-timelapse type; gatherWorkflowParams is the save path.
     if (task.type !== "timelapse") {
       if (params.event_label) setInputValue("#paramEventLabel", params.event_label);
       if (params.detect_first) {
@@ -742,8 +746,7 @@
       if (hasIn || hasOut) {
         state.inMarker = hasIn ? params.start_seconds : null;
         state.outMarker = hasOut ? params.end_seconds : null;
-        // Markers persist per participant, so a task-restored range has to be
-        // written through too or a page nav would revert to the previous pair.
+        // Markers persist per participant; write the restored range through too.
         if (SS.persistMarkers) SS.persistMarkers();
         updateMarkerInfo();
         renderTimeline();
@@ -751,14 +754,10 @@
     }
 
     syncValueDisplays();
-    // The setInputValue calls above dispatch nothing, so the reset buttons have
-    // to be re-derived against the task's values rather than the defaults the
-    // panel was built with.
+    // setInputValue dispatches nothing, so re-derive reset buttons against the task's values.
     updateParamResetButtons();
     updateRunButton();
-    // Re-evaluate pins against the restored params so the strip (and the Run
-    // "Calibrated" hint) immediately reflect whether the saved task still
-    // satisfies them (no-op only when the participant has no pins).
+    // Re-evaluate pins so the strip and Run hint reflect the restored params.
     refreshCalibration();
     showToast("Restored " + task.type + " task parameters");
   }
@@ -862,7 +861,7 @@
       if (task.id === state.selectedTaskId) card.classList.add("selected");
 
       // Drag handle for reorderable tasks (completed, failed, queued)
-      var isDraggable = task.status === "queued" || task.status === "completed" || task.status === "failed";
+      var isDraggable = task.status === "queued" || isTaskFinished(task);
       if (isDraggable) {
         var handle = el("span", "task-card-drag-handle");
         handle.appendChild(iconSpan("bars-2"));
@@ -930,16 +929,17 @@
       }
       card.appendChild(info);
 
-      // Status text. Ticks carry result_count (not the result list \u2014 see #521),
-      // so taskStatusText reads that. The running/paused text is refreshed in
-      // place by tickTaskProgress on each push rather than rebuilding the card.
+      // Status text; tickTaskProgress refreshes running/paused text in place.
       if (task.status === "failed" && task.error) card.title = task.error;
-      var statusSpan = el("span", "task-card-status", taskStatusText(task));
+      // Only running shimmers; a status transition rebuilds the card, so no clearing.
+      var statusSpan = el(
+        "span",
+        "task-card-status" + (task.status === "running" ? " cg-shimmer" : ""),
+        taskStatusText(task)
+      );
       statusSpan.dataset.taskStatus = task.id;
       if (task.status === "failed" && task.error) {
-        // The status text truncates with ellipsis; let users read the whole
-        // error via a toast without leaving the queue. stopPropagation so the
-        // click doesn't also select/seek the card.
+        // Truncated error text; click toasts the full error. stopPropagation avoids selecting the card.
         statusSpan.classList.add("task-card-status-error");
         statusSpan.title = "Click to view the full error";
         (function (err) {
@@ -969,9 +969,7 @@
     container.innerHTML = "";
     container.appendChild(frag);
     container.scrollTop = prevScrollTop;
-    // The rebuild drops the painted keyboard cursor, and sortTasks() above may
-    // have moved the focused card (a task finishing re-sorts the list), so
-    // re-anchor by task id rather than leaving the user to re-target Shift+3.
+    // The rebuild (and re-sort) drops the keyboard cursor; re-anchor it by task id.
     if (SS.ssRefreshNav) SS.ssRefreshNav();
     updateResultsCrumb();
   }
@@ -990,17 +988,13 @@
     );
   }
 
-  // The task-card status line. Progress is NOT part of renderTaskList's rebuild
-  // gate (that would rebuild the whole list ~2/s to move a bar); instead this
-  // text + the progress fill are refreshed in place by tickTaskProgress. Kept
-  // pure (no side effects) so both the card build and the ticker can call it.
+  // Pure; both the card build and tickTaskProgress call it (progress skips the rebuild gate).
   function taskStatusText(task) {
     // Ticks carry result_count (not the result list — see #521); use it here.
     var rLen = task.result_count || 0;
     if (task.status === "running") {
       var rPct = Math.round((task.progress || 0) * 100);
-      // "0% · scanning…" reads as in-progress rather than hung when a running
-      // task hasn't produced any hits yet.
+      // "scanning…" reads as in-progress, not hung, before the first hit.
       return rPct + "%" + (rLen ? " · " + rLen + " result" + (rLen !== 1 ? "s" : "") : " · scanning…");
     }
     if (task.status === "paused") {
@@ -1014,9 +1008,7 @@
     return task.status;
   }
 
-  // In-place refresh of running/paused cards on each data push: move the progress
-  // fill + rewrite the status text without rebuilding the list (status/heatmap
-  // transitions still go through renderTaskList via the structural fingerprint).
+  // In-place progress fill + status refresh; transitions still rebuild via renderTaskList.
   function tickTaskProgress() {
     var fills = document.querySelectorAll("#taskList [data-task-progress]");
     for (var i = 0; i < fills.length; i++) {
@@ -1032,10 +1024,7 @@
     }
   }
 
-  // Ensure a tracker exists for an active task and return its "0:42 · ~1:20 left"
-  // label. Seeded from created_at so a page reload still shows elapsed (created_at
-  // includes any queue wait, so elapsed may slightly overstate). Paused tasks show
-  // elapsed only — the bar isn't advancing, so an ETA would be misleading.
+  // "0:42 · ~1:20 left" label. Seeded from created_at (includes queue wait); paused shows elapsed only.
   function taskEtaLabel(task) {
     var t = _etaTrackers[task.id];
     if (!t) {
@@ -1056,10 +1045,7 @@
   }
 
   function tickEtas() {
-    // Prune trackers only for tasks that are gone or terminal. A resumed task
-    // dips through "queued" (not active) on its way back to running; keeping the
-    // tracker across that gap preserves its paused-time accumulator so elapsed
-    // doesn't re-count the paused span after resume.
+    // Prune only terminal/gone tasks: a resumed task passes through "queued" and keeps its paused-time accumulator.
     var keepIds = {};
     state.tasks.forEach(function (t) {
       if (!taskIsTerminal(t)) keepIds[t.id] = true;
@@ -1083,28 +1069,17 @@
 
   // ---- SSE (Server-Sent Events) with polling fallback ----
 
-  // Heatmap PNG/GIF filenames are attached after a task is marked completed
-  // (they're generated outside the worker lock), so a task can surface as
-  // "completed" before they exist. Signature lets us detect their late arrival.
+  // Heatmap filenames land after completion (outside the worker lock); signature catches late arrival.
   function _heatmapSig(t) {
     if (!t) return "";
     return (t.heatmap || "") + "|" + (t.heatmap_gif || "") + "|" + (t.heatmap_rolling_gif || "");
   }
 
-  // Per-task result sync. Status ticks no longer carry result lists (just
-  // result_count), so we pull the tail beyond our cached length and append into
-  // state.taskResults[id]. result is append-only during a scan, so the count is
-  // a safe cursor and each fetch payload stays flat. The timeline and results
-  // panel both read from the cache, so one sync feeds both. Scoped to the
-  // selected participant's tasks — the only ones the timeline draws.
+  // Results are append-only during a scan, so result_count is a safe tail cursor for _syncTaskResults.
   var _resultFetching = {};
   var _taskStatusSeen = {};
 
-  // Drop cached results that are no longer append-consistent so _syncTaskResults
-  // refetches the authoritative list. Two cases: (1) a task transitions into a
-  // terminal state — color/inactivity reshape point hits into merged spans on
-  // completion, so the tail cursor would otherwise keep stale point rows;
-  // (2) result_count drops below what we cached (pause/resume clears results).
+  // Drop caches no longer append-consistent: completion merges hits into spans; pause/resume shrinks result_count.
   function _reconcileResultCache(tasks) {
     var seenNow = {};
     tasks.forEach(function (t) {
@@ -1174,20 +1149,12 @@
     var oldHeatmapSig = _heatmapSig(oldTask);
     state.tasks = data.tasks;
     _reconcileResultCache(data.tasks);
-    // Only rebuild the pause/play icon when the queue state actually flips —
-    // handleTaskData runs on every SSE push (≈2/s while a task streams
-    // progress), and re-creating the icon span each time re-fetches its svg.
+    // Rebuild the pause icon only on flips; every push (~2/s) would refetch its svg.
     if (data.paused !== undefined && data.paused !== state.queuePaused) {
       state.queuePaused = data.paused;
       updatePauseButton();
     }
-    // Structural gate: rebuild the list only on status/heatmap transitions.
-    // Progress + result-count status text move in place via tickTaskProgress, so
-    // a running task no longer rebuilds the whole list ~2/s just to nudge a bar.
-    // (Heatmap fields matter so a push that only attaches them — status/progress
-    // unchanged at completed:1 — still refreshes the list.) result_count is left
-    // out on purpose: the badge count updates in place, and new detections redraw
-    // the timeline through _syncTaskResults (which fetches the result tail).
+    // Rebuild only on status/heatmap transitions; progress and result_count update in place (tickTaskProgress, _syncTaskResults).
     var taskFp = JSON.stringify(data.tasks.map(function (t) {
       return t.id + ":" + t.status + ":" + _heatmapSig(t);
     }));
@@ -1199,9 +1166,7 @@
     } else {
       tickTaskProgress(); // in-place bar + status refresh when no rebuild
     }
-    // Pull result tails for the selected participant's tasks (ticks no longer
-    // carry result lists) so the timeline and results panel stay current — this
-    // is what redraws the timeline as new hits land during a scan.
+    // Fetch result tails; this redraws the timeline as hits land mid-scan.
     _syncTaskResults();
     // Auto-load results when selected task completes
     if (wasRunning && oldSelected) {
@@ -1210,8 +1175,7 @@
         SS.loadAndShowResults(oldSelected);
       }
     } else if (oldSelected) {
-      // Late heatmap arrival on an already-completed selected task: re-render
-      // so the heatmap section appears without a page reload.
+      // Late heatmap arrival on a completed task: re-render so the section appears.
       var curTask = findTask(oldSelected);
       if (curTask && curTask.status === "completed" && _heatmapSig(curTask) !== oldHeatmapSig) {
         if (state.selectedTaskResults) SS.renderResults();
@@ -1224,12 +1188,7 @@
   function startSSE() {
     if (state.eventSource) return;
     state.eventSource = createSSEStream("api/tasks/stream", {
-      // SSE is primary: a live stream makes the fallback poller redundant, so
-      // retire it here. Without this a drop-and-recover (onError starts the
-      // poller, visibilitychange or a re-queue reopens the stream) leaves both
-      // transports running until the queue happens to drain. The server yields
-      // the current payload on connect, so there is no gap between the two.
-      // A live connection also re-arms the one-shot drop notice for any later drop.
+      // Retire the poller or drop-and-recover leaves both transports running; re-arm the drop toast.
       onOpen: function () {
         stopPolling();
         state.sseFellBack = false;
@@ -1237,8 +1196,7 @@
       onUnsupported: startPolling,
       onMessage: handleTaskData,
       onError: function () {
-        // Connection lost — fall back to polling. onError can fire repeatedly,
-        // so toast only once per drop (the flag resets when SSE is re-established).
+        // Fall back to polling; onError repeats, so toast once per drop.
         state.eventSource = null;
         if (!state.sseFellBack) {
           state.sseFellBack = true;
@@ -1251,25 +1209,23 @@
 
   // ---- Polling (fallback) ----
 
+  // createPoller handles hidden tabs itself; runImmediately false matches the old setInterval.
+  var _taskPoller = createManagedPoller(pollTasks, POLL_INTERVAL, {
+    runImmediately: false,
+    label: "screenspace.tasks",
+  });
+
   function startPolling() {
-    if (state.poller) return;
-    // createPoller pauses while the tab is hidden and resumes on return, so the
-    // old `if (document.hidden) return` guard is no longer needed. runImmediately
-    // is false to match the previous setInterval (first poll after POLL_INTERVAL).
-    state.poller = createPoller(pollTasks, POLL_INTERVAL, { runImmediately: false });
-    state.poller.start();
+    _taskPoller.start();
   }
 
   function stopPolling() {
-    if (state.poller) {
-      state.poller.stop();
-      state.poller = null;
-    }
+    _taskPoller.stop();
   }
 
   function pollTasks() {
     var hasActive = state.tasks.some(function (t) {
-      return t.status === "queued" || t.status === "running" || t.status === "paused";
+      return isTaskActive(t);
     });
     if (!hasActive) {
       stopPolling();
@@ -1309,25 +1265,19 @@
       return;
     }
     var hasActive = state.tasks.some(function (t) {
-      return t.status === "queued" || t.status === "running" || t.status === "paused";
+      return isTaskActive(t);
     });
     if (hasActive) startSSE();
     ensureEtaTicker();
   });
 
-  // ---- Satellite interface (published back to window.ClipgenScreenspace) ----
-  // The hub keeps same-named thin delegators for the entry points its own code
-  // calls (findTask, renderTaskList, startSSE, setRightPaneTab, ...); the rest
-  // are consumed by sibling satellites — calibration reuses restoreTaskToWorkflow
-  // / setInputValue / syncValueDisplays and multitool reuses findTask — via these
-  // SS.* handles (this file loads before them).
+  // ---- Satellite interface (window.ClipgenScreenspace) ----
+  // Consumed by hub delegators and later-loading satellites.
   SS.findTask = findTask;
   SS.focusedTaskId = focusedTaskId;
   SS.renderTaskList = renderTaskList;
   SS.startSSE = startSSE;
-  // The result cache is normally kept current inside handleTaskData (SSE/poll),
-  // but the boot path and participant switches also need it filled so the
-  // timeline has markers without waiting for a tick.
+  // Boot and participant switches call this so the timeline has markers before a tick.
   SS.syncTaskResults = _syncTaskResults;
   SS.reconcileResultCache = _reconcileResultCache;
   SS.setRightPaneTab = setRightPaneTab;

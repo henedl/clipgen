@@ -22,9 +22,9 @@ def test_studio_selection_requires_valid_timestamp_cells():
 
 
 def test_studio_parse_clip_timestamps_no_zero_fallback():
-    src = _studio_js()
+    src = (_WEB / "utils.js").read_text()
     start = src.index("function parseClipTimestamps")
-    end = src.index("  // Cross-referencing:", start)
+    end = src.index("\n  }\n", start)
     body = src[start:end]
     assert "segments.push({ startSeconds: 0" not in body
     assert "return parseClipSegmentsForCell" in body
@@ -54,6 +54,25 @@ def test_studio_css_does_not_freeze_drop_targets_during_generation():
     assert "studio-generating" not in css
 
 
+def test_artifacts_toolbar_makes_room_for_the_progress_readout():
+    """The mid-run readout must not push Generate/Stash/Clear off the toolbar.
+
+    `.bs-toolbar` is a fixed-height flex row with no wrap, and the row only just
+    fits at rest — measured 868px of content in an 799px column once the
+    "N / M artifacts · elapsed" readout and its spinner appear.
+    """
+    css = STUDIO_CSS.read_text(encoding="utf-8")
+    assert "@container artifacts-toolbar (max-width: 920px)" in css
+    assert (
+        "#artifactsToolbar:has(#generateProgress:not(.hidden)) #artifactFormat" in css
+    )
+    assert (
+        "#artifactsToolbar:has(#generateProgress:not(.hidden)) #titlecardGroup" in css
+    )
+    # The rule keys off .hidden, which is what _paintGenerateProgress toggles.
+    assert 'el.classList.add("hidden")' in _studio_js()
+
+
 def test_studio_generate_uses_abort_controllers_for_both_branches():
     """Generate sheet + intake fetches must be cancellable via AbortController
     so the network connections are torn down promptly on cancel."""
@@ -81,21 +100,22 @@ def test_on_cancel_generate_aborts_and_posts_intake_cancel():
 
 
 def test_studio_uses_shared_ndjson_reader():
-    """The shared NDJSON helper lives in utils.js (also used by Composer) and is
-    reused by the sheet/intake/reel readers (the three sites used to duplicate
-    the loop); Studio must not grow a local copy back."""
+    """The shared NDJSON streaming helpers live in utils.js (also used by
+    Composer/Transcripts/Overview); Studio must not grow a local copy back."""
     utils_src = (_WEB / "utils.js").read_text(encoding="utf-8")
     assert "var readNDJSONStream = function (response, onLine)" in utils_src
     # response.body guard
     assert "if (!response.body" in utils_src
+    assert "var apiPostNDJSON = function (path, body, opts)" in utils_src
     src = _studio_js()
     # The duplicated raw .getReader() blocks should be gone (only the utils.js
     # helper calls it).
     assert "response.body.getReader()" not in src
-    # Used by all three streaming endpoints.
-    assert "readNDJSONStream(response, handleLine).then(finishBranch)" in src
-    assert "readNDJSONStream(response, handleIntakeLine).then(finishBranch)" in src
-    assert "readNDJSONStream(response, handleLine).then(finish)" in src
+    # All three streaming endpoints go through the fetch+drain helper.
+    assert 'apiPostNDJSON("api/generate", genBody' in src
+    assert '"api/generate-intake"' in src
+    assert "onLine: handleIntakeLine" in src
+    assert "apiPostNDJSON(endpoint, reelBody, { onLine: handleLine })" in src
 
 
 def test_sheet_branch_catch_marks_failures():
@@ -133,6 +153,46 @@ def test_finish_branch_handles_zero_zero_case():
     should surface an error, not silently report '0 artifacts'."""
     src = _studio_js()
     assert "No artifacts were generated" in src
+
+
+def test_generate_progress_counts_artifacts_not_cells():
+    """The readout beside the Artifacts badge must count the same things it does.
+
+    The badge is queue-card count (one card per timestamp segment) while the
+    POST body is deduped cell refs, so a per-line ``++`` made the panel show two
+    totals for one Generate — "(58)" next to "51 / 52 cells".
+    """
+    src = _studio_js()
+    # Total is cards, not the deduped ref list, and the intake branch shares the
+    # unit so a mixed or intake-only run keeps one honest denominator.
+    assert "var sheetArtifactTotal = sheetItems.length;" in src
+    assert "updateGenerateProgress(0, sheetArtifactTotal + intakeTotal);" in src
+    assert "sheetCellTotal" not in src
+    assert "sheetCellsDone" not in src
+    # A line covering a multi-segment cell advances by that cell's card count.
+    assert "sheetArtifactsDone += cardsPerCell[cellKey] || 1;" in src
+    # Guard against the double-advance when a ref draws both a result line and
+    # a trailing "No clip found".
+    assert "if (!cellCounted[cellKey]) {" in src
+    # Every cell-ref map folds case, so a ref spelled unlike its sheet header
+    # can't split one cell across two keys (the server folds the same way).
+    assert "function generateCellKey(ref)" in src
+    assert "var cellKey = generateCellKey(data.cell);" in src
+    assert "generateCardIndex[cellKey]" in src
+    # Readout noun matches the panel, and works for screenshots/GIFs too.
+    assert '_genLastTotal + " cells"' not in src
+    assert 'clipgenPluralUnit(_genLastTotal, "artifact", "artifacts")' in src
+
+
+def test_queue_count_badges_explain_the_cell_relationship():
+    """Both badge tooltips are rebuilt per render, from the live queue."""
+    src = _studio_js()
+    assert "function queueCountTooltip(q, noun, nounPlural)" in src
+    assert "queueCountTooltip(q, cfg.countNoun, cfg.countNounPlural)" in src
+    assert 'countNoun: "artifact"' in src
+    assert 'countNoun: "clip"' in src
+    # The stale static wording called artifact cards "Cells".
+    assert "Cells queued for generation" not in STUDIO_HTML.read_text(encoding="utf-8")
 
 
 def test_clear_card_status_selects_card_gen_badge():
@@ -189,7 +249,7 @@ def test_add_to_queue_handles_intake_sources():
     not expandCellToSegments() which requires spreadsheet row/timestamp shape."""
     src = _studio_js()
     start = src.index("function addToQueue(")
-    end = src.index("\n  // Collect selectable timestamp cell infos", start)
+    end = src.index("\n  }\n", start)
     body = src[start:end]
     intake_idx = body.index("if (isIntakeSource(info.source))")
     expand_idx = body.index("expandCellToSegments")
@@ -239,3 +299,61 @@ def test_studio_card_scrubber_gates_on_thumbnail_and_prefetches():
     assert "function processSpritePrefetch()" in src
     assert "function loadCardSprite(thumb, done)" in src
     assert "SPRITE_PREFETCH_CONCURRENCY" in src
+
+
+def test_intake_queued_state_covers_every_panel():
+    """refreshIntakeCardStates visited only the Screenspace and Transcript
+    panels, so a queued MindNode or Composer card showed no "already queued"
+    highlight and clicking it again silently toggled it back out. The rule
+    (.intake-queue-card.in-queue) and the class were both already there — only
+    the sweep was missing. Driving it off each panel's own config is what keeps
+    the next panel from being forgotten the same way."""
+    src = _studio_js()
+    start = src.index("function intakeCardPanels(")
+    body = src[start : src.index("\n  function ", start + 1)]
+    for cfg in ("CO_INTAKE", "MN_INTAKE"):
+        assert cfg in body, f"{cfg} is missing from the queued-state sweep"
+    sweep_start = src.index("function refreshIntakeCardStates(")
+    sweep = src[sweep_start : src.index("\n  function ", sweep_start + 1)]
+    assert "intakeCardPanels()" in sweep, (
+        "the sweep must iterate the panel list, not hardcode two selectors"
+    )
+    # Scoped per panel: every card also carries the shared .intake-queue-card,
+    # so an unscoped query would index one panel's cards against another's list.
+    assert "panel.cardsSel" in sweep and "panel.cardSel" in sweep
+
+
+def test_intake_add_all_batches_queue_render() -> None:
+    """Add-all used to call addToArtifacts per cluster, and each call rendered
+    the whole queue. 400 intake cards was a ~1s longtask and ~30k listeners."""
+    src = _studio_js()
+    assert "function intakeAddItems(queue, items, renderFn)" in src
+    start = src.index("function initIntakePanel(")
+    body = src[start : src.index("\n  function ", start + 1)]
+    assert "intakeAddItems(state.artifactQueue, items, renderArtifactQueue)" in body
+    assert "intakeAddItems(state.reelQueue, items, renderReelQueue)" in body
+    assert "cfg.filtered().forEach" not in body
+
+
+def test_queue_cards_do_not_bind_per_card_listeners() -> None:
+    """Artifact/reel cards used to attach dragstart, remove-click, and hover
+    on every card. Delegation lives on bindQueueList; render just stamps idx."""
+    src = _studio_js()
+    start = src.index("function buildQueueCard(")
+    end = src.index("function renderQueue(", start)
+    body = src[start:end]
+    # The only per-card listener left is the rare Composer-trim badge.
+    assert body.count("addEventListener") == 1
+    assert "intake-trim-badge" in body
+    assert "data-queue-idx" in body
+    assert "function bindQueueList(cfg)" in src
+    impl = src[
+        src.index("function renderQueueImpl(") : src.index(
+            "function renderArtifactQueue("
+        )
+    ]
+    assert "document.createDocumentFragment" in impl
+    bind_start = src.index("function bindQueueList(")
+    bind = src[bind_start : src.index("\n  function ", bind_start + 1)]
+    assert "queue-card-remove" in bind
+    assert "dragstart" in bind

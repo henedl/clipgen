@@ -20,7 +20,7 @@ import subprocess
 
 import pytest
 
-from _frontend_source import WEB
+from _frontend_source import WEB, assert_es5, strip_comments
 
 NODE = shutil.which("node")
 
@@ -44,3 +44,26 @@ def test_js_parses(name: str) -> None:
         text=True,
     )
     assert result.returncode == 0, f"{name} is not valid JavaScript:\n{result.stderr}"
+
+
+@pytest.mark.parametrize("name", JS_FILES)
+def test_js_is_es5(name: str) -> None:
+    """House style: every page script is ES5 (no arrows, no async/await)."""
+    assert_es5(strip_comments((WEB / name).read_text(encoding="utf-8")), name)
+
+
+@pytest.mark.skipif(NODE is None, reason="node not installed; JS syntax gate skipped")
+def test_format_time_rounds_fractional_seconds() -> None:
+    """Rounding after splitting produced "1:010.0" and "0:60.0"."""
+    assert NODE is not None
+    src = (WEB / "utils.js").read_text(encoding="utf-8")
+    snippet = src[src.index("var pad2 = ") : src.index("// Rounds rather than floors")]
+    probe = (
+        "console.log([formatTime(69.96, {decimals: 1}), formatTime(59.97, {decimals: 1}),"
+        " formatTime(9.99, {decimals: 1}), formatTime(3599.9), formatTime(65.4)]"
+        '.join(" "));'
+    )
+    result = subprocess.run(
+        [NODE, "-e", snippet + probe], check=True, capture_output=True, text=True
+    )
+    assert result.stdout.split() == ["1:10.0", "1:00.0", "0:10.0", "59:59", "1:05"]

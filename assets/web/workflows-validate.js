@@ -1,12 +1,11 @@
 /* Workflows — pre-run validation panel (satellite of workflows.js).
  *
- * Aggregates the graph's pre-run issues into one panel (#wfValidation) and gates
- * the Run button on errors (warnings never block). Recomputed on every edit via
+ * Aggregates the graph's pre-run issues into #wfValidation and gates the Run
+ * button on errors (warnings never block). Recomputed on every edit via
  * WF.refreshValidation, which the hub calls from scheduleSave + openBlueprint.
- * Owns the per-node issue computation (WF.nodeIssues) — shared with the node-card
- * cue in workflows-nodes.js — plus a JS port of workflows.topo_order's cycle
- * check (the server 400 stays a backstop). Reads shared state through WF.state —
- * never re-`var`s a divergent `state` (the carve gotcha).
+ * Owns the per-node issue computation (WF.nodeIssues), shared with the node-card
+ * cue in workflows-nodes.js, plus a JS port of workflows.topo_order's cycle check
+ * (the server 400 stays a backstop).
  */
 
 (function () {
@@ -60,12 +59,9 @@
     return value === undefined || value === null || value === "";
   }
 
-  // Per-node issues: {errors:[msg…], warnings:[msg…]}. Single source of truth for
-  // both the node-card cue (workflows-nodes.js) and the panel rows.
+  // Per-node {errors, warnings}; shared by the node-card cue and panel rows.
   function nodeIssues(node) {
-    // A muted node never runs, so it can't block the run — report no issues.
-    // Sticky notes are annotations, not executable nodes: same deal (kills the
-    // orphan/no-input warnings a port-less card would otherwise collect).
+    // Muted nodes and sticky notes never run, so they report no issues.
     if (node.disabled || node.type === "note") {
       return { errors: [], warnings: [] };
     }
@@ -73,6 +69,17 @@
     var errors = [];
     var warnings = [];
 
+    // A type missing from the catalog can never execute; catalogType's fallback hides that.
+    if (!state.catalogById[node.type]) {
+      errors.push("Unknown node type “" + node.type + "”");
+    }
+    // error — multitool needs two steps to chain; fewer yields empty events.
+    if (node.type === "multitool") {
+      var mtSteps = (node.params || {}).steps;
+      if (!Array.isArray(mtSteps) || mtSteps.length < 2) {
+        errors.push("Add at least 2 steps");
+      }
+    }
     // error — launch context can't satisfy `requires` (sheet/videoDir).
     if (WF.nodeContextMet && !WF.nodeContextMet(type)) {
       errors.push("Requires " + ((type.requires || []).join(", ") || "context"));
@@ -87,8 +94,7 @@
         errors.push("Set “" + (spec.label || spec.name) + "”");
       }
     });
-    // error — the Detect node's active detector has its own (swapped-in) params;
-    // check their required flags against the hidden ss_<detector> spec node.
+    // error — the Detect node's active detector params live on the hidden ss_<detector> spec.
     if (node.type === "detect") {
       var det = (node.params || {}).detector;
       var specNode = det && state.catalogById && state.catalogById["ss_" + det];
@@ -101,8 +107,7 @@
 
     // warning — heatmap style needs a matching upstream detector.
     if (node.type === "heatmap") {
-      // The heatmap style names map 1:1 to the ss_<style> detector that produces
-      // the matching raw_results (template→ss_template, …) — derive it directly.
+      // Style names map 1:1 to the ss_<style> detector producing the raw_results.
       var want = "ss_" + ((node.params || {}).style || "change");
       var up = upstreamType(node.id, "events");
       if (up && up !== want && up !== "multitool") {
@@ -113,9 +118,7 @@
     if (node.type === "gate" && !inputWired(node.id, "value")) {
       warnings.push("Gate has no scalar source");
     }
-    // warning — a Video Source with an empty participant array has nothing to run
-    // (the multi-select stores [] when every box is unchecked). Not a hard error:
-    // the run/batch simply produces no clips for it.
+    // warning — [] means every participant box is unchecked; the run yields nothing.
     if (
       node.type === "video_source" &&
       Array.isArray((node.params || {}).participant) &&
@@ -123,20 +126,35 @@
     ) {
       warnings.push("No participants selected");
     }
-    // warning — a filter/partition with an ordering comparison (>=,>,<=,<) needs a
-    // numeric value; a non-numeric one fails the backend float() coerce and
-    // silently drops every item. (Heuristic on the op, so no need to mirror the
-    // backend's per-field numeric/text table.)
-    if (
-      node.type.indexOf("filter_") === 0 ||
-      node.type.indexOf("partition_") === 0
-    ) {
-      var op = (node.params || {}).op;
-      var val = (node.params || {}).value;
-      var ordering = op === ">=" || op === ">" || op === "<=" || op === "<";
-      var numeric = /^\s*-?(\d+\.?\d*|\.\d+)\s*$/.test(String(val));
-      if (ordering && !paramEmpty(val) && !numeric) {
-        warnings.push("Value must be a number for this comparison");
+    // error — predicates that drop every item: ordering on text, non-numbers vs numeric fields.
+    if (node.type.indexOf("filter_") === 0) {
+      var fpSpecs = type.params || [];
+      var fpParams = node.params || {};
+      var specByName = function (n) {
+        for (var si = 0; si < fpSpecs.length; si++) {
+          if (fpSpecs[si].name === n) return fpSpecs[si];
+        }
+        return null;
+      };
+      var clauseError = function (fieldKey, opKey, valueKey, suffix) {
+        var fs = specByName(fieldKey);
+        var field =
+          fpParams[fieldKey] != null ? fpParams[fieldKey] : fs && fs.default;
+        var numeric = fs && (fs.numericChoices || []).indexOf(field) >= 0;
+        var op = fpParams[opKey] != null ? fpParams[opKey] : ">=";
+        var val = fpParams[valueKey];
+        var ordering = op === ">=" || op === ">" || op === "<=" || op === "<";
+        var isNum = /^\s*-?(\d+\.?\d*|\.\d+)\s*$/.test(String(val));
+        if (ordering && !numeric) {
+          errors.push("Ordering comparison" + suffix + " needs a numeric field");
+        } else if (numeric && op !== "contains" && !paramEmpty(val) && !isNum) {
+          errors.push("Value" + suffix + " must be a number");
+        }
+      };
+      clauseError("field", "op", "value", "");
+      if (fpParams.combine && fpParams.combine !== "off") {
+        clauseError("field2", "op2", "value2", " 2");
+        if (paramEmpty(fpParams.value2)) errors.push("Set “Value 2”");
       }
     }
     var connected = (state.edges || []).some(function (e) {
@@ -150,10 +168,7 @@
       }).length;
       if (wired < 2) warnings.push("Merge needs 2+ inputs to combine");
     } else {
-      // warning — a node with data input ports but none wired runs but produces
-      // nothing (e.g. make_clips / measure, whose inputs are all optional so the
-      // required-input check above never fires). Suppressed when the clearer
-      // "not connected" orphan message below will fire instead.
+      // warning — data inputs exist but none wired; skipped when the orphan warning fires.
       var dataInputs = (type.inputs || []).filter(function (p) {
         return p.type !== "control";
       });
@@ -172,10 +187,8 @@
     return { errors: errors, warnings: warnings };
   }
 
-  // Kahn cycle check, ported from workflows.topo_order. Control edges are real
-  // dependencies, so they count; edges to unknown nodes are ignored (a stale wire
-  // never blocks). Returns true iff the graph contains a cycle.
-  function graphHasCycle() {
+  // Kahn's algorithm, ported from workflows.topo_order; returns the ids it could not place.
+  function cycleNodeIds() {
     var nodes = state.nodes || [];
     var ids = {};
     nodes.forEach(function (n) {
@@ -197,25 +210,27 @@
     nodes.forEach(function (n) {
       if (indeg[n.id] === 0) ready.push(n.id);
     });
-    var seen = 0;
+    var placed = {};
     while (ready.length) {
       var nid = ready.shift();
-      seen += 1;
+      placed[nid] = true;
       adj[nid].forEach(function (nxt) {
         indeg[nxt] -= 1;
         if (indeg[nxt] === 0) ready.push(nxt);
       });
     }
-    return seen !== nodes.length;
+    return nodes
+      .filter(function (n) {
+        return !placed[n.id];
+      })
+      .map(function (n) {
+        return n.id;
+      });
   }
 
   // ---- Dry-run preview (what would execute) ----
 
-  // Estimate the set of nodes a Run (or "Run to here" with targetNodeId) would
-  // execute: everything minus sticky notes, muted nodes, and nodes whose
-  // *required* data inputs are fed only by skipped producers (a JS mirror of the
-  // runner's _should_skip, minus gate evaluation — gates resolve at run time, so
-  // gated branches count as running). Bounded relaxation keeps it cycle-safe.
+  // Nodes a Run (or "Run to here") would execute; mirrors the runner's _should_skip minus gates.
   function computeWouldRun(targetNodeId) {
     var nodes = (state.nodes || []).filter(function (n) {
       return n.type !== "note";
@@ -259,8 +274,7 @@
     nodes.forEach(function (n) {
       if (!skip[n.id]) would[n.id] = true;
     });
-    // "Run to here": intersect with the target's ancestors (inclusive) — a JS
-    // port of the runner's _ancestors_inclusive reverse walk.
+    // "Run to here": keep only the target's ancestors (runner's _ancestors_inclusive).
     if (targetNodeId && ids[targetNodeId]) {
       var keep = {};
       var stack = [targetNodeId];
@@ -281,10 +295,7 @@
     return { ids: would, count: Object.keys(would).length, total: nodes.length };
   }
 
-  // Toggle the preview classes on the canvas cards + the "N of M steps" chip.
-  // clearRunPreview removes ONLY its own classes — never the run-* tint set the
-  // runs satellite owns. (A renderAllNodes rebuild drops the preview classes;
-  // re-hovering Run re-applies them, which is fine for a hover-scoped cue.)
+  // Hover cue: preview classes on cards plus the steps chip. Never touches run-* classes.
   function showRunPreview(targetNodeId) {
     if (!state.ready) return;
     var plan = computeWouldRun(targetNodeId);
@@ -298,12 +309,32 @@
     var chip = qs("#wfPreviewChip");
     if (chip) {
       var steps = plan.count === 1 ? " step" : " steps";
-      chip.textContent =
+      var text =
         plan.count === plan.total
           ? plan.count + steps
           : plan.count + " of " + plan.total + " steps";
+      // Count of video-duration-bound steps; a cost hint, not an ETA.
+      var heavy = 0;
+      (state.nodes || []).forEach(function (n) {
+        if (plan.ids[n.id] && isHeavyNodeType(n.type)) heavy += 1;
+      });
+      if (heavy) text += " · " + heavy + " heavy";
+      chip.textContent = text;
       chip.classList.toggle("hidden", !plan.total);
     }
+  }
+
+  // Video-duration-bound node types: whole-recording decode (detectors,
+  // multitool, timelapse), transcription, or a whole-file rewrite/copy.
+  function isHeavyNodeType(type) {
+    if (String(type).indexOf("ss_") === 0) return true;
+    return (
+      type === "detect" ||
+      type === "multitool" ||
+      type === "timelapse" ||
+      type === "transcribe" ||
+      type === "post_process"
+    );
   }
 
   function clearRunPreview() {
@@ -319,6 +350,7 @@
   // ---- Aggregate + render ----
 
   function nodeLabel(node) {
+    if (node.name) return node.name;
     var type = state.catalogById[node.type];
     return (type && type.label) || node.type;
   }
@@ -326,9 +358,19 @@
   function compute() {
     var errors = [];
     var warnings = [];
-    // Graph-level: a cycle makes the run unschedulable (Kahn never drains).
-    if (graphHasCycle()) {
-      errors.push({ message: "Graph has a cycle", nodeId: null });
+    // A cycle blocks scheduling; anchor the row on the first unplaced node.
+    var cyc = cycleNodeIds();
+    if (cyc.length) {
+      var cycLabels = cyc.slice(0, 3).map(function (id) {
+        var n = WF.findNode ? WF.findNode(id) : null;
+        return n ? nodeLabel(n) : id;
+      });
+      if (cyc.length > 3) cycLabels.push("+" + (cyc.length - 3) + " more");
+      errors.push({
+        message: "Graph has a cycle",
+        nodeId: cyc[0],
+        label: cycLabels.join(", "),
+      });
     }
     (state.nodes || []).forEach(function (node) {
       var issues = nodeIssues(node);
@@ -394,8 +436,6 @@
     panel.appendChild(list);
   }
 
-  // Recompute from the live graph, re-render the panel, and re-gate Run. Called
-  // by the hub on every edit (scheduleSave) and on blueprint load (openBlueprint).
   function refreshValidation() {
     state.validation = compute();
     render();
@@ -406,7 +446,6 @@
 
   // ---- Satellite interface ----
   WF.nodeIssues = nodeIssues;
-  WF.graphHasCycle = graphHasCycle;
   WF.refreshValidation = refreshValidation;
   // Dry-run preview (hub wires the Run split-button hover to these).
   WF.computeWouldRun = computeWouldRun;

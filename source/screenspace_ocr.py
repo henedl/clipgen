@@ -1,15 +1,12 @@
-"""Screenspace OCR + numeric helpers.
-
-Pooled EasyOCR readers, region preprocessing, glyph confusion-folding, the
-numeric comparison helpers and allowlists, region reading/scoring, and the
-calibration OCR entry point. Imports region cropping from screenspace_primitives.
-"""
+"""Screenspace OCR + numeric helpers."""
 
 import difflib
 import math
+import os
 import queue
 import re
 import threading
+import time
 from collections.abc import Iterator
 from contextlib import contextmanager
 from typing import Any
@@ -18,55 +15,127 @@ import cv2
 import numpy as np
 
 import config
+import profiling
+from utils import get_bundled_assets_root
 from screenspace_primitives import extract_region, point_in_mask_points
 
 
 # ---------------------------------------------------------------------------
-# Reader pool
+# Engine pool
 # ---------------------------------------------------------------------------
 #
-# EasyOCR/torch inference on a shared Reader is not thread-safe: with parallel
-# Screenspace workers (and the calibration route thread) hitting one Reader,
-# concurrent readtext calls can corrupt results or crash. Rather than serialize
-# every readtext behind a global lock (which capped OCR concurrency at 1 despite
-# SCREENSPACE_PARALLEL_WORKERS), keep a small bounded pool of Readers per
-# language set and hand a distinct Reader to each concurrent caller. A Reader is
-# only ever touched by one thread at a time, so no inference lock is needed and
-# up to pool-size OCR calls run truly in parallel. The pool is bounded (not a
-# per-thread reader) because the Flask calibration path spawns ephemeral request
-# threads, which would otherwise accumulate one model copy per thread.
+# Per-model pool: RapidOCR engines aren't thread-safe; bounded against Flask
+# thread churn.
 
-_ocr_pools: dict[tuple, queue.Queue] = {}
+_ocr_pools: dict[str, queue.Queue] = {}
 _ocr_pool_lock = threading.Lock()  # guards _ocr_pools creation
-_ocr_build_lock = threading.Lock()  # serializes first-time Reader construction
+_ocr_build_lock = threading.Lock()  # serializes first-time engine construction
+
+# Language → recognition model; non-default families are vendored
+# (build/fetch_binaries.py). UI dropdown mirrors these keys.
+_OCR_MODEL_DEFAULT = "default"
+_OCR_LANG_TO_MODEL: dict[str, str] = {
+    "en": _OCR_MODEL_DEFAULT,
+    "zh": _OCR_MODEL_DEFAULT,  # the default rec model covers Chinese + English
+    "es": "latin",
+    "fr": "latin",
+    "de": "latin",
+    "ja": "japan",
+    "ko": "korean",
+}
 
 
-def _build_ocr_reader(languages: list[str]) -> Any:
-    """Construct one EasyOCR Reader (the sole reader-construction site)."""
-    import easyocr
+def _resolve_ocr_model(languages: list[str] | None) -> str:
+    """Map a UI language list onto one recognition-model family."""
+    langs = list(languages or ["en"])
+    unknown = [lang for lang in langs if lang not in _OCR_LANG_TO_MODEL]
+    if unknown:
+        raise ValueError(f"Unsupported OCR language(s): {unknown}")
+    models = {_OCR_LANG_TO_MODEL[lang] for lang in langs}
+    if models == {_OCR_MODEL_DEFAULT, "latin"}:
+        # latin lacks the default model's Chinese half: ["en","de"] share latin,
+        # ["zh","de"] cannot.
+        default_langs = [
+            lang for lang in langs if _OCR_LANG_TO_MODEL[lang] == _OCR_MODEL_DEFAULT
+        ]
+        if default_langs and all(lang == "en" for lang in default_langs):
+            return "latin"
+    if len(models) == 1:
+        return next(iter(models))
+    raise ValueError(f"OCR languages {langs} need incompatible recognition models")
 
-    return easyocr.Reader(
-        list(languages), gpu=config.SCREENSPACE_OCR_GPU, verbose=False
-    )
+
+def _vendored_rec_model(model: str) -> Any:
+    """Locate the build-time-vendored recognition model for a model family.
+
+    ONNX rec models embed their character dict in the model metadata, so a
+    single ``.onnx`` file is the whole vendored artifact. Frozen bundles carry
+    them under ``<_MEIPASS>/ocr_models/``; source checkouts that ran
+    ``build/fetch_binaries.py`` have them in ``build/vendor/ocr/``. Returns the
+    path, or ``None`` when absent (dev fallback: rapidocr's own pinned
+    download).
+    """
+    root = get_bundled_assets_root()
+    for base in (root / "ocr_models", root / "build" / "vendor" / "ocr"):
+        onnx = base / f"{model}_rec.onnx"
+        if onnx.is_file():
+            return onnx
+    return None
+
+
+def _build_ocr_reader(model: str) -> Any:
+    """Construct one RapidOCR engine (the sole engine-construction site)."""
+    from rapidocr import LangRec, ModelType, OCRVersion, RapidOCR
+
+    params: dict[str, Any] = {
+        "Global.log_level": "error",
+        # RapidOCR pre-filters below text_score (default 0.5); near-zero makes
+        # ocr_confidence_threshold the single gate.
+        "Global.text_score": 0.05,
+        # Cap intra-op threads so pool_size × threads cannot oversubscribe the CPU.
+        "EngineConfig.onnxruntime.intra_op_num_threads": max(
+            1, (os.cpu_count() or 4) // _ocr_pool_size()
+        ),
+    }
+    if model != _OCR_MODEL_DEFAULT:
+        vendored = _vendored_rec_model(model)
+        if vendored is not None:
+            params["Rec.model_path"] = str(vendored)
+        else:
+            # Dev-only fallback: rapidocr fetches its pinned model. v5 has no
+            # japan model, hence v4.
+            params["Rec.lang_type"] = {
+                "latin": LangRec.LATIN,
+                "japan": LangRec.JAPAN,
+                "korean": LangRec.KOREAN,
+            }[model]
+            params["Rec.ocr_version"] = (
+                OCRVersion.PPOCRV4 if model == "japan" else OCRVersion.PPOCRV5
+            )
+            params["Rec.model_type"] = ModelType.MOBILE
+    return RapidOCR(params=params)
 
 
 def _ocr_pool_size() -> int:
-    """Max concurrent Readers per language set (auto = parallel worker count)."""
+    """Max concurrent engines per model family (auto = parallel worker count)."""
     size = config.SCREENSPACE_OCR_POOL_SIZE or config.SCREENSPACE_PARALLEL_WORKERS
     return max(1, size)
 
 
 def _get_ocr_pool(languages: list[str]) -> queue.Queue:
-    """Return the (lazily created) Reader pool for the given language set.
+    """Return the (lazily created) engine pool for the given language set.
 
     The pool is seeded with ``_ocr_pool_size()`` ``None`` placeholder slots;
-    each slot's Reader is built on first checkout.
+    each slot's engine is built on first checkout. Keyed by the resolved
+    recognition-model family, so e.g. es/fr/de share one pool.
     """
-    key = tuple(sorted(languages))
+    key = _resolve_ocr_model(languages)
     with _ocr_pool_lock:
         pool = _ocr_pools.get(key)
         if pool is None:
-            pool = queue.Queue()
+            # LIFO so a sequential caller gets its engine back; FIFO built one
+            # engine per slot.
+            pool = queue.LifoQueue()
             for _ in range(_ocr_pool_size()):
                 pool.put(None)
             _ocr_pools[key] = pool
@@ -75,44 +144,68 @@ def _get_ocr_pool(languages: list[str]) -> queue.Queue:
 
 @contextmanager
 def _checkout_ocr_reader(languages: list[str]) -> Iterator[Any]:
-    """Borrow a Reader from the bounded per-language pool for the duration of a call.
+    """Borrow an engine from the bounded per-model pool for one call.
 
-    ``pool.get()`` blocks when every Reader is busy, so concurrency is capped at
-    the pool size. A ``None`` slot is built on first use under ``_ocr_build_lock``
-    (serializing only construction, so the initial model-file download can't
-    race). The slot is always returned to the pool — ``None`` again if
-    construction raised — so the pool's slot count never shrinks.
+    ``pool.get()`` blocks while every engine is busy, capping concurrency at the
+    pool size. ``None`` slots are built on first use under ``_ocr_build_lock`` so
+    a first-use model fetch (dev fallback) can't race. The slot always goes
+    back — ``None`` again if construction raised — so the pool never shrinks.
     """
-    key = tuple(sorted(languages))
+    model = _resolve_ocr_model(languages)
     pool = _get_ocr_pool(languages)
+    # Wait time here is OCR concurrency the pool refuses; sizes
+    # SCREENSPACE_OCR_POOL_SIZE. One add() per call.
+    _t0 = time.perf_counter() if config.PROFILING else 0.0
     reader = pool.get()
+    if _t0:
+        profiling.add("ocr.pool_wait", time.perf_counter() - _t0)
     try:
         if reader is None:
-            with _ocr_build_lock:
-                reader = _build_ocr_reader(list(key))
+            with _ocr_build_lock, profiling.span("ocr.reader_build"):
+                reader = _build_ocr_reader(model)
         yield reader
     finally:
         pool.put(reader)
 
 
-def _ocr_readtext(languages: list[str], image: np.ndarray, **kwargs: Any) -> list[Any]:
-    """Run ``readtext`` on a pooled Reader for the given language set."""
+def _readings_from_result(result: Any) -> list[Any]:
+    """Adapt a ``RapidOCROutput`` to raw ``[(bbox, text, conf)]`` readings.
+
+    ``bbox`` is a list of four ``(x, y)`` floats in pixel space — the same shape
+    EasyOCR produced, which every downstream consumer unpacks. Plain tuples,
+    not ndarrays: readings cross the server's per-pin OCR cache boundary and
+    nothing numpy may leak toward JSON. An empty result carries ``None`` fields.
+    """
+    boxes = getattr(result, "boxes", None)
+    txts = getattr(result, "txts", None)
+    if boxes is None or txts is None:
+        return []
+    scores = getattr(result, "scores", None)
+    if scores is None:
+        scores = [0.0] * len(txts)
+    readings: list[Any] = []
+    for box, text, score in zip(boxes, txts, scores, strict=False):
+        points = [
+            (float(x), float(y)) for x, y in np.asarray(box, dtype=float).reshape(-1, 2)
+        ]
+        readings.append((points, str(text), float(score)))
+    return readings
+
+
+def _ocr_readtext(languages: list[str], image: np.ndarray) -> list[Any]:
+    """Run a pooled RapidOCR engine over *image* for the given language set."""
     with _checkout_ocr_reader(languages) as reader:
-        return reader.readtext(image, **kwargs)
+        return _readings_from_result(reader(image))
 
 
 def _preprocess_for_ocr(pixels: np.ndarray, *, min_height: int = 0) -> np.ndarray:
     """Enhance a region crop for OCR: upscale small crops and boost local contrast.
 
-    Compressed game HUDs frequently render text below EasyOCR's comfortable size
-    and at low contrast. Crops shorter than ``min_height`` are upscaled with cubic
-    interpolation (preserving aspect ratio), then CLAHE (contrast-limited adaptive
-    histogram equalization) separates faint glyphs from the background. Opt-in per
-    task because the resize + equalization costs a few ms/frame and can introduce
-    ringing on already-clean text.
-
-    Returns a 3-channel BGR array (EasyOCR accepts grayscale, but stacking keeps
-    the downstream call identical to the raw crop).
+    Compressed HUDs render text below the OCR engine's comfortable size and contrast,
+    so crops shorter than ``min_height`` are cubic-upscaled (aspect preserved) and
+    CLAHE-equalized. Opt-in per task: it costs a few ms/frame and can ring on
+    already-clean text. Returns 3-channel BGR so the downstream call is identical
+    to the raw-crop path.
     """
     if min_height <= 0:
         min_height = config.SCREENSPACE_OCR_MIN_HEIGHT
@@ -129,10 +222,8 @@ def _preprocess_for_ocr(pixels: np.ndarray, *, min_height: int = 0) -> np.ndarra
     return cv2.cvtColor(enhanced, cv2.COLOR_GRAY2BGR)
 
 
-# Opt-in OCR confusion-collapsing for the text tool. Folds glyphs EasyOCR most
-# often swaps on compressed footage toward a canonical form before the fuzzy
-# compare. Two directions: fold toward digits (so a search for "100" matches an
-# OCR reading of "l00") or toward letters (so a search for "stop" matches "5top").
+# Opt-in glyph confusion folding before the fuzzy compare; pairs tuned on
+# EasyOCR, re-tune for PP-OCR.
 _OCR_FOLD_TO_DIGITS = str.maketrans(
     {"o": "0", "l": "1", "i": "1", "|": "1", "s": "5", "b": "8"}
 )
@@ -172,17 +263,6 @@ def _effective_ocr_confidence_threshold(value: Any = None) -> float:
 _NUMBERS_RE = re.compile(r"-?\d+(?:\.\d+)?")
 _VALID_OPERATORS = ("eq", "gt", "lt", "gte", "lte", "range")
 
-# EasyOCR character allowlist for the numbers tool. Numbers mode is digits-only,
-# so constraining recognition kills glyph confusions (O↔0, S↔5, l↔1) at the
-# source. Only passed for the default English reader — some language combos
-# reject ``allowlist``. Mirrors what the downstream parser accepts (``-``, ``.``,
-# ``,`` thousands separators, digits).
-_OCR_NUMBER_ALLOWLIST = "0123456789.,-"
-# integers_only narrows the allowlist further: dropping ``.,-`` stops a separator
-# or sign glyph from surviving OCR as a digit and inflating the parsed value.
-# Use for whole-number HUD targets (scores, counts) where decimals never appear.
-_OCR_DIGITS_ONLY_ALLOWLIST = "0123456789"
-
 
 def _number_matches(
     value: float,
@@ -194,15 +274,15 @@ def _number_matches(
     """Check if *value* satisfies the given numeric comparison."""
     if operator == "eq":
         return value == target_value
-    elif operator == "gt":
+    if operator == "gt":
         return value > target_value
-    elif operator == "lt":
+    if operator == "lt":
         return value < target_value
-    elif operator == "gte":
+    if operator == "gte":
         return value >= target_value
-    elif operator == "lte":
+    if operator == "lte":
         return value <= target_value
-    elif operator == "range":
+    if operator == "range":
         return (
             range_min is not None
             and range_max is not None
@@ -211,39 +291,26 @@ def _number_matches(
     return False
 
 
-def _numbers_ocr_allowlist(languages: list[str], integers_only: bool) -> str | None:
-    """EasyOCR allowlist for the numbers tool (English only; ``None`` otherwise)."""
-    if languages == ["en"]:
-        return _OCR_DIGITS_ONLY_ALLOWLIST if integers_only else _OCR_NUMBER_ALLOWLIST
-    return None
-
-
 def _ocr_region_readings(
     region_pixels: np.ndarray,
     *,
     languages: list[str] | None = None,
-    allowlist: str | None = None,
     preprocess: bool = False,
     mask_points: list[Any] | None = None,
 ) -> list[Any]:
-    """Run EasyOCR over a region crop and return raw ``(bbox, text, conf)`` tuples.
+    """Run OCR over a region crop and return raw ``(bbox, text, conf)`` tuples.
 
-    Pure transport over the cached reader — no fuzzy/threshold logic — so the
-    same readings can be re-scored under different fuzzy/confidence settings
-    (the basis of the calibration OCR cache).
+    Pure transport — no fuzzy/threshold logic — so the same readings can be
+    re-scored under different settings (the calibration OCR cache relies on this).
 
-    For shaped regions, *mask_points* (bbox-relative contour list) drops
-    readings whose bbox center falls outside every contour. OCR always sees the
-    full rect (masking glyph pixels would corrupt recognition); only the
-    readings are filtered. Centers are normalized by the *post-preprocess*
-    image shape so the test is unaffected by the OCR upscale.
+    For shaped regions, *mask_points* (bbox-relative contours) drops readings whose
+    bbox center falls outside every contour. OCR still sees the full rect, since
+    masking glyph pixels would corrupt recognition. Centers normalize by the
+    *post-preprocess* shape so the test survives the OCR upscale.
     """
     langs = languages or ["en"]
     pixels = _preprocess_for_ocr(region_pixels) if preprocess else region_pixels
-    kwargs: dict[str, Any] = {"detail": 1}
-    if allowlist is not None:
-        kwargs["allowlist"] = allowlist
-    readings = _ocr_readtext(langs, pixels, **kwargs)
+    readings = _ocr_readtext(langs, pixels)
     if mask_points:
         img_h, img_w = pixels.shape[:2]
         if img_h > 0 and img_w > 0:
@@ -259,6 +326,32 @@ def _ocr_region_readings(
     return readings
 
 
+def _fuzzy_match_ratio(needle: str, haystack: str) -> float:
+    """Best fuzzy ratio of *needle* against *haystack* or any span of it.
+
+    PP-OCR's detector returns whole lines as single readings (a WoW chat line,
+    a full sentence), where EasyOCR segmented into word-group boxes. Scoring
+    the search string against the entire reading punishes exactly the case the
+    tool exists for — a short target inside a longer line scores ~0.6 even on
+    a perfect read — so a reading longer than the search is scored by its
+    best same-length window instead ("does this text appear", not "is this
+    text the whole reading"). The plain two-string ratio still applies when
+    the search is at least as long as the reading.
+    """
+    if not needle or len(needle) >= len(haystack):
+        return difflib.SequenceMatcher(None, needle, haystack).ratio()
+    if needle in haystack:
+        return 1.0
+    # SequenceMatcher caches seq2, so the constant needle goes there.
+    matcher = difflib.SequenceMatcher(None, "", needle)
+    best = 0.0
+    for i in range(len(haystack) - len(needle) + 1):
+        matcher.set_seq1(haystack[i : i + len(needle)])
+        ratio = matcher.ratio()
+        best = max(best, ratio)
+    return best
+
+
 def _score_text_readings(
     readings: list[Any], params: dict[str, Any]
 ) -> tuple[bool, dict[str, Any]]:
@@ -266,7 +359,8 @@ def _score_text_readings(
 
     ``fuzzy_ratio`` is the calibration scalar; ``text_found``/``confidence`` carry
     the best-matching reading for the strip tooltip. ``passed`` is the fuzzy
-    match at the current threshold.
+    match at the current threshold. Matching is substring-aware — see
+    :func:`_fuzzy_match_ratio`.
     """
     search_string = params.get("search_string", "")
     fuzzy_threshold = params.get(
@@ -286,7 +380,7 @@ def _score_text_readings(
         if conf < ocr_min_conf:
             continue
         ocr_cmp = _normalize_ocr_text(text, ocr_normalize)
-        ratio = difflib.SequenceMatcher(None, search_cmp, ocr_cmp).ratio()
+        ratio = _fuzzy_match_ratio(search_cmp, ocr_cmp)
         if ratio > best_ratio:
             best_ratio = ratio
             best_text = text
@@ -307,11 +401,17 @@ def _score_numbers_readings(
     reflects the best reading that satisfies operator / target_value / range,
     not an unrelated high-confidence number. ``passed`` then applies the current
     confidence threshold to that matching reading.
+
+    ``integers_only`` rejects any extracted value carrying a decimal part or a
+    sign, so "3.5" or "-12" can never satisfy a whole-number HUD condition.
+    (Post-filtering replaces the old English-only EasyOCR recognition allowlist;
+    it now applies to every language.)
     """
     operator = params.get("operator", "gt")
     target_value = params.get("target_value", 0)
     range_min = params.get("range_min")
     range_max = params.get("range_max")
+    integers_only = bool(params.get("integers_only", False))
     ocr_min_conf = _effective_ocr_confidence_threshold(
         params.get("ocr_confidence_threshold")
     )
@@ -320,6 +420,8 @@ def _score_numbers_readings(
     for _, text, conf in readings:
         cleaned = text.replace(",", "")
         for match in _NUMBERS_RE.findall(cleaned):
+            if integers_only and not match.isdigit():
+                continue  # decimal or signed reading — not a whole-number value
             num = float(match)
             if _number_matches(num, operator, target_value, range_min, range_max) and (
                 matched_number is None or conf > matched_conf
@@ -335,26 +437,21 @@ def _score_numbers_readings(
 def run_calibration_ocr(
     frame: np.ndarray,
     region: dict[str, Any],
-    tool_type: str,
     params: dict[str, Any],
 ) -> list[Any]:
-    """Run EasyOCR for one calibration frame/region (text or numbers tool).
+    """Run OCR for one calibration frame/region (text or numbers tool).
 
     Public entry point for the server's per-pin OCR cache: returns the raw
     ``(bbox, text, conf)`` readings so they can be memoized and re-scored under
-    changed fuzzy/confidence settings without re-running OCR.
+    changed fuzzy/confidence settings without re-running OCR. Text and numbers
+    pins share readings — ``integers_only`` and the numeric operators are
+    applied at scoring time, not here.
     """
     languages = params.get("languages") or ["en"]
-    allowlist = (
-        _numbers_ocr_allowlist(languages, params.get("integers_only", False))
-        if tool_type == "numbers"
-        else None
-    )
     pixels = extract_region(frame, region)
     return _ocr_region_readings(
         pixels,
         languages=languages,
-        allowlist=allowlist,
         preprocess=params.get("ocr_preprocess", False),
         mask_points=region.get("mask_points"),
     )

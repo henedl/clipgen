@@ -10,21 +10,11 @@
 
 // ---- Feature flags ----
 
-// Live token-tweak debug widget (dev-token-tweak.js). When false, the widget
-// script bails on load and never mounts. Flip to false during a build, or
-// when not iterating on the redesign. The widget never ships in exports
-// either way — viewer.py strips data-dev-only tags during inlining.
+// Gates dev-token-tweak.js; viewer.py strips data-dev-only tags from exports regardless.
 var CLIPGEN_DEV_TOKEN_TWEAK = false;
 
-// ---- Canonical config (mirror of config.py via utils.get_frontend_config)
-//
-// Source of truth: every API response (server.py /api/sheet) and every
-// exported viewer payload (viewer.py finalize_*) embeds a `config` field.
-// Pages call
-// clipgenApplyConfig(payload) to overlay the live values onto these defaults.
-// The hardcoded defaults below cover purely-offline contexts (re-opened
-// older exported viewers); tests/test_shared_constants.py asserts they
-// match config.py.
+// ---- Canonical config ----
+// Offline defaults mirroring config.py; clipgenApplyConfig overlays live payloads. tests/test_shared_constants.py checks.
 
 var CLIPGEN_CONFIG = {
   defaultDuration: 60,
@@ -63,14 +53,25 @@ var CLIPGEN_CONFIG = {
   screenshotFormat: ".png",
   gifFormat: ".gif",
   composerAnnotationColor: "#f05a3c",
+  composerAnnotationColorSecondary: "#f8fafc",
   composerAnnotationStrokeWidth: 0.004,
   composerAnnotationStrokeStyle: "solid",
   composerAnnotationFontSize: 0.035,
   composerAnnotationSpanSeconds: 10.0,
   composerScrubMaxAudioSeconds: 180.0,
   composerDoubleClickCuts: true,
+  crossReferences: true,
   mediaContainerWarning: true,
+  transcribeSpeakers: false,
+  speakerLabelMaxLen: 40,
+  // Mirrors video.SUBTITLE_CODEC_BY_CONTAINER / SUBTITLE_ALWAYS_DEFAULT_CONTAINERS;
+  // the mp4 muxer ignores -disposition:s:0.
+  subtitleContainers: {
+    supported: [".m4v", ".mkv", ".mov", ".mp4", ".webm"],
+    alwaysDefault: [".m4v", ".mov", ".mp4"],
+  },
   hotkeyOverrides: {},
+  profiling: false,
 };
 
 var clipgenApplyConfig = function (payload) {
@@ -129,14 +130,44 @@ var clipgenApplyConfig = function (payload) {
   if (typeof payload.gifFormat === "string") {
     CLIPGEN_CONFIG.gifFormat = payload.gifFormat;
   }
+  if (typeof payload.composerAnnotationColor === "string") {
+    CLIPGEN_CONFIG.composerAnnotationColor = payload.composerAnnotationColor;
+  }
+  if (typeof payload.composerAnnotationColorSecondary === "string") {
+    CLIPGEN_CONFIG.composerAnnotationColorSecondary = payload.composerAnnotationColorSecondary;
+  }
+  if (typeof payload.composerAnnotationStrokeWidth === "number") {
+    CLIPGEN_CONFIG.composerAnnotationStrokeWidth = payload.composerAnnotationStrokeWidth;
+  }
+  if (typeof payload.composerAnnotationStrokeStyle === "string") {
+    CLIPGEN_CONFIG.composerAnnotationStrokeStyle = payload.composerAnnotationStrokeStyle;
+  }
+  if (typeof payload.composerAnnotationFontSize === "number") {
+    CLIPGEN_CONFIG.composerAnnotationFontSize = payload.composerAnnotationFontSize;
+  }
+  if (typeof payload.composerAnnotationSpanSeconds === "number") {
+    CLIPGEN_CONFIG.composerAnnotationSpanSeconds = payload.composerAnnotationSpanSeconds;
+  }
   if (typeof payload.composerScrubMaxAudioSeconds === "number") {
     CLIPGEN_CONFIG.composerScrubMaxAudioSeconds = payload.composerScrubMaxAudioSeconds;
   }
   if (typeof payload.composerDoubleClickCuts === "boolean") {
     CLIPGEN_CONFIG.composerDoubleClickCuts = payload.composerDoubleClickCuts;
   }
+  if (typeof payload.crossReferences === "boolean") {
+    CLIPGEN_CONFIG.crossReferences = payload.crossReferences;
+  }
   if (typeof payload.mediaContainerWarning === "boolean") {
     CLIPGEN_CONFIG.mediaContainerWarning = payload.mediaContainerWarning;
+  }
+  if (typeof payload.transcribeSpeakers === "boolean") {
+    CLIPGEN_CONFIG.transcribeSpeakers = payload.transcribeSpeakers;
+  }
+  if (typeof payload.speakerLabelMaxLen === "number") {
+    CLIPGEN_CONFIG.speakerLabelMaxLen = payload.speakerLabelMaxLen;
+  }
+  if (payload.subtitleContainers && typeof payload.subtitleContainers === "object") {
+    CLIPGEN_CONFIG.subtitleContainers = payload.subtitleContainers;
   }
   if (payload.hotkeyOverrides && typeof payload.hotkeyOverrides === "object") {
     CLIPGEN_CONFIG.hotkeyOverrides = payload.hotkeyOverrides;
@@ -144,7 +175,141 @@ var clipgenApplyConfig = function (payload) {
       window.ClipgenHotkeys.applyOverrides(payload.hotkeyOverrides);
     }
   }
+  if (typeof payload.profiling === "boolean") {
+    CLIPGEN_CONFIG.profiling = payload.profiling;
+    if (payload.profiling && window.clipgenPerf) {
+      window.clipgenPerf.observe();
+    }
+  }
 };
+
+// ---- Performance instrumentation ----
+// No-op unless CLIPGEN_CONFIG.profiling; read via `tests/ui/shot.py --perf`. See agents/skills/profile/SKILL.md.
+var clipgenPerf = (function () {
+  var MAX_LABELS = 512; // bounded like the Python side; overflow is counted, never silent
+  var acc = {
+    measures: {},
+    longtasks: { count: 0, totalMs: 0, maxMs: 0 },
+    dropped: 0,
+    supported: { longtask: null }, // null until observe() runs; false when the browser lacks it
+  };
+  window.__clipgenPerf = acc;
+  var observer = null;
+  var labelCount = 0;
+  // Per-label stacks of start times: nested same-label spans each get a sample.
+  var open = {};
+
+  function record(label, ms) {
+    if (!CLIPGEN_CONFIG.profiling) return;
+    var m = acc.measures[label];
+    if (!m) {
+      if (labelCount >= MAX_LABELS) { acc.dropped += 1; return; }
+      labelCount += 1;
+      m = acc.measures[label] = { totalMs: 0, n: 0, maxMs: 0 };
+    }
+    m.totalMs += ms;
+    m.n += 1;
+    if (ms > m.maxMs) m.maxMs = ms;
+  }
+
+  function begin(label) {
+    if (!CLIPGEN_CONFIG.profiling) return;
+    (open[label] || (open[label] = [])).push(performance.now());
+    // Trace breadcrumb only; timing comes from the stack above.
+    try { performance.mark("cg:" + label + ":start"); } catch (_) {}
+  }
+
+  function end(label) {
+    if (!CLIPGEN_CONFIG.profiling) return;
+    var stack = open[label];
+    if (!stack || !stack.length) return; // begin() never ran for this label
+    record(label, performance.now() - stack.pop());
+    if (!stack.length) delete open[label];
+    try { performance.mark("cg:" + label + ":end"); } catch (_) {}
+  }
+
+  // Time a synchronous function; returns its result.
+  function span(label, fn) {
+    if (!CLIPGEN_CONFIG.profiling) return fn();
+    begin(label);
+    try {
+      return fn();
+    } finally {
+      end(label);
+    }
+  }
+
+  // Records wall time per call, including a returned promise's async tail.
+  function wrap(label, fn) {
+    return function () {
+      if (!CLIPGEN_CONFIG.profiling) return fn.apply(this, arguments);
+      var t0 = performance.now();
+      var result;
+      try {
+        result = fn.apply(this, arguments);
+      } catch (e) {
+        record(label, performance.now() - t0);
+        throw e;
+      }
+      if (result && typeof result.then === "function") {
+        var settle = function () { record(label, performance.now() - t0); };
+        result.then(settle, settle);
+      } else {
+        record(label, performance.now() - t0);
+      }
+      return result;
+    };
+  }
+
+  // Longtask observer: main-thread stalls >50ms. Unsupported browsers report false.
+  function observe() {
+    if (observer || !CLIPGEN_CONFIG.profiling) return;
+    if (typeof PerformanceObserver === "undefined") {
+      acc.supported.longtask = false;
+      return;
+    }
+    var types = PerformanceObserver.supportedEntryTypes;
+    if (types && types.indexOf("longtask") < 0) {
+      acc.supported.longtask = false;
+      return;
+    }
+    try {
+      observer = new PerformanceObserver(function (list) {
+        var entries = list.getEntries();
+        for (var i = 0; i < entries.length; i++) {
+          var d = entries[i].duration;
+          acc.longtasks.count += 1;
+          acc.longtasks.totalMs += d;
+          if (d > acc.longtasks.maxMs) acc.longtasks.maxMs = d;
+        }
+      });
+      observer.observe({ entryTypes: ["longtask"] });
+      acc.supported.longtask = true;
+      window.addEventListener("pagehide", function () {
+        if (observer) { observer.disconnect(); observer = null; }
+      });
+    } catch (_) {
+      observer = null;
+      acc.supported.longtask = false;
+    }
+  }
+
+  // Plain data only: Playwright's serializer drops PerformanceEntry prototype getters.
+  function snapshot() {
+    return JSON.parse(JSON.stringify(acc));
+  }
+
+  return {
+    begin: begin,
+    end: end,
+    span: span,
+    wrap: wrap,
+    record: record,
+    observe: observe,
+    snapshot: snapshot,
+  };
+})();
+window.clipgenPerf = clipgenPerf;
 
 // ---- DOM helpers ----
 
@@ -163,11 +328,7 @@ var clipgenPluralUnit = function (n, singular, plural) {
   return n + " " + (n === 1 ? singular : plural);
 };
 
-// Populate a container with a skeleton table: `cols` header cells plus
-// `rows × cols` body cells. Pairs with the `.skeleton-grid` / `.skeleton-cell`
-// CSS in primitives.css (and the shimmer in tokens.css). Target should
-// already have class `skeleton-grid`; the helper appends cells via a single
-// DocumentFragment.
+// Appends `cols` header cells plus rows×cols body cells into a .skeleton-grid target (primitives.css).
 var buildSkeletonGrid = function (target, cols, rows) {
   if (!target) return;
   var frag = document.createDocumentFragment();
@@ -182,15 +343,12 @@ var buildSkeletonGrid = function (target, cols, rows) {
   target.appendChild(frag);
 };
 
-// True when an animated artifact's filename should render via <video> rather
-// than <img>. Used by the gallery and viewer so they agree which extensions
-// are looping video. Keep as the single source of truth.
+// Single source of truth for which animated artifacts render as <video>.
 var isVideoLoop = function (filename) {
   return /\.webm$/i.test(filename || "");
 };
 
-// Create a looping, silent, autoplay <video> element for animated artifacts
-// stored as .webm. Centralized so the attribute set is consistent everywhere.
+// Looping, silent, autoplay <video> for .webm artifacts; keeps the attribute set uniform.
 var createLoopVideo = function (src, alt) {
   var v = document.createElement("video");
   v.src = src;
@@ -204,24 +362,24 @@ var createLoopVideo = function (src, alt) {
   return v;
 };
 
+// ---- Export attribution (version + repo from CLIPGEN_DATA.meta) ----
+var clipgenRenderFooter = function (meta) {
+  var el = document.getElementById("footerCredit");
+  if (!el || !meta) return;
+  var version = meta.clipgenVersion ? " v" + meta.clipgenVersion : "";
+  el.textContent = "Generated by clipgen" + version;
+  if (!meta.repoUrl) return;
+  el.appendChild(document.createTextNode(" \u00b7 "));
+  var link = document.createElement("a");
+  link.href = meta.repoUrl;
+  link.target = "_blank";
+  link.rel = "noopener noreferrer";
+  link.textContent = meta.repoUrl.replace(/^https?:\/\//, "");
+  el.appendChild(link);
+};
+
 // ---- Brand mark hydration ----
-//
-// Fetches assets/logos/favicon.svg and injects it as inline <svg> into every
-// .brand-mark element so the three F-paths can be animated via CSS
-// stroke-dashoffset (see .brand-mark.is-animated rules in tokens.css).
-//
-// The draw-on cascade plays only the first time a browser session sees the
-// mark (sessionStorage key BRAND_MARK_PLAYED_KEY). Navigating between Studio,
-// Screenspace, and Transcripts within the same tab re-injects the SVG but
-// skips the animation — closing the tab/browser clears the flag and the
-// next visit replays.
-//
-// On fetch failure (e.g. file:// open with no server, blocked by CSP) the
-// existing mask-image fallback in tokens.css renders the static mark — no
-// flicker, no broken state.
-//
-// Loading from the file rather than inlining means future drop-in replacement
-// of assets/logos/favicon.svg propagates without code edits.
+// Inlines logos/favicon.svg for tokens.css's stroke animation; plays once per session.
 var BRAND_MARK_PLAYED_KEY = "clipgen.brand-mark.played";
 
 var clipgenInitBrandMark = function () {
@@ -262,12 +420,7 @@ if (document.readyState === "loading") {
 }
 
 // ---- Mask-image icon helpers ----
-//
-// Apply both `mask-image` and `-webkit-mask-image` to a DOM element. `urlValue`
-// is a CSS url(...) string such as "url('icons/check.svg')" or
-// "url('/screenspace/icons/eye.svg')". The element's `mask-size`,
-// `mask-repeat`, and `background-color: currentColor` should come from a CSS
-// class on the element (see .xref-badge-icon, .cg-icon, .ss-task-icon, etc).
+// mask-size, mask-repeat and currentColor fill come from the element's class.
 
 var applyMaskIcon = function (el, urlValue) {
   el.style.maskImage = urlValue;
@@ -280,16 +433,10 @@ var maskIconStyle = function (urlValue) {
   return "mask-image:" + urlValue + ";-webkit-mask-image:" + urlValue + ";";
 };
 
-// ---- Unified icon-mask helper family ----
-//
-// All build on applyMaskIcon / maskIconStyle above. `name` is the basename of a
-// file in an icons/ directory (no extension); `basePath` defaults to "icons/"
-// (the common relative case). Pages with a different icon route pass their own
-// (e.g. "/screenspace/icons/", "../screenspace/icons/").
+// ---- Icon masks by basename ----
+// `basePath` defaults to "icons/"; other routes override it.
 
-// Full CSS url(...) string for an icon basename. Single-quoted so the result is
-// safe to embed inside a double-quoted HTML style attribute (e.g.
-// `style="..."`); a double-quoted url() would terminate the attribute early.
+// Single-quoted so it can sit inside a double-quoted style attribute.
 var iconMaskUrl = function (name, basePath) {
   return "url('" + (basePath || "icons/") + name + ".svg')";
 };
@@ -312,9 +459,7 @@ var iconMaskSpan = function (name, opts) {
   return span;
 };
 
-// Apply mask-image to every matching element within `scope`.
-// opts = { selector, basePath }; selector defaults to "[data-icon]" and the
-// icon name is read from each node's data-icon attribute.
+// opts = { selector, basePath }; default selector "[data-icon]".
 var applyIconMasksIn = function (scope, opts) {
   opts = opts || {};
   var root = scope || document;
@@ -326,24 +471,8 @@ var applyIconMasksIn = function (scope, opts) {
   }
 };
 
-// ---- Segmented capsule track (pairs with .cg-segtrack in tokens.css) ----
-//
-// A pill track of mutually exclusive options; a capsule thumb slides to the
-// selected segment (CSS transition driven by the --seg-index inline var, so
-// no layout measurement is needed and building while detached is safe).
-//
-// opts = {
-//   id,        // optional id for the hidden <input type=hidden> value holder
-//   value,     // initially selected value
-//   options,   // [{ value, icon, label, desc, title, hotkey }] — icon is an
-//              //   assets/icons basename; desc -> data-desc (custom param
-//              //   tooltips); title -> native title attribute; hotkey -> the
-//              //   data-hotkey catalog id whose combo the Alt-hold chip shows
-//   size,      // "sm" -> .cg-segtrack--sm
-//   onChange,  // fn(value), fires on user click after state applies, before
-//              //   the bubbling input event
-//   basePath,  // icon base path, default "icons/"
-// }
+// ---- Segmented capsule track ----
+// --seg-index moves the thumb in CSS; safe to build detached.
 var createSegTrack = function (opts) {
   opts = opts || {};
   var options = opts.options || [];
@@ -360,9 +489,7 @@ var createSegTrack = function (opts) {
     btn.type = "button";
     btn.setAttribute("data-value", spec.value);
     if (spec.desc) btn.setAttribute("data-desc", spec.desc);
-    // Tooltip through the [data-tooltip] singleton, not native title. Mirror it
-    // into aria-label too: icon-only segments have no other accessible name,
-    // and data-tooltip carries none.
+    // data-tooltip carries no accessible name; icon-only segments need aria-label.
     if (spec.title) {
       btn.setAttribute("data-tooltip", spec.title);
       if (!spec.label) btn.setAttribute("aria-label", spec.title);
@@ -387,9 +514,7 @@ var createSegTrack = function (opts) {
   return track;
 };
 
-// Reflect a value onto an existing segtrack (active segment, thumb position,
-// hidden input). Dispatches no events and calls no onChange — callers that
-// need side effects run them explicitly. Unknown values are a no-op.
+// Fires no events and no onChange; unknown values are a no-op.
 var segTrackSetValue = function (trackEl, value) {
   var btns = trackEl.querySelectorAll(".cg-segtrack-btn");
   var index = -1;
@@ -415,11 +540,7 @@ var createTooltip = function (opts) {
   if (opts.multiline) cls += " cg-tooltip--multiline";
   var tip = document.createElement("div");
   tip.className = cls;
-  // Icon sidecar + text live in separate nodes so show()'s third argument can
-  // hang a glyph off the left edge — the only way to mark a control whose own
-  // hit area is too small to carry one (e.g. the 24px Regenerate buttons on
-  // Transcripts, which start a local AI agent). Both nodes always exist; the
-  // sidecar stays display:none until an icon name arrives.
+  // Separate icon node lets show() hang a glyph off controls too small to carry one.
   var iconEl = document.createElement("span");
   iconEl.className = "cg-tooltip-icon";
   var textEl = document.createElement("span");
@@ -429,8 +550,7 @@ var createTooltip = function (opts) {
   document.body.appendChild(tip);
   return {
     el: tip,
-    // `icon` is an icon basename as taken by applyIconMask ("check",
-    // "octicon/dependabot-16"); omit it for a plain text tooltip.
+    // `icon` is an applyIconMask basename ("check", "octicon/dependabot-16"); omit for text-only.
     show: function (anchor, text, icon) {
       textEl.textContent = text || "";
       if (icon) {
@@ -462,11 +582,7 @@ var attachHoverTooltip = function (anchor, getText, opts) {
   return t;
 };
 
-// Singleton tooltip driven by [data-tooltip] attributes anywhere on the page.
-// Replaces the per-page CSS ::after pseudo-element variants so positioning
-// goes through positionTooltipAnchored and stays inside the viewport. The
-// pointer-events:auto override in tokens.css ensures Chrome/Safari still
-// dispatch mouseover events for disabled <button data-tooltip>.
+// Singleton [data-tooltip] tooltip; tokens.css's pointer-events:auto keeps disabled buttons firing mouseover.
 var clipgenInitDataTooltips = function () {
   var tip = null;
   var current = null;
@@ -481,9 +597,7 @@ var clipgenInitDataTooltips = function () {
     }
     return false;
   };
-  // An optional data-tooltip-icon="<basename>" hangs a glyph off the tooltip's
-  // left edge (see createTooltip). It rides along with data-tooltip and never
-  // shows on its own — an element with only the icon attribute returns below.
+  // data-tooltip-icon rides along with data-tooltip; alone it shows nothing.
   var showFor = function (el) {
     if (shouldSuppress(el)) return;
     var text = el.getAttribute("data-tooltip");
@@ -504,8 +618,7 @@ var clipgenInitDataTooltips = function () {
   });
   document.addEventListener("mouseout", function (e) {
     if (!current) return;
-    // relatedTarget is what the cursor moved onto. If still inside the
-    // anchor, keep the tooltip — mouseout fires when crossing into children.
+    // mouseout fires when crossing into children; stay while relatedTarget is inside.
     var to = e.relatedTarget;
     if (to && current.contains(to)) return;
     hide();
@@ -530,6 +643,11 @@ var formatTime = function (sec, options) {
   if (sec == null || isNaN(sec) || !isFinite(sec)) return "--:--";
   if (sec < 0) sec = 0;
   var decimals = options.decimals || 0;
+  if (decimals > 0) {
+    // Round first so "59.97" becomes 1:00.0, not 0:60.0.
+    var p = Math.pow(10, decimals);
+    sec = Math.round(sec * p) / p;
+  }
   var totalInt = Math.floor(sec);
   var h = Math.floor(totalInt / 3600);
   var m = Math.floor((totalInt % 3600) / 60);
@@ -545,9 +663,84 @@ var formatTime = function (sec, options) {
   return m + ":" + sStr;
 };
 
-// Like formatTime but rounds rather than floors. Used where the value is a
-// duration (e.g. clip length, ruler ticks) and rounding to the nearest second
-// reads more naturally than truncating.
+// Sheet cross-reference helpers bound to a hub's state (Studio and Overview).
+var createSheetXrefHelpers = function (getState) {
+  function parseClipTimestamps(raw, participantId) {
+    var state = getState();
+    var baselineSeconds = 0;
+    if (participantId && state.convergenceBaselines) {
+      baselineSeconds = state.convergenceBaselines[participantId] || 0;
+    }
+    return parseClipSegmentsForCell(raw, baselineSeconds, CLIPGEN_CONFIG.defaultDuration);
+  }
+
+  var ROW_FUNCTIONS = {
+    Count: function (row, participants) {
+      var total = 0;
+      for (var j = 0; j < participants.length; j++) {
+        var c = row.cells[participants[j]];
+        if (c && c.valid) total += parseClipTimestamps(c.value, participants[j]).length;
+      }
+      return total;
+    },
+    Unique: function (row, participants) {
+      var count = 0;
+      for (var j = 0; j < participants.length; j++) {
+        var c = row.cells[participants[j]];
+        if (c && c.valid) count++;
+      }
+      return count;
+    },
+  };
+
+  // Overlapping data from sibling sources for one participant + time range.
+  function findOverlappingData(participant, start, end) {
+    var state = getState();
+    var result = { transcriptSnippets: [], screenspaceEvents: [], sheetObservations: [] };
+
+    // Projection: consumers expect `text` already resolved (text || label).
+    for (var i = 0; i < state.trIntakeClusters.length; i++) {
+      var tc = state.trIntakeClusters[i];
+      if (tc.participant === participant && tc.start < end && tc.end > start) {
+        result.transcriptSnippets.push({ text: tc.text || tc.label || "", category: tc.category, start: tc.start, end: tc.end });
+      }
+    }
+
+    // Pass the cluster through; consumers read only detector / event_type.
+    for (var j = 0; j < state.intakeClusters.length; j++) {
+      var sc = state.intakeClusters[j];
+      if (sc.participant === participant && sc.start < end && sc.end > start) {
+        result.screenspaceEvents.push(sc);
+      }
+    }
+
+    if (state.sheetData && state.sheetData.rows) {
+      for (var k = 0; k < state.sheetData.rows.length; k++) {
+        var row = state.sheetData.rows[k];
+        var cell = row.cells[participant];
+        if (!cell || !cell.valid) continue;
+        var segs = parseClipTimestamps(cell.value, participant);
+        for (var s = 0; s < segs.length; s++) {
+          var segEnd = segs[s].startSeconds + segs[s].duration;
+          if (segs[s].startSeconds < end && segEnd > start) {
+            result.sheetObservations.push(row);
+            break;
+          }
+        }
+      }
+    }
+
+    return result;
+  }
+
+  return {
+    parseClipTimestamps: parseClipTimestamps,
+    ROW_FUNCTIONS: ROW_FUNCTIONS,
+    findOverlappingData: findOverlappingData,
+  };
+};
+
+// Rounds rather than floors; use for durations (clip length, ruler ticks).
 var formatDuration = function (sec) {
   if (sec == null || isNaN(sec)) return "--:--";
   var total = Math.round(sec);
@@ -560,26 +753,14 @@ var formatDuration = function (sec) {
 
 // ---- Elapsed-time / ETA estimation for long-running operations ----
 
-// Linearly extrapolate remaining seconds from elapsed time and a 0..1 progress
-// fraction. Returns null when no honest estimate is possible (progress not inside
-// the open interval (0, 1), or no time elapsed yet) — callers render elapsed only.
+// Null unless 0 < progress < 1 and elapsed > 0; callers show elapsed only.
 var estimateRemainingSec = function (elapsedSec, progress) {
   if (progress == null || !isFinite(progress) || progress <= 0 || progress >= 1) return null;
   if (!isFinite(elapsedSec) || elapsedSec <= 0) return null;
   return (elapsedSec * (1 - progress)) / progress;
 };
 
-// Track elapsed time and a smoothed remaining-time estimate for one long-running
-// operation. Frontend-only; fed a 0..1 progress fraction on each update. For
-// indeterminate operations (no progress signal) callers omit progress and read
-// elapsedSec only — remainingSec stays null. Returns a plain object (not a class,
-// per project convention) closing over the start timestamp and an EMA of the raw
-// estimate to damp jitter.
-//
-// pause()/resume() are opt-in: elapsed freezes while paused and continues afterward,
-// with the paused span excluded from elapsed. Callers that never call pause() see the
-// original continuous wall-clock behavior (so e.g. the Transcripts timers are
-// unaffected).
+// Elapsed plus EMA-smoothed remaining estimate; omit progress for indeterminate jobs. pause()/resume() exclude paused spans.
 var createEtaTracker = function (opts) {
   opts = opts || {};
   var emaAlpha = opts.emaAlpha != null ? opts.emaAlpha : 0.3;
@@ -590,8 +771,7 @@ var createEtaTracker = function (opts) {
   var pausedMs = 0; // total ms spent paused across completed pause spans
   var pausedAt = null; // epoch (ms) the current pause began, else null
   return {
-    // Idempotent: repeated calls keep the original start so elapsed never resets.
-    // Pass an explicit epoch (ms) to seed from a known start (e.g. reattach).
+    // Idempotent; an explicit epoch (ms) seeds from a known start (reattach).
     start: function (nowMs) {
       if (startMs == null) startMs = nowMs != null ? nowMs : Date.now();
     },
@@ -607,12 +787,10 @@ var createEtaTracker = function (opts) {
         pausedAt = null;
       }
     },
-    // Returns { elapsedSec, remainingSec } — remainingSec is null until the
-    // progress/elapsed gates open, then an EMA-smoothed, rounded estimate.
+    // remainingSec stays null until the progress/elapsed gates open, then EMA-smoothed.
     update: function (progress) {
       if (startMs == null) startMs = Date.now();
-      // While paused, "now" holds at pausedAt (the current pause isn't in pausedMs
-      // yet), so elapsed freezes; after resume() it continues seamlessly.
+      // Paused: "now" holds at pausedAt, so elapsed freezes until resume().
       var now = pausedAt != null ? pausedAt : Date.now();
       var elapsedSec = (now - startMs - pausedMs) / 1000;
       var raw = estimateRemainingSec(elapsedSec, progress);
@@ -633,9 +811,7 @@ var createEtaTracker = function (opts) {
   };
 };
 
-// Friendly "~1:20 left" label for a remaining-seconds estimate. Buckets the value
-// before formatting so the text doesn't twitch every tick. Returns "" when no
-// estimate is available.
+// "~1:20 left"; bucketed so the text doesn't twitch each tick. "" without estimate.
 var formatEtaLabel = function (remainingSec) {
   if (remainingSec == null || !isFinite(remainingSec) || remainingSec < 0) return "";
   var bucketed;
@@ -646,12 +822,7 @@ var formatEtaLabel = function (remainingSec) {
   return "~" + formatDuration(bucketed) + " left";
 };
 
-// Drive *tickFn* on a fixed interval (default 1s) while a job is active, with
-// optional pause-when-hidden. ensure() starts the timer (idempotent); each tick
-// first checks the guards and self-stops when isActive() returns false (or, with
-// gateHidden, when the tab is hidden), so pages don't re-implement the
-// setInterval/clearInterval lifecycle. Returns a plain object (not a class, per
-// project convention).
+// Fixed-interval ticker; self-stops when isActive() is false or (gateHidden) the tab hides.
 var createIntervalTicker = function (tickFn, opts) {
   opts = opts || {};
   var intervalMs = opts.intervalMs != null ? opts.intervalMs : 1000;
@@ -717,8 +888,7 @@ var parseTimestamp = function (str) {
   return isNaN(n) ? null : n;
 };
 
-// Parse a timestamp string in clock semantics: 2-part is HH:MM (not MM:SS).
-// Mirrors Python utils._clock_to_seconds. Returns null on failure.
+// Clock semantics: 2-part is HH:MM. Mirrors Python utils._clock_to_seconds.
 var parseClockTimestamp = function (str) {
   str = (str == null ? "" : String(str)).trim();
   if (!str) return null;
@@ -736,14 +906,7 @@ var parseClockTimestamp = function (str) {
   return null;
 };
 
-// Parse a Sheet cell's timestamp tokens into [{startSeconds, duration}].
-// When baselineSeconds > 0, tokens are treated as absolute clock times
-// (2-part = HH:MM) and the baseline is subtracted from both ends of each
-// range. Mirrors files.prepare_clip + utils.convert_clock_pairs_to_relative.
-// Pairs that resolve to negative or zero-length intervals are skipped.
-// defaultDuration: required (per-clip duration when only a start time is
-// given). Callers must pass CLIPGEN_CONFIG.defaultDuration; a missing value
-// is a contract bug.
+// Mirrors files.prepare_clip + utils.convert_clock_pairs_to_relative. A baseline makes tokens clock times; defaultDuration is required.
 var parseClipSegmentsForCell = function (raw, baselineSeconds, defaultDuration) {
   var DEFAULT_DUR = defaultDuration;
   var hasBaseline = baselineSeconds && baselineSeconds > 0;
@@ -827,8 +990,7 @@ var stddev = function (nums) {
 
 // ---- Tooltip positioning ----
 
-// Position a tooltip element centered above an anchor rect, flipping below
-// if there's no room above and clamping to the viewport horizontally.
+// Centered above the anchor; flips below when cramped, clamps horizontally.
 var positionTooltipAnchored = function (tooltipEl, anchorRect) {
   var ttW = tooltipEl.offsetWidth;
   var ttH = tooltipEl.offsetHeight;
@@ -841,10 +1003,7 @@ var positionTooltipAnchored = function (tooltipEl, anchorRect) {
   tooltipEl.style.top = top + "px";
 };
 
-// Position a popover element bottom-left aligned with an anchor rect, flipping
-// above if there's no room below, and clamping to the viewport with 4px
-// margins. Reads the popover's actual offsetWidth/Height — the popover must
-// be in the DOM and visible (not display:none) before calling.
+// Below the anchor, flipping above when cramped; popover must be visible to measure.
 var positionPopoverAnchored = function (popoverEl, anchorRect) {
   var w = popoverEl.offsetWidth;
   var h = popoverEl.offsetHeight;
@@ -858,7 +1017,7 @@ var positionPopoverAnchored = function (popoverEl, anchorRect) {
   popoverEl.style.top = top + "px";
 };
 
-// ---- Debounce / escaping / color / toast (shared across Studio tabs + web UIs) ----
+// ---- Debounce / escaping / color / toast (shared across pages) ----
 
 var debounce = function (fn, ms) {
   var timer;
@@ -875,11 +1034,23 @@ var escapeHtml = function (str) {
   return div.innerHTML;
 };
 
-// Inline-markdown for model output (Transcripts summaries, Overview reports).
-// Escapes first, then converts only inline spans — `code`, **bold**, and a
-// conservative *italic* (must hug non-space content, so "5 * 3" survives).
-// Block structure (headings, bullets, paragraphs) stays the callers' concern;
-// underscore emphasis is deliberately unsupported (snake_case would mangle).
+// Escapes per piece around raw-text matches; matching escaped text splits entities like &amp;.
+var clipgenHighlightMatches = function (text, query, cssClass) {
+  if (!query) return escapeHtml(text);
+  var regex = new RegExp(query.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "gi");
+  var out = "";
+  var last = 0;
+  var m;
+  while ((m = regex.exec(text)) !== null) {
+    out += escapeHtml(text.slice(last, m.index));
+    out += '<span class="' + cssClass + '">' + escapeHtml(m[0]) + "</span>";
+    last = m.index + m[0].length;
+  }
+  out += escapeHtml(text.slice(last));
+  return out;
+};
+
+// Escapes, then converts inline `code`, **bold**, hugging *italic*. No underscore emphasis: snake_case would mangle.
 var clipgenRenderInlineMarkdown = function (str) {
   var html = escapeHtml(str == null ? "" : String(str));
   html = html.replace(/`([^`]+)`/g, "<code>$1</code>");
@@ -895,10 +1066,7 @@ var hexToRgba = function (hex, alpha) {
   return "rgba(" + r + "," + g + "," + b + "," + alpha + ")";
 };
 
-// Canonical hex <-> rgb helpers (previously duplicated in screenspace-utils.js
-// and color-picker.js). hexToRgb accepts "#rgb"/"#rrggbb" (with or without the
-// hash) and returns null on anything else; rgbToHex clamps + rounds so it is
-// safe on float channel values from HSV sliders.
+// hexToRgb takes "#rgb"/"#rrggbb" (hash optional), else null; rgbToHex clamps and rounds float channels.
 var hexToRgb = function (hex) {
   var h = String(hex == null ? "" : hex).trim().replace(/^#/, "");
   if (h.length === 3) h = h[0] + h[0] + h[1] + h[1] + h[2] + h[2];
@@ -916,8 +1084,7 @@ var rgbToHex = function (r, g, b) {
   return "#" + c(r) + c(g) + c(b);
 };
 
-// Read a CSS custom property from :root, returning fallback when unset/empty.
-// Pages use this for theme-aware values (--color-accent, --color-heatmap, ...).
+// Read a :root custom property, falling back when unset or empty.
 var getCSSVar = function (name, fallback) {
   try {
     var v = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
@@ -927,10 +1094,7 @@ var getCSSVar = function (name, fallback) {
   }
 };
 
-// Cached snapshot of the theme tokens that canvas renderers (Screenspace
-// timeline, Transcripts ruler, Studio heatmap) read on every frame. The cache
-// is invalidated automatically when initThemeToggle()'s click handler fires;
-// callers can also invalidate manually via invalidateCanvasThemeColors().
+// Per-frame canvas renderers read this cache; the theme toggle invalidates it.
 var _canvasThemeColorsCache = null;
 
 var getCanvasThemeColors = function () {
@@ -967,11 +1131,9 @@ var showToast = function (msg, opts) {
   if (!toastEl) return;
   toastEl.textContent = msg;
   toastEl.classList.remove("hidden");
-  // Generation token: the toast is a reused element, so a fade-out that started
-  // before a re-show must not add `.hidden` when it settles onto the fresh toast.
+  // Reused element: a stale fade-out must not hide a fresh toast.
   var gen = (toastEl._toastGen = (toastEl._toastGen || 0) + 1);
-  // Fade in on show; the newer entry animation supersedes any stale exit fill.
-  // Guarded because motion.js only loads on some pages (elsewhere the toast snaps).
+  // Fade in supersedes a stale exit fill; motion.js only loads on some pages.
   if (window.ClipgenMotion) ClipgenMotion.animateIn(toastEl, "fade");
   clearTimeout(toastEl._timer);
   toastEl._timer = setTimeout(function () {
@@ -984,9 +1146,7 @@ var showToast = function (msg, opts) {
 };
 
 // ---- Severity ----
-//
-// Read severity metadata from CLIPGEN_CONFIG.severity (kept in sync with
-// config.py SEVERITY_NUMERIC_TO_LABEL via tests/test_shared_constants.py).
+// CLIPGEN_CONFIG.severity mirrors config.py SEVERITY_NUMERIC_TO_LABEL (tests/test_shared_constants.py).
 
 var severityClass = function (raw) {
   if (!raw || !String(raw).trim()) return "";
@@ -999,10 +1159,7 @@ var severityClass = function (raw) {
   return "sev-unknown";
 };
 
-// Numeric rank (most-severe = lowest, e.g. Critical = -4) used by sorters
-// and Studio's severity filter. Returns null for empty or unrecognized input
-// — callers decide how to treat unknown (Studio filters them out; viewer
-// sorts them last).
+// Lowest = most severe (Critical -4). Null for unknown; callers decide how to treat it.
 var severityRank = function (raw) {
   if (!raw || !String(raw).trim()) return null;
   var k = String(raw).trim().toLowerCase();
@@ -1014,13 +1171,50 @@ var severityRank = function (raw) {
   return null;
 };
 
+// Vertical wheel scrolls an overflowing strip horizontally; passive:false so preventDefault works.
+var clipgenWheelToHorizontal = function (el) {
+  el.addEventListener(
+    "wheel",
+    function (e) {
+      if (el.scrollWidth > el.clientWidth) {
+        e.preventDefault();
+        el.scrollLeft += e.deltaY;
+      }
+    },
+    { passive: false }
+  );
+};
+
 // ---- API helpers (always check r.ok) ----
 
+// Third envelope state: {ok:false, generating:true} at HTTP 200 means poll again.
+var isPending = function (data) {
+  return !!(data && data.generating);
+};
+
+// Rejects with the server's envelope error; .status for branching, .serverMessage empty for generic failures.
+var _apiJson = function (r) {
+  if (!r.ok) {
+    var mkError = function (message) {
+      var e = new Error(message || "Server error " + r.status);
+      e.status = r.status;
+      e.serverMessage = message || "";
+      return e;
+    };
+    return r.json().then(
+      function (data) {
+        throw mkError(data && data.error);
+      },
+      function () {
+        throw mkError(null);
+      }
+    );
+  }
+  return r.json();
+};
+
 var apiGet = function (path) {
-  return fetch(path).then(function (r) {
-    if (!r.ok) throw new Error("Server error " + r.status);
-    return r.json();
-  });
+  return fetch(path).then(_apiJson);
 };
 
 var apiPost = function (path, body) {
@@ -1028,10 +1222,7 @@ var apiPost = function (path, body) {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
-  }).then(function (r) {
-    if (!r.ok) throw new Error("Server error " + r.status);
-    return r.json();
-  });
+  }).then(_apiJson);
 };
 
 var apiPut = function (path, body) {
@@ -1039,17 +1230,19 @@ var apiPut = function (path, body) {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
-  }).then(function (r) {
-    if (!r.ok) throw new Error("Server error " + r.status);
-    return r.json();
-  });
+  }).then(_apiJson);
+};
+
+var apiPatch = function (path, body) {
+  return fetch(path, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  }).then(_apiJson);
 };
 
 var apiDelete = function (path) {
-  return fetch(path, { method: "DELETE" }).then(function (r) {
-    if (!r.ok) throw new Error("Server error " + r.status);
-    return r.json();
-  });
+  return fetch(path, { method: "DELETE" }).then(_apiJson);
 };
 
 // Blob variants for image/media routes (frame thumbnails, preview renders).
@@ -1071,10 +1264,7 @@ var apiPostBlob = function (path, body) {
   });
 };
 
-// Returns a .catch handler that surfaces the failure as a toast. For
-// user-initiated loads and mutations whose silent failure would leave the
-// UI wrong; background polling/preloading keeps its silent catches.
-// Usage: apiGet("api/regions").then(...).catch(toastError("Failed to load regions"));
+// .catch handler that toasts the failure; for user-initiated calls, not background polling.
 var toastError = function (prefix) {
   return function (err) {
     showToast(prefix + (err && err.message ? ": " + err.message : ""));
@@ -1085,40 +1275,12 @@ var toastError = function (prefix) {
 
 var POLL_INTERVAL = 3000;
 
-// Generic poller. Encapsulates the recurring `setInterval` + `visibilitychange`
-// + `document.hidden` dance used by Studio intake counters, Screenspace task
-// status, and similar live-refresh loops.
-//
-//   var poller = createPoller(fn, ms, opts);
-//   poller.start();   // arm; pauses automatically when tab hidden
-//   poller.stop();    // disarm; safe to call multiple times
-//
-// Options:
-//   pauseWhenHidden (default true)  — pause when document.hidden, resume on
-//                                     visibilitychange and run fn() once to
-//                                     catch up.
-//   runImmediately  (default true)  — run fn() once on start (and again on
-//                                     resume) before the next interval tick.
-//   maxIntervalMs   (default = intervalMs) — enable idle backoff. When set
-//                                     above intervalMs the loop self-reschedules
-//                                     with setTimeout instead of setInterval:
-//                                     fn's resolved value is an "active this
-//                                     tick" signal — truthy resets to the base
-//                                     interval, falsy backs the delay off toward
-//                                     maxIntervalMs after backoffAfter quiet
-//                                     ticks (e.g. 5s → 10 → 20 → 30, capped).
-//   backoffAfter    (default 3)     — consecutive quiet ticks before backing off.
-//
-// In backoff mode fn may return a value or a Promise; the loop waits for it
-// before scheduling the next tick (so slow polls never overlap). The returned
-// object also gains wake(): snap back to the base cadence and refresh now —
-// call it after a user action so polling both refreshes and speeds back up.
-// wake() returns a promise settling when that refresh has landed, so a caller
-// driving a spinner can await it.
-//
-// fn exceptions are swallowed so a transient error does not kill the loop.
+// Live-refresh loop with hidden-tab pause. maxIntervalMs > intervalMs enables backoff; fn's truthy result means "active".
 var createPoller = function (fn, intervalMs, opts) {
   opts = opts || {};
+  if (opts.label) {
+    fn = clipgenPerf.wrap("poll." + opts.label, fn);
+  }
   var pauseWhenHidden = opts.pauseWhenHidden !== false;
   var runImmediately = opts.runImmediately !== false;
   var maxIntervalMs = opts.maxIntervalMs != null ? opts.maxIntervalMs : intervalMs;
@@ -1131,10 +1293,7 @@ var createPoller = function (fn, intervalMs, opts) {
   var quiet = 0;
   var inFlight = false;
   var pendingWake = false;
-  // The promise of the poll currently in flight. Because runAdaptive() chains
-  // any pendingWake follow-up into its own result, this settles only once the
-  // whole queued chain is done — so a wake() that lands mid-poll can hand it
-  // back and its caller's spinner stops at the right moment.
+  // Settles only after any pendingWake follow-up, so wake() callers' spinners stop on time.
   var currentRun = null;
 
   function safeFn() {
@@ -1158,8 +1317,7 @@ var createPoller = function (fn, intervalMs, opts) {
   function schedule() {
     timer = setTimeout(runAdaptive, currentDelay);
   }
-  // Returns a promise that settles once this poll (and any follow-up a wake()
-  // queued mid-flight) has completed, so wake() callers can drive a spinner.
+  // Resolves once this poll and any wake()-queued follow-up complete.
   function runAdaptive() {
     timer = null;
     inFlight = true;
@@ -1171,8 +1329,7 @@ var createPoller = function (fn, intervalMs, opts) {
     ).then(function () {
       inFlight = false;
       if (!wantRunning || hidden()) { pendingWake = false; return; }
-      // A wake() landed mid-flight: that response may predate the user's
-      // mutation, so run one fresh poll now instead of waiting a full tick.
+      // A mid-flight wake() may predate the user's mutation; poll again now.
       if (pendingWake) {
         pendingWake = false;
         currentDelay = intervalMs;
@@ -1227,16 +1384,13 @@ var createPoller = function (fn, intervalMs, opts) {
         visListener = null;
       }
     },
-    // Returns a promise settling when the refresh it triggered has landed
-    // (already-resolved on the paths that schedule no new work of their own).
+    // Resolves when the triggered refresh lands; already resolved when nothing new runs.
     wake: function () {
       if (!wantRunning || hidden()) return Promise.resolve();
       if (adaptive) {
         currentDelay = intervalMs;
         quiet = 0;
-        // A poll is already running but may predate this action's server-side
-        // effect — queue one fresh poll for when it completes, and hand back the
-        // in-flight run, which only settles once that follow-up has landed too.
+        // The in-flight poll may predate this action; queue a follow-up and return the chained run.
         if (inFlight) { pendingWake = true; return currentRun || Promise.resolve(); }
         disarm();
         return runAdaptive();
@@ -1249,18 +1403,25 @@ var createPoller = function (fn, intervalMs, opts) {
   };
 };
 
-// ---- SSE stream with standard parse + fallback hook ----
-// Open an EventSource with the project's standard JSON-parse onmessage wrapper
-// and auto-close-on-error. The caller owns its polling fallback — each subscriber
-// stores its own stream/poller and reacts to a drop differently — so onError
-// fires AFTER the stream is closed. Returns the EventSource (or null if the
-// browser lacks EventSource, in which case onUnsupported runs).
-//
-// Options:
-//   onMessage(data)   — called with the parsed JSON of each message
-//   onOpen()          — called when the connection (re)opens
-//   onError()         — called once the dropped stream has been closed
-//   onUnsupported()   — called instead of opening when window.EventSource is absent
+// Lazily-built createPoller behind an idempotent start/stop pair.
+var createManagedPoller = function (fn, intervalMs, opts) {
+  var poller = null;
+  return {
+    start: function () {
+      if (poller) return;
+      poller = createPoller(fn, intervalMs, opts);
+      poller.start();
+    },
+    stop: function () {
+      if (!poller) return;
+      poller.stop();
+      poller = null;
+    },
+  };
+};
+
+// ---- SSE stream ----
+// Closes itself before onError so the caller's polling fallback can start.
 var createSSEStream = function (url, opts) {
   opts = opts || {};
   if (!window.EventSource) {
@@ -1282,11 +1443,7 @@ var createSSEStream = function (url, opts) {
 };
 
 // ---- NDJSON streaming reader ----
-// Drain a fetch Response body line-by-line, calling onLine(trimmedLine) for each
-// non-empty newline-delimited chunk. Returns a Promise that resolves when the
-// stream is fully drained. Guards against responses without a streamable body
-// (e.g. older browsers, or unexpected non-streaming responses that the caller
-// should have caught with response.ok before reaching here).
+// onLine(trimmedLine) per non-empty line; rejects when the body cannot stream.
 var readNDJSONStream = function (response, onLine) {
   if (!response.body || typeof response.body.getReader !== "function") {
     return Promise.reject(new Error("Streaming response not supported"));
@@ -1312,19 +1469,37 @@ var readNDJSONStream = function (response, onLine) {
   return pump();
 };
 
+// Streaming POST; !r.ok rejects with .status and .bodyText for branching, aborts pass through as AbortError.
+var apiPostNDJSON = function (path, body, opts) {
+  opts = opts || {};
+  return fetch(path, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+    signal: opts.signal,
+  }).then(function (r) {
+    if (!r.ok) {
+      var mkError = function (txt) {
+        var e = new Error("Server error " + r.status);
+        e.status = r.status;
+        e.bodyText = txt || "";
+        return e;
+      };
+      return r.text().then(
+        function (txt) {
+          throw mkError(txt);
+        },
+        function () {
+          throw mkError("");
+        }
+      );
+    }
+    return readNDJSONStream(r, opts.onLine || function () {});
+  });
+};
+
 // ---- File downloads ----
-// Save generated text (JSON/CSV) to disk from any page.
-//
-// Two mechanisms, because the desktop shell cannot use the browser one. In a
-// real browser this is the usual blob + <a download> click. Inside the pywebview
-// window it is not: WKWebView ignores the download attribute for blob:, data:
-// AND for HTTP responses carrying Content-Disposition (the request is made and
-// the body silently discarded), so every export would look like a dead button.
-// desktop.py therefore exposes save_file, which raises a native save dialog and
-// writes the bytes from Python.
-//
-// onDone(path|null, error|null) is optional; path is null when the user
-// cancelled the native dialog.
+// WKWebView drops every download, so desktop.py's save_file writes the bytes instead.
 var clipgenSaveFile = function (filename, content, mime, onDone) {
   var api = window.pywebview && window.pywebview.api;
   if (api && typeof api.save_file === "function") {
@@ -1345,9 +1520,7 @@ var clipgenSaveFile = function (filename, content, mime, onDone) {
   if (onDone) onDone(filename, null);
 };
 
-// Fetch a server-generated file and hand it to clipgenSaveFile. Needed for
-// endpoints that build the payload server-side (e.g. the Screenspace events
-// export), since navigating to them cannot download inside the desktop window.
+// For server-built payloads; navigating to the URL cannot download inside the desktop window.
 var clipgenSaveFromUrl = function (url, filename, onDone) {
   fetch(url)
     .then(function (r) {
@@ -1362,13 +1535,7 @@ var clipgenSaveFromUrl = function (url, filename, onDone) {
 };
 
 // ---- Video seek coalescer ----
-// Shared scaffolding for pages that seek a <video> from rapid-fire UI events
-// (scrub drags, timeline clicks): while metadata is not loaded (readyState < 1)
-// the seek is deferred onto loadedmetadata; otherwise bursts are RAF-coalesced
-// into one seek per frame. Page behavior stays at the call site via the hooks:
-//   getVideo()          — the page's <video> element (or null)
-//   onDeferred(t)       — re-dispatch after metadata arrives (page seek entry)
-//   applySeek(video, t) — the actual seek write for the RAF path
+// Defers seeks until loadedmetadata; RAF-coalesces bursts to one per frame.
 var createSeekCoalescer = function (getVideo, onDeferred, applySeek) {
   var pendingTime = null;
   var raf = 0;
@@ -1419,29 +1586,13 @@ var createSeekCoalescer = function (getVideo, onDeferred, applySeek) {
   };
 };
 
-// ---- Blocking modal lifecycle (Escape / backdrop / optional focus trap) ----
-// Shared lifecycle for blocking overlays: closes on Escape, optionally on
-// backdrop click, optionally traps Tab/Shift+Tab inside the overlay and restores
-// focus to the trigger on release. Singleton — opening a new modal releases the
-// previous one (callers never stack blocking overlays). The returned trap's
-// release() is idempotent cleanup-only, so any dismiss path (button, backdrop,
-// Escape) can call closeBlockingModal safely.
-//
-// Options:
-//   onEscape()        — fired on Escape
-//   onBackdropClick() — fired when the overlay element itself is clicked
-//   trapFocus         — keep Tab/Shift+Tab inside the overlay and focus its first
-//                       control on open
-//   restoreFocus      — restore focus to the prior element on release
+// ---- Blocking modal lifecycle (Escape / backdrop / focus trap) ----
+// Singleton; release() is idempotent.
 var _TRAP_FOCUSABLE =
   'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])';
 var _activeBlockingModal = null;
 
-// The DOM root of the modal currently owning the keyboard. hotkeys.js reads this
-// to scope Alt-hold discoverability hints to that modal's own [data-hotkey]
-// controls (so background-page chips never leak over an open modal). Set
-// automatically by openBlockingModal; self-managed modals that only toggle
-// body.modal-open (e.g. settings-modal.js) set/clear it explicitly.
+// hotkeys.js scopes Alt-hold hints to this root. Self-managed modals (settings-modal.js) set it explicitly.
 var _activeModalRoot = null;
 var setActiveModalRoot = function (el) { _activeModalRoot = el || null; };
 var getActiveModalRoot = function () { return _activeModalRoot; };
@@ -1468,8 +1619,7 @@ var openBlockingModal = function (overlayEl, opts) {
       return;
     }
     if (!trap.opts.trapFocus || ev.key !== "Tab") return;
-    // Re-query each Tab — overlay button visibility can change between phases
-    // (e.g. a status overlay's in-progress vs result state).
+    // Re-query each Tab: button visibility changes between overlay phases.
     var f = visibleFocusable();
     if (f.length === 0) { ev.preventDefault(); return; }
     var first = f[0];
@@ -1481,9 +1631,7 @@ var openBlockingModal = function (overlayEl, opts) {
       ev.preventDefault();
       first.focus();
     } else if (f.indexOf(document.activeElement) === -1) {
-      // Focus is parked outside the cycle (e.g. a tabindex="-1" panel used as
-      // initialFocus). Pull it back in so Tab/Shift+Tab can't escape to the
-      // page behind the modal.
+      // Focus parked outside the cycle (tabindex="-1" initialFocus): pull it back in.
       ev.preventDefault();
       (ev.shiftKey ? last : first).focus();
     }
@@ -1521,39 +1669,13 @@ var closeBlockingModal = function (overlayEl) {
   }
 };
 
-// Whether any blocking modal is currently open. Consulted by the hotkeys.js
-// dispatcher so page hotkeys stay dead while a modal owns the keyboard, and
-// by the command palette so opening on a chord never steals an existing
-// overlay's trap (openBlockingModal is a singleton — stealing would leave
-// the overlay visible with Escape/backdrop dismiss dead).
+// hotkeys.js mutes page hotkeys on this; the palette refuses to steal an open modal's trap.
 var isBlockingModalOpen = function () {
   return _activeBlockingModal !== null;
 };
 
-// ---- Modal reveal / dismiss animation ----
-//
-// The visual half of a modal's lifecycle, paired with openBlockingModal's
-// logical half (focus trap, Escape, focus restore). Every blocking modal in the
-// app runs through this pair, so they all behave identically when spam-toggled.
-//
-// Two backdrop treatments, chosen by whether the overlay carries
-// `cg-modal-veil` (see tokens.css):
-//   veiled  — the frosted ::before is ramped by toggling `.is-veiled`. The
-//     overlay's own opacity is deliberately left alone: animating it would
-//     establish a backdrop root and the backdrop-filter would sample nothing,
-//     killing the frost outright. The CSS transition therefore owns the exit
-//     timing, and we read it back off the element (--duration-veil) rather than
-//     keeping a matching number here that could drift.
-//   plain   — no backdrop at all (e.g. Studio's non-blocking #buildStatus
-//     corner card), so only the card animates.
-//
-// Reused DOM is the shared hazard: these surfaces toggle `.hidden` and never
-// rebuild their card, so a fill:"forwards" exit strands the card invisible on
-// the next open unless the entrance is WAAPI too. Hence the two bits of state
-// parked on the overlay: `_cgModalGen` makes a stale exit's commit a no-op after
-// a re-open, and `_cgModalExiting` forces the entrance to re-run after a
-// *cancelled* exit, which would otherwise leave the card filled invisible.
-// (Same shape as showToast's _toastGen.)
+// ---- Modal reveal / dismiss ----
+// Visual half of openBlockingModal's lifecycle; veil rules: tokens.css .cg-modal-veil.
 
 var _cgVeilMs = function (overlayEl) {
   var raw = getComputedStyle(overlayEl).getPropertyValue("--duration-veil");
@@ -1569,22 +1691,17 @@ var popModalIn = function (overlayEl, cardEl) {
   overlayEl._cgModalExiting = false;
   overlayEl.classList.remove("hidden");
   if (overlayEl.classList.contains("cg-modal-veil")) {
-    // Next frame: the element was display:none a moment ago, so the transition
-    // needs a painted start value to ramp from. Re-checked against `gen` so a
-    // dismiss landing in the same frame isn't overridden by this callback.
+    // Next frame: display:none needs a painted start value; `gen` guards a same-frame dismiss.
     requestAnimationFrame(function () {
       if (overlayEl._cgModalGen === gen) overlayEl.classList.add("is-veiled");
     });
   }
-  // A content update on an already-open modal (e.g. a build flipping
-  // in-progress → done) must not re-pop the card.
+  // Re-pop only after hidden or a cancelled exit (which leaves the card filled invisible).
   if ((!wasHidden && !wasExiting) || !window.ClipgenMotion) return;
   if (cardEl) ClipgenMotion.animateIn(cardEl, "pop");
 };
 
-// `commit` performs the VISUAL hide only (classList.add("hidden") and any
-// content clears). Logical cleanup — focus trap, listeners, page state — must
-// stay synchronous at the call site, or a dismiss can be swallowed by the fade.
+// `commit` does the visual hide only; logical cleanup stays synchronous at the call site.
 var popModalOut = function (overlayEl, cardEl, commit) {
   if (!overlayEl) return;
   var gen = (overlayEl._cgModalGen = (overlayEl._cgModalGen || 0) + 1);
@@ -1603,19 +1720,67 @@ var popModalOut = function (overlayEl, cardEl, commit) {
   var cardExit = cardEl
     ? ClipgenMotion.animateOut(cardEl, "pop")
     : Promise.resolve();
-  // Veiled modals wait for the backdrop, which outlasts the card so the frost
-  // doesn't cut out from under a dialog that has already left. With reduced
-  // motion the veil transition is disabled in CSS, so don't wait on it.
+  // The veil outlasts the card, so wait on it; reduced motion disables its transition.
   if (veiled && !ClipgenMotion.isReduced()) setTimeout(done, _cgVeilMs(overlayEl));
   else cardExit.then(done);
 };
 
+// Pop a modal open; traps focus when `onEscape` is given.
+var openPopModal = function (overlayEl, cardEl, opts) {
+  opts = opts || {};
+  popModalIn(overlayEl, cardEl);
+  if (opts.modalOpen) document.body.classList.add("modal-open");
+  if (opts.onEscape) {
+    openBlockingModal(overlayEl, {
+      onEscape: opts.onEscape,
+      trapFocus: true,
+      restoreFocus: true,
+    });
+  }
+};
+
+// Reverse of openPopModal; `commit` runs with the visual hide.
+var closePopModal = function (overlayEl, cardEl, opts, commit) {
+  opts = opts || {};
+  if (opts.releaseTrapNow) closeBlockingModal(overlayEl);
+  popModalOut(overlayEl, cardEl, function () {
+    if (!opts.releaseTrapNow) closeBlockingModal(overlayEl);
+    overlayEl.classList.add("hidden");
+    if (opts.modalOpen) document.body.classList.remove("modal-open");
+    if (commit) commit();
+  });
+};
+
+// Object-URL cache (URL | "loading" | "error"); setBlob mints so every path revokes.
+var createBlobCache = function () {
+  var store = {};
+  function revoke(key) {
+    var url = store[key];
+    if (url && url !== "error" && url !== "loading") {
+      try { URL.revokeObjectURL(url); } catch (_) {}
+    }
+    delete store[key];
+  }
+  window.addEventListener("pagehide", function () {
+    Object.keys(store).forEach(revoke);
+  });
+  return {
+    get: function (key) { return store[key]; },
+    mark: function (key, sentinel) {
+      revoke(key);
+      store[key] = sentinel;
+    },
+    setBlob: function (key, blob) {
+      revoke(key);
+      var url = URL.createObjectURL(blob);
+      store[key] = url;
+      return url;
+    },
+  };
+};
+
 // ---- Mark categories ----
-// Hardcoded fallback that mirrors config.MARK_CATEGORIES defaults; the live
-// values are repopulated in place by setMarkCategories() once the page fetches
-// settings from the server. Existing references to MARK_CATEGORIES keep
-// working because we mutate this object rather than replace it.
-// Verified against config.MARK_CATEGORIES by tests/test_shared_constants.py.
+// Fallback mirroring config.MARK_CATEGORIES (tests/test_shared_constants.py); setMarkCategories() mutates it in place.
 
 var MARK_CATEGORIES = {
   pain_point: { label: "Pain Point", color: "#dc2626" },
@@ -1647,10 +1812,7 @@ function setMarkCategories(next) {
 }
 
 // ---- Cross-reference badge metadata ----
-// Icon names reference files in assets/icons/; rendered via CSS mask-image.
-// Colors use color-mix on the canonical `--stream-*` tokens in tokens.css so
-// any theme change or token tweak propagates automatically (color-mix yields a
-// CSS color string usable both in inline style and JS .style assignment).
+// Colors color-mix the `--stream-*` tokens so theme changes propagate.
 
 var XREF_BADGES = {
   screenspace: { icon: "squares-2x2", color: "color-mix(in srgb, var(--stream-screenspace) 85%, transparent)" },
@@ -1660,18 +1822,16 @@ var XREF_BADGES = {
   mindnode:    { icon: "share", color: "color-mix(in srgb, var(--stream-mindnode) 85%, transparent)" },
 };
 
-// Relative icon base works from any /prefix/ page — every served page has a
-// sibling /screenspace/icons/ route.
+// Works from any /prefix/ page: each has a sibling /screenspace/icons/ route.
 var XREF_ICON_BASE = "../screenspace/icons/";
 
 var xrefBadgeIcon = function (iconName) {
   return iconMaskSpan(iconName, { className: "xref-badge-icon", basePath: XREF_ICON_BASE });
 };
 
-// Stacked source badges for a findOverlappingData() result. Used by Studio's
-// intake cards and the Overview page (Convergence detail rows, Map drill-down).
-// selfBadge: optional { icon, color, title } to prepend as the "self" source badge.
+// Stacked source badges for a findOverlappingData() result; selfBadge { icon, color, title } goes first.
 var buildXrefBadges = function (xref, selfSource, selfBadge) {
+  if (!CLIPGEN_CONFIG.crossReferences) return null;
   var badges = [];
   if (selfBadge) badges.push(selfBadge);
   if (selfSource !== "screenspace" && xref.screenspaceEvents.length > 0) {
@@ -1713,8 +1873,7 @@ var buildXrefBadges = function (xref, selfSource, selfBadge) {
 
 // ---- Filter helpers (artifact grids in viewer) ----
 
-// Sorted unique non-empty values of `field` across `items`.
-// opts.trim: trim string values before deduping (default false).
+// Sorted unique non-empty values of `field`; opts.trim trims strings first.
 var uniqueFieldValues = function (items, field, opts) {
   var trim = opts && opts.trim;
   var seen = {};
@@ -1728,8 +1887,7 @@ var uniqueFieldValues = function (items, field, opts) {
   return out.sort();
 };
 
-// Replace a <select>'s options with [allLabel, ...values]. The "all" option
-// has empty value "" so callers can detect it via select.value === "".
+// The "all" option has value "" so callers can detect it.
 var populateSelect = function (selectEl, values, allLabel) {
   if (!selectEl) return;
   selectEl.innerHTML = "";
@@ -1748,34 +1906,21 @@ var populateSelect = function (selectEl, values, allLabel) {
 };
 
 // ---- Detector colors ----
-//
-// Single source of truth: `--color-task-{type}` tokens in `tokens.css`.
-// Every place that paints a detector — Screenspace workflow tabs, Screenspace
-// result rows, Studio Screenspace-Intake (filter chips / density bars / card
-// labels), and exported viewers — pulls from those tokens via either CSS
-// (`var(--color-task-X)` directly) or the JS helpers below.
-//
-// `_DETECTOR_FALLBACK` is the offline-export safety net for HTML files that
-// somehow ship without `tokens.css`; values here MUST stay aligned with the
-// dark-theme `--color-task-*` block in `tokens.css`. `CATEGORY_HUES` stays
-// the path for non-detector labels (transcript intake categories, mark
-// categories) — adding a new detector without updating tokens.css is caught
-// by `tests/test_shared_constants.py`.
+// Source of truth: `--color-task-{type}` tokens in tokens.css; tests/test_shared_constants.py catches drift.
 
 var DETECTOR_COLORS = {};
 var _DETECTOR_TYPES = [
   "multitool", "color", "change", "similarity", "text",
-  "numbers", "timelapse", "template", "flow", "scene", "inactivity",
+  "numbers", "timelapse", "template", "shape", "flow", "scene", "inactivity",
   "boundary", "attention",
 ];
-// Values mirrored from the dark-theme `--color-task-*` block in tokens.css.
-// Update this map and tokens.css together when changing a detector palette.
+// Mirrors the dark-theme `--color-task-*` block in tokens.css; update both together.
 var _DETECTOR_FALLBACK = {
   multitool: "#60a5fa", color: "#a78bfa", change: "#fb923c",
   similarity: "#22d3ee", text: "#34d399", numbers: "#facc15",
-  timelapse: "#f472b6", template: "#fb7185", flow: "#818cf8",
-  scene: "#2dd4bf", inactivity: "#94a3b8", boundary: "#e879f9",
-  attention: "#a3e635",
+  timelapse: "#f472b6", template: "#fb7185", shape: "#f87171",
+  flow: "#818cf8", scene: "#2dd4bf", inactivity: "#94a3b8",
+  boundary: "#e879f9", attention: "#a3e635",
 };
 
 function refreshDetectorColors() {
@@ -1794,15 +1939,7 @@ function refreshDetectorColors() {
 
 refreshDetectorColors();
 
-// Return a CSS color string for a known Screenspace detector label, sourced
-// from the canonical `--color-task-{type}` token in `tokens.css` so chips /
-// dots / bars / labels in Studio's Screenspace Intake match the live
-// Screenspace surface exactly. Returns `null` for unknown labels so callers
-// can fall back to the oklch / `categoryHue` path for non-detector tints
-// (transcript categories, mark categories, ad-hoc labels).
-//
-//   alpha == null | >= 1  →  raw `var(--color-task-X)`
-//   alpha < 1             →  `color-mix(in oklch, var(--color-task-X) <pct>%, transparent)`
+// Detector label → its `--color-task-*` token (color-mix when alpha < 1); null for unknown labels.
 function detectorColor(label, alpha) {
   if (!label) return null;
   var key = String(label).toLowerCase().trim();
@@ -1813,14 +1950,8 @@ function detectorColor(label, alpha) {
   return "color-mix(in oklch, " + v + " " + pct + "%, transparent)";
 }
 
-// ---- Category hue palette (redesign) ----
-// Stable hue per non-detector label (mark categories / transcript intake
-// categories), rendered at runtime via oklch(). Detector colors do NOT live
-// here — see `detectorColor()` above and the `--color-task-*` tokens for the
-// canonical detector palette. The detector entries below remain so legacy
-// callers that pass a detector label keep working, but new code colouring
-// a detector should prefer `detectorColor(label)` over `categoryColor(label)`
-// to stay aligned with Screenspace.
+// ---- Category hue palette ----
+// Hue per non-detector label; detector entries are legacy, prefer detectorColor().
 var CATEGORY_HUES = {
   multitool: 220, color: 280, change: 30, similarity: 200,
   text: 170, numbers: 330, timelapse: 350, template: 18,
@@ -1857,12 +1988,8 @@ function categoryColor(label, alpha) {
 // ---- Shared settings (localStorage) ----
 
 var THEME_STORAGE_KEY = "clipgen-theme";
-var TOOLTIP_STORAGE_KEY = "clipgen-tooltips";
 
-// In the native window the theme is not just the page's business: AppKit fills
-// the area a resize exposes with an appearance-derived colour for the frame
-// before WebKit repaints, and Light appearance makes that fill white — a flash
-// on every zoom of a dark page. Hand the theme to the window so the two agree.
+// AppKit fills resize-exposed frame from the window appearance; Light flashes white on dark pages.
 var syncDesktopAppearance = function (theme) {
   if (!document.documentElement.dataset.desktopChrome) return;
   var send = function () {
@@ -1871,8 +1998,7 @@ var syncDesktopAppearance = function (theme) {
       api.set_window_appearance(theme);
     }
   };
-  // On first load the bridge is injected after this runs; pywebviewready is the
-  // signal that it is there. A toggle later can call straight through.
+  // On first load the bridge arrives after this runs; pywebviewready signals it.
   if (window.pywebview && window.pywebview.api) send();
   else window.addEventListener("pywebviewready", send, { once: true });
 };
@@ -1914,6 +2040,23 @@ var initThemeToggle = function (onToggle) {
     invalidateCanvasThemeColors();
     if (onToggle) onToggle();
   });
+};
+
+// ---- Shared /api/status ----
+// Memoized: every hit scans directories server-side. force=true refetches.
+var _clipgenStatusPromise = null;
+var clipgenStatus = function (force) {
+  if (force || !_clipgenStatusPromise) {
+    _clipgenStatusPromise = fetch("/api/status").then(function (r) {
+      if (!r.ok) throw new Error("HTTP " + r.status);
+      return r.json();
+    });
+    // Drop a failed fetch so the next caller retries; also prevents an unhandled rejection.
+    _clipgenStatusPromise.catch(function () {
+      _clipgenStatusPromise = null;
+    });
+  }
+  return _clipgenStatusPromise;
 };
 
 // ---- Frontend switcher (shared across Studio / Screenspace / Transcripts) ----
@@ -1969,8 +2112,7 @@ var initFrontendSwitcher = function () {
     if (!root.contains(e.target)) close();
   });
 
-  fetch("/api/status")
-    .then(function (r) { return r.json(); })
+  clipgenStatus()
     .then(function (status) {
       var items = panel.querySelectorAll(".frontend-switcher-item");
       items.forEach(function (item) {
@@ -1981,26 +2123,62 @@ var initFrontendSwitcher = function () {
     .catch(function () {});
 };
 
-var getStoredTooltipPref = function () {
-  try {
-    var v = window.localStorage.getItem(TOOLTIP_STORAGE_KEY);
-    if (v === "false") return false;
-  } catch (_) {}
-  return true;
+// Reads a /api/settings save or reset payload; returns whether the value moved.
+var applyCrossRefSetting = function (applied, settings) {
+  var value;
+  if (applied && applied.CROSS_REFERENCES_ENABLED !== undefined) {
+    value = applied.CROSS_REFERENCES_ENABLED;
+  } else if (settings) {
+    for (var i = 0; i < settings.length; i++) {
+      if (settings[i].name === "CROSS_REFERENCES_ENABLED") {
+        value = settings[i].value;
+        break;
+      }
+    }
+  }
+  if (value === undefined) return false;
+  var changed = CLIPGEN_CONFIG.crossReferences !== !!value;
+  CLIPGEN_CONFIG.crossReferences = !!value;
+  return changed;
 };
 
-var setStoredTooltipPref = function (enabled) {
-  try {
-    window.localStorage.setItem(TOOLTIP_STORAGE_KEY, enabled ? "true" : "false");
-  } catch (_) {}
+// Settings live at the combined-app root, not under the page prefix.
+var setCrossReferences = function (enabled) {
+  return apiPut("/api/settings", { settings: { CROSS_REFERENCES_ENABLED: enabled } })
+    .then(function () {
+      CLIPGEN_CONFIG.crossReferences = enabled;
+      if (typeof window.clipgenRerenderCrossRefs === "function") {
+        window.clipgenRerenderCrossRefs();
+      }
+    })
+    .catch(function () {});
 };
 
 // ---- Participant deep links (location.hash) ----
 
-// /transcripts/#P07 and /screenspace/#P07 pre-select that participant on
-// load (set by the Overview Map's explain-panel links). Accepts any simple
-// token so participant-prefix rules stay in config.py alone; the consuming
-// page validates the id against its actual participant list.
+// Part owning global second g; startKey: "cumulativeStart" (default) or "offset" (composer). Clamps past end.
+var clipgenPartForGlobal = function (parts, g, startKey) {
+  var k = startKey || "cumulativeStart";
+  for (var i = 0; i < parts.length; i++) {
+    if (g >= parts[i][k] && g < parts[i][k] + parts[i].duration) return i;
+  }
+  return Math.max(0, parts.length - 1);
+};
+
+// First of hashPid / currentId / storedId present in participants, else "".
+var clipgenPickParticipant = function (participants, opts) {
+  opts = opts || {};
+  function present(id) {
+    if (!id) return "";
+    for (var i = 0; i < participants.length; i++) {
+      if (participants[i].id === id) return id;
+    }
+    return "";
+  }
+  return present(opts.hashPid) || present(opts.currentId) || present(opts.storedId) || "";
+};
+
+// /transcripts/#P07 pre-selects a participant; any token passes so prefix rules stay in config.py; pages validate.
 var clipgenHashParticipant = function () {
   var raw = (window.location.hash || "").replace(/^#/, "");
   if (!raw) return "";
@@ -2008,50 +2186,29 @@ var clipgenHashParticipant = function () {
   return /^[A-Za-z][\w-]*$/.test(raw) ? raw : "";
 };
 
-// /overview/#tab=metadata style deep links (set by the command palette's
-// cross-page tab commands). Returns the tab key or "". Distinct from the
-// participant form above: the "=" never matches its token pattern, so the
-// two hash shapes can't collide.
+// /overview/#tab=metadata deep links. The "=" never matches the participant hash pattern.
 var clipgenHashTab = function () {
   var m = /^#tab=([\w-]+)$/.exec(window.location.hash || "");
   return m ? m[1] : "";
 };
 
-// ---- Ollama availability ----
+// ---- Local AI availability ----
 
-// Classify the `ollama` block of /api/models into something a panel can render.
-// Returns {state, message, hint, baseUrl} where state is "ok" (usable or
-// unknown), "missing" (binary absent) or "stopped" (installed, not answering).
-//
-// The two failure states need opposite advice, and every page used to collapse
-// them into one boolean — Overview told users who had never installed Ollama to
-// "start it, then Refresh". Transcripts, Overview and Settings all route their
-// wording through here so the answer is the same wherever it is asked.
-//
-// An absent or unfetched payload is deliberately "ok": an unknown state must
-// never block an action or paint a scary banner.
-var clipgenOllamaStatus = function (ollama) {
-  var baseUrl = (ollama && ollama.base_url) || "localhost";
-  var hint = (ollama && ollama.install_hint) || [];
-  // Whether clipgen can download the Ollama CLI itself in-app (macOS managed
-  // install) — "missing" surfaces point at that flow instead of shell commands.
-  var canInstall = !!(ollama && ollama.can_install);
-  var installSizeMb = (ollama && ollama.install_size_mb) || 0;
-  var base = { hint: hint, baseUrl: baseUrl, canInstall: canInstall, installSizeMb: installSizeMb };
-  if (!ollama) return { state: "ok", message: "", hint: hint, baseUrl: baseUrl, canInstall: false, installSizeMb: 0 };
-  // The messages name the problem but prescribe no particular control — the
-  // three surfaces that show them have different affordances (Overview has a
-  // Refresh, Settings has nothing, the dialog has its own retry button), and a
-  // banner telling you to press something that isn't there is worse than one
-  // that just says what is wrong.
-  if (ollama.installed === false) {
+// Classify /api/models' `llm` block: "ok", "missing" or "stopped". An unknown payload is "ok": never block.
+var clipgenLlmStatus = function (llm) {
+  var baseUrl = (llm && llm.base_url) || "localhost";
+  var hint = (llm && llm.install_hint) || [];
+  var base = { hint: hint, baseUrl: baseUrl };
+  if (!llm) return { state: "ok", message: "", hint: hint, baseUrl: baseUrl };
+  // Messages name the problem but prescribe no control; the three surfaces differ in affordances.
+  if (llm.installed === false) {
     base.state = "missing";
-    base.message = "Ollama is not installed — the AI summaries, citations and reports need it.";
+    base.message = "The local AI runtime is not installed — summaries, citations and reports need it.";
     return base;
   }
-  if (ollama.available === false) {
+  if (llm.available === false) {
     base.state = "stopped";
-    base.message = "Ollama is installed but not running at " + baseUrl + ".";
+    base.message = "The AI server is not running at " + baseUrl + ".";
     return base;
   }
   base.state = "ok";
@@ -2086,27 +2243,24 @@ var setStoredUIStateField = function (page, field, value) {
   } catch (_) {}
 };
 
+// One key inside a map-valued stored field (videoTimeByParticipant, tabByParticipant, ...).
+var getStoredUIMapEntry = function (page, field, key, fallback) {
+  var map = getStoredUIState(page)[field];
+  return map && typeof map === "object" && Object.prototype.hasOwnProperty.call(map, key)
+    ? map[key]
+    : fallback;
+};
+
+var setStoredUIMapEntry = function (page, field, key, value) {
+  var st = getStoredUIState(page);
+  var map = st[field] && typeof st[field] === "object" ? st[field] : {};
+  map[key] = value;
+  setStoredUIStateField(page, field, map);
+};
+
 // ---- Canvas helpers (timeline overlays) ----
 
-// Draw stacked per-series amplitude bands inside a canvas rect.
-//
-// Pure: no DOM lookups, no global state. Each timeline page (screenspace,
-// viewer, transcripts, convergence) builds a `series` array from its own
-// event shape and calls this helper from inside its renderTimeline().
-//
-// opts:
-//   x, y, w, h         band rect on the canvas (pixels, integer)
-//   visStart, visEnd   visible time window (seconds)
-//   series             [{ key, color, timestamps: number[] }, ...]
-//                      `key` is used for dim comparison; `color` is "#rrggbb";
-//                      `timestamps` are seconds (already filtered to visible scope
-//                      is fine but not required — out-of-window samples are skipped)
-//   binPx              column width in pixels for binning (default 2)
-//   dimKey             optional series key to keep at full opacity; all other series
-//                      render at reduced alpha. Pass null/undefined for no dimming.
-//
-// Each series is normalized against its OWN peak so quiet types still show
-// shape. Curves are drawn back-to-front so dimKey paints last when set.
+// Stacked per-series bands normalized to their own peaks; dimKey paints last; colors are #rrggbb.
 var drawAmplitudeBands = function (ctx, opts) {
   var x = opts.x, y = opts.y, w = opts.w, h = opts.h;
   var visStart = opts.visStart, visEnd = opts.visEnd;
@@ -2194,13 +2348,7 @@ var drawAmplitudeBands = function (ctx, opts) {
 // "Nice" tick intervals (seconds) for a timeline ruler, coarse → fine.
 var TIMELINE_TICK_STEPS = [1, 2, 5, 10, 15, 30, 60, 120, 300, 600, 900, 1800, 3600];
 
-// Pick a tick interval (seconds) for a ruler spanning `visibleSeconds`. Two
-// strategies, matching the two canvas surfaces' historical behavior:
-//   { maxTicks: N }    largest step that keeps the tick count at/under N
-//                      (Screenspace's zoomable ruler — was `<= 20`).
-//   { targetTicks: N } smallest step giving roughly N ticks, i.e. step >=
-//                      visibleSeconds / N (Transcripts' fixed-extent ruler — was N=8).
-// Falls back to the coarsest step (3600s) when nothing fits.
+// maxTicks: largest step with <= N ticks; targetTicks: smallest step giving ~N ticks (default 8).
 var niceTimeInterval = function (visibleSeconds, opts) {
   opts = opts || {};
   var steps = TIMELINE_TICK_STEPS;
@@ -2218,18 +2366,7 @@ var niceTimeInterval = function (visibleSeconds, opts) {
   return steps[steps.length - 1];
 };
 
-// Draw the tick marks + time labels of a timeline ruler onto a 2D canvas.
-// Markers, bands, playheads, and shading stay per-surface; this is only the ruler.
-//
-// opts:
-//   visStart, visEnd   visible time window (seconds); ticks are drawn from the
-//                      first multiple of `interval` at/after visStart up to visEnd
-//   interval           tick spacing in seconds (see niceTimeInterval)
-//   timeToX            fn(seconds) -> x pixel
-//   colors             { border, textDim, fontMono }
-//   tickHeight         tick line length in px (default 6)
-//   labelY             baseline y for the label text (default 16)
-//   format             fn(seconds) -> label string (default formatTime)
+// Ruler ticks and labels only; markers, bands and playheads stay per-surface.
 var drawTimelineRuler = function (ctx, opts) {
   var interval = opts.interval;
   if (!(interval > 0)) return;
@@ -2260,31 +2397,7 @@ var drawTimelineRuler = function (ctx, opts) {
 
 // ---- Video helpers ----
 
-// Bridge the "paused <video> goes blank when the tab is hidden" gap.
-//
-// Chrome / Safari (and Edge, same engine as Chrome) will release the
-// decoded frame buffer — and sometimes the entire compositor texture — of
-// paused <video> elements while the tab is hidden, to free GPU memory. On
-// return, the element shows nothing until the next play or seek manages to
-// re-establish the surface. A plain `currentTime` nudge is unreliable
-// because the seek can land before the compositor has re-attached, and
-// because `readyState` may have dropped below HAVE_CURRENT_DATA while
-// hidden.
-//
-// Workaround: snapshot the current frame onto a canvas overlay just before
-// the browser has a chance to discard it (i.e. on visibilitychange→hidden
-// while paused), then keep the overlay visible until the live video proves
-// it has a fresh frame again (via the `seeked` / `play` / `loadedmetadata`
-// events). Same architectural trick Screenspace uses for its paused state,
-// except the pixels come from the live video instead of a server PNG.
-//
-// Install once per <video>. The helper attaches its own listeners (visibility,
-// play, seeked, emptied, loadedmetadata) and is idempotent — repeated calls
-// no-op.
-//
-// Requirements: the video's parent must be a positioned container (the
-// overlay is absolutely positioned inside it). `#videoFrame` in transcripts
-// already is `position: relative`.
+// Hidden tabs drop paused <video> frames; snapshot to canvas until repaint. Positioned parent required.
 var clipgenInstallPausedFrameOverlay = function (video) {
   if (!video || video._clipgenPausedOverlay) return;
   var parent = video.parentNode;
@@ -2308,8 +2421,7 @@ var clipgenInstallPausedFrameOverlay = function (video) {
   var snapshot = function () {
     if (!video.src || !video.paused) return;
     var w = video.videoWidth, h = video.videoHeight;
-    // videoWidth/Height are only non-zero once the first frame has decoded;
-    // skip if we have nothing to paint.
+    // videoWidth/Height are zero until the first frame decodes.
     if (!w || !h) return;
     canvas.width = w;
     canvas.height = h;
@@ -2317,8 +2429,7 @@ var clipgenInstallPausedFrameOverlay = function (video) {
       canvas.getContext("2d").drawImage(video, 0, 0, w, h);
       canvas.style.display = "";
     } catch (_) {
-      // Cross-origin or other draw failure — leave overlay hidden, the page
-      // is no worse off than it was before this helper existed.
+      // Cross-origin or other draw failure: leave the overlay hidden.
     }
   };
 
@@ -2332,10 +2443,7 @@ var clipgenInstallPausedFrameOverlay = function (video) {
     if (document.hidden) {
       snapshot();
     } else if (video.paused && video.src) {
-      // Nudge currentTime to coax the video into producing a fresh frame;
-      // the `seeked` listener above will then hide the snapshot. We use a
-      // ~1 ms back-step (well under one frame at any reasonable framerate)
-      // because same-value assignment is sometimes optimized away.
+      // Nudge currentTime so `seeked` hides the snapshot; same-value assignment may be optimized away.
       var t = video.currentTime;
       video.currentTime = t > 0.001 ? t - 0.001 : 0.001;
     }
@@ -2343,45 +2451,38 @@ var clipgenInstallPausedFrameOverlay = function (video) {
 };
 
 
-// ---- Bottom-panel drag-to-resize divider ----
+// ---- Drag-to-resize handles ----
 
-// Shared drag + dblclick wiring for the #panelDivider handle, used by Studio
-// and Screenspace. The pages differ only in how they read/apply panel height,
-// compute bounds, and persist — supplied as callbacks in `cfg`:
-//   isCollapsed() -> bool   getHeight() -> px   setHeight(px)
-//   getBounds() -> { min, max }   onToggle()   [onDragStart] [onDragEnd] [persist]
-function initPanelDivider(cfg) {
-  var handle = document.querySelector("#panelDivider");
+// rAF-throttled mouse/touch drag along `axis`; cfg.onStart() may return false to refuse.
+function initDragHandle(handle, axis, cfg) {
   if (!handle) return;
   var dragging = false;
-  var startY = 0;
-  var startHeight = 0;
-  var minH = 0;
-  var maxH = 0;
+  var start = 0;
   var rafPending = false;
 
+  function coord(e) {
+    var touch = e.touches && e.touches[0];
+    if (axis === "x") return e.clientX || (touch && touch.clientX) || 0;
+    return e.clientY || (touch && touch.clientY) || 0;
+  }
+
   function onDown(e) {
-    if (cfg.isCollapsed()) return;
+    if (cfg.onStart && cfg.onStart() === false) return;
     e.preventDefault();
+    if (cfg.stopPropagation) e.stopPropagation();
     dragging = true;
-    startY = e.clientY || (e.touches && e.touches[0].clientY) || 0;
-    startHeight = cfg.getHeight();
-    var bounds = cfg.getBounds();
-    minH = bounds.min;
-    maxH = bounds.max;
+    start = coord(e);
     handle.classList.add("active");
-    if (cfg.onDragStart) cfg.onDragStart();
-    document.body.style.cursor = "row-resize";
+    document.body.style.cursor = cfg.cursor || (axis === "x" ? "col-resize" : "row-resize");
     document.body.style.userSelect = "none";
   }
 
   function onMove(e) {
     if (!dragging || rafPending) return;
     rafPending = true;
-    var clientY = e.clientY || (e.touches && e.touches[0].clientY) || 0;
+    var now = coord(e);
     requestAnimationFrame(function () {
-      var delta = startY - clientY;
-      cfg.setHeight(Math.max(minH, Math.min(maxH, startHeight + delta)));
+      cfg.onDelta(now - start);
       rafPending = false;
     });
   }
@@ -2390,10 +2491,9 @@ function initPanelDivider(cfg) {
     if (!dragging) return;
     dragging = false;
     handle.classList.remove("active");
-    if (cfg.onDragEnd) cfg.onDragEnd();
     document.body.style.cursor = "";
     document.body.style.userSelect = "";
-    if (cfg.persist) cfg.persist();
+    if (cfg.onEnd) cfg.onEnd();
   }
 
   handle.addEventListener("mousedown", onDown);
@@ -2403,8 +2503,35 @@ function initPanelDivider(cfg) {
   document.addEventListener("mouseup", onUp);
   document.addEventListener("touchend", onUp);
 
-  handle.addEventListener("dblclick", function (e) {
-    e.preventDefault();
-    cfg.onToggle();
+  if (cfg.onToggle) {
+    handle.addEventListener("dblclick", function (e) {
+      e.preventDefault();
+      if (cfg.stopPropagation) e.stopPropagation();
+      cfg.onToggle();
+    });
+  }
+}
+
+// #panelDivider drag + dblclick for Studio and Screenspace; page specifics arrive as cfg callbacks.
+function initPanelDivider(cfg) {
+  var startHeight = 0;
+  var bounds = { min: 0, max: 0 };
+  initDragHandle(document.querySelector("#panelDivider"), "y", {
+    onStart: function () {
+      if (cfg.isCollapsed()) return false;
+      startHeight = cfg.getHeight();
+      bounds = cfg.getBounds();
+      if (cfg.onDragStart) cfg.onDragStart();
+      return true;
+    },
+    // Dragging up (negative delta) grows the bottom panel.
+    onDelta: function (delta) {
+      cfg.setHeight(Math.max(bounds.min, Math.min(bounds.max, startHeight - delta)));
+    },
+    onEnd: function () {
+      if (cfg.onDragEnd) cfg.onDragEnd();
+      if (cfg.persist) cfg.persist();
+    },
+    onToggle: cfg.onToggle,
   });
 }

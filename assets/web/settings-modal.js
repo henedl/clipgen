@@ -20,33 +20,35 @@
     "CLI",
   ];
 
-  // Entry/exit animation. The backdrop is the shared .cg-modal-veil, ramped by
-  // toggling `.is-veiled`; the panel slides in on `.is-in`. EXIT_MS must stay in
-  // step with --duration-veil (tokens.css) so the veil finishes fading exactly
-  // as the overlay is hidden.
+  // EXIT_MS must match --duration-veil (tokens.css) so veil and overlay finish together.
   var EXIT_MS = 360;
 
   var _root = null;
   var _tabsEl = null;
   var _panelsEl = null;
   var _statusEl = null;
+  var _actionsEl = null;
   var _settings = null;
   var _activeTab = "General";
   var _saveTimer = null;
   var _opts = {};
   var _modelsCache = null;
   var _modelsCachePromise = null;
+  // Running GGUF downloads by model ref; a rebuilt row joins the existing poll.
+  var _llmDownloadWatch = {};
+  // The Summaries tab's model block refresh, set when the block is built.
+  var _llmBlockRefresh = null;
   var _closeTimer = null;
   // Titlecard/endcard picker state (shared by the title + end pickers).
   var _cardsCache = null;
   var _cardsCachePromise = null;
   var _cardPickers = [];
+  // Desktop-only footer button; built after load, once the server says native window.
+  var _revealBtn = null;
   var _SAMPLE_TITLE_TEXT = "Sample description";
 
   function _getApiRoot() {
-    // Each page is served under a different prefix (/studio/, /transcripts/,
-    // /screenspace/). Settings + models are registered at the combined-app
-    // root, so request them from an absolute path.
+    // Settings and models live at the combined-app root, not under a page prefix.
     return "/api";
   }
 
@@ -55,15 +57,45 @@
     return mb + " MB";
   }
 
+  var FIT_LABELS = { fits: "Fits", tight: "Tight", too_big: "Too large" };
+
+  // Memory-fit chip from the server's verdict; the recommended model wins the label.
+  function _fitChip(model, isReco) {
+    var fit = model.fit || {};
+    if (!FIT_LABELS[fit.level]) return null;
+    var chip = el("span", "settings-llm-model-fit", isReco ? "Recommended" : FIT_LABELS[fit.level]);
+    if (isReco) chip.classList.add("settings-llm-model-fit--reco");
+    else if (fit.level === "too_big") chip.classList.add("settings-llm-model-fit--warn");
+    chip.title = "Needs about " + _formatSize(fit.need_mb) + ", " +
+      _formatSize(fit.usable_mb) + " usable";
+    return chip;
+  }
+
+  // Option-label suffix; too-large models stay selectable, like "won't load".
+  function _fitSuffix(model, isReco) {
+    if (isReco) return " \u2014 recommended";
+    if (model.fit && model.fit.level === "too_big") return " \u2014 too large for this machine";
+    return "";
+  }
+
+  function _hardwareSummary(hw) {
+    var parts = [];
+    if (hw.chip) parts.push(hw.chip);
+    if (hw.memory_mb) {
+      parts.push(_formatSize(hw.memory_mb).replace(".0 GB", " GB") +
+        (hw.unified_memory ? " unified memory" : " RAM"));
+    }
+    if (hw.cpu_count) parts.push(hw.cpu_count + " cores");
+    return parts.length ? parts.join(" \u00b7 ") : "This machine";
+  }
+
   function _fetchModels() {
     if (_modelsCache) return Promise.resolve(_modelsCache);
     if (_modelsCachePromise) return _modelsCachePromise;
     _modelsCachePromise = apiGet(_getApiRoot() + "/models")
       .then(function (data) {
-        // Only pin a result that actually discovered Ollama. If the server
-        // wasn't reachable yet, don't cache the empty list for the session —
-        // reset so a later open re-fetches and picks up installed models.
-        if (data && data.ok && !(data.ollama && data.ollama.available === false)) {
+        // Cache only when the AI server answered; otherwise retry on the next open.
+        if (data && data.ok && !(data.llm && data.llm.available === false)) {
           _modelsCache = data;
         } else {
           _modelsCachePromise = null;
@@ -74,6 +106,346 @@
     return _modelsCachePromise;
   }
 
+  function _invalidateModels() {
+    _modelsCache = null;
+    _modelsCachePromise = null;
+  }
+
+  // Refetch once and repaint the model block plus every AI-model dropdown.
+  function _refreshLlmViews() {
+    _invalidateModels();
+    if (_llmBlockRefresh) _llmBlockRefresh();
+    _refreshLlmSelects();
+  }
+
+  function _refreshLlmSelects() {
+    if (!_panelsEl) return;
+    var sels = _panelsEl.querySelectorAll(".settings-row[data-setting] .settings-model-dropdown");
+    for (var i = 0; i < sels.length; i++) {
+      var row = sels[i].parentNode;
+      while (row && !(row.getAttribute && row.getAttribute("data-setting"))) row = row.parentNode;
+      var s = row && _findSetting(row.getAttribute("data-setting"));
+      if (s && s.provider === "llm") {
+        _loadModelsForSelect(sels[i], s.provider, s.value, s.emptyLabel);
+      }
+    }
+  }
+
+  // Start or join a GGUF download; one shared poll per model survives modal reopen.
+  function _watchLlmDownload(model, onProgress) {
+    var watch = _llmDownloadWatch[model];
+    if (watch) { watch.listeners.push(onProgress); return; }
+    watch = { listeners: [onProgress] };
+    _llmDownloadWatch[model] = watch;
+
+    function emit(st) {
+      for (var i = 0; i < watch.listeners.length; i++) watch.listeners[i](st);
+    }
+    function finish(st) {
+      delete _llmDownloadWatch[model];
+      emit(st);
+      if (st.succeeded) _refreshLlmViews();
+    }
+
+    apiPost(_getApiRoot() + "/models/llm/download", { model: model }).then(function (data) {
+      if (!data || !data.ok) {
+        finish({ done: true, succeeded: false, error: (data && data.error) || "Download failed" });
+        return;
+      }
+      var misses = 0;
+      var poller = createPoller(function () {
+        return apiGet(_getApiRoot() + "/models/llm/download-status?model=" + encodeURIComponent(model))
+          .then(function (st) {
+            if (!st || !st.ok || !st.found) {
+              if (++misses >= 20) {
+                poller.stop();
+                finish({ done: true, succeeded: false, error: "Download failed" });
+              }
+              return;
+            }
+            misses = 0;
+            if (st.done) { poller.stop(); finish(st); } else emit(st);
+          })
+          .catch(function () {
+            if (++misses >= 20) {
+              poller.stop();
+              finish({ done: true, succeeded: false, error: "Download failed" });
+            }
+          });
+      }, 1000, { runImmediately: true, label: "settings.llmDownload" });
+      poller.start();
+    }).catch(function () {
+      finish({ done: true, succeeded: false, error: "Download failed" });
+    });
+  }
+
+  // Recommendation, catalog, then the downloaded models with show/delete.
+  function _buildLlmModelsBlock() {
+    var wrap = el("div", "settings-llm-models");
+    wrap.appendChild(el("div", "settings-group-label", "Recommendation"));
+    var reco = el("div", "settings-llm-reco");
+    wrap.appendChild(reco);
+    wrap.appendChild(el("div", "settings-group-label", "Suggested models"));
+    var suggestedList = el("div", "settings-llm-models-list");
+    wrap.appendChild(suggestedList);
+    wrap.appendChild(el("div", "settings-group-label", "Downloaded models"));
+    var list = el("div", "settings-llm-models-list");
+    wrap.appendChild(list);
+
+    function refresh() {
+      _fetchModels().then(function (data) {
+        list.textContent = "";
+        suggestedList.textContent = "";
+        var llm = (data && data.llm) || {};
+        renderReco(llm);
+        var models = (data && data.llm && data.llm.models) || [];
+        if (!models.length) {
+          list.appendChild(el("div", "settings-model-note", "No models downloaded yet."));
+        }
+        for (var i = 0; i < models.length; i++) {
+          list.appendChild(_buildLlmModelRow(models[i]));
+        }
+        var suggested = (data && data.llm && data.llm.suggested) || [];
+        for (var j = 0; j < suggested.length; j++) {
+          suggestedList.appendChild(_buildSuggestedRow(suggested[j], llm.recommended));
+        }
+      });
+    }
+
+    function _summaryFitNote(agents) {
+      for (var i = 0; i < (agents || []).length; i++) {
+        var a = agents[i];
+        if (a.key !== "summary" || !a.fit) continue;
+        if (a.fit.level === "too_big") return "Your summary model may not fit.";
+        if (a.fit.level === "tight") return "Your summary model is a tight fit.";
+      }
+      return "";
+    }
+
+    // Which catalog model this machine should run, from the server's fit verdicts.
+    function renderReco(llm) {
+      reco.textContent = "";
+      var hw = llm.hardware || {};
+      var hwLine = el("div", "settings-llm-reco-hw");
+      hwLine.appendChild(el("span", "settings-llm-reco-icon settings-llm-reco-icon--chip"));
+      hwLine.appendChild(document.createTextNode(_hardwareSummary(hw)));
+      reco.appendChild(hwLine);
+      var pick = null;
+      var suggested = llm.suggested || [];
+      for (var i = 0; i < suggested.length; i++) {
+        if (suggested[i].name === llm.recommended) pick = suggested[i];
+      }
+      // Every applicable caveat shows; the GPU note must not hide a fit problem.
+      var notes = [];
+      if (!pick && hw.memory_mb) notes.push("No catalog model fits this machine.");
+      if (hw.note) notes.push(hw.note);
+      if (!pick) {
+        for (var n = 0; n < notes.length; n++) {
+          reco.appendChild(el("div", "settings-llm-reco-note", notes[n]));
+        }
+        return;
+      }
+      var line = el("div", "settings-llm-reco-pick");
+      line.appendChild(el("span", "settings-llm-reco-icon settings-llm-reco-icon--pick"));
+      line.appendChild(document.createTextNode("Recommended: " + pick.label));
+      reco.appendChild(line);
+      var summaryNote = _summaryFitNote(llm.agents);
+      if (summaryNote) notes.unshift(summaryNote);
+      for (var k = 0; k < notes.length; k++) {
+        reco.appendChild(el("div", "settings-llm-reco-note", notes[k]));
+      }
+
+      var useBtn = el("button", "btn btn-small");
+      useBtn.type = "button";
+      var current = _findSetting("LLM_SUMMARY_MODEL");
+      var inUse = !!current && current.value === pick.name;
+      useBtn.textContent = inUse ? "In use" : "Use recommended";
+      useBtn.disabled = inUse;
+      // Goes through the row's select so the change marks, saves, and refreshes as usual.
+      useBtn.addEventListener("click", function () {
+        var sel = _panelsEl.querySelector(
+          '.settings-row[data-setting="LLM_SUMMARY_MODEL"] select');
+        if (sel) {
+          sel.value = pick.name;
+          _fireChange(sel);
+        }
+        if (!pick.installed) {
+          var dl = suggestedList.querySelector('button[data-model="' + pick.name + '"]');
+          if (dl && !dl.disabled) dl.click();
+        }
+        useBtn.textContent = "In use";
+        useBtn.disabled = true;
+      });
+      reco.appendChild(useBtn);
+    }
+
+    // Friendly name over mono id; without a catalog label the id stays primary.
+    function _modelNameBlock(model) {
+      var name = el("div", "settings-llm-model-name");
+      var title = el("span", "settings-llm-model-title", model.label || model.name);
+      if (!model.label) title.classList.add("settings-llm-model-title--mono");
+      name.appendChild(title);
+      if (model.label) {
+        name.appendChild(el("span", "settings-llm-model-id", model.name));
+      }
+      return name;
+    }
+
+    // Only catalog models carry a source page; the rest get no link at all.
+    function _modelLinkButton(model) {
+      if (!model.model_url) return null;
+      var link = el("a", "settings-llm-model-reveal");
+      link.href = model.model_url;
+      link.target = "_blank";
+      link.rel = "noopener noreferrer";
+      link.title = "View this model on Hugging Face";
+      link.setAttribute("aria-label", "View this model on Hugging Face");
+      link.appendChild(
+        el("span", "settings-llm-model-icon settings-llm-model-icon--link")
+      );
+      return link;
+    }
+
+    // Same width with or without a link, so the columns to its right line up.
+    function _modelLinkSlot(model) {
+      var slot = el("span", "settings-llm-model-link-slot");
+      var link = _modelLinkButton(model);
+      if (link) slot.appendChild(link);
+      return slot;
+    }
+
+    // A curated model: Download with an in-row progress bar, or "Downloaded".
+    function _buildSuggestedRow(model, recommended) {
+      var row = el("div", "settings-llm-model-row");
+      var name = _modelNameBlock(model);
+      name.appendChild(el("span", "settings-llm-model-desc", model.description));
+      if (model.unusable) {
+        name.appendChild(el("span", "settings-llm-model-reason", model.unusable));
+        row.classList.add("settings-llm-model-row--unusable");
+      }
+      row.appendChild(name);
+      var size = el("span", "settings-llm-model-size", _formatSize(model.size_mb));
+      row.appendChild(size);
+      var chip = _fitChip(model, model.name === recommended);
+      if (chip) row.appendChild(chip);
+      row.appendChild(_modelLinkSlot(model));
+      var action = el("span", "settings-llm-model-action");
+      row.appendChild(action);
+
+      if (model.installed) {
+        var done = el("span", "settings-llm-model-state");
+        done.appendChild(el("span", "settings-llm-model-icon settings-llm-model-icon--done"));
+        done.appendChild(document.createTextNode("Downloaded"));
+        action.appendChild(done);
+        return row;
+      }
+
+      var bar = el("div", "settings-llm-model-bar");
+      var fill = el("div", "settings-llm-model-bar-fill");
+      bar.appendChild(fill);
+      var dlBtn = el("button", "btn btn-small btn-icon");
+      dlBtn.type = "button";
+      // The recommendation widget's "Use recommended" clicks this by model.
+      dlBtn.setAttribute("data-model", model.name);
+      dlBtn.appendChild(el("span", "settings-llm-model-icon settings-llm-model-icon--download"));
+      dlBtn.appendChild(document.createTextNode("Download"));
+      action.appendChild(dlBtn);
+
+      function onProgress(st) {
+        if (st.done) {
+          if (!st.succeeded) {
+            bar.remove();
+            dlBtn.disabled = false;
+            size.textContent = _formatSize(model.size_mb);
+            _setStatus(st.error || "Download failed");
+          }
+          return;
+        }
+        if (st.total > 0) {
+          var pct = Math.max(0, Math.min(100, Math.round((st.completed / st.total) * 100)));
+          fill.style.width = pct + "%";
+          size.textContent = _formatSize(Math.round(st.completed / 1048576)) +
+            " / " + _formatSize(model.size_mb);
+        }
+      }
+      function startWatching() {
+        dlBtn.disabled = true;
+        name.appendChild(bar);
+        _watchLlmDownload(model.name, onProgress);
+      }
+      dlBtn.addEventListener("click", startWatching);
+      // A download started before the modal was closed is still running.
+      apiGet(_getApiRoot() + "/models/llm/download-status?model=" + encodeURIComponent(model.name))
+        .then(function (st) {
+          if (st && st.ok && st.found && !st.done) startWatching();
+        })
+        .catch(function () {});
+      return row;
+    }
+
+    function _buildLlmModelRow(model) {
+      var row = el("div", "settings-llm-model-row");
+      var name = _modelNameBlock(model);
+      if (model.unusable) {
+        // Show the router's own reason, not a generic "incompatible".
+        name.appendChild(el("span", "settings-llm-model-reason", model.unusable));
+        row.classList.add("settings-llm-model-row--unusable");
+      }
+      row.appendChild(name);
+      row.appendChild(
+        el("span", "settings-llm-model-size", model.size_mb ? _formatSize(model.size_mb) : "")
+      );
+      row.appendChild(_modelLinkSlot(model));
+
+      var showBtn = el("button", "settings-llm-model-reveal");
+      showBtn.type = "button";
+      showBtn.title = "Show in file browser";
+      showBtn.setAttribute("aria-label", "Show in file browser");
+      showBtn.appendChild(
+        el("span", "settings-llm-model-icon settings-llm-model-icon--reveal")
+      );
+      showBtn.addEventListener("click", function () {
+        apiPost(_getApiRoot() + "/models/llm/reveal", { model: model.name })
+          .catch(function (e) {
+            _setStatus((e && e.message) || "Could not open the folder");
+          });
+      });
+      row.appendChild(showBtn);
+      var action = el("span", "settings-llm-model-action");
+      row.appendChild(action);
+
+      // Ollama owns the blob and the scan re-offers it; only `ollama rm` removes it.
+      if (model.source === "ollama") {
+        var managed = el("span", "settings-llm-model-state", "Ollama");
+        managed.title = "Managed by Ollama; remove it with ollama rm";
+        action.appendChild(managed);
+        return row;
+      }
+
+      var delBtn = el("button", "btn btn-small btn-icon");
+      delBtn.type = "button";
+      delBtn.appendChild(
+        el("span", "settings-llm-model-icon settings-llm-model-icon--delete")
+      );
+      delBtn.appendChild(document.createTextNode("Delete"));
+      delBtn.addEventListener("click", function () {
+        delBtn.disabled = true;
+        apiDelete(_getApiRoot() + "/models/llm/" + encodeURIComponent(model.name))
+          .then(function () { _refreshLlmViews(); })
+          .catch(function (e) {
+            delBtn.disabled = false;
+            _setStatus((e && e.message) || "Delete failed");
+          });
+      });
+      action.appendChild(delBtn);
+      return row;
+    }
+
+    _llmBlockRefresh = refresh;
+    refresh();
+    return wrap;
+  }
+
   function _loadModelsForSelect(sel, provider, currentValue, emptyLabel) {
     _fetchModels().then(function (data) {
       if (!data || !data.ok) { sel.disabled = false; return; }
@@ -81,8 +453,8 @@
       var models = [];
       if (provider === "whisper") {
         models = (data.whisper && data.whisper.models) || [];
-      } else if (provider === "ollama") {
-        models = (data.ollama && data.ollama.models) || [];
+      } else if (provider === "llm") {
+        models = (data.llm && data.llm.models) || [];
       }
 
       sel.innerHTML = "";
@@ -95,22 +467,53 @@
         if (!currentValue) inheritOpt.selected = true;
         sel.appendChild(inheritOpt);
       }
+      // Settings hold HF refs, installed entries file stems; the catalog maps stem to ref.
+      var suggested = (provider === "llm" && data.llm && data.llm.suggested) || [];
+      var refByStem = {};
+      for (var si = 0; si < suggested.length; si++) {
+        refByStem[suggested[si].stem] = suggested[si].name;
+      }
       var hasCurrentValue = false;
       for (var i = 0; i < models.length; i++) {
         var m = models[i];
         var opt = document.createElement("option");
-        opt.value = m.name;
-        var label = m.name;
+        opt.value = refByStem[m.name] || m.name;
+        // No room for the raw id in an option; it goes in the tooltip.
+        var label = m.label || m.name;
         if (m.size_mb) label += " (" + _formatSize(m.size_mb) + ")";
-        if (m.parameter_size) label += " \u00B7 " + m.parameter_size;
         if (m.description) label += " \u2014 " + m.description;
+        // Still selectable: a llama.cpp upgrade may fix it; the mark warns.
+        if (m.unusable) label += " \u2014 won't load";
+        if (provider === "llm") label += _fitSuffix(m, opt.value === data.llm.recommended);
         opt.textContent = label;
-        if (m.name === currentValue) {
+        opt.title = m.unusable ? m.name + " \u2014 " + m.unusable : m.name;
+        if (opt.value === currentValue || m.name === currentValue) {
           opt.selected = true;
           hasCurrentValue = true;
         }
         sel.appendChild(opt);
       }
+      // Selectable before download; the Transcripts gate fetches on first use.
+      var group = null;
+      for (var sj = 0; sj < suggested.length; sj++) {
+        var sm = suggested[sj];
+        if (sm.installed) continue;
+        if (!group) {
+          group = document.createElement("optgroup");
+          group.label = "Suggested";
+        }
+        var sopt = document.createElement("option");
+        sopt.value = sm.name;
+        sopt.textContent = (sm.label || sm.name) + " (" + _formatSize(sm.size_mb) +
+          ") \u2014 not downloaded" + _fitSuffix(sm, sm.name === data.llm.recommended);
+        sopt.title = sm.name + " \u2014 " + sm.description;
+        if (sm.name === currentValue) {
+          sopt.selected = true;
+          hasCurrentValue = true;
+        }
+        group.appendChild(sopt);
+      }
+      if (group) sel.appendChild(group);
       if (!hasCurrentValue && currentValue) {
         var custom = document.createElement("option");
         custom.value = currentValue;
@@ -120,11 +523,9 @@
       }
       sel.disabled = false;
 
-      // An Ollama dropdown whose only entry is "<model> (current)" looks like a
-      // populated list, so a user with no Ollama at all gets no signal that the
-      // setting cannot do anything. Say so next to the control.
-      if (provider === "ollama") {
-        var status = clipgenOllamaStatus(data.ollama);
+      // A single "(current)" option looks populated; say next to it when no runtime exists.
+      if (provider === "llm") {
+        var status = clipgenLlmStatus(data.llm);
         var note = sel.parentNode && sel.parentNode.querySelector(".settings-model-note");
         if (status.state !== "ok" && sel.parentNode) {
           if (!note) {
@@ -133,10 +534,8 @@
             sel.parentNode.appendChild(note);
           }
           var extra = "";
-          if (status.state === "missing") {
-            extra = status.canInstall
-              ? " clipgen can download it for you — run any AI action on the Transcripts page."
-              : (status.hint.length ? " " + status.hint[0] : "");
+          if (status.state === "missing" && status.hint.length) {
+            extra = " " + status.hint[0];
           }
           note.textContent = status.message + extra;
         } else if (note) {
@@ -176,20 +575,20 @@
 
     var panels = el("div", "settings-tab-panels");
     panels.id = "settingsContent";
-    // Keyboard entry point for the row cursor: the nav listener only engages
-    // while focus is inside this container, and on open no row is focused yet.
-    // Programmatically focusable only (-1), never in the Tab order.
+    // Focus target for the row cursor on open; programmatic only, never in Tab order.
     panels.tabIndex = -1;
     panel.appendChild(panels);
 
     var footer = el("div", "settings-footer");
+    var actions = el("div", "settings-footer-actions");
     var resetAll = el("button", "btn btn-small settings-reset-all");
     resetAll.type = "button";
     resetAll.textContent = "Reset all to defaults";
     resetAll.setAttribute("data-hotkey", "settings.resetAll");
     resetAll.addEventListener("click", function () { _resetAll(); });
+    actions.appendChild(resetAll);
     var status = el("span", "settings-save-status");
-    footer.appendChild(resetAll);
+    footer.appendChild(actions);
     footer.appendChild(status);
     panel.appendChild(footer);
 
@@ -200,9 +599,17 @@
     document.body.appendChild(overlay);
 
     _root = overlay;
+    _actionsEl = actions;
     _tabsEl = tabs;
     _panelsEl = panels;
     _statusEl = status;
+  }
+
+  // Footer status line; `working` shimmers in-flight messages, terminal messages write flat.
+  function _setStatus(text, working) {
+    if (!_statusEl) return;
+    _statusEl.classList.toggle("cg-shimmer", working === true);
+    _statusEl.textContent = text;
   }
 
   function _open() {
@@ -222,15 +629,11 @@
 
     _root.classList.remove("hidden");
     document.body.classList.add("modal-open");
-    // Every session starts in mouse mode: no cursor, no ring. Focus the list
-    // container so the first arrow key still reaches the nav listener.
+    // Start in mouse mode; focus the list so arrow keys reach the nav listener.
     _navVisible = false;
     _navRow = null;
     if (_panelsEl) _panelsEl.focus();
-    // Let hotkeys.js scope Alt-hold hints to this modal's controls. This modal
-    // rolls its own Escape/focus (bubble-phase, so capture-phase owners like the
-    // hotkey recorder win first), so it can't rely on openBlockingModal to set
-    // the active-modal root — do it explicitly.
+    // Set the active-modal root ourselves: this modal bypasses openBlockingModal (own Escape/focus).
     if (typeof setActiveModalRoot === "function") setActiveModalRoot(_root);
 
     // Next frame: build in the backdrop blur and slide/scale the panel.
@@ -242,14 +645,11 @@
 
   function _close() {
     if (!_root || _root.classList.contains("hidden")) return;
-    // Release the active-modal root immediately; the showHints() guard keeps
-    // hints suppressed through the fade-out (body.modal-open lingers until the
-    // exit timer), so no background chips leak.
+    // Release the root now; showHints() keeps hints suppressed through the fade-out.
     if (typeof setActiveModalRoot === "function") setActiveModalRoot(null);
     // A hotkey recording capture-listener must never outlive the modal.
     _hkStopRecording();
-    // Dismiss the inline color popover; it lives on document.body at --z-toast
-    // and would otherwise outlive the modal.
+    // The color popover lives on document.body and would outlive the modal.
     if (window.ClipgenColorPicker) window.ClipgenColorPicker.close();
     // Drop the keyboard cursor so a re-open starts in mouse mode again.
     _navVisible = false;
@@ -260,17 +660,17 @@
     if (_closeTimer) clearTimeout(_closeTimer);
     _closeTimer = setTimeout(function () {
       if (_root) _root.classList.add("hidden");
-      // Clear the topnav gate only once the veil is gone, so the bar stays
-      // covered through the fade-out.
+      // Keep the topnav covered until the veil has faded.
       document.body.classList.remove("modal-open");
       _closeTimer = null;
     }, EXIT_MS);
   }
 
   function _load() {
-    _panelsEl.textContent = "Loading settings\u2026";
-    // Dismiss any stale color popover and refetch the card list each time the
-    // modal opens so externally added or removed uploads show up.
+    // Inner span, not the container: .cg-shimmer styles would leak onto the settings UI.
+    _panelsEl.textContent = "";
+    _panelsEl.appendChild(el("span", "cg-shimmer", "Loading settings\u2026"));
+    // Refetch the card list on every open so external uploads show up.
     if (window.ClipgenColorPicker) window.ClipgenColorPicker.close();
     _cardsCache = null;
     _cardsCachePromise = null;
@@ -281,10 +681,31 @@
           return;
         }
         _settings = data.settings;
+        _syncRevealBtn(data.desktop, data.path);
         _render();
       })
       .catch(function () {
         _panelsEl.textContent = "Failed to load settings.";
+      });
+  }
+
+  // Native windows have no address bar. Gate on GUI_LAUNCH: data-desktop-chrome is macOS-only.
+  function _syncRevealBtn(isDesktop, path) {
+    if (!isDesktop || !_actionsEl) return;
+    if (!_revealBtn) {
+      _revealBtn = el("button", "btn btn-small");
+      _revealBtn.type = "button";
+      _revealBtn.textContent = "Show settings file";
+      _revealBtn.addEventListener("click", _reveal);
+      _actionsEl.appendChild(_revealBtn);
+    }
+    if (path) _revealBtn.title = path;
+  }
+
+  function _reveal() {
+    apiPost(_getApiRoot() + "/settings/reveal", {})
+      .catch(function (err) {
+        _setStatus((err && err.message) || "Could not open the folder");
       });
   }
 
@@ -297,8 +718,7 @@
   }
 
   function _isChanged(s) {
-    // Object-valued settings (mark_categories, hotkeys) need structural
-    // comparison; identity-compare is always true for two parsed JSON objects.
+    // Object-valued settings (mark_categories, hotkeys) need structural comparison.
     if (s.value !== null && typeof s.value === "object") {
       return JSON.stringify(s.value) !== JSON.stringify(s.default);
     }
@@ -326,36 +746,17 @@
       var s = _settings[i];
       payload[s.name] = s.value;
     }
-    if (_statusEl) _statusEl.textContent = "Saving\u2026";
+    _setStatus("Saving\u2026", true);
 
-    // Manual fetch (not apiPut) so a server-supplied data.error on a non-2xx
-    // response still reaches the status line; capture r.ok alongside the body.
-    fetch(_getApiRoot() + "/settings", {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ settings: payload }),
-    })
-      .then(function (r) {
-        return r.json().then(
-          function (j) { return { ok: r.ok, body: j }; },
-          function () { return { ok: r.ok, body: null }; }
-        );
-      })
-      .then(function (res) {
-        var data = res.body;
-        if (!res.ok || !data || !data.ok) {
-          if (_statusEl) {
-            _statusEl.textContent = data && data.error ? "Save failed: " + data.error : "Save failed";
-          }
+    apiPut(_getApiRoot() + "/settings", { settings: payload })
+      .then(function (data) {
+        if (!data || !data.ok) {
+          _setStatus(data && data.error ? "Save failed: " + data.error : "Save failed");
           return;
         }
-        if (_statusEl) {
-          _statusEl.textContent = "Saved";
-          setTimeout(function () { if (_statusEl) _statusEl.textContent = ""; }, 2000);
-        }
-        // The save succeeded server-side. Run the post-save hook in isolation
-        // so a UI-refresh error can't bubble into the catch below and mislabel
-        // a persisted save as "Save failed".
+        _setStatus("Saved");
+        setTimeout(function () { _setStatus(""); }, 2000);
+        // Save already persisted; isolate the hook so its errors don't read as "Save failed".
         if (typeof _opts.onSave === "function") {
           try {
             _opts.onSave(data.applied || {}, _settings.slice());
@@ -366,8 +767,8 @@
           }
         }
       })
-      .catch(function () {
-        if (_statusEl) _statusEl.textContent = "Save failed";
+      .catch(function (err) {
+        _setStatus(err.serverMessage ? "Save failed: " + err.serverMessage : "Save failed");
       });
   }
 
@@ -375,17 +776,15 @@
     apiPut(_getApiRoot() + "/settings", { reset: "tab:" + tabName })
       .then(function (data) {
         if (!data.ok) {
-          if (_statusEl) _statusEl.textContent = "Reset failed";
+          _setStatus("Reset failed");
           return;
         }
-        if (_statusEl) {
-          _statusEl.textContent = "Reset " + tabName;
-          setTimeout(function () { if (_statusEl) _statusEl.textContent = ""; }, 2000);
-        }
+        _setStatus("Reset " + tabName);
+        setTimeout(function () { _setStatus(""); }, 2000);
         _reloadAfterReset(tabName);
       })
       .catch(function () {
-        if (_statusEl) _statusEl.textContent = "Reset failed";
+        _setStatus("Reset failed");
       });
   }
 
@@ -393,17 +792,15 @@
     apiPut(_getApiRoot() + "/settings", { reset: "all" })
       .then(function (data) {
         if (!data.ok) {
-          if (_statusEl) _statusEl.textContent = "Reset failed";
+          _setStatus("Reset failed");
           return;
         }
-        if (_statusEl) {
-          _statusEl.textContent = "Reset to defaults";
-          setTimeout(function () { if (_statusEl) _statusEl.textContent = ""; }, 2000);
-        }
+        _setStatus("Reset to defaults");
+        setTimeout(function () { _setStatus(""); }, 2000);
         _reloadAfterReset("all");
       })
       .catch(function () {
-        if (_statusEl) _statusEl.textContent = "Reset failed";
+        _setStatus("Reset failed");
       });
   }
 
@@ -430,8 +827,11 @@
       .replace(/_/g, " ").toLowerCase()
       .replace(/\b\w/g, function (c) { return c.toUpperCase(); })
       .replace(/Mb$/i, "(MB)").replace(/Seconds$/i, "(s)")
-      // Title-casing turns the FFMPEG_* prefix into "Ffmpeg"; restore the brand.
-      .replace(/^Ffmpeg\b/, "FFmpeg");
+      // Title-casing lowercases acronyms ("Ffmpeg", "Llm"); restore them.
+      .replace(/^Ffmpeg\b/, "FFmpeg")
+      .replace(/\bLlm\b/g, "LLM")
+      .replace(/\bGif\b/g, "GIF")
+      .replace(/\bUrl\b/g, "URL");
     labelDiv.appendChild(el("div", "settings-label-name", friendlyName));
     labelDiv.appendChild(el("div", "settings-label-desc", s.description));
 
@@ -471,8 +871,7 @@
       msel.className = "settings-model-dropdown";
       var curOpt = document.createElement("option");
       curOpt.value = s.value;
-      // Show the inherit label up front for a blank value (avoids an empty
-      // placeholder flashing before the model list loads).
+      // Blank value shows the inherit label; avoids an empty placeholder before models load.
       curOpt.textContent = (!s.value && s.emptyLabel) ? s.emptyLabel : s.value;
       curOpt.selected = true;
       msel.appendChild(curOpt);
@@ -595,10 +994,7 @@
   }
 
   // ---- Hotkeys editor ----
-  // Renders from the JS action catalog (window.ClipgenHotkeys.catalog());
-  // the setting's value stores only overrides {actionId: "combo"} with ""
-  // meaning "disabled". Recording captures one combo which replaces the
-  // action's default alias list; per-action Reset deletes the override.
+  // Value holds only overrides {actionId: "combo"}; "" means disabled.
 
   var _hkRecordCleanup = null;
 
@@ -615,8 +1011,7 @@
     if (!s.value || typeof s.value !== "object") s.value = {};
     if (combo === (action.combos || []).join(" ")) delete s.value[action.id];
     else s.value[action.id] = combo;
-    // Apply live so the open page reflects the new binding immediately;
-    // other pages pick it up from config on their next load.
+    // Apply live for this page; other pages read config on next load.
     window.ClipgenHotkeys.applyOverrides(s.value);
     CLIPGEN_CONFIG.hotkeyOverrides = s.value;
     _updateChanged(settingName);
@@ -712,8 +1107,7 @@
       return;
     }
     if (!setting.value || typeof setting.value !== "object") setting.value = {};
-    // Keep the live registry in sync with what the editor shows (also
-    // self-heals after reset-tab / reset-all re-renders).
+    // Keep the live registry in sync with the editor (also after resets).
     window.ClipgenHotkeys.applyOverrides(setting.value);
     CLIPGEN_CONFIG.hotkeyOverrides = setting.value;
 
@@ -751,7 +1145,7 @@
       chips.appendChild(offChip);
     } else {
       for (var ci = 0; ci < combos.length; ci++) {
-        chips.appendChild(el("kbd", "hotkey-chip", window.ClipgenHotkeys.formatCombo(combos[ci])));
+        chips.appendChild(window.ClipgenHotkeys.fillKeycap(el("kbd", "hotkey-chip"), combos[ci]));
       }
     }
     if (action.rebindable !== false) {
@@ -957,8 +1351,7 @@
     } else if (item.kind === "color") {
       preview.style.background = _cardCurrentColor(kind);
     }
-    // Approximate the ffmpeg drawtext overlay on titlecards: centered sample
-    // text over the chosen background. Endcards carry no text.
+    // Approximate the ffmpeg drawtext overlay; endcards carry no text.
     if (kind === "title" && item.kind !== "none") {
       preview.appendChild(el("span", "card-tile-text-overlay", _SAMPLE_TITLE_TEXT));
     }
@@ -1057,7 +1450,7 @@
   function _renderCardPicker(container, settingName, kind) {
     container.innerHTML = "";
     var grid = el("div", "settings-card-picker");
-    grid.appendChild(el("div", "card-tile card-tile--loading", "Loading…"));
+    grid.appendChild(el("div", "card-tile card-tile--loading cg-shimmer", "Loading…"));
     container.appendChild(grid);
 
     _fetchCards(false).then(function (data) {
@@ -1079,11 +1472,10 @@
   }
 
   function _uploadCard(file, settingName) {
-    if (_statusEl) _statusEl.textContent = "Uploading…";
+    _setStatus("Uploading…", true);
     var form = new FormData();
     form.append("file", file);
-    // Manual fetch (not apiPost) — it is a FormData upload and a server-supplied
-    // data.error on a non-2xx still surfaces; capture r.ok alongside the body.
+    // Manual fetch, not apiPost: FormData upload; keep data.error from non-2xx and r.ok.
     fetch(_getApiRoot() + "/titlecards/upload", { method: "POST", body: form })
       .then(function (r) {
         return r.json().then(
@@ -1094,12 +1486,10 @@
       .then(function (res) {
         var data = res.body;
         if (!res.ok || !data || !data.ok) {
-          if (_statusEl) {
-            _statusEl.textContent = data && data.error ? data.error : "Upload failed";
-          }
+          _setStatus(data && data.error ? data.error : "Upload failed");
           return;
         }
-        if (_statusEl) _statusEl.textContent = "Uploaded";
+        _setStatus("Uploaded");
         // Auto-select the new image for the picker that triggered the upload.
         var s = _findSetting(settingName);
         if (s && data.item) {
@@ -1110,14 +1500,13 @@
         _refreshAllCardPickers();
       })
       .catch(function () {
-        if (_statusEl) _statusEl.textContent = "Upload failed";
+        _setStatus("Upload failed");
       });
   }
 
   function _deleteCard(name) {
-    if (_statusEl) _statusEl.textContent = "Deleting…";
-    // Manual fetch (not apiDelete) so a server-supplied data.error on a non-2xx
-    // still surfaces in the status line; capture r.ok alongside the body.
+    _setStatus("Deleting…", true);
+    // Manual fetch, not apiDelete: keep data.error from non-2xx responses and r.ok.
     fetch(_getApiRoot() + "/titlecards/image/" + encodeURIComponent(name), {
       method: "DELETE",
     })
@@ -1130,14 +1519,11 @@
       .then(function (res) {
         var data = res.body;
         if (!res.ok || !data || !data.ok) {
-          if (_statusEl) {
-            _statusEl.textContent = data && data.error ? data.error : "Delete failed";
-          }
+          _setStatus(data && data.error ? data.error : "Delete failed");
           return;
         }
-        if (_statusEl) _statusEl.textContent = "Deleted";
-        // The server resets any selection that pointed at the deleted file;
-        // mirror that into the in-memory settings so the UI stays in sync.
+        _setStatus("Deleted");
+        // Mirror the server's reset of selections pointing at the deleted file.
         if (data.reset) {
           for (var key in data.reset) {
             var s = _findSetting(key);
@@ -1150,7 +1536,7 @@
         _refreshAllCardPickers();
       })
       .catch(function () {
-        if (_statusEl) _statusEl.textContent = "Delete failed";
+        _setStatus("Delete failed");
       });
   }
 
@@ -1188,8 +1574,7 @@
       tabBtn.type = "button";
       tabBtn.setAttribute("role", "tab");
       tabBtn.setAttribute("data-tab", name);
-      // Alt-hold reveals a number chip on the first nine tabs; the shared
-      // settings.tab hotkey (1–9) switches to the corresponding tab.
+      // First nine tabs get Alt-hold chips; the settings.tab hotkey (1–9) switches.
       if (j < 9) {
         tabBtn.setAttribute("data-hotkey", "settings.tab");
         tabBtn.setAttribute("data-hotkey-combo", String(j));
@@ -1211,8 +1596,7 @@
       var groupOrder = [];
       for (var gi = 0; gi < items.length; gi++) {
         var it = items[gi];
-        // Hidden settings are persisted + sent to the client but have no row of
-        // their own (e.g. the card colors edited via the card picker's swatch).
+        // Hidden settings ship to the client but get no row (e.g. card colors).
         if (it.type === "hidden") continue;
         var g = it.group || "";
         if (!groups[g]) {
@@ -1229,6 +1613,8 @@
           panel.appendChild(_buildRow(gitems[gii]));
         }
       }
+
+      if (name === "Summaries") panel.appendChild(_buildLlmModelsBlock());
 
       var resetTabBtn = el("button", "btn btn-small settings-tab-reset", "Reset this tab");
       resetTabBtn.type = "button";
@@ -1268,26 +1654,12 @@
       if (p.getAttribute("data-tab") === name) p.classList.remove("hidden");
       else p.classList.add("hidden");
     }
-    // Park the keyboard cursor on the new panel's first row so arrow nav
-    // continues seamlessly after a tab switch.
+    // Park the cursor on the new panel's first row.
     _resetNavCursor(true);
   }
 
-  // ---- Keyboard list navigation (arrow-key cursor over setting rows) --------
-  // Up/Down (and Tab/Shift+Tab) move a highlighted cursor over the visible rows
-  // of the active tab; Left/Right toggle a bool (off/on), cycle a select, or
-  // step a number; Enter opens a text/number field for editing (Esc or Enter on
-  // a single-line field returns to the cursor). The listener runs in the capture
-  // phase so edit-mode Esc is caught before the modal-close listener below. It
-  // stays inert while the modal is closed, while the hotkey recorder or color
-  // picker owns the keyboard, or when focus sits outside the settings list.
-  //
-  // The cursor has two independent states: a *position* (_navRow, which also
-  // carries the roving tabindex) and a *visibility* (_navVisible). A freshly
-  // opened modal is in mouse mode — no position, no ring — and the first nav
-  // keypress reveals the cursor. Without that split the ring painted itself on
-  // row 0 of every tab the moment the modal opened, reading as a stuck focus
-  // frame to anyone using the mouse.
+  // ---- Keyboard list navigation ----
+  // _navRow is position, _navVisible the ring; mouse mode paints none.
   var _navRow = null;
   var _navVisible = false;
 
@@ -1308,8 +1680,7 @@
     var rows = _navRows();
     for (var i = 0; i < rows.length; i++) {
       var on = rows[i] === row;
-      // Ring only in keyboard mode; the roving tabindex tracks the position
-      // either way so a revealed cursor is immediately tabbable.
+      // Ring only in keyboard mode; the roving tabindex follows the position regardless.
       rows[i].classList.toggle("is-nav-selected", on && _navVisible);
       rows[i].tabIndex = on ? 0 : -1;
     }
@@ -1320,18 +1691,14 @@
     }
   }
 
-  // Reveal the cursor on the first nav keypress. Called before the key acts, so
-  // a press that also moves paints the ring at the destination.
+  // Reveal the cursor before the key acts so a move paints the destination.
   function _showNavCursor() {
     if (_navVisible) return;
     _navVisible = true;
     _selectNavRow(_navRow, false);
   }
 
-  // Park the cursor on the active panel's first row (called after render / tab
-  // switch). In mouse mode the cursor is cleared instead of parked, so the first
-  // ArrowDown lands on row 0 rather than skipping it (_moveNav treats a null
-  // cursor as "before the list"). Only steals focus when the modal is open.
+  // Park on the first row; mouse mode clears instead so ArrowDown hits row 0.
   function _resetNavCursor(focus) {
     if (!_navVisible) {
       _selectNavRow(null, false);
@@ -1365,9 +1732,7 @@
     return false;
   }
 
-  // Left/Right on the selected row: toggle a bool (off/on), cycle a select, or
-  // step a number. Routes through a change event so the existing per-control
-  // handlers persist the value.
+  // Left/Right: toggle, cycle, or step. Fires change so per-control handlers persist.
   function _actuateNav(row, dir) {
     if (!row) return;
     var control = row.querySelector(".settings-control");
@@ -1393,8 +1758,7 @@
     }
   }
 
-  // Enter on the selected row: toggle a bool, else focus the first editable
-  // field (text / number / textarea / select) to start typing.
+  // Enter: toggle a bool, else focus the first editable field.
   function _editNav(row) {
     if (!row) return;
     var control = row.querySelector(".settings-control");
@@ -1419,8 +1783,7 @@
     if (!_navActive()) return;
     var t = e.target;
 
-    // Edit mode: focus is in a text/number/select field. Esc (and Enter on a
-    // single-line field) return to the cursor; every other key is native.
+    // Edit mode: Esc (or Enter on single-line fields) returns to the cursor.
     if (_isEditableField(t) && _panelsEl && _panelsEl.contains(t)) {
       if (e.key === "Escape") {
         e.preventDefault();
@@ -1446,8 +1809,7 @@
       case "ArrowDown": e.preventDefault(); _showNavCursor(); _moveNav(1); break;
       case "ArrowUp":   e.preventDefault(); _showNavCursor(); _moveNav(-1); break;
       case "Tab":
-        // Move rows; at the list edges fall through to native Tab so focus can
-        // still leave the list (tab strip / footer).
+        // At the list edges fall through to native Tab so focus can leave.
         _showNavCursor();
         if (_moveNav(e.shiftKey ? -1 : 1)) e.preventDefault();
         break;
@@ -1459,10 +1821,7 @@
     }
   }, true);
 
-  // Escape closes the modal. Bubble-phase so capture-phase owners layered on
-  // top win first: the hotkey recorder stops propagation (Esc = cancel
-  // recording), and the color-picker popover stops propagation (Esc = close
-  // just the picker); the isOpen guard covers the picker's same-press case.
+  // Escape closes. Bubble-phase so the hotkey recorder and color picker (capture, stopPropagation) win.
   document.addEventListener("keydown", function (e) {
     if (e.key !== "Escape") return;
     if (!_root || _root.classList.contains("hidden")) return;
@@ -1475,8 +1834,7 @@
     return !!_root && !_root.classList.contains("hidden");
   }
 
-  // Move the active tab by delta (wrapping), mirroring Screenspace's Z/X tool
-  // cycling. Reuses the tab buttons' click path so aria/active state stays right.
+  // Cycle tabs with wrap via the buttons' click path (keeps aria state right).
   function _cycleTab(delta) {
     if (!_tabsEl) return;
     var btns = _tabsEl.querySelectorAll(".settings-tab");
@@ -1488,10 +1846,7 @@
     btns[((cur + delta) % btns.length + btns.length) % btns.length].click();
   }
 
-  // Tab hotkeys, active only while the modal owns the keyboard (inModal so page
-  // hotkeys stay dead; when-gated to this modal being open). Digit 1–9 jumps to
-  // a tab (buttons carry data-hotkey="settings.tab" so Alt-hold reveals chips);
-  // Z/X cycle prev/next like Screenspace's tool tabs.
+  // Modal-only tab hotkeys: digits 1–9 jump, Z/X cycle like Screenspace's tool tabs.
   if (window.ClipgenHotkeys) {
     window.ClipgenHotkeys.register([
       {
@@ -1508,8 +1863,7 @@
       },
       { id: "settings.cyclePrev", inModal: true, when: _isModalOpen, handler: function () { _cycleTab(-1); } },
       { id: "settings.cycleNext", inModal: true, when: _isModalOpen, handler: function () { _cycleTab(1); } },
-      // Reset hotkeys reuse the buttons' handlers (unconfirmed, like the
-      // buttons). R resets the active tab; Shift+R resets everything.
+      // Reset hotkeys reuse the buttons' unconfirmed handlers; Shift+R resets everything.
       { id: "settings.resetTab", inModal: true, when: _isModalOpen, handler: function () { _resetTab(_activeTab); } },
       { id: "settings.resetAll", inModal: true, when: _isModalOpen, handler: function () { _resetAll(); } }
     ]);
@@ -1520,5 +1874,27 @@
     if (_opts.initialTab) _activeTab = _opts.initialTab;
     _open();
     _load();
+  };
+
+  // Wire TopNav #settingsBtn to the modal. opts: initialTab, version (string|function), onApply(applied, settings).
+  window.wireSettingsButton = function (opts) {
+    opts = opts || {};
+    var btn = document.getElementById("settingsBtn");
+    if (!btn) return;
+    btn.addEventListener("click", function () {
+      var options = {
+        initialTab: opts.initialTab,
+        version: typeof opts.version === "function" ? opts.version() : opts.version,
+      };
+      if (opts.onApply) {
+        options.onSave = function (applied, settings) {
+          opts.onApply(applied, settings);
+        };
+        options.onReset = function (_scope, settings) {
+          opts.onApply(null, settings);
+        };
+      }
+      window.openSettingsModal(options);
+    });
   };
 })();

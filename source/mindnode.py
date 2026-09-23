@@ -45,6 +45,7 @@ import html
 import plistlib
 import re
 from pathlib import Path
+from xml.parsers import expat
 from typing import Any
 
 import config
@@ -54,8 +55,7 @@ import utils
 CONTENTS_FILENAME = "contents.xml"
 PREVIEW_RELPATH = "QuickLook/Preview.jpg"
 
-# Node titles are stored as an HTML fragment carrying MindNode's own font and
-# color styling, e.g. "<p style='color: rgba(…); font: 20px "Helvetica"; …'>P01</p>".
+# Titles are HTML fragments styled by MindNode, e.g. "<p style='…'>P01</p>".
 _BR_RE = re.compile(r"<br\s*/?>", re.IGNORECASE)
 _PARA_BREAK_RE = re.compile(r"</p>\s*<p[^>]*>", re.IGNORECASE)
 _TAG_RE = re.compile(r"<[^>]+>")
@@ -157,7 +157,13 @@ def load_document(path: str | Path) -> list[dict[str, Any]]:
     try:
         with contents.open("rb") as fh:
             data = plistlib.load(fh)
-    except (OSError, plistlib.InvalidFileException, ValueError) as exc:
+    except (
+        OSError,
+        plistlib.InvalidFileException,
+        ValueError,
+        # A truncated XML-format .mindnode raises ExpatError, which is not a ValueError.
+        expat.ExpatError,
+    ) as exc:
         raise ValueError(f"Could not read {contents}: {exc}") from exc
 
     canvas = data.get("canvas") if isinstance(data, dict) else None

@@ -1,13 +1,14 @@
 """Smoke tests for the Composer Flask blueprint.
 
 Verifies the page serves, participant/part discovery, the composer manifest
-round-trip (cuts CRUD + UI toggles persisted to ``composer_manifest.json``),
+round-trip (cuts CRUD + UI toggles persisted to the ``composer`` section),
 and span clamping — mirroring tests/test_workflows_api.py's bare-blueprint
 setup. Combined-app registration (topnav-visible ``/composer/`` + the
 ``/api/status`` flag) is exercised against ``server.build_combined_app``.
 """
 
 import json
+from pathlib import Path
 
 import pytest
 
@@ -15,6 +16,7 @@ Flask = pytest.importorskip("flask").Flask
 
 import composer_server
 import config
+import files
 import utils
 import video
 
@@ -37,8 +39,13 @@ def co_app():
 def co_client(co_app, tmp_path, monkeypatch):
     # Seed module globals via monkeypatch so they auto-restore on teardown.
     monkeypatch.setattr(composer_server, "_manifest", composer_server._empty_manifest())
-    monkeypatch.setattr(composer_server, "_input_dir", str(tmp_path))
     monkeypatch.setattr(composer_server, "_sheet_context", None)
+    monkeypatch.setattr(composer_server, "_participants", [])
+    monkeypatch.setattr(
+        composer_server,
+        "_participant_source",
+        composer_server._fresh_participant_source(),
+    )
     monkeypatch.setattr(config, "INPUT_DIR", str(tmp_path), raising=False)
     monkeypatch.setattr(config, "OUTPUT_DIR", str(tmp_path), raising=False)
 
@@ -64,9 +71,10 @@ def co_client(co_app, tmp_path, monkeypatch):
 
 
 def _manifest_on_disk(tmp_path):
-    return json.loads(
-        (tmp_path / config.COMPOSER_MANIFEST_FILENAME).read_text(encoding="utf-8")
-    )
+    """The composer section, or the empty shape once it has been dropped."""
+    path = tmp_path / config.MANIFEST_FILENAME
+    doc = json.loads(path.read_text(encoding="utf-8")) if path.is_file() else {}
+    return doc.get("composer") or {"cuts": [], "trims": {}, "annotations": []}
 
 
 def test_page_serves(co_client):
@@ -89,6 +97,61 @@ def test_participants_reports_parts_and_total(co_client):
     # to skip the badge rather than marking every participant.
     assert p["in_sheet"] is False
     assert body["has_sheet"] is False
+
+
+def test_participants_fallback_parts_carry_offset(co_client, monkeypatch):
+    """Unprobeable videos still serve offset-complete part entries.
+
+    The client computes global time as ``currentTime + part.offset`` on every
+    timeupdate; a fallback entry without the field turned the playhead NaN.
+    """
+    monkeypatch.setattr(video, "get_file_duration", lambda path: None)
+    body = co_client.get("/composer/api/participants").get_json()
+    (p,) = body["participants"]
+    assert p["total_duration"] is None
+    assert [part["offset"] for part in p["parts"]] == [0, 0]
+
+
+def test_participants_prewarms_probes_before_the_loop(co_client, monkeypatch):
+    """Every part is probed in one batch, not one ffprobe per participant.
+
+    The per-entry probes are cache reads; serialized cold they measured 1.06 s
+    for a 24-participant study and the page cannot render until the last one
+    returns. Asserting the prewarm *saw every part path* is the invariant —
+    timing it here would just measure the mock.
+    """
+    seen: list[list[str]] = []
+    monkeypatch.setattr(video, "prewarm_probes", lambda paths: seen.append(list(paths)))
+
+    body = co_client.get("/composer/api/participants").get_json()
+    (p,) = body["participants"]
+
+    assert len(seen) == 1, "prewarm must run once for the whole list, not per entry"
+    assert [Path(path).name for path in seen[0]] == [
+        part["name"] for part in p["parts"]
+    ]
+
+
+def test_prewarm_probes_dedupes_and_never_raises(monkeypatch):
+    """Prewarming is pure optimization: it dedupes, and a failure is not an error.
+
+    A path that cannot be probed simply stays uncached — the caller re-probes it
+    and handles ``None`` as it always did. Raising here would turn a slow page
+    into a broken one.
+    """
+    calls: list[str] = []
+
+    def boom(path):
+        calls.append(path)
+        raise OSError("unprobeable")
+
+    monkeypatch.setattr(video, "probe_video_properties", boom)
+    # One path is already as fast as it gets, so the pool is skipped entirely.
+    video.prewarm_probes(["/only.mp4"])
+    assert calls == []
+
+    video.prewarm_probes(["/a.mp4", "/a.mp4", "/b.mp4"])
+    assert sorted(calls) == ["/a.mp4", "/b.mp4"]
 
 
 def test_participants_reports_audio_tracks(co_client, monkeypatch):
@@ -137,7 +200,7 @@ def test_cuts_crud_round_trip(co_client, tmp_path):
     cut_id = created["cut"]["id"]
     assert cut_id.startswith("cut_")
 
-    # Persisted to composer_manifest.json (save-after-mutation).
+    # Persisted to the composer section (save-after-mutation).
     disk = _manifest_on_disk(tmp_path)
     assert [c["id"] for c in disk["cuts"]] == [cut_id]
 
@@ -153,6 +216,8 @@ def test_cuts_crud_round_trip(co_client, tmp_path):
     deleted = co_client.delete(f"/composer/api/cuts/{cut_id}").get_json()
     assert deleted["ok"] is True
     assert _manifest_on_disk(tmp_path)["cuts"] == []
+    # Nothing left worth persisting → the section (and lone file) is dropped.
+    assert not (tmp_path / config.MANIFEST_FILENAME).exists()
 
 
 def test_cut_create_rejects_inverted_span(co_client):
@@ -170,6 +235,22 @@ def test_cut_patch_clamps_to_duration(co_client):
         f"/composer/api/cuts/{cut['id']}", json={"end": 999.0}
     ).get_json()
     assert patched["cut"]["end"] == 20  # stitched duration caps the out point
+
+
+def test_cut_patch_start_zero_survives(co_client):
+    """``start: 0`` must read as a value, not a missing field.
+
+    The guard is ``data.get("start") is not None`` — an ``if data.get("start")``
+    regression would silently keep the old start on a snap-to-zero PATCH.
+    """
+    cut = co_client.post(
+        "/composer/api/cuts", json={"participant": "P01", "start": 2.0, "end": 5.0}
+    ).get_json()["cut"]
+    patched = co_client.patch(
+        f"/composer/api/cuts/{cut['id']}", json={"start": 0}
+    ).get_json()
+    assert patched["cut"]["start"] == 0.0
+    assert patched["cut"]["end"] == 5.0
 
 
 def test_cut_patch_unknown_id_404(co_client):
@@ -365,7 +446,159 @@ def test_trim_put_rejects_inverted_span(co_client):
     assert resp.status_code == 400
 
 
-# ---- Annotations (P3) ----
+@pytest.mark.parametrize(
+    "body",
+    [
+        {"start": -2, "end": -1},  # negative span survived the clamp-after-check
+        {"start": 0, "end": "NaN"},
+        {"start": "Infinity", "end": 5},
+        {"start": 0, "end": "-Infinity"},
+    ],
+)
+def test_trim_put_rejects_invalid_times(co_client, tmp_path, body):
+    """Non-finite or negative spans must not mutate state or emit bare NaN JSON."""
+    key = "sheet:P01:1"
+    assert (
+        co_client.put(
+            f"/composer/api/trims/{key}", json={"start": 1, "end": 2}
+        ).status_code
+        == 200
+    )
+    resp = co_client.put(f"/composer/api/trims/{key}", json=body)
+    assert resp.status_code == 400
+    assert json.loads(resp.data)["ok"] is False  # strict JSON, no NaN literal
+    stored = co_client.get("/composer/api/manifest").get_json()["manifest"]["trims"]
+    assert stored[key]["start"] == 1 and stored[key]["end"] == 2
+    assert _manifest_on_disk(tmp_path)["trims"][key]["end"] == 2
+
+
+@pytest.mark.parametrize("field", ["start", "end"])
+def test_cut_routes_reject_non_finite(co_client, field):
+    body = {"participant": "P01", "start": 1.0, "end": 3.0}
+    body[field] = "NaN"
+    assert co_client.post("/composer/api/cuts", json=body).status_code == 400
+    cut = co_client.post(
+        "/composer/api/cuts", json={"participant": "P01", "start": 1.0, "end": 3.0}
+    ).get_json()["cut"]
+    resp = co_client.patch(f"/composer/api/cuts/{cut['id']}", json={field: "inf"})
+    assert resp.status_code == 400
+
+
+def test_cut_label_patch_keeps_concurrent_time_edit(co_client, monkeypatch):
+    """A label-only PATCH must not write back times it read before the lock.
+
+    The rename is paused inside the duration probe while a timing PATCH
+    lands; the rename then resumes and must leave the new end alone.
+    """
+    import threading
+
+    cut = co_client.post(
+        "/composer/api/cuts", json={"participant": "P01", "start": 1.0, "end": 2.0}
+    ).get_json()["cut"]
+    real_duration = composer_server._participant_duration
+    entered, resume = threading.Event(), threading.Event()
+    calls = {"n": 0}
+
+    def _blocking(participant):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            entered.set()
+            resume.wait(5)
+        return real_duration(participant)
+
+    monkeypatch.setattr(composer_server, "_participant_duration", _blocking)
+    monkeypatch.setattr(composer_server, "_persist_locked", lambda: None)
+
+    results = {}
+
+    bg = co_client.application.test_client()
+
+    def _rename():
+        results["rename"] = bg.patch(
+            f"/composer/api/cuts/{cut['id']}", json={"label": "new", "end": 2.0}
+        ).status_code
+
+    t = threading.Thread(target=_rename)
+    t.start()
+    assert entered.wait(5)
+    other = co_client.patch(f"/composer/api/cuts/{cut['id']}", json={"end": 4.0})
+    assert other.status_code == 200
+    resume.set()
+    t.join(5)
+    assert results["rename"] == 200
+    # Label-only rename never touches times at all: no probe, no rewrite.
+    label_only = co_client.patch(
+        f"/composer/api/cuts/{cut['id']}", json={"label": "final"}
+    ).get_json()["cut"]
+    assert label_only["label"] == "final"
+    assert label_only["start"] == 1.0
+    assert calls["n"] == 2  # both timed PATCHes probed; the label-only one didn't
+
+
+def test_cut_patch_merges_over_current_times(co_client, monkeypatch):
+    """An end-only edit racing a start-only edit keeps both."""
+    import threading
+
+    cut = co_client.post(
+        "/composer/api/cuts", json={"participant": "P01", "start": 1.0, "end": 5.0}
+    ).get_json()["cut"]
+    real_duration = composer_server._participant_duration
+    entered, resume = threading.Event(), threading.Event()
+    first = {"done": False}
+
+    def _blocking(participant):
+        if not first["done"]:
+            first["done"] = True
+            entered.set()
+            resume.wait(5)
+        return real_duration(participant)
+
+    monkeypatch.setattr(composer_server, "_participant_duration", _blocking)
+    bg = co_client.application.test_client()
+    t = threading.Thread(
+        target=lambda: bg.patch(f"/composer/api/cuts/{cut['id']}", json={"end": 8.0})
+    )
+    t.start()
+    assert entered.wait(5)
+    co_client.patch(f"/composer/api/cuts/{cut['id']}", json={"start": 2.0})
+    resume.set()
+    t.join(5)
+    got = co_client.get("/composer/api/manifest").get_json()["manifest"]["cuts"][0]
+    assert (got["start"], got["end"]) == (2.0, 8.0)
+
+
+def test_cut_patch_deleted_during_probe_404s(co_client, monkeypatch):
+    import threading
+
+    cut = co_client.post(
+        "/composer/api/cuts", json={"participant": "P01", "start": 1.0, "end": 5.0}
+    ).get_json()["cut"]
+    entered, resume = threading.Event(), threading.Event()
+
+    def _blocking(participant):
+        entered.set()
+        resume.wait(5)
+        return 20.0
+
+    monkeypatch.setattr(composer_server, "_participant_duration", _blocking)
+    status = {}
+    bg = co_client.application.test_client()
+    t = threading.Thread(
+        target=lambda: status.update(
+            code=bg.patch(
+                f"/composer/api/cuts/{cut['id']}", json={"end": 8.0}
+            ).status_code
+        )
+    )
+    t.start()
+    assert entered.wait(5)
+    assert co_client.delete(f"/composer/api/cuts/{cut['id']}").status_code == 200
+    resume.set()
+    t.join(5)
+    assert status["code"] == 404
+
+
+# ---- Annotations ----
 
 
 def _make_annotation(co_client, **overrides):
@@ -398,6 +631,39 @@ def test_annotation_crud_round_trip(co_client, tmp_path):
     deleted = co_client.delete(f"/composer/api/annotations/{ann['id']}").get_json()
     assert deleted["ok"] is True
     assert _manifest_on_disk(tmp_path)["annotations"] == []
+
+
+def test_annotation_rejected_update_leaves_state_untouched(co_client, tmp_path):
+    """A 400 on geometry must not leave a half-applied span in live state."""
+    ann = _make_annotation(co_client, span={"start": 1.0, "end": 2.0})["annotation"]
+    resp = co_client.patch(
+        f"/composer/api/annotations/{ann['id']}",
+        json={"span": {"start": 5.0, "end": 6.0}, "geometry": {"text": ""}},
+    )
+    assert resp.status_code == 400
+    live = co_client.get("/composer/api/manifest").get_json()["manifest"]
+    assert live["annotations"][0]["span"] == {"start": 1.0, "end": 2.0}
+    # A later valid mutation must not flush the rejected span to disk.
+    ok_resp = co_client.patch(
+        f"/composer/api/annotations/{ann['id']}", json={"style": {"color": "#fff"}}
+    )
+    assert ok_resp.status_code == 200
+    on_disk = _manifest_on_disk(tmp_path)["annotations"][0]
+    assert on_disk["span"] == {"start": 1.0, "end": 2.0}
+    # A valid combined update still persists every field.
+    combined = co_client.patch(
+        f"/composer/api/annotations/{ann['id']}",
+        json={
+            "span": {"start": 3.0, "end": 4.0},
+            "geometry": {"x": 0.5, "y": 0.5, "text": "ok"},
+        },
+    ).get_json()["annotation"]
+    assert combined["span"] == {"start": 3.0, "end": 4.0}
+    assert combined["geometry"]["text"] == "ok"
+    assert _manifest_on_disk(tmp_path)["annotations"][0]["span"] == {
+        "start": 3.0,
+        "end": 4.0,
+    }
 
 
 def test_annotation_freehand_and_validation(co_client):
@@ -726,7 +992,7 @@ def _stub_overlay_ffmpeg(monkeypatch):
         probed.append(path)
         return {"width": 1280, "height": 720}
 
-    def fake_run(cmd, input_file, output_file, os_error_message, cancel_flag):
+    def fake_run(cmd, input_file, output_file, os_error_message, cancel_flag, kind):
         from pathlib import Path
 
         Path(output_file).write_bytes(b"x")
@@ -813,6 +1079,66 @@ def test_annotated_burn_within_part_keeps_single_pass_fast_path(
     assert resp["artifact"]["sourceVideo"] == "study_P01-1.mp4"
 
 
+@pytest.mark.parametrize("route", ["burn", "gif"])
+def test_overlay_exports_return_400_on_bad_span(co_client, route):
+    """The shared span parse raises ApiError; the routes must turn it into a 400."""
+    resp = co_client.post(
+        f"/composer/api/export/{route}",
+        json={"participant": "P01", "start": "soon", "end": 5.0},
+    )
+    assert resp.status_code == 400
+    assert resp.get_json() == {"ok": False, "error": "start must be a number"}
+    assert not composer_server._export_busy.locked()
+
+
+def test_annotated_burn_rejects_a_span_that_only_grazes_an_annotation(
+    co_client, monkeypatch
+):
+    """Overlap under the 0.01 s window floor leaves nothing to burn.
+
+    The annotation is "in the span" as far as _annotations_in_span is concerned,
+    so the no-annotations check passes, but _annotation_windows drops the window
+    — which used to hand ffmpeg an empty filter graph and a `[0:v]` label it
+    never defined.
+    """
+    _make_annotation(co_client, span={"start": 10.0, "end": 20.0})
+
+    def _no_ffmpeg(*_a, **_kw):
+        raise AssertionError("ffmpeg must not run with nothing to overlay")
+
+    monkeypatch.setattr(composer_server.video, "run_ffmpeg_process", _no_ffmpeg)
+
+    resp = co_client.post(
+        "/composer/api/export/burn",
+        json={"participant": "P01", "start": 19.995, "end": 25.0},
+    ).get_json()
+
+    assert resp["ok"] is False
+    assert "visible for long enough" in resp["error"]
+
+
+def test_annotated_export_rejects_out_of_range_span(co_client, monkeypatch):
+    """A multi-part span past the recording errs cleanly, never encodes.
+
+    ``map_global_range_to_segments`` signals an out-of-range start with None
+    (never ``[]``); conflating that with the single-part fast path sent the
+    span down the parts-based branch and into a doomed ffmpeg run.
+    """
+    _make_annotation(co_client, span={"start": 24.0, "end": 30.0})
+
+    def _no_ffmpeg(*_a, **_kw):
+        raise AssertionError("ffmpeg must not run for an out-of-range span")
+
+    monkeypatch.setattr(composer_server.video, "run_ffmpeg_process", _no_ffmpeg)
+
+    resp = co_client.post(
+        "/composer/api/export/burn",
+        json={"participant": "P01", "start": 25.0, "end": 30.0},
+    )
+    assert resp.status_code == 400
+    assert "outside the recording" in resp.get_json()["error"]
+
+
 def test_ffmpeg_exports_rejected_while_another_export_runs(co_client):
     # _export_cancel is a single shared Event; the busy lock enforces the
     # one-export-at-a-time assumption it relies on. Without it a second
@@ -829,6 +1155,40 @@ def test_ffmpeg_exports_rejected_while_another_export_runs(co_client):
             assert resp.get_json()["ok"] is False
     finally:
         composer_server._export_busy.release()
+
+
+def test_export_cancel_sets_the_shared_event(co_client):
+    composer_server._export_cancel.clear()
+    resp = co_client.post("/composer/api/export/cancel").get_json()
+    assert resp["ok"] is True
+    assert composer_server._export_cancel.is_set()
+    composer_server._export_cancel.clear()
+
+
+def test_remux_routes_registered_on_composer(co_app):
+    """The shared remux routes ride on the composer blueprint itself.
+
+    tests/test_container_seekability.py exercises the route bodies against a
+    throwaway blueprint; this pins the composer registration.
+    """
+    rules = {r.rule for r in co_app.url_map.iter_rules()}
+    assert "/composer/api/remux/status" in rules
+    assert "/composer/api/remux/<pid>" in rules
+
+
+def test_repin_sheet_state_repoints_context(monkeypatch):
+    """Worksheet swaps go through repin_sheet_state, not a re-init.
+
+    The remux registration hands the blueprint ``lambda: _sheet_context``, so
+    this repoint is what keeps remux (and participant resolution) on the newly
+    opened sheet.
+    """
+    monkeypatch.setattr(composer_server, "_sheet_context", None)
+    sentinel = object()
+    composer_server.repin_sheet_state(sentinel)
+    assert composer_server._sheet_context is sentinel
+    composer_server.repin_sheet_state(None)
+    assert composer_server._sheet_context is None
 
 
 def test_combined_app_registers_composer(tmp_path, monkeypatch):
@@ -851,3 +1211,29 @@ def test_combined_app_registers_composer(tmp_path, monkeypatch):
         status = client.get("/api/status").get_json()
         assert status["composer"] is True
         assert client.get("/composer/").status_code == 200
+
+
+def test_participants_are_cached_until_the_input_dir_changes(co_client, monkeypatch):
+    """A second request is a stat(), not another discovery + probe pass."""
+    calls: list[int] = []
+    original = files.resolve_participant_videos
+
+    def counting(ctx):
+        calls.append(1)
+        return original(ctx)
+
+    monkeypatch.setattr(files, "resolve_participant_videos", counting)
+    co_client.get("/composer/api/participants")
+    co_client.get("/composer/api/participants")
+    assert len(calls) == 1
+
+
+def test_repin_sheet_state_invalidates_participants(co_client, monkeypatch):
+    co_client.get("/composer/api/participants")
+    calls: list[int] = []
+    monkeypatch.setattr(
+        files, "resolve_participant_videos", lambda ctx: calls.append(1) or []
+    )
+    composer_server.repin_sheet_state(None)
+    body = co_client.get("/composer/api/participants").get_json()
+    assert calls and body["participants"] == []

@@ -1,31 +1,23 @@
-"""Workflows: node-based scripting engine (data model + persistence + run engine).
+"""Workflows node-graph engine: executors, import-time wiring, facade.
 
-Workflows is clipgen's fourth top-level frontend (next to Studio, Screenspace,
-and Transcripts). It is a free-form 2D node canvas where users drag "blueprint
-cards" — each wrapping one backend action — and wire typed outputs into typed
-inputs to chain capabilities across all three domains (artifact generation,
-Screenspace analysis, transcription + thinking agents). A ``WorkflowRunner``
-executes the resulting DAG.
-
-This module is the backend home for:
-
-* ``NODE_TYPES`` — a declarative single-source-of-truth registry of node types
-  (typed ports + param schema), modelled on ``thinking_agents.AGENTS``. Present
-  as of M1; ``serialize_catalog`` feeds the frontend via ``/api/catalog``.
-* ``NodeContext`` + the per-node ``execute`` callables (M3) — each a thin adapter
-  over an existing pure function, keyed by output-port name. Every domain value a
-  node emits embeds a "source descriptor" so the adapters below stay pure.
-* ``ADAPTERS`` (M3) — the typed-port coercion table (e.g. ``events -> clipRecords``),
-  pure ``value -> value`` callables the runner applies when an output type differs
-  from the consuming input type.
-* ``WorkflowRunner`` (M4) — DAG topo-sort + sequential ready-set execution, calling
-  the executors directly with the uniform ``on_progress`` / ``cancel_flag`` /
-  ``cancel_event`` contract ``NodeContext`` carries. ``topo_order`` rejects cycles;
-  control edges (a gate's ``control`` output) gate downstream without feeding data.
-
+A free-form 2D node canvas where users wire typed outputs into typed inputs to
+chain capabilities across domains (artifact generation, Screenspace analysis,
+transcription + thinking agents); ``WorkflowRunner`` executes the resulting DAG.
 See ``plans/archive/WORKFLOWS-PLAN.md``.
 
-Manifest shape (``workflows_manifest.json`` in the output directory)::
+Owned here: the per-node ``execute`` callables, each a thin adapter over an
+existing pure function and keyed by output-port name. Every domain value a node
+emits embeds a "source descriptor", which is what keeps ``ADAPTERS`` pure.
+
+The declarative catalog (``NODE_TYPES``, ``BUILTIN_STASHES``, ``ADAPTERS``) lives
+in ``workflows_catalog``, the run engine in ``workflows_runner``; this facade
+re-exports both, so ``workflows.NAME`` still resolves every public name and the
+private ones tests reach for. The wiring below mutates the *shared* ``NODE_TYPES``
+dict rather than a copy — tests patch node executors through
+``workflows.NODE_TYPES`` and depend on that identity. Re-binding a name here only
+rebinds it on the facade; patch the owning sibling to stub a seam.
+
+Manifest shape (the ``workflows`` section of the output-dir manifest)::
 
     {
         "blueprints": [ {id, name, nodes, edges, viewport, trigger} ],
@@ -33,29 +25,15 @@ Manifest shape (``workflows_manifest.json`` in the output directory)::
         "runs":       [ {id, blueprintId, status, nodeStates, startedAt, completedAt} ]
     }
 
-``trigger`` holds the auto-launch binding: ``null`` (or ``{"type": <t>,
-"enabled": false}``) when disarmed, or ``{"type": <t>, "enabled": true}`` on an
-armed blueprint, where ``<t>`` is one of ``TRIGGER_TYPES`` (``new_video`` /
-``transcript_complete`` / ``scan_event``). At most one blueprint is armed *per
-trigger type* (so a new-video pipeline can chain into a transcript-complete
-one). The watcher daemon in ``workflows_server`` fires the matching armed
-blueprint once per arriving participant/completion, bound via
-``bind_participant``. Feedback-loop note: the workflow ``transcribe`` node
-calls ``transcripts.transcribe_video`` directly and never writes the
-transcripts manifest, so a transcript-complete-triggered graph containing a
-Transcribe node cannot re-fire itself.
-
-This module is now the executors + wiring half and the re-export facade:
-the declarative catalog (``NodeContext``, ``NODE_TYPES``, ``BUILTIN_STASHES``,
-``ADAPTERS``) lives in ``workflows_catalog`` and the run engine
-(``WorkflowRunner``, ``topo_order``, statuses, triggers, sidecars, resume) in
-``workflows_runner``; ``import workflows; workflows.NAME`` keeps resolving
-every public name — and the private names the test suite reaches for — from
-their new homes. The import-time wiring below mutates the *shared*
-``NODE_TYPES`` dict imported from ``workflows_catalog`` (never a copy: tests
-patch node executors via ``workflows.NODE_TYPES`` and rely on the identity).
-Re-binding a name here only rebinds it on the facade — to stub a seam in a
-test, patch the owning sibling module.
+``trigger`` is the auto-launch binding: ``null`` (or ``{"type": <t>, "enabled":
+false}``) when disarmed, else ``{"type": <t>, "enabled": true}`` for one of
+``TRIGGER_TYPES``. At most one blueprint is armed *per trigger type*, so a
+new-video pipeline can chain into a transcript-complete one; the watcher daemon
+in ``workflows_server`` fires the match once per arriving participant, bound via
+``bind_participant``. No feedback loop is possible: the ``transcribe`` node calls
+``transcripts.transcribe_video`` directly and never writes the transcripts
+manifest, so a transcript-complete graph containing a Transcribe node cannot
+re-fire itself.
 """
 
 from __future__ import annotations
@@ -65,10 +43,10 @@ from pathlib import Path
 from typing import Any, cast
 
 import config
+import manifest as manifest_io
 import utils
 
-# Catalog names the executors + wiring below use directly (also part of the
-# ``workflows.NAME`` facade surface, like everything imported here).
+# Catalog names used below; every import here is also facade surface.
 from workflows_catalog import (
     NODE_TYPES,
     NodeContext,
@@ -111,6 +89,7 @@ from workflows_runner import (  # noqa: F401
     bind_participant,
     blueprint_participant_nodes,
     compute_resume_plan,
+    node_exec_definition,
     inspectable_sidecar_view,
     run_results_dir,
     topo_order,
@@ -124,20 +103,19 @@ def empty_workflows_manifest() -> dict[str, list[Any]]:
 
 
 def load_workflows_manifest() -> dict[str, Any]:
-    """Load ``workflows_manifest.json`` from the output dir (empty default).
+    """Load the ``workflows`` manifest section (empty default).
 
     Missing or corrupt files fall back to :func:`empty_workflows_manifest` so
     callers always get the full key set, never a partial dict.
     """
-    data = utils.load_json_manifest(config.WORKFLOWS_MANIFEST_FILENAME, default=None)
+    data = manifest_io.load_manifest_section("workflows")
     if not isinstance(data, dict):
         return empty_workflows_manifest()
     # Backfill any missing top-level keys so callers can index unconditionally.
     base = empty_workflows_manifest()
     base.update({k: v for k, v in data.items() if k in base})
-    # A trigger whose type isn't in TRIGGER_TYPES (e.g. the pre-chaining
-    # "watch_dir") reads as disarmed: the watcher only fires known types, so
-    # keeping it enabled would render an armed toolbar state that never fires.
+    # Unknown trigger types disarm: the watcher never fires them, so don't show
+    # them armed.
     for blueprint in base.get("blueprints", []):
         if not isinstance(blueprint, dict):
             continue
@@ -179,26 +157,16 @@ def save_workflows_manifest(
         "runs": runs or [],
     }
     if _is_empty_workflows_manifest(payload):
-        utils.remove_json_manifest(config.WORKFLOWS_MANIFEST_FILENAME)
+        manifest_io.save_manifest_section("workflows", None)
         return None
-    return utils.save_json_manifest(
-        config.WORKFLOWS_MANIFEST_FILENAME,
-        payload,
-        warn_label="workflows manifest",
-    )
+    return manifest_io.save_manifest_section("workflows", payload)
 
 
 # ---------------------------------------------------------------------------
-# Executors (M3) — thin adapters over existing pure functions
+# Executors
 # ---------------------------------------------------------------------------
 #
-# Each executor has the uniform shape ``execute(ctx, inputs, params) -> {port:
-# value}`` (keyed by OUTPUT-port name). Backend modules are imported lazily
-# inside each executor (mirrors ``cli._run_ss_clips``) to avoid import cost and
-# cycles — Workflows sits at the top of the dependency DAG. The concrete value
-# carried on each wire is documented in ``plans/archive/WORKFLOWS-PLAN.md``; the unifying
-# primitive is a "source descriptor" embedded in every domain value so the pure
-# ``ADAPTERS`` (value -> value, no ctx/params) can still reach a clip's source.
+# Lazy imports inside each executor keep Workflows atop the import DAG.
 
 
 # ---- Sources ----
@@ -207,7 +175,20 @@ def save_workflows_manifest(
 def _exec_video_source(
     ctx: NodeContext, inputs: dict[str, Any], params: dict[str, Any]
 ) -> dict[str, Any]:
-    participant = str(params.get("participant", "") or "")
+    # A list (multi-selection or "__all__") is batch input (bind_participant);
+    # never stringify it.
+    raw = params.get("participant", "")
+    if isinstance(raw, list):
+        if len(raw) > 1:
+            raise RuntimeError(
+                "Video Source has several participants selected — use Run to fan out as a batch"
+            )
+        raw = raw[0] if raw else ""
+    participant = str(raw or "")
+    if participant == "__all__":
+        raise RuntimeError(
+            "Video Source is set to all participants — use Run to fan out as a batch"
+        )
     video_paths = ctx.resolve_videos(participant) if participant else []
     return {
         "video": _source_descriptor(participant, video_paths),
@@ -246,7 +227,15 @@ def _exec_region(
         entry = regions.get(name)
         if isinstance(entry, dict):
             coords = {k: entry[k] for k in ("x", "y", "w", "h") if k in entry}
-    return {"region": {"name": name, "coords": coords}}
+            if entry.get("points"):
+                coords["points"] = entry["points"]
+            if entry.get("shape"):
+                coords["shape"] = entry["shape"]
+    result: dict[str, Any] = {"region": {"name": name, "coords": coords}}
+    if name and coords is None:
+        # Downstream falls back to the full frame (_resolve_region_coords); say so.
+        result["__note__"] = f'Region "{name}" not found — scanning the full frame'
+    return result
 
 
 def _exec_time_range(
@@ -282,13 +271,29 @@ def _exec_transcribe(
     language = str(params.get("language", "") or "").strip()
     lang = None if language in ("", "auto") else language
     model_name = str(params.get("model", "") or "").strip() or None
-    # No audio-track param on purpose: passing no audio_index gets speech-track
-    # auto-detection, and a *pinned index* would be portable-looking and wrong —
-    # "track 1" is the mic for P01 and system audio for P07 whose recorder wrote
-    # the streams in the other order. If control is ever wanted here it should be
-    # a name hint ("audio_track_contains"), not an index.
+    # No audio_index param: stream order differs per recorder. Prefer a name hint
+    # if ever needed.
+
+    # Study vocabulary and correction keywords, same as every other entry point.
+    manifest = transcripts.load_transcripts_manifest()
+    context_keywords = (
+        transcripts.get_corrections_keywords(manifest.get("corrections", [])) or None
+    )
+    known_terms = transcripts.get_known_terms(manifest) or None
 
     result: Any = None
+    if not paths:
+        return {
+            "transcript": {
+                "segments": [],
+                "language": lang or "",
+                "source_file": "",
+                "model": "",
+                "source": src,
+            },
+            "segments": {"segments": [], "source": src},
+            "__note__": "No video wired",
+        }
     if len(paths) >= 2:
         timeline = video.build_source_timeline(paths)
         if timeline is not None:
@@ -296,29 +301,43 @@ def _exec_transcribe(
                 timeline,
                 model_name=model_name,
                 language=lang,
+                context_keywords=context_keywords,
+                known_terms=known_terms,
                 cancel_flag=ctx.cancel_flag,
             )
-    elif paths:
+    else:
         result = transcripts.transcribe_video(
             paths[0],
             model_name=model_name,
             language=lang,
+            context_keywords=context_keywords,
+            known_terms=known_terms,
             cancel_flag=ctx.cancel_flag,
         )
 
     if result is None:
-        result = {
-            "segments": [],
-            "language": lang or "",
-            "source_file": paths[0] if paths else "",
-            "model": "",
-        }
+        # A None result is a decode/model failure, not an empty transcript.
+        raise RuntimeError("Could not transcribe the wired video")
+    if _speakers_wanted(params) and result.get("segments"):
+        transcripts.label_speakers(
+            paths, result["segments"], None, cancel_flag=ctx.cancel_flag
+        )
     transcript_val = dict(result)
     transcript_val["source"] = src
     return {
         "transcript": transcript_val,
         "segments": {"segments": result.get("segments", []), "source": src},
     }
+
+
+def _speakers_wanted(params: dict[str, Any]) -> bool:
+    """Node param ``on``/``off`` wins; ``default`` follows TRANSCRIBE_SPEAKERS."""
+    choice = str(params.get("speakers", "default") or "default")
+    if choice == "on":
+        return True
+    if choice == "off":
+        return False
+    return bool(config.TRANSCRIBE_SPEAKERS)
 
 
 def _exec_find_word(
@@ -345,6 +364,61 @@ def _exec_find_word(
     }
 
 
+def _exec_transcript_marks(
+    ctx: NodeContext, inputs: dict[str, Any], params: dict[str, Any]
+) -> dict[str, Any]:
+    """Read the participant's Transcripts-page marks as padded time ranges.
+
+    Marks live in the transcripts manifest as ``{segment_id: "pid:index", …}``
+    records; each resolves against that participant's persisted segments (the
+    workflow ``transcribe`` node deliberately never writes that manifest, so
+    this reads what the Transcripts page produced).
+    """
+    import transcripts
+
+    src = inputs.get("video") or {}
+    participant = str(src.get("participant", "") or "")
+    empty = {
+        "timeRange": {"ranges": [], "source": src},
+        "timestamps": {"times": [], "source": src},
+    }
+    if not participant:
+        return {**empty, "__note__": "No video wired"}
+    manifest = transcripts.load_transcripts_manifest()
+    entry = (manifest.get("source_transcripts") or {}).get(participant) or {}
+    segments = list(entry.get("segments") or [])
+    category = str(params.get("category", "") or "").strip().lower()
+    pad = max(0.0, float(params.get("pad", 2) or 0))
+
+    spans: list[tuple[float, float, float]] = []  # (start, padded lo, padded hi)
+    for mark in manifest.get("marks") or []:
+        if not isinstance(mark, dict):
+            continue
+        pid, sep, idx_str = str(mark.get("segment_id", "") or "").partition(":")
+        if not sep or pid != participant:
+            continue
+        if category and str(mark.get("category", "") or "").lower() != category:
+            continue
+        try:
+            idx = int(idx_str)
+        except ValueError:
+            continue
+        if not 0 <= idx < len(segments):
+            continue
+        seg = segments[idx]
+        start = float(seg.get("start", 0.0) or 0.0)
+        end = max(start, float(seg.get("end", 0.0) or 0.0))
+        spans.append((start, max(0.0, start - pad), end + pad))
+    spans.sort()
+    if not spans:
+        scope = f' in category "{category}"' if category else ""
+        return {**empty, "__note__": f"No marks for this participant{scope}"}
+    return {
+        "timeRange": {"ranges": [(lo, hi) for _, lo, hi in spans], "source": src},
+        "timestamps": {"times": [start for start, _, _ in spans], "source": src},
+    }
+
+
 def _exec_transcript_export(
     ctx: NodeContext, inputs: dict[str, Any], params: dict[str, Any]
 ) -> dict[str, Any]:
@@ -359,8 +433,7 @@ def _exec_transcript_export(
     if fmt not in ("md", "srt", "vtt"):
         fmt = "md"
 
-    # Prefer the full transcript (carries language/model); a bare segments wire
-    # still exports, just with empty metadata.
+    # Prefer the full transcript; a bare segments wire exports with empty metadata.
     if transcript_in.get("segments"):
         base: dict[str, Any] = transcript_in
     elif seg_in.get("segments"):
@@ -393,27 +466,30 @@ def _exec_transcript_export(
         files.release_reservation(output_path)
         return {
             "artifacts": {"artifacts": [], "study": study, "count": 0},
-            "__note__": "Transcript couldn't be written",
+            "__degraded__": "Transcript couldn't be written",
         }
-    # "export" (not "transcript") — the viewer routes it to the Attachments
-    # pane's document card; "transcript" is a timeline card type there.
+    # "export" routes to the viewer's Attachments pane; "transcript" is a timeline
+    # card type.
     rec = _attachment_artifact("export", output_path, src, f"Transcript ({fmt})")
     return {"artifacts": {"artifacts": [rec], "study": study, "count": 1}}
 
 
-# ---- Thinking (Ollama) ----
+# ---- Thinking (local LLM) ----
 
 
 def _exec_summarize(
     ctx: NodeContext, inputs: dict[str, Any], params: dict[str, Any]
 ) -> dict[str, Any]:
-    import ollama_client
+    import llm_client
     import thinking_agents
 
     transcript = inputs.get("transcript") or {}
     segments = transcript.get("segments") or []
-    if not ollama_client.is_available():
-        return {"summary": "", "__note__": "Ollama not available. Summary skipped"}
+    if not llm_client.ensure_server():
+        return {
+            "summary": "",
+            "__degraded__": "AI server would not start. Summary skipped",
+        }
     summary = thinking_agents.summarize_transcript(
         segments, model=params.get("model") or None, cancel_event=ctx.cancel_event
     )
@@ -423,14 +499,17 @@ def _exec_summarize(
 def _exec_citations(
     ctx: NodeContext, inputs: dict[str, Any], params: dict[str, Any]
 ) -> dict[str, Any]:
-    import ollama_client
+    import llm_client
     import thinking_agents
 
     summary = str(inputs.get("summary") or "")
     seg_val = inputs.get("segments") or {}
     segments = seg_val.get("segments") or []
-    if not ollama_client.is_available():
-        return {"citations": [], "__note__": "Ollama not available. Citations skipped"}
+    if not llm_client.ensure_server():
+        return {
+            "citations": [],
+            "__degraded__": "AI server would not start. Citations skipped",
+        }
     cites = thinking_agents.find_citations(
         summary,
         segments,
@@ -444,16 +523,19 @@ def _exec_friction(
     ctx: NodeContext, inputs: dict[str, Any], params: dict[str, Any]
 ) -> dict[str, Any]:
     import friction
-    import ollama_client
+    import llm_client
     import thinking_agents
 
     seg_val = inputs.get("segments") or {}
     segments = seg_val.get("segments") or []
     summary = str(inputs.get("summary") or "")
-    if not ollama_client.is_available():
-        return {"friction": [], "__note__": "Ollama not available. Friction skipped"}
+    if not llm_client.ensure_server():
+        return {
+            "friction": [],
+            "__degraded__": "AI server would not start. Friction skipped",
+        }
     scored = friction.score_segments(segments)
-    candidates = friction.select_candidates(scored)
+    candidates = friction.select_candidates(scored, config.FRICTION_CANDIDATE_LIMIT)
     moments = thinking_agents.find_friction_moments(
         summary,
         segments,
@@ -461,7 +543,45 @@ def _exec_friction(
         model=params.get("model") or None,
         cancel_event=ctx.cancel_event,
     )
-    return {"friction": moments or []}
+    if moments is None:
+        # "Didn't run" (model failure / unrenderable candidates) must not read
+        # as "ran and found nothing".
+        return {"friction": [], "__degraded__": "Friction analysis failed. See log"}
+    return {"friction": moments}
+
+
+def _exec_report(
+    ctx: NodeContext, inputs: dict[str, Any], params: dict[str, Any]
+) -> dict[str, Any]:
+    import llm_client
+    import thinking_agents
+
+    summary = str(inputs.get("summary") or "")
+    src = inputs.get("video") or {}
+    participant = str(src.get("participant", "") or "")
+    if not summary:
+        return {"report": "", "__note__": "No summary wired"}
+    if not llm_client.ensure_server():
+        return {
+            "report": "",
+            "__degraded__": "AI server would not start. Report skipped",
+        }
+    # Same injection seam as the Overview Reports tab; unwired, both lists are empty.
+    observation_lines, mark_lines = thinking_agents.report_source_lines(participant)
+    text = thinking_agents.build_report(
+        summary,
+        "\n".join(observation_lines),
+        "\n".join(mark_lines),
+        participant=participant or "unknown",
+        model=params.get("model") or None,
+        cancel_event=ctx.cancel_event,
+    )
+    if not text:
+        return {"report": "", "__degraded__": "Report generation failed"}
+    out: dict[str, Any] = {"report": text}
+    if not participant:
+        out["__note__"] = "No video wired — the report covers the summary only"
+    return out
 
 
 # ---- Screenspace ----
@@ -537,6 +657,17 @@ def _build_ss_scan_params(tool_name: str, params: dict[str, Any]) -> dict[str, A
             "template_scale": _num("template_scale", 1.0),
             "interval": _num("interval"),
         }
+    if tool_name == "shape":
+        return {
+            "threshold": _num("threshold"),
+            "scale_min": _num("scale_min"),
+            "scale_max": _num("scale_max"),
+            "scale_steps": int(_num("scale_steps")),
+            "scale_y_min": _num("scale_y_min"),
+            "scale_y_max": _num("scale_y_max"),
+            "scale_y_steps": int(_num("scale_y_steps")),
+            "interval": _num("interval"),
+        }
     if tool_name == "inactivity":
         return {
             "threshold": _num("threshold"),
@@ -552,6 +683,12 @@ def _build_ss_scan_params(tool_name: str, params: dict[str, Any]) -> dict[str, A
             ),
             "interval": _num("interval"),
         }
+    if tool_name == "attention":
+        return {
+            "shift_threshold": _num("shift_threshold"),
+            "ema_alpha": _num("ema_alpha"),
+            "interval": _num("interval"),
+        }
     return {"interval": _num("interval")}
 
 
@@ -560,13 +697,14 @@ def _attach_ss_reference(
     base_params: dict[str, Any],
     params: dict[str, Any],
     video_path: str,
-    region_coords: dict[str, int],
+    region_coords: dict[str, Any],
 ) -> bool:
     """Self-extract a reference frame from ``video_path`` at ``reference_seconds``.
 
-    Similarity/scene/template need reference image data that the canvas can't
-    upload; instead we crop the node's region from a frame at ``reference_seconds``.
-    Returns False when the frame can't be read so the executor can short-circuit.
+    Similarity/scene/template/shape need reference image data that the canvas
+    can't upload; instead we crop the node's region from a frame at
+    ``reference_seconds``. Returns False when the frame can't be read so the
+    executor can short-circuit.
     """
     import screenspace
     import video as video_mod
@@ -580,6 +718,14 @@ def _attach_ss_reference(
         base_params["reference_frame"] = crop
     elif tool_name == "template":
         base_params["template_image"] = crop
+        screenspace.attach_capture_mask(
+            base_params, "template_image", "template_mask", region_coords
+        )
+    elif tool_name == "shape":
+        base_params["shape_image"] = crop
+        screenspace.attach_capture_mask(
+            base_params, "shape_image", "shape_mask", region_coords
+        )
     elif tool_name == "scene":
         base_params["reference_scenes"] = [{"name": "ref", "frame": crop}]
     return True
@@ -599,14 +745,13 @@ def _run_ss_detector(
     paths = list(src.get("video_paths") or [])
     tool = screenspace.TOOLS.get(tool_name)
     if not paths or tool is None:
-        note = "No video wired" if not paths else f"Unknown detector: {tool_name}"
-        return {
-            "events": {"events": [], "source": src, "raw_results": []},
-            "__note__": note,
-        }
+        empty = {"events": {"events": [], "source": src, "raw_results": []}}
+        if not paths:
+            return {**empty, "__note__": "No video wired"}
+        return {**empty, "__degraded__": f"Unknown detector: {tool_name}"}
 
-    # Unwired region scans the whole frame (zero-size coords would make the scan a
-    # silent no-op — see _resolve_region_coords).
+    # _resolve_region_coords supplies the full frame when unwired; zero-size coords
+    # would silently no-op.
     region_name, region_coords = _resolve_region_coords(
         inputs.get("region") or {}, paths[0]
     )
@@ -617,7 +762,7 @@ def _run_ss_detector(
     ):
         return {
             "events": {"events": [], "source": src, "raw_results": []},
-            "__note__": "Couldn't read the reference frame at the given time",
+            "__degraded__": "Couldn't read the reference frame at the given time",
         }
 
     task = screenspace_manifest.create_task(
@@ -634,9 +779,8 @@ def _run_ss_detector(
     windows = list((inputs.get("timeRange") or {}).get("ranges") or [])
     raw_results: list[dict[str, Any]] = []
     scan_targets = windows or [None]
-    # Each underlying scan reports progress on its own 0->1 scale (multi-video
-    # scans even force on_progress(1.0) at the end), so map each window into its
-    # span-weighted slice of the job to keep job-level progress monotonic.
+    # Each scan reports its own 0->1 progress; span-weighted slices keep the job
+    # monotonic.
     spans = [
         max(0.0, float(w[1]) - float(w[0])) if w is not None else 1.0
         for w in scan_targets
@@ -646,7 +790,7 @@ def _run_ss_detector(
         spans = [1.0] * len(scan_targets)
         total_span = float(len(scan_targets))
     done_span = 0.0
-    for window, win_span in zip(scan_targets, spans):
+    for window, win_span in zip(scan_targets, spans, strict=True):
         if ctx.cancel_flag():
             break
         scan_params = dict(task["parameters"])
@@ -677,8 +821,7 @@ def _run_ss_detector(
         done_span += win_span
 
     events = screenspace_manifest.generate_events_from_results(task, raw_results)
-    # raw_results rides along for the heatmap node (template/flow/change); every
-    # other consumer reads only ``events`` and ignores it.
+    # raw_results feeds the heatmap node only; other consumers read ``events``.
     return {"events": {"events": events, "source": src, "raw_results": raw_results}}
 
 
@@ -705,7 +848,7 @@ def _exec_detect(
 
 def _resolve_region_coords(
     region_in: dict[str, Any], video_path: str
-) -> tuple[str, dict[str, int]]:
+) -> tuple[str, dict[str, Any]]:
     """Resolve a region input to pixel coords, defaulting to the **full frame**.
 
     A region port is optional on every Screenspace node; when it is unwired (or a
@@ -722,7 +865,7 @@ def _resolve_region_coords(
     props = video.probe_video_properties(video_path) or {}
     width = int(props.get("width", 0) or 0)
     height = int(props.get("height", 0) or 0)
-    coords: dict[str, int] = {"x": 0, "y": 0, "w": 0, "h": 0}
+    coords: dict[str, Any] = {"x": 0, "y": 0, "w": 0, "h": 0}
     norm = region_in.get("coords")
     if isinstance(norm, dict) and norm and width > 0 and height > 0:
         coords = screenspace.denormalize_region(norm, width, height)
@@ -749,8 +892,7 @@ def _exec_multitool(
         inputs.get("region") or {}, paths[0]
     )
 
-    # Reshape each flat step into the {type, region_coords, logic, …} shape
-    # scan_multitool expects, reusing the per-detector param builder.
+    # Reshape flat steps into what scan_multitool expects.
     steps: list[dict[str, Any]] = []
     for idx, raw in enumerate(raw_steps):
         step_type = str(raw.get("type", "") or "")
@@ -810,8 +952,8 @@ def _exec_highlights(
     budget = int(params.get("budget", config.HIGHLIGHTS_REEL_DURATION_SECONDS) or 0)
     if budget <= 0:
         budget = config.HIGHLIGHTS_REEL_DURATION_SECONDS
-    # Uniqueness is scored against artifacts already in the output dir (mirrors the
-    # ``-H`` CLI path: spreadsheet.generate_reel_timestamps -> score_and_truncate_clips).
+    # Uniqueness scores against existing output-dir artifacts, mirroring the ``-H``
+    # CLI path.
     existing_filenames = set(files.discover_clips())
     selected = spreadsheet.score_and_truncate_clips(records, existing_filenames, budget)
     return {"clips": {"records": selected, "study": study}}
@@ -908,11 +1050,11 @@ def _exec_interval_captures(
     if not paths:
         return {**empty, "__note__": "No video wired"}
 
-    interval = int(
-        float(params.get("interval", config.GALLERY_INTERVAL_SECONDS) or 0)
+    interval = float(
+        params.get("interval", config.GALLERY_INTERVAL_SECONDS)
         or config.GALLERY_INTERVAL_SECONDS
     )
-    interval = max(interval, 1)
+    interval = max(interval, 0.2)
     fmt = (
         "gif" if str(params.get("output_format", "screen") or "") == "gif" else "screen"
     )
@@ -928,11 +1070,10 @@ def _exec_interval_captures(
     if not ranges:
         duration = video_mod.get_file_duration(paths[0]) or 0
         if duration <= 0:
-            return {**empty, "__note__": "Couldn't read the video duration"}
+            return {**empty, "__degraded__": "Couldn't read the video duration"}
         ranges = [(0.0, float(duration))]
 
-    # Expand each window into per-interval sample points (a point for a
-    # screenshot, a [t, t+gif_dur] window for a GIF).
+    # Expand windows into sample points; GIFs get a [t, t+gif_dur] span.
     sample_ranges: list[tuple[float, float]] = []
     for start, end in ranges:
         t = start
@@ -999,13 +1140,12 @@ def _exec_timelapse(
             "__note__": "No video wired",
         }
 
-    # _resolve_region_coords already falls back to the full frame when no region
-    # is wired; a still-zero size means the probe failed (unreadable video).
+    # Full-frame fallback already applied; a zero size means the video probe failed.
     _name, region_coords = _resolve_region_coords(inputs.get("region") or {}, paths[0])
     if region_coords["w"] <= 0 or region_coords["h"] <= 0:
         return {
             "artifacts": {"artifacts": [], "study": study, "count": 0},
-            "__note__": "Couldn't read the video",
+            "__degraded__": "Couldn't read the video",
         }
 
     out_format = str(params.get("output_format", "mp4") or "mp4")
@@ -1028,7 +1168,7 @@ def _exec_timelapse(
         files.release_reservation(output_path)
         return {
             "artifacts": {"artifacts": [], "study": study, "count": 0},
-            "__note__": "Timelapse couldn't be generated",
+            "__degraded__": "Timelapse couldn't be generated",
         }
     rec = _attachment_artifact("timelapse", result, src, "Timelapse")
     return {"artifacts": {"artifacts": [rec], "study": study, "count": 1}}
@@ -1045,11 +1185,11 @@ def _exec_heatmap(
     src = events_in.get("source") or {}
     study = str(src.get("study", "") or "")
     results = list(events_in.get("raw_results") or [])
-    style = str(params.get("style", "change") or "change")
+    style = str(params.get("style", "auto") or "auto")
     paths = list(src.get("video_paths") or [])
-    if not results or not paths or style not in ("template", "flow", "change"):
+    if not results or not paths:
         note = (
-            "No detector results. Wire a matching template/flow/change detector"
+            "No detector results. Wire a template/flow/change/attention detector"
             if not results
             else "No video for the heatmap"
         )
@@ -1057,6 +1197,18 @@ def _exec_heatmap(
             "artifacts": {"artifacts": [], "study": study, "count": 0},
             "__note__": note,
         }
+    if style not in ("template", "flow", "change", "attention"):
+        # "auto" infers from the per-frame payload, not the producing node type, so
+        # merges stay correct.
+        style = _infer_heatmap_style(results)
+        if not style:
+            return {
+                "artifacts": {"artifacts": [], "study": study, "count": 0},
+                "__note__": (
+                    "The wired events carry no heatmap data — use a "
+                    "template/flow/change/attention detector upstream"
+                ),
+            }
 
     props = video.probe_video_properties(paths[0]) or {}
     width = int(props.get("width", 0) or 0) or 1920
@@ -1072,6 +1224,10 @@ def _exec_heatmap(
             )
         elif style == "flow":
             result = screenspace_heatmap.generate_flow_heatmap(
+                results, width, height, output_path
+            )
+        elif style == "attention":
+            result = screenspace_heatmap.generate_attention_heatmap(
                 results, width, height, output_path
             )
         else:
@@ -1101,8 +1257,8 @@ def _exec_heatmap(
                 num_frames=num_frames,
                 window_frames=int(float(params.get("window", 6) or 6)),
             )
-        # No sprite sheet here: this node's output is a standalone artifact for
-        # the manifest/viewer, not a Screenspace results thumbnail to scrub.
+        # No sprite sheet: this is a viewer artifact, not a Screenspace results
+        # thumbnail.
         result = anim["path"] if anim else None
         failure_note = "Not enough detector results for an animated heatmap"
     if not result:
@@ -1113,6 +1269,27 @@ def _exec_heatmap(
         }
     rec = _attachment_artifact("heatmap", result, src, f"{style.title()} heatmap")
     return {"artifacts": {"artifacts": [rec], "study": study, "count": 1}}
+
+
+def _infer_heatmap_style(results: list[Any]) -> str:
+    """Pick the heatmap style from the detector payload keys in *results*.
+
+    Each style's generator reads a distinctive key (template match boxes,
+    flow/change/saliency grids — see ``screenspace_heatmap._GRID_KEYS``), so
+    the first result carrying one decides. Empty string when none match.
+    """
+    for r in results:
+        if not isinstance(r, dict):
+            continue
+        if r.get("saliency_grid") is not None:
+            return "attention"
+        if r.get("flow_grid") is not None:
+            return "flow"
+        if r.get("change_grid") is not None:
+            return "change"
+        if r.get("matches"):
+            return "template"
+    return ""
 
 
 def _reel_start_seconds(rec: Any) -> float:
@@ -1151,8 +1328,8 @@ def _exec_build_reel(
             "manifest": {"path": None, "records": []},
             "__note__": "No clips to build a reel from",
         }
-    # Honor the node's reel name: reserve a unique output path (process_reel
-    # treats a supplied output_file as a reservation and releases it on failure).
+    # process_reel treats a supplied output_file as a reservation and releases it
+    # on failure.
     name = utils.sanitize_filename(str(params.get("name", "") or "").strip()) or "reel"
     output_file = files.get_unique_filename(f"{name}{config.FILEFORMAT}")
     pad_pre, pad_post, max_duration = _artifact_padding_params(params)
@@ -1168,6 +1345,198 @@ def _exec_build_reel(
         "artifacts": {"artifacts": reels, "study": study, "count": count},
         "manifest": {"path": None, "records": reels},
     }
+
+
+def _exec_post_process(
+    ctx: NodeContext, inputs: dict[str, Any], params: dict[str, Any]
+) -> dict[str, Any]:
+    """Post-process the wired source video: subtitles, loudness, remux, or size.
+
+    Two shapes of operation, mirrored from the app's own actions:
+
+    - **In place** (``normalize_audio``, ``remux_faststart``) rewrite the source
+      file exactly like the Transcripts page's quick actions — the original is
+      kept beside it as ``.orig`` and the ``video`` output passes the input
+      descriptor through unchanged.
+    - **Copies** (``embed_subtitles``, ``compress``) write a new file into the
+      output dir; the ``video`` output points at the copy so downstream nodes
+      chain onto it, and ``artifacts`` carries a record for the manifest/viewer.
+    """
+    import shutil
+    import tempfile
+
+    import files
+    import transcripts
+    import video as video_mod
+
+    src = inputs.get("video") or {}
+    paths = list(src.get("video_paths") or [])
+    study = str(src.get("study", "") or "")
+    op = str(params.get("operation", "embed_subtitles") or "embed_subtitles")
+
+    def _done(
+        video_out: dict[str, Any],
+        records: list[dict[str, Any]],
+        note: str | None = None,
+    ) -> dict[str, Any]:
+        out: dict[str, Any] = {
+            "video": video_out,
+            "artifacts": {
+                "artifacts": records,
+                "study": study,
+                "count": len(records),
+            },
+        }
+        if note:
+            out["__note__"] = note
+        return out
+
+    if not paths:
+        return _done(src, [], "No video wired")
+
+    if op == "embed_subtitles":
+        transcript_in = inputs.get("transcript") or {}
+        segments = list(transcript_in.get("segments") or [])
+        if not segments:
+            return _done(src, [], "Embedding subtitles needs a wired transcript")
+        if len(paths) > 1:
+            # Transcript timing spans the stitched timeline; no single part can
+            # carry it.
+            return _done(
+                src,
+                [],
+                "Subtitle embedding isn't supported for multi-video participants",
+            )
+        result = cast(
+            transcripts.TranscriptResult,
+            {
+                "segments": segments,
+                "language": str(transcript_in.get("language", "") or ""),
+                "model": str(transcript_in.get("model", "") or ""),
+                "source_file": str(src.get("source_filename", "") or ""),
+            },
+        )
+        source_path = Path(paths[0])
+        with tempfile.NamedTemporaryFile(suffix=".srt", delete=False) as tmp:
+            srt_path = tmp.name
+        try:
+            if not transcripts.write_transcript(result, srt_path, fmt="srt"):
+                return _done(src, [], "Subtitle file couldn't be written")
+            out_path = files.get_unique_filename(
+                f"{source_path.stem}-subtitled{source_path.suffix}",
+                file_format=source_path.suffix,
+            )
+            if not video_mod.mux_subtitles(
+                str(source_path),
+                srt_path,
+                out_path,
+                set_default=bool(params.get("default_track", True)),
+            ):
+                files.release_reservation(out_path)
+                return _done(src, [], "Subtitle mux failed")
+        finally:
+            Path(srt_path).unlink(missing_ok=True)
+        new_src = {
+            **src,
+            "video_paths": [out_path],
+            "source_filename": Path(out_path).name,
+        }
+        rec = _attachment_artifact("export", out_path, src, "Subtitled video")
+        return _done(new_src, [rec])
+
+    if op == "normalize_audio":
+        # In-place per part, sharing the .orig slot and already-rewritten skip
+        # with remux.
+        import transcripts_server
+
+        failures: list[str] = []
+        done = 0
+        already = 0
+        for path in paths:
+            if ctx.cancel_flag():
+                failures.append(f"{Path(path).name}: cancelled")
+                break
+            if video_mod.original_backup_path(path).exists():
+                already += 1
+                continue
+            props = video_mod.probe_video_properties(path)
+            if props is None:
+                failures.append(f"{Path(path).name}: could not probe the file")
+                continue
+            indices = transcripts_server._resolve_normalize_indices(props, "auto")
+            if isinstance(indices, str):
+                failures.append(f"{Path(path).name}: {indices}")
+                continue
+            success, message = video_mod.normalize_audio_inplace(
+                path, indices, cancel_flag=ctx.cancel_flag
+            )
+            if success:
+                done += 1
+            else:
+                failures.append(f"{Path(path).name}: {message}")
+        if failures:
+            raise RuntimeError("Normalize audio failed: " + " ".join(failures))
+        note = None
+        if already and not done:
+            note = "Already rewritten; the original is still kept beside the source"
+        return _done(src, [], note)
+
+    if op == "remux_faststart":
+        failures = []
+        done = 0
+        already = 0
+        for path in paths:
+            if ctx.cancel_flag():
+                failures.append(f"{Path(path).name}: cancelled")
+                break
+            seek = video_mod.probe_container_seekability(path)
+            if seek is not None and seek.get("browser_seekable"):
+                already += 1
+                continue
+            success, message = video_mod.remux_to_faststart(
+                path, cancel_flag=ctx.cancel_flag
+            )
+            if success:
+                done += 1
+            else:
+                failures.append(f"{Path(path).name}: {message}")
+        if failures:
+            raise RuntimeError("Remux failed: " + " ".join(failures))
+        note = "Already browser-seekable" if already and not done else None
+        return _done(src, [], note)
+
+    # compress: size-capped copy per part into the output dir; sources are never
+    # touched.
+    target_mb = max(1.0, float(params.get("target_mb", 100) or 100))
+    records: list[dict[str, Any]] = []
+    out_paths: list[str] = []
+    for path in paths:
+        if ctx.cancel_flag():
+            break
+        source_path = Path(path)
+        out_path = files.get_unique_filename(
+            f"{source_path.stem}-compressed{source_path.suffix}",
+            file_format=source_path.suffix,
+        )
+        try:
+            shutil.copyfile(path, out_path)
+        except OSError as exc:
+            files.release_reservation(out_path)
+            raise RuntimeError(f"Couldn't copy {source_path.name}: {exc}") from exc
+        if not video_mod.compress_to_size(
+            out_path, target_mb, cancel_flag=ctx.cancel_flag
+        ):
+            # False = encode error or cancel (an already-small file is True).
+            files.release_reservation(out_path)
+            raise RuntimeError(f"Compression failed for {source_path.name}")
+        out_paths.append(out_path)
+        records.append(
+            _attachment_artifact(
+                "export", out_path, src, f"Compressed copy (≤{target_mb:g} MB)"
+            )
+        )
+    new_src = {**src, "video_paths": out_paths} if out_paths else src
+    return _done(new_src, records)
 
 
 def _exec_data_export(
@@ -1220,10 +1589,51 @@ def _exec_data_export(
                 "Segments export",
             )
         )
+    # Opt-in tables read the on-disk manifests, not wires; empty tables skip
+    # silently.
+    if params.get("include_pins"):
+        import screenspace
+
+        pins = data_export.build_screenspace_pins(
+            screenspace.load_screenspace_manifest()
+        )
+        if pins:
+            surfaces.append(
+                (
+                    "export_pins",
+                    pins,
+                    data_export.SCREENSPACE_PIN_COLUMNS,
+                    "Calibration pins export",
+                )
+            )
+    if params.get("include_friction"):
+        import transcripts
+
+        t_manifest = transcripts.load_transcripts_manifest()
+        moments = data_export.build_friction_moments(t_manifest)
+        if moments:
+            surfaces.append(
+                (
+                    "export_friction_moments",
+                    moments,
+                    data_export._FRICTION_MOMENT_COLS,
+                    "Friction moments export",
+                )
+            )
+        scored = data_export.build_friction_segments(t_manifest)
+        if scored:
+            surfaces.append(
+                (
+                    "export_friction_segments",
+                    scored,
+                    data_export._FRICTION_SEGMENT_COLS,
+                    "Friction segments export",
+                )
+            )
     if not surfaces:
         return {
             "artifacts": {"artifacts": [], "study": study, "count": 0},
-            "__note__": "No events or segments wired",
+            "__note__": "No events or segments wired (and no opt-in tables had rows)",
         }
 
     records: list[dict[str, Any]] = []
@@ -1245,14 +1655,13 @@ def _exec_data_export(
             try:
                 Path(output_path).write_text(payload, encoding="utf-8")
             except OSError:
-                # All-or-nothing: also remove any files this node already wrote,
-                # so a half-bundle never orphans behind an artifact-less result.
+                # All-or-nothing: a failed write removes the files already written.
                 files.release_reservation(output_path)
                 for prior in written:
                     files.release_reservation(prior)
                 return {
                     "artifacts": {"artifacts": [], "study": study, "count": 0},
-                    "__note__": "Export couldn't be written",
+                    "__degraded__": "Export couldn't be written",
                 }
             written.append(output_path)
             records.append(
@@ -1271,11 +1680,8 @@ def _exec_timeline_viewer(
     artifacts_in = inputs.get("artifacts") or {}
     incoming = list(artifacts_in.get("artifacts") or [])
     study = str(artifacts_in.get("study", "") or "")
-    # build_reel emits reel records (carrying ``components``, no start/end) onto
-    # the same ``artifacts`` wire as clip/screen/gif artifacts. The viewer renders
-    # them from separate slots — timeline artifacts on the timeline, reels in the
-    # Attachments pane — so split them out here (otherwise reels land in the
-    # timeline slot, get filtered for lack of start/end, and the viewer is empty).
+    # Reel records (``components``, no start/end) share the artifacts wire; the
+    # viewer needs them split.
     reels = [
         a for a in incoming if isinstance(a, dict) and a.get("components") is not None
     ]
@@ -1289,6 +1695,40 @@ def _exec_timeline_viewer(
         artifacts, reels=reels or None, study=study, screenspace_events=ss_events
     )
     path = viewer.generate_timeline_viewer(data, output_basename="workflow_viewer.html")
+    return {"viewer": {"path": str(path) if path else None}}
+
+
+def _exec_gallery_viewer(
+    ctx: NodeContext, inputs: dict[str, Any], params: dict[str, Any]
+) -> dict[str, Any]:
+    import video as video_mod
+    import viewer
+
+    artifacts_in = inputs.get("artifacts") or {}
+    incoming = list(artifacts_in.get("artifacts") or [])
+    # The gallery renders image/GIF captures; clips and reels belong to the
+    # timeline viewer.
+    stills = [
+        a
+        for a in incoming
+        if isinstance(a, dict) and a.get("type") in ("screen", "gif")
+    ]
+    if not stills:
+        return {
+            "viewer": {"path": None},
+            "__note__": "No screenshot/GIF artifacts wired (clips go to Timeline Viewer)",
+        }
+    src = artifacts_in.get("source") or {}
+    fmt = "gif" if any(a.get("type") == "gif" for a in stills) else "screen"
+    paths = list(src.get("video_paths") or [])
+    duration = int(video_mod.get_file_duration(paths[0]) or 0) if paths else 0
+    data = viewer.finalize_gallery_data(
+        stills,
+        source_video=str(src.get("source_filename", "") or ""),
+        video_duration=duration,
+        output_format=fmt,
+    )
+    path = viewer.generate_gallery_viewer(data, output_basename="workflow_gallery.html")
     return {"viewer": {"path": str(path) if path else None}}
 
 
@@ -1367,14 +1807,6 @@ def _reduce_collection(metric: str, inputs: dict[str, Any]) -> float:
     return 0.0
 
 
-def _exec_measure(
-    ctx: NodeContext, inputs: dict[str, Any], params: dict[str, Any]
-) -> dict[str, Any]:
-    """Reduce a wired collection to one scalar for a downstream gate."""
-    metric = str(params.get("metric", "count") or "count")
-    return {"value": _reduce_collection(metric, inputs)}
-
-
 def _apply_gate(value: float, params: dict[str, Any]) -> bool:
     """Compare *value* to a threshold per the node's ``op`` (shared gate logic)."""
     fn = _GATE_OPS.get(str(params.get("op", ">=") or ">="))
@@ -1402,38 +1834,24 @@ def _exec_gate(
 def _exec_gate_collection(
     ctx: NodeContext, inputs: dict[str, Any], params: dict[str, Any]
 ) -> dict[str, Any]:
-    """Reduce a wired collection to a scalar then gate it — the measure+gate pair
-    fused into one node (see :func:`_exec_measure` and :func:`_exec_gate`)."""
+    """Reduce a wired collection to a scalar then gate it (measure+gate fused —
+    the scalar :func:`_exec_gate` remains for the video→scalar adapter path)."""
     metric = str(params.get("metric", "count") or "count")
     value = _reduce_collection(metric, inputs)
     return {"pass": _apply_gate(value, params)}
 
 
-# ---- Collection-algebra control nodes (filter / merge / partition / limit / dedup) ----
+# ---- Collection-algebra nodes ----
 #
-# These thin / combine / branch / cap / dedup the collections that already flow
-# through the graph (events, clipRecords, segments) — the collections *are* the
-# iteration, so no per-item ``foreach`` (which would force runtime DAG expansion,
-# breaking the static ``topo_order`` model). All are pure single-pass nodes: no
-# runner changes. Per-type families (mirroring the ss_* split) keep every port
-# exact-typed, so no adapters or frontend ``canConnect`` changes are needed.
+# No per-item ``foreach``: runtime DAG expansion would break static ``topo_order``.
 
-# One ``{field, op, value}`` clause reuses the gate's comparison table; ``contains``
-# is the one string-only addition (kept out of ``_GATE_OPS``, which must stay
-# numeric for the gate). ``none`` is the limit node's "keep input order" sentinel.
+# ``contains`` stays out of ``_GATE_OPS``, which must remain numeric. ``none``
+# means keep input order.
 _COLLECTION_OPS: list[str] = list(_GATE_OPS.keys()) + ["contains"]
 _SORT_NONE = "none"
 
-# kind -> envelope metadata. ``port`` is the wire type; ``key`` is the inner list
-# key in the envelope; ``preserve`` are the envelope keys carried through unchanged
-# (source lineage / study / raw_results); ``fields`` drive the predicate enum and
-# ``sort_fields`` the limit sort enum (numeric-only, so the sort key stays
-# comparable). ``recount`` (artifacts) rewrites the envelope's ``count`` to the
-# kept length. dedup is span-based, registered for events + clips + timeRanges.
-#
-# Both the pre-clip side (``clipRecords``, ``timeRange``) and the post-clip side
-# (``artifacts`` from make_clips/timelapse/heatmap/build_reel) get families, so a
-# stream can be thinned/capped/combined before *or* after it becomes artifacts.
+# kind -> envelope metadata; ``preserve`` keys pass through unchanged, ``recount``
+# rewrites ``count``.
 _COLLECTION_KINDS: dict[str, dict[str, Any]] = {
     "events": {
         "port": "events",
@@ -1445,10 +1863,8 @@ _COLLECTION_KINDS: dict[str, dict[str, Any]] = {
     },
     "clips": {
         "port": "clipRecords",
-        # Labelled "Clip Selections" (not "Clips") so the family reads as operating
-        # on pre-render clip specs from sheet_selection/highlights — not the
-        # rendered ``artifacts`` Make Clips emits (which has its own artifacts
-        # family). The node ids stay ``*_clips`` so saved blueprints are unaffected.
+        # Labelled "Clip Selections" to distinguish pre-render specs from artifacts;
+        # ids stay ``*_clips`` for saved blueprints.
         "key": "records",
         "label": "Clip Selections",
         "preserve": ("study",),
@@ -1616,7 +2032,12 @@ def _wrap_collection(
 def _make_filter_executor(
     kind: str,
 ) -> Callable[[NodeContext, dict[str, Any], dict[str, Any]], dict[str, Any]]:
-    """Keep items matching the clause(s) (see ``_eval_clauses``); same type in/out."""
+    """Keep items matching the clause(s) on ``out``; the rest go to ``unmatched``.
+
+    The second output makes filter subsume the old partition family — leave
+    ``unmatched`` unwired for a plain filter, wire it for the gate's data-level
+    branch. Same type on every port (runner stores the whole result dict;
+    consumers read per-port)."""
     meta = _COLLECTION_KINDS[kind]
 
     def _exec(
@@ -1624,33 +2045,14 @@ def _make_filter_executor(
     ) -> dict[str, Any]:
         env = inputs.get("in") or {}
         items = list(env.get(meta["key"]) or [])
-        kept = [it for it in items if _eval_clauses(kind, it, params)]
-        return {"out": _wrap_collection(kind, env, kept)}
-
-    return _exec
-
-
-def _make_partition_executor(
-    kind: str,
-) -> Callable[[NodeContext, dict[str, Any], dict[str, Any]], dict[str, Any]]:
-    """Split one collection into ``matched`` / ``unmatched`` — the gate's missing
-    data-level branch. Two same-typed outputs (runner stores the whole result
-    dict; consumers read per-port)."""
-    meta = _COLLECTION_KINDS[kind]
-
-    def _exec(
-        ctx: NodeContext, inputs: dict[str, Any], params: dict[str, Any]
-    ) -> dict[str, Any]:
-        env = inputs.get("in") or {}
-        items = list(env.get(meta["key"]) or [])
-        matched: list[Any] = []
-        unmatched: list[Any] = []
+        kept: list[Any] = []
+        rejected: list[Any] = []
         for it in items:
-            target = matched if _eval_clauses(kind, it, params) else unmatched
+            target = kept if _eval_clauses(kind, it, params) else rejected
             target.append(it)
         return {
-            "matched": _wrap_collection(kind, env, matched),
-            "unmatched": _wrap_collection(kind, env, unmatched),
+            "out": _wrap_collection(kind, env, kept),
+            "unmatched": _wrap_collection(kind, env, rejected),
         }
 
     return _exec
@@ -1776,8 +2178,7 @@ def _dedup_clips(records: list[dict[str, Any]], gap: float) -> list[dict[str, An
             last_span = (last_span[0], max(last_span[1], span[1]))
             continue
         out.append(rec)
-        # Keep an untimed record but never let its None span clobber the tracker —
-        # otherwise the next overlap check short-circuits and later duplicates leak.
+        # An untimed record must not reset last_span, or later duplicates leak.
         if span is not None:
             last_span = span
     return out
@@ -1825,9 +2226,20 @@ def _make_dedup_executor(
     return _exec
 
 
+# Fields that compare as text in _collection_field; all others coerce to float
+# (numericChoices).
+_TEXT_FIELDS = frozenset(
+    {"category", "severity", "desc", "text", "type", "participant"}
+)
+
+
 def _predicate_params(kind: str) -> list[ParamSpec]:
     """The shared ``{field, op, value}`` clause for filter / partition nodes."""
     meta = _COLLECTION_KINDS[kind]
+    numeric = [f for f in meta["fields"] if f not in _TEXT_FIELDS]
+    # A ``>=`` default on a text field (segments: ``text``) would drop every item.
+    default_op = ">=" if meta["fields"][0] not in _TEXT_FIELDS else "contains"
+    second_clause: dict[str, Any] = {"param": "combine", "not": "off"}
     return [
         {
             "name": "field",
@@ -1835,11 +2247,12 @@ def _predicate_params(kind: str) -> list[ParamSpec]:
             "default": meta["fields"][0],
             "choices": list(meta["fields"]),
             "label": "Field",
+            "numericChoices": numeric,
         },
         {
             "name": "op",
             "type": "enum",
-            "default": ">=",
+            "default": default_op,
             "choices": list(_COLLECTION_OPS),
             "label": "Comparison",
         },
@@ -1849,9 +2262,10 @@ def _predicate_params(kind: str) -> list[ParamSpec]:
             "default": "",
             "label": "Value",
             "required": True,
+            "numericFor": "field",
         },
-        # Optional second clause. "off" keeps the node single-clause; value2 is
-        # deliberately not required so validation stays quiet in that case.
+        # Optional second clause; value2 is not required so validation stays quiet
+        # when "off".
         {
             "name": "combine",
             "type": "enum",
@@ -1865,19 +2279,24 @@ def _predicate_params(kind: str) -> list[ParamSpec]:
             "default": meta["fields"][0],
             "choices": list(meta["fields"]),
             "label": "Field 2",
+            "numericChoices": numeric,
+            "showIf": second_clause,
         },
         {
             "name": "op2",
             "type": "enum",
-            "default": ">=",
+            "default": default_op,
             "choices": list(_COLLECTION_OPS),
             "label": "Comparison 2",
+            "showIf": second_clause,
         },
         {
             "name": "value2",
             "type": "string",
             "default": "",
             "label": "Value 2",
+            "numericFor": "field2",
+            "showIf": second_clause,
         },
     ]
 
@@ -1911,8 +2330,8 @@ def _limit_params(kind: str) -> list[ParamSpec]:
     ]
 
 
-# Wire each declarative NodeType to its executor. ``serialize_catalog`` strips
-# ``execute`` again for the JSON catalog endpoint, so this stays server-internal.
+# Executor per NodeType; ``serialize_catalog`` strips ``execute`` from the JSON
+# catalog.
 _EXECUTORS: dict[
     str, Callable[[NodeContext, dict[str, Any], dict[str, Any]], dict[str, Any]]
 ] = {
@@ -1922,34 +2341,34 @@ _EXECUTORS: dict[
     "time_range": _exec_time_range,
     "transcribe": _exec_transcribe,
     "find_word": _exec_find_word,
+    "transcript_marks": _exec_transcript_marks,
     "transcript_export": _exec_transcript_export,
     "data_export": _exec_data_export,
     "summarize": _exec_summarize,
     "citations": _exec_citations,
     "friction": _exec_friction,
+    "report": _exec_report,
     "multitool": _exec_multitool,
     "highlights": _exec_highlights,
     "make_clips": _exec_make_clips,
     "interval_captures": _exec_interval_captures,
     "build_reel": _exec_build_reel,
+    "post_process": _exec_post_process,
     "timelapse": _exec_timelapse,
     "heatmap": _exec_heatmap,
-    "measure": _exec_measure,
     "timeline_viewer": _exec_timeline_viewer,
+    "gallery_viewer": _exec_gallery_viewer,
     "gate": _exec_gate,
     "gate_collection": _exec_gate_collection,
 }
 
-# The ten per-detector Screenspace nodes share one body via the factory above;
-# the unified ``detect`` node dispatches into the same body by ``detector`` param.
+# Per-detector nodes and the unified ``detect`` node share one body.
 for _ss_tool in _SS_DETECTOR_SPECS:
     _EXECUTORS[f"ss_{_ss_tool}"] = _make_ss_executor(_ss_tool)
 _EXECUTORS["detect"] = _exec_detect
 
-# Collection-algebra control nodes — per-type families, all factory-generated.
-# Registered here (NODE_TYPES + _EXECUTORS together) so the attach loop below
-# wires their ``execute`` like any other node. Category "Collection" groups them
-# apart from measure/gate in the palette.
+# Per-type collection families keep every port exact-typed; registered before
+# the attach loop below.
 for _kind, _meta in _COLLECTION_KINDS.items():
     _T = _meta["port"]
     _name = _meta["label"]
@@ -1959,28 +2378,19 @@ for _kind, _meta in _COLLECTION_KINDS.items():
         "label": f"Filter {_name}",
         "domain": "control",
         "category": "Collection",
-        "description": f"Keep only the {_lname} matching a field/comparison/value test.",
-        "inputs": [{"name": "in", "type": _T}],
-        "outputs": [{"name": "out", "type": _T}],
-        "params": _predicate_params(_kind),
-        "requires": [],
-    }
-    _EXECUTORS[f"filter_{_kind}"] = _make_filter_executor(_kind)
-    NODE_TYPES[f"partition_{_kind}"] = {
-        "id": f"partition_{_kind}",
-        "label": f"Partition {_name}",
-        "domain": "control",
-        "category": "Collection",
-        "description": f"Split {_lname} into matched and unmatched branches by a test.",
+        "description": (
+            f"Keep the {_lname} matching a field/comparison/value test; "
+            "the unmatched output carries the rest."
+        ),
         "inputs": [{"name": "in", "type": _T}],
         "outputs": [
-            {"name": "matched", "type": _T},
+            {"name": "out", "type": _T},
             {"name": "unmatched", "type": _T},
         ],
         "params": _predicate_params(_kind),
         "requires": [],
     }
-    _EXECUTORS[f"partition_{_kind}"] = _make_partition_executor(_kind)
+    _EXECUTORS[f"filter_{_kind}"] = _make_filter_executor(_kind)
     NODE_TYPES[f"merge_{_kind}"] = {
         "id": f"merge_{_kind}",
         "label": f"Merge {_name}",

@@ -10,7 +10,6 @@ the Convergence tab's per-lane display offsets, persisted in the output dir.
 from __future__ import annotations
 
 import math
-from pathlib import Path
 from typing import Any, cast
 
 from flask import Blueprint, request
@@ -18,7 +17,8 @@ from flask import Blueprint, request
 from server_utils import err, ok
 
 import config
-import utils
+import manifest
+import server_utils
 
 overview_bp = Blueprint("overview", __name__)
 
@@ -53,8 +53,7 @@ def _clean_convergence_offsets(raw: object) -> dict[str, dict[str, float]]:
     return cleaned
 
 
-# Registered before register_static_routes so the catch-all /<path:filename>
-# static route can never shadow the API (mirrors the other blueprints).
+# Registered before register_static_routes so the catch-all static route cannot shadow it.
 @overview_bp.route("/api/convergence/offsets")
 def api_convergence_offsets_get():
     """Return persisted per-lane convergence display offsets (seconds, signed).
@@ -67,9 +66,7 @@ def api_convergence_offsets_get():
 
     Response: {"ok": true, "offsets": {"P01": {"sheet": 12.5, "screenspace": 12.5}}}
     """
-    data = utils.load_json_manifest(
-        config.CONVERGENCE_OFFSETS_FILENAME, default={"offsets": {}}
-    )
+    data = manifest.load_manifest_section("convergence", default={})
     raw = data.get("offsets") if isinstance(data, dict) else None
     return ok(offsets=_clean_convergence_offsets(raw))
 
@@ -80,8 +77,8 @@ def api_convergence_offsets_put():
 
     Body: {"offsets": {"P01": {"sheet": 12.5, ...}, ...}}. Unknown sources,
     zeros, and non-finite values are dropped per lane; participants left with
-    no lanes are dropped. When the cleaned dict is empty, the manifest file is
-    deleted so a clean output dir has no leftover empty manifest.
+    no lanes are dropped. When the cleaned dict is empty, the section is
+    removed so a clean output dir has no leftover empty manifest.
     """
     data = request.get_json(silent=True) or {}
     raw = data.get("offsets")
@@ -90,21 +87,11 @@ def api_convergence_offsets_put():
 
     cleaned = _clean_convergence_offsets(raw)
 
-    settings_path = (
-        Path(utils.get_effective_output_dir()) / config.CONVERGENCE_OFFSETS_FILENAME
+    manifest.save_manifest_section(
+        "convergence", {"offsets": cleaned} if cleaned else None
     )
-    if not cleaned:
-        if settings_path.is_file():
-            try:
-                settings_path.unlink()
-            except OSError:
-                pass
-    else:
-        utils.save_json_manifest(
-            config.CONVERGENCE_OFFSETS_FILENAME, {"offsets": cleaned}
-        )
 
     return ok(offsets=cleaned)
 
 
-utils.register_static_routes(overview_bp, "overview.html", icons=True)
+server_utils.register_static_routes(overview_bp, "overview.html", icons=True)

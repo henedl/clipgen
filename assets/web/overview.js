@@ -37,81 +37,16 @@
     trIntakeClusters: [],
     composerCuts: [],         // ../composer/api/manifest cuts (each carries participant)
     activeTab: "metadata",
-    // Bumped after every completed loadAll(). The tabs' staleness snapshots
-    // compare against this — data can only "change" via an actual refetch,
-    // never via length-heuristic false positives.
+    // Bumped after every completed loadAll(); tab staleness snapshots compare against it.
     dataVersion: 0,
   };
   OV.state = state;
 
-  // ---- Shared helpers (lifted from studio.js; bind this page's state) ----
-
-  function parseClipTimestamps(raw, participantId) {
-    var DEFAULT_DUR = CLIPGEN_CONFIG.defaultDuration;
-    var baselineSeconds = 0;
-    if (participantId && state.convergenceBaselines) {
-      baselineSeconds = state.convergenceBaselines[participantId] || 0;
-    }
-    return parseClipSegmentsForCell(raw, baselineSeconds, DEFAULT_DUR);
-  }
-
-  var ROW_FUNCTIONS = {
-    Count: function (row, participants) {
-      var total = 0;
-      for (var j = 0; j < participants.length; j++) {
-        var c = row.cells[participants[j]];
-        if (c && c.valid) total += parseClipTimestamps(c.value, participants[j]).length;
-      }
-      return total;
-    },
-    Unique: function (row, participants) {
-      var count = 0;
-      for (var j = 0; j < participants.length; j++) {
-        var c = row.cells[participants[j]];
-        if (c && c.valid) count++;
-      }
-      return count;
-    },
-  };
-
-  // Cross-referencing: overlapping data from the other sources for a given
-  // participant + time range (same contract as Studio's copy — consumed by
-  // the moved Convergence detail rows).
-  function findOverlappingData(participant, start, end) {
-    var result = { transcriptSnippets: [], screenspaceEvents: [], sheetObservations: [] };
-
-    for (var i = 0; i < state.trIntakeClusters.length; i++) {
-      var tc = state.trIntakeClusters[i];
-      if (tc.participant === participant && tc.start < end && tc.end > start) {
-        result.transcriptSnippets.push({ text: tc.text || tc.label || "", category: tc.category, start: tc.start, end: tc.end });
-      }
-    }
-
-    for (var j = 0; j < state.intakeClusters.length; j++) {
-      var sc = state.intakeClusters[j];
-      if (sc.participant === participant && sc.start < end && sc.end > start) {
-        result.screenspaceEvents.push(sc);
-      }
-    }
-
-    if (state.sheetData && state.sheetData.rows) {
-      for (var k = 0; k < state.sheetData.rows.length; k++) {
-        var row = state.sheetData.rows[k];
-        var cell = row.cells[participant];
-        if (!cell || !cell.valid) continue;
-        var segs = parseClipTimestamps(cell.value, participant);
-        for (var s = 0; s < segs.length; s++) {
-          var segEnd = segs[s].startSeconds + segs[s].duration;
-          if (segs[s].startSeconds < end && segEnd > start) {
-            result.sheetObservations.push(row);
-            break;
-          }
-        }
-      }
-    }
-
-    return result;
-  }
+  // ---- Shared sheet helpers (utils.js), bound to this page's state ----
+  var _xref = createSheetXrefHelpers(function () { return state; });
+  var parseClipTimestamps = _xref.parseClipTimestamps,
+    ROW_FUNCTIONS = _xref.ROW_FUNCTIONS,
+    findOverlappingData = _xref.findOverlappingData;
 
   OV.parseClipTimestamps = parseClipTimestamps;
   OV.ROW_FUNCTIONS = ROW_FUNCTIONS;
@@ -160,8 +95,7 @@
       })
       .catch(function () { state.trIntakeMarks = []; });
 
-    // Composer cuts are one flat array (each cut carries its own participant),
-    // so a single fetch covers every participant's 4th Convergence lane.
+    // Cuts are one flat array carrying participants, so one fetch covers every lane.
     var composerP = apiGet("../composer/api/manifest")
       .then(function (data) {
         state.composerCuts = (data && data.manifest && data.manifest.cuts) || [];
@@ -190,9 +124,7 @@
   OV.refreshData = refreshData;
   OV.buildClusters = buildClusters;
 
-  // Staleness paint. A tab knows whether its view was built against an older
-  // dataVersion; the hub owns the single Refresh button, so the tabs report and
-  // this paints. Replaces the per-tab accent button / banner each used to carry.
+  // Staleness paint: tabs report a stale dataVersion, the hub's single Refresh button shows it.
   function setRefreshStale(stale) {
     var btn = qs("#ovRefresh");
     if (!btn) return;
@@ -203,6 +135,22 @@
   }
 
   OV.setRefreshStale = setRefreshStale;
+
+  // Per-tab staleness: snapshot dataVersion at render; flag Refresh once it moves.
+  function createStalenessTracker(tabState) {
+    function take() {
+      tabState._snapshot = { version: state.dataVersion };
+    }
+    function check() {
+      if (!tabState._snapshot || !tabState.active) return;
+      setRefreshStale(tabState._snapshot.version !== state.dataVersion);
+    }
+    document.addEventListener("visibilitychange", function () {
+      if (!document.hidden && tabState.active) check();
+    });
+    return { take: take, check: check };
+  }
+  OV.createStalenessTracker = createStalenessTracker;
 
   // ---- Tabs ----
 
@@ -237,8 +185,7 @@
   }
 
   function restoreStoredTab() {
-    // /overview/#tab=metadata style deep links (command palette) win over the
-    // stored tab; the hash stays in the URL so reloads keep the choice.
+    // #tab=KEY deep links (command palette) beat the stored tab; the hash persists across reloads.
     var stored = clipgenHashTab() || getStoredUIState("overview").activeTab;
     if (!stored || stored === state.activeTab) return;
     var tabs = qsa(".preview-tab");
@@ -252,6 +199,21 @@
     }
   }
 
+  var TAB_KEYS = ["convergence", "metadata", "reports"];
+
+  // Call a tab satellite's lifecycle hook (e.g. OV.reportsActivate) if the
+  // satellite published it.
+  function tabHook(tab, phase) {
+    var fn = OV[tab + phase];
+    if (fn) fn();
+  }
+
+  // Settings modal + palette hook. syncTab would close the open zone detail without rebuilding badges.
+  function rerenderCrossRefs() {
+    if (OV.convergenceRenderCrossRefs) OV.convergenceRenderCrossRefs();
+  }
+  window.clipgenRerenderCrossRefs = rerenderCrossRefs;
+
   function syncTab(animate) {
     var panels = {
       convergence: qs("#convergencePanel"),
@@ -263,19 +225,14 @@
       if (panels[key]) panels[key].classList.add("hidden");
     }
 
-    if (OV.convergenceDeactivate) OV.convergenceDeactivate();
-    if (OV.metadataDeactivate) OV.metadataDeactivate();
-    if (OV.reportsDeactivate) OV.reportsDeactivate();
+    TAB_KEYS.forEach(function (tab) { tabHook(tab, "Deactivate"); });
 
-    // Drop any paint the outgoing tab asserted; the incoming one re-asserts it
-    // from its own activate path.
+    // Drop the outgoing tab's paint; the incoming one re-asserts from activate.
     setRefreshStale(false);
 
     var activePanel = panels[state.activeTab];
     if (activePanel) activePanel.classList.remove("hidden");
-    if (state.activeTab === "convergence" && OV.convergenceActivate) OV.convergenceActivate();
-    if (state.activeTab === "metadata" && OV.metadataActivate) OV.metadataActivate();
-    if (state.activeTab === "reports" && OV.reportsActivate) OV.reportsActivate();
+    tabHook(state.activeTab, "Activate");
 
     if (activePanel && animate) {
       activePanel.classList.add("tab-slide-enter");
@@ -289,71 +246,44 @@
 
   OV.syncTab = syncTab;
 
-  // Command palette (command-palette.js): Overview registers no TopNav quick
-  // actions, so this adds the tab switchers and the data refresh.
+  // Overview has no TopNav quick actions, so the palette gets tab switchers and refresh here.
   function initCommandPalette() {
     if (!window.ClipgenCommandPalette) return;
     window.ClipgenCommandPalette.setParticipants(function () {
       return (state.sheetData && state.sheetData.participants) || [];
     });
+    var palette = window.ClipgenCommandPalette;
     function tabCommand(tabKey, title, icon) {
-      function tabEl() {
-        return qs('.preview-tab[data-tab="' + tabKey + '"]');
-      }
-      return {
-        id: "overview:tab-" + tabKey,
-        title: title,
-        icon: icon,
-        keywords: "tab show switch",
-        section: "Overview",
-        visible: function () { return !!tabEl(); },
-        run: function () { tabEl().click(); },
-      };
+      return palette.selectorCommand("Overview", "overview:tab-" + tabKey, title, icon,
+        "tab show switch", '.preview-tab[data-tab="' + tabKey + '"]');
     }
     window.ClipgenCommandPalette.register("overview", [
       tabCommand("metadata", "Show Metadata tab", "table-cells"),
       tabCommand("convergence", "Show Convergence tab", "arrows-pointing-in"),
       tabCommand("reports", "Show Reports tab", "document-text"),
-      {
-        id: "overview:refresh",
-        title: "Refresh Overview data",
-        icon: "arrow-path",
-        keywords: "reload fetch update",
-        section: "Overview",
-        visible: function () { return !!qs("#ovRefresh"); },
-        run: function () { qs("#ovRefresh").click(); },
-      },
-      {
-        id: "overview:reset-offsets",
-        title: "Reset convergence offsets",
-        icon: "arrow-uturn-left",
-        keywords: "alignment convergence clear restore per-participant",
-        section: "Overview",
-        // The button (own confirm dialog) exists + is unhidden only on the
-        // Convergence tab once per-participant offsets have been set.
-        visible: function () {
-          var b = qs("#cvResetOffsetsBtn");
-          return !!b && !b.classList.contains("hidden");
-        },
-        run: function () { qs("#cvResetOffsetsBtn").click(); },
-      },
+      palette.buttonCommand("Overview", "overview:refresh", "Refresh Overview data", "arrow-path",
+        "reload fetch update", "ovRefresh", "visible"),
+      // The button only exists unhidden on Convergence once offsets are set.
+      palette.buttonCommand("Overview", "overview:reset-offsets", "Reset convergence offsets",
+        "arrow-uturn-left", "alignment convergence clear restore per-participant",
+        "cvResetOffsetsBtn", "visible"),
     ]);
   }
 
   // ---- Boot ----
 
   document.addEventListener("DOMContentLoaded", function () {
-    // Resolve mask-image for every static [data-icon] element (the subheader
-    // Refresh button); createBtn does this itself for JS-built primitives.
+    // Static [data-icon] elements need mask resolution; createBtn handles JS-built ones.
     applyIconMasksIn(document);
-    // TopNav renders #themeToggle / #settingsBtn synchronously before this
-    // hub loads; wire them here as the other surfaces do (utils.js owns the
-    // theme logic, settings-modal.js the shared modal).
-    initThemeToggle();
-    var settingsBtn = qs("#settingsBtn");
-    if (settingsBtn && typeof window.openSettingsModal === "function") {
-      settingsBtn.addEventListener("click", function () {
-        window.openSettingsModal({});
+    // TopNav renders these buttons before this hub loads; wire them like the other surfaces.
+    if (typeof initThemeToggle === "function") {
+      initThemeToggle();
+    }
+    if (window.wireSettingsButton) {
+      window.wireSettingsButton({
+        onApply: function (applied, settings) {
+          if (applyCrossRefSetting(applied, settings)) rerenderCrossRefs();
+        },
       });
     }
 

@@ -1,8 +1,8 @@
 """Engine tests for the Workflows run engine (M4).
 
 Exercises ``topo_order`` + ``WorkflowRunner`` directly (synchronously, no HTTP),
-using ``config.DEBUGGING`` + a forced-unavailable Ollama so no Whisper / ffmpeg /
-Ollama is needed. The HTTP surface is covered in tests/test_workflows_api.py.
+using ``config.DEBUGGING`` + a forced-unavailable AI server so no Whisper / ffmpeg /
+LLM is needed. The HTTP surface is covered in tests/test_workflows_api.py.
 """
 
 import json
@@ -148,9 +148,9 @@ def test_runner_snapshot_carries_triggered_flag(tmp_path):
 
 def test_runner_executes_chain_to_completion(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "DEBUGGING", True, raising=False)
-    import ollama_client
+    import llm_client
 
-    monkeypatch.setattr(ollama_client, "is_available", lambda: False)
+    monkeypatch.setattr(llm_client, "ensure_server", lambda: False)
 
     runner = _runner(
         tmp_path,
@@ -165,18 +165,21 @@ def test_runner_executes_chain_to_completion(tmp_path, monkeypatch):
         ],
     )
     runner.run()
-    assert runner.status == "completed"
-    assert {n["status"] for n in runner.node_states.values()} == {"completed"}
+    # AI server mocked down: the summary node is degraded, so a resume retries it.
+    assert runner.status == "degraded"
+    assert runner.node_states["s"]["status"] == "degraded"
+    assert "AI server" in runner.node_states["s"]["note"]
+    assert {runner.node_states[n]["status"] for n in ("v", "t")} == {"completed"}
 
 
-# ---- Per-node result sidecars (P5) ----
+# ---- Per-node result sidecars ----
 
 
 def test_runner_writes_node_result_sidecars(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "DEBUGGING", True, raising=False)
-    import ollama_client
+    import llm_client
 
-    monkeypatch.setattr(ollama_client, "is_available", lambda: False)
+    monkeypatch.setattr(llm_client, "ensure_server", lambda: False)
     runner = _runner(
         tmp_path,
         nodes=[
@@ -474,15 +477,64 @@ def test_adapter_is_applied_on_type_mismatch(tmp_path):
     assert "records" in inputs["clips"]  # adapter produced ClipRecords
 
 
+def test_sample_window_bounds_unwired_detector_timerange(tmp_path, monkeypatch):
+    # A sample-window test run injects a bounded timeRange into detectors whose
+    # scan window is unwired; wired windows and non-detector nodes are untouched.
+    seen: dict[str, dict] = {}
+
+    def spy(node_id):
+        def _exec(ctx, inputs, params):
+            seen[node_id] = inputs
+            return {"events": {"events": [], "source": {}, "raw_results": []}}
+
+        return _exec
+
+    monkeypatch.setitem(workflows.NODE_TYPES["detect"], "execute", spy("d"))
+    monkeypatch.setitem(workflows.NODE_TYPES["ss_text"], "execute", spy("s"))
+    monkeypatch.setitem(
+        workflows.NODE_TYPES["time_range"],
+        "execute",
+        lambda ctx, inputs, params: (
+            seen.__setitem__("t", inputs)
+            or {"timeRange": {"ranges": [(5.0, 9.0)], "source": {}}}
+        ),
+    )
+    nodes = [
+        {"id": "t", "type": "time_range", "params": {}},
+        {"id": "d", "type": "detect", "params": {}},
+        {"id": "s", "type": "ss_text", "params": {"search_string": "x"}},
+    ]
+    edges = [
+        {
+            "id": "e1",
+            "from": "t",
+            "fromPort": "timeRange",
+            "to": "s",
+            "toPort": "timeRange",
+        }
+    ]
+    runner = workflows.WorkflowRunner(
+        "run_test",
+        {"id": "bp", "nodes": nodes, "edges": edges},
+        _ctx(tmp_path),
+        sample_window=30,
+    )
+    runner.run()
+    assert seen["d"]["timeRange"]["ranges"] == [(0.0, 30.0)]  # unwired → bounded
+    assert seen["s"]["timeRange"]["ranges"] == [(5.0, 9.0)]  # wired wins
+    assert "timeRange" not in seen["t"]  # non-detector untouched
+    assert runner.snapshot()["sampleWindow"] == 30
+
+
 def test_executor_note_surfaces_and_is_stripped(tmp_path, monkeypatch):
     # A node that completes with the reserved __note__ key surfaces it as the
     # node's `note` (a non-fatal degraded outcome, not a FAILED error) and never
     # stores it as a result port.
-    nodes = [{"id": "m", "type": "measure", "params": {}}]
+    nodes = [{"id": "m", "type": "gate", "params": {}}]
     monkeypatch.setitem(
-        workflows.NODE_TYPES["measure"],
+        workflows.NODE_TYPES["gate"],
         "execute",
-        lambda ctx, inputs, params: {"value": 0, "__note__": "nothing measured"},
+        lambda ctx, inputs, params: {"pass": False, "__note__": "nothing measured"},
     )
     runner = _runner(tmp_path, nodes, [])
     runner.run()
@@ -681,16 +733,29 @@ _T_SIDECAR = {
 }
 
 
+def _stamped(bp, sidecars, sample_window=0.0):
+    """Sidecars as a real run wrote them: with the node's ``__exec__`` stamp."""
+    by_id = {n["id"]: n for n in bp["nodes"]}
+    return {
+        nid: {
+            **payload,
+            "__exec__": workflows.node_exec_definition(
+                by_id[nid], bp["edges"], sample_window
+            ),
+        }
+        for nid, payload in sidecars.items()
+    }
+
+
 def test_resume_plan_reruns_failed_node_and_descendants():
     prior = {
         "v": {"status": "completed"},
         "t": {"status": "failed"},
         "s": {"status": "completed"},
     }
-    sidecars = {"v": _V_SIDECAR, "t": _T_SIDECAR}
-    seeds, _notes = workflows.compute_resume_plan(
-        _chain_blueprint(), prior, sidecars.get
-    )
+    bp = _chain_blueprint()
+    sidecars = _stamped(bp, {"v": _V_SIDECAR, "t": _T_SIDECAR})
+    seeds, _notes = workflows.compute_resume_plan(bp, prior, sidecars.get)
     # Only the pre-failure ancestor is reused; the failed node and everything
     # downstream (even previously-completed) re-run with fresh inputs.
     assert set(seeds) == {"v"}
@@ -710,9 +775,95 @@ def test_resume_plan_changed_node_type_invalidates_seed():
     prior = {nid: {"status": "completed"} for nid in ("v", "t", "s")}
     # The sidecar says "t" was a transcribe run, but the blueprint now has a
     # different type under that id — its seed (and its descendants) re-run.
-    sidecars = {"v": _V_SIDECAR, "t": {**_T_SIDECAR, "__type__": "find_word"}}
+    sidecars = _stamped(bp, {"v": _V_SIDECAR, "t": _T_SIDECAR})
+    sidecars["t"]["__type__"] = "find_word"
     seeds, _notes = workflows.compute_resume_plan(bp, prior, sidecars.get)
     assert set(seeds) == {"v"}
+
+
+def test_resume_plan_changed_params_invalidate_node_and_descendants():
+    bp = {
+        "id": "bp",
+        "nodes": [
+            {"id": "range", "type": "time_range", "params": {"ranges": "0:01-0:02"}},
+            {"id": "v", "type": "video_source", "params": {"participant": "P01"}},
+        ],
+        "edges": [],
+    }
+    prior = {"range": {"status": "completed"}, "v": {"status": "completed"}}
+    sidecars = _stamped(
+        bp,
+        {
+            "range": {
+                "__type__": "time_range",
+                "timeRange": {"ranges": [[1.0, 2.0]], "source": {}},
+            },
+            "v": _V_SIDECAR,
+        },
+    )
+    # Unchanged graph: both reused.
+    seeds, _ = workflows.compute_resume_plan(bp, prior, sidecars.get)
+    assert set(seeds) == {"range", "v"}
+    # Edited range: its stale result must not come back.
+    bp["nodes"][0]["params"] = {"ranges": "0:10-0:20"}
+    seeds, notes = workflows.compute_resume_plan(bp, prior, sidecars.get)
+    assert set(seeds) == {"v"}
+    assert any("range" in n for n in notes)
+    # A different sample window is a different result too.
+    bp["nodes"][0]["params"] = {"ranges": "0:01-0:02"}
+    seeds, _ = workflows.compute_resume_plan(bp, prior, sidecars.get, 30.0)
+    assert set(seeds) == set()
+
+
+def test_resume_plan_rewired_or_muted_node_reruns():
+    bp = _chain_blueprint()
+    prior = {nid: {"status": "completed"} for nid in ("v", "t", "s")}
+    sidecars = _stamped(bp, {"v": _V_SIDECAR, "t": _T_SIDECAR})
+    # Rewire t's input to a new source node: t (and s) re-run, v is kept.
+    bp["nodes"].append(
+        {"id": "v2", "type": "video_source", "params": {"participant": "P02"}}
+    )
+    bp["edges"][0] = {"from": "v2", "fromPort": "video", "to": "t", "toPort": "video"}
+    seeds, _ = workflows.compute_resume_plan(bp, prior, sidecars.get)
+    assert set(seeds) == {"v"}
+    # Muting a completed node drops its seed and its descendants'.
+    bp = _chain_blueprint()
+    bp["nodes"][1]["disabled"] = True
+    seeds, _ = workflows.compute_resume_plan(bp, prior, sidecars.get)
+    assert set(seeds) == {"v"}
+
+
+def test_resumed_runner_retries_a_degraded_node(tmp_path, monkeypatch):
+    """An AI-server outage is degraded, so the resume re-executes the node."""
+    monkeypatch.setattr(config, "DEBUGGING", True, raising=False)
+    import llm_client
+
+    calls = {"n": 0}
+
+    def _ensure():
+        calls["n"] += 1
+        return calls["n"] > 1  # down on the first run, up on the resume
+
+    monkeypatch.setattr(llm_client, "ensure_server", _ensure)
+    bp = _chain_blueprint()
+    first = workflows.WorkflowRunner("run_first", bp, _ctx(tmp_path))
+    first.run()
+    assert first.node_states["s"]["status"] == "degraded"
+    results_dir = workflows.run_results_dir(tmp_path, "run_first")
+
+    def _load(nid):
+        path = results_dir / f"{nid}.json"
+        return json.loads(path.read_text()) if path.exists() else None
+
+    seeds, _ = workflows.compute_resume_plan(bp, first.node_states, _load)
+    assert set(seeds) == {"v", "t"}
+    second = workflows.WorkflowRunner(
+        "run_second", bp, _ctx(tmp_path), seed_results=seeds
+    )
+    second.run()
+    assert calls["n"] == 2
+    assert second.node_states["s"]["status"] == "completed"
+    assert second.status == "completed"
 
 
 def test_resume_plan_cliprecords_producer_always_reruns():
@@ -752,11 +903,14 @@ def test_resume_plan_heatmap_pulls_events_ancestry_through_filter():
         "h": {"status": "failed"},
     }
     ev = {"__type__": "detect", "events": {"events": [], "source": {}}}
-    sidecars = {
-        "v": _V_SIDECAR,
-        "d": ev,
-        "f": {**ev, "__type__": "filter_events", "out": ev["events"]},
-    }
+    sidecars = _stamped(
+        bp,
+        {
+            "v": _V_SIDECAR,
+            "d": ev,
+            "f": {**ev, "__type__": "filter_events", "out": ev["events"]},
+        },
+    )
     sidecars["f"].pop("events", None)
     seeds, _notes = workflows.compute_resume_plan(bp, prior, sidecars.get)
     # Sidecars project out raw_results, which the heatmap consumes — so its
@@ -765,9 +919,8 @@ def test_resume_plan_heatmap_pulls_events_ancestry_through_filter():
     assert set(seeds) == {"v"}
 
 
-def test_seeded_node_survives_skipped_parent(tmp_path):
-    # Resume semantics: a seed for a completed node is authoritative even when
-    # its (re-running) parent is muted/skipped in this run.
+def test_seed_never_bypasses_a_muted_parent(tmp_path):
+    # A muted parent changed the graph: the seeded child skips instead of replaying.
     runner = workflows.WorkflowRunner(
         "run_seed",
         {
@@ -796,10 +949,32 @@ def test_seeded_node_survives_skipped_parent(tmp_path):
     )
     runner.run()
     assert runner.node_states["t"]["status"] == "skipped"
-    # Without the seed-before-skip ordering this would be "skipped" too.
-    assert runner.node_states["s"]["status"] == "completed"
-    assert runner.node_states["s"]["note"] == "Reused from run run_prior"
+    assert runner.node_states["s"]["status"] == "skipped"
+    assert "s" not in runner._results
     assert runner.status == "completed"
+
+
+def test_seed_never_bypasses_a_closed_gate(tmp_path):
+    """Batch precompute seeds must still honour a gate that says no."""
+    runner = workflows.WorkflowRunner(
+        "run_seed_gate",
+        {
+            "id": "bp",
+            "nodes": [
+                {"id": "g", "type": "gate_collection", "params": {"threshold": 1}},
+                {"id": "sel", "type": "sheet_selection", "params": {}},
+            ],
+            "edges": [
+                {"from": "g", "fromPort": "pass", "to": "sel", "toPort": "__gate__"}
+            ],
+        },
+        _ctx(tmp_path),
+        seed_results={"sel": {"clips": []}},
+    )
+    runner.run()
+    assert runner.node_states["g"]["status"] == "completed"
+    assert runner.node_states["sel"]["status"] == "skipped"
+    assert "sel" not in runner._results
 
 
 def test_seeded_node_reports_a_failed_sidecar_write_as_degraded(tmp_path, monkeypatch):
@@ -855,3 +1030,15 @@ def test_seeded_node_with_no_sidecar_payload_is_not_advertised(tmp_path, monkeyp
     assert runner.node_states["s"]["status"] == "completed"
     assert runner.status == workflows.RUN_STATUS_COMPLETED
     assert runner.snapshot()["nodeStates"]["s"]["hasResult"] is False
+
+
+def test_unwired_executors_fail_loudly(tmp_path, monkeypatch):
+    """Importing the runner without the facade must not fail as a bare KeyError."""
+    stripped = {
+        key: {k: v for k, v in spec.items() if k != "execute"}
+        for key, spec in workflows_runner.NODE_TYPES.items()
+    }
+    monkeypatch.setattr(workflows_runner, "NODE_TYPES", stripped)
+    runner = _runner(tmp_path, [], [])
+    with pytest.raises(RuntimeError, match="import workflows"):
+        runner.run()

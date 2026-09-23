@@ -7,7 +7,7 @@
  *   - Transcription warmup: a single `tryPostTranscriptionWarmup()` post that
  *     asks the backend to preload the Whisper model. `_transcriptionWarmupPosted`
  *     guards it so we never double-post per page load.
- *   - Summary / citations: Ollama-generated; `_summaryPoller` and
+ *   - Summary / citations: LLM-generated; `_summaryPoller` and
  *     `_citationsPoller` (createPoller handles) poll the backend until the
  *     result lands or the user navigates away.
  */
@@ -17,19 +17,32 @@
 
   var state = {
     participants: [],
+    // "<pid>/<agent>" -> the failure reason already toasted for that run.
+    agentErrorsSeen: {},
     selectedParticipant: null,
     segments: [],
+    // {enabled, labels, count} from api/transcript; null until loaded.
+    speakers: null,
+    // False when the bundled speaker model is missing; the pill switch disables.
+    speakerModel: true,
     corrections: [],
+    knownTerms: [],
     tasks: [],
+    // Task id -> { at, progress } for cancels in flight; server still reports "running".
+    cancellingTasks: {},
+    // Transcribe-range markers in global-timeline seconds; null = unset. Video satellite owns.
+    inMarker: null,
+    outMarker: null,
     searchQuery: "",
     searchResults: null,
     activeSegmentIndex: -1,
     editingTextEl: null,
-    pollPoller: null,
     lastMarkCategory: "bookmark",
     streamingParticipant: null,
     ssEvents: [],
     ssEventsLoaded: false,
+    ssEventsVersion: null, // events_version cursor; unchanged ticks skip the payload
+    sheetVersion: null, // sheet_version cursor, same idea for ../studio/api/sheet
     sheetRows: [],
     sheetParticipants: [],
     sheetLoaded: false,
@@ -38,54 +51,33 @@
     xrefPoller: null,
     xrefEligible: false,
     xrefIndex: { eventsByParticipant: {}, sheetByParticipant: {} },
-    tooltipsEnabled: true,
     summaryEditing: false,
     summaryText: "",
     summaryCitations: null,
     citationsGenerating: false,
     activeTab: "summary",
     frictionData: null,
-    // Which participant frictionData belongs to. loadFriction blanks the pane
-    // only when this changes, so a same-participant refetch mid-run keeps the
-    // deterministic scores rather than emptying the tab until the agent lands.
+    // Owner of frictionData; loadFriction blanks the pane only when this changes.
     frictionPid: null,
     frictionBySegId: {},
     frictionGenerating: false,
-    // Server-recorded friction run start (epoch ms) so the elapsed clock
-    // survives page navigation; null while idle or for a just-clicked run.
+    // Server-recorded run start (epoch ms); survives navigation. Null while idle.
     frictionStartedAt: null,
-    // "off" | "highlight" | "isolate" — what the friction filter does to
-    // #segmentList. Persisted; owned by transcripts-agents.js, read here and by
-    // the video satellite's timeline band.
+    // "off" | "highlight" | "isolate". Persisted; owned by transcripts-agents.js.
     frictionMode: "off",
-    // Score band the filter keeps, both ends draggable on the histogram. Opens
-    // fully open (every segment the scorer flagged) — the histogram makes the
-    // distribution visible, so narrowing from everything beats opening
-    // pre-filtered to something the user can't see.
+    // Score band the filter keeps; starts fully open so the histogram shows everything.
     frictionMin: 0,
     frictionMax: 1,
-    // Two independent filters, one per evidence source — the keyword scorer
-    // labels segments, the agent labels its own moments, and the two never
-    // agree on a line. Sharing one dict meant hiding a category on one side
-    // silently hid it on the other. Both persist; frictionMomentFilter also
-    // carries the "other" bucket for categories the model invented.
+    // Separate filters per evidence source (scorer vs agent); both persist.
     frictionCategoryFilter: null,
     frictionMomentFilter: null,
-    // Derived from (threshold, categoryFilter, frictionData, segments) by
-    // _recomputeFrictionMatches. The single source every friction consumer reads:
-    // segment id -> score for matching segments, the visible moments resolved to
-    // segment indices, and segment id -> 1-based moment number for cited rows.
+    // Outputs of _recomputeFrictionMatches; every friction consumer reads these.
     frictionMatchBySegId: {},
-    // The union both evidence sources contribute to, keyed to the strongest
-    // score on each line. What the timeline density band draws and hit-tests —
-    // an AI-cited line scores 0 with the keyword scorer, so the match map alone
-    // left the agent's moments off the band entirely.
+    // Union of both sources, strongest score per line; the timeline band draws this.
     frictionBandBySegId: {},
     frictionVisibleMoments: [],
     frictionCitedBySegId: {},
-    // Moments that passed the filter but cite segment ids absent from
-    // state.segments (transcript edited since the run). Counted alongside the
-    // three maps above so the jump strip can say *why* it came out empty.
+    // Filtered moments citing segment ids no longer in state.segments.
     frictionUnsourcedMoments: 0,
     frictionMomentIndex: -1,
     transcribePrewarm: "queue_open",
@@ -93,8 +85,7 @@
     modelFailSince: 0,
     videoPlaying: false,
     videoMuted: false,
-    // Audio-track layout for the current participant (from /api/audio-info);
-    // feeds the volume popover's detected-track caption + per-track mixer.
+    // From /api/audio-info; feeds the volume popover's track caption and mixer.
     audioTracks: [],
     audioPanel: null, // ClipgenVideoControls audio-popover controller
     videoPlaybackRate: 1,
@@ -102,34 +93,20 @@
     pipActive: false,
     pipEnabled: true,
     videoCollapsed: false,
-    // Lazily-built cache of .segment-row elements (invalidated on re-render);
-    // shared by the segments editor (hub) and the video satellite's playhead
-    // highlight / marker-click. frictionTooltipShown coordinates the shared
-    // #trTooltip between the timeline-canvas hover (video) and the hot-segment
-    // friction tooltip (agents), so neither clobbers the other.
+    // Lazy .segment-row cache, invalidated on re-render. frictionTooltipShown arbitrates #trTooltip.
     cachedSegmentRows: null,
     frictionTooltipShown: false,
-    // Bumped on every participant switch so per-participant fetches that resolve
-    // late (loadTranscript, loadSummary, summary/citations/friction polls — now
-    // in the agents satellite) can detect they're stale and bail before
-    // clobbering the active participant's UI.
+    // Bumped per participant switch; late-resolving fetches compare and bail.
     participantReqVer: 0,
-    // Keyboard cursor into the open participant-options dropdown (-1 = none);
-    // see pillNav* in transcripts-pills.js.
+    // Keyboard cursor into the participant-options dropdown (-1 = none); see pillNav*.
     pillOptionsCursor: -1,
   };
 
   var _transcriptionWarmupPosted = false;
-  // Prewarm never downloads silently: when the model isn't cached we confirm
-  // the download with the user. _prewarmDownloadPrompting guards against
-  // double-prompting; _prewarmDeclinedModel records the specific model the user
-  // declined so we stop re-asking for it — but switching to a different model
-  // (or changing TRANSCRIBE_MODEL in settings) still gets its own prompt. The
-  // model still loads on demand, with confirmation, at transcribe time.
+  // Prewarm confirms downloads; a declined model is not re-asked until it changes.
   var _prewarmDownloadPrompting = false;
   var _prewarmDeclinedModel = null;
-  // Last-known TRANSCRIBE_MODEL, so a settings change can reset the prewarm
-  // guards for the new model. Seeded once from the model-status hint.
+  // Last-known TRANSCRIBE_MODEL; a change resets the prewarm guards.
   var _lastTranscribeModel = null;
   var _modelHintPoller = null;
   var _hadActiveTranscriptionLastPoll = false;
@@ -157,12 +134,9 @@
 
   function startXrefPolling() {
     if (!state.xrefEligible || state.xrefPoller) return;
-    // Re-arm the sheet leg: this also runs on tab focus, and a spreadsheet may
-    // have been opened from another tab since we last looked.
+    // Re-arm the sheet leg; a sheet may have opened from another tab since.
     _sheetXrefIdle = false;
-    // createPoller runs loadCrossRefData once immediately (runImmediately
-    // default), then every 30s.
-    state.xrefPoller = createPoller(loadCrossRefData, 30000);
+    state.xrefPoller = createPoller(loadCrossRefData, 30000, { label: "transcripts.xref" });
     state.xrefPoller.start();
   }
 
@@ -173,9 +147,7 @@
     }
   }
 
-  // A genuinely unreachable sibling tool (network error or non-2xx) flips a
-  // per-source flag so the status tooltip can say cross-references are missing,
-  // rather than the badges silently never appearing. A successful poll clears it.
+  // Per-source unreachable flag for the status tooltip; a good poll clears it.
   function _markXrefSource(source, failed) {
     var prev = !!(state.xrefErrors && (state.xrefErrors.screenspace || state.xrefErrors.studio));
     if (!state.xrefErrors) state.xrefErrors = { screenspace: false, studio: false };
@@ -189,63 +161,67 @@
     updateStatusIndicator();
   }
 
-  // With no spreadsheet open, /studio/api/sheet answers {ok, sheet_loaded: false}
-  // with no rows — nothing this page can index — so stop asking after the first
-  // such answer. Cleared on tab focus (see startXrefPolling's resume): a sheet
-  // opened from another tab reloads only that document, not this one. The first
-  // tick always runs, which matters because this handler is the page's only
-  // caller of clipgenApplyConfig.
+  // Set after sheet_loaded: false; stops polling the sheet until tab focus re-arms.
   var _sheetXrefIdle = false;
 
+  // The config _buildSheetIndex parses with; a change invalidates the index.
+  function _sheetParseConfigKey() {
+    return JSON.stringify([
+      CLIPGEN_CONFIG.defaultDuration,
+      CLIPGEN_CONFIG.annotationKeyphrases,
+      CLIPGEN_CONFIG.ignoredTimestampTokens,
+    ]);
+  }
+
+  // Both legs echo a version cursor; an unchanged tick skips payload and index rebuild.
   function loadCrossRefData() {
-    fetch("../screenspace/api/events?excluded=false")
-      .then(function (r) {
-        if (!r.ok) throw new Error("HTTP " + r.status);
-        return r.json();
-      })
+    var eventsUrl = "../screenspace/api/events?excluded=false";
+    if (state.ssEventsVersion != null) eventsUrl += "&events_version=" + state.ssEventsVersion;
+    apiGet(eventsUrl)
       .then(function (data) {
         _markXrefSource("screenspace", false);
-        if (data.ok) {
-          state.ssEvents = data.events || [];
-          state.ssEventsLoaded = true;
-          _buildEventsIndex();
-        }
+        if (!data.ok) return;
+        if (data.events_version != null) state.ssEventsVersion = data.events_version;
+        if (data.events_unchanged) return;
+        state.ssEvents = data.events || [];
+        state.ssEventsLoaded = true;
+        _buildEventsIndex();
       })
       .catch(function () { _markXrefSource("screenspace", true); });
 
     if (_sheetXrefIdle) return;
-    fetch("../studio/api/sheet")
-      .then(function (r) {
-        if (!r.ok) throw new Error("HTTP " + r.status);
-        return r.json();
-      })
+    var sheetUrl = "../studio/api/sheet";
+    if (state.sheetVersion != null) sheetUrl += "?sheet_version=" + state.sheetVersion;
+    apiGet(sheetUrl)
       .then(function (data) {
         _markXrefSource("studio", false);
         if (data.ok && data.sheet_loaded === false) _sheetXrefIdle = true;
-        if (data.ok) {
-          clipgenApplyConfig(data.config);
-          state.sheetRows = data.rows || [];
-          state.sheetParticipants = data.participants || [];
-          state.sheetLoaded = true;
-          _buildSheetIndex();
+        if (!data.ok) return;
+        var parseBefore = _sheetParseConfigKey();
+        clipgenApplyConfig(data.config);
+        if (data.sheet_version != null) state.sheetVersion = data.sheet_version;
+        if (data.sheet_unchanged) {
+          // Same rows, new parse rules: the index is stale even though the sheet is not.
+          if (state.sheetLoaded && _sheetParseConfigKey() !== parseBefore) _buildSheetIndex();
+          return;
         }
+        state.sheetRows = data.rows || [];
+        state.sheetParticipants = data.participants || [];
+        state.sheetLoaded = true;
+        _buildSheetIndex();
       })
       .catch(function () { _markXrefSource("studio", true); });
   }
 
   function parseSheetTimestamps(raw) {
-    // Cross-reference search; baselines are not applied here so timestamps
-    // are interpreted in their relative form (MM:SS for 2-part).
+    // No baseline applied; timestamps stay relative (MM:SS for 2-part).
     var segs = parseClipSegmentsForCell(raw, 0, CLIPGEN_CONFIG.defaultDuration);
     return segs.map(function (s) {
       return { start: s.startSeconds, duration: s.duration };
     });
   }
 
-  // Per-participant indexes keyed on start time. Rebuilt when loadCrossRefData
-  // receives fresh data, so findOverlapsForSearch can binary-search instead of
-  // linearly scanning ssEvents / sheetRows (and re-parsing sheet timestamps)
-  // on every rendered segment.
+  // Per-participant indexes sorted by start so findOverlapsForSearch can binary-search.
 
   function _buildEventsIndex() {
     var byP = {};
@@ -289,8 +265,7 @@
     state.xrefIndex.sheetByParticipant = byP;
   }
 
-  // Binary search: return the first index where arr[i].key >= value, using the
-  // provided key function.
+  // First index where keyFn(arr[i]) >= value.
   function _lowerBound(arr, value, keyFn) {
     var lo = 0;
     var hi = arr.length;
@@ -307,8 +282,7 @@
 
     var events = state.xrefIndex.eventsByParticipant[participant];
     if (events && events.length > 0) {
-      // Candidates are entries where `in < end`. Since events are sorted by
-      // `in`, lower-bound on `end` gives us the exclusive upper cursor.
+      // Sorted by `in`, so lower-bound on `end` is the exclusive upper cursor.
       var upper = _lowerBound(events, end, function (e) { return e.in; });
       for (var i = 0; i < upper; i++) {
         if (events[i].out > start) result.screenspaceEvents.push(events[i].ev);
@@ -318,9 +292,7 @@
     var segs = state.xrefIndex.sheetByParticipant[participant];
     if (segs && segs.length > 0) {
       var upper2 = _lowerBound(segs, end, function (s) { return s.start; });
-      // Preserve the original "first observation per row" behavior by de-duping
-      // on rowIdx. Row-iteration order matched sheet row order before; replicate
-      // that by collecting matches and sorting by rowIdx.
+      // One observation per row, in sheet row order.
       var seenRow = {};
       var matches = [];
       for (var m = 0; m < upper2; m++) {
@@ -355,11 +327,9 @@
   function applyTranscriptionModelHint(data) {
     if (!data || !data.ok) return;
     state.modelStatus = data;
-    // Seed the change-detector once; thereafter only settings saves update it,
-    // so a poll landing mid-save can't mask a model change.
+    // Seed once; only settings saves update it afterwards.
     if (data.model && _lastTranscribeModel === null) _lastTranscribeModel = data.model;
-    // Track how long we've been in an apparent "failed to load" state, so
-    // the indicator doesn't flash red on cold load before the first response.
+    // Time the failed-looking state so cold load doesn't flash red.
     var looksFailed = !data.loaded && !data.warming && data.prewarm !== "off";
     if (looksFailed) {
       if (state.modelFailSince === 0) state.modelFailSince = Date.now();
@@ -377,13 +347,35 @@
     var latest = null;
     for (var i = 0; i < state.tasks.length; i++) {
       var t = state.tasks[i];
-      if (t.participant !== pid) continue;
+      if (t.participant !== pid || _isSpeakerTask(t)) continue;
       // Priority: running > queued > failed > completed/cancelled > stale
       if (!latest) { latest = t; continue; }
       var order = { running: 5, queued: 4, failed: 3, completed: 2, cancelled: 1 };
       if ((order[t.status] || 0) > (order[latest.status] || 0)) latest = t;
     }
     return latest;
+  }
+
+  // Diarization rides the same task list; streaming and ETA paths must skip it.
+  function _isSpeakerTask(t) {
+    return !!t && t.kind === "speakers";
+  }
+
+  function _speakerTaskForSelected() {
+    var pid = state.selectedParticipant;
+    if (!pid) return null;
+    var latest = null;
+    for (var i = 0; i < state.tasks.length; i++) {
+      var t = state.tasks[i];
+      if (t.participant !== pid || !_isSpeakerTask(t)) continue;
+      if (!latest || t.created_at > latest.created_at) latest = t;
+    }
+    return latest;
+  }
+
+  // Every surface that words task progress asks this, so they agree.
+  function _cancelPending(task) {
+    return !!(task && state.cancellingTasks[task.id]);
   }
 
   function _selectedParticipantRow() {
@@ -418,12 +410,23 @@
   function computeIndicatorState() {
     var pid = state.selectedParticipant;
     var task = _taskForSelectedParticipant();
+    var spk = _speakerTaskForSelected();
     var row = _selectedParticipantRow();
     var cls = "status-indicator--ready";
     var taskLine;
 
     if (!pid) {
       taskLine = "No participant selected";
+    } else if (_cancelPending(task)) {
+      // Still --working: the worker is winding down.
+      cls = "status-indicator--working";
+      taskLine = pid + ": cancelling…";
+    } else if (task && task.status === "running" && task.phase === "loading_model") {
+      cls = "status-indicator--working";
+      taskLine = pid + ": loading transcription model\u2026";
+    } else if (task && task.status === "running" && task.phase === "diarizing") {
+      cls = "status-indicator--working";
+      taskLine = pid + ": detecting speakers\u2026 " + Math.round((task.progress || 0) * 100) + "%";
     } else if (task && task.status === "running") {
       cls = "status-indicator--working";
       var pct = Math.round((task.progress || 0) * 100);
@@ -434,6 +437,15 @@
     } else if (task && task.status === "failed") {
       cls = "status-indicator--error";
       taskLine = pid + ": transcription failed" + (task.error ? " (" + task.error + ")" : "");
+    } else if (spk && spk.status === "running") {
+      cls = "status-indicator--working";
+      taskLine = pid + ": detecting speakers\u2026 " + Math.round((spk.progress || 0) * 100) + "%";
+    } else if (spk && spk.status === "queued") {
+      cls = "status-indicator--working";
+      taskLine = pid + ": speaker detection queued";
+    } else if (spk && spk.status === "failed" && speakersOn()) {
+      cls = "status-indicator--error";
+      taskLine = pid + ": speaker detection failed" + (spk.error ? " (" + spk.error + ")" : "");
     } else if (row && row.has_transcript) {
       taskLine = pid + ": " + (row.segment_count || 0) + " segments";
       if (row.has_stale_artifacts) taskLine += " \u00B7 artifacts outdated";
@@ -443,8 +455,7 @@
       taskLine = pid + ": no source video";
     }
 
-    // Model failure overrides non-task-active states (keep working class if a
-    // task is currently running — the user can see the task is progressing).
+    // Model failure overrides every state except an active task.
     if (cls !== "status-indicator--working" && _modelHasFailed()) {
       cls = "status-indicator--error";
     }
@@ -488,6 +499,15 @@
     updateStatusIndicator();
   }
 
+  // Repaint task wording now, without waiting for the poll. Keep out of _txEtaTicker.
+  function refreshTranscribeWording() {
+    updateStatusIndicator();
+    var task = _taskForSelectedParticipant();
+    _setTranscriptEmptyText(task);
+    var txt = document.querySelector("#segmentList .streaming-text");
+    if (txt && task) txt.textContent = _streamingTextStr(task.progress || 0);
+  }
+
   function refreshTranscriptionModelHintOnce() {
     apiGet("api/transcribe/model-status")
       .then(function (data) {
@@ -503,11 +523,7 @@
     }
   }
 
-  // Forget which Whisper downloads the user has agreed to and refresh the
-  // models cache. Call when a download attempt has concluded (transcription
-  // finished, or a warmup load loaded/failed) so the next gate re-reads real
-  // cache state — re-prompting for a model whose download failed, staying
-  // quiet for one that succeeded. Never call mid-download (it would re-prompt).
+  // Call once a download attempt has concluded; never mid-download (would re-prompt).
   function _forgetWhisperDownloadAgreements() {
     _whisperDownloadConfirmed = {};
     _trModelsCache = null;
@@ -533,17 +549,14 @@
             return;
           }
           if (!data.warming) {
-            // Warmup ended without loading (failed/idle) — let the next attempt
-            // re-confirm rather than silently re-downloading.
+            // Warmup ended without loading; the next attempt re-confirms.
             stopModelHintPoll();
             _forgetWhisperDownloadAgreements();
           }
         })
         .catch(function () {});
     };
-    // createPoller runs poll() once immediately (runImmediately default), then
-    // every 1.5s.
-    _modelHintPoller = createPoller(poll, 1500);
+    _modelHintPoller = createPoller(poll, 1500, { label: "transcripts.modelHint" });
     _modelHintPoller.start();
   }
 
@@ -553,15 +566,7 @@
     tryPostTranscriptionWarmup();
   }
 
-  // Ask the backend to preload the Whisper model. Idempotent per page load
-  // via `_transcriptionWarmupPosted`; we reset the flag whenever the post
-  // didn't actually lead to a load (skipped / error / no-op response) so a
-  // later trigger (e.g. pill hover) can retry. Five response branches:
-  //   skipped         — backend declined (e.g. no GPU policy met); keep flag
-  //                     down so a later hover can re-prompt.
-  //   already_loaded  — model is in memory; nothing to poll.
-  //   started / warming — kick off the model-hint poller until it finishes.
-  //   !ok / catch     — treat as transient; clear flag for retry.
+  // Preload the Whisper model once per page load; the flag resets unless a load began.
   function tryPostTranscriptionWarmup() {
     if (_transcriptionWarmupPosted) return;
     if (state.transcribePrewarm === "off") return;
@@ -597,11 +602,7 @@
       });
   }
 
-  // Prewarm wanted to load a model that isn't downloaded yet. We never
-  // download silently — confirm with the user first (once per session). On
-  // confirm, re-post warmup with force=true so the backend proceeds; on
-  // decline, leave the warmup flag set so we stop re-posting/re-prompting
-  // (the model still loads, with confirmation, at transcribe time).
+  // Confirm before downloading; confirm re-posts with force=true, decline stops re-asking.
   function _confirmPrewarmDownload(data) {
     if (_prewarmDownloadPrompting) return;
     if (_prewarmDeclinedModel === data.model) {
@@ -623,8 +624,7 @@
         refreshTranscriptionModelHintOnce();
         return;
       }
-      // Agreed once — don't re-prompt at transcribe time before the download
-      // completes (the models cache still reports it as not cached).
+      // Skip the transcribe-time prompt while this download is still running.
       if (data.model) _whisperDownloadConfirmed[data.model] = true;
       apiPost("api/transcribe/warmup", { force: true })
         .then(function (d) {
@@ -648,20 +648,41 @@
     });
   }
 
-  // One-shot #P07 deep-link guard: the hash must not re-hijack selection on
-  // later participant-list refreshes after the user has moved on.
+  // The #P07 deep link applies once; later refreshes must not re-hijack selection.
   var _hashPidApplied = false;
 
-  // The pill row and the transcript pane both ship placeholders (skeleton pills,
-  // a hidden #transcriptEmpty) that only the first successful render replaces.
-  // If that render never happens the page shimmers forever and the transcript
-  // pane stays blank, which reads as "still loading" rather than "unreachable" —
-  // so a failed *boot* fetch has to fall back to the real empty states. A later
-  // refresh failing is harmless: the already-rendered list stays put.
+  // A failed boot fetch must replace the skeleton placeholders with real empty states.
   function _clearBootPlaceholders() {
     if (state.participants.length) return;
     renderPills();
     renderEmptyState();
+  }
+
+  // Toast failed AI runs for every participant, deduped per pid/agent until cleared.
+  function _reportAgentErrors(participants) {
+    var live = {};
+    for (var i = 0; i < participants.length; i++) {
+      var pid = participants[i].id;
+      var errors = participants[i].agent_errors || {};
+      for (var agent in errors) {
+        if (!Object.prototype.hasOwnProperty.call(errors, agent)) continue;
+        live[pid + "/" + agent] = true;
+        reportAgentError(pid, agent, errors[agent]);
+      }
+    }
+    var seen = state.agentErrorsSeen;
+    for (var known in seen) {
+      if (!Object.prototype.hasOwnProperty.call(live, known)) delete seen[known];
+    }
+  }
+
+  // Shared with the per-agent panel polls; first caller wins, the rest dedupe.
+  function reportAgentError(pid, agentKey, message) {
+    if (!message) return;
+    var key = pid + "/" + agentKey;
+    if (state.agentErrorsSeen[key] === message) return;
+    state.agentErrorsSeen[key] = message;
+    showToast(pid + " " + agentKey + ": " + message);
   }
 
   function loadParticipants() {
@@ -670,8 +691,12 @@
         _clearBootPlaceholders();
         return;
       }
+      // Primary config channel; the xref sheet leg only refreshes it later.
+      if (data.config) clipgenApplyConfig(data.config);
       state.participants = data.participants;
+      _reportAgentErrors(data.participants);
       state.hasSheet = !!data.has_sheet;
+      state.speakerModel = data.speaker_model !== false;
       state.transcribePrewarm = data.transcribe_prewarm || "queue_open";
       renderPills();
       refreshTopNavActions();
@@ -683,35 +708,17 @@
       }
       refreshTranscriptionModelHintOnce();
 
-      // Deep link (#P07, from the Overview Map's explain panel) wins once,
-      // on the first load that has the participant list.
+      // Precedence: #P07 deep link (once) > in-memory selection > localStorage.
       var hashPid = _hashPidApplied ? "" : clipgenHashParticipant();
-      if (hashPid && state.participants.length) {
-        _hashPidApplied = true;
-        for (var h = 0; h < state.participants.length; h++) {
-          if (state.participants[h].id === hashPid) {
-            selectParticipant(hashPid);
-            return;
-          }
-        }
-      }
-
-      // Preserve current in-memory selection if still valid (soft refresh)
-      if (state.selectedParticipant) {
-        for (var i = 0; i < state.participants.length; i++) {
-          if (state.participants[i].id === state.selectedParticipant) return;
-        }
-      }
-
-      // Restore from localStorage if present and still valid (fresh page load)
-      var storedPid = getStoredUIState("transcripts").selectedParticipant;
-      if (storedPid) {
-        for (var j = 0; j < state.participants.length; j++) {
-          if (state.participants[j].id === storedPid) {
-            selectParticipant(storedPid);
-            return;
-          }
-        }
+      if (hashPid && state.participants.length) _hashPidApplied = true;
+      var pick = clipgenPickParticipant(state.participants, {
+        hashPid: hashPid,
+        currentId: state.selectedParticipant,
+        storedId: getStoredUIState("transcripts").selectedParticipant,
+      });
+      if (pick) {
+        if (pick !== state.selectedParticipant) selectParticipant(pick);
+        return;
       }
 
       // Auto-select first participant with a transcript, or just the first
@@ -728,8 +735,7 @@
   }
 
 
-  // Move the selection to the previous/next participant in the sidebar order,
-  // wrapping around. Bound to Z / X (see transcripts-video.js).
+  // Previous/next participant, wrapping. Bound to Z / X in transcripts-video.js.
   function cycleParticipant(delta) {
     var list = state.participants;
     if (!list || list.length < 2) return;
@@ -748,8 +754,15 @@
     _stopCitationsPoll();
     _stopFrictionPoll();
     hideMarkPopover();
+    hideSpeakerPopover();
     state.selectedParticipant = pid;
     setStoredUIStateField("transcripts", "selectedParticipant", pid);
+    // Restore transcribe-range markers; loadedmetadata clamps them later.
+    if (TS.restoreMarkers) {
+      TS.restoreMarkers(pid);
+      TS.updateMarkerInfo();
+      renderTimeline();
+    }
     renderPills();
     refreshTopNavActions();
 
@@ -771,22 +784,12 @@
     video.pause();
     cancelPendingSeek();
 
-    // Set video source. ?v=<mtime_ns> mirrors the screenspace cache-bust so
-    // a re-encoded or replaced source file invalidates the browser HTTP cache
-    // instead of relying on send_from_directory's Last-Modified revalidation.
-    // Reset the audio-track layout to single-track, which tears down the
-    // previous participant's mix. Outside the has_video branch on purpose:
-    // selecting a participant *without* video must also drop the mix, or its
-    // orphaned <audio> elements keep playing, the <video> stays force-muted, and
-    // the volume popover goes on showing the previous participant's sliders.
+    // Reset the mix even without video, or orphaned <audio> elements keep playing.
     state.audioTracks = [];
     if (state.audioPanel) state.audioPanel.refresh();
 
     if (p.has_video) {
-      // Lazily probe the audio-track layout for the volume popover's caption +
-      // per-track mixer, then reconfigure once the layout arrives. Shares the
-      // pill picker's cache (_trFetchAudioInfo). Guarded by participantReqVer so
-      // a stale response can't overwrite the current tracks.
+      // Probe audio layout for the volume popover; participantReqVer drops stale replies.
       (function (ver) {
         _trFetchAudioInfo(pid, p.video_version)
           .then(function (info) {
@@ -797,8 +800,7 @@
           .catch(function () {});
       })(state.participantReqVer);
 
-      // Multi-video participants carry a per-part timeline; play part-by-part
-      // with client-side source switching (see the timeline helpers).
+      // Multi-part participants play part-by-part with client-side source switching.
       state.videoTimeline = p.timeline && p.timeline.length > 1 ? p.timeline : null;
       state.videoVersion = p.video_version != null ? p.video_version : null;
       state.videoActivePart = 0;
@@ -806,12 +808,7 @@
       video.classList.remove("hidden");
       videoEmpty.classList.add("hidden");
 
-      // Set VTT track. Browsers reset textTracks[0].mode when the track src
-      // changes, so re-apply the user's preference now and again on the
-      // track's load event in initVideoPlayer. The native overlay track carries
-      // GLOBAL cue times, which only align with a single continuous file — for
-      // multi-video participants it is disabled (the in-app transcript list still
-      // highlights the active segment via global time).
+      // VTT cues use global time, so multi-part participants get no native track.
       var track = qs("#subtitleTrack");
       if (state.videoTimeline) {
         track.removeAttribute("src");
@@ -820,10 +817,7 @@
       }
       applyCaptionMode();
 
-      // Restore the saved playback offset (GLOBAL) for this participant if we
-      // have one; otherwise seek to 0.001s so the first frame renders without
-      // waiting for play/scrub. `preload="metadata"` decodes duration but not
-      // pixels, so without this nudge the viewer shows a blank gray box on load.
+      // Restore saved global time, else 0.001s so preload="metadata" paints a frame.
       var storedMap = getStoredUIState("transcripts").videoTimeByParticipant;
       var savedTime =
         storedMap && typeof storedMap[pid] === "number" ? storedMap[pid] : 0.001;
@@ -858,6 +852,7 @@
 
     var taskForPid = null;
     state.tasks.forEach(function (t) {
+      if (_isSpeakerTask(t)) return;
       if (t.participant === pid && (t.status === "running" || t.status === "queued")) {
         taskForPid = t;
       }
@@ -881,22 +876,55 @@
       });
     } else {
       state.segments = [];
+      state.speakers = null;
       state.streamingParticipant = null;
       renderSegments();
+      // Not taskForPid: the pane must match the indicator's pick among duplicate tasks.
+      _setTranscriptEmptyText(_taskForSelectedParticipant());
       renderTimeline();
       clearAnalysisPanel();
     }
 
-    // Reflect the newly-selected participant's transcription progress on the
-    // timeline immediately (draws the band if it's mid-transcription, clears it
-    // otherwise) rather than waiting up to a full poll interval.
+    // Draw or clear the transcribe band now, not at the next poll.
     updateTranscribeFill();
+  }
+
+  // #transcriptEmpty copy for the selected participant's task; null restores defaults.
+  function _setTranscriptEmptyText(task) {
+    var empty = qs("#transcriptEmpty");
+    if (!empty) return;
+    var main = empty.querySelector("p");
+    var hint = empty.querySelector(".empty-hint");
+    // Only in-flight states shimmer.
+    var waiting = !!(task && (task.status === "running" || task.status === "queued"));
+    main.classList.toggle("cg-shimmer", waiting);
+    if (_cancelPending(task)) {
+      main.textContent = "Cancelling…";
+      // Not "finishing the current segment": a cancel may wait on the model load.
+      hint.textContent = "Waiting for the transcription worker to stop";
+    } else if (task && task.status === "running" && task.phase === "loading_model") {
+      main.textContent = "Loading transcription model…";
+      hint.textContent = "The first transcription after a restart takes a few extra seconds";
+    } else if (task && task.status === "running" && task.phase === "diarizing") {
+      main.textContent = "Detecting speakers…";
+      hint.textContent = "The transcript is done; labels land when the pass finishes";
+    } else if (task && task.status === "running") {
+      main.textContent = "Starting transcription…";
+      hint.textContent = "Lines appear here as they are transcribed";
+    } else if (task && task.status === "queued") {
+      main.textContent = "Queued for transcription…";
+      hint.textContent = "Waiting for the current task to finish";
+    } else {
+      main.textContent = "No transcript available";
+      hint.textContent = "Use the Queue panel to transcribe this participant's video";
+    }
   }
 
   function renderEmptyState() {
     qs("#videoPlayer").classList.add("hidden");
     qs("#videoEmpty").classList.remove("hidden");
     qs("#segmentList").innerHTML = "";
+    _setTranscriptEmptyText(null);
     qs("#transcriptEmpty").classList.remove("hidden");
     clearAnalysisPanel();
     clearTimelineMarkers();
@@ -912,22 +940,28 @@
       if (ver !== state.participantReqVer) return;
       if (!data.ok) {
         state.segments = [];
+        state.speakers = null;
         renderSegments();
         renderTimeline();
         return;
       }
       state.segments = data.segments;
+      state.speakers = data.speakers || null;
       state.activeSegmentIndex = -1;
       renderSegments();
       renderTimeline();
     });
   }
 
-  // ---- Analysis panel: summary + citations + friction (impl in transcripts-agents.js) ----
-  // Thin hub delegators forward to the satellite. selectParticipant + the poller +
-  // the visibility/focus handlers drive load*/clear*/stop*/_restoreActiveTab; boot
-  // wires the init*; the segment-list hover calls _show/_hideFrictionTooltip; the
-  // poller's re-arm asks _currentParticipant/_frictionDepMet.
+  // ---- Speaker delegators; implementation in transcripts-speakers.js ----
+  function speakersOn() { return !!(TS.speakersOn && TS.speakersOn()); }
+  function speakerName() { return TS.speakerName && TS.speakerName.apply(null, arguments); }
+  function speakerChipHtml() { return (TS.speakerChipHtml && TS.speakerChipHtml.apply(null, arguments)) || ""; }
+  function showSpeakerPopover() { return TS.showSpeakerPopover && TS.showSpeakerPopover.apply(null, arguments); }
+  function hideSpeakerPopover() { return TS.hideSpeakerPopover && TS.hideSpeakerPopover(); }
+  function initSpeakers() { return TS.initSpeakers && TS.initSpeakers(); }
+
+  // ---- Analysis panel delegators; implementation in transcripts-agents.js ----
   function loadSummary() { return TS.loadSummary && TS.loadSummary.apply(null, arguments); }
   function loadFriction() { return TS.loadFriction && TS.loadFriction.apply(null, arguments); }
   function clearAnalysisPanel() { return TS.clearAnalysisPanel && TS.clearAnalysisPanel(); }
@@ -949,19 +983,20 @@
 
   // ---- Segment rendering ----
 
+  // Perf span decides whether >2000-segment lists ever need virtualizing.
   function renderSegments() {
+    return clipgenPerf.span("transcripts.renderSegments", renderSegmentsImpl);
+  }
+
+  function renderSegmentsImpl() {
     var container = qs("#segmentList");
     var empty = qs("#transcriptEmpty");
     state.editingTextEl = null;
     state.cachedSegmentRows = null;
-    // We're rendering the finalized transcript — drop any queued streaming
-    // indicator so a paused-tab RAF can't re-insert it over the real segments.
+    // Drop any queued streaming indicator before the final render.
     _cancelStreamingIndicator();
 
-    // Scroll lives on #trMain, not on #segmentList (the floating nav scrolls
-    // under it) — same probe renderPartialSegments uses. A full rebuild of a
-    // same-participant list (heatmap toggle, tooltip toggle, streaming→final
-    // swap) must not drop the reader to the top; a participant change must.
+    // Scroll lives on #trMain. Same-participant rebuilds keep the offset; switches reset.
     var scrollHost = qs("#trMain") || container;
     var samePid = _renderedSegmentsPid === state.selectedParticipant;
     var restoreTop = samePid ? scrollHost.scrollTop : 0;
@@ -975,6 +1010,7 @@
     empty.classList.add("hidden");
 
     var html = "";
+    var spkOn = speakersOn();
     for (var i = 0; i < state.segments.length; i++) {
       var seg = state.segments[i];
       var activeClass = i === state.activeSegmentIndex ? " active" : "";
@@ -997,15 +1033,13 @@
         sevDotHtml = '<span class="segment-sev-dot ' + severityClass(markObj.severity) + '" data-tooltip="' + escapeHtml(markObj.severity) + '"></span>';
       }
 
-      // No friction markup here on purpose: applyFrictionDecorations() below owns
-      // every friction class/inline var, so the rebuild path and the live filter
-      // path can't drift apart.
+      // No friction markup here; applyFrictionDecorations() owns it all.
       html += '<div class="segment-row' + activeClass + correctedClass + '" data-index="' + i + '" data-start="' + seg.start + '">';
       html += '<span class="' + markClass + '" data-segment-id="' + escapeHtml(seg.id) + '"' + markStyle + markLabel + '></span>';
       html += sevDotHtml;
       html += '<span class="segment-timestamp">' + formatTime(seg.start);
       // Cross-reference badges in gutter (inside timestamp, positioned at right edge)
-      if (state.tooltipsEnabled) {
+      if (CLIPGEN_CONFIG.crossReferences) {
         var xref = findOverlapsForSearch(state.selectedParticipant, seg.start, seg.end);
         if (xref.screenspaceEvents.length > 0 || xref.sheetObservations.length > 0) {
           html += '<span class="segment-xref-badges">';
@@ -1026,14 +1060,26 @@
         }
       }
       html += '</span>';
-      // Split text into word spans
+      if (spkOn) {
+        var prevSpk = i > 0 ? state.segments[i - 1].speaker : null;
+        html += speakerChipHtml(seg.speaker, { repeat: !!seg.speaker && seg.speaker === prevSpk });
+      }
+      // Word spans carry data-ws/data-we for the karaoke sweep; count mismatch leaves them untimed.
       var tokens = seg.text.split(/(\s+)/);
+      var wordCount = 0;
+      for (var w = 0; w < tokens.length; w++) {
+        if (tokens[w] && !/^\s+$/.test(tokens[w])) wordCount++;
+      }
+      var segWords = (!seg.corrected && seg.words && seg.words.length === wordCount) ? seg.words : null;
       var wordHtml = "";
+      var wi = 0;
       for (var w = 0; w < tokens.length; w++) {
         if (/^\s+$/.test(tokens[w])) {
           wordHtml += tokens[w];
         } else if (tokens[w]) {
-          wordHtml += '<span class="segment-word">' + escapeHtml(tokens[w]) + '</span>';
+          var timing = segWords ? ' data-ws="' + segWords[wi].start + '" data-we="' + segWords[wi].end + '"' : "";
+          wordHtml += '<span class="segment-word"' + timing + '>' + escapeHtml(tokens[w]) + '</span>';
+          wi++;
         }
       }
       html += '<span class="segment-text" data-id="' + escapeHtml(seg.id) + '">' + annoBadgeHtml + wordHtml + '</span>';
@@ -1041,17 +1087,9 @@
       html += '</div>';
     }
     container.innerHTML = html;
-    // Before the scroll restore, not after: isolate mode hides rows and the
-    // callouts add height, so decorating afterwards would let the browser clamp
-    // the restored offset against a stale scrollHeight.
+    // Decorate before the scroll restore; isolate mode changes scrollHeight.
     applyFrictionDecorations();
-    // Same task as the wipe, so the new scrollHeight is already laid out and the
-    // browser can't clamp us to 0 — and initPipScroll's rAF-coalesced listener
-    // reads the restored value rather than the transient top. The write itself
-    // looks like a reader scroll to the auto-follow pause, hence the marker.
-    // Written unconditionally: on a participant switch restoreTop is 0, and
-    // without the write the browser keeps the outgoing transcript's offset and
-    // drops the reader into the middle of the new one.
+    // Always write, even 0, or the outgoing offset survives a participant switch.
     ignoreNextScroll();
     scrollHost.scrollTop = restoreTop;
 
@@ -1062,16 +1100,10 @@
     _partialRender.marksVersion = _streamingMarksVersion;
   }
 
-  // Which participant #segmentList currently shows, so a rebuild can tell a
-  // same-transcript re-render (restore scroll) from a participant switch (top).
-  // renderPartialSegments keeps it current too — the streaming→final swap is
-  // exactly when the reader is deepest in the list.
+  // Participant #segmentList shows; renderPartialSegments keeps it current too.
   var _renderedSegmentsPid = null;
 
-  // Append-only state for renderPartialSegments. Each streaming poll appends new
-  // trailing segments to #segmentList instead of rebuilding the entire list. A
-  // full rebuild is only performed when the participant changes, when the
-  // segment count drops (restart), or when the in-memory marks cache changes.
+  // Append cursor for renderPartialSegments; full rebuild on pid change, count drop, or marks change.
 
   var _partialRender = {
     pid: null,
@@ -1080,11 +1112,7 @@
     marksVersion: 0,
   };
 
-  // Client-side accumulator for streaming partial segments. The status poll only
-  // carries partial_count now (not the full array), so we fetch the tail beyond
-  // our cursor and append. partial_segments is append-only server-side, so the
-  // count is a safe cursor and the request payload stays flat as the transcript
-  // grows. Resets when the streamed task changes.
+  // Streaming accumulator; partial_segments is append-only server-side, so count is the cursor.
   var _streamSegs = { taskId: null, segments: [], fetching: false };
 
   function _syncStreamSegs(task, cb) {
@@ -1141,9 +1169,7 @@
   }
 
   // ---- Elapsed / ETA tracking ----
-  // Transcription progress is a linear fraction of media duration, so its ETA
-  // extrapolation is meaningful (per-participant trackers). The thinking agents
-  // expose no progress fraction, so they show elapsed only (single trackers).
+  // Transcription gets an ETA; thinking agents show elapsed only.
   var _txEtaTrackers = {};
   var _summaryEtaTracker = createEtaTracker();
   var _citationsEtaTracker = createEtaTracker();
@@ -1152,17 +1178,16 @@
     isActive: _anyTxEtaActive,
   });
 
-  // " \u00b7 0:42 \u00b7 ~1:20 left" suffix for a participant's running transcription, or
-  // "" when not running. Each entry is keyed by the task's created_at so a re-run
-  // of the same participant seeds a fresh tracker from the new task rather than
-  // continuing the prior run's elapsed (created_at includes any queue wait, so
-  // elapsed may slightly overstate). Stale entries are pruned in _tickTxEta.
+  // " \u00b7 0:42 \u00b7 ~1:20 left" or "". Keyed by created_at; seeded from transcribe_started_at.
   function _txEtaSuffix(pid, task) {
     if (!pid || !task || task.status !== "running") return "";
+    // The speaker pass restarts progress at 0; its ETA is not the transcript's.
+    if (task.phase === "loading_model" || task.phase === "diarizing") return "";
     var entry = _txEtaTrackers[pid];
     if (!entry || entry.createdAt !== task.created_at) {
       var t = createEtaTracker();
-      var seed = task.created_at ? Date.parse(task.created_at) : NaN;
+      var seedIso = task.transcribe_started_at || task.created_at;
+      var seed = seedIso ? Date.parse(seedIso) : NaN;
       t.start(isNaN(seed) ? undefined : seed);
       entry = { tracker: t, createdAt: task.created_at };
       _txEtaTrackers[pid] = entry;
@@ -1177,6 +1202,11 @@
   function _streamingTextStr(progress) {
     var pid = state.streamingParticipant || state.selectedParticipant;
     var task = _taskForSelectedParticipant();
+    // Every footer writer renders through here, so one branch covers cancel.
+    if (_cancelPending(task)) return "Cancelling\u2026";
+    if (task && task.phase === "diarizing") {
+      return "Detecting speakers\u2026 " + Math.round((task.progress || 0) * 100) + "%";
+    }
     return "Transcribing\u2026 " + Math.round(progress * 100) + "%" + _txEtaSuffix(pid, task);
   }
 
@@ -1197,10 +1227,7 @@
   }
 
   function _tickTxEta() {
-    // The ticker's isActive guard (_anyTxEtaActive) self-stops it; this body
-    // only runs while transcription or a thinking agent is active.
-    // Drop trackers for participants with no running transcription so memory
-    // stays bounded and a later re-run starts fresh.
+    // Runs only while something is active (_anyTxEtaActive). Prune idle trackers.
     var runningPids = {};
     for (var r = 0; r < state.tasks.length; r++) {
       if (state.tasks[r].status === "running") runningPids[state.tasks[r].participant] = true;
@@ -1224,18 +1251,14 @@
   function _streamingIndicatorHtml(progress) {
     return '<div class="streaming-indicator">' +
       '<span class="streaming-dot"></span>' +
-      '<span class="streaming-text">' + _streamingTextStr(progress) + '</span>' +
+      '<span class="streaming-text cg-shimmer">' + _streamingTextStr(progress) + '</span>' +
       '</div>';
   }
 
   var _streamIndicatorRaf = null;
   var _streamIndicatorPending = null;
 
-  // Cancel a queued streaming-indicator insert. requestAnimationFrame callbacks
-  // are paused while the tab is backgrounded, so a RAF scheduled during the last
-  // streaming poll can outlive the transcript being finalized and re-insert a
-  // stale "Transcribing… X%" row when the user returns. Call this whenever the
-  // finalized transcript replaces the streaming view.
+  // A RAF paused in a background tab could re-insert a stale indicator after finalize.
   function _cancelStreamingIndicator() {
     if (_streamIndicatorRaf) {
       cancelAnimationFrame(_streamIndicatorRaf);
@@ -1261,7 +1284,14 @@
     });
   }
 
+  // Fires per poll tick while streaming; the likelier jank source.
   function renderPartialSegments(segments, progress) {
+    return clipgenPerf.span("transcripts.renderPartialSegments", function () {
+      return renderPartialSegmentsImpl(segments, progress);
+    });
+  }
+
+  function renderPartialSegmentsImpl(segments, progress) {
     var container = qs("#segmentList");
     var empty = qs("#transcriptEmpty");
     var pid = state.streamingParticipant || state.selectedParticipant;
@@ -1273,9 +1303,7 @@
     // Row list changes shape on both append and rebuild paths.
     state.cachedSegmentRows = null;
 
-    // Pass 6 floating-nav scroll-under: scroll lives on #trMain, not on
-    // #segmentList. Probe the actual scroll container so the
-    // auto-follow-streaming-tail behaviour keeps working.
+    // Scroll lives on #trMain, not #segmentList.
     var trMain = qs("#trMain");
     var scrollHost = trMain || container;
     var nearBottom = scrollHost.scrollHeight - scrollHost.scrollTop - scrollHost.clientHeight < 100;
@@ -1320,18 +1348,14 @@
     _partialRender.count = segments.length;
     _partialRender.segments = segments;
     _partialRender.marksVersion = _streamingMarksVersion;
-    // The list now shows this participant, so the finalized render that replaces
-    // it counts as a same-participant rebuild and keeps the reader's position.
+    // So the finalized render counts as a same-participant rebuild and keeps scroll.
     _renderedSegmentsPid = pid;
 
     if (nearBottom) {
       scrollHost.scrollTop = scrollHost.scrollHeight;
     }
 
-    // Mirror partial segments into state.segments so the marker timeline can
-    // resolve marker positions during streaming. Each row's id is the
-    // composed "<pid>:<index>" string, matching what _streamingMarks is keyed
-    // on via _renderPartialSegmentRow above.
+    // Mirror into state.segments for the marker timeline; ids are "<pid>:<index>".
     var mirrored = [];
     for (var mi = 0; mi < segments.length; mi++) {
       var s = segments[mi];
@@ -1340,6 +1364,7 @@
         start: s.start,
         end: s.end,
         text: s.text,
+        speaker: s.speaker,
         marks: [],
       });
     }
@@ -1352,10 +1377,7 @@
   // ---- Segment list event delegation ----
 
   var _segmentListDelegated = false;
-  // Coalesces the segment-list mousemove (hot-segment friction tooltip) the same
-  // way the timeline canvas does. Lives here with its only user — the delegation
-  // handler below — even though the tooltip render itself is in the agents
-  // satellite (reached via TS._show/_hideFrictionTooltip).
+  // RAF handle coalescing the friction-tooltip mousemove below.
   var _segTooltipRaf = 0;
 
   function _ensureSegmentListDelegation() {
@@ -1394,9 +1416,20 @@
         var src = isStreaming ? (_partialRender.segments || []) : state.segments;
         var segCopy = src[idx];
         if (!segCopy) return;
-        navigator.clipboard.writeText(segCopy.text).then(function () {
+        var copyText = segCopy.text;
+        if (!isStreaming && segCopy.speaker && speakersOn()) {
+          copyText = speakerName(segCopy.speaker) + ": " + copyText;
+        }
+        navigator.clipboard.writeText(copyText).then(function () {
           showToast("Copied to clipboard");
         });
+        return;
+      }
+
+      var spkEl = e.target.closest(".segment-speaker");
+      if (spkEl && row.contains(spkEl) && spkEl.hasAttribute("data-speaker")) {
+        e.stopPropagation();
+        showSpeakerPopover(spkEl, spkEl.getAttribute("data-speaker"), idx);
         return;
       }
 
@@ -1425,9 +1458,7 @@
       startSegmentEditing(textEl);
     });
 
-    // Friction tooltip on hot segments (only while friction mode is on).
-    // RAF-coalesced like the timeline canvas so getBoundingClientRect isn't
-    // called on every mousemove event.
+    // Friction tooltip on hot segments; RAF-coalesced like the timeline canvas.
     container.addEventListener("mousemove", function (e) {
       if (_segTooltipRaf) return;
       var cx = e.clientX, cy = e.clientY, tgt = e.target;
@@ -1446,12 +1477,11 @@
     container.addEventListener("mouseleave", function () { _hideFrictionTooltip(); });
   }
 
-  // Cache marks made during streaming so they survive DOM rebuilds.
-  // Each entry: { color, id, category, label, severity }. `version` is bumped on
-  // any write to invalidate renderPartialSegments' append-only fast path.
+  // Streaming marks: id -> { color, id, category, label, severity }; version bumps on write.
   var _streamingMarks = {};
   var _streamingMarksVersion = 0;
-  var _streamingMarksLoaded = false;
+  // Per participant, or the first stream's load would swallow later ones.
+  var _streamingMarksLoadedByPid = {};
 
   function _bumpStreamingMarksVersion() {
     _streamingMarksVersion++;
@@ -1459,8 +1489,8 @@
   }
 
   function _loadStreamingMarks(pid) {
-    if (_streamingMarksLoaded) return;
-    _streamingMarksLoaded = true;
+    if (_streamingMarksLoadedByPid[pid]) return;
+    _streamingMarksLoadedByPid[pid] = true;
     apiGet("api/marks").then(function (data) {
       if (!data.ok) return;
       if (data.categories) setMarkCategories(data.categories);
@@ -1482,21 +1512,14 @@
     });
   }
 
-  // getMarkForSegment resolves a segment's active mark — the persisted
-  // seg.marks[0], falling back to the streaming-marks cache. Kept in the hub
-  // (reads _streamingMarks); the video satellite reads it via TS.getMarkForSegment
-  // for timeline marker rendering + tooltips.
+  // Persisted seg.marks[0], else the streaming cache. Video satellite reads via TS.
   function getMarkForSegment(seg) {
     if (seg.marks && seg.marks.length > 0) return seg.marks[0];
     var streaming = _streamingMarks[seg.id];
     return streaming || null;
   }
 
-  // ---- Video player + timeline (impl in transcripts-video.js) ----
-  // Thin hub delegators forward to the satellite; selectParticipant, the segment
-  // list, renderEmptyState/loadTranscript, the agents panel, search, and boot keep
-  // calling these bare names. cancelPendingSeek / clearTimelineMarkers /
-  // hasTimelineHover encapsulate the video-internal state the hub used to poke.
+  // ---- Video player + timeline delegators; implementation in transcripts-video.js ----
   function initVideoPlayer() { return TS.initVideoPlayer && TS.initVideoPlayer(); }
   function initTimelineCanvas() { return TS.initTimelineCanvas && TS.initTimelineCanvas(); }
   function initPipScroll() { return TS.initPipScroll && TS.initPipScroll(); }
@@ -1577,9 +1600,29 @@
     }
 
     var corrections = extractCorrections(originalText, newText);
-    if (corrections.length === 0) return;
+    var partial = corrections.some(function (c) { return !c.from || !c.to; });
+    if (corrections.length && !partial) {
+      saveCorrections(corrections);
+      return;
+    }
+    // Insertions and deletions have no from→to rule form; save the whole segment.
+    saveSegmentText(textEl.getAttribute("data-id"), newText);
+  }
 
-    saveCorrections(corrections);
+  function saveSegmentText(segId, text) {
+    var pid = state.selectedParticipant;
+    if (!pid || !segId) return;
+    apiPut("api/transcript/" + encodeURIComponent(pid) + "/segment", { segment_id: segId, text: text })
+      .then(function (data) {
+        showToast(data.ok ? "Segment saved" : (data.error || "Failed to save segment"));
+      }, function () {
+        showToast("Failed to save segment");
+      })
+      .then(function () {
+        if (state.streamingParticipant) return;
+        loadTranscript(pid);
+        loadCorrections();
+      });
   }
 
   function extractCorrections(oldText, newText) {
@@ -1615,7 +1658,7 @@
       }
     }
 
-    // Group consecutive non-equal ops into from→to correction pairs
+    // Group non-equal runs into from→to pairs; pure insert/delete leaves one side empty.
     var corrections = [];
     var k = 0;
     while (k < ops.length) {
@@ -1627,9 +1670,7 @@
           else toParts.push(ops[k].word);
           k++;
         }
-        if (fromParts.length > 0 && toParts.length > 0) {
-          corrections.push({ from: fromParts.join(" "), to: toParts.join(" ") });
-        }
+        corrections.push({ from: fromParts.join(" "), to: toParts.join(" ") });
       } else {
         k++;
       }
@@ -1644,8 +1685,8 @@
       chain = chain.then(function () {
         return apiPost("api/corrections", { from: c.from, to: c.to }).then(function (data) {
           if (data.ok) {
-            if (data.removed) removed++;
-            else if (data.correction) updated++;  // covers both new and updated
+            removed += (data.removed || []).length;
+            updated += (data.updated || []).length + (data.correction ? 1 : 0);
           }
         });
       });
@@ -1655,7 +1696,7 @@
       if (updated) parts.push(updated === 1 ? "1 correction saved" : updated + " corrections saved");
       if (removed) parts.push(removed === 1 ? "1 reverted" : removed + " reverted");
       showToast(parts.join(", ") || "No changes");
-      // During streaming, skip reload — corrections are persisted and will apply on completion
+      // No reload during streaming; corrections apply on completion.
       if (state.streamingParticipant) return;
       var pid = state.selectedParticipant;
       if (pid) {
@@ -1664,6 +1705,8 @@
       }
     }).catch(function () {
       showToast("Failed to save correction");
+      // Drop the unsaved edit from the DOM rather than leave it looking saved.
+      if (!state.streamingParticipant && state.selectedParticipant) loadTranscript(state.selectedParticipant);
     });
   }
 
@@ -1688,9 +1731,7 @@
     return null;
   }
 
-  // Repaint a single segment's mark dot + annotation badge in place (mirrors the
-  // template in renderSegments) so a mark add/remove/recolor shows instantly
-  // without a full loadTranscript round-trip. markObj null clears the mark.
+  // Repaint one row's mark dot and badge in place; mirrors renderSegments. Null clears.
   function _paintSegmentMark(idx, markObj) {
     var list = qs("#segmentList");
     if (!list) return;
@@ -1739,11 +1780,10 @@
     var idx = _segmentIndexById(segmentId);
     var seg = idx >= 0 ? state.segments[idx] : null;
     if (!seg) {
-      // No loaded row (shouldn't happen for the persisted path) — fall back to a
-      // reload so the new mark still appears.
+      // No loaded row; reload so the new mark still appears.
       apiPost("api/marks", { segment_ids: [segmentId], category: state.lastMarkCategory }).then(function (data) {
         if (data.ok && state.selectedParticipant) loadTranscript(state.selectedParticipant);
-      });
+      }).catch(toastError("Could not add mark"));
       return;
     }
     // Optimistic: fill the dot now, reconcile the real id on success, revert on failure.
@@ -1788,7 +1828,7 @@
         };
         _bumpStreamingMarksVersion();
       }
-    });
+    }).catch(toastError("Could not add mark"));
   }
 
   function removeMark(markId) {
@@ -1807,7 +1847,7 @@
           }
           pollTaskStatus();
         }
-      });
+      }).catch(toastError("Could not remove mark"));
       return;
     }
     // Optimistic: clear the dot now, restore on failure.
@@ -1815,7 +1855,7 @@
     if (!found) {
       apiDelete("api/marks/" + markId).then(function (data) {
         if (data.ok && state.selectedParticipant) loadTranscript(state.selectedParticipant);
-      });
+      }).catch(toastError("Could not remove mark"));
       return;
     }
     var prevMarks = found.seg.marks;
@@ -1856,7 +1896,7 @@
           }
           pollTaskStatus();
         }
-      });
+      }).catch(toastError("Could not change category"));
       return;
     }
     // Optimistic: recolor the dot now, restore on failure.
@@ -1864,7 +1904,7 @@
     if (!found) {
       apiPut("api/marks/" + markId, { category: category }).then(function (data) {
         if (data.ok && state.selectedParticipant) loadTranscript(state.selectedParticipant);
-      });
+      }).catch(toastError("Could not change category"));
       return;
     }
     var prevCategory = found.mark.category;
@@ -1878,23 +1918,39 @@
   }
 
   function updateMarkLabel(markId, label) {
-    apiPut("api/marks/" + markId, { label: label || null });
     if (state.streamingParticipant) {
+      apiPut("api/marks/" + markId, { label: label || null }).catch(function () {
+        showToast("Failed to update mark");
+      });
       for (var key in _streamingMarks) {
         if (_streamingMarks[key].id === markId) {
           _streamingMarks[key].label = label || "";
           break;
         }
       }
+      return;
     }
+    // Write state and repaint optimistically, like updateMarkCategory; restore on failure.
+    var found = _findSegmentByMarkId(markId);
+    if (!found) {
+      apiPut("api/marks/" + markId, { label: label || null }).catch(function () {
+        showToast("Failed to update mark");
+      });
+      return;
+    }
+    var prevLabel = found.mark.label;
+    found.mark.label = label || "";
+    _paintSegmentMark(found.idx, found.mark);
+    apiPut("api/marks/" + markId, { label: label || null }).catch(function () {
+      found.mark.label = prevLabel;
+      _paintSegmentMark(found.idx, found.mark);
+      showToast("Failed to update mark");
+    });
   }
 
   function updateMarkSeverity(markId, severity) {
     var sev = severity || null;
-    // Streaming participant: mirror updateMarkCategory — update the cache and
-    // re-render on confirmed success. Severity changes the visible segment dot,
-    // so a version bump alone isn't enough; pollTaskStatus re-renders the list
-    // now instead of leaving a stale dot until the next scheduled poll.
+    // Streaming: update the cache, then pollTaskStatus re-renders the dot now.
     if (state.streamingParticipant) {
       apiPut("api/marks/" + markId, { severity: sev }).then(function (data) {
         if (data.ok) {
@@ -1907,16 +1963,15 @@
           }
           pollTaskStatus();
         }
-      });
+      }).catch(toastError("Could not change severity"));
       return;
     }
-    // Loaded participant: optimistically repaint the dot, restore on failure
-    // (mirrors updateMarkCategory).
+    // Loaded: optimistic repaint, restore on failure (mirrors updateMarkCategory).
     var found = _findSegmentByMarkId(markId);
     if (!found) {
       apiPut("api/marks/" + markId, { severity: sev }).then(function (data) {
         if (data.ok && state.selectedParticipant) loadTranscript(state.selectedParticipant);
-      });
+      }).catch(toastError("Could not change severity"));
       return;
     }
     var prevSeverity = found.mark.severity;
@@ -1930,6 +1985,8 @@
   }
 
   function showMarkPopover(anchorEl, segmentId, markObj) {
+    // A provisional mark has no id yet; actions would hit api/marks/null.
+    if (markObj && markObj.id == null) return;
     var popover = qs("#markPopover");
     hideMarkPopover();
 
@@ -1973,9 +2030,7 @@
       if (e.key === "Escape") { e.preventDefault(); hideMarkPopover(); }
     };
 
-    // Severity dropdown (optional). Options come from CLIPGEN_CONFIG.severity
-    // (mirrored from config.py SEVERITY_NUMERIC_TO_LABEL); a blank first option
-    // means "no severity".
+    // Severity options from CLIPGEN_CONFIG.severity; blank first option = none.
     var sevSelect = popover.querySelector(".mark-popover-severity");
     if (!sevSelect.options.length) {
       var blankOpt = document.createElement("option");
@@ -1992,9 +2047,7 @@
     }
     sevSelect.value = markObj.severity || "";
     sevSelect.onchange = function () {
-      // updateMarkSeverity owns the mark-state mutation (like updateMarkCategory)
-      // so it can capture the previous value and roll back on failure. markObj is
-      // the live seg.marks[0]/streaming-cache ref, so it stays in sync.
+      // updateMarkSeverity owns the mutation so it can roll back on failure.
       updateMarkSeverity(markObj.id, sevSelect.value);
     };
 
@@ -2005,9 +2058,7 @@
       removeMark(markObj.id);
     };
 
-    // Keyboard: arrows rove between category pills, Enter applies the focused
-    // category (the pill's own click), Esc dismisses. Typing in the label input
-    // keeps its own Enter/Esc handling and is skipped for arrow roving.
+    // Arrows rove the pills, Enter clicks, Esc dismisses; inputs keep their own keys.
     popover.onkeydown = function (e) {
       if (e.key === "Escape") { e.preventDefault(); hideMarkPopover(); return; }
       if (document.activeElement === labelInput || document.activeElement === sevSelect) return;
@@ -2027,17 +2078,13 @@
     popover.style.left = (rect.left + window.scrollX - 4) + "px";
     popover.classList.remove("hidden");
 
-    // Focus the current category so arrows/Enter work immediately. preventScroll
-    // keeps the segment list from jumping when the popover opens via the keyboard.
+    // Focus the current category; preventScroll keeps the list from jumping.
     if (pills.length) {
       try { pills[activeIdx].focus({ preventScroll: true }); }
       catch (err) { pills[activeIdx].focus(); }
     }
 
-    // Close on outside click (deferred so this click doesn't trigger it).
-    // Track the timeout so a fast hideMarkPopover (e.g. Esc within the same
-    // tick) cancels the pending attach instead of leaving a permanently
-    // attached listener after the deferred .addEventListener fires.
+    // Deferred outside-click close; the timer lets hideMarkPopover cancel the attach.
     if (_popoverAttachTimer) clearTimeout(_popoverAttachTimer);
     document.removeEventListener("click", _popoverOutsideClick);
     _popoverAttachTimer = setTimeout(function () {
@@ -2065,28 +2112,18 @@
     document.removeEventListener("click", _popoverOutsideClick);
   }
 
-  // ---- Search (impl in transcripts-search.js) ----
-  // Thin hub delegator: boot wires initSearch. Search renders its own results
-  // internally, so no renderSearchResults delegator is needed.
+  // ---- Search delegator; implementation in transcripts-search.js ----
   function initSearch() {
     return TS.initSearch && TS.initSearch();
   }
 
-  // ---- Participant pills (impl in transcripts-pills.js) ----
-  // Thin hub delegators: loadParticipants / selectParticipant / pollTaskStatus
-  // call renderPills; boot wires initPillOutsideClick / initPillWheelScroll; the
-  // Transcribe All quick action enqueues through transcribeParticipants.
+  // ---- Participant pill delegators; implementation in transcripts-pills.js ----
   function renderPills() { return TS.renderPills && TS.renderPills(); }
   function transcribeParticipants() { return TS.transcribeParticipants && TS.transcribeParticipants.apply(null, arguments); }
   function initPillOutsideClick() { return TS.initPillOutsideClick && TS.initPillOutsideClick(); }
   function initPillWheelScroll() { return TS.initPillWheelScroll && TS.initPillWheelScroll(); }
 
-  // _confirmUncachedWhisperModels stays in the hub (model-install state:
-  // _trModelsCache / _trModelsCachePromise / _whisperDownloadConfirmed +
-  // confirmModelInstall). The pills satellite's _postTranscribe reaches it via
-  // TS._confirmUncachedWhisperModels.
-
-  // Confirm each distinct non-cached Whisper model in turn; any cancel aborts.
+  // Confirm each uncached Whisper model in turn; any cancel aborts. Pills reach via TS.
   function _confirmUncachedWhisperModels(uncached) {
     return uncached.reduce(function (chain, m) {
       return chain.then(function (okSoFar) {
@@ -2108,34 +2145,45 @@
   }
 
   // ---- Task polling ----
-  // state.pollPoller → pollTaskStatus for Whisper jobs; summary/citations use
-  // separate pollers (see file header).
+  // Whisper jobs only; summary/citations have their own pollers (see file header).
+
+  // First poll after POLL_INTERVAL, not immediately.
+  var _taskPoller = createManagedPoller(pollTaskStatus, POLL_INTERVAL, {
+    runImmediately: false,
+    label: "transcripts.tasks",
+  });
 
   function startPolling() {
-    if (state.pollPoller) return;
-    // runImmediately is false to match the previous setInterval (first poll after POLL_INTERVAL).
-    state.pollPoller = createPoller(pollTaskStatus, POLL_INTERVAL, { runImmediately: false });
-    state.pollPoller.start();
+    _taskPoller.start();
   }
 
   function stopPolling() {
-    if (state.pollPoller) {
-      state.pollPoller.stop();
-      state.pollPoller = null;
-    }
+    _taskPoller.stop();
   }
 
-  // Keyed by task id (NOT participant) so each task's completion is handled
-  // exactly once. A participant can have several completed tasks over a session
-  // (re-transcription creates a new task while old completed tasks linger in the
-  // worker and are restored from the manifest), so a participant key would let a
-  // stale completed task suppress the new run's completion transition.
+  // Keyed by task id, not participant: old completed tasks linger and would suppress new runs.
   var _refreshedCompletedTaskIds = {};
-  // After a whisper task flips to "completed", keep the main poll loop alive
-  // for a few cycles so the summary "Generating…" state surfaces even if the
-  // next /api/participants or /api/summary response races the in-flight slot.
+  // Poll cycles kept alive after completion so the agent "Generating…" state surfaces.
   var _postCompletionGrace = 0;
   var POST_COMPLETION_GRACE_CYCLES = 4; // ~12s at POLL_INTERVAL=3000ms
+
+  // "Cancelling…" ceiling; only a wedged worker gets near it. Hands the stop button back.
+  var CANCEL_PENDING_MAX_MS = 30000;
+
+  // Drop pending-cancel flags for tasks no longer active or past the ceiling.
+  function _sweepCancellingTasks() {
+    var active = {};
+    for (var i = 0; i < state.tasks.length; i++) {
+      var t = state.tasks[i];
+      if (t.status === "running" || t.status === "queued") active[t.id] = true;
+    }
+    var now = Date.now();
+    for (var id in state.cancellingTasks) {
+      if (!active[id] || now - state.cancellingTasks[id].at > CANCEL_PENDING_MAX_MS) {
+        delete state.cancellingTasks[id];
+      }
+    }
+  }
 
   function _anyAgentActive() {
     for (var i = 0; i < state.participants.length; i++) {
@@ -2145,23 +2193,15 @@
     return false;
   }
 
-  // During the post-completion grace window an agent may register as running a
-  // cycle or two after the whisper task completes. Re-load the selected
-  // participant's summary so renderSummaryGenerating()/_startSummaryPoll fire
-  // once the backend reports it generating; also refresh friction when its dep
-  // is met. Guarded so it won't stomp an already-armed/rendered panel.
+  // Agents may register as running a cycle after completion; reload panels without stomping armed ones.
   function _rearmSelectedAgentPanels() {
     var pid = state.selectedParticipant;
     if (!pid) return;
     var p = _currentParticipant();
     var summaryRunning = !!(p && p.agents && p.agents.summary === "running");
-    // _summaryPoller lives in the agents satellite; ask it whether the summary
-    // poll is already armed (TS.isSummaryPolling) rather than reading the var.
+    // _summaryPoller lives in the agents satellite; ask via TS.isSummaryPolling.
     if (summaryRunning && !(TS.isSummaryPolling && TS.isSummaryPolling()) && !state.summaryText) loadSummary(pid);
-    // Reload friction when the panel is empty, or when the deterministic-only
-    // placeholder is showing and the summary-gated agent has now started/finished
-    // — otherwise the deterministic blob keeps this guard shut and
-    // the AI moments would never replace it (see agents/CODE-REVIEW.md poll gates).
+    // Also reload when only deterministic scores show and the agent has since run.
     var frictionActive = !!(p && p.agents && (p.agents.friction === "running" || p.agents.friction === "done"));
     var showingDeterministic = !!(state.frictionData && state.frictionData.deterministic);
     if (!state.frictionGenerating && _frictionDepMet() &&
@@ -2170,51 +2210,41 @@
     }
   }
 
-  // Called from pill agent onStart/onStop after the API POST resolves.
-  // Reloads participants so pill state reflects the new running/idle state
-  // immediately, and starts the poll loop so the pill keeps updating without
-  // waiting for the next external trigger (poll loop is otherwise gated on
-  // `_anyAgentActive()` which reads stale state right after a manual run).
+  // After a pill agent start/stop: reload pills now and kick the poll loop.
   function _refreshAgentStateNow() {
     loadParticipants().then(function () {
       if (_anyAgentActive()) startPolling();
     });
   }
 
-  // Reconcile a participant that is still showing the streaming view against the
-  // backend: if its whisper task has finished (no running/queued task remains
-  // and a completed one exists) and its transcript is ready, swap the streaming
-  // "Transcribing… X%" footer for the finalized transcript and reveal the
-  // analysis panel — mirroring selectParticipant's has_transcript path. Called
-  // every poll, so it self-heals: state.streamingParticipant is only cleared
-  // once the finalized transcript has actually rendered, so a transient API
-  // failure just retries on the next poll instead of freezing the footer.
+  // Swap the streaming view for the final transcript; retried each poll until rendered.
   function _finalizeStreamingIfComplete(pid) {
     var running = false;
     var completed = false;
     for (var i = 0; i < state.tasks.length; i++) {
       var t = state.tasks[i];
-      if (t.participant !== pid) continue;
+      if (t.participant !== pid || _isSpeakerTask(t)) continue;
       if (t.status === "running" || t.status === "queued") running = true;
       else if (t.status === "completed") completed = true;
     }
-    // Still transcribing → leave the streaming view up; a later poll re-enters.
     if (running) return;
-    // No running task and nothing completed (failed/cancelled/dismissed) → drop
-    // the streaming flag so the normal empty/failed rendering can take over and
-    // the poll loop can wind down (matches the prior behaviour here).
+    // Failed/cancelled/dismissed: drop the flag so normal rendering takes over.
     if (!completed) {
       state.streamingParticipant = null;
+      // Keep the partial rows, drop the footer; cancel the queued RAF insert first.
+      _cancelStreamingIndicator();
+      var ind = document.querySelector("#segmentList .streaming-indicator");
+      if (ind) ind.parentNode.removeChild(ind);
       return;
     }
     var ver = state.participantReqVer;
     apiGet("api/transcript/" + pid).then(function (data) {
       if (ver !== state.participantReqVer || state.selectedParticipant !== pid) return;
-      // Transcript not merged yet (rare race) → keep streamingParticipant set so
-      // the next poll retries rather than leaving a frozen footer.
+      // Not merged yet: keep the flag so the next poll retries.
       if (!(data.ok && data.segments && data.segments.length > 0)) return;
       state.streamingParticipant = null;
       state.segments = data.segments;
+      state.speakers = data.speakers || null;
       state.activeSegmentIndex = -1;
       renderSegments();
       renderTimeline();
@@ -2229,31 +2259,30 @@
     apiGet("api/transcribe/status").then(function (data) {
       if (!data.ok) return;
       state.tasks = data.tasks;
+      // Sweep first; the fill, indicator and pills below all read the flag.
+      _sweepCancellingTasks();
       if (_anyTxEtaActive()) _txEtaTicker.ensure();
 
-      // Fill the timeline in sync with the selected participant's transcription
-      // progress (starts/updates/clears the band purely from state.tasks).
       updateTranscribeFill();
 
-      // Snapshot before _finalizeStreamingIfComplete can clear streamingParticipant
-      // in its async /api/transcript callback; the newlyCompleted refresh must not
-      // double-fire loadTranscript/loadSummary/loadFriction for that transition.
+      // Snapshot before _finalizeStreamingIfComplete clears it asynchronously.
       var wasStreamingSelected =
         state.streamingParticipant === state.selectedParticipant;
 
-      // Re-render the status circle immediately so completed tasks reflect
-      // before the async loadParticipants()/loadTranscript() chain resolves.
-      // This is what keeps the indicator from freezing at "95%".
+      // Now, not after the async chain, or the indicator freezes at "95%".
       updateStatusIndicator();
 
       // Stream partial segments for the selected participant's running task
       var selectedRunningTask = null;
       if (state.selectedParticipant) {
         data.tasks.forEach(function (t) {
+          if (_isSpeakerTask(t)) return;
           if (t.participant === state.selectedParticipant && t.status === "running" && t.partial_count) {
             selectedRunningTask = t;
           }
         });
+        // Keep the wait text current; same task pick as the status indicator.
+        _setTranscriptEmptyText(_taskForSelectedParticipant());
       }
       if (selectedRunningTask) {
         state.streamingParticipant = state.selectedParticipant;
@@ -2262,39 +2291,31 @@
           if (segs.length > 0) renderPartialSegments(segs, selectedRunningTask.progress);
         });
       } else if (state.streamingParticipant) {
-        // The selected participant's streaming view is up but it has no running
-        // task. Finalize in place once its transcript is ready. This is
-        // state-driven and retried every poll (not a one-shot tied to the
-        // newlyCompleted de-dup), so a transient /api/participants or
-        // /api/transcript failure can't leave the "Transcribing… X%" footer
-        // frozen forever. It owns clearing state.streamingParticipant.
+        // Streaming view up with no running task; finalize once the transcript is ready.
         _finalizeStreamingIfComplete(state.streamingParticipant);
       }
 
       var hasActive = false;
       var newlyCompleted = [];
+      var newlySpeakers = [];
       data.tasks.forEach(function (t) {
         if (t.status === "queued" || t.status === "running") hasActive = true;
         if (t.status === "completed" && !_refreshedCompletedTaskIds[t.id]) {
-          newlyCompleted.push(t.participant);
+          // Speaker passes reload labels only; they never reset marks or agents.
+          (_isSpeakerTask(t) ? newlySpeakers : newlyCompleted).push(t.participant);
           _refreshedCompletedTaskIds[t.id] = true;
         }
       });
 
-      // Refresh participants and transcript as each task completes.
-      // Thinking-agents (summary → citations) are spawned on whisper completion
-      // and on server startup, so we always refresh after anything completes
-      // or if any agent is currently running on any pill.
-      // Refresh during the grace window too, so participants are re-fetched each
-      // cycle until the summary agent registers as running (or grace expires).
+      // Refresh on completion, while any agent runs, and through the grace window.
       var needsRefresh =
-        newlyCompleted.length > 0 || _anyAgentActive() || _postCompletionGrace > 0;
+        newlyCompleted.length > 0 || newlySpeakers.length > 0 ||
+        _anyAgentActive() || _postCompletionGrace > 0;
       if (newlyCompleted.length > 0) {
-        // Re-arm on every fresh completion so a multi-participant queue keeps
-        // extending the grace window.
+        // Re-arm per completion so a queue keeps extending the window.
         _postCompletionGrace = POST_COMPLETION_GRACE_CYCLES;
         _streamingMarks = {};
-        _streamingMarksLoaded = false;
+        _streamingMarksLoadedByPid = {};
         _bumpStreamingMarksVersion();
       }
       if (needsRefresh) {
@@ -2302,31 +2323,21 @@
           if (newlyCompleted.length > 0 && state.selectedParticipant &&
               newlyCompleted.indexOf(state.selectedParticipant) >= 0 &&
               !wasStreamingSelected) {
-            // The selected participant finished but was NOT mid-stream in this
-            // view (e.g. it was queued/idle when it completed), so reveal the
-            // analysis panel and load the finalized transcript here, mirroring
-            // selectParticipant's has_transcript path. The streaming→done case
-            // is owned by _finalizeStreamingIfComplete (state-driven + retried),
-            // so skip when wasStreamingSelected to avoid double-firing after it
-            // clears streamingParticipant and loads summary/friction first.
+            // Completed while not streaming; the streaming case belongs to _finalizeStreamingIfComplete.
             _setAnalysisPanelVisible(true);
             _restoreActiveTab(state.selectedParticipant);
             loadTranscript(state.selectedParticipant);
             loadSummary(state.selectedParticipant);
             loadFriction(state.selectedParticipant);
+          } else if (state.selectedParticipant &&
+              newlySpeakers.indexOf(state.selectedParticipant) >= 0) {
+            loadTranscript(state.selectedParticipant);
           } else if (state.selectedParticipant) {
-            // Summary/citations/friction may be auto-chaining server-side after
-            // an earlier completion, or registering during the grace window;
-            // re-arm the selected participant's panels so the running state
-            // surfaces without a manual reload.
+            // Agents may be chaining server-side; surface the running state.
             _rearmSelectedAgentPanels();
           }
           updateStatusIndicator();
-          // Agents typically kick in right after whisper completes; keep the
-          // poll alive across the grace window so dot transitions (running →
-          // done → next) are seen even before the agent registers as running.
-          // Also stay alive while a streaming view still needs finalizing, so
-          // _finalizeStreamingIfComplete keeps retrying until it renders.
+          // Stay alive through the grace window and while a stream awaits finalizing.
           if (_anyAgentActive() || _postCompletionGrace > 0 || state.streamingParticipant) startPolling();
           else if (!hasActive) {
             stopPolling();
@@ -2344,24 +2355,19 @@
 
       if (!hasActive && _hadActiveTranscriptionLastPoll) {
         refreshTranscriptionModelHintOnce();
-        // Transcription just finished — re-validate downloads against real
-        // cache state (downloaded → no prompt, failed → prompt again).
+        // Transcription finished; re-read real cache state before the next gate.
         _forgetWhisperDownloadAgreements();
       }
       _hadActiveTranscriptionLastPoll = hasActive;
 
-      // Count down the grace window at the end so the current cycle still
-      // counts as "in grace" for the decisions above.
+      // Count down last so this cycle still counts as in grace.
       if (_postCompletionGrace > 0) _postCompletionGrace--;
 
       renderPills();
     });
   }
 
-  // ---- Corrections modal (impl in transcripts-corrections.js) ----
-  // Thin hub delegators forward to the satellite; the inline-edit
-  // saveCorrections() flow (loadCorrections) and boot (initCorrectionsModal)
-  // keep calling these bare names.
+  // ---- Corrections modal delegators; implementation in transcripts-corrections.js ----
   function initCorrectionsModal() {
     return TS.initCorrectionsModal && TS.initCorrectionsModal();
   }
@@ -2369,32 +2375,14 @@
     return TS.loadCorrections && TS.loadCorrections();
   }
 
-  function initTooltipToggle() {
-    state.tooltipsEnabled = getStoredTooltipPref();
-    var btn = qs("#tooltipToggle");
-    if (!btn) return;
-    btn.setAttribute("aria-pressed", state.tooltipsEnabled ? "true" : "false");
-    btn.addEventListener("click", function () {
-      state.tooltipsEnabled = !state.tooltipsEnabled;
-      btn.setAttribute("aria-pressed", state.tooltipsEnabled ? "true" : "false");
-      setStoredTooltipPref(state.tooltipsEnabled);
-      if (state.segments.length > 0) renderSegments();
-    });
-  }
-
   // ---- Settings (shared modal lives in settings-modal.js) ----
 
-  // Models are also fetched for per-pill model overrides; keep a tiny
-  // cached fetcher here. The shared modal maintains its own cache.
+  // Cached models fetch for per-pill overrides; the shared modal has its own cache.
   var _trModelsCache = null;
   var _trModelsCachePromise = null;
-  // Whisper models the user has already agreed to download this session. The
-  // models response is cached and a just-confirmed model won't read back as
-  // cached until its background download finishes, so without this we'd
-  // re-prompt on every transcription. Keyed by model name.
+  // Model name -> agreed this session; a downloading model still reads as uncached.
   var _whisperDownloadConfirmed = {};
-  // Serializes confirmModelInstall() calls: there is one shared modal element,
-  // so overlapping callers (e.g. prewarm + an agent run) must take turns.
+  // Serializes confirmModelInstall(); there is one shared modal element.
   var _modelInstallChain = Promise.resolve();
 
   function _trFetchModels() {
@@ -2402,10 +2390,8 @@
     if (_trModelsCachePromise) return _trModelsCachePromise;
     _trModelsCachePromise = apiGet("/api/models")
       .then(function (data) {
-        // Don't pin a result where Ollama wasn't reachable — otherwise the
-        // agent gate and pickers stay blind to installed models for the whole
-        // session. Reset so the next call re-fetches once the server is up.
-        if (data && data.ok && !(data.ollama && data.ollama.available === false)) {
+        // Never cache an unreachable-AI-server result; re-fetch next call.
+        if (data && data.ok && !(data.llm && data.llm.available === false)) {
           _trModelsCache = data;
         } else {
           _trModelsCachePromise = null;
@@ -2416,12 +2402,7 @@
     return _trModelsCachePromise;
   }
 
-  // Audio-track layout per participant, shared by the volume mixer (which only
-  // ever wants the *selected* participant) and the pill transcribe picker (which
-  // opens for any pill). One endpoint, one cache — two independent fetchers of
-  // /api/audio-info would drift. Keyed by pid + video_version (an mtime sum from
-  // /api/participants) so replacing a source file re-probes; bounded by the
-  // participant count. Never cached on a failed response.
+  // One /api/audio-info cache for mixer and pill picker; keyed by pid + video_version.
   var _trAudioInfoCache = {};
   var _trAudioInfoPromises = {};
 
@@ -2429,9 +2410,7 @@
     return pid + ":" + (videoVersion == null ? "" : videoVersion);
   }
 
-  // Synchronous peek — returns the cached layout or null. Lets the pill popover
-  // render its track row in the same tick when warm, so the 3 s poll's pane
-  // rebuild doesn't strobe the row in and out.
+  // Synchronous peek so the pill popover's track row doesn't strobe per poll.
   function audioInfoCached(pid, videoVersion) {
     return _trAudioInfoCache[_trAudioInfoKey(pid, videoVersion)] || null;
   }
@@ -2459,9 +2438,7 @@
   }
 
   // ---- Local-model install confirmation ----
-  // Both whisper transcription models and Ollama agent models are "local
-  // models" that get installed on demand. We never download one silently:
-  // confirmModelInstall() gates every install behind an explicit dialog.
+  // confirmModelInstall() gates every Whisper and GGUF download behind a dialog.
 
   function _trFormatModelSize(mb) {
     if (!mb || mb <= 0) return "";
@@ -2469,90 +2446,46 @@
     return Math.round(mb) + " MB";
   }
 
-  // Stream an Ollama pull, reporting progress dicts via onProgress. Resolves
-  // true on success, false on failure/cancellation. isCancelled() is polled
-  // each tick so a dismissed dialog stops the poll (the server-side pull keeps
-  // running and resumes from cached layers). The poll also self-terminates
-  // after a run of unanswered status checks so it can never leak forever.
-  function installOllamaModel(model, onProgress, isCancelled) {
-    return apiPost("api/models/ollama/pull", { model: model }).then(function (data) {
+  // Resolves true on success. Dismissal stops the poll only; the server download continues.
+  function downloadLlmModel(model, onProgress, isCancelled) {
+    return apiPost("api/models/llm/download", { model: model }).then(function (data) {
       if (!data || !data.ok) return false;
       return new Promise(function (resolve) {
+        // createPoller pauses in a backgrounded tab; a raw setInterval would not.
         var misses = 0;
-        var poll = setInterval(function () {
+        var poller = createPoller(function () {
           if (isCancelled && isCancelled()) {
-            clearInterval(poll);
+            poller.stop();
             resolve(false);
             return;
           }
-          apiGet("api/models/ollama/pull-status?model=" + encodeURIComponent(model))
+          apiGet("api/models/llm/download-status?model=" + encodeURIComponent(model))
             .then(function (st) {
               if (!st || !st.ok || !st.found) {
-                if (++misses >= 20) { clearInterval(poll); resolve(false); }
+                if (++misses >= 20) { poller.stop(); resolve(false); }
                 return;
               }
               misses = 0;
               if (onProgress) onProgress(st);
               if (st.done) {
-                clearInterval(poll);
+                poller.stop();
                 resolve(!!st.succeeded);
               }
             })
             .catch(function () {
-              if (++misses >= 20) { clearInterval(poll); resolve(false); }
+              if (++misses >= 20) { poller.stop(); resolve(false); }
             });
-        }, 1000);
+        }, 1000, { runImmediately: true, label: "transcripts.llmDownload" });
+        poller.start();
       });
     }).catch(function () { return false; });
   }
 
-  // Stream the managed install of the Ollama CLI itself (macOS): same
-  // start-then-poll shape as installOllamaModel, against the unkeyed
-  // install/install-status endpoints. `already_installing` attaches to the
-  // in-flight install rather than failing, so a reopened dialog resumes its
-  // progress display.
-  function installOllamaRuntime(onProgress, isCancelled) {
-    return apiPost("api/models/ollama/install", {}).then(function (data) {
-      if (!data || !data.ok) return false;
-      if (data.already_installed) return true;
-      return new Promise(function (resolve) {
-        var misses = 0;
-        var poll = setInterval(function () {
-          if (isCancelled && isCancelled()) {
-            clearInterval(poll);
-            resolve(false);
-            return;
-          }
-          apiGet("api/models/ollama/install-status")
-            .then(function (st) {
-              if (!st || !st.ok || !st.found) {
-                if (++misses >= 20) { clearInterval(poll); resolve(false); }
-                return;
-              }
-              misses = 0;
-              if (onProgress) onProgress(st);
-              if (st.done) {
-                clearInterval(poll);
-                resolve(!!st.succeeded);
-              }
-            })
-            .catch(function () {
-              if (++misses >= 20) { clearInterval(poll); resolve(false); }
-            });
-        }, 1000);
-      });
-    }).catch(function () { return false; });
-  }
-
-  // Show the confirm/install dialog. Resolves true when the model is available
-  // to use (whisper: user agreed to the download; ollama: pull succeeded),
-  // false when the user cancels or the install fails. Calls are serialized
-  // (see _modelInstallChain) so concurrent callers never share the one modal.
+  // Resolves true when usable (whisper: agreed; llm: downloaded). Serialized via _modelInstallChain.
   function confirmModelInstall(opts) {
     var run = function () { return _confirmModelInstallNow(opts); };
     var result = _modelInstallChain.then(run, run);
-    // Advance the chain when this dialog settles, swallowing its outcome so a
-    // cancelled/failed dialog doesn't break the queue for the next caller.
+    // Swallow the outcome so a failed dialog doesn't break the queue.
     _modelInstallChain = result.then(function () {}, function () {});
     return result;
   }
@@ -2568,54 +2501,37 @@
       var progressText = qs("#modelInstallProgressText");
       var cancelBtn = qs("#modelInstallCancel");
       var confirmBtn = qs("#modelInstallConfirm");
-      var altBtn = qs("#modelInstallAlt");
       var hintEl = qs("#modelInstallHint");
+      var licenseEl = qs("#modelInstallLicense");
+      var licenseLink = qs("#modelInstallLicenseLink");
+
+      // Shimmer only while moving; pass working=false for terminal states.
+      function setProgressText(text, working) {
+        progressText.classList.toggle("cg-shimmer", working !== false);
+        progressText.textContent = text;
+      }
 
       progress.classList.add("hidden");
       barFill.style.width = "0%";
-      progressText.textContent = "";
+      setProgressText("", false);
       hintEl.classList.add("hidden");
       hintEl.textContent = "";
+      licenseEl.classList.add("hidden");
+      licenseLink.removeAttribute("href");
       cancelBtn.disabled = false;
       cancelBtn.textContent = "Cancel";
       confirmBtn.disabled = false;
       confirmBtn.classList.remove("hidden");
-      altBtn.classList.add("hidden");
-      altBtn.disabled = false;
 
-      if (opts.kind === "ollama-runtime") {
-        // Ollama itself is missing or down — a different problem from "the
-        // model isn't pulled", and previously the one case the gate stayed
-        // silent about. On macOS clipgen can download the CLI itself
-        // (consent-gated, this dialog *is* the consent); elsewhere we show the
-        // commands and offer a re-check. For "stopped", starting the server is
-        // something clipgen can genuinely do on the user's behalf.
-        // Not status.message: that one is written for a panel banner and ends
-        // in "then Refresh", which is the wrong instruction next to a button
-        // that does the re-check itself.
-        if (opts.state === "missing") {
-          titleEl.textContent = "Ollama isn't installed";
-          if (opts.canInstall) {
-            var dlSize = opts.installSizeMb ? " (~" + _trFormatModelSize(opts.installSizeMb) + ")" : "";
-            msgEl.textContent = "clipgen couldn't find Ollama on this machine. " +
-              "The AI summaries, citations and reports need it — everything else works without it. " +
-              "clipgen can download it for you" + dlSize + ", or install it yourself:";
-            confirmBtn.textContent = "Download & install";
-            altBtn.classList.remove("hidden");
-          } else {
-            msgEl.textContent = "clipgen couldn't find Ollama on this machine. " +
-              "The AI summaries, citations and reports need it — everything else works without it.";
-            confirmBtn.textContent = "I've installed it — retry";
-          }
-          if (opts.hint && opts.hint.length) {
-            hintEl.textContent = opts.hint.join("\n");
-            hintEl.classList.remove("hidden");
-          }
-        } else {
-          titleEl.textContent = "Ollama isn't running";
-          msgEl.textContent = "Ollama is installed but isn't answering at " +
-            (opts.baseUrl || "localhost") + ". clipgen can start it for you.";
-          confirmBtn.textContent = "Start Ollama";
+      if (opts.kind === "llm-runtime") {
+        // Source-tree runs only (frozen builds bundle llama-server). Not status.message: its "then Refresh" misleads here.
+        titleEl.textContent = "AI runtime isn't installed";
+        msgEl.textContent = "clipgen couldn't find llama-server on this machine. " +
+          "The AI summaries, citations and reports need it — everything else works without it.";
+        confirmBtn.textContent = "I've installed it — retry";
+        if (opts.hint && opts.hint.length) {
+          hintEl.textContent = opts.hint.join("\n");
+          hintEl.classList.remove("hidden");
         }
       } else if (opts.kind === "whisper") {
         titleEl.textContent = "Download transcription model?";
@@ -2629,17 +2545,21 @@
         }
         confirmBtn.textContent = "Download";
       } else {
-        titleEl.textContent = "Install AI model?";
-        msgEl.textContent = 'The Ollama model "' + opts.model + '" used by the ' +
-          (opts.agentKey || "analysis") +
-          " agent isn't installed. Install it now? This downloads the model locally and may take several minutes.";
-        confirmBtn.textContent = "Install";
+        titleEl.textContent = "Download AI model?";
+        msgEl.textContent = 'The AI model "' + (opts.label || opts.model) +
+          '" used by the ' + (opts.agentKey || "analysis") +
+          " agent isn't downloaded. Download it now? The model is stored locally and may take several minutes.";
+        // Curated models only; shows whose terms a multi-GB download accepts.
+        if (opts.modelUrl) {
+          licenseLink.href = opts.modelUrl;
+          licenseEl.classList.remove("hidden");
+        }
+        confirmBtn.textContent = "Download";
       }
 
       function cleanup() {
         cancelBtn.removeEventListener("click", onCancel);
         confirmBtn.removeEventListener("click", onConfirm);
-        altBtn.removeEventListener("click", onRuntimeConfirm);
         closeBlockingModal(modal);
       }
       function close(result) {
@@ -2650,141 +2570,69 @@
       }
       function onCancel() { close(false); }
 
-      // "Start Ollama" / "I've installed it — retry": both end in the same
-      // question — is Ollama usable now? Re-fetch rather than trusting the
-      // start call, so a server that spawned but never came up still reads as
-      // a failure.
+      // Re-fetch rather than trust the user; a runtime still off PATH fails.
       function onRuntimeConfirm() {
         confirmBtn.disabled = true;
-        altBtn.disabled = true;
         progress.classList.remove("hidden");
-        progressText.textContent = opts.state === "stopped" ? "Starting…" : "Checking…";
-        var step = opts.state === "stopped"
-          ? apiPost("/api/models/ollama/start", {}).catch(function () { return null; })
-          : Promise.resolve(null);
-        // Re-enabling the button and relabelling Cancel is the only way out of
-        // the "Checking…" state, so it has to happen on *every* ending — a
-        // /api/models that rejects left the dialog stuck mid-check with both
-        // buttons dead.
+        setProgressText("Checking…");
+        // Must run on every ending, or the dialog sticks mid-check with dead buttons.
         function stillUnavailable(text) {
           if (cancelled) return;
-          progressText.textContent = text;
+          setProgressText(text, false);
           confirmBtn.disabled = false;
-          altBtn.disabled = false;
           cancelBtn.textContent = "Close";
         }
 
-        step.then(function () {
-          _trModelsCache = null;
-          _trModelsCachePromise = null;
-          return _trFetchModels();
-        }).then(function (data) {
+        _trModelsCache = null;
+        _trModelsCachePromise = null;
+        _trFetchModels().then(function (data) {
           if (cancelled) return;
-          // _trFetchModels resolves null rather than rejecting when the fetch
-          // fails, and clipgenOllamaStatus(null) is "ok" by design (an unknown
-          // state must never block an action elsewhere). Here that default is
-          // wrong in the other direction: the user asked "is it ready now?" and
-          // a failed check is not a yes.
+          // clipgenLlmStatus(null) reads "ok"; here a failed check is not a yes.
           if (!data || !data.ok) {
             stillUnavailable("Couldn't check — clipgen didn't answer. Try again.");
             return;
           }
-          if (clipgenOllamaStatus(data.ollama).state === "ok") {
-            showToast("Ollama is ready");
+          // "stopped" counts; a fresh install is never running yet.
+          if (clipgenLlmStatus(data.llm).state !== "missing") {
+            showToast("AI runtime found");
             close(true);
             return;
           }
-          stillUnavailable(opts.state === "stopped"
-            ? "Ollama still isn't responding."
-            : "Still not finding Ollama. Open a new terminal and check `ollama --version`.");
+          stillUnavailable(
+            "Still not finding it. Open a new terminal and check `llama-server --version`.");
         }).catch(function () {
           stillUnavailable("Couldn't check — clipgen didn't answer. Try again.");
         });
       }
 
-      // Download the Ollama CLI itself, then chain into the same "is it usable
-      // now?" sequence the Start button runs: serve → refetch → status check.
-      // The server-side install keeps running if the dialog is dismissed, and
-      // reopening re-attaches via `already_installing` + the status poll.
-      function onManagedInstall() {
-        confirmBtn.classList.add("hidden");
-        altBtn.classList.add("hidden");
-        hintEl.classList.add("hidden");
-        progress.classList.remove("hidden");
-        progressText.textContent = "Starting download…";
-        installOllamaRuntime(function (st) {
-          if (st.total > 0) {
-            var pct = Math.max(0, Math.min(100, Math.round((st.completed / st.total) * 100)));
-            barFill.style.width = pct + "%";
-            progressText.textContent = (st.status || "Downloading") + ": " + pct + "%";
-          } else {
-            progressText.textContent = st.status || "Working…";
-          }
-        }, function () { return cancelled; }).then(function (installed) {
-          if (cancelled) return;
-          if (!installed) {
-            progressText.textContent = "Installation failed. You can install Ollama yourself:";
-            if (opts.hint && opts.hint.length) {
-              hintEl.textContent = opts.hint.join("\n");
-              hintEl.classList.remove("hidden");
-            }
-            cancelBtn.textContent = "Close";
-            return;
-          }
-          progressText.textContent = "Installed. Starting Ollama…";
-          apiPost("/api/models/ollama/start", {}).catch(function () { return null; })
-            .then(function () {
-              _trModelsCache = null;
-              _trModelsCachePromise = null;
-              return _trFetchModels();
-            }).then(function (data) {
-              if (cancelled) return;
-              if (data && data.ok && clipgenOllamaStatus(data.ollama).state === "ok") {
-                showToast("Ollama installed and running");
-                close(true);
-                return;
-              }
-              progressText.textContent = "Installed, but Ollama isn't answering yet. Close and retry the action.";
-              cancelBtn.textContent = "Close";
-            }).catch(function () {
-              if (cancelled) return;
-              progressText.textContent = "Installed, but couldn't confirm Ollama is running. Close and retry the action.";
-              cancelBtn.textContent = "Close";
-            });
-        });
-      }
-
       function onConfirm() {
-        if (opts.kind === "ollama-runtime") {
-          if (opts.state === "missing" && opts.canInstall) { onManagedInstall(); return; }
+        if (opts.kind === "llm-runtime") {
           onRuntimeConfirm();
           return;
         }
         if (opts.kind === "whisper") { close(true); return; }
-        // Ollama: kick off the pull and show progress in place. Cancel stays
-        // enabled so the user can dismiss while it runs.
+        // llm: download with progress in place; Cancel stays enabled.
         confirmBtn.classList.add("hidden");
         progress.classList.remove("hidden");
-        progressText.textContent = "Starting…";
-        installOllamaModel(opts.model, function (st) {
+        setProgressText("Starting…");
+        downloadLlmModel(opts.model, function (st) {
           if (st.total > 0) {
             var pct = Math.max(0, Math.min(100, Math.round((st.completed / st.total) * 100)));
             barFill.style.width = pct + "%";
-            progressText.textContent = (st.status || "Downloading") + ": " + pct + "%";
+            setProgressText((st.status || "Downloading") + ": " + pct + "%");
           } else {
-            progressText.textContent = st.status || "Working…";
+            setProgressText(st.status || "Working…");
           }
         }, function () { return cancelled; }).then(function (ok) {
-          if (cancelled) return; // dialog dismissed mid-pull — no toast, no re-close
+          if (cancelled) return; // dismissed mid-download: no toast, no re-close
           if (ok) {
             _trModelsCache = null;
             _trModelsCachePromise = null;
-            showToast("Model installed");
+            showToast("Model downloaded");
             close(true);
           } else {
-            // Leave the dialog open so the user can read the failure and
-            // dismiss it; Cancel now resolves false.
-            progressText.textContent = "Installation failed. Check that Ollama is running.";
+            // Stay open so the failure is readable; Cancel now resolves false.
+            setProgressText("Download failed. Check the model name and connection.", false);
             cancelBtn.textContent = "Close";
           }
         });
@@ -2792,42 +2640,35 @@
 
       cancelBtn.addEventListener("click", onCancel);
       confirmBtn.addEventListener("click", onConfirm);
-      altBtn.addEventListener("click", onRuntimeConfirm);
       modal.classList.remove("hidden");
-      // Escape and backdrop click both cancel (no focus trap — matches prior
-      // behavior for this lightweight progress dialog).
+      // Escape and backdrop click both cancel; no focus trap.
       openBlockingModal(modal, { onEscape: onCancel, onBackdropClick: onCancel });
     });
   }
 
-  // Gate an agent run on Ollama being usable and its model being installed.
-  // Resolves true to proceed, false to abort.
-  //
-  // This used to return true whenever Ollama was unreachable, on the theory
-  // that the downstream "model unavailable" error would explain it — but that
-  // error only appears on two of the agent surfaces, and never says how to fix
-  // anything. An unreachable Ollama is the state a first-time user is actually
-  // in, so it gets its own dialog. An *unknown* state (fetch failed) still
-  // passes through: never block an action on a question we couldn't ask.
+  // Gate an agent run: start a stopped runtime, ask about a missing one.
   function ensureAgentModelInstalled(agentKey) {
     return _trFetchModels().then(function (data) {
-      var oll = data && data.ollama;
-      if (!oll) return true;
-      var status = clipgenOllamaStatus(oll);
-      if (status.state !== "ok") {
+      var llm = data && data.llm;
+      if (!llm) return true;
+      var status = clipgenLlmStatus(llm);
+      if (status.state === "stopped") {
+        return _startAiServer().then(function (fresh) {
+          if (!fresh) return false;
+          // Server up says nothing about the agent's model yet.
+          return _ensureModelFromPayload(fresh, agentKey);
+        });
+      }
+      if (status.state === "missing") {
         return confirmModelInstall({
-          kind: "ollama-runtime",
-          state: status.state,
+          kind: "llm-runtime",
           baseUrl: status.baseUrl,
           hint: status.hint,
-          canInstall: status.canInstall,
-          installSizeMb: status.installSizeMb,
         }).then(function (recovered) {
           if (!recovered) return false;
-          // Ollama is up now, but that says nothing about the agent's model —
-          // the payload we started from listed no models at all. Ask again
-          // against the fresh one the dialog just refetched.
-          return _trFetchModels().then(function (fresh) {
+          // Installed now, but never already running — same path as stopped.
+          return _startAiServer().then(function (fresh) {
+            if (!fresh) return false;
             return _ensureModelFromPayload(fresh, agentKey);
           });
         });
@@ -2836,18 +2677,45 @@
     }).catch(function () { return true; });
   }
 
-  // The "is this agent's model pulled?" half of the gate, against an already
-  // fetched /api/models payload. Resolves true to proceed.
+  // Resolves the refreshed /api/models payload, or null. The toast covers the ~2 s boot.
+  function _startAiServer() {
+    showToast("Starting AI server…");
+    return apiPost("api/models/llm/start", {})
+      .then(function () {
+        _trModelsCache = null;
+        _trModelsCachePromise = null;
+        return _trFetchModels();
+      })
+      .then(function (fresh) {
+        if (fresh && fresh.ok && clipgenLlmStatus(fresh.llm).state === "ok") {
+          return fresh;
+        }
+        showToast("The AI server did not start");
+        return null;
+      })
+      .catch(function (e) {
+        showToast((e && (e.serverMessage || e.message)) || "The AI server did not start");
+        return null;
+      });
+  }
+
+  // Model-downloaded half of the gate, against a fetched /api/models payload.
   function _ensureModelFromPayload(data, agentKey) {
-    var oll = data && data.ollama;
-    if (!oll) return true;
-    var agents = oll.agents || [];
+    var llm = data && data.llm;
+    if (!llm) return true;
+    var agents = llm.agents || [];
     var info = null;
     for (var i = 0; i < agents.length; i++) {
       if (agents[i].key === agentKey) { info = agents[i]; break; }
     }
     if (!info || info.installed || !info.model) return true;
-    return confirmModelInstall({ kind: "ollama", agentKey: agentKey, model: info.model });
+    return confirmModelInstall({
+      kind: "llm",
+      agentKey: agentKey,
+      model: info.model,
+      label: info.label,
+      modelUrl: info.model_url,
+    });
   }
 
   function _applySettingsSnapshot(applied, settings) {
@@ -2878,13 +2746,25 @@
       hideMarkPopover();
       if (state.selectedParticipant) loadTranscript(state.selectedParticipant);
     }
+    if (applyCrossRefSetting(applied, settings)) rerenderCrossRefs();
+    var spk = applied && applied.TRANSCRIBE_SPEAKERS !== undefined
+      ? applied.TRANSCRIBE_SPEAKERS
+      : _settingValueFromRecords(settings, "TRANSCRIBE_SPEAKERS");
+    if (spk !== undefined && !!spk !== CLIPGEN_CONFIG.transcribeSpeakers) {
+      CLIPGEN_CONFIG.transcribeSpeakers = !!spk;
+      // Unset pill switches follow the global; the transcript re-reads chip visibility.
+      renderPills();
+      if (state.selectedParticipant) loadTranscript(state.selectedParticipant);
+    }
   }
 
-  // A changed transcription model invalidates the prewarm guards: the new
-  // model may be uncached and must get its own download confirmation, so we
-  // clear the "already posted/declined" state and let prewarm re-offer it.
-  // Clearing the declined model also means re-selecting a previously-declined
-  // model gets a fresh prompt (the user explicitly chose it again).
+  // Shared by the settings modal and the command palette's cross-ref command.
+  function rerenderCrossRefs() {
+    if (state.segments.length > 0) renderSegments();
+  }
+  window.clipgenRerenderCrossRefs = rerenderCrossRefs;
+
+  // A model change resets the prewarm guards so the new model gets its own prompt.
   function _onTranscribeModelMaybeChanged(newModel) {
     if (newModel === undefined || newModel === null) return;
     if (newModel !== _lastTranscribeModel) {
@@ -2904,290 +2784,31 @@
   }
 
   function initTranscriptSettings() {
-    var btn = qs("#settingsBtn");
-    if (!btn) return;
-    btn.addEventListener("click", function () {
-      openSettingsModal({
-        initialTab: "Transcription",
-        onSave: function (applied, settings) {
-          _trModelsCache = null;
-          _trModelsCachePromise = null;
-          _onTranscribeModelMaybeChanged(
-            (applied && applied.TRANSCRIBE_MODEL) !== undefined
-              ? applied.TRANSCRIBE_MODEL
-              : _settingValueFromRecords(settings, "TRANSCRIBE_MODEL")
-          );
-          _applySettingsSnapshot(applied, settings);
-        },
-        onReset: function (scope, settings) {
-          _trModelsCache = null;
-          _trModelsCachePromise = null;
-          _onTranscribeModelMaybeChanged(
-            _settingValueFromRecords(settings, "TRANSCRIBE_MODEL")
-          );
-          _applySettingsSnapshot(null, settings);
-        },
-      });
+    if (!window.wireSettingsButton) return;
+    window.wireSettingsButton({
+      initialTab: "Transcription",
+      onApply: function (applied, settings) {
+        _trModelsCache = null;
+        _trModelsCachePromise = null;
+        _onTranscribeModelMaybeChanged(
+          applied && applied.TRANSCRIBE_MODEL !== undefined
+            ? applied.TRANSCRIBE_MODEL
+            : _settingValueFromRecords(settings, "TRANSCRIBE_MODEL")
+        );
+        _applySettingsSnapshot(applied, settings);
+      },
     });
   }
 
-  // ---- Clip marked lines ----
-  //
-  // Cuts one clip per cluster of manually marked lines through Studio's
-  // ../studio/api/generate-intake — the same endpoint Studio's Transcript
-  // Intake tab uses, so the output lands in clipgen_manifest.json exactly as if
-  // it had been queued there, and the page needs no generation backend of its
-  // own. Unlike Studio's queue path we also send `text`/`label`, which is what
-  // gives each artifact a readable description instead of a bare category
-  // (see _process_intake_item in server.py).
-
-  // Mirrors Studio's #trIntakeClusterThreshold default so identical marks
-  // cluster identically on both pages. Padding defaults to 0 for the same
-  // reason — the spans then match Studio's exactly — but is exposed because a
-  // mark's segment boundaries sit tight against the speech, and a tight cut can
-  // clip the first or last word.
-  var CLIP_MARKS_DEFAULT_GAP_SECONDS = 10;
-  var CLIP_MARKS_DEFAULT_PAD_SECONDS = 0;
-
-  // { done, failed, total, abort } while a batch streams; null when idle. The
-  // modal can be dismissed mid-run (the run continues) and reopened onto the
-  // live progress, so this outlives the dialog.
-  var _clipMarksRun = null;
-  // Valid resolved marks, refetched every time the modal opens.
-  var _clipMarksMarks = [];
-
-  function _clipMarksScopedMarks() {
-    var scope = (qs("#clipMarksScope") || {}).value;
-    if (scope !== "current") return _clipMarksMarks;
-    var pid = state.selectedParticipant;
-    return _clipMarksMarks.filter(function (m) { return m.participant === pid; });
-  }
-
-  function _clipMarksNumber(sel, fallback, min, max) {
-    var raw = parseFloat((qs(sel) || {}).value);
-    if (isNaN(raw)) return fallback;
-    return Math.min(max, Math.max(min, raw));
-  }
-
-  // The preview and the payload cluster through the same shared helper, so the
-  // count the user reads is the number of clips they get.
-  function _clipMarksClusters() {
-    var marks = _clipMarksScopedMarks();
-    if (!marks.length) return [];
-    var gap = _clipMarksNumber("#clipMarksGap", CLIP_MARKS_DEFAULT_GAP_SECONDS, 0, 120);
-    return window.ClipgenIntakeCluster.clusterTranscriptMarks(marks, gap);
-  }
-
-  function renderClipMarksSummary() {
-    var summaryEl = qs("#clipMarksSummary");
-    var confirmBtn = qs("#clipMarksConfirm");
-    if (!summaryEl || !confirmBtn) return;
-    if (_clipMarksRun) return; // progress block owns the copy while a run streams
-    var marks = _clipMarksScopedMarks();
-    if (!marks.length) {
-      var pid = state.selectedParticipant;
-      var scope = (qs("#clipMarksScope") || {}).value;
-      summaryEl.textContent =
-        scope === "current" && pid
-          ? "No marked lines in " + pid + " yet."
-          : "No marked lines yet — mark a line with M or the gutter dot.";
-      confirmBtn.disabled = true;
-      return;
-    }
-    var clusters = _clipMarksClusters();
-    summaryEl.textContent =
-      clipgenPluralUnit(marks.length, "marked line", "marked lines") +
-      " → " +
-      clipgenPluralUnit(clusters.length, "clip", "clips");
-    confirmBtn.disabled = false;
-  }
-
-  // Both option labels carry live counts so the scope choice and its
-  // consequence are legible in one place.
-  function _renderClipMarksScopeOptions() {
-    var sel = qs("#clipMarksScope");
-    if (!sel || sel.options.length < 2) return;
-    var pid = state.selectedParticipant;
-    var mine = pid
-      ? _clipMarksMarks.filter(function (m) { return m.participant === pid; }).length
-      : 0;
-    sel.options[0].textContent =
-      (pid ? "Current participant (" + pid + ")" : "Current participant") +
-      " — " + clipgenPluralUnit(mine, "mark", "marks");
-    sel.options[0].disabled = !pid;
-    sel.options[1].textContent =
-      "All participants — " + clipgenPluralUnit(_clipMarksMarks.length, "mark", "marks");
-    if (!pid) sel.value = "all";
-  }
-
-  function _renderClipMarksProgress() {
-    var wrap = qs("#clipMarksProgress");
-    var fill = qs("#clipMarksBarFill");
-    var text = qs("#clipMarksProgressText");
-    var confirmBtn = qs("#clipMarksConfirm");
-    var cancelBtn = qs("#clipMarksCancel");
-    if (!wrap || !fill || !text || !confirmBtn || !cancelBtn) return;
-    var run = _clipMarksRun;
-    wrap.classList.toggle("hidden", !run);
-    confirmBtn.classList.toggle("hidden", !!run);
-    cancelBtn.textContent = run ? "Stop" : "Cancel";
-    if (!run) return;
-    var pct = run.total ? Math.round((run.done / run.total) * 100) : 0;
-    fill.style.width = pct + "%";
-    text.textContent =
-      "Clipping… " + run.done + "/" + run.total +
-      (run.failed ? " (" + run.failed + " failed)" : "");
-  }
-
-  function openClipMarksModal() {
-    var modal = qs("#clipMarksModal");
-    if (!modal) return;
-    modal.classList.remove("hidden");
-    openBlockingModal(modal, {
-      onEscape: closeClipMarksModal,
-      onBackdropClick: closeClipMarksModal,
-    });
-    _renderClipMarksProgress();
-    // A run in flight owns the dialog's copy; only refresh the pickers when idle.
-    if (_clipMarksRun) return;
-    qs("#clipMarksSummary").textContent = "Loading marks…";
-    qs("#clipMarksConfirm").disabled = true;
-    apiGet("api/marks")
-      .then(function (data) {
-        _clipMarksMarks = data.ok
-          ? (data.marks || []).filter(function (m) { return m.valid; })
-          : [];
-        _renderClipMarksScopeOptions();
-        renderClipMarksSummary();
-      })
-      .catch(function () {
-        qs("#clipMarksSummary").textContent = "Could not load marks.";
-      });
-  }
-
-  function closeClipMarksModal() {
-    var modal = qs("#clipMarksModal");
-    if (!modal) return;
-    closeBlockingModal(modal);
-    modal.classList.add("hidden");
-  }
-
-  function submitClipMarks() {
-    if (_clipMarksRun) return;
-    var clusters = _clipMarksClusters();
-    if (!clusters.length) return;
-    var pad = _clipMarksNumber("#clipMarksPad", CLIP_MARKS_DEFAULT_PAD_SECONDS, 0, 10);
-    // Only the start needs clamping — ffmpeg stops at EOF, and a multi-video
-    // participant's span is bounded when it is mapped onto the timeline.
-    var items = clusters.map(function (c) {
-      return {
-        participant: c.participant,
-        start: Math.max(0, c.start - pad),
-        end: c.end + pad,
-        event_type: c.category || "transcript",
-        event_ids: [],
-        source: "transcript",
-        mark_ids: c.marks.map(function (m) { return m.id; }),
-        text: c.text || "",
-        label: c.label || "",
-      };
-    });
-
-    var run = { done: 0, failed: 0, total: items.length, abort: new AbortController() };
-    _clipMarksRun = run;
-    _renderClipMarksProgress();
-
-    function handleLine(line) {
-      var data;
-      try { data = JSON.parse(line); } catch (_) { return; }
-      // The trailing {"cancelled": true} line carries no index — this also
-      // keeps it out of the completion tally.
-      if (!data || typeof data.index !== "number") return;
-      run.done++;
-      if (!data.ok) run.failed++;
-      _renderClipMarksProgress();
-    }
-
-    function finish(message) {
-      _clipMarksRun = null;
-      _renderClipMarksProgress();
-      closeClipMarksModal();
-      showToast(message);
-    }
-
-    fetch("../studio/api/generate-intake", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ items: items, format: "clip" }),
-      signal: run.abort.signal,
-    })
-      .then(function (response) {
-        if (!response.ok) throw new Error("Server error " + response.status);
-        return readNDJSONStream(response, handleLine).then(function () {
-          var made = run.done - run.failed;
-          finish(
-            run.failed
-              ? clipgenPluralUnit(made, "clip", "clips") + " generated, " + run.failed + " failed"
-              : clipgenPluralUnit(made, "clip", "clips") + " generated — open Studio to review"
-          );
-        });
-      })
-      .catch(function (err) {
-        var aborted = err && (err.name === "AbortError" || err.code === 20);
-        finish(aborted ? "Clip generation cancelled" : "Clip generation failed: " + (err && err.message));
-      });
-  }
-
-  function onClipMarksCancel() {
-    if (!_clipMarksRun) {
-      closeClipMarksModal();
-      return;
-    }
-    apiPost("../studio/api/generate-intake/cancel", {}).catch(function () {});
-    _clipMarksRun.abort.abort();
-  }
-
-  function initClipMarksModal() {
-    qs("#clipMarksCancel").addEventListener("click", onClipMarksCancel);
-    qs("#clipMarksConfirm").addEventListener("click", submitClipMarks);
-    qs("#clipMarksScope").addEventListener("change", renderClipMarksSummary);
-    qs("#clipMarksGap").addEventListener("input", renderClipMarksSummary);
-  }
+  // ---- Batch-job modal delegators; implementation in transcripts-batch.js ----
+  function openClipMarksModal() { return TS.openClipMarksModal && TS.openClipMarksModal(); }
+  function openEmbedSubsModal() { return TS.openEmbedSubsModal && TS.openEmbedSubsModal(); }
+  function openNormalizeAudioModal() { return TS.openNormalizeAudioModal && TS.openNormalizeAudioModal(); }
+  function initBatchModals() { return TS.initBatchModals && TS.initBatchModals(); }
 
   // ---- Boot ----
 
-  function runEmbedSubtitle() {
-    var pid = state.selectedParticipant;
-    if (!pid) return;
-    showToast("Embedding subtitle…");
-    apiPost("api/embed-subtitle/" + pid, {})
-      .then(function (data) {
-        if (data && data.ok) showToast("Wrote " + data.output_filename);
-        else showToast((data && data.error) || "Embed failed");
-      })
-      .catch(function (err) { showToast("Embed failed: " + err.message); });
-  }
-
-  function runEmbedAllSubtitles() {
-    showToast("Embedding subtitles for all transcripts…");
-    apiPost("api/embed-all-subtitles", {})
-      .then(function (data) {
-        if (!data || !data.ok) {
-          showToast((data && data.error) || "Embed failed");
-          return;
-        }
-        var results = data.results || [];
-        var okCount = 0;
-        for (var i = 0; i < results.length; i++) if (results[i].ok) okCount++;
-        showToast("Embedded " + okCount + "/" + clipgenPluralUnit(results.length, "video", "videos") + " to " + data.output_dir);
-      })
-      .catch(function (err) { showToast("Embed failed: " + err.message); });
-  }
-
-  // Participants the Transcribe All action would enqueue: a source video, no
-  // transcript yet, and nothing already queued or running for them. That last
-  // filter is not optional — /api/transcribe has no in-flight guard, so without
-  // it a second click while the batch runs enqueues every pending pid twice.
+  // Video, no transcript, nothing queued/running: /api/transcribe has no in-flight guard.
   function _untranscribedParticipants() {
     var ps = state.participants || [];
     var tasks = state.tasks || [];
@@ -3202,9 +2823,7 @@
     return pids;
   }
 
-  // One POST for the whole list; the worker thread runs them sequentially and the
-  // pills render each task's progress off the existing poller. _postTranscribe
-  // owns the toast, the polling restart, and the uncached-model confirm.
+  // One POST for the list; _postTranscribe owns toast, poll restart and model confirm.
   function runTranscribeAll() {
     var pids = _untranscribedParticipants();
     if (!pids.length) return;
@@ -3213,6 +2832,7 @@
 
   var _rebuildTopNavActions = function () {};
 
+  // Published on TS; transcripts-agents.js gates panel refreshes on it.
   function _currentParticipantHasTranscript() {
     var pid = state.selectedParticipant;
     if (!pid || !state.participants) return false;
@@ -3222,25 +2842,16 @@
     return false;
   }
 
-  function _anyTranscriptExists() {
-    var ps = state.participants || [];
-    for (var i = 0; i < ps.length; i++) {
-      if (ps[i].has_transcript) return true;
-    }
-    return false;
-  }
-
   function refreshTopNavActions() {
     _rebuildTopNavActions();
   }
 
+  // Rebuilt on open so Transcribe All re-counts against in-flight tasks.
   function initTopNavActions() {
     if (!window.ClipgenTopNav) return;
-    function rebuild() {
-      var hasOne = _currentParticipantHasTranscript();
-      var hasAny = _anyTranscriptExists();
+    _rebuildTopNavActions = window.ClipgenTopNav.installQuickActions(function () {
       var pending = _untranscribedParticipants().length;
-      window.ClipgenTopNav.setQuickActions([
+      return [
         {
           icon: "microphone",
           label: "Transcribe All",
@@ -3252,60 +2863,36 @@
         },
         {
           icon: "language",
-          label: "Embed Subtitle in Video",
-          action: runEmbedSubtitle,
-          disabled: !hasOne,
-          title: hasOne
-            ? "Mux this participant's transcript into a copy of their source video"
-            : "Select a participant with a transcript to enable this.",
+          label: "Embed Subtitles…",
+          action: openEmbedSubsModal,
+          // Never gated: the modal reports counts and disables its own button.
+          title: "Write a subtitled copy of each source video into the output folder; the originals are never modified",
         },
         {
-          icon: "film",
-          label: "Embed all Subtitles",
-          action: runEmbedAllSubtitles,
-          disabled: !hasAny,
-          title: hasAny
-            ? "Mux every participant's transcript into a subtitled copy of their video"
-            : "Transcribe at least one video to enable this.",
+          icon: "speaker-wave",
+          label: "Normalize Audio…",
+          action: openNormalizeAudioModal,
+          // Never gated, same as the neighbours.
+          title: "Rewrite source videos in place with loudness-normalized audio; the original is kept beside each file until you delete it",
         },
         {
           icon: "scissors",
           label: "Clip Marked Lines…",
           action: openClipMarksModal,
-          // Never gated: the modal reports the mark count and disables its own
-          // Generate button, which keeps the menu free of an async mark fetch.
+          // Never gated; keeps the menu free of an async mark fetch.
           title: "Cut a clip for every manually marked line",
         },
         window.ClipgenExportActions.exportQuickAction(),
-      ]);
-    }
-    _rebuildTopNavActions = rebuild;
-    rebuild();
-    window.ClipgenExportActions.refreshExportStatus(rebuild);
-    // Always rebuild on menu open so Embed-Subtitle items pick up
-    // participant-selection changes and Transcribe All re-counts against
-    // in-flight tasks; also refresh export-enabled state.
-    window.ClipgenTopNav.onBeforeOpen(function () {
-      rebuild();
-      window.ClipgenExportActions.refreshExportStatus(rebuild);
-    });
+      ];
+    }, { rebuildOnOpen: true });
   }
 
-  // Command palette (command-palette.js): additions beyond the auto-ingested
-  // quick actions — search focus, cheatsheet, panel tabs, participant jumps
-  // (the provider runs on every palette open, so it tracks state.participants).
+  // Palette commands beyond the auto-ingested quick actions; provider runs per open.
   function initCommandPalette() {
     if (!window.ClipgenCommandPalette) return;
+    var palette = window.ClipgenCommandPalette;
     function clickCommand(id, title, icon, keywords, elId) {
-      return {
-        id: id,
-        title: title,
-        icon: icon,
-        keywords: keywords,
-        section: "Transcripts",
-        visible: function () { return !!document.getElementById(elId); },
-        run: function () { document.getElementById(elId).click(); },
-      };
+      return palette.buttonCommand("Transcripts", id, title, icon, keywords, elId, "visible");
     }
     window.ClipgenCommandPalette.setParticipants(function () {
       return (state.participants || []).map(function (p) { return p.id; });
@@ -3319,8 +2906,7 @@
           keywords: "find text query",
           section: "Transcripts",
           visible: function () { return !!document.getElementById("searchInput"); },
-          // Runs after the palette closes and restores focus, so this focus
-          // call wins.
+          // Runs after the palette restores focus, so this call wins.
           run: function () { document.getElementById("searchInput").focus(); },
         },
         clickCommand("transcripts:shortcuts", "Keyboard shortcuts", "command-line",
@@ -3339,8 +2925,7 @@
           icon: "fire",
           keywords: "friction analysis overlay heatmap filter isolate highlight timeline",
           section: "Transcripts",
-          // Gated on data, not on a control: the mode track only means anything
-          // once the selected participant has friction scores.
+          // Gated on data: the mode means nothing without friction scores.
           enabled: function () {
             var fd = state.frictionData;
             return !!(fd && fd.segments && fd.segments.length);
@@ -3348,25 +2933,14 @@
           run: function () { cycleFrictionMode(); },
         },
       ];
-      // "Jump to … in Transcripts" = stays here and selects in place; the
-      // palette's built-in provider adds the cross-page "Open … in <Page>".
-      (state.participants || []).forEach(function (p) {
-        cmds.push({
-          id: "transcripts:p:" + p.id,
-          title: "Jump to " + p.id + " in Transcripts",
-          icon: "user",
-          keywords: "participant select transcript",
-          section: "Participants",
-          run: function () { selectParticipant(p.id); },
-        });
-      });
-      return cmds;
+      return cmds.concat(palette.participantJumps("transcripts:p:", "Transcripts",
+        "participant select transcript", (state.participants || []).map(function (p) { return p.id; }),
+        selectParticipant));
     });
   }
 
   document.addEventListener("DOMContentLoaded", function () {
     initThemeToggle();
-    initTooltipToggle();
     initStatusIndicatorTooltip();
     checkNavLinks();
     initFrontendSwitcher();
@@ -3374,15 +2948,14 @@
     initPillOutsideClick();
     initPillWheelScroll();
     initCorrectionsModal();
-    initClipMarksModal();
+    initBatchModals();
     initVideoPlayer();
     initVideoSync();
     initTimelineCanvas();
     initPipScroll();
     initPlayerKeyboard();
     initPanelTabs();
-    // /transcripts/#tab=friction style deep links (command palette). The
-    // participant hash form (#P07) is handled separately in loadParticipants.
+    // #tab=friction deep links; the #P07 form is handled in loadParticipants.
     var hashTab = clipgenHashTab();
     if (hashTab === "summary" || hashTab === "friction") {
       var hashTabBtn = qs(hashTab === "friction" ? "#tabBtnFriction" : "#tabBtnSummary");
@@ -3391,13 +2964,12 @@
     initSummaryActions();
     initFriction();
     initFrictionMode();
+    initSpeakers();
     initTranscriptSettings();
     initTopNavActions();
     initCommandPalette();
 
-    // Pause every poller when tab is hidden; resume what was active on focus.
-    // Without this, summary/citations/model-hint pollers (1.5–3 s cadence)
-    // keep hammering the backend from background tabs.
+    // Pause every poller while hidden; resume what was active on focus.
     document.addEventListener("visibilitychange", function () {
       if (document.hidden) {
         stopPolling();
@@ -3411,15 +2983,7 @@
         pollTaskStatus();
         startXrefPolling();
         if (_anyTxEtaActive()) _txEtaTicker.ensure();
-        // Re-check summary + citations on tab refocus. Background-running
-        // Ollama agents finish without notifying the frontend; if the citations
-        // poll already gave up (or summary completed after we stopped polling)
-        // the manifest result would only surface on a full page reload. This
-        // catches the common "user goes to another tab, comes back" case.
-        // loadSummary re-arms the summary/citations polls if generation is
-        // still in flight, and the transcribe-status poll re-arms the
-        // model-hint poll on the next active task transition. loadFriction does
-        // the same for the friction pass.
+        // Agents finish silently in the background; reload and re-arm their polls.
         if (state.selectedParticipant) {
           loadSummary(state.selectedParticipant);
           loadFriction(state.selectedParticipant);
@@ -3427,14 +2991,7 @@
       }
     });
 
-    // Window focus is a separate signal from tab visibility: switching to
-    // another window/app (Cmd-Tab) leaves the tab "visible" (document.hidden
-    // stays false, so the visibilitychange handler above never fires) yet
-    // browsers — Safari most aggressively — still pause/throttle setInterval for
-    // the unfocused window. That freezes the streaming "Transcribing… X%"
-    // progress until the next throttled tick or a manual reload. Re-poll
-    // immediately on focus so the transcription progress resyncs without a
-    // reload (the per-agent summary/friction pollers self-resume on focus).
+    // Cmd-Tab keeps document.hidden false yet Safari throttles timers; re-poll on focus.
     window.addEventListener("focus", function () {
       if (document.hidden) return;
       pollTaskStatus();
@@ -3460,29 +3017,20 @@
   });
 
   // ---- Satellite interface (window.ClipgenTranscripts) ----
-  // Published for the transcripts-*.js satellite files (corrections, search,
-  // video, pills, agents) that load after this script. They read the hub's
-  // shared `state` + helpers through this object and attach their own published
-  // functions back onto it — mirrors screenspace.js / window.ClipgenScreenspace.
-  // Assigned synchronously here (during the hub script's load) so the object is
-  // fully populated before any satellite IIFE runs; the DOMContentLoaded init
-  // above and all user-event handlers fire later still, by which point
-  // satellites have registered their functions.
-  //
-  // Hub helpers the satellites call outward are published below as they are
-  // needed by each carved satellite. Functions the hub calls that live in a
-  // satellite are reached through thin guarded delegators (see the delegators
-  // section) so the hub degrades to a no-op if a satellite fails to load.
+  // Assigned synchronously so satellites see it; see agents/skills/carve-satellite/SKILL.md.
   var TS = (window.ClipgenTranscripts = window.ClipgenTranscripts || {});
   TS.state = state;
   TS.showToast = showToast;
+  TS.reportAgentError = reportAgentError;
   // Hub helpers the satellites call outward.
-  TS.loadTranscript = loadTranscript; // corrections, search, agents
+  TS.loadTranscript = loadTranscript; // corrections, search, agents, speakers
+  TS.loadParticipants = loadParticipants; // speakers
+  TS.hideMarkPopover = hideMarkPopover; // speakers (one popover at a time)
+  TS._isSpeakerTask = _isSpeakerTask; // video, pills
   TS.findOverlapsForSearch = findOverlapsForSearch; // search
   TS.selectParticipant = selectParticipant; // search, pills
   TS.cycleParticipant = cycleParticipant; // video (Z/X participant cycle)
-  // Accumulated streaming segments for the currently-streamed participant. The
-  // status poll no longer carries partial_segments, so search reads them here.
+  // Streaming segments for the streamed participant; search reads them here.
   TS.streamingSegmentsFor = function (pid) {
     return pid && pid === state.streamingParticipant ? _streamSegs.segments : [];
   }; // search
@@ -3493,6 +3041,7 @@
   TS.maybeWarmOnPillHover = maybeWarmOnPillHover; // pills
   TS.tryPostTranscriptionWarmup = tryPostTranscriptionWarmup; // pills
   TS.pollTaskStatus = pollTaskStatus; // pills
+  TS.refreshTranscribeWording = refreshTranscribeWording; // pills (cancel repaints before the next poll)
   TS.startPolling = startPolling; // pills
   TS._refreshAgentStateNow = _refreshAgentStateNow; // pills
   TS._trFetchModels = _trFetchModels; // pills
@@ -3501,14 +3050,13 @@
   TS.ensureAgentModelInstalled = ensureAgentModelInstalled; // pills, agents
   TS.confirmModelInstall = confirmModelInstall; // shot.py state probing; future satellites
   TS._confirmUncachedWhisperModels = _confirmUncachedWhisperModels; // pills (model-install kept in hub)
-  // Hub helpers the agents satellite calls outward (loadFriction is owned by the
-  // agents satellite now and reached through the delegator above).
+  // Hub helpers the agents satellite calls outward.
   TS.renderSegments = renderSegments; // agents (heatmap toggle, friction mark-all)
   TS._txEtaTicker = _txEtaTicker; // agents (summary/citations/friction elapsed)
   TS._summaryEtaTracker = _summaryEtaTracker; // agents
   TS._citationsEtaTracker = _citationsEtaTracker; // agents
   TS._frictionEtaTracker = _frictionEtaTracker; // agents
   TS._updateAgentElapsed = _updateAgentElapsed; // agents
-  TS._currentParticipantHasTranscript = _currentParticipantHasTranscript; // agents (panel-visible guard) + hub topnav
+  TS._currentParticipantHasTranscript = _currentParticipantHasTranscript; // agents (panel-visible guard)
 
 })();

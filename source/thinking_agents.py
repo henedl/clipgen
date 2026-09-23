@@ -1,30 +1,26 @@
 """Thinking-agent registry for clipgen.
 
-A "thinking agent" is a small, self-contained unit of Ollama-powered reasoning
+A "thinking agent" is a small, self-contained unit of local-LLM-powered reasoning
 over a transcript: summary generation, citation linking, friction detection,
 and mini-report writing.
 
-This module owns:
-  - The ``Agent`` shape (prompt building, model selection, response parsing,
-    dependency metadata, manifest field).
-  - The ``AGENTS`` registry, ordered so dependencies come before dependents.
-  - The built-in agents: ``summary`` (Pass 1), ``citations`` (Pass 2),
-    ``friction`` (Pass 3), and ``report`` (Pass 4 — a per-participant
-    mini-report over the summary, sheet observations, and transcript marks;
-    the latter two arrive via the ``configure()`` injection seam and the
-    agent is disabled by default, so it only runs when triggered manually).
+Owns the ``Agent`` shape (prompt building, model selection, response parsing,
+dependency metadata, manifest field) and the ``AGENTS`` registry, ordered so
+dependencies precede dependents: ``summary``, ``citations``, ``friction``, and
+``report`` — a per-participant mini-report over the summary, sheet observations
+and transcript marks, the latter two arriving via the ``configure()`` injection
+seam. ``report`` is disabled by default, so it only runs when triggered manually.
 
-It does *not* own HTTP transport — that stays in ``ollama_client.generate()``.
-It does *not* own orchestration — that stays in ``transcripts_server._run_agent_chain()``.
-
-Adding a new agent is a matter of writing a ``run`` callable, defining an
-``Agent`` dict, and appending it to ``AGENTS``. No edits elsewhere required.
+Owns neither HTTP transport (``llm_client.generate()``) nor orchestration
+(``transcripts_server._run_agent_chain()``). Adding an agent means writing a
+``run`` callable, defining an ``Agent`` dict, and appending it to ``AGENTS``.
 """
 
 from __future__ import annotations
 
 import bisect
 import json
+import math
 import re
 import threading
 from collections.abc import Callable
@@ -33,7 +29,8 @@ from typing import Any, TypedDict, cast
 
 import config
 import friction
-import ollama_client
+import llm_client
+import speakers
 import utils
 
 
@@ -52,7 +49,7 @@ class Agent(TypedDict):
                           differ per-agent, but keeping them separate means
                           future agents can have their own toggle.
       model_config_key:   Name of the ``config`` attribute (str) holding the
-                          Ollama model name this agent runs against. Read by
+                          Model value (HF ref or stem) this agent runs against. Read by
                           the orchestrator for cancel-after-stop unload
                           scheduling so future agents that use a different
                           model unload the right one.
@@ -101,7 +98,7 @@ _THINK_RE = re.compile(r"<think>[\s\S]*?</think>\s*", re.DOTALL)
 
 
 def _strip_think(text: str) -> str:
-    """Remove <think>...</think> reasoning blocks a model may emit despite think=False.
+    """Remove <think>...</think> reasoning blocks a model may emit despite thinking being disabled.
 
     Reasoning models sometimes emit chain-of-thought scaffolding even when asked
     not to; stripping it is response parsing, so every agent cleans its own raw
@@ -133,25 +130,27 @@ def summarize_transcript(
     model: str | None = None,
     cancel_event: threading.Event | None = None,
     on_token: Callable[[str], None] | None = None,
+    speaker_labels: dict[str, str] | None = None,
 ) -> str | None:
     """Summarize transcript segments into a paragraph + bullet points.
 
-    Uses ``config.OLLAMA_SUMMARY_MODEL`` unless an explicit model override is
+    Uses ``config.LLM_SUMMARY_MODEL`` unless an explicit model override is
     provided. If *cancel_event* is set during the model call, the request is
     aborted and ``None`` is returned. When *on_token* is provided it is invoked
     with each streamed piece so callers can surface the summary as it forms.
 
-    Thinking is disabled (``think=False``, matching the citations and friction
-    agents): a reasoning model would otherwise spend its first chunk of time in
-    a silent think phase that emits no ``response`` text — dead air with nothing
-    to stream, and pure added latency for a task that doesn't need reasoning.
+    Thinking is disabled (llm_client passes ``enable_thinking: false`` to the
+    chat template): a reasoning model would otherwise spend its first chunk of
+    time in a silent think phase that emits no text — dead air with nothing to
+    stream, and pure added latency for a task that doesn't need reasoning.
+    Speaker-labelled segments go in one ``Name: text`` line each.
     """
-    text = " ".join(seg.get("text", "").strip() for seg in segments).strip()
+    text = _transcript_text(segments, speaker_labels)
     if len(text) < _MIN_TEXT_LENGTH:
         return None
 
     if model is None:
-        model = config.OLLAMA_SUMMARY_MODEL
+        model = config.LLM_SUMMARY_MODEL
 
     text = _truncate_middle(text, _MAX_TRANSCRIPT_CHARS)
 
@@ -159,11 +158,10 @@ def summarize_transcript(
         f"Summarizing transcript ({len(segments)} segments, "
         f"{len(text)} chars) with model {model}"
     )
-    prompt = config.OLLAMA_SUMMARY_PROMPT.format(text=text)
-    result = ollama_client.generate(
+    prompt = config.LLM_SUMMARY_PROMPT.format(text=text)
+    result = llm_client.generate(
         prompt,
         model=model,
-        think=False,
         cancel_event=cancel_event,
         on_token=on_token,
     )
@@ -181,7 +179,36 @@ def _run_summary(
     on_token: Callable[[str], None] | None = None,
 ) -> str | None:
     segments = entry.get("segments") or []
-    return summarize_transcript(segments, cancel_event=cancel_event, on_token=on_token)
+    return summarize_transcript(
+        segments,
+        cancel_event=cancel_event,
+        on_token=on_token,
+        speaker_labels=_speaker_labels(entry),
+    )
+
+
+def _speaker_labels(entry: dict[str, Any]) -> dict[str, str] | None:
+    block = entry.get("speakers") or {}
+    return block.get("labels") if block.get("enabled") else None
+
+
+def _transcript_text(
+    segments: list[dict[str, Any]], speaker_labels: dict[str, str] | None
+) -> str:
+    """Plain prose, or one ``Name: text`` line per segment once speakers exist."""
+    if not any(seg.get("speaker") for seg in segments):
+        return " ".join(seg.get("text", "").strip() for seg in segments).strip()
+    lines = []
+    for seg in segments:
+        text = seg.get("text", "").strip()
+        if not text:
+            continue
+        speaker = seg.get("speaker")
+        if speaker:
+            name = speakers.speaker_display_name(speaker, speaker_labels)
+            text = f"{name}: {text}"
+        lines.append(text)
+    return "\n".join(lines).strip()
 
 
 # ---------------------------------------------------------------------------
@@ -213,15 +240,21 @@ def _split_summary_sentences(summary: str) -> list[str]:
     return sentences
 
 
-def _format_segment_chunk(segments: list[dict[str, Any]]) -> str:
+def _format_segment_chunk(
+    segments: list[dict[str, Any]], speaker_labels: dict[str, str] | None = None
+) -> str:
     """Format a chunk of segments as ``[M:SS] text`` lines for the prompt."""
     lines: list[str] = []
     for seg in segments:
         start = seg.get("start", 0)
         ts = utils.seconds_to_timestamp(int(start))
         text = seg.get("text", "").strip()
-        if text:
-            lines.append(f"[{ts}] {text}")
+        if not text:
+            continue
+        speaker = seg.get("speaker")
+        if speaker:
+            text = f"{speakers.speaker_display_name(speaker, speaker_labels)}: {text}"
+        lines.append(f"[{ts}] {text}")
     return "\n".join(lines)
 
 
@@ -243,14 +276,14 @@ def _find_closest_segment(
         return None
     pos = bisect.bisect_left(sorted_starts, target_seconds)
     best_pos: int | None = None
-    best_dist = tolerance + 1
+    best_dist = math.inf
     for candidate in (pos - 1, pos):
         if 0 <= candidate < len(sorted_starts):
             dist = abs(sorted_starts[candidate] - target_seconds)
             if dist < best_dist:
                 best_dist = dist
                 best_pos = candidate
-    if best_pos is None:
+    if best_pos is None or best_dist > tolerance:
         return None
     return sorted_indices[best_pos]
 
@@ -300,11 +333,12 @@ def find_citations(
     *,
     model: str | None = None,
     cancel_event: threading.Event | None = None,
+    speaker_labels: dict[str, str] | None = None,
 ) -> list[dict[str, Any]] | None:
     """Find supporting transcript segments for each summary sentence.
 
     Sends the full transcript (truncated if very long) in a single model call
-    to avoid multi-chunk latency. Uses ``config.OLLAMA_SUMMARY_MODEL`` unless an
+    to avoid multi-chunk latency. Uses ``config.LLM_SUMMARY_MODEL`` unless an
     explicit *model* override is provided. If *cancel_event* is set during the
     model call, the request is aborted and ``None`` is returned. Returns an
     ordered list of ``{"sentence", "refs": [...]}`` dicts — one entry per claim,
@@ -317,11 +351,12 @@ def find_citations(
         return None
 
     if model is None:
-        model = config.OLLAMA_SUMMARY_MODEL
+        model = config.LLM_SUMMARY_MODEL
 
     claims_text = "\n".join(f"{i + 1}. {s}" for i, s in enumerate(sentences))
     transcript_text = _truncate_middle(
-        _format_segment_chunk(segments), _MAX_CITATION_TRANSCRIPT_CHARS
+        _format_segment_chunk(segments, speaker_labels),
+        _MAX_CITATION_TRANSCRIPT_CHARS,
     )
 
     utils.verbose_print(
@@ -329,31 +364,40 @@ def find_citations(
         f"({len(transcript_text)} chars transcript) with model {model}"
     )
 
-    prompt = config.OLLAMA_CITATIONS_PROMPT.format(
+    prompt = config.LLM_CITATIONS_PROMPT.format(
         claims=claims_text, transcript=transcript_text
     )
-    response = ollama_client.generate(
+    response = llm_client.generate(
         prompt,
         model=model,
-        system=config.OLLAMA_CITATIONS_SYSTEM,
-        think=False,
+        system=config.LLM_CITATIONS_SYSTEM,
         cancel_event=cancel_event,
     )
 
     if not response:
-        # The model call itself failed (Ollama down, model missing, aborted
-        # mid-request). Returning a full list of empty refs here would persist a
-        # success-shaped result the UI cannot tell apart from "no sources
-        # exist", so report the failure and let the caller retry.
+        # Model call failed; empty refs would look like success. Caller retries.
         utils.warning_print("Citations: no response from the model")
         return None
 
-    parsed = _parse_citation_response(_strip_think(response), segments)
+    stripped = _strip_think(response)
+    if not _CITATION_LINE_RE.search(stripped):
+        # Zero "N: ts" lines is a parse failure, not "no sources"; NONE still commits.
+        utils.warning_print("Citations: response did not match the expected format")
+        return None
+    parsed = _parse_citation_response(stripped, segments)
 
     citations: list[dict[str, Any]] = []
     for i, sentence in enumerate(sentences):
         refs = sorted(parsed.get(i, []), key=lambda r: r["start"])
-        citations.append({"sentence": sentence, "refs": refs[:_MAX_REFS_PER_CLAIM]})
+        # Two cited timestamps may resolve to one segment; dedupe to protect the ref budget.
+        seen_segments: set[int] = set()
+        deduped: list[dict[str, Any]] = []
+        for ref in refs:
+            if ref["segment_index"] in seen_segments:
+                continue
+            seen_segments.add(ref["segment_index"])
+            deduped.append(ref)
+        citations.append({"sentence": sentence, "refs": deduped[:_MAX_REFS_PER_CLAIM]})
 
     total_refs = sum(len(c["refs"]) for c in citations)
     utils.verbose_print(
@@ -367,12 +411,15 @@ def _run_citations(
     cancel_event: threading.Event | None,
     on_token: Callable[[str], None] | None = None,
 ) -> list[dict[str, Any]] | None:
-    # on_token is accepted for uniform dispatch but ignored: citations are
-    # parsed line-by-line from the *complete* response, so streaming raw tokens
-    # to the UI would be meaningless.
+    # on_token is ignored: citations parse from the complete response only.
     summary = entry.get("summary") or ""
     segments = entry.get("segments") or []
-    return find_citations(summary, segments, cancel_event=cancel_event)
+    return find_citations(
+        summary,
+        segments,
+        cancel_event=cancel_event,
+        speaker_labels=_speaker_labels(entry),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -445,12 +492,17 @@ def _extract_json_array(text: str) -> list[Any]:
     def _is_object_array(data: Any) -> bool:
         return isinstance(data, list) and all(isinstance(x, dict) for x in data)
 
+    # Only a non-empty object array wins; `[]` is the fallback when nothing better appears.
+    saw_empty_array = False
+
     fence = re.search(r"```(?:json)?\s*(\[.*?\])\s*```", cleaned, re.DOTALL)
     if fence:
         try:
             data = json.loads(fence.group(1))
             if _is_object_array(data):
-                return data
+                if data:
+                    return data
+                saw_empty_array = True
         except json.JSONDecodeError:
             pass
 
@@ -460,11 +512,16 @@ def _extract_json_array(text: str) -> list[Any]:
         try:
             data, _ = decoder.raw_decode(cleaned[start:])
             if _is_object_array(data):
-                return data
+                if data:
+                    return data
+                saw_empty_array = True
         except json.JSONDecodeError:
             pass
         start = cleaned.find("[", start + 1)
 
+    if saw_empty_array:
+        # The model answered with an empty array; salvaging prose objects would fabricate entries.
+        return []
     return list(_extract_json_objects(cleaned))
 
 
@@ -476,7 +533,8 @@ def _format_friction_candidates(
     Context segments are merged into a single ordered, de-duplicated block so
     adjacent candidates don't repeat lines.
     """
-    id_to_idx = {seg.get("id"): i for i, seg in enumerate(segments)}
+    # Match friction.score_segments' id scheme: str(index) for id-less segments (Workflows path).
+    id_to_idx = {(seg.get("id") or str(i)): i for i, seg in enumerate(segments)}
     include: set[int] = set()
     for cand in candidates:
         idx = id_to_idx.get(cand.get("id"))
@@ -540,13 +598,13 @@ def _parse_friction_response(response: str) -> list[dict[str, Any]]:
 
 
 def friction_model() -> str:
-    """Resolve the Ollama model the friction agent should use.
+    """Resolve the model the friction agent should use.
 
-    Blank ``OLLAMA_FRICTION_MODEL`` means "follow the summary model", so a single
+    Blank ``LLM_FRICTION_MODEL`` means "follow the summary model", so a single
     AI-model setting drives all three thinking agents. Set the override to pin
     friction to a different (e.g. smaller/faster) model.
     """
-    return config.OLLAMA_FRICTION_MODEL or config.OLLAMA_SUMMARY_MODEL
+    return config.LLM_FRICTION_MODEL or config.LLM_SUMMARY_MODEL
 
 
 def find_friction_moments(
@@ -559,13 +617,14 @@ def find_friction_moments(
 ) -> list[dict[str, Any]] | None:
     """Refine programmatic candidates into a short list of friction moments.
 
-    Sends the session summary plus candidate segments (with context) to Ollama
+    Sends the session summary plus candidate segments (with context) to the LLM
     and parses the JSON response. Returns:
       - a list of moments (possibly empty) when the model responded — empty means
         it ran but found nothing,
       - ``[]`` when there are no candidates to send,
-      - ``None`` when the model call itself failed (unavailable / wrong model /
-        cancelled), so the caller can distinguish "no moments" from "didn't run".
+      - ``None`` when no model call was made or it failed (unavailable / wrong
+        model / cancelled / candidates that couldn't be rendered), so the
+        caller can distinguish "no moments" from "didn't run".
     """
     if not candidates:
         return []
@@ -574,9 +633,11 @@ def find_friction_moments(
 
     block = _format_friction_candidates(segments, candidates)
     if not block:
-        return []
+        # Candidates rendered nothing, so no model call was made: "didn't run", not "found nothing".
+        utils.warning_print("Friction: no candidate segments could be rendered")
+        return None
 
-    prompt = config.OLLAMA_FRICTION_PROMPT.format(
+    prompt = config.LLM_FRICTION_PROMPT.format(
         summary=_truncate_middle(summary, _MAX_FRICTION_SUMMARY_CHARS),
         segments=block,
         limit=config.FRICTION_MOMENT_LIMIT,
@@ -585,11 +646,10 @@ def find_friction_moments(
         f"Detecting friction over {len(candidates)} candidate segments "
         f"with model {model}"
     )
-    response = ollama_client.generate(
+    response = llm_client.generate(
         prompt,
         model=model,
-        system=config.OLLAMA_FRICTION_SYSTEM,
-        think=False,
+        system=config.LLM_FRICTION_SYSTEM,
         cancel_event=cancel_event,
     )
     if not response:
@@ -598,10 +658,8 @@ def find_friction_moments(
         )
         return None
 
-    # Keep only moments that cite at least one real segment, trimming any
-    # hallucinated IDs. An unsourced moment can't be seeked to or quoted, so it
-    # must never reach the manifest.
-    valid_ids = {seg.get("id") for seg in segments if seg.get("id")}
+    # Drop hallucinated segment ids; an unsourced moment cannot be seeked to or quoted.
+    valid_ids = {(seg.get("id") or str(i)) for i, seg in enumerate(segments)}
     moments: list[dict[str, Any]] = []
     for moment in _parse_friction_response(response):
         kept = [sid for sid in moment["segment_ids"] if sid in valid_ids]
@@ -658,9 +716,7 @@ def _run_friction(
     if cancel_event is not None and cancel_event.is_set():
         return None
 
-    # moments is None only when the LLM call itself failed; persist the
-    # programmatic scores anyway (heatmap/stats/marks still work) but record that
-    # moment detection did not succeed so the UI can say so instead of pretending.
+    # None means the LLM call failed; keep programmatic scores, record the failure.
     llm_ok = moments is not None
 
     return {
@@ -683,12 +739,7 @@ _MAX_REPORT_OBSERVATIONS_CHARS = 4000
 _MAX_REPORT_MARKS_CHARS = 6000
 _REPORT_EMPTY_SECTION = "(none recorded)"
 
-# The report agent needs data that lives outside the transcript entry: sheet
-# observation rows (studio-blueprint process state in server.py) and resolved
-# transcript marks (transcripts_server manifest state). Both reach this module
-# by injection because importing either owner from here would be an import
-# cycle (transcripts_server imports this module). Either getter may be None (CLI runs, tests); the report then
-# degrades to the sources that exist.
+# Injected by configure(): importing server.py or transcripts_server here would cycle.
 _observation_rows_getter: Any = None
 _participant_marks_getter: Any = None
 
@@ -713,13 +764,39 @@ def configure(
     _participant_marks_getter = participant_marks_getter
 
 
-def report_model() -> str:
-    """Resolve the Ollama model the report agent should use.
+def report_source_lines(participant: str) -> tuple[list[str], list[str]]:
+    """Formatted observation + mark lines for *participant* via the configured getters.
 
-    Blank ``OLLAMA_REPORT_MODEL`` means "follow the summary model", matching
+    The seam ``configure()`` wires in server.py; unwired (CLI, tests, a
+    sheet-less launch) both lists come back empty and a report simply covers
+    the summary alone. Shared by ``_run_report`` and the Workflows report node.
+    """
+    # A raising getter (network hiccup) costs its section, not the whole report.
+    obs_rows: list[dict[str, Any]] = []
+    if _observation_rows_getter:
+        try:
+            obs_rows = _observation_rows_getter()
+        except Exception as exc:
+            utils.warning_print(f"Report: sheet observations unavailable: {exc}")
+    marks: list[dict[str, Any]] = []
+    if _participant_marks_getter and participant:
+        try:
+            marks = _participant_marks_getter(participant)
+        except Exception as exc:
+            utils.warning_print(f"Report: transcript marks unavailable: {exc}")
+    return (
+        _format_report_observations(obs_rows, participant),
+        _format_report_marks(marks),
+    )
+
+
+def report_model() -> str:
+    """Resolve the model the report agent should use.
+
+    Blank ``LLM_REPORT_MODEL`` means "follow the summary model", matching
     the friction agent's inherit behavior.
     """
-    return config.OLLAMA_REPORT_MODEL or config.OLLAMA_SUMMARY_MODEL
+    return config.LLM_REPORT_MODEL or config.LLM_SUMMARY_MODEL
 
 
 def _format_report_observations(
@@ -796,7 +873,7 @@ def build_report(
     """
     if model is None:
         model = report_model()
-    prompt = config.OLLAMA_REPORT_PROMPT.format(
+    prompt = config.LLM_REPORT_PROMPT.format(
         participant=participant or "unknown",
         summary=_truncate_middle(summary, _MAX_REPORT_SUMMARY_CHARS)
         or _REPORT_EMPTY_SECTION,
@@ -806,11 +883,10 @@ def build_report(
         or _REPORT_EMPTY_SECTION,
     )
     utils.verbose_print(f"Generating mini-report for {participant} with model {model}")
-    response = ollama_client.generate(
+    response = llm_client.generate(
         prompt,
         model=model,
-        system=config.OLLAMA_REPORT_SYSTEM,
-        think=False,
+        system=config.LLM_REPORT_SYSTEM,
         cancel_event=cancel_event,
         on_token=on_token,
     )
@@ -839,14 +915,7 @@ def _run_report(
         return None
     participant = str(entry.get("participant") or "")
 
-    obs_rows = _observation_rows_getter() if _observation_rows_getter else []
-    marks = (
-        _participant_marks_getter(participant)
-        if (_participant_marks_getter and participant)
-        else []
-    )
-    observation_lines = _format_report_observations(obs_rows, participant)
-    mark_lines = _format_report_marks(marks)
+    observation_lines, mark_lines = report_source_lines(participant)
 
     if cancel_event is not None and cancel_event.is_set():
         return None
@@ -879,13 +948,12 @@ def _run_report(
 # Registry
 # ---------------------------------------------------------------------------
 
-# Order matters: dependents must appear after their dependencies so the
-# orchestrator can iterate this list to produce a valid run order.
+# Dependents come after their dependencies; the orchestrator iterates in list order.
 AGENTS: list[Agent] = [
     Agent(
         key="summary",
-        enabled_config_key="OLLAMA_SUMMARY_ENABLED",
-        model_config_key="OLLAMA_SUMMARY_MODEL",
+        enabled_config_key="LLM_SUMMARY_ENABLED",
+        model_config_key="LLM_SUMMARY_MODEL",
         manifest_field="summary",
         depends_on=[],
         thread_name_prefix="summary",
@@ -894,8 +962,8 @@ AGENTS: list[Agent] = [
     ),
     Agent(
         key="citations",
-        enabled_config_key="OLLAMA_CITATIONS_ENABLED",
-        model_config_key="OLLAMA_SUMMARY_MODEL",
+        enabled_config_key="LLM_CITATIONS_ENABLED",
+        model_config_key="LLM_SUMMARY_MODEL",
         manifest_field="citations",
         depends_on=["summary"],
         thread_name_prefix="citations",
@@ -904,8 +972,8 @@ AGENTS: list[Agent] = [
     ),
     Agent(
         key="friction",
-        enabled_config_key="OLLAMA_FRICTION_ENABLED",
-        model_config_key="OLLAMA_FRICTION_MODEL",
+        enabled_config_key="LLM_FRICTION_ENABLED",
+        model_config_key="LLM_FRICTION_MODEL",
         manifest_field="friction",
         depends_on=["summary"],
         thread_name_prefix="friction",
@@ -914,8 +982,8 @@ AGENTS: list[Agent] = [
     ),
     Agent(
         key="report",
-        enabled_config_key="OLLAMA_REPORT_ENABLED",
-        model_config_key="OLLAMA_REPORT_MODEL",
+        enabled_config_key="LLM_REPORT_ENABLED",
+        model_config_key="LLM_REPORT_MODEL",
         manifest_field="report",
         depends_on=["summary"],
         thread_name_prefix="report",
@@ -934,12 +1002,12 @@ def get_agent(key: str) -> Agent | None:
 
 
 def resolve_model(agent: Agent) -> str:
-    """Return the Ollama model name *agent* runs against.
+    """Return the model value *agent* runs against.
 
     Reads the config attribute named by ``model_config_key``; a blank value
     means "inherit the summary model" (friction's default).
     """
     model = getattr(config, agent["model_config_key"], None)
     if not model:
-        model = config.OLLAMA_SUMMARY_MODEL
+        model = config.LLM_SUMMARY_MODEL
     return model

@@ -15,7 +15,15 @@ _MATCHING_PROPS = {
     "width": 1920,
     "height": 1080,
     "video_codec": "h264",
-    "audio_codec": "aac",
+    "audio_tracks": [
+        {
+            "index": 0,
+            "codec": "aac",
+            "channels": 2,
+            "sample_rate": 48000,
+            "channel_layout": "stereo",
+        }
+    ],
 }
 
 
@@ -44,6 +52,35 @@ def test_build_ffmpeg_cut_command_includes_expected_flags():
     assert "-c:v" not in cmd_reencode
     assert "-af" not in cmd_reencode
     assert "out.mp4" in cmd_reencode
+
+
+def test_build_normalize_audio_command_shape():
+    cmd = video.build_normalize_audio_command(
+        "in.mp4", "tmp.out", audio_indices=[1], muxer="mp4", sample_rate=44100
+    )
+    assert cmd[:2] == ["ffmpeg", "-y"]
+    # Every stream rides along; only the selected track is re-encoded.
+    assert "-map" in cmd and "0" == cmd[cmd.index("-map") + 1]
+    assert "-c" in cmd and "copy" == cmd[cmd.index("-c") + 1]
+    assert cmd[cmd.index("-c:a:1") + 1] == "aac"
+    assert cmd[cmd.index("-b:a:1") + 1] == f"{config.AUDIO_BITRATE_KBPS}k"
+    assert cmd[cmd.index("-filter:a:1") + 1] == video.LOUDNORM_FILTER
+    # loudnorm resamples to 192 kHz internally; the pin keeps AAC off 96 kHz.
+    assert cmd[cmd.index("-ar:a:1") + 1] == "44100"
+    assert "-c:a:0" not in cmd
+    assert "+faststart" in cmd
+    assert cmd[cmd.index("-f") + 1] == "mp4"
+    assert cmd[-1] == "tmp.out"
+
+
+def test_build_normalize_audio_command_matroska_has_no_faststart():
+    cmd = video.build_normalize_audio_command(
+        "in.mkv", "tmp.out", audio_indices=[0, 1], muxer="matroska", sample_rate=48000
+    )
+    assert "-movflags" not in cmd
+    assert cmd[cmd.index("-f") + 1] == "matroska"
+    assert cmd[cmd.index("-c:a:0") + 1] == "aac"
+    assert cmd[cmd.index("-c:a:1") + 1] == "aac"
 
 
 def test_concatenate_clips_reencode_fallback(monkeypatch):
@@ -330,16 +367,14 @@ def test_probe_video_properties_parses_output(monkeypatch, tmp_path):
         "width": 1920,
         "height": 1080,
         "video_codec": "h264",
-        "audio_codec": "aac",
         "pix_fmt": "yuv420p",
-        "audio_sample_rate": 48000,
-        "audio_channels": 2,
-        "audio_channel_layout": "stereo",
         "audio_tracks": [
             {
                 "index": 0,
                 "codec": "aac",
                 "channels": 2,
+                "sample_rate": 48000,
+                "channel_layout": "stereo",
                 "title": "",
                 "language": "",
                 "handler": "",
@@ -350,7 +385,32 @@ def test_probe_video_properties_parses_output(monkeypatch, tmp_path):
         "fps": 0.0,
         "duration": 0.0,
         "nb_frames": 0,
+        "start_time": 0.0,
     }
+
+
+def test_probe_video_properties_parses_container_start_time(monkeypatch, tmp_path):
+    video._video_properties_cache.clear()
+    clip = tmp_path / "clip.ts"
+    clip.write_bytes(b"x")
+    fake_json = json.dumps(
+        {
+            "streams": [
+                {
+                    "codec_type": "video",
+                    "codec_name": "mpeg2video",
+                    "width": 160,
+                    "height": 120,
+                }
+            ],
+            "format": {"duration": "8.0", "start_time": "11.4"},
+        }
+    )
+    monkeypatch.setattr(video.subprocess, "check_output", lambda _cmd, **_kw: fake_json)
+    result = video.probe_video_properties(str(clip))
+    assert result is not None
+    assert result["start_time"] == 11.4
+    assert result["duration"] == 8.0
 
 
 def test_probe_video_properties_multiple_audio_tracks(monkeypatch, tmp_path):
@@ -398,9 +458,8 @@ def test_probe_video_properties_multiple_audio_tracks(monkeypatch, tmp_path):
     labels = [t["label"] for t in result["audio_tracks"]]
     assert labels == ["Microphone", "ENG", "Track 3"]
     assert [t["index"] for t in result["audio_tracks"]] == [0, 1, 2]
-    # Flat top-level fields describe the first audio stream only.
-    assert result["audio_codec"] == "aac"
-    assert result["audio_channels"] == 2
+    assert result["audio_tracks"][0]["codec"] == "aac"
+    assert result["audio_tracks"][0]["channels"] == 2
 
 
 def test_probe_video_properties_no_audio(monkeypatch, tmp_path):
@@ -423,13 +482,8 @@ def test_probe_video_properties_no_audio(monkeypatch, tmp_path):
 
     result = video.probe_video_properties(str(clip))
     assert result is not None
-    assert result["audio_codec"] is None
     assert result["video_codec"] == "hevc"
     assert result["width"] == 1280
-    # No audio stream → audio params are absent/zero.
-    assert result["audio_sample_rate"] == 0
-    assert result["audio_channels"] == 0
-    assert result["audio_channel_layout"] is None
     assert result["audio_tracks"] == []
     assert result["audio_track_count"] == 0
 
@@ -757,13 +811,29 @@ def test_concatenate_clips_resolution_mismatch_uses_filter_complex(monkeypatch):
             "width": 1920,
             "height": 1080,
             "video_codec": "h264",
-            "audio_codec": "aac",
+            "audio_tracks": [
+                {
+                    "index": 0,
+                    "codec": "aac",
+                    "channels": 2,
+                    "sample_rate": 48000,
+                    "channel_layout": "stereo",
+                }
+            ],
         },
         "b.mp4": {
             "width": 1280,
             "height": 720,
             "video_codec": "h264",
-            "audio_codec": "aac",
+            "audio_tracks": [
+                {
+                    "index": 0,
+                    "codec": "aac",
+                    "channels": 2,
+                    "sample_rate": 48000,
+                    "channel_layout": "stereo",
+                }
+            ],
         },
     }
     monkeypatch.setattr(video, "probe_video_properties", lambda p: props_by_path.get(p))
@@ -799,13 +869,29 @@ def test_concatenate_clips_warns_on_mismatch(monkeypatch):
             "width": 1920,
             "height": 1080,
             "video_codec": "h264",
-            "audio_codec": "aac",
+            "audio_tracks": [
+                {
+                    "index": 0,
+                    "codec": "aac",
+                    "channels": 2,
+                    "sample_rate": 48000,
+                    "channel_layout": "stereo",
+                }
+            ],
         },
         "b.mp4": {
             "width": 1280,
             "height": 720,
             "video_codec": "hevc",
-            "audio_codec": "aac",
+            "audio_tracks": [
+                {
+                    "index": 0,
+                    "codec": "aac",
+                    "channels": 2,
+                    "sample_rate": 48000,
+                    "channel_layout": "stereo",
+                }
+            ],
         },
     }
     monkeypatch.setattr(video, "probe_video_properties", lambda p: props_by_path.get(p))
@@ -845,13 +931,21 @@ def test_concatenate_clips_mixed_audio_presence(monkeypatch):
             "width": 1920,
             "height": 1080,
             "video_codec": "h264",
-            "audio_codec": "aac",
+            "audio_tracks": [
+                {
+                    "index": 0,
+                    "codec": "aac",
+                    "channels": 2,
+                    "sample_rate": 48000,
+                    "channel_layout": "stereo",
+                }
+            ],
         },
         "b.mp4": {
             "width": 1920,
             "height": 1080,
             "video_codec": "h264",
-            "audio_codec": None,
+            "audio_tracks": [],
         },
     }
     monkeypatch.setattr(video, "probe_video_properties", lambda p: props_by_path.get(p))
@@ -882,7 +976,7 @@ def test_concatenate_clips_all_no_audio(monkeypatch):
         "width": 1280,
         "height": 720,
         "video_codec": "h264",
-        "audio_codec": None,
+        "audio_tracks": [],
     }
     monkeypatch.setattr(
         video, "probe_video_properties", lambda _p: dict(no_audio_props)
@@ -899,13 +993,13 @@ def test_concatenate_clips_all_no_audio(monkeypatch):
                 "width": 1920,
                 "height": 1080,
                 "video_codec": "h264",
-                "audio_codec": None,
+                "audio_tracks": [],
             }
         return {
             "width": 1280,
             "height": 720,
             "video_codec": "h264",
-            "audio_codec": None,
+            "audio_tracks": [],
         }
 
     monkeypatch.setattr(video, "probe_video_properties", props_alternating)
@@ -986,7 +1080,7 @@ def test_get_file_duration_returns_rounded_probe_duration(monkeypatch, tmp_path)
             "width": 1920,
             "height": 1080,
             "video_codec": "h264",
-            "audio_codec": None,
+            "audio_tracks": [],
             "fps": 30.0,
             "duration": 99.4,
             "nb_frames": 0,
@@ -1168,7 +1262,7 @@ def test_check_vp9_support_detects_encoder(monkeypatch):
 
 def test_extract_gif_rejects_webm_when_vp9_unsupported(monkeypatch):
     monkeypatch.setattr(video, "check_vp9_support", lambda: False)
-    monkeypatch.setattr(video, "_vp9_missing_warned", False)
+    monkeypatch.setattr(video, "_encoder_missing_warned", {})
 
     called = {"run": False}
 
@@ -1247,7 +1341,7 @@ def test_extract_gif_uses_vp9_for_webm_output(monkeypatch):
 
 def test_extract_gif_rejects_webp_when_unsupported(monkeypatch):
     monkeypatch.setattr(video, "check_webp_support", lambda: False)
-    monkeypatch.setattr(video, "_webp_missing_warned", False)
+    monkeypatch.setattr(video, "_encoder_missing_warned", {})
 
     called = {"run": False}
 
@@ -1379,26 +1473,40 @@ def test_extract_frame_at_timestamp_debug_mode(monkeypatch):
 # ---- accurate_seek_args ----
 
 
-def test_accurate_seek_args_zero_returns_empty_lists():
-    pre, post = video.accurate_seek_args(0.0)
-    assert pre == []
-    assert post == []
+def test_accurate_seek_args_zero_returns_empty_list():
+    assert video.accurate_seek_args(0.0) == []
 
 
-def test_accurate_seek_args_within_preseek_window_skips_pre():
-    """For ts within the preseek window, the entire seek goes after -i."""
-    ts = video.FFMPEG_PRESEEK_SECONDS / 2
-    pre, post = video.accurate_seek_args(ts)
-    assert pre == []
-    assert post == ["-ss", str(ts)]
+def test_accurate_seek_args_is_a_single_pre_input_seek():
+    """One pre-input -ss, exact float preserved — no two-stage split.
+
+    Pre-input -ss is frame-accurate on every decoded output (ffmpeg
+    decodes-and-discards from the prior keyframe); the old split decoded
+    ~2 s of extra frames per extraction for a bit-identical result.
+    """
+    assert video.accurate_seek_args(12.345) == ["-ss", "12.345"]
+    assert video.accurate_seek_args(0.5) == ["-ss", "0.5"]
 
 
-def test_accurate_seek_args_splits_for_far_target():
-    """For ts beyond the preseek window, we get a fast pre + small post."""
-    ts = video.FFMPEG_PRESEEK_SECONDS + 12.345
-    pre, post = video.accurate_seek_args(ts)
-    assert pre == ["-ss", str(ts - video.FFMPEG_PRESEEK_SECONDS)]
-    assert post == ["-ss", str(video.FFMPEG_PRESEEK_SECONDS)]
+def test_accurate_seek_pre_post_zero_start_is_single_pre_input():
+    assert video.accurate_seek_pre_post(12.345) == (["-ss", "12.345"], [])
+    assert video.accurate_seek_pre_post(0.0) == ([], [])
+    assert video.accurate_seek_pre_post(0.5, container_start=0.0) == (
+        ["-ss", "0.5"],
+        [],
+    )
+
+
+def test_accurate_seek_pre_post_nonzero_start_uses_two_stage():
+    """MPEG-TS start_time ≠ 0: post-input -ss counts decoded media."""
+    assert video.accurate_seek_pre_post(0.5, container_start=11.4) == (
+        [],
+        ["-ss", "0.5"],
+    )
+    assert video.accurate_seek_pre_post(3.7, container_start=11.4) == (
+        ["-ss", "1.7"],
+        ["-ss", "2.0"],
+    )
 
 
 # ---- two-stage seek wiring in extract_frame_at_timestamp ----
@@ -1412,8 +1520,13 @@ def _captured_run(captured: dict):
     return _run
 
 
-def test_extract_frame_at_timestamp_uses_two_stage_seek(monkeypatch):
-    """Far targets get -ss before -i AND -ss after -i (frame-accurate)."""
+def test_extract_frame_at_timestamp_seeks_before_input_only(monkeypatch):
+    """The seek is one pre-input -ss; no post-input -ss survives.
+
+    A post-input -ss on top of a pre-input one is the obsolete two-stage
+    idiom — it decodes ~2 s of frames per extraction that ffmpeg then
+    discards, for a bit-identical result.
+    """
     monkeypatch.setattr(
         video,
         "probe_video_properties",
@@ -1425,27 +1538,31 @@ def test_extract_frame_at_timestamp_uses_two_stage_seek(monkeypatch):
     video.extract_frame_at_timestamp("/fake.mp4", 12.5)
     cmd = captured["cmd"]
     i_idx = cmd.index("-i")
-    pre = cmd[:i_idx]
-    post = cmd[i_idx + 2 :]
-    assert "-ss" in pre, "expected fast pre-input seek"
-    assert "-ss" in post, "expected accurate post-input seek"
+    assert cmd[:i_idx][-2:] == ["-ss", "12.5"], "expected pre-input seek"
+    assert "-ss" not in cmd[i_idx + 2 :], "post-input seek is the obsolete split"
 
 
-def test_extract_frame_at_timestamp_post_only_seek_for_near_target(monkeypatch):
-    """For ts inside the preseek window, only post-input -ss is emitted."""
+def test_extract_frame_at_timestamp_two_stage_when_start_time_nonzero(monkeypatch):
     monkeypatch.setattr(
         video,
         "probe_video_properties",
-        lambda _: {"width": 320, "height": 240, "fps": 30.0, "duration": 60.0},
+        lambda _: {
+            "width": 320,
+            "height": 240,
+            "fps": 30.0,
+            "duration": 60.0,
+            "start_time": 11.4,
+        },
     )
     captured: dict = {}
     monkeypatch.setattr(video.subprocess, "run", _captured_run(captured))
 
-    video.extract_frame_at_timestamp("/fake.mp4", 0.5)
+    video.extract_frame_at_timestamp("/fake.ts", 0.5)
     cmd = captured["cmd"]
     i_idx = cmd.index("-i")
     assert "-ss" not in cmd[:i_idx]
-    assert "-ss" in cmd[i_idx + 2 :]
+    assert cmd[i_idx + 1 : i_idx + 3] == ["/fake.ts", "-ss"]
+    assert cmd[i_idx + 3] == "0.5"
 
 
 # ---- two-stage seek + float ts in extract_thumbnail_bytes ----
@@ -1461,13 +1578,9 @@ def test_extract_thumbnail_bytes_preserves_float_timestamp(monkeypatch, tmp_path
     video.extract_thumbnail_bytes(str(fake), 12.75, width=200)
     cmd = captured["cmd"]
     seek_values = [cmd[i + 1] for i, a in enumerate(cmd) if a == "-ss"]
-    assert seek_values, "expected at least one -ss flag"
-    assert any("12.75" in str(v) or "10.75" in str(v) for v in seek_values), (
-        f"float seconds should appear in either pre- or post-seek (got {seek_values})"
-    )
-    # And no integer-truncated whole-second-only command.
-    i_idx = cmd.index("-i")
-    assert "-ss" in cmd[i_idx + 2 :]
+    # One pre-input seek carrying the exact float — no int() truncation.
+    assert seek_values == ["12.75"]
+    assert cmd.index("-ss") < cmd.index("-i")
 
 
 # ---- card-scrubber media helpers (sprite sheet + audio segment) ----
@@ -1560,6 +1673,89 @@ def test_run_ffmpeg_forwards_cancel_flag(monkeypatch):
     )
     assert ok is True
     assert captured == [sentinel]
+
+
+# -- end-of-recording spans are shortened, not dropped --
+
+
+def _run_ffmpeg_harness(monkeypatch, captured, *, file_duration):
+    """Stub out the filesystem + ffmpeg around run_ffmpeg / extract_gif."""
+    monkeypatch.setattr(video.Path, "is_file", lambda self: True)
+    monkeypatch.setattr(
+        video.Path, "stat", lambda self: type("_S", (), {"st_size": 1})()
+    )
+    monkeypatch.setattr(video, "get_file_duration", lambda *_a: file_duration)
+    monkeypatch.setattr(video, "verify_output_file", lambda *_a, **_kw: True)
+    monkeypatch.setattr(video.config, "MAX_FILESIZE_MB", 0)
+
+    def _fake(cmd, **_kwargs):
+        captured.append(list(cmd))
+        return subprocess.CompletedProcess(args=["ffmpeg"], returncode=0, stderr="")
+
+    monkeypatch.setattr(video, "run_ffmpeg_process", _fake)
+
+
+def test_run_ffmpeg_shortens_a_clip_running_past_the_end(monkeypatch):
+    """A bare end-of-session timestamp overshoots by DEFAULT_DURATION_SECONDS.
+
+    ffmpeg stops at EOF anyway, and the multi-video path already clamps, so the
+    clip is cut short rather than dropped.
+    """
+    captured: list = []
+    _run_ffmpeg_harness(monkeypatch, captured, file_duration=100)
+
+    ok = video.run_ffmpeg("in.mp4", "out.mp4", "01:20", "02:20", reencode=False)
+
+    assert ok is True
+    cmd = captured[0]
+    assert cmd[cmd.index("-t") + 1] == "20"  # 100 - 80, not the requested 60
+
+
+def test_run_ffmpeg_leaves_an_in_bounds_clip_alone(monkeypatch):
+    captured: list = []
+    _run_ffmpeg_harness(monkeypatch, captured, file_duration=100)
+
+    assert video.run_ffmpeg("in.mp4", "out.mp4", "00:10", "00:40", reencode=False)
+    cmd = captured[0]
+    assert cmd[cmd.index("-t") + 1] == "30"
+
+
+def test_run_ffmpeg_still_skips_a_start_past_the_end(monkeypatch):
+    captured: list = []
+    _run_ffmpeg_harness(monkeypatch, captured, file_duration=100)
+
+    assert (
+        video.run_ffmpeg("in.mp4", "out.mp4", "02:00", "03:00", reencode=False) is False
+    )
+    assert captured == []
+
+
+def test_run_ffmpeg_skips_when_clamping_leaves_nothing(monkeypatch):
+    """Defensive floor: a sub-second tail truncates to 0 and must not be cut."""
+    captured: list = []
+    _run_ffmpeg_harness(monkeypatch, captured, file_duration=80.5)
+
+    assert (
+        video.run_ffmpeg("in.mp4", "out.mp4", "01:20", "02:20", reencode=False) is False
+    )
+    assert captured == []
+
+
+def test_extract_gif_shortens_a_range_running_past_the_end(monkeypatch):
+    captured: list = []
+    _run_ffmpeg_harness(monkeypatch, captured, file_duration=100)
+
+    assert video.extract_gif("in.mp4", "out.gif", "01:30", 60) is True
+    cmd = captured[0]
+    assert cmd[cmd.index("-t") + 1] == "10"  # 100 - 90
+
+
+def test_extract_gif_still_skips_a_start_past_the_end(monkeypatch):
+    captured: list = []
+    _run_ffmpeg_harness(monkeypatch, captured, file_duration=100)
+
+    assert video.extract_gif("in.mp4", "out.gif", "02:00", 5) is False
+    assert captured == []
 
 
 def test_enforce_filesize_limit_noop_when_disabled(monkeypatch):
@@ -1703,9 +1899,72 @@ def test_mux_subtitles_mp4_uses_mov_text(monkeypatch, tmp_path):
     assert cmd[:2] == ["ffmpeg", "-y"]
     assert "-c:s" in cmd and cmd[cmd.index("-c:s") + 1] == "mov_text"
     assert "-c" in cmd and cmd[cmd.index("-c") + 1] == "copy"
-    assert "-map" in cmd
-    assert "0" in cmd and "1:0" in cmd
+    # Video + audio only, never a bare `-map 0`: mapping the source's own
+    # subtitle streams would push the new track off output index 0, so the
+    # -metadata/-disposition arguments below would land on the wrong one.
+    maps = [cmd[i + 1] for i, tok in enumerate(cmd) if tok == "-map"]
+    assert maps == ["0:v?", "0:a?", "1:0"]
+    assert cmd[cmd.index("-disposition:s:0") + 1] == "default"
     assert cmd[-1] == str(out)
+
+
+def test_mux_subtitles_normalizes_the_language_to_three_letters(monkeypatch, tmp_path):
+    """Whisper reports ISO 639-1 ("en"), containers store only ISO 639-2.
+
+    Measured on ffmpeg 8.1.2: the mp4 muxer drops an "en" tag outright and
+    truncates transcripts.py's "unknown" fallback to the nonsense tag "unk" —
+    both silently. So the code is normalized before it reaches the muxer, not
+    trusted.
+    """
+    src, srt = _write_dummy_pair(tmp_path)
+
+    def fake_run(command, **_kwargs):
+        captured["command"] = command
+        return subprocess.CompletedProcess(args=command, returncode=0, stderr="")
+
+    monkeypatch.setattr(video, "run_ffmpeg_process", fake_run)
+    monkeypatch.setattr(video, "verify_output_file", lambda *_a, **_kw: True)
+
+    for given, expected in [
+        ("en", "eng"),  # the case that shipped untagged mp4s
+        ("zh", "zho"),
+        ("pt-BR", "por"),  # BCP 47 keeps only the primary subtag
+        ("eng", "eng"),  # already 639-2 -> untouched
+        ("unknown", "und"),  # transcripts.py's detection fallback
+        ("", "und"),
+    ]:
+        captured: dict = {}
+        out = tmp_path / f"out-{expected}.mp4"
+        assert video.mux_subtitles(
+            str(src), str(srt), str(out), track_language=given
+        ), given
+        cmd = captured["command"]
+        lang_arg = cmd[cmd.index("-metadata:s:s:0") + 1]
+        assert lang_arg == f"language={expected}", f"{given!r} -> {lang_arg}"
+
+
+def test_mux_subtitles_set_default_false_clears_the_disposition(monkeypatch, tmp_path):
+    """set_default=False writes an explicit 0 rather than dropping the flag.
+
+    A container whose only subtitle stream is the one we add can mark it default
+    on its own, so omitting the flag would not reliably leave the track off.
+    """
+    src, srt = _write_dummy_pair(tmp_path)
+    out = tmp_path / "out.mp4"
+
+    captured = {}
+
+    def fake_run(command, **_kwargs):
+        captured["command"] = command
+        return subprocess.CompletedProcess(args=command, returncode=0, stderr="")
+
+    monkeypatch.setattr(video, "run_ffmpeg_process", fake_run)
+    monkeypatch.setattr(video, "verify_output_file", lambda *_a, **_kw: True)
+
+    ok = video.mux_subtitles(str(src), str(srt), str(out), set_default=False)
+    assert ok is True
+    cmd = captured["command"]
+    assert cmd[cmd.index("-disposition:s:0") + 1] == "0"
 
 
 def test_mux_subtitles_mkv_uses_srt(monkeypatch, tmp_path):
@@ -1831,3 +2090,83 @@ def test_extract_sprite_sheet_seek_all_grabs_fail_returns_none(monkeypatch, tmp_
         video.extract_sprite_sheet_bytes(str(src), 0.0, 10.0, 2, 2, seek_frames=True)
         is None
     )
+
+
+def test_probe_video_properties_single_flight(monkeypatch, tmp_path):
+    """Concurrent probes of one file share a single ffprobe.
+
+    A participant select fires the video-info and pins routes together; both
+    missed the cache and each ran its own ffprobe on the same file.
+    """
+    import threading
+    import time as _time
+
+    import video as video_mod
+
+    video_mod._video_properties_cache.clear()
+    src = tmp_path / "probe.mp4"
+    src.write_bytes(b"stub")
+    payload = (
+        '{"streams":[{"codec_type":"video","width":1280,"height":720,'
+        '"codec_name":"h264","r_frame_rate":"30/1","nb_frames":"30"}],'
+        '"format":{"duration":"1.0"}}'
+    )
+    calls = []
+
+    def slow_probe(*_a, **_k):
+        calls.append(1)
+        _time.sleep(0.05)
+        return payload
+
+    monkeypatch.setattr(video_mod.subprocess, "check_output", slow_probe)
+    results: list = []
+    threads = [
+        threading.Thread(
+            target=lambda: results.append(video_mod.probe_video_properties(str(src)))
+        )
+        for _ in range(4)
+    ]
+    for th in threads:
+        th.start()
+    for th in threads:
+        th.join()
+    assert len(calls) == 1
+    assert all(r == results[0] for r in results) and results[0]["width"] == 1280
+    assert not video_mod._probe_inflight  # flight entry released
+
+
+def test_parallel_gifs_reserve_nothing_for_a_tail_past_the_end(monkeypatch, tmp_path):
+    """A timestamp with no room for a GIF must not leave a 0-byte placeholder."""
+    monkeypatch.setattr(config, "OUTPUT_DIR", str(tmp_path), raising=False)
+    monkeypatch.setattr(video, "extract_gif", lambda *_a, **_k: True)
+
+    artifacts = video._parallel_extract_gifs("in.mp4", [0, 10], 3, 10)
+
+    assert artifacts is not None and len(artifacts) == 1
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["gallery_0_00.gif"]
+
+
+def test_run_ffmpeg_rejects_a_zero_length_range(monkeypatch):
+    """ffmpeg -t 0 writes a stub file; a same-start-and-end range is skipped."""
+    captured: list = []
+    _run_ffmpeg_harness(monkeypatch, captured, file_duration=100)
+
+    assert (
+        video.run_ffmpeg("in.mp4", "out.mp4", "01:23", "01:23", reencode=False) is False
+    )
+    assert captured == []
+
+
+class TestFfprobeTimeout:
+    """A stalled ffprobe surfaces as a probe failure, never a hang."""
+
+    def test_timeout_becomes_called_process_error(self, monkeypatch):
+        import subprocess
+
+        def _stall(cmd, **kwargs):
+            assert kwargs["timeout"] == video.FFPROBE_TIMEOUT_SECONDS
+            raise subprocess.TimeoutExpired(cmd, kwargs["timeout"])
+
+        monkeypatch.setattr(subprocess, "check_output", _stall)
+        with pytest.raises(subprocess.CalledProcessError):
+            video._ffprobe_check_output(["ffprobe", "x.mp4"])

@@ -1,7 +1,9 @@
 """Smoke tests for Transcripts Flask API (prewarm + model status)."""
 
+import json
 import threading
 import time
+from pathlib import Path
 from typing import cast
 
 import pytest
@@ -9,6 +11,7 @@ import pytest
 Flask = pytest.importorskip("flask").Flask
 
 import config
+import start_settings
 import thinking_agents
 import transcripts
 import transcripts_server
@@ -42,6 +45,7 @@ def tr_client(tr_app, tmp_path, monkeypatch):
             "source_transcripts": {},
             "corrections": [],
             "marks": [],
+            "known_terms": [],
         },
     )
     monkeypatch.setattr(
@@ -56,7 +60,9 @@ def tr_client(tr_app, tmp_path, monkeypatch):
         ],
     )
     monkeypatch.setattr(transcripts_server, "_worker", None)
-    monkeypatch.setattr(transcripts_server, "_input_dir", str(tmp_path))
+    # The media route reads the input dir live rather than from a module global,
+    # so point config at tmp_path instead of pinning a snapshot.
+    monkeypatch.setattr(config, "INPUT_DIR", str(tmp_path))
     monkeypatch.setattr(transcripts_server, "_transcript_model_warming", False)
     # Fresh corrected-segments cache + merged-task set per test (auto-restored).
     monkeypatch.setattr(transcripts_server, "_corrected_cache", {})
@@ -167,6 +173,9 @@ def test_transcribe_status_slim_and_segments_tail(tr_client):
     entry = next(x for x in status["tasks"] if x["id"] == task["id"])
     assert "partial_segments" not in entry
     assert entry["partial_count"] == 3
+    # Running entries carry the phase sub-state ("queued" here: the test flips
+    # status by hand, so _execute_task never advanced it).
+    assert entry["phase"] == "queued"
 
     seg = tr_client.get(
         f"/transcripts/api/transcribe/{task['id']}/segments?since=1"
@@ -313,6 +322,14 @@ def test_model_status_shape(tr_client):
     assert data["prewarm"] in ("off", "queue_open", "page_load")
 
 
+def test_model_status_warming_during_on_demand_load(tr_client, monkeypatch):
+    """A load triggered by a transcription task (not the warmup endpoint) must
+    read as warming — 'not loaded, not warming' renders as 'failed to load'."""
+    monkeypatch.setattr(transcripts, "_model_loading", True)
+    data = tr_client.get("/transcripts/api/transcribe/model-status").get_json()
+    assert data["warming"] is True
+
+
 def test_warmup_already_loaded_in_debugging(tr_client, monkeypatch):
     monkeypatch.setattr(config, "DEBUGGING", True)
     monkeypatch.setattr(config, "TRANSCRIBE_PREWARM", "queue_open")
@@ -393,12 +410,16 @@ def test_transcribe_returns_adoptable_task_records(tr_client, monkeypatch):
     # Same keys the status route serves, so the client can concat the two lists.
     assert set(task) == {
         "id",
+        "kind",
         "participant",
         "status",
+        "phase",
         "progress",
         "error",
         "created_at",
         "completed_at",
+        "start_seconds",
+        "end_seconds",
     }
     assert task["participant"] == "P01"
     assert task["status"] == transcripts.TASK_STATUS_QUEUED
@@ -522,6 +543,65 @@ def test_transcribe_rejects_invalid_audio_track(tr_client, monkeypatch, bad):
             "force": True,
             "overrides": {"P01": {"audio_index": bad}},
         },
+    )
+    assert resp.get_json()["ok"] is False
+    assert captured == []
+
+
+def test_transcribe_applies_marker_window_override(tr_client, monkeypatch):
+    """start_seconds/end_seconds overrides (in/out markers) reach the task."""
+    captured = _stub_transcribe_worker(monkeypatch)
+
+    resp = tr_client.post(
+        "/transcripts/api/transcribe",
+        json={
+            "participants": ["P01"],
+            "force": True,
+            "overrides": {"P01": {"start_seconds": 12.5, "end_seconds": 90}},
+        },
+    )
+    assert resp.status_code == 200
+    assert captured[0]["start_seconds"] == 12.5
+    assert captured[0]["end_seconds"] == 90.0
+    # And the adoptable record carries the window for the progress band.
+    task = resp.get_json()["tasks"][0]
+    assert task["start_seconds"] == 12.5
+    assert task["end_seconds"] == 90.0
+
+
+def test_transcribe_marker_start_zero_is_kept(tr_client, monkeypatch):
+    """0.0 is a real window start, not "no override" — a falsy test loses it."""
+    captured = _stub_transcribe_worker(monkeypatch)
+
+    resp = tr_client.post(
+        "/transcripts/api/transcribe",
+        json={
+            "participants": ["P01"],
+            "force": True,
+            "overrides": {"P01": {"start_seconds": 0, "end_seconds": 30}},
+        },
+    )
+    assert resp.status_code == 200
+    assert captured[0]["start_seconds"] == 0.0
+    assert captured[0]["end_seconds"] == 30.0
+
+
+@pytest.mark.parametrize(
+    "window",
+    [
+        {"start_seconds": "x"},
+        {"start_seconds": -1},
+        {"end_seconds": float("nan")},
+        {"start_seconds": 30, "end_seconds": 30},
+        {"start_seconds": 30, "end_seconds": 10},
+    ],
+)
+def test_transcribe_rejects_invalid_marker_window(tr_client, monkeypatch, window):
+    captured = _stub_transcribe_worker(monkeypatch)
+
+    resp = tr_client.post(
+        "/transcripts/api/transcribe",
+        json={"participants": ["P01"], "force": True, "overrides": {"P01": window}},
     )
     assert resp.get_json()["ok"] is False
     assert captured == []
@@ -673,6 +753,57 @@ def test_citations_stop_when_not_running_is_noop(tr_client, _agent_state_clean):
     assert "P01" not in transcripts_server._orchestrator._cancel_events["citations"]
 
 
+def test_agents_read_corrected_segments(_agent_state_clean, monkeypatch):
+    """Agents must see what the reader sees.
+
+    apply_corrections is a read-time transform, so the stored segments stay
+    raw forever. Nothing re-applies them on the agent path, which left every
+    summary quoting text the UI had already fixed. Ids must survive the
+    round-trip too: apply_corrections returns fresh segments without one, and
+    friction moments key on it.
+    """
+    orch = transcripts_server._orchestrator
+    pid = "P01"
+    transcripts_server._manifest = {
+        "source_transcripts": {
+            pid: {
+                "segments": [
+                    {"id": "P01:0", "start": 0.0, "end": 1.0, "text": "teh frobnicator"}
+                ]
+            }
+        },
+        "corrections": [{"id": "c1", "from": "teh", "to": "the"}],
+        "marks": [],
+        "known_terms": [],
+    }
+    # Swapping _manifest wholesale is what _init_transcripts_state does, and the
+    # corrected-segments memo is keyed on (participant, version), not segments.
+    transcripts_server._bump_corrections_version()
+
+    seen: dict = {}
+    done = threading.Event()
+
+    # Returns None so no summary is committed: a committed one advances the
+    # chain into a real citations pass, which outlives the test and its
+    # monkeypatches.
+    def capture(snapshot, cancel_event, on_token=None):
+        seen["segments"] = snapshot["segments"]
+        done.set()
+
+    summary_agent = thinking_agents.get_agent("summary")
+    assert summary_agent is not None
+    monkeypatch.setitem(summary_agent, "run", capture)
+
+    orch.run_agent("summary", pid, force=True)
+    assert done.wait(timeout=5), "summary agent never ran"
+
+    assert seen["segments"][0]["text"] == "the frobnicator"
+    assert seen["segments"][0]["id"] == "P01:0"
+    # The manifest keeps the raw text so corrections survive re-transcription.
+    raw = transcripts_server._manifest["source_transcripts"][pid]["segments"][0]
+    assert raw["text"] == "teh frobnicator"
+
+
 def test_orchestrator_stop_then_restart_isolates_run_state(
     _agent_state_clean, monkeypatch
 ):
@@ -802,6 +933,81 @@ def test_summary_partial_streams_via_sink_and_clears(
     assert orch.partial_text(pid, "summary") == ""
 
 
+def test_failed_agent_run_reports_its_reason(tr_client, monkeypatch):
+    """A failed AI run must reach the page, not just the terminal.
+
+    The run stores nothing, so the route 404s; without the reason riding along
+    the user sees an empty panel and no hint that the model failed to load. It
+    also rides on the participants payload, which is the only poll watching a
+    participant whose run was started from the pill menu.
+    """
+    orch = transcripts_server._orchestrator
+    pid = "P01"
+    transcripts_server._manifest = {
+        "source_transcripts": {pid: {"segments": [{"id": "s0", "text": "x"}]}},
+        "corrections": [],
+        "marks": [],
+    }
+    summary_agent = thinking_agents.get_agent("summary")
+    assert summary_agent is not None
+
+    def failing_run(snapshot, cancel_event, on_token=None):
+        import llm_client
+
+        llm_client._fail("AI generate failed: model name=tiny failed to load")
+
+    monkeypatch.setitem(summary_agent, "run", failing_run)
+
+    orch.run_agent("summary", pid, force=True)
+    _join_orchestrator_threads(orch)
+
+    resp = tr_client.get(f"/transcripts/api/agent/summary/{pid}")
+    assert resp.status_code == 404
+    assert "failed to load" in resp.get_json()["error"]
+    # Peeked, not popped: a reload must still explain the empty panel. The
+    # frontend dedupes; only the next run clears it.
+    assert (
+        "failed to load"
+        in (tr_client.get(f"/transcripts/api/agent/summary/{pid}").get_json()["error"])
+    )
+    assert orch.error_for(pid, "summary") != ""
+
+
+def test_participants_payload_carries_agent_failures(tr_client, monkeypatch):
+    """The pill poll is the only surface watching every participant."""
+    orch = transcripts_server._orchestrator
+    pid = "P01"
+    transcripts_server._manifest = {
+        "source_transcripts": {pid: {"segments": [{"id": "s0", "text": "x"}]}},
+        "corrections": [],
+        "marks": [],
+    }
+    summary_agent = thinking_agents.get_agent("summary")
+    assert summary_agent is not None
+
+    def failing_run(snapshot, cancel_event, on_token=None):
+        import llm_client
+
+        llm_client._fail("AI generate failed: model name=tiny failed to load")
+
+    monkeypatch.setitem(summary_agent, "run", failing_run)
+    orch.run_agent("summary", pid, force=True)
+    _join_orchestrator_threads(orch)
+
+    body = tr_client.get("/transcripts/api/participants").get_json()
+    entry = next(p for p in body["participants"] if p["id"] == pid)
+    assert "failed to load" in entry["agent_errors"]["summary"]
+
+    # A fresh run clears it, so an identical second failure toasts again.
+    def slow_run(snapshot, cancel_event, on_token=None):
+        return "ok"
+
+    monkeypatch.setitem(summary_agent, "run", slow_run)
+    orch.run_agent("summary", pid, force=True)
+    _join_orchestrator_threads(orch)
+    assert orch.error_for(pid, "summary") == ""
+
+
 def test_summary_stream_emits_partial_then_done(
     tr_client, _agent_state_clean, monkeypatch
 ):
@@ -857,7 +1063,7 @@ def test_summary_stop_schedules_model_unload(
 ):
     """A successful summary /stop must schedule an unload timer for the
     summary model. We force a long delay so the timer is observable."""
-    monkeypatch.setattr(config, "OLLAMA_UNLOAD_DELAY_SECONDS", 30.0)
+    monkeypatch.setattr(config, "LLM_UNLOAD_DELAY_SECONDS", 30.0)
     pid = "P01"
     evt = threading.Event()
     transcripts_server._orchestrator._in_flight["summary"].add(pid)
@@ -865,7 +1071,7 @@ def test_summary_stop_schedules_model_unload(
 
     tr_client.post(f"/transcripts/api/agent/summary/{pid}/stop")
 
-    model = config.OLLAMA_SUMMARY_MODEL
+    model = config.LLM_SUMMARY_MODEL
     assert model in transcripts_server._pending_model_unloads
 
 
@@ -873,7 +1079,7 @@ def test_citations_stop_schedules_model_unload(
     tr_client, _agent_state_clean, monkeypatch
 ):
     """A successful citations /stop must schedule an unload timer."""
-    monkeypatch.setattr(config, "OLLAMA_UNLOAD_DELAY_SECONDS", 30.0)
+    monkeypatch.setattr(config, "LLM_UNLOAD_DELAY_SECONDS", 30.0)
     pid = "P01"
     evt = threading.Event()
     transcripts_server._orchestrator._in_flight["citations"].add(pid)
@@ -881,15 +1087,15 @@ def test_citations_stop_schedules_model_unload(
 
     tr_client.post(f"/transcripts/api/agent/citations/{pid}/stop")
 
-    model = config.OLLAMA_SUMMARY_MODEL
+    model = config.LLM_SUMMARY_MODEL
     assert model in transcripts_server._pending_model_unloads
 
 
 def test_starting_a_run_cancels_pending_unload(_agent_state_clean, monkeypatch):
     """When a new agent run starts, any pending unload for the same model is
     cancelled so we don't churn on rapid stop→run cycles."""
-    monkeypatch.setattr(config, "OLLAMA_UNLOAD_DELAY_SECONDS", 30.0)
-    model = config.OLLAMA_SUMMARY_MODEL
+    monkeypatch.setattr(config, "LLM_UNLOAD_DELAY_SECONDS", 30.0)
+    model = config.LLM_SUMMARY_MODEL
     transcripts_server._schedule_model_unload(model)
     assert model in transcripts_server._pending_model_unloads
 
@@ -899,11 +1105,11 @@ def test_starting_a_run_cancels_pending_unload(_agent_state_clean, monkeypatch):
 
 def test_unload_fires_after_delay(_agent_state_clean, monkeypatch):
     """With a tiny delay, the scheduled unload should actually fire and call
-    ollama_client.unload_model with the right model."""
-    monkeypatch.setattr(config, "OLLAMA_UNLOAD_DELAY_SECONDS", 0.05)
+    llm_client.unload_model with the right model."""
+    monkeypatch.setattr(config, "LLM_UNLOAD_DELAY_SECONDS", 0.05)
     calls: list[str] = []
     monkeypatch.setattr(
-        transcripts_server.ollama_client,
+        transcripts_server.llm_client,
         "unload_model",
         lambda m: calls.append(m) or True,
     )
@@ -918,11 +1124,11 @@ def test_unload_fires_after_delay(_agent_state_clean, monkeypatch):
 
 
 def test_zero_delay_unloads_immediately(_agent_state_clean, monkeypatch):
-    """OLLAMA_UNLOAD_DELAY_SECONDS=0 unloads synchronously without scheduling."""
-    monkeypatch.setattr(config, "OLLAMA_UNLOAD_DELAY_SECONDS", 0)
+    """LLM_UNLOAD_DELAY_SECONDS=0 unloads synchronously without scheduling."""
+    monkeypatch.setattr(config, "LLM_UNLOAD_DELAY_SECONDS", 0)
     calls: list[str] = []
     monkeypatch.setattr(
-        transcripts_server.ollama_client,
+        transcripts_server.llm_client,
         "unload_model",
         lambda m: calls.append(m) or True,
     )
@@ -947,7 +1153,27 @@ def _seed_transcript(pid: str, video_path: str) -> None:
     }
 
 
-def test_embed_subtitle_happy_path(tr_client, tmp_path, monkeypatch):
+def _ndjson(resp) -> list[dict]:
+    """Parse a streamed NDJSON response body into its lines."""
+    return [json.loads(line) for line in resp.data.decode().strip().split("\n")]
+
+
+def _writing_mux(captured: dict):
+    """A mux_subtitles stub that records its args and touches the output file."""
+
+    def fake_mux(input_video, srt_path, output_video, **kwargs):
+        captured.setdefault("calls", []).append(
+            (input_video, srt_path, output_video, kwargs)
+        )
+        # Touch the output so files.get_unique_filename treats a second run as
+        # needing a -1 suffix.
+        Path(output_video).write_bytes(b"\x00")
+        return True
+
+    return fake_mux
+
+
+def test_embed_subtitles_happy_path(tr_client, tmp_path, monkeypatch):
     video_path = tmp_path / "study_P01.mp4"
     video_path.write_bytes(b"\x00")
     transcripts_server._participants = [
@@ -958,51 +1184,101 @@ def test_embed_subtitle_happy_path(tr_client, tmp_path, monkeypatch):
         transcripts_server.utils, "get_effective_output_dir", lambda: tmp_path
     )
 
-    captured = {}
+    captured: dict = {}
+    monkeypatch.setattr(
+        transcripts_server.video, "mux_subtitles", _writing_mux(captured)
+    )
 
-    def fake_mux(input_video, srt_path, output_video, **kwargs):
-        captured["args"] = (input_video, srt_path, output_video, kwargs)
-        # Touch the output file so files.get_unique_filename treats a second
-        # run as needing a -1 suffix.
-        from pathlib import Path
-
-        Path(output_video).write_bytes(b"\x00")
-        return True
-
-    monkeypatch.setattr(transcripts_server.video, "mux_subtitles", fake_mux)
-
-    resp = tr_client.post("/transcripts/api/embed-subtitle/P01")
+    resp = tr_client.post(
+        "/transcripts/api/embed-subtitles", json={"participants": ["P01"]}
+    )
     assert resp.status_code == 200
-    data = resp.get_json()
-    assert data["ok"] is True
-    assert data["output_filename"] == "study_P01-subtitled.mp4"
+    assert resp.mimetype == "application/x-ndjson"
+    header, result, done = _ndjson(resp)
+    assert done == {"done": True}
+    assert header["total"] == 1
+    assert header["output_dir"] == str(tmp_path)
+    assert header["token"]  # echoed by the Stop button to scope the cancel
+    assert result["index"] == 0
+    assert result["participant"] == "P01"
+    assert result["ok"] is True
+    assert result["output_filename"] == "study_P01-subtitled.mp4"
     assert (tmp_path / "study_P01-subtitled.mp4").is_file()
     # mux helper received correct args
-    assert captured["args"][0] == str(video_path)
-    assert captured["args"][3]["track_language"] == "en"
+    assert captured["calls"][0][0] == str(video_path)
+    assert captured["calls"][0][3]["track_language"] == "en"
+    # Default disposition is on unless the request opts out.
+    assert captured["calls"][0][3]["set_default"] is True
 
 
-def test_embed_subtitle_404_without_transcript(tr_client, tmp_path, monkeypatch):
+def test_embed_subtitles_forwards_default_track_false(tr_client, tmp_path, monkeypatch):
+    """Unticking 'Set as default track' reaches mux_subtitles as set_default=False."""
     video_path = tmp_path / "study_P01.mp4"
     video_path.write_bytes(b"\x00")
     transcripts_server._participants = [
         {"id": "P01", "video_paths": [str(video_path)], "has_video": True}
     ]
-    # No transcript seeded.
+    _seed_transcript("P01", str(video_path))
     monkeypatch.setattr(
         transcripts_server.utils, "get_effective_output_dir", lambda: tmp_path
     )
+
+    captured: dict = {}
     monkeypatch.setattr(
-        transcripts_server.video,
-        "mux_subtitles",
-        lambda *a, **kw: pytest.fail("mux_subtitles should not be called"),
+        transcripts_server.video, "mux_subtitles", _writing_mux(captured)
     )
-    resp = tr_client.post("/transcripts/api/embed-subtitle/P01")
-    assert resp.status_code == 404
+
+    resp = tr_client.post(
+        "/transcripts/api/embed-subtitles",
+        json={"participants": ["P01"], "default_track": False},
+    )
+    assert resp.status_code == 200
+    _ndjson(resp)
+    assert captured["calls"][0][3]["set_default"] is False
+
+
+def test_embed_subtitles_400_without_participants(tr_client):
+    resp = tr_client.post("/transcripts/api/embed-subtitles", json={"participants": []})
+    assert resp.status_code == 400
     assert resp.get_json()["ok"] is False
 
 
-def test_embed_subtitle_500_when_ffmpeg_fails(tr_client, tmp_path, monkeypatch):
+def test_embed_subtitles_streams_failure_for_missing_transcript(
+    tr_client, tmp_path, monkeypatch
+):
+    """A participant with no transcript is an ok=false line, not a failed request.
+
+    One unusable id must not sink the rest of a whole-study batch.
+    """
+    v1 = tmp_path / "study_P01.mp4"
+    v2 = tmp_path / "study_P02.mp4"
+    v1.write_bytes(b"\x00")
+    v2.write_bytes(b"\x00")
+    transcripts_server._participants = [
+        {"id": "P01", "video_paths": [str(v1)], "has_video": True},
+        {"id": "P02", "video_paths": [str(v2)], "has_video": True},
+    ]
+    _seed_transcript("P01", str(v1))  # P02 deliberately left untranscribed
+    monkeypatch.setattr(
+        transcripts_server.utils, "get_effective_output_dir", lambda: tmp_path
+    )
+    monkeypatch.setattr(transcripts_server.video, "mux_subtitles", _writing_mux({}))
+
+    resp = tr_client.post(
+        "/transcripts/api/embed-subtitles", json={"participants": ["P01", "P02"]}
+    )
+    assert resp.status_code == 200
+    lines = _ndjson(resp)
+    assert lines[0]["total"] == 2
+    assert [ln["participant"] for ln in lines[1:-1]] == ["P01", "P02"]
+    assert lines[1]["ok"] is True
+    assert lines[2]["ok"] is False
+    assert lines[2]["error"] == "No transcript for participant"
+
+
+def test_embed_subtitles_streams_failure_when_ffmpeg_fails(
+    tr_client, tmp_path, monkeypatch
+):
     video_path = tmp_path / "study_P01.mp4"
     video_path.write_bytes(b"\x00")
     transcripts_server._participants = [
@@ -1016,13 +1292,53 @@ def test_embed_subtitle_500_when_ffmpeg_fails(tr_client, tmp_path, monkeypatch):
         transcripts_server.video, "mux_subtitles", lambda *a, **kw: False
     )
 
-    resp = tr_client.post("/transcripts/api/embed-subtitle/P01")
-    assert resp.status_code == 500
-    body = resp.get_json()
-    assert body["ok"] is False
+    resp = tr_client.post(
+        "/transcripts/api/embed-subtitles", json={"participants": ["P01"]}
+    )
+    assert resp.status_code == 200
+    _, result, done = _ndjson(resp)
+    assert done == {"done": True}
+    assert result["ok"] is False
+    assert result["error"] == "ffmpeg failed to mux subtitles"
+    # get_unique_filename reserves by creating an empty file; a failed mux that
+    # does not release it leaves a 0-byte artifact looking like a real export.
+    assert not list(tmp_path.glob("*-subtitled.mp4"))
 
 
-def test_embed_all_subtitles_mixed_participants(tr_client, tmp_path, monkeypatch):
+def test_embed_subtitles_truncated_stream_has_no_done_sentinel(
+    tr_client, tmp_path, monkeypatch
+):
+    """A generator that dies mid-run just truncates the body, which the client's
+    NDJSON reader cannot distinguish from a clean end — so the terminal
+    sentinel's absence is what marks the run as incomplete."""
+    video_path = tmp_path / "study_P01.mp4"
+    video_path.write_bytes(b"\x00")
+    transcripts_server._participants = [
+        {"id": "P01", "video_paths": [str(video_path)], "has_video": True}
+    ]
+    _seed_transcript("P01", str(video_path))
+    monkeypatch.setattr(
+        transcripts_server.utils, "get_effective_output_dir", lambda: tmp_path
+    )
+
+    def _explode(*_a, **_kw):
+        raise RuntimeError("mux blew up")
+
+    monkeypatch.setattr(transcripts_server, "_embed_subtitle_for_participant", _explode)
+
+    resp = tr_client.post(
+        "/transcripts/api/embed-subtitles", json={"participants": ["P01"]}
+    )
+    with pytest.raises(RuntimeError, match="mux blew up"):
+        resp.get_data()
+    # The slot must still be free — the generator's finally runs on teardown.
+    assert transcripts_server._embed_slot.busy is False
+
+
+def test_embed_subtitles_cancel_stops_before_the_next_file(
+    tr_client, tmp_path, monkeypatch
+):
+    """A cancel mid-run skips the remaining participants and ends with the flag."""
     v1 = tmp_path / "study_P01.mp4"
     v2 = tmp_path / "study_P02.mp4"
     v1.write_bytes(b"\x00")
@@ -1032,45 +1348,586 @@ def test_embed_all_subtitles_mixed_participants(tr_client, tmp_path, monkeypatch
         {"id": "P02", "video_paths": [str(v2)], "has_video": True},
     ]
     _seed_transcript("P01", str(v1))
-    # P02 has no transcript — should be skipped silently.
+    _seed_transcript("P02", str(v2))
     monkeypatch.setattr(
         transcripts_server.utils, "get_effective_output_dir", lambda: tmp_path
     )
 
-    def fake_mux(input_video, srt_path, output_video, **kwargs):
-        from pathlib import Path
-
+    def cancelling_mux(input_video, srt_path, output_video, **kwargs):
         Path(output_video).write_bytes(b"\x00")
+        # Stand in for the user hitting Stop while the first file is muxing.
+        transcripts_server._embed_slot.cancel_event.set()
         return True
 
-    monkeypatch.setattr(transcripts_server.video, "mux_subtitles", fake_mux)
+    monkeypatch.setattr(transcripts_server.video, "mux_subtitles", cancelling_mux)
 
-    resp = tr_client.post("/transcripts/api/embed-all-subtitles")
-    assert resp.status_code == 200
-    data = resp.get_json()
-    assert data["ok"] is True
-    assert len(data["results"]) == 1
-    assert data["results"][0]["participant"] == "P01"
-    assert data["results"][0]["ok"] is True
+    resp = tr_client.post(
+        "/transcripts/api/embed-subtitles", json={"participants": ["P01", "P02"]}
+    )
+    lines = _ndjson(resp)
+    assert lines[0]["total"] == 2
+    assert lines[1]["participant"] == "P01"
+    assert lines[-2] == {"cancelled": True}
+    assert lines[-1] == {"done": True}
+    assert not any(ln.get("participant") == "P02" for ln in lines)
+    # The slot is released even on the cancel path, so the next run can claim it.
+    assert transcripts_server._embed_slot.busy is False
 
 
-def test_embed_all_subtitles_404_when_no_transcripts(tr_client, tmp_path):
-    resp = tr_client.post("/transcripts/api/embed-all-subtitles")
-    assert resp.status_code == 404
+def test_embed_subtitles_409_while_a_run_holds_the_slot(tr_client, monkeypatch):
+    """A second tab gets 409 rather than sharing the first run's cancel event."""
+    monkeypatch.setattr(transcripts_server._embed_slot, "busy", True)
+    resp = tr_client.post(
+        "/transcripts/api/embed-subtitles", json={"participants": ["P01"]}
+    )
+    assert resp.status_code == 409
     assert resp.get_json()["ok"] is False
+
+
+def test_embed_slot_is_freed_when_the_stream_is_never_consumed(tr_client, monkeypatch):
+    """Closing a generator that was never *started* runs no body at all — not
+    its finally — so a response discarded before the first read would have left
+    the slot held and every later embed answering 409 until restart."""
+    monkeypatch.setattr(transcripts_server._embed_slot, "busy", False)
+    monkeypatch.setattr(transcripts_server._embed_slot, "owner", None)
+
+    resp = tr_client.post(
+        "/transcripts/api/embed-subtitles", json={"participants": ["P01"]}
+    )
+    assert resp.status_code == 200
+    # Tear the response down without ever pulling a line from the body.
+    resp.close()
+
+    assert transcripts_server._embed_slot.busy is False
+    assert transcripts_server._embed_slot.owner is None
+
+
+def test_embed_slot_release_is_scoped_to_its_own_run(monkeypatch):
+    """The release is attempted twice per run (the generator's finally and the
+    response's call_on_close). An ungated release would let the late one clear
+    a successor's claim — the 863edf8f pattern."""
+    monkeypatch.setattr(transcripts_server._embed_slot, "busy", False)
+    monkeypatch.setattr(transcripts_server._embed_slot, "owner", None)
+
+    first = transcripts_server._embed_slot.claim()
+    assert first is not None
+    transcripts_server._embed_slot.release(first)
+
+    second = transcripts_server._embed_slot.claim()
+    assert second is not None and second != first
+
+    # The first run's straggler release must not free the second run's slot.
+    transcripts_server._embed_slot.release(first)
+    assert transcripts_server._embed_slot.busy is True
+    assert transcripts_server._embed_slot.claim() is None
+
+    transcripts_server._embed_slot.release(second)
+    assert transcripts_server._embed_slot.busy is False
+
+
+def test_embed_subtitles_cancel_route_is_token_scoped(tr_client):
+    """Cancel only takes effect with the in-flight run's token: a late cancel
+    POST from a stopped run must not cancel its successor."""
+    token = transcripts_server._embed_slot.claim()
+    assert token is not None
+    try:
+        # Wrong (stale) token: ignored.
+        resp = tr_client.post(
+            "/transcripts/api/embed-subtitles/cancel", json={"token": "stale"}
+        )
+        assert resp.status_code == 200
+        assert not transcripts_server._embed_slot.cancel_event.is_set()
+        # Matching token: cancels.
+        resp = tr_client.post(
+            "/transcripts/api/embed-subtitles/cancel", json={"token": token}
+        )
+        assert resp.status_code == 200
+        assert transcripts_server._embed_slot.cancel_event.is_set()
+    finally:
+        transcripts_server._embed_slot.cancel_event.clear()
+        transcripts_server._embed_slot.release()
+
+
+# ---- Normalize audio ----
+
+
+def _audio_props(track_count: int) -> dict:
+    """A probe_video_properties stub with *track_count* generic audio tracks."""
+    return {
+        "audio_track_count": track_count,
+        "audio_tracks": [
+            {"index": i, "codec": "aac", "channels": 2, "label": f"Track {i + 1}"}
+            for i in range(track_count)
+        ],
+    }
+
+
+def _capturing_normalize(captured: dict, results=None):
+    """A normalize_audio_inplace stub recording (path, indices) per call.
+
+    *results* maps a path's basename to a (ok, message) tuple; unlisted paths
+    succeed.
+    """
+    captured["calls"] = []
+
+    def stub(path, indices, **_kwargs):
+        captured["calls"].append((path, indices))
+        outcome = (results or {}).get(Path(path).name)
+        return outcome if outcome else (True, "Audio normalized.")
+
+    return stub
+
+
+def test_normalize_audio_happy_path_auto_track(tr_client, tmp_path, monkeypatch):
+    video_path = tmp_path / "study_P01.mp4"
+    video_path.write_bytes(b"\x00")
+    transcripts_server._participants = [
+        {"id": "P01", "video_paths": [str(video_path)], "has_video": True}
+    ]
+    monkeypatch.setattr(
+        transcripts_server.video, "probe_video_properties", lambda _p: _audio_props(2)
+    )
+    monkeypatch.setattr(
+        transcripts_server.video, "pick_speech_audio_track", lambda _tracks: 1
+    )
+    captured: dict = {}
+    monkeypatch.setattr(
+        transcripts_server.video,
+        "normalize_audio_inplace",
+        _capturing_normalize(captured),
+    )
+
+    resp = tr_client.post(
+        "/transcripts/api/normalize-audio", json={"participants": ["P01"]}
+    )
+    assert resp.status_code == 200
+    assert resp.mimetype == "application/x-ndjson"
+    header, result, done = _ndjson(resp)
+    assert header["total"] == 1
+    assert header["token"]  # echoed by the Stop button to scope the cancel
+    assert done == {"done": True}
+    assert result["index"] == 0
+    assert result["participant"] == "P01"
+    assert result["ok"] is True
+    assert result["parts"] == 1
+    # The default "auto" spec resolves through the speech-track heuristic.
+    assert captured["calls"] == [(str(video_path), [1])]
+
+
+def test_normalize_audio_all_tracks(tr_client, tmp_path, monkeypatch):
+    video_path = tmp_path / "study_P01.mp4"
+    video_path.write_bytes(b"\x00")
+    transcripts_server._participants = [
+        {"id": "P01", "video_paths": [str(video_path)], "has_video": True}
+    ]
+    monkeypatch.setattr(
+        transcripts_server.video, "probe_video_properties", lambda _p: _audio_props(3)
+    )
+    captured: dict = {}
+    monkeypatch.setattr(
+        transcripts_server.video,
+        "normalize_audio_inplace",
+        _capturing_normalize(captured),
+    )
+
+    resp = tr_client.post(
+        "/transcripts/api/normalize-audio",
+        json={"participants": ["P01"], "tracks": "all"},
+    )
+    assert resp.status_code == 200
+    _ndjson(resp)
+    assert captured["calls"] == [(str(video_path), [0, 1, 2])]
+
+
+def test_normalize_audio_explicit_list_is_intersected_per_file(
+    tr_client, tmp_path, monkeypatch
+):
+    """Out-of-range indices are dropped, not fatal: on a multi-part participant
+    part 2 may legitimately have fewer tracks than the part the dialog probed."""
+    video_path = tmp_path / "study_P01.mp4"
+    video_path.write_bytes(b"\x00")
+    transcripts_server._participants = [
+        {"id": "P01", "video_paths": [str(video_path)], "has_video": True}
+    ]
+    monkeypatch.setattr(
+        transcripts_server.video, "probe_video_properties", lambda _p: _audio_props(2)
+    )
+    captured: dict = {}
+    monkeypatch.setattr(
+        transcripts_server.video,
+        "normalize_audio_inplace",
+        _capturing_normalize(captured),
+    )
+
+    resp = tr_client.post(
+        "/transcripts/api/normalize-audio",
+        json={"participants": ["P01"], "tracks": [0, 5]},
+    )
+    assert resp.status_code == 200
+    _ndjson(resp)
+    assert captured["calls"] == [(str(video_path), [0])]
+
+
+def test_normalize_audio_explicit_list_with_no_match_is_a_failure_line(
+    tr_client, tmp_path, monkeypatch
+):
+    video_path = tmp_path / "study_P01.mp4"
+    video_path.write_bytes(b"\x00")
+    transcripts_server._participants = [
+        {"id": "P01", "video_paths": [str(video_path)], "has_video": True}
+    ]
+    monkeypatch.setattr(
+        transcripts_server.video, "probe_video_properties", lambda _p: _audio_props(2)
+    )
+    captured: dict = {}
+    monkeypatch.setattr(
+        transcripts_server.video,
+        "normalize_audio_inplace",
+        _capturing_normalize(captured),
+    )
+
+    resp = tr_client.post(
+        "/transcripts/api/normalize-audio",
+        json={"participants": ["P01"], "tracks": [5]},
+    )
+    assert resp.status_code == 200
+    _, result, done = _ndjson(resp)
+    assert done == {"done": True}
+    assert result["ok"] is False
+    assert "None of the selected tracks" in result["error"]
+    assert captured["calls"] == []
+
+
+def test_normalize_audio_single_track_file_overrides_the_spec(
+    tr_client, tmp_path, monkeypatch
+):
+    """A single-track file always normalizes track 0 — there is nothing to
+    choose, so even an explicit index list must not fail it."""
+    video_path = tmp_path / "study_P01.mp4"
+    video_path.write_bytes(b"\x00")
+    transcripts_server._participants = [
+        {"id": "P01", "video_paths": [str(video_path)], "has_video": True}
+    ]
+    monkeypatch.setattr(
+        transcripts_server.video, "probe_video_properties", lambda _p: _audio_props(1)
+    )
+    captured: dict = {}
+    monkeypatch.setattr(
+        transcripts_server.video,
+        "normalize_audio_inplace",
+        _capturing_normalize(captured),
+    )
+
+    resp = tr_client.post(
+        "/transcripts/api/normalize-audio",
+        json={"participants": ["P01"], "tracks": [1]},
+    )
+    assert resp.status_code == 200
+    _, result, _done = _ndjson(resp)
+    assert result["ok"] is True
+    assert captured["calls"] == [(str(video_path), [0])]
+
+
+def test_normalize_audio_multi_part_normalizes_every_part(
+    tr_client, tmp_path, monkeypatch
+):
+    """Unlike subtitle muxing, parts are independent files — each is rewritten,
+    and the participant still gets exactly one aggregate NDJSON line."""
+    p1 = tmp_path / "study_P01.mp4"
+    p2 = tmp_path / "study_P01 2.mp4"
+    p1.write_bytes(b"\x00")
+    p2.write_bytes(b"\x00")
+    transcripts_server._participants = [
+        {"id": "P01", "video_paths": [str(p1), str(p2)], "has_video": True}
+    ]
+    monkeypatch.setattr(
+        transcripts_server.video, "probe_video_properties", lambda _p: _audio_props(1)
+    )
+    captured: dict = {}
+    monkeypatch.setattr(
+        transcripts_server.video,
+        "normalize_audio_inplace",
+        _capturing_normalize(captured),
+    )
+
+    resp = tr_client.post(
+        "/transcripts/api/normalize-audio", json={"participants": ["P01"]}
+    )
+    assert resp.status_code == 200
+    lines = _ndjson(resp)
+    assert [c[0] for c in captured["calls"]] == [str(p1), str(p2)]
+    results = [ln for ln in lines if "participant" in ln]
+    assert len(results) == 1
+    assert results[0]["ok"] is True
+    assert results[0]["parts"] == 2
+
+
+def test_normalize_audio_partial_part_failure_names_the_part(
+    tr_client, tmp_path, monkeypatch
+):
+    p1 = tmp_path / "study_P01.mp4"
+    p2 = tmp_path / "study_P01 2.mp4"
+    p1.write_bytes(b"\x00")
+    p2.write_bytes(b"\x00")
+    transcripts_server._participants = [
+        {"id": "P01", "video_paths": [str(p1), str(p2)], "has_video": True}
+    ]
+    monkeypatch.setattr(
+        transcripts_server.video, "probe_video_properties", lambda _p: _audio_props(1)
+    )
+    captured: dict = {}
+    monkeypatch.setattr(
+        transcripts_server.video,
+        "normalize_audio_inplace",
+        _capturing_normalize(captured, results={p2.name: (False, "ffmpeg failed")}),
+    )
+
+    resp = tr_client.post(
+        "/transcripts/api/normalize-audio", json={"participants": ["P01"]}
+    )
+    assert resp.status_code == 200
+    _, result, _done = _ndjson(resp)
+    # Both parts were attempted; the aggregate line names only the failed one.
+    assert len(captured["calls"]) == 2
+    assert result["ok"] is False
+    assert p2.name in result["error"]
+    assert p1.name not in result["error"]
+    # Part 1 was swapped on disk despite the participant-level failure — the
+    # client's post-run reload keys on this count, not on ok.
+    assert result["parts_done"] == 1
+
+
+def test_normalize_audio_retry_skips_parts_with_kept_originals(
+    tr_client, tmp_path, monkeypatch
+):
+    """A retry of a half-finished multi-part participant must finish the
+    remaining parts, not collect a 'still kept' refusal for the ones that
+    already succeeded (which would read as a failure forever)."""
+    p1 = tmp_path / "study_P01.mp4"
+    p2 = tmp_path / "study_P01 2.mp4"
+    p1.write_bytes(b"\x00")
+    p2.write_bytes(b"\x00")
+    # Part 1 already rewritten by the failed run: its backup slot is occupied.
+    Path(str(p1) + ".orig").write_bytes(b"\x00")
+    transcripts_server._participants = [
+        {"id": "P01", "video_paths": [str(p1), str(p2)], "has_video": True}
+    ]
+    monkeypatch.setattr(
+        transcripts_server.video, "probe_video_properties", lambda _p: _audio_props(1)
+    )
+    captured: dict = {}
+    monkeypatch.setattr(
+        transcripts_server.video,
+        "normalize_audio_inplace",
+        _capturing_normalize(captured),
+    )
+
+    resp = tr_client.post(
+        "/transcripts/api/normalize-audio", json={"participants": ["P01"]}
+    )
+    assert resp.status_code == 200
+    _, result, _done = _ndjson(resp)
+    assert [c[0] for c in captured["calls"]] == [str(p2)]
+    assert result["ok"] is True
+    assert result["parts_done"] == 1
+    assert "already-rewritten" in result["message"]
+
+
+def test_normalize_audio_fully_kept_participant_is_a_clean_noop(
+    tr_client, tmp_path, monkeypatch
+):
+    video_path = tmp_path / "study_P01.mp4"
+    video_path.write_bytes(b"\x00")
+    Path(str(video_path) + ".orig").write_bytes(b"\x00")
+    transcripts_server._participants = [
+        {"id": "P01", "video_paths": [str(video_path)], "has_video": True}
+    ]
+    captured: dict = {}
+    monkeypatch.setattr(
+        transcripts_server.video,
+        "normalize_audio_inplace",
+        _capturing_normalize(captured),
+    )
+
+    resp = tr_client.post(
+        "/transcripts/api/normalize-audio", json={"participants": ["P01"]}
+    )
+    assert resp.status_code == 200
+    _, result, _done = _ndjson(resp)
+    assert captured["calls"] == []
+    assert result["ok"] is True
+    assert result["parts_done"] == 0
+    assert "Already rewritten" in result["message"]
+
+
+def test_normalize_audio_400_without_participants(tr_client):
+    resp = tr_client.post("/transcripts/api/normalize-audio", json={"participants": []})
+    assert resp.status_code == 400
+    assert resp.get_json()["ok"] is False
+
+
+@pytest.mark.parametrize("bad_tracks", ["bogus", [1.5], [True], [], {"a": 1}])
+def test_normalize_audio_400_on_malformed_tracks(tr_client, bad_tracks):
+    resp = tr_client.post(
+        "/transcripts/api/normalize-audio",
+        json={"participants": ["P01"], "tracks": bad_tracks},
+    )
+    assert resp.status_code == 400
+    assert resp.get_json()["ok"] is False
+
+
+def test_normalize_audio_missing_video_is_a_failure_line(
+    tr_client, tmp_path, monkeypatch
+):
+    """An unknown participant is an ok=false line, not a failed request — one
+    bad id must not sink the rest of the batch."""
+    video_path = tmp_path / "study_P01.mp4"
+    video_path.write_bytes(b"\x00")
+    transcripts_server._participants = [
+        {"id": "P01", "video_paths": [str(video_path)], "has_video": True}
+    ]
+    monkeypatch.setattr(
+        transcripts_server.video, "probe_video_properties", lambda _p: _audio_props(1)
+    )
+    captured: dict = {}
+    monkeypatch.setattr(
+        transcripts_server.video,
+        "normalize_audio_inplace",
+        _capturing_normalize(captured),
+    )
+
+    resp = tr_client.post(
+        "/transcripts/api/normalize-audio", json={"participants": ["P99", "P01"]}
+    )
+    assert resp.status_code == 200
+    lines = _ndjson(resp)
+    assert lines[1]["participant"] == "P99"
+    assert lines[1]["ok"] is False
+    assert lines[1]["error"] == "Source video not found"
+    assert lines[2]["participant"] == "P01"
+    assert lines[2]["ok"] is True
+
+
+def test_normalize_audio_cancel_stops_before_the_next_participant(
+    tr_client, tmp_path, monkeypatch
+):
+    v1 = tmp_path / "study_P01.mp4"
+    v2 = tmp_path / "study_P02.mp4"
+    v1.write_bytes(b"\x00")
+    v2.write_bytes(b"\x00")
+    transcripts_server._participants = [
+        {"id": "P01", "video_paths": [str(v1)], "has_video": True},
+        {"id": "P02", "video_paths": [str(v2)], "has_video": True},
+    ]
+    monkeypatch.setattr(
+        transcripts_server.video, "probe_video_properties", lambda _p: _audio_props(1)
+    )
+
+    def cancelling_normalize(path, indices, **_kwargs):
+        # Stand in for the user hitting Stop while the first file rewrites.
+        transcripts_server._normalize_slot.cancel_event.set()
+        return True, "Audio normalized."
+
+    monkeypatch.setattr(
+        transcripts_server.video, "normalize_audio_inplace", cancelling_normalize
+    )
+
+    resp = tr_client.post(
+        "/transcripts/api/normalize-audio", json={"participants": ["P01", "P02"]}
+    )
+    lines = _ndjson(resp)
+    assert lines[0]["total"] == 2
+    assert lines[1]["participant"] == "P01"
+    assert lines[-2] == {"cancelled": True}
+    assert lines[-1] == {"done": True}
+    assert not any(ln.get("participant") == "P02" for ln in lines)
+    # The slot is released even on the cancel path, so the next run can claim it.
+    assert transcripts_server._normalize_slot.busy is False
+
+
+def test_normalize_audio_409_while_a_run_holds_the_slot(tr_client, monkeypatch):
+    monkeypatch.setattr(transcripts_server._normalize_slot, "busy", True)
+    resp = tr_client.post(
+        "/transcripts/api/normalize-audio", json={"participants": ["P01"]}
+    )
+    assert resp.status_code == 409
+    assert resp.get_json()["ok"] is False
+
+
+def test_normalize_slot_is_freed_when_the_stream_is_never_consumed(
+    tr_client, monkeypatch
+):
+    monkeypatch.setattr(transcripts_server._normalize_slot, "busy", False)
+    monkeypatch.setattr(transcripts_server._normalize_slot, "owner", None)
+
+    resp = tr_client.post(
+        "/transcripts/api/normalize-audio", json={"participants": ["P01"]}
+    )
+    assert resp.status_code == 200
+    # Tear the response down without ever pulling a line from the body.
+    resp.close()
+
+    assert transcripts_server._normalize_slot.busy is False
+    assert transcripts_server._normalize_slot.owner is None
+
+
+def test_normalize_slot_release_is_scoped_to_its_own_run(monkeypatch):
+    monkeypatch.setattr(transcripts_server._normalize_slot, "busy", False)
+    monkeypatch.setattr(transcripts_server._normalize_slot, "owner", None)
+
+    first = transcripts_server._normalize_slot.claim()
+    assert first is not None
+    transcripts_server._normalize_slot.release(first)
+
+    second = transcripts_server._normalize_slot.claim()
+    assert second is not None and second != first
+
+    # The first run's straggler release must not free the second run's slot.
+    transcripts_server._normalize_slot.release(first)
+    assert transcripts_server._normalize_slot.busy is True
+    assert transcripts_server._normalize_slot.claim() is None
+
+    transcripts_server._normalize_slot.release(second)
+    assert transcripts_server._normalize_slot.busy is False
+
+
+def test_normalize_audio_cancel_route_is_token_scoped(tr_client):
+    """Token-scoped like the embed cancel: see that test for the rationale."""
+    token = transcripts_server._normalize_slot.claim()
+    assert token is not None
+    try:
+        resp = tr_client.post(
+            "/transcripts/api/normalize-audio/cancel", json={"token": "stale"}
+        )
+        assert resp.status_code == 200
+        assert not transcripts_server._normalize_slot.cancel_event.is_set()
+        resp = tr_client.post(
+            "/transcripts/api/normalize-audio/cancel", json={"token": token}
+        )
+        assert resp.status_code == 200
+        assert transcripts_server._normalize_slot.cancel_event.is_set()
+    finally:
+        transcripts_server._normalize_slot.cancel_event.clear()
+        transcripts_server._normalize_slot.release()
 
 
 # ---- Friction endpoints ----
 
 
 def _seed_friction_entry(pid="P01", **extra):
-    """Insert a transcript entry with a summary for *pid* into the manifest."""
+    """Insert a transcript entry with a summary for *pid* into the manifest.
+
+    Bumps the corrections version: seeding replaces segments, and a stale
+    corrected-segments cache entry would otherwise leak into any later test
+    (even cross-module) that resolves this participant at the same version.
+    """
     entry = {
         "segments": [{"id": f"{pid}:0", "start": 0.0, "end": 1.0, "text": "um where"}],
         "summary": "A session summary.",
     }
     entry.update(extra)
     transcripts_server._manifest["source_transcripts"][pid] = entry
+    transcripts_server._bump_corrections_version()
     return entry
 
 
@@ -1101,6 +1958,33 @@ def test_friction_get_deterministic_when_absent_and_idle(tr_client, _agent_state
     assert "by_category" in fr["stats"]
 
 
+def test_friction_deterministic_payload_cached_per_version(
+    tr_client, _agent_state_clean
+):
+    """The agent poll refetches this every 3s for a whole LLM run; the scorer
+    must not re-run per poll. Same version serves the cached payload object;
+    a corrections/segments bump invalidates it."""
+    _seed_friction_entry()
+    transcripts_server._bump_corrections_version()
+    segs = transcripts_server._manifest["source_transcripts"]["P01"]["segments"]
+    try:
+        first = transcripts_server._deterministic_friction(
+            "friction", "P01", list(segs), []
+        )
+        second = transcripts_server._deterministic_friction(
+            "friction", "P01", list(segs), []
+        )
+        assert first is second
+        transcripts_server._bump_corrections_version()
+        third = transcripts_server._deterministic_friction(
+            "friction", "P01", list(segs), []
+        )
+        assert third is not second
+        assert third == second
+    finally:
+        transcripts_server._bump_corrections_version()
+
+
 def test_friction_get_keeps_deterministic_scores_while_the_agent_runs(
     tr_client, _agent_state_clean
 ):
@@ -1122,6 +2006,32 @@ def test_friction_get_keeps_deterministic_scores_while_the_agent_runs(
     )
     assert len(fr["segments"]) == 1 and "score" in fr["segments"][0]
     assert fr["moments"] == [], "only the LLM half waits on the agent"
+
+
+def test_friction_deterministic_scores_the_corrected_text(
+    tr_client, _agent_state_clean
+):
+    """The pre-run scores must match what a run would produce.
+
+    Stored segments stay raw so corrections can re-apply after a re-transcribe;
+    the agent snapshot applies them, so scoring raw text here made the
+    histogram, tinting and timeline band jump the moment a run landed.
+    """
+    transcripts_server._manifest["source_transcripts"]["P01"] = {
+        "segments": [{"id": "P01:0", "start": 0.0, "end": 1.0, "text": "this is fine"}],
+        "summary": "A session summary.",
+    }
+    transcripts_server._manifest["corrections"] = [
+        {"id": "c_1", "from": "this is fine", "to": "this is annoying"}
+    ]
+    transcripts_server._bump_corrections_version()
+    try:
+        fr = tr_client.get("/transcripts/api/agent/friction/P01").get_json()["friction"]
+    finally:
+        transcripts_server._manifest["corrections"] = []
+        transcripts_server._bump_corrections_version()
+    assert fr["segments"][0]["categories"] == ["frustration"]
+    assert fr["stats"]["total_markers"] == 1
 
 
 def test_friction_generating_without_segments_carries_no_scores(
@@ -1274,8 +2184,8 @@ def test_friction_regenerate_404_without_summary(tr_client, _agent_state_clean):
 def test_friction_regenerate_triggers(tr_client, _agent_state_clean, monkeypatch):
     # The stub stores nothing, so the chain advances — without this the seeded
     # entry (summary, no citations) would spawn the REAL citations agent, a
-    # live Ollama generation leaking past the end of the test.
-    monkeypatch.setattr(config, "OLLAMA_CITATIONS_ENABLED", False)
+    # live LLM generation leaking past the end of the test.
+    monkeypatch.setattr(config, "LLM_CITATIONS_ENABLED", False)
     monkeypatch.setattr(transcripts_server, "_persist_manifest", lambda: None)
     _seed_friction_entry(friction={"stale": False, "moments": []})
 
@@ -1324,16 +2234,16 @@ def test_report_regenerate_404_without_summary(tr_client, _agent_state_clean):
 def test_report_regenerate_runs_when_disabled(
     tr_client, _agent_state_clean, monkeypatch
 ):
-    """Manual-trigger contract: OLLAMA_REPORT_ENABLED=False keeps report out of
+    """Manual-trigger contract: LLM_REPORT_ENABLED=False keeps report out of
     the auto-chain, but the regenerate route runs it anyway (force=True). The
     orchestrator's snapshot must also carry the participant id for the report
     agent's injected getters."""
-    monkeypatch.setattr(config, "OLLAMA_REPORT_ENABLED", False)
+    monkeypatch.setattr(config, "LLM_REPORT_ENABLED", False)
     # The seeded entry has no citations, and the post-run chain advance would
     # otherwise spawn the REAL citations agent (enabled by default) — a live
-    # Ollama call in a daemon thread that outlives this test and corrupts the
+    # LLM call in a daemon thread that outlives this test and corrupts the
     # shared orchestrator for whichever chain test runs next.
-    monkeypatch.setattr(config, "OLLAMA_CITATIONS_ENABLED", False)
+    monkeypatch.setattr(config, "LLM_CITATIONS_ENABLED", False)
     monkeypatch.setattr(transcripts_server, "_persist_manifest", lambda: None)
     _seed_friction_entry()
 
@@ -1373,13 +2283,13 @@ def test_friction_stop_sets_cancel_event(tr_client, _agent_state_clean):
 def test_friction_stop_schedules_model_unload(
     tr_client, _agent_state_clean, monkeypatch
 ):
-    monkeypatch.setattr(config, "OLLAMA_UNLOAD_DELAY_SECONDS", 30.0)
+    monkeypatch.setattr(config, "LLM_UNLOAD_DELAY_SECONDS", 30.0)
     pid = "P01"
     evt = threading.Event()
     transcripts_server._orchestrator._in_flight["friction"].add(pid)
     transcripts_server._orchestrator._cancel_events["friction"][pid] = evt
     tr_client.post(f"/transcripts/api/agent/friction/{pid}/stop")
-    # Friction inherits the summary model (OLLAMA_FRICTION_MODEL is blank by
+    # Friction inherits the summary model (LLM_FRICTION_MODEL is blank by
     # default), so the unload targets the resolved model.
     assert thinking_agents.friction_model() in transcripts_server._pending_model_unloads
 
@@ -1407,7 +2317,7 @@ def test_agent_stop_unknown_key_404(tr_client, _agent_state_clean):
 def test_friction_not_eligible_when_disabled(
     tr_client, _agent_state_clean, monkeypatch
 ):
-    monkeypatch.setattr(config, "OLLAMA_FRICTION_ENABLED", False)
+    monkeypatch.setattr(config, "LLM_FRICTION_ENABLED", False)
     # summary + citations present so those passes are skipped; friction is the
     # only remaining candidate.
     _seed_friction_entry(citations=[{"sentence": "s", "refs": []}])
@@ -1415,7 +2325,7 @@ def test_friction_not_eligible_when_disabled(
 
 
 def test_friction_eligible_when_enabled(tr_client, _agent_state_clean, monkeypatch):
-    monkeypatch.setattr(config, "OLLAMA_FRICTION_ENABLED", True)
+    monkeypatch.setattr(config, "LLM_FRICTION_ENABLED", True)
     _seed_friction_entry(citations=[{"sentence": "s", "refs": []}])
     agent = transcripts_server._orchestrator.next_eligible("P01")
     assert agent is not None and agent["key"] == "friction"
@@ -1425,8 +2335,8 @@ def test_friction_eligible_without_citations(
     tr_client, _agent_state_clean, monkeypatch
 ):
     """Friction depends only on summary — it runs even when citations is off."""
-    monkeypatch.setattr(config, "OLLAMA_FRICTION_ENABLED", True)
-    monkeypatch.setattr(config, "OLLAMA_CITATIONS_ENABLED", False)
+    monkeypatch.setattr(config, "LLM_FRICTION_ENABLED", True)
+    monkeypatch.setattr(config, "LLM_CITATIONS_ENABLED", False)
     _seed_friction_entry()  # summary present, no citations
     agent = transcripts_server._orchestrator.next_eligible("P01")
     assert agent is not None and agent["key"] == "friction"
@@ -1435,9 +2345,9 @@ def test_friction_eligible_without_citations(
 def test_friction_force_eligible_regardless_of_flag(
     tr_client, _agent_state_clean, monkeypatch
 ):
-    monkeypatch.setattr(config, "OLLAMA_FRICTION_ENABLED", False)
-    monkeypatch.setattr(config, "OLLAMA_SUMMARY_ENABLED", False)
-    monkeypatch.setattr(config, "OLLAMA_CITATIONS_ENABLED", False)
+    monkeypatch.setattr(config, "LLM_FRICTION_ENABLED", False)
+    monkeypatch.setattr(config, "LLM_SUMMARY_ENABLED", False)
+    monkeypatch.setattr(config, "LLM_CITATIONS_ENABLED", False)
     _seed_friction_entry(citations=[{"sentence": "s", "refs": []}])
     agent = transcripts_server._orchestrator.next_eligible("P01", force=True)
     assert agent is not None and agent["key"] == "friction"
@@ -1449,8 +2359,8 @@ def test_next_eligible_honors_skip(tr_client, _agent_state_clean, monkeypatch):
     Its manifest field is still empty, so without skip it is picked straight
     back and the chain spins on it instead of reaching its siblings.
     """
-    monkeypatch.setattr(config, "OLLAMA_FRICTION_ENABLED", True)
-    monkeypatch.setattr(config, "OLLAMA_CITATIONS_ENABLED", True)
+    monkeypatch.setattr(config, "LLM_FRICTION_ENABLED", True)
+    monkeypatch.setattr(config, "LLM_CITATIONS_ENABLED", True)
     _seed_friction_entry()  # summary present; citations + friction both pending
 
     agent = transcripts_server._orchestrator.next_eligible("P01")
@@ -1469,8 +2379,8 @@ def test_failed_citations_still_chains_to_friction(
     committed. Friction depends only on the summary, so the chain has to carry
     on past the failure rather than stopping at the uncommitted step.
     """
-    monkeypatch.setattr(config, "OLLAMA_FRICTION_ENABLED", True)
-    monkeypatch.setattr(config, "OLLAMA_CITATIONS_ENABLED", True)
+    monkeypatch.setattr(config, "LLM_FRICTION_ENABLED", True)
+    monkeypatch.setattr(config, "LLM_CITATIONS_ENABLED", True)
     monkeypatch.setattr(transcripts_server, "_persist_manifest", lambda: None)
     _seed_friction_entry()
 
@@ -1505,8 +2415,8 @@ def test_raising_agent_still_chains_past_it(tr_client, _agent_state_clean, monke
     Same stall as the uncommitted-result path — friction depends only on the
     summary and would otherwise never start after a citations exception.
     """
-    monkeypatch.setattr(config, "OLLAMA_FRICTION_ENABLED", True)
-    monkeypatch.setattr(config, "OLLAMA_CITATIONS_ENABLED", True)
+    monkeypatch.setattr(config, "LLM_FRICTION_ENABLED", True)
+    monkeypatch.setattr(config, "LLM_CITATIONS_ENABLED", True)
     monkeypatch.setattr(transcripts_server, "_persist_manifest", lambda: None)
     _seed_friction_entry()
 
@@ -1519,7 +2429,7 @@ def test_raising_agent_still_chains_past_it(tr_client, _agent_state_clean, monke
         _boom,
     )
     # The spy passes friction through to the real run_agent; without a stub
-    # that is a REAL Ollama generation on machines where Ollama runs. It
+    # that is a REAL LLM generation on machines where the server runs. It
     # outlives the 2 s thread join, then commits into a later test's manifest
     # and squats the shared in-flight slot — the suite's flakiest interleaving.
     monkeypatch.setitem(
@@ -1554,8 +2464,8 @@ def test_chain_terminates_when_every_agent_stores_nothing(
     them take turns indefinitely — one live model call per lap. The skip set
     accumulates across the chain to make each agent run at most once.
     """
-    monkeypatch.setattr(config, "OLLAMA_FRICTION_ENABLED", True)
-    monkeypatch.setattr(config, "OLLAMA_CITATIONS_ENABLED", True)
+    monkeypatch.setattr(config, "LLM_FRICTION_ENABLED", True)
+    monkeypatch.setattr(config, "LLM_CITATIONS_ENABLED", True)
     monkeypatch.setattr(transcripts_server, "_persist_manifest", lambda: None)
     _seed_friction_entry()
 
@@ -1761,6 +2671,31 @@ def test_intake_poll_agents_running_without_stat(
     assert resp.get_json()["status"]["agents_running"] is True
 
 
+def test_transcript_includes_words_when_present(tr_client):
+    words = [
+        {"start": 0.4, "end": 0.7, "text": "the"},
+        {"start": 0.75, "end": 1.0, "text": "cat"},
+    ]
+    transcripts_server._manifest["source_transcripts"]["P01"] = {
+        "segments": [
+            {
+                "id": "P01:0",
+                "start": 0.4,
+                "end": 1.0,
+                "text": "the cat",
+                "words": words,
+            },
+            {"id": "P01:1", "start": 2.0, "end": 3.0, "text": "old shape"},
+        ],
+    }
+    resp = tr_client.get("/transcripts/api/transcript/P01")
+    assert resp.status_code == 200
+    segments = resp.get_json()["segments"]
+    assert segments[0]["words"] == words
+    # Segments from manifests predating word timing degrade to an empty list.
+    assert segments[1]["words"] == []
+
+
 def test_corrected_segments_cached_and_invalidated_on_correction(
     tr_client, monkeypatch
 ):
@@ -1796,6 +2731,215 @@ def test_corrected_segments_cached_and_invalidated_on_correction(
     seg = r3.get_json()["segments"][0]
     assert seg["text"] == "the cat"
     assert seg["corrected"] is True
+
+
+def test_known_terms_crud(tr_client, monkeypatch):
+    """List, add, and remove the study vocabulary."""
+    monkeypatch.setattr(transcripts_server, "_schedule_persist", lambda: None)
+
+    assert tr_client.get("/transcripts/api/known-terms").get_json()["terms"] == []
+
+    resp = tr_client.post(
+        "/transcripts/api/known-terms", json={"term": "  Frobnicator  "}
+    )
+    assert resp.status_code == 200
+    assert resp.get_json()["term"] == "Frobnicator"
+    assert tr_client.get("/transcripts/api/known-terms").get_json()["terms"] == [
+        "Frobnicator"
+    ]
+
+    resp = tr_client.delete("/transcripts/api/known-terms/Frobnicator")
+    assert resp.status_code == 200
+    assert tr_client.get("/transcripts/api/known-terms").get_json()["terms"] == []
+
+
+def test_known_terms_reject_empty(tr_client):
+    resp = tr_client.post("/transcripts/api/known-terms", json={"term": "   "})
+    assert resp.status_code == 400
+
+
+def test_known_terms_duplicate_is_not_an_error(tr_client, monkeypatch):
+    """A repeat term reports duplicate rather than failing, and is not stored twice."""
+    monkeypatch.setattr(transcripts_server, "_schedule_persist", lambda: None)
+    tr_client.post("/transcripts/api/known-terms", json={"term": "Widget"})
+    resp = tr_client.post("/transcripts/api/known-terms", json={"term": "widget"})
+    assert resp.status_code == 200
+    assert resp.get_json()["duplicate"] is True
+    assert tr_client.get("/transcripts/api/known-terms").get_json()["terms"] == [
+        "Widget"
+    ]
+
+
+def test_known_terms_delete_unknown_is_404(tr_client):
+    assert tr_client.delete("/transcripts/api/known-terms/nope").status_code == 404
+
+
+def test_known_term_does_not_invalidate_corrected_cache(tr_client, monkeypatch):
+    """Terms bias the next transcription; they never rewrite stored text, so the
+    corrected-segments cache must survive one (inverse of the corrections test)."""
+    calls = {"n": 0}
+    real_apply = transcripts.apply_corrections
+
+    def _counting_apply(segments, corrections):
+        calls["n"] += 1
+        return real_apply(segments, corrections)
+
+    monkeypatch.setattr(transcripts, "apply_corrections", _counting_apply)
+    monkeypatch.setattr(transcripts_server, "_schedule_persist", lambda: None)
+    transcripts_server._manifest["source_transcripts"]["P01"] = {
+        "segments": [{"id": "P01:0", "start": 0.0, "end": 1.0, "text": "teh cat"}],
+    }
+
+    assert tr_client.get("/transcripts/api/transcript/P01").status_code == 200
+    assert calls["n"] == 1
+    tr_client.post("/transcripts/api/known-terms", json={"term": "Frobnicator"})
+    tr_client.get("/transcripts/api/transcript/P01")
+    assert calls["n"] == 1
+
+
+def test_dictionary_export_csv(tr_client, monkeypatch):
+    """Both halves of the dictionary land in one CSV."""
+    monkeypatch.setattr(transcripts_server, "_schedule_persist", lambda: None)
+    tr_client.post("/transcripts/api/corrections", json={"from": "teh", "to": "the"})
+    tr_client.post("/transcripts/api/known-terms", json={"term": "Frobnicator"})
+
+    resp = tr_client.get("/transcripts/api/dictionary.csv")
+    assert resp.status_code == 200
+    assert resp.mimetype == "text/csv"
+    body = resp.get_data(as_text=True)
+    assert body.startswith("type,from,to")
+    assert "correction,teh,the" in body
+    assert "term,,Frobnicator" in body
+
+
+def test_dictionary_import_merges_and_skips_duplicates(tr_client, monkeypatch):
+    monkeypatch.setattr(transcripts_server, "_schedule_persist", lambda: None)
+    tr_client.post("/transcripts/api/known-terms", json={"term": "Frobnicator"})
+
+    csv_text = (
+        "type,from,to\n"
+        "correction,teh,the\n"
+        "term,,Frobnicator\n"  # already present, case-insensitively
+        "term,,Widget Bay\n"
+    )
+    resp = tr_client.post("/transcripts/api/dictionary/import", json={"csv": csv_text})
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert (data["corrections"], data["terms"], data["skipped"]) == (1, 1, 1)
+
+    terms = tr_client.get("/transcripts/api/known-terms").get_json()["terms"]
+    assert terms == ["Frobnicator", "Widget Bay"]
+    assert (
+        len(tr_client.get("/transcripts/api/corrections").get_json()["corrections"])
+        == 1
+    )
+
+
+def test_dictionary_import_is_idempotent(tr_client, monkeypatch):
+    """Re-importing the same file adds nothing — merge never duplicates."""
+    monkeypatch.setattr(transcripts_server, "_schedule_persist", lambda: None)
+    csv_text = "type,from,to\ncorrection,teh,the\nterm,,Widget\n"
+    tr_client.post("/transcripts/api/dictionary/import", json={"csv": csv_text})
+    again = tr_client.post(
+        "/transcripts/api/dictionary/import", json={"csv": csv_text}
+    ).get_json()
+    assert (again["corrections"], again["terms"]) == (0, 0)
+
+
+def test_dictionary_import_rejects_empty_and_unusable(tr_client):
+    assert (
+        tr_client.post(
+            "/transcripts/api/dictionary/import", json={"csv": ""}
+        ).status_code
+        == 400
+    )
+    resp = tr_client.post(
+        "/transcripts/api/dictionary/import", json={"csv": "nothing,useful\n1,2\n"}
+    )
+    assert resp.status_code == 400
+
+
+def test_dictionary_import_invalidates_corrected_cache(tr_client, monkeypatch):
+    """Imported corrections rewrite displayed text, so the cache must drop."""
+    calls = {"n": 0}
+    real_apply = transcripts.apply_corrections
+
+    def _counting_apply(segments, corrections):
+        calls["n"] += 1
+        return real_apply(segments, corrections)
+
+    monkeypatch.setattr(transcripts, "apply_corrections", _counting_apply)
+    monkeypatch.setattr(transcripts_server, "_schedule_persist", lambda: None)
+    transcripts_server._manifest["source_transcripts"]["P01"] = {
+        "segments": [{"id": "P01:0", "start": 0.0, "end": 1.0, "text": "teh cat"}],
+    }
+
+    assert tr_client.get("/transcripts/api/transcript/P01").status_code == 200
+    assert calls["n"] == 1
+    tr_client.post(
+        "/transcripts/api/dictionary/import",
+        json={"csv": "type,from,to\ncorrection,teh,the\n"},
+    )
+    r = tr_client.get("/transcripts/api/transcript/P01")
+    assert calls["n"] == 2
+    assert r.get_json()["segments"][0]["text"] == "the cat"
+
+
+def test_dictionary_import_of_terms_only_keeps_cache(tr_client, monkeypatch):
+    """A terms-only import changes no text, so the cache survives."""
+    calls = {"n": 0}
+    real_apply = transcripts.apply_corrections
+
+    def _counting_apply(segments, corrections):
+        calls["n"] += 1
+        return real_apply(segments, corrections)
+
+    monkeypatch.setattr(transcripts, "apply_corrections", _counting_apply)
+    monkeypatch.setattr(transcripts_server, "_schedule_persist", lambda: None)
+    transcripts_server._manifest["source_transcripts"]["P01"] = {
+        "segments": [{"id": "P01:0", "start": 0.0, "end": 1.0, "text": "teh cat"}],
+    }
+
+    assert tr_client.get("/transcripts/api/transcript/P01").status_code == 200
+    tr_client.post(
+        "/transcripts/api/dictionary/import",
+        json={"csv": "type,from,to\nterm,,Widget\n"},
+    )
+    tr_client.get("/transcripts/api/transcript/P01")
+    assert calls["n"] == 1
+
+
+def test_global_dictionary_save_and_load(tr_client, tmp_path, monkeypatch):
+    """The global copy round-trips through the config dir and merges back in."""
+    monkeypatch.setattr(transcripts_server, "_schedule_persist", lambda: None)
+    monkeypatch.setattr(
+        start_settings, "config_json_path", lambda name: tmp_path / name
+    )
+
+    assert (
+        tr_client.get("/transcripts/api/dictionary/global").get_json()["exists"]
+        is False
+    )
+    assert tr_client.post("/transcripts/api/dictionary/global").status_code == 400
+    assert tr_client.post("/transcripts/api/dictionary/global/load").status_code == 404
+
+    tr_client.post("/transcripts/api/corrections", json={"from": "teh", "to": "the"})
+    tr_client.post("/transcripts/api/known-terms", json={"term": "Frobnicator"})
+    saved = tr_client.post("/transcripts/api/dictionary/global").get_json()
+    assert (saved["corrections"], saved["terms"]) == (1, 1)
+
+    status = tr_client.get("/transcripts/api/dictionary/global").get_json()
+    assert (status["exists"], status["corrections"], status["terms"]) == (True, 1, 1)
+
+    # Loading into a study that already has them adds nothing...
+    again = tr_client.post("/transcripts/api/dictionary/global/load").get_json()
+    assert (again["corrections"], again["terms"]) == (0, 0)
+
+    # ...but into an empty study it restores both halves.
+    transcripts_server._manifest["corrections"] = []
+    transcripts_server._manifest["known_terms"] = []
+    restored = tr_client.post("/transcripts/api/dictionary/global/load").get_json()
+    assert (restored["corrections"], restored["terms"]) == (1, 1)
 
 
 def test_vtt_shares_corrected_segments_cache(tr_client, monkeypatch):
@@ -1845,7 +2989,7 @@ def test_persist_keeps_corrected_cache_for_unchanged_transcription(
     }
 
     class _FakeWorker:
-        def get_all_tasks(self):
+        def get_all_tasks(self, include_partials=True):
             return [_copy.deepcopy(completed)]  # mirror the real deepcopy contract
 
     monkeypatch.setattr(transcripts_server, "_worker", _FakeWorker())
@@ -1888,7 +3032,7 @@ def test_citations_regenerate_does_not_run_disabled_friction(
     """Regression (H1): a manual single-agent regenerate must not cascade into a
     disabled sibling. The post-success chain advance is force=False, so with
     friction off, regenerating citations recomputes only citations."""
-    monkeypatch.setattr(config, "OLLAMA_FRICTION_ENABLED", False)
+    monkeypatch.setattr(config, "LLM_FRICTION_ENABLED", False)
     monkeypatch.setattr(transcripts_server, "_persist_manifest", lambda: None)
     # summary + citations present, friction absent — friction is the only empty field.
     _seed_friction_entry(citations=[{"sentence": "s", "refs": []}])
@@ -1949,7 +3093,7 @@ def test_on_task_complete_registers_summary_before_disk_write(
     runs — not only after it. Otherwise the frontend can observe the task as
     completed with no agent running and stop polling until a manual reload.
     """
-    monkeypatch.setattr(config, "OLLAMA_SUMMARY_ENABLED", True)
+    monkeypatch.setattr(config, "LLM_SUMMARY_ENABLED", True)
 
     pid = "P01"
     completed_task = {
@@ -1966,7 +3110,7 @@ def test_on_task_complete_registers_summary_before_disk_write(
     }
 
     class _FakeWorker:
-        def get_all_tasks(self):
+        def get_all_tasks(self, include_partials=True):
             return [dict(completed_task)]
 
     monkeypatch.setattr(transcripts_server, "_worker", _FakeWorker())
@@ -2007,48 +3151,48 @@ def test_on_task_complete_registers_summary_before_disk_write(
 
 
 # ---------------------------------------------------------------------------
-# Local-model install gating: Ollama pull endpoints + /api/models surface
+# Local-model download gating: GGUF download endpoints + /api/models surface
 # ---------------------------------------------------------------------------
 
 
-def test_ollama_pull_requires_model(tr_client):
-    resp = tr_client.post("/transcripts/api/models/ollama/pull", json={})
+def test_llm_download_requires_model(tr_client):
+    resp = tr_client.post("/transcripts/api/models/llm/download", json={})
     assert resp.status_code == 400
     assert resp.get_json()["ok"] is False
 
 
-def test_ollama_pull_status_unknown_model(tr_client):
-    resp = tr_client.get("/transcripts/api/models/ollama/pull-status?model=ghost:1b")
+def test_llm_download_status_unknown_model(tr_client):
+    resp = tr_client.get("/transcripts/api/models/llm/download-status?model=ghost:1b")
     assert resp.status_code == 200
     data = resp.get_json()
     assert data["ok"] is True
     assert data["found"] is False
 
 
-def test_ollama_pull_starts_and_reports_success(tr_client, monkeypatch):
+def test_llm_download_starts_and_reports_success(tr_client, monkeypatch):
     import time
 
-    import ollama_client
+    import llm_client
 
     def _fake_pull(model, on_progress=None):
         if on_progress:
             on_progress({"status": "downloading", "total": 10, "completed": 5})
         return True
 
-    monkeypatch.setattr(ollama_client, "pull_model", _fake_pull)
-    transcripts_server._ollama_pull_status.clear()
+    monkeypatch.setattr(llm_client, "download_model", _fake_pull)
+    transcripts_server._llm_downloads.clear()
 
     resp = tr_client.post(
-        "/transcripts/api/models/ollama/pull", json={"model": "tiny:1b"}
+        "/transcripts/api/models/llm/download", json={"model": "tiny:1b"}
     )
     assert resp.status_code == 200
     assert resp.get_json()["started"] is True
 
-    # The pull runs in a daemon thread; poll until it reports done.
+    # The download runs in a daemon thread; poll until it reports done.
     status = {}
     for _ in range(100):
         status = tr_client.get(
-            "/transcripts/api/models/ollama/pull-status?model=tiny:1b"
+            "/transcripts/api/models/llm/download-status?model=tiny:1b"
         ).get_json()
         if status.get("found") and status.get("done"):
             break
@@ -2058,21 +3202,21 @@ def test_ollama_pull_starts_and_reports_success(tr_client, monkeypatch):
     assert status["succeeded"] is True
 
 
-def test_ollama_pull_reports_failure(tr_client, monkeypatch):
+def test_llm_download_reports_failure(tr_client, monkeypatch):
     import time
 
-    import ollama_client
+    import llm_client
 
     monkeypatch.setattr(
-        ollama_client, "pull_model", lambda model, on_progress=None: False
+        llm_client, "download_model", lambda model, on_progress=None: False
     )
-    transcripts_server._ollama_pull_status.clear()
+    transcripts_server._llm_downloads.clear()
 
-    tr_client.post("/transcripts/api/models/ollama/pull", json={"model": "bad:1b"})
+    tr_client.post("/transcripts/api/models/llm/download", json={"model": "bad:1b"})
     status = {}
     for _ in range(100):
         status = tr_client.get(
-            "/transcripts/api/models/ollama/pull-status?model=bad:1b"
+            "/transcripts/api/models/llm/download-status?model=bad:1b"
         ).get_json()
         if status.get("found") and status.get("done"):
             break
@@ -2082,108 +3226,87 @@ def test_ollama_pull_reports_failure(tr_client, monkeypatch):
     assert status["error"]
 
 
-def test_ollama_install_rejected_where_unsupported(tr_client, monkeypatch):
-    import ollama_client
+def _models_dir(tmp_path, monkeypatch):
+    import llm_client
 
-    monkeypatch.setattr(ollama_client, "can_install_managed", lambda: False)
-    resp = tr_client.post("/transcripts/api/models/ollama/install", json={})
-    assert resp.status_code == 400
-    assert resp.get_json()["ok"] is False
+    monkeypatch.setattr(llm_client.start_settings, "config_dir", lambda: tmp_path)
+    directory = tmp_path / "models"
+    directory.mkdir(parents=True, exist_ok=True)
+    return directory
 
 
-def test_ollama_install_short_circuits_when_installed(tr_client, monkeypatch):
-    import ollama_client
+def test_llm_delete_removes_model_file(tr_client, tmp_path, monkeypatch):
+    import llm_client
 
-    monkeypatch.setattr(ollama_client, "can_install_managed", lambda: True)
-    monkeypatch.setattr(ollama_client, "is_installed", lambda: True)
-    resp = tr_client.post("/transcripts/api/models/ollama/install", json={})
+    directory = _models_dir(tmp_path, monkeypatch)
+    (directory / "tiny.gguf").write_bytes(b"GGUF")
+    monkeypatch.setattr(llm_client, "unload_model", lambda name: True)
+    resp = tr_client.delete("/transcripts/api/models/llm/tiny")
     assert resp.status_code == 200
-    assert resp.get_json()["already_installed"] is True
+    assert resp.get_json()["deleted"] is True
+    assert not (directory / "tiny.gguf").exists()
 
 
-def test_ollama_install_status_before_any_install(tr_client, monkeypatch):
-    monkeypatch.setattr(transcripts_server, "_ollama_install_status", None)
-    resp = tr_client.get("/transcripts/api/models/ollama/install-status")
+def test_llm_delete_symlink_keeps_target(tr_client, tmp_path, monkeypatch):
+    """Deleting an external model unlinks; the ecosystem cache is untouched."""
+    import llm_client
+
+    directory = _models_dir(tmp_path, monkeypatch)
+    external = tmp_path / "cache" / "big.gguf"
+    external.parent.mkdir()
+    external.write_bytes(b"GGUF-external")
+    (directory / "big.gguf").symlink_to(external)
+    monkeypatch.setattr(llm_client, "unload_model", lambda name: True)
+    resp = tr_client.delete("/transcripts/api/models/llm/big")
     assert resp.status_code == 200
-    data = resp.get_json()
-    assert data["ok"] is True
-    assert data["found"] is False
+    assert not (directory / "big.gguf").is_symlink()
+    assert external.read_bytes() == b"GGUF-external"
 
 
-def test_ollama_install_starts_and_reports_success(tr_client, monkeypatch):
-    import time
-
-    import ollama_client
-
-    monkeypatch.setattr(ollama_client, "can_install_managed", lambda: True)
-    monkeypatch.setattr(ollama_client, "is_installed", lambda: False)
-
-    def _fake_install(on_progress=None):
-        if on_progress:
-            on_progress({"status": "downloading Ollama", "total": 100, "completed": 40})
-        return True
-
-    monkeypatch.setattr(ollama_client, "install_managed", _fake_install)
-    monkeypatch.setattr(transcripts_server, "_ollama_install_status", None)
-
-    resp = tr_client.post("/transcripts/api/models/ollama/install", json={})
-    assert resp.status_code == 200
-    assert resp.get_json()["started"] is True
-
-    status = {}
-    for _ in range(100):
-        status = tr_client.get(
-            "/transcripts/api/models/ollama/install-status"
-        ).get_json()
-        if status.get("found") and status.get("done"):
-            break
-        time.sleep(0.02)
-    assert status["found"] is True
-    assert status["done"] is True
-    assert status["succeeded"] is True
-    assert status["status"] == "success"
+def test_llm_delete_unknown_model_404(tr_client, tmp_path, monkeypatch):
+    _models_dir(tmp_path, monkeypatch)
+    resp = tr_client.delete("/transcripts/api/models/llm/ghost")
+    assert resp.status_code == 404
 
 
-def test_ollama_install_second_post_attaches(tr_client, monkeypatch):
-    import threading as threading_mod
+def test_llm_delete_refused_while_generating(tr_client, tmp_path, monkeypatch):
 
-    import ollama_client
-
-    monkeypatch.setattr(ollama_client, "can_install_managed", lambda: True)
-    monkeypatch.setattr(ollama_client, "is_installed", lambda: False)
-    release = threading_mod.Event()
+    directory = _models_dir(tmp_path, monkeypatch)
+    (directory / "busy.gguf").write_bytes(b"GGUF")
     monkeypatch.setattr(
-        ollama_client,
-        "install_managed",
-        lambda on_progress=None: release.wait(2.0),
+        transcripts_server._orchestrator, "busy_models", lambda: {"busy"}
     )
-    monkeypatch.setattr(transcripts_server, "_ollama_install_status", None)
-    try:
-        first = tr_client.post("/transcripts/api/models/ollama/install", json={})
-        assert first.get_json()["started"] is True
-        second = tr_client.post("/transcripts/api/models/ollama/install", json={})
-        assert second.get_json()["already_installing"] is True
-    finally:
-        release.set()
+    resp = tr_client.delete("/transcripts/api/models/llm/busy")
+    assert resp.status_code == 400
+    assert "in use" in resp.get_json()["error"]
+    assert (directory / "busy.gguf").exists()
+
+
+def test_llm_start_returns_the_recorded_reason(tr_client, monkeypatch):
+    import llm_client
+
+    monkeypatch.setattr(llm_client, "is_installed", lambda: True)
+    monkeypatch.setattr(llm_client, "start_server", lambda: False)
+    monkeypatch.setattr(
+        llm_client, "take_last_error", lambda: "AI server did not start within timeout."
+    )
+    resp = tr_client.post("/transcripts/api/models/llm/start", json={})
+    assert resp.status_code == 400
+    assert "timeout" in resp.get_json()["error"]
 
 
 def test_api_models_includes_cached_and_agents(monkeypatch):
-    import ollama_client
+    import llm_client
     import server as server_mod
 
     monkeypatch.setattr(
         transcripts, "is_whisper_model_cached", lambda n=None: n == "base"
     )
     monkeypatch.setattr(
-        ollama_client,
+        llm_client,
         "list_models",
         lambda: [
-            {
-                "name": "qwen3.5:9b",
-                "size_bytes": 0,
-                "parameter_size": "",
-                "family": "",
-            }
+            {"name": llm_client.model_name(config.LLM_SUMMARY_MODEL), "size_bytes": 0}
         ],
     )
 
@@ -2199,30 +3322,29 @@ def test_api_models_includes_cached_and_agents(monkeypatch):
     tiny = next(m for m in whisper if m["name"] == "tiny")
     assert tiny["cached"] is False
 
-    agents = data["ollama"]["agents"]
+    agents = data["llm"]["agents"]
     assert {a["key"] for a in agents} == {"summary", "citations", "friction", "report"}
-    # The configured summary model is present in the faked install list, and the
+    # The configured summary model is present in the faked models dir, and the
     # blank friction/report models resolve to it.
     assert all(a["installed"] for a in agents)
 
 
 def _models_payload(monkeypatch, *, binary_present, server_answers):
-    import ollama_client
+    import llm_client
     import server as server_mod
 
     monkeypatch.setattr(transcripts, "is_whisper_model_cached", lambda n=None: True)
-    monkeypatch.setattr(ollama_client, "is_installed", lambda: binary_present)
-    monkeypatch.setattr(
-        ollama_client, "list_models", lambda: [] if server_answers else None
-    )
+    monkeypatch.setattr(llm_client, "is_installed", lambda: binary_present)
+    monkeypatch.setattr(llm_client, "is_available", lambda: server_answers)
+    monkeypatch.setattr(llm_client, "list_models", list)
     app = server_mod.build_combined_app()
     with app.test_client() as c:
-        return c.get("/api/models").get_json()["ollama"]
+        return c.get("/api/models").get_json()["llm"]
 
 
 def test_api_models_separates_not_installed_from_not_running(monkeypatch):
     """`available` alone cannot tell the two apart, and they need opposite
-    advice — telling someone who never installed Ollama to "start it" was the
+    advice — telling someone who never installed the runtime to "start it" was the
     bug this field exists to fix."""
     missing = _models_payload(monkeypatch, binary_present=False, server_answers=False)
     assert missing["installed"] is False
@@ -2243,7 +3365,7 @@ def test_api_models_ships_install_guidance(monkeypatch):
     payload = _models_payload(monkeypatch, binary_present=False, server_answers=False)
     hint = payload["install_hint"]
     assert hint and all(isinstance(line, str) for line in hint)
-    assert any("ollama.com" in line for line in hint)
+    assert any("llama" in line.lower() for line in hint)
 
 
 # ---- Completed-task merge semantics ----
@@ -2255,7 +3377,7 @@ class _CompletedTasksWorker:
     def __init__(self, tasks):
         self._tasks = tasks
 
-    def get_all_tasks(self):
+    def get_all_tasks(self, include_partials=True):
         return self._tasks
 
 
@@ -2385,3 +3507,994 @@ def test_on_task_complete_refreshes_agents_on_retranscription(monkeypatch):
         assert agent["manifest_field"] not in entry
     # Chain re-run for the participant.
     assert chained == [pid]
+
+
+class TestMediaRouteFollowsTheInputDir:
+    """``/media/<file>`` must resolve the input directory per request.
+
+    The Start overlay sets the input directory through ``POST /api/dirs``, which
+    moves ``config.INPUT_DIR`` without re-running ``_init_transcripts_state``.
+    While the route served a snapshot taken at init, choosing a directory in the
+    overlay left the page listing participants from the new one while every
+    video 404'd — with the page's own ``?v=`` mtime proving the file was there.
+    """
+
+    def test_serves_from_the_directory_chosen_after_startup(
+        self, tr_client, tmp_path, monkeypatch
+    ):
+        first = tmp_path / "before"
+        first.mkdir()
+        (first / "study_P01.mp4").write_bytes(b"first")
+        monkeypatch.setattr(config, "INPUT_DIR", str(first))
+        assert tr_client.get("/transcripts/media/study_P01.mp4").status_code == 200
+
+        # The user picks a different folder in the Start overlay.
+        second = tmp_path / "after"
+        second.mkdir()
+        (second / "study_P02.mp4").write_bytes(b"second")
+        monkeypatch.setattr(config, "INPUT_DIR", str(second))
+
+        assert tr_client.get("/transcripts/media/study_P02.mp4").status_code == 200
+        # ...and the old directory is no longer served.
+        assert tr_client.get("/transcripts/media/study_P01.mp4").status_code == 404
+
+    def test_serves_after_the_very_first_directory_choice(
+        self, tr_client, tmp_path, monkeypatch
+    ):
+        """The shape every desktop launch hits.
+
+        Nothing configures an input directory before the Start overlay does, so
+        ``get_effective_input_dir()`` falls back to ``Path.cwd()`` — which
+        ``cli.main()`` has chdir'd to the folder holding the app. Snapshotting
+        that gave the media route a directory that exists but holds no videos,
+        so the first transcription's playback 404'd rather than reporting a
+        missing configuration.
+        """
+        monkeypatch.setattr(config, "INPUT_DIR", "")
+        chosen = tmp_path / "chosen"
+        chosen.mkdir()
+        (chosen / "study_P03.mp4").write_bytes(b"chosen")
+        monkeypatch.setattr(config, "INPUT_DIR", str(chosen))
+        assert tr_client.get("/transcripts/media/study_P03.mp4").status_code == 200
+
+
+def test_reinit_stops_previous_worker(tmp_path, monkeypatch):
+    """A sheet swap re-inits the blueprint; the old worker must be retired.
+
+    Left alive, its on_task_complete resolves the module globals at call time
+    and would merge the old study's segments into the new study's manifest —
+    and every swap would leak a live worker thread.
+    """
+    monkeypatch.setattr(config, "OUTPUT_DIR", str(tmp_path))
+    monkeypatch.setattr(config, "INPUT_DIR", str(tmp_path))
+    monkeypatch.setattr(transcripts_server, "_worker", None)
+    monkeypatch.setattr(transcripts_server, "_manifest", {})
+    monkeypatch.setattr(transcripts_server, "_participant_source", None)
+    monkeypatch.setattr(transcripts_server, "_participants", [])
+
+    transcripts_server._init_transcripts_state()
+    first = transcripts_server._worker
+    assert first is not None
+    try:
+        transcripts_server._init_transcripts_state()
+        second = transcripts_server._worker
+        assert second is not first
+        assert first.on_task_complete is None
+        assert first._running is False
+    finally:
+        if transcripts_server._worker is not None:
+            transcripts_server._worker.stop(join_timeout=2.0)
+
+
+def test_reinit_invalidates_the_corrected_segments_cache(tmp_path, monkeypatch):
+    """Participant ids repeat across studies; the memo is keyed on the id.
+
+    Without the version bump a swap served the previous study's corrected text
+    for the new study's P01, zipped against the new raw segments.
+    """
+    monkeypatch.setattr(config, "OUTPUT_DIR", str(tmp_path))
+    monkeypatch.setattr(config, "INPUT_DIR", str(tmp_path))
+    monkeypatch.setattr(transcripts_server, "_worker", None)
+    monkeypatch.setattr(transcripts_server, "_manifest", {})
+    monkeypatch.setattr(transcripts_server, "_participant_source", None)
+    monkeypatch.setattr(transcripts_server, "_participants", [])
+
+    old = [{"id": "P01:0", "start": 0.0, "end": 1.0, "text": "old study"}]
+    transcripts_server._corrected_segments("P01", old, [])
+    assert "P01" in transcripts_server._corrected_cache
+
+    try:
+        transcripts_server._init_transcripts_state()
+        assert transcripts_server._corrected_cache == {}
+        new = [{"id": "P01:0", "start": 0.0, "end": 1.0, "text": "new study"}]
+        assert transcripts_server._corrected_segments("P01", new, [])[0]["text"] == (
+            "new study"
+        )
+    finally:
+        if transcripts_server._worker is not None:
+            transcripts_server._worker.stop(join_timeout=2.0)
+
+
+def test_marks_resolve_by_segment_id_not_index(tr_client):
+    """A mark follows its segment's stable id, never its list position.
+
+    The segment carrying id "P01:2" sits at index 0 here; positional
+    resolution would return the wrong row (or ship wrong times to Clip
+    Marked Lines), by-id resolution finds it regardless of position.
+    """
+    transcripts_server._manifest["source_transcripts"]["P01"] = {
+        "segments": [
+            {"id": "P01:2", "start": 20.0, "end": 21.0, "text": "late"},
+            {"id": "P01:0", "start": 0.0, "end": 1.0, "text": "early"},
+        ],
+    }
+    transcripts_server._manifest["marks"] = [
+        {
+            "id": "m_1",
+            "segment_id": "P01:2",
+            "category": "friction",
+            "label": None,
+            "severity": None,
+            "created": "2026-01-01T00:00:00+00:00",
+        },
+        # In numeric range as an index (2 segments would cover idx 1), but no
+        # segment carries this id — must resolve invalid, not to index 1.
+        {
+            "id": "m_2",
+            "segment_id": "P01:1",
+            "category": "friction",
+            "label": None,
+            "severity": None,
+            "created": "2026-01-01T00:00:00+00:00",
+        },
+    ]
+    marks = tr_client.get("/transcripts/api/marks").get_json()["marks"]
+    by_id = {m["id"]: m for m in marks}
+    assert by_id["m_1"]["valid"] is True
+    assert by_id["m_1"]["text"] == "late"
+    assert by_id["m_1"]["start"] == 20.0
+    assert by_id["m_2"]["valid"] is False
+
+
+def test_retranscription_merge_drops_pre_run_marks(monkeypatch, tmp_path):
+    """Replacing a transcript invalidates marks made against the old one.
+
+    The fresh save mints the same "{pid}:{index}" ids again, so old marks
+    would silently re-point at new content. Marks created after the task
+    started (streaming-era marks on the new transcript) survive; other
+    participants' marks are untouched.
+    """
+    monkeypatch.setattr(
+        transcripts_server,
+        "_manifest",
+        {
+            "source_transcripts": {
+                "P01": {
+                    "segments": [
+                        {"id": "P01:0", "start": 0.0, "end": 1.0, "text": "old"}
+                    ]
+                },
+            },
+            "corrections": [],
+            "marks": [
+                {
+                    "id": "m_old",
+                    "segment_id": "P01:0",
+                    "created": "2026-01-01T00:00:00+00:00",
+                },
+                {
+                    "id": "m_live",
+                    "segment_id": "P01:1",
+                    "created": "2026-03-01T12:00:00+00:00",
+                },
+                {
+                    "id": "m_other",
+                    "segment_id": "P02:0",
+                    "created": "2026-01-01T00:00:00+00:00",
+                },
+            ],
+        },
+    )
+    monkeypatch.setattr(transcripts_server, "_merged_task_ids", set())
+    monkeypatch.setattr(transcripts_server, "_pending_chain_pids", [])
+    task = {
+        "id": "tr_rerun001",
+        "participant": "P01",
+        "status": transcripts.TASK_STATUS_COMPLETED,
+        "created_at": "2026-03-01T00:00:00+00:00",
+        "result": {"segments": [{"start": 0.0, "end": 2.0, "text": "new"}]},
+    }
+    monkeypatch.setattr(transcripts_server, "_worker", _CompletedTasksWorker([task]))
+
+    with transcripts_server._manifest_lock:
+        merged = transcripts_server._merge_completed_results_locked()
+
+    assert merged == ["P01"]
+    remaining = {m["id"] for m in transcripts_server._manifest["marks"]}
+    assert remaining == {"m_live", "m_other"}
+
+
+def test_corrected_cache_generation_mismatch_recomputes(monkeypatch):
+    """A reader whose snapshot predates a segment-list replacement must not be
+    served the entry a *newer* snapshot cached under the current version —
+    that zipped old raw segments against new corrected text."""
+    monkeypatch.setattr(transcripts_server, "_corrected_cache", {})
+    monkeypatch.setattr(transcripts_server, "_corrections_version", 5)
+    old_segments = [{"start": 0.0, "end": 1.0, "text": "old"}]
+    new_segments = [{"start": 0.0, "end": 1.0, "text": "new"}]
+
+    # A current-generation reader populates the cache.
+    out_new = transcripts_server._corrected_segments("P01", new_segments, [], version=5)
+    assert out_new[0]["text"] == "new"
+    # A reader holding a pre-replacement snapshot recomputes from its own
+    # segments instead of hitting the newer cache entry...
+    out_old = transcripts_server._corrected_segments("P01", old_segments, [], version=4)
+    assert out_old[0]["text"] == "old"
+    # ...and does not poison the cache for current-generation readers.
+    again = transcripts_server._corrected_segments("P01", new_segments, [], version=5)
+    assert again[0]["text"] == "new"
+
+
+def test_regenerate_stops_in_flight_dependents(
+    tr_client, _agent_state_clean, monkeypatch
+):
+    """A citations run computed from the summary being regenerated must be
+    aborted, or its result commits after the clear, reads as current, and
+    blocks the fresh chain from re-running it."""
+    monkeypatch.setattr(transcripts_server, "_persist_manifest", lambda: None)
+    monkeypatch.setattr(
+        transcripts_server._orchestrator, "run_agent", lambda *a, **k: None
+    )
+    _seed_friction_entry(citations=None, friction=None)
+    # Mark citations as in flight for P01 (as if it were mid-run off the old
+    # summary) and hand it a cancel event to observe.
+    evt = threading.Event()
+    transcripts_server._orchestrator._in_flight["citations"].add("P01")
+    transcripts_server._orchestrator._cancel_events["citations"]["P01"] = evt
+
+    resp = tr_client.post("/transcripts/api/agent/summary/P01/regenerate")
+    assert resp.status_code == 200
+    assert evt.is_set(), "in-flight dependent must be cancelled"
+    assert "P01" not in transcripts_server._orchestrator._in_flight["citations"]
+
+
+def test_invalidate_dependents_matches_on_agent_keys(monkeypatch):
+    """depends_on holds agent *keys*; an agent whose key differs from its
+    manifest_field must still have its dependents invalidated."""
+    fake_agents = [
+        cast(
+            thinking_agents.Agent,
+            {
+                "key": "themes",
+                "manifest_field": "theme_analysis",
+                "depends_on": [],
+                "on_upstream_change": "clear",
+            },
+        ),
+        cast(
+            thinking_agents.Agent,
+            {
+                "key": "digest",
+                "manifest_field": "digest_result",
+                "depends_on": ["themes"],
+                "on_upstream_change": "clear",
+            },
+        ),
+    ]
+    monkeypatch.setattr(thinking_agents, "AGENTS", fake_agents)
+    entry = {"theme_analysis": "old", "digest_result": "derived"}
+    transcripts_server._invalidate_dependents(entry, fake_agents[0])
+    assert "digest_result" not in entry
+
+
+def test_corrections_add_rejects_non_string_fields(tr_client):
+    resp = tr_client.post(
+        "/transcripts/api/corrections", json={"from": None, "to": "x"}
+    )
+    assert resp.status_code == 400
+
+
+# ---- Speaker attribution -----------------------------------------------------
+
+
+class _SpeakersWorker:
+    """Capture-only worker with the task-list/cancel surface the routes use."""
+
+    is_alive = True
+
+    def __init__(self, tasks=None):
+        self.enqueued: list[dict] = []
+        self.tasks = list(tasks or [])
+        self.cancelled: list[str] = []
+
+    def enqueue(self, task):
+        self.enqueued.append(task)
+        self.tasks.append(task)
+
+    def get_all_tasks(self, include_partials=True):
+        return list(self.tasks)
+
+    def cancel(self, task_id):
+        self.cancelled.append(task_id)
+        return True
+
+
+def _seed_speakers(monkeypatch, tmp_path, entry, worker=None):
+    monkeypatch.setattr(
+        transcripts_server,
+        "_manifest",
+        {"source_transcripts": {"P01": entry}, "corrections": [], "marks": []},
+    )
+    transcripts_server._participants = [
+        {
+            "id": "P01",
+            "video_paths": [str(tmp_path / "study_P01.mp4")],
+            "has_video": True,
+        }
+    ]
+    worker = worker or _SpeakersWorker()
+    transcripts_server._worker = cast("transcripts.TranscriptWorker", worker)
+    monkeypatch.setattr(transcripts, "save_transcripts_manifest", lambda *a, **k: None)
+    monkeypatch.setattr(config, "DEBUGGING", True)
+    return worker
+
+
+def _labelled_entry():
+    return {
+        "segments": [
+            {"id": "P01:0", "start": 0, "end": 1, "text": "a", "speaker": "1"},
+            {"id": "P01:1", "start": 1, "end": 2, "text": "b", "speaker": "2"},
+        ],
+        "speakers": {"enabled": True, "labels": {"1": "Mod"}, "count": 2},
+        "transcribed_at": "2026-01-01T00:00:00+00:00",
+        "audio_index": 0,
+    }
+
+
+def test_speakers_enable_enqueues_task_for_unlabelled_transcript(
+    tr_client, monkeypatch, tmp_path
+):
+    entry = {
+        "segments": [{"id": "P01:0", "start": 0, "end": 1, "text": "a"}],
+        "audio_index": 1,
+    }
+    worker = _seed_speakers(monkeypatch, tmp_path, entry)
+    resp = tr_client.put("/transcripts/api/speakers/P01", json={"enabled": True})
+    assert resp.status_code == 200
+    body = resp.get_json()
+    assert body["speakers"]["enabled"] is True
+    assert body["task"]["kind"] == "speakers"
+    task = worker.enqueued[0]
+    assert task["kind"] == "speakers"
+    assert task["audio_index"] == 1
+    assert task["segments"][0]["id"] == "P01:0"
+    assert entry["speakers"] == {"enabled": True, "labels": {}, "count": 0}
+
+
+def test_speakers_enable_without_segments_persists_choice_only(
+    tr_client, monkeypatch, tmp_path
+):
+    worker = _seed_speakers(monkeypatch, tmp_path, {})
+    resp = tr_client.put("/transcripts/api/speakers/P01", json={"enabled": True})
+    assert resp.status_code == 200
+    assert resp.get_json()["task"] is None
+    assert worker.enqueued == []
+    entry = transcripts_server._manifest["source_transcripts"]["P01"]
+    assert entry["speakers"]["enabled"] is True
+    assert "segments" not in entry
+
+
+def test_speakers_enable_already_labelled_does_not_requeue(
+    tr_client, monkeypatch, tmp_path
+):
+    worker = _seed_speakers(monkeypatch, tmp_path, _labelled_entry())
+    resp = tr_client.put("/transcripts/api/speakers/P01", json={"enabled": True})
+    assert resp.status_code == 200
+    assert worker.enqueued == []
+    assert resp.get_json()["speakers"]["labels"] == {"1": "Mod"}
+
+
+def test_speakers_enable_without_model_is_409(tr_client, monkeypatch, tmp_path):
+    _seed_speakers(monkeypatch, tmp_path, _labelled_entry())
+    monkeypatch.setattr(config, "DEBUGGING", False)
+    import speakers
+
+    monkeypatch.setattr(speakers, "is_speaker_model_available", lambda: False)
+    resp = tr_client.put("/transcripts/api/speakers/P01", json={"enabled": True})
+    assert resp.status_code == 409
+
+
+def test_speakers_rejects_non_bool(tr_client, monkeypatch, tmp_path):
+    _seed_speakers(monkeypatch, tmp_path, _labelled_entry())
+    resp = tr_client.put("/transcripts/api/speakers/P01", json={"enabled": "yes"})
+    assert resp.status_code == 400
+
+
+def test_speakers_disable_strips_labels_and_cancels(tr_client, monkeypatch, tmp_path):
+    entry = _labelled_entry()
+    live = {
+        "id": "sp_live",
+        "kind": "speakers",
+        "participant": "P01",
+        "status": transcripts.TASK_STATUS_RUNNING,
+    }
+    worker = _seed_speakers(monkeypatch, tmp_path, entry, _SpeakersWorker([live]))
+    before = transcripts_server._corrections_version
+    resp = tr_client.put("/transcripts/api/speakers/P01", json={"enabled": False})
+    assert resp.status_code == 200
+    assert resp.get_json()["speakers"] == {
+        "enabled": False,
+        "count": 2,
+        "labels": {"1": "Mod"},
+        "error": None,
+    }
+    assert all("speaker" not in s for s in entry["segments"])
+    # Renames and the stripped ids survive the off/on round trip.
+    assert entry["speakers"] == {
+        "enabled": False,
+        "labels": {"1": "Mod"},
+        "count": 2,
+        "stash": {"assignments": {"P01:0": "1", "P01:1": "2"}, "manual": []},
+    }
+    assert worker.cancelled == ["sp_live"]
+    assert transcripts_server._corrections_version > before
+
+
+def test_reenable_remaps_permuted_ids_onto_the_stash(tr_client, monkeypatch, tmp_path):
+    """Off then on: a pass that swaps cluster ids must not move a rename."""
+    entry = _labelled_entry()
+    entry["segments"][1]["speaker_manual"] = True
+    _seed_speakers(monkeypatch, tmp_path, entry)
+    assert (
+        tr_client.put(
+            "/transcripts/api/speakers/P01", json={"enabled": False}
+        ).status_code
+        == 200
+    )
+    assert (
+        tr_client.put(
+            "/transcripts/api/speakers/P01", json={"enabled": True}
+        ).status_code
+        == 200
+    )
+    assert entry["speakers"]["stash"]["manual"] == ["P01:1"]
+    # The second pass numbers the same two voices the other way round.
+    transcripts_server._apply_speaker_result(
+        entry,
+        {
+            "segments": [
+                {"id": "P01:0", "speaker": "2"},
+                {"id": "P01:1", "speaker": "1"},
+            ],
+            "speakers": {"enabled": True, "labels": {}, "count": 2},
+        },
+    )
+    assert [s["speaker"] for s in entry["segments"]] == ["1", "2"]
+    assert entry["segments"][1]["speaker_manual"] is True
+    assert entry["speakers"]["labels"] == {"1": "Mod"}
+    assert "stash" not in entry["speakers"]
+
+
+def test_speakers_regenerate_resets_labels_and_enqueues(
+    tr_client, monkeypatch, tmp_path
+):
+    entry = _labelled_entry()
+    worker = _seed_speakers(monkeypatch, tmp_path, entry)
+    resp = tr_client.post("/transcripts/api/speakers/P01/regenerate")
+    assert resp.status_code == 200
+    assert resp.get_json()["task"]["kind"] == "speakers"
+    assert entry["speakers"]["labels"] == {"1": "Mod"}, "renames survive a re-run"
+    assert entry["speakers"]["enabled"] is True
+    assert len(worker.enqueued) == 1
+
+
+def test_speakers_regenerate_without_transcript_is_404(
+    tr_client, monkeypatch, tmp_path
+):
+    _seed_speakers(monkeypatch, tmp_path, {})
+    assert tr_client.post("/transcripts/api/speakers/P01/regenerate").status_code == 404
+
+
+def test_speakers_stop_cancels_live_tasks(tr_client, monkeypatch, tmp_path):
+    live = {
+        "id": "sp_live",
+        "kind": "speakers",
+        "participant": "P01",
+        "status": transcripts.TASK_STATUS_QUEUED,
+    }
+    done = {
+        "id": "sp_done",
+        "kind": "speakers",
+        "participant": "P01",
+        "status": transcripts.TASK_STATUS_COMPLETED,
+    }
+    worker = _seed_speakers(
+        monkeypatch, tmp_path, _labelled_entry(), _SpeakersWorker([live, done])
+    )
+    resp = tr_client.post("/transcripts/api/speakers/P01/stop")
+    assert resp.get_json()["stopped"] is True
+    assert worker.cancelled == ["sp_live"]
+
+
+def test_speakers_labels_rename_reset_and_validate(tr_client, monkeypatch, tmp_path):
+    entry = _labelled_entry()
+    _seed_speakers(monkeypatch, tmp_path, entry)
+    resp = tr_client.put(
+        "/transcripts/api/speakers/P01/labels", json={"2": "  Participant  ", "1": ""}
+    )
+    assert resp.status_code == 200
+    assert resp.get_json()["speakers"]["labels"] == {"2": "Participant"}
+    assert entry["speakers"]["labels"] == {"2": "Participant"}
+    long = "x" * 100
+    resp = tr_client.put("/transcripts/api/speakers/P01/labels", json={"1": long})
+    assert len(resp.get_json()["speakers"]["labels"]["1"]) == 40
+    assert (
+        tr_client.put(
+            "/transcripts/api/speakers/P01/labels", json={"3": "Nope"}
+        ).status_code
+        == 400
+    )
+    assert (
+        tr_client.put("/transcripts/api/speakers/P01/labels", json={"1": 5}).status_code
+        == 400
+    )
+
+
+def test_speakers_labels_require_enabled(tr_client, monkeypatch, tmp_path):
+    entry = _labelled_entry()
+    entry["speakers"] = {"enabled": False}
+    _seed_speakers(monkeypatch, tmp_path, entry)
+    resp = tr_client.put("/transcripts/api/speakers/P01/labels", json={"1": "Mod"})
+    assert resp.status_code == 404
+
+
+def test_transcript_payload_carries_speakers(tr_client, monkeypatch, tmp_path):
+    _seed_speakers(monkeypatch, tmp_path, _labelled_entry())
+    body = tr_client.get("/transcripts/api/transcript/P01").get_json()
+    assert [s["speaker"] for s in body["segments"]] == ["1", "2"]
+    assert body["speakers"]["labels"] == {"1": "Mod"}
+    assert body["speakers"]["count"] == 2
+    assert body["speakers"]["enabled"] is True
+
+
+def test_participants_payload_carries_speakers_summary(
+    tr_client, monkeypatch, tmp_path
+):
+    _seed_speakers(monkeypatch, tmp_path, _labelled_entry())
+    body = tr_client.get("/transcripts/api/participants").get_json()
+    assert body["speaker_model"] is True
+    p01 = body["participants"][0]
+    assert p01["speakers"]["enabled"] is True
+    assert p01["speakers"]["count"] == 2
+    # An unset participant reports None so the pill can fall back to the global.
+    transcripts_server._manifest["source_transcripts"]["P01"].pop("speakers")
+    body = tr_client.get("/transcripts/api/participants").get_json()
+    assert body["participants"][0]["speakers"]["enabled"] is None
+
+
+def test_vtt_emits_voice_tags(tr_client, monkeypatch, tmp_path):
+    _seed_speakers(monkeypatch, tmp_path, _labelled_entry())
+    text = tr_client.get("/transcripts/api/vtt/P01").get_data(as_text=True)
+    assert "<v Mod>a" in text
+    assert "<v Speaker 2>b" in text
+
+
+def test_search_results_carry_speaker_names(tr_client, monkeypatch, tmp_path):
+    _seed_speakers(monkeypatch, tmp_path, _labelled_entry())
+    body = tr_client.get("/transcripts/api/search?q=a").get_json()
+    hit = body["results"][0]
+    assert hit["speaker"] == "1"
+    assert hit["speaker_name"] == "Mod"
+
+
+def test_transcribe_status_reports_task_kind(tr_client, monkeypatch, tmp_path):
+    live = {
+        "id": "sp_live",
+        "kind": "speakers",
+        "participant": "P01",
+        "status": transcripts.TASK_STATUS_RUNNING,
+        "progress": 0.4,
+        "phase": "diarizing",
+    }
+    _seed_speakers(monkeypatch, tmp_path, _labelled_entry(), _SpeakersWorker([live]))
+    body = tr_client.get("/transcripts/api/transcribe/status").get_json()
+    assert body["tasks"][0]["kind"] == "speakers"
+    assert body["tasks"][0]["phase"] == "diarizing"
+
+
+@pytest.mark.parametrize(
+    ("block", "global_on", "expected"),
+    [
+        (None, False, False),
+        (None, True, True),
+        ({"enabled": True}, False, True),
+        ({"enabled": False}, True, False),
+    ],
+)
+def test_transcribe_resolves_diarize_per_participant(
+    tr_client, monkeypatch, tmp_path, block, global_on, expected
+):
+    entry = {} if block is None else {"speakers": block}
+    worker = _seed_speakers(monkeypatch, tmp_path, entry)
+    monkeypatch.setattr(config, "TRANSCRIBE_SPEAKERS", global_on)
+    monkeypatch.setattr(transcripts, "is_whisper_model_cached", lambda n=None: True)
+    resp = tr_client.post(
+        "/transcripts/api/transcribe", json={"participants": ["P01"], "force": True}
+    )
+    assert resp.status_code == 200
+    assert worker.enqueued[0]["diarize"] is expected
+
+
+def test_transcribe_explicit_opt_in_without_model_is_409(
+    tr_client, monkeypatch, tmp_path
+):
+    _seed_speakers(monkeypatch, tmp_path, {"speakers": {"enabled": True}})
+    monkeypatch.setattr(config, "DEBUGGING", False)
+    import speakers
+
+    monkeypatch.setattr(speakers, "is_speaker_model_available", lambda: False)
+    monkeypatch.setattr(transcripts, "is_whisper_model_cached", lambda n=None: True)
+    resp = tr_client.post(
+        "/transcripts/api/transcribe", json={"participants": ["P01"], "force": True}
+    )
+    assert resp.status_code == 409
+
+
+def test_transcribe_global_default_without_model_silently_skips(
+    tr_client, monkeypatch, tmp_path
+):
+    worker = _seed_speakers(monkeypatch, tmp_path, {})
+    monkeypatch.setattr(config, "DEBUGGING", False)
+    monkeypatch.setattr(config, "TRANSCRIBE_SPEAKERS", True)
+    import speakers
+
+    monkeypatch.setattr(speakers, "is_speaker_model_available", lambda: False)
+    monkeypatch.setattr(transcripts, "is_whisper_model_cached", lambda n=None: True)
+    resp = tr_client.post(
+        "/transcripts/api/transcribe", json={"participants": ["P01"], "force": True}
+    )
+    assert resp.status_code == 200
+    assert worker.enqueued[0]["diarize"] is False
+
+
+def test_merge_speakers_task_copies_labels_by_id_without_agent_reset(monkeypatch):
+    pid = "P01"
+    entry = {
+        "segments": [
+            {"id": "P01:0", "text": "a"},
+            {"id": "P01:1", "text": "b"},
+            {"id": "P01:2", "text": "c"},
+        ],
+        "speakers": {"enabled": True, "labels": {}, "count": 0},
+        "summary": {"paragraph": "keep"},
+        "transcribed_at": "then",
+    }
+    monkeypatch.setattr(
+        transcripts_server,
+        "_manifest",
+        {
+            "source_transcripts": {pid: entry},
+            "marks": [{"segment_id": "P01:1", "created": "0000"}],
+        },
+        raising=False,
+    )
+    task = {
+        "id": "sp_done",
+        "kind": "speakers",
+        "participant": pid,
+        "status": transcripts.TASK_STATUS_COMPLETED,
+        "created_at": "9999",
+        "result": {
+            "segments": [
+                {"id": "P01:0", "text": "a", "speaker": "1"},
+                {"id": "P01:1", "text": "b", "speaker": "2"},
+                {"id": "P01:9", "text": "gone", "speaker": "1"},
+            ],
+            "speakers": {"enabled": True, "labels": {}, "count": 2},
+        },
+    }
+    monkeypatch.setattr(
+        transcripts_server,
+        "_worker",
+        cast("transcripts.TranscriptWorker", _CompletedTasksWorker([task])),
+        raising=False,
+    )
+    transcripts_server._merged_task_ids.clear()
+    # A leftover transcription pid would pop the agent fields below.
+    monkeypatch.setattr(transcripts_server, "_pending_chain_pids", [])
+    chained: list[str] = []
+    monkeypatch.setattr(
+        transcripts_server._orchestrator, "run_chain", lambda p: chained.append(p)
+    )
+    monkeypatch.setattr(transcripts, "save_transcripts_manifest", lambda *a, **k: None)
+    before = transcripts_server._corrections_version
+
+    transcripts_server._on_task_complete()
+
+    assert [s.get("speaker") for s in entry["segments"]] == ["1", "2", None]
+    assert entry["speakers"]["count"] == 2
+    assert entry["summary"] == {"paragraph": "keep"}
+    assert entry["transcribed_at"] == "then"
+    assert transcripts_server._manifest["marks"], "marks must survive a speaker pass"
+    assert chained == []
+    assert transcripts_server._corrections_version > before
+    assert "sp_done" in transcripts_server._merged_task_ids
+
+
+def test_speakers_segment_override_and_new_speaker(tr_client, monkeypatch, tmp_path):
+    entry = _labelled_entry()
+    _seed_speakers(monkeypatch, tmp_path, entry)
+    before = transcripts_server._corrections_version
+    resp = tr_client.put(
+        "/transcripts/api/speakers/P01/segment",
+        json={"segment_id": "P01:0", "speaker": "2"},
+    )
+    assert resp.status_code == 200
+    assert resp.get_json()["speaker"] == "2"
+    assert entry["segments"][0]["speaker"] == "2"
+    assert entry["segments"][0]["speaker_manual"] is True
+    assert transcripts_server._corrections_version > before
+    # count + 1 introduces a new speaker; count + 2 does not exist.
+    resp = tr_client.put(
+        "/transcripts/api/speakers/P01/segment",
+        json={"segment_id": "P01:1", "speaker": "3"},
+    )
+    assert resp.status_code == 200
+    assert entry["speakers"]["count"] == 3
+    assert resp.get_json()["speakers"]["count"] == 3
+    assert (
+        tr_client.put(
+            "/transcripts/api/speakers/P01/segment",
+            json={"segment_id": "P01:1", "speaker": "5"},
+        ).status_code
+        == 400
+    )
+    assert (
+        tr_client.put(
+            "/transcripts/api/speakers/P01/segment",
+            json={"segment_id": "P01:9", "speaker": "1"},
+        ).status_code
+        == 404
+    )
+    assert (
+        tr_client.put(
+            "/transcripts/api/speakers/P01/segment",
+            json={"segment_id": "P01:1", "speaker": "x"},
+        ).status_code
+        == 400
+    )
+
+
+def test_speakers_segment_override_requires_enabled(tr_client, monkeypatch, tmp_path):
+    entry = _labelled_entry()
+    entry["speakers"] = {"enabled": False}
+    _seed_speakers(monkeypatch, tmp_path, entry)
+    resp = tr_client.put(
+        "/transcripts/api/speakers/P01/segment",
+        json={"segment_id": "P01:0", "speaker": "1"},
+    )
+    assert resp.status_code == 404
+
+
+def test_merge_speakers_task_remaps_ids_and_keeps_manual_lines(monkeypatch):
+    pid = "P01"
+    entry = {
+        "segments": [
+            {"id": "P01:0", "text": "a", "speaker": "1"},
+            {"id": "P01:1", "text": "b", "speaker": "1"},
+            {"id": "P01:2", "text": "c", "speaker": "2"},
+            {"id": "P01:3", "text": "d", "speaker": "2", "speaker_manual": True},
+        ],
+        "speakers": {"enabled": True, "labels": {"1": "Moderator"}, "count": 2},
+    }
+    monkeypatch.setattr(
+        transcripts_server,
+        "_manifest",
+        {"source_transcripts": {pid: entry}, "marks": []},
+        raising=False,
+    )
+    # The fresh run swapped the cluster ids and put the manual line on "1".
+    task = {
+        "id": "sp_again",
+        "kind": "speakers",
+        "participant": pid,
+        "status": transcripts.TASK_STATUS_COMPLETED,
+        "created_at": "9999",
+        "result": {
+            "segments": [
+                {"id": "P01:0", "speaker": "2"},
+                {"id": "P01:1", "speaker": "2"},
+                {"id": "P01:2", "speaker": "1"},
+                {"id": "P01:3", "speaker": "1"},
+            ],
+            "speakers": {"enabled": True, "labels": {}, "count": 2},
+        },
+    }
+    monkeypatch.setattr(
+        transcripts_server,
+        "_worker",
+        cast("transcripts.TranscriptWorker", _CompletedTasksWorker([task])),
+        raising=False,
+    )
+    transcripts_server._merged_task_ids.clear()
+    monkeypatch.setattr(transcripts, "save_transcripts_manifest", lambda *a, **k: None)
+
+    transcripts_server._on_task_complete()
+
+    assert [s["speaker"] for s in entry["segments"]] == ["1", "1", "2", "2"]
+    assert entry["segments"][3]["speaker_manual"] is True
+    assert entry["speakers"]["labels"] == {"1": "Moderator"}
+    assert entry["speakers"]["count"] == 2
+
+
+def test_disable_speakers_is_not_undone_by_a_late_result(
+    tr_client, monkeypatch, tmp_path
+):
+    """A completed-but-unmerged speakers task must not flip the switch back on."""
+    entry = _labelled_entry()
+    late = {
+        "id": "sp_late",
+        "kind": "speakers",
+        "participant": "P01",
+        "status": transcripts.TASK_STATUS_COMPLETED,
+        "created_at": "9999",
+        "result": {
+            "segments": [
+                {"id": "P01:0", "speaker": "1"},
+                {"id": "P01:1", "speaker": "2"},
+            ],
+            "speakers": {"enabled": True, "labels": {}, "count": 2},
+        },
+    }
+    _seed_speakers(monkeypatch, tmp_path, entry, _SpeakersWorker([late]))
+    transcripts_server._merged_task_ids.clear()
+    resp = tr_client.put("/transcripts/api/speakers/P01", json={"enabled": False})
+    assert resp.status_code == 200
+    # The disable path persisted (and so merged) synchronously.
+    assert entry["speakers"]["enabled"] is False
+    assert all("speaker" not in s for s in entry["segments"])
+    assert "sp_late" in transcripts_server._merged_task_ids
+    # Nor does a later persist replay it.
+    with transcripts_server._manifest_lock:
+        transcripts_server._merge_completed_results_locked()
+    assert entry["speakers"]["enabled"] is False
+
+
+def test_merge_strips_speakers_from_a_transcription_after_disable(monkeypatch):
+    pid = "P01"
+    entry = {
+        "segments": [{"id": "P01:0", "text": "old"}],
+        "speakers": {"enabled": False},
+    }
+    monkeypatch.setattr(
+        transcripts_server,
+        "_manifest",
+        {"source_transcripts": {pid: entry}, "marks": []},
+        raising=False,
+    )
+    task = {
+        "id": "tr_new",
+        "kind": "transcribe",
+        "participant": pid,
+        "status": transcripts.TASK_STATUS_COMPLETED,
+        "created_at": "9999",
+        "result": {
+            "segments": [{"id": "P01:0", "text": "fresh", "speaker": "1"}],
+            "speakers": {"enabled": True, "labels": {}, "count": 1},
+        },
+    }
+    monkeypatch.setattr(
+        transcripts_server,
+        "_worker",
+        cast("transcripts.TranscriptWorker", _CompletedTasksWorker([task])),
+        raising=False,
+    )
+    transcripts_server._merged_task_ids.clear()
+    with transcripts_server._manifest_lock:
+        transcripts_server._merge_completed_results_locked()
+    merged = transcripts_server._manifest["source_transcripts"][pid]
+    assert merged["segments"][0]["text"] == "fresh"
+    assert "speaker" not in merged["segments"][0]
+    assert merged["speakers"] == {"enabled": False}
+
+
+# ---- Corrections chaining + whole-segment edits ----
+
+
+def _corrections_pairs(tr_client):
+    rows = tr_client.get("/transcripts/api/corrections").get_json()["corrections"]
+    return sorted((c["from"], c["to"]) for c in rows)
+
+
+@pytest.mark.parametrize("order", [("teh", "hte"), ("hte", "teh")])
+def test_corrections_chain_rewrites_every_matching_rule(tr_client, monkeypatch, order):
+    """Two misspellings converging on one word must both follow a later edit,
+    and raw text already reading that word must be corrected as well."""
+    monkeypatch.setattr(transcripts_server, "_schedule_persist", lambda: None)
+    transcripts_server._manifest["source_transcripts"]["P01"] = {
+        "segments": [{"id": "P01:0", "start": 0.0, "end": 1.0, "text": "teh hte the"}],
+    }
+    for word in order:
+        assert (
+            tr_client.post(
+                "/transcripts/api/corrections", json={"from": word, "to": "the"}
+            ).status_code
+            == 200
+        )
+    resp = tr_client.post(
+        "/transcripts/api/corrections", json={"from": "the", "to": "they"}
+    )
+    body = resp.get_json()
+    assert resp.status_code == 200
+    assert len(body["updated"]) == 2 and body["removed"] == []
+    assert body["correction"]["from"] == "the"
+    assert _corrections_pairs(tr_client) == [
+        ("hte", "they"),
+        ("teh", "they"),
+        ("the", "they"),
+    ]
+    seg = tr_client.get("/transcripts/api/transcript/P01").get_json()["segments"][0]
+    assert seg["text"] == "they they they"
+
+
+def test_corrections_revert_deletes_without_adding(tr_client, monkeypatch):
+    monkeypatch.setattr(transcripts_server, "_schedule_persist", lambda: None)
+    transcripts_server._manifest["source_transcripts"]["P01"] = {
+        "segments": [{"id": "P01:0", "start": 0.0, "end": 1.0, "text": "teh the"}],
+    }
+    tr_client.post("/transcripts/api/corrections", json={"from": "teh", "to": "the"})
+    body = tr_client.post(
+        "/transcripts/api/corrections", json={"from": "the", "to": "teh"}
+    ).get_json()
+    assert len(body["removed"]) == 1 and body["correction"] is None
+    assert _corrections_pairs(tr_client) == []
+    seg = tr_client.get("/transcripts/api/transcript/P01").get_json()["segments"][0]
+    assert seg["text"] == "teh the"
+
+
+def test_corrections_mixed_revert_still_adds_submitted_pair(tr_client, monkeypatch):
+    """Reverting one rule while rewriting another is a global edit, so the
+    submitted pair must land too and correct raw occurrences of the word."""
+    monkeypatch.setattr(transcripts_server, "_schedule_persist", lambda: None)
+    transcripts_server._manifest["source_transcripts"]["P01"] = {
+        "segments": [{"id": "P01:0", "start": 0.0, "end": 1.0, "text": "teh hte the"}],
+    }
+    tr_client.post("/transcripts/api/corrections", json={"from": "teh", "to": "the"})
+    tr_client.post("/transcripts/api/corrections", json={"from": "hte", "to": "the"})
+    body = tr_client.post(
+        "/transcripts/api/corrections", json={"from": "the", "to": "teh"}
+    ).get_json()
+    assert len(body["removed"]) == 1 and len(body["updated"]) == 1
+    assert body["correction"]["from"] == "the"
+    assert _corrections_pairs(tr_client) == [("hte", "teh"), ("the", "teh")]
+    seg = tr_client.get("/transcripts/api/transcript/P01").get_json()["segments"][0]
+    assert seg["text"] == "teh teh teh"
+
+
+def test_corrections_duplicate_rule_is_not_added_twice(tr_client, monkeypatch):
+    monkeypatch.setattr(transcripts_server, "_schedule_persist", lambda: None)
+    for _ in range(2):
+        tr_client.post(
+            "/transcripts/api/corrections", json={"from": "teh", "to": "the"}
+        )
+    assert _corrections_pairs(tr_client) == [("teh", "the")]
+
+
+def test_edit_segment_matches_already_corrected_text(tr_client, monkeypatch):
+    """A whole-segment edit lands after word rules, so it must match the text
+    those rules produce — the text the user actually edited."""
+    monkeypatch.setattr(transcripts_server, "_schedule_persist", lambda: None)
+    transcripts_server._manifest["source_transcripts"]["P01"] = {
+        "segments": [
+            {"id": "P01:0", "start": 0.0, "end": 1.0, "text": "I like teh cat"}
+        ],
+    }
+    tr_client.post("/transcripts/api/corrections", json={"from": "teh", "to": "the"})
+    resp = tr_client.put(
+        "/transcripts/api/transcript/P01/segment",
+        json={"segment_id": "P01:0", "text": "I really like the cat"},
+    )
+    assert resp.status_code == 200
+    assert resp.get_json()["correction"]["from"] == "I like the cat"
+    seg = tr_client.get("/transcripts/api/transcript/P01").get_json()["segments"][0]
+    assert seg["text"] == "I really like the cat"

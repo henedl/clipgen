@@ -10,6 +10,7 @@
   <link rel="stylesheet" href="primitives.css">
   <link rel="stylesheet" href="studio.css">
   <link rel="stylesheet" href="card-scrubber.css">
+  <link rel="stylesheet" href="log-panel.css">
   <link rel="stylesheet" href="settings-modal.css">
   <link rel="stylesheet" href="hotkeys.css">
   <link rel="stylesheet" href="command-palette.css">
@@ -47,7 +48,7 @@
   <section id="sheetPreview">
   <!-- Sheet + preview tabs (screenspace/transcript/composer intake) -->
 
-    <aside id="studioSidebar" class="cg-scroll-thin" data-open="true" aria-label="Sheet filters">
+    <aside id="studioSidebar" data-open="true" aria-label="Sheet filters">
       <button id="studioSidebarToggle" type="button" aria-label="Toggle sidebar" data-hotkey="studio.toggleSidebar" data-tooltip="Toggle sidebar"><span class="studio-sidebar-toggle-icon" aria-hidden="true"></span></button>
       <section class="studio-sidebar-section" data-section="views">
         <header class="studio-sidebar-header">Views</header>
@@ -160,7 +161,8 @@
     <div id="artifactsArea" class="drop-area">
       <div class="bs-toolbar" id="artifactsToolbar">
         <span class="bs-label">Artifacts</span>
-        <span id="artifactsCount" class="bs-count cg-mono" data-tooltip="Cells queued for generation">(0)</span>
+        <!-- Empty-state text only; renderQueueImpl rewrites data-tooltip with the live artifact/cell tally. -->
+        <span id="artifactsCount" class="bs-count cg-mono" data-tooltip="Artifacts queued for generation">(0)</span>
         <!-- Intentional inline SVG (icon convention exception): animated loading spinner (animateTransform), not an icon. -->
         <svg id="artifactsSpinner" class="title-spinner bs-spinner" width="12" height="12" viewBox="0 0 14 14" fill="none"><circle cx="7" cy="7" r="5.5" stroke="currentColor" stroke-width="1.5" opacity="0.25"/><circle cx="7" cy="7" r="5.5" stroke="currentColor" stroke-width="1.5" stroke-dasharray="20 15" stroke-linecap="round"><animateTransform attributeName="transform" type="rotate" from="0 7 7" to="360 7 7" dur="0.7s" repeatCount="indefinite"/></circle></svg>
         <span id="generateProgress" class="generate-progress hidden cg-mono" aria-live="polite"></span>
@@ -202,6 +204,7 @@
   <section id="reelArea">
     <div class="bs-toolbar" id="reelToolbar">
       <span class="bs-label">Reel</span>
+      <!-- Empty-state text only; renderQueueImpl rewrites data-tooltip with the live clip/cell tally. -->
       <span id="reelCount" class="bs-count cg-mono" data-tooltip="Clips queued for the reel">(0)</span>
       <span id="reelDuration" class="bs-count cg-mono" data-tooltip="Estimated total length of the reel"></span>
       <!-- Intentional inline SVG (icon convention exception): animated loading spinner (animateTransform), not an icon. -->
@@ -254,7 +257,7 @@
   <div id="statusOverlay" class="cg-modal-veil hidden">
     <div class="status-card" role="dialog" aria-modal="true" aria-labelledby="statusTitle">
       <div id="statusSpinner" class="spinner"></div>
-      <h3 id="statusTitle">Processing...</h3>
+      <h3 id="statusTitle" class="cg-shimmer">Processing&hellip;</h3>
       <p id="statusMessage"></p>
       <div class="status-actions">
         <button id="statusDismiss" class="btn btn-small hidden">Dismiss</button>
@@ -279,7 +282,7 @@
   </div>
 
   <div id="confirmOverlay" class="cg-modal-veil hidden">
-    <div class="confirm-card" role="dialog" aria-modal="true" aria-labelledby="confirmTitle">
+    <div class="confirm-card cg-modal-card" role="dialog" aria-modal="true" aria-labelledby="confirmTitle">
       <h3 id="confirmTitle"></h3>
       <p id="confirmMessage"></p>
       <div class="confirm-actions">
@@ -291,7 +294,7 @@
 
   <div id="galleryOverlay" class="cg-modal-veil hidden">
     <div class="gallery-card" role="dialog" aria-modal="true" aria-labelledby="galleryDialogTitle">
-      <h3 id="galleryDialogTitle">Open Gallery</h3>
+      <h3 id="galleryDialogTitle">Build Gallery</h3>
       <p class="gallery-dialog-help">Generate a gallery viewer from a participant's source video.</p>
       <div class="gallery-dialog-fields">
         <label class="gallery-dialog-label">Source
@@ -335,10 +338,12 @@
   <script src="command-palette.js" defer></script>
   <script src="intake-cluster.js" defer></script>
   <script src="studio.js" defer></script>
+  <script src="studio-sidebar.js" defer></script>
   <script src="studio-scrubber.js" defer></script>
   <script src="studio-trim.js" defer></script>
   <script src="studio-stash.js" defer></script>
   <script src="studio-generate.js" defer></script>
   <script src="studio-intake.js" defer></script>
+  <script src="studio-reel.js" defer></script>
 </body>
 </html>

@@ -1,5 +1,6 @@
 """File and filename operations for clipgen."""
 
+import glob
 import os
 import re
 import threading
@@ -11,17 +12,15 @@ import config
 import utils
 from utils import ClipRecord
 
-# Per-template high-water counter so a batch of same-named reservations doesn't
-# re-probe 0,1,2,… from scratch each call (which is O(n²) syscalls). Keyed on
-# (directory, base, extension); only ever advances, so released slots leave
-# harmless gaps but uniqueness is preserved. Guarded because get_unique_filename
-# runs inside the clip ThreadPoolExecutor.
+# Per-template high-water counter: a batch of reservations shouldn't re-probe 0,1,2,… each call.
 _unique_high_water: dict[tuple[str, str, str], int] = {}
 _unique_high_water_lock = threading.Lock()
 
 
 def safe_truncate(text: str, max_chars: int) -> str:
-    """Truncate to ``max_chars`` code points, then drop trailing combining marks.
+    """Truncate to ``max_chars`` UTF-8 bytes, then drop trailing combining marks.
+
+    Filesystems cap names in bytes, so multi-byte scripts back off further.
 
     Plain ``text[:n]`` can split a grapheme cluster (e.g. emoji + skin-tone
     modifier, or letter + combining accent), leaving an orphan combining
@@ -31,6 +30,8 @@ def safe_truncate(text: str, max_chars: int) -> str:
     if max_chars <= 0:
         return ""
     truncated = text[:max_chars]
+    while truncated and len(truncated.encode("utf-8")) > max_chars:
+        truncated = truncated[:-1]
     # Trim trailing combining marks / joiners that would render orphaned.
     while truncated and (
         unicodedata.category(truncated[-1]) in ("Mn", "Mc", "Me")
@@ -41,35 +42,22 @@ def safe_truncate(text: str, max_chars: int) -> str:
 
 
 def get_unique_filename(filename: str, file_format: str | None = None) -> str:
-    """Atomically reserve a unique output path.
+    """Atomically reserve a unique output path, as an empty placeholder file.
 
-    Creates an empty placeholder file at the returned path so that parallel
-    clip / reel / gallery workers each receive a distinct path even when their
-    filename templates collide. The placeholder is overwritten by the ffmpeg
-    process (or file writer) that fills the artifact. Callers that abort before
-    writing real content should remove the placeholder with
-    ``release_reservation()``.
+    The placeholder is what makes this atomic: parallel clip / reel / gallery
+    workers each get a distinct path even when their filename templates collide.
+    Whoever fills the artifact overwrites it; a caller that aborts before writing
+    real content must remove it with ``release_reservation()``.
 
-    If a file with the given name already exists, appends '-1', '-2', etc.
-    until a free name is found. Also truncates if filename exceeds max length.
-
-    Args:
-        filename: Original filename
-        file_format: File extension to preserve (defaults to config.FILEFORMAT)
-
-    Returns:
-        Unique filename path as a string, reserved on disk as an empty file.
+    Appends '-1', '-2', … when the name is taken, and truncates over-long names.
+    *file_format* defaults to ``config.FILEFORMAT``.
     """
     file_extension = file_format or config.FILEFORMAT
     resolved = Path(utils.resolve_output_path(filename))
     directory = resolved.parent
     name = resolved.name
     # Strip extension to get base name
-    if name.endswith(file_extension):
-        base = name[: -len(file_extension)]
-    else:
-        base = name
-    # Truncate base if needed (reserve space for extension)
+    base = name.removesuffix(file_extension)
     max_base = config.MAX_FILENAME_LENGTH - len(file_extension)
     base = safe_truncate(base, max_base)
 
@@ -96,9 +84,7 @@ def get_unique_filename(filename: str, file_format: str | None = None) -> str:
             counter += 1
             continue
         except OSError:
-            # Reservation not possible (missing/unwritable directory, name too
-            # long, etc.). Fall back to non-atomic uniqueness so callers still
-            # receive a usable path.
+            # Reservation impossible (unwritable dir, long name); fall back to non-atomic uniqueness.
             while candidate.is_file():
                 counter += 1
                 candidate = _candidate(counter)
@@ -141,10 +127,11 @@ def get_source_video_filenames(
       cell like ``"morning.mp4 + afternoon.mp4"`` yields two files in order. Each
       part follows the same default-extension rule (:func:`_apply_default_extension`).
       Empty parts are dropped. Order is authoritative (concatenation order).
-    - Without an override: returns the single plain name
-      ``{study}_{participant}.mp4``. On-disk numbered-suffix auto-detection
-      (``study_P01-1.mp4`` ...) is resolved later by the pipeline against the
-      input directory via :func:`discover_numbered_source_videos`.
+    - Without an override: returns the single plain name built from
+      ``config.SOURCE_FILENAME_PATTERN`` (default ``{study}_{participant}.mp4``).
+      On-disk numbered-suffix auto-detection (``study_P01-1.mp4`` ...) is
+      resolved later by the pipeline against the input directory via
+      :func:`discover_numbered_source_videos`.
 
     Always returns at least one entry.
     """
@@ -155,7 +142,7 @@ def get_source_video_filenames(
         names = [_apply_default_extension(p) for p in parts if p]
         if names:
             return names
-    return [f"{study}_{participant}{config.FILEFORMAT}"]
+    return [utils.format_source_video_stem(study, participant) + config.FILEFORMAT]
 
 
 def resolve_source_video_paths(
@@ -169,7 +156,8 @@ def resolve_source_video_paths(
 
     - *override* present (the spreadsheet ``Filename`` row) → its plus-separated
       parts, resolved in order.
-    - else the plain ``{study}_{participant}.mp4`` when it exists on disk.
+    - else the plain patterned name (``config.SOURCE_FILENAME_PATTERN``, default
+      ``{study}_{participant}.mp4``) when it exists on disk.
     - else on-disk numbered parts (``study_P01-1.mp4`` ...) when any exist.
     - else the (missing) plain path, so callers can report it via ``is_file()``.
 
@@ -197,22 +185,23 @@ def discover_numbered_source_videos(
 ) -> list[Path]:
     """Return numbered source-video parts for a participant, ordered by part number.
 
-    Globs *input_dir* for ``{study}_{participant}-N{FILEFORMAT}`` files and sorts
-    them by the integer N (so ``-2`` precedes ``-10``). Used only when no
-    spreadsheet override is set and the plain ``{study}_{participant}{FILEFORMAT}``
-    file is absent. Returns [] when no numbered parts exist.
+    Globs *input_dir* for the patterned stem plus a ``-N`` suffix
+    (``config.SOURCE_FILENAME_PATTERN``, e.g. ``study_P01-1.mp4``) and sorts
+    the hits by the integer N (so ``-2`` precedes ``-10``). Used only when no
+    spreadsheet override is set and the plain patterned file is absent.
+    Returns [] when no numbered parts exist.
 
     The parts must form a gapless ``1..N`` sequence: concatenating non-contiguous
     parts back-to-back would map global timestamps into the wrong sub-video. When
     a gap is found, a warning is emitted and [] is returned (treated as no valid
     multi-part sequence) rather than building a silently-wrong timeline.
     """
-    prefix = f"{study}_{participant}"
+    prefix = utils.format_source_video_stem(study, participant)
+    suffix_re = re.compile(rf"-(\d+){re.escape(config.FILEFORMAT)}$", re.IGNORECASE)
     matches: list[tuple[int, Path]] = []
-    for p in input_dir.glob(f"{prefix}-*{config.FILEFORMAT}"):
-        m = re.search(
-            config.NUMBERED_SOURCE_VIDEO_SUFFIX_PATTERN, p.name, re.IGNORECASE
-        )
+    # glob.escape: a study name may contain [ ], which Path.glob reads as a character class.
+    for p in input_dir.glob(f"{glob.escape(prefix + '-')}*{config.FILEFORMAT}"):
+        m = suffix_re.search(p.name)
         if m:
             matches.append((int(m.group(1)), p))
     matches.sort(key=lambda item: item[0])
@@ -265,21 +254,24 @@ def resolve_participant_videos(sheet_context: Any = None) -> list[dict[str, Any]
       Discovery accepts any ``*_P<x>`` / ``*_G<x>`` name regardless of study
       prefix, so ``study_P13.mp4`` must NOT be re-resolved against the sheet's
       study name — that would invent a ``clipgen-test_P13.mp4`` that is not there.
+    - Every participant with a user filename override
+      (``config.FILENAME_OVERRIDES``) that neither of the above produced. An
+      override names a file discovery cannot pattern-match, so without this a
+      mind-map participant pointed at ``recording 3.mp4`` would stay invisible.
 
-    Sheet order first, then disk-only ids sorted; deduped by id with the sheet
-    winning. ``in_sheet`` lets the frontend mark the disk-only ones. With
-    ``sheet_context=None`` this is a plain scan and every entry is
-    ``in_sheet: False``.
+    Sheet order first, then disk-only ids sorted, then override-only ids sorted;
+    deduped by id, sheet winning. ``sheet_context=None`` makes this a plain scan
+    with every entry ``in_sheet: False``.
 
-    The input directory is derived here rather than passed in: letting a caller
-    hand the sheet half a different directory than ``discover_participant_videos``
-    (which always derives its own) would be a silent-mismatch bug.
+    The input directory is derived here rather than passed in — handing the sheet
+    half a different directory than ``discover_participant_videos`` (which always
+    derives its own) would be a silent-mismatch bug.
 
     Returns:
-        ``[{"id", "video_paths", "has_video", "in_sheet", "browser_seekable"}]`` —
-        freshly built dicts. Never the memoized ones
-        ``discover_participant_videos`` returns; those are shared with the
-        Workflows blueprint and must not be stamped on.
+        ``[{"id", "video_paths", "has_video", "in_sheet", "browser_seekable"}]``,
+        freshly built. Never the memoized dicts ``discover_participant_videos``
+        returns — those are shared with the Workflows blueprint and must not be
+        stamped on.
     """
     import spreadsheet  # lazy: files.py is CLI-hot; spreadsheet pulls in google_api
 
@@ -316,17 +308,100 @@ def resolve_participant_videos(sheet_context: Any = None) -> list[dict[str, Any]
     for found in utils.discover_participant_videos():  # already sorted by id
         if found["id"] in seen:
             continue
-        found_paths = list(found["video_paths"])  # copy — source is memoized
+        seen.add(found["id"])
+        user_override = config.FILENAME_OVERRIDES.get(found["id"])
+        if user_override:
+            # The user pointed at a specific file; a name match is not it.
+            paths = resolve_source_video_paths(
+                "", found["id"], user_override, input_dir
+            )
+            found_paths = [str(p) for p in paths]
+            has_video = paths[0].is_file()
+        else:
+            found_paths = list(found["video_paths"])  # copy — source is memoized
+            has_video = found["has_video"]
         entries.append(
             {
                 "id": found["id"],
                 "video_paths": found_paths,
-                "has_video": found["has_video"],
+                "has_video": has_video,
                 "in_sheet": False,
                 "browser_seekable": _browser_seekable(found_paths),
             }
         )
+    for pid in sorted(config.FILENAME_OVERRIDES):
+        if pid in seen:
+            continue
+        override = config.FILENAME_OVERRIDES[pid]
+        if not override:
+            continue
+        # study is irrelevant here: resolve_source_video_paths ignores it when
+        # an override is present.
+        paths = resolve_source_video_paths("", pid, override, input_dir)
+        path_strs = [str(p) for p in paths]
+        entries.append(
+            {
+                "id": pid,
+                "video_paths": path_strs,
+                "has_video": paths[0].is_file(),
+                "in_sheet": False,
+                "browser_seekable": _browser_seekable(path_strs),
+            }
+        )
     return entries
+
+
+def derive_sheet_meta(worksheet: Any) -> dict[str, str] | None:
+    """Return ``{type, id_or_path, label, worksheet}`` identifying *worksheet*.
+
+    This triple keys the per-source filename overrides in ``start.json`` and
+    the Start overlay's recent-projects entries. Shared by the server (picker
+    display, override seeding) and the CLI launch path, so both derive the
+    same identity for the same worksheet.
+    """
+    if worksheet is None:
+        return None
+    try:
+        import excel_io
+
+        if isinstance(worksheet, excel_io.ExcelSheetAdapter):
+            path = getattr(worksheet, "_workbook_path", "") or ""
+            if not path:
+                return None
+            return {
+                "type": "excel",
+                "id_or_path": path,
+                "label": Path(path).name,
+                "worksheet": getattr(worksheet, "title", ""),
+            }
+    except ImportError:
+        pass  # no excel_io in this build; fall through to the gspread branch
+    # gspread Worksheet: the parent spreadsheet title is both identifier and label.
+    parent = getattr(worksheet, "spreadsheet", None)
+    title = getattr(parent, "title", "") if parent is not None else ""
+    if not title:
+        return None
+    return {
+        "type": "google",
+        "id_or_path": title,
+        "label": title,
+        "worksheet": getattr(worksheet, "title", ""),
+    }
+
+
+def find_participant_record(
+    sheet_context: Any, participant_id: str
+) -> dict[str, Any] | None:
+    """First :func:`resolve_participant_videos` record matching *participant_id*.
+
+    A fresh resolve on every call — for routes that must see the live input
+    directory (e.g. after ``POST /api/dirs``) rather than a blueprint's
+    ``_participants`` cache.
+    """
+    for participant in resolve_participant_videos(sheet_context):
+        if participant["id"] == participant_id:
+            return participant
+    return None
 
 
 def prepare_clip(clip: ClipRecord) -> ClipRecord:
@@ -346,9 +421,7 @@ def prepare_clip(clip: ClipRecord) -> ClipRecord:
     if config.DEBUGGING:
         config.debug_ic(clip)
 
-    # Pre-parsed fast path: callers (e.g. --ss-clips, --transcript-clips) build
-    # synthetic clips with timestamps already resolved. Skip the cell-based parse
-    # but still sanitize desc/category for use in filenames.
+    # Pre-parsed fast path: synthetic clips arrive with times resolved, so only sanitize.
     if clip.get("times"):
         clip["cell_annotations"] = list(clip.get("cell_annotations") or [])
         clip["segment_annotations"] = dict(clip.get("segment_annotations") or {})
@@ -372,10 +445,8 @@ def prepare_clip(clip: ClipRecord) -> ClipRecord:
     )
     utils.debug_print("Will attempt to split the cell contents")
 
-    # Get cell reference for error messages
     cell_ref = utils.safe_cell_a1(clip["cell"].row, clip["cell"].col)
 
-    # Parse inline annotations (e.g. !key), then parse timestamps from cleaned value.
     cleaned_cell_value, segment_annotations, cell_annotations = (
         utils.parse_cell_annotations(clip["cell"].value)
     )
@@ -384,17 +455,18 @@ def prepare_clip(clip: ClipRecord) -> ClipRecord:
         key: sorted(indexes) for key, indexes in segment_annotations.items()
     }
     clip["times"] = utils.parse_timestamps(cleaned_cell_value, cell_ref=cell_ref)
-    timestamp_baseline = clip.get("timestamp_baseline")
-    if timestamp_baseline:
-        clip["times"] = utils.convert_clock_pairs_to_relative(
-            clip["times"], timestamp_baseline, cell_ref=cell_ref
-        )
+    # Select before the baseline conversion: it drops pairs and shifts indexes.
     selected_segment_indexes = clip.get("selected_segment_indexes")
     if selected_segment_indexes is not None:
         selected_set = set(selected_segment_indexes)
         clip["times"] = [
             pair for index, pair in enumerate(clip["times"]) if index in selected_set
         ]
+    timestamp_baseline = clip.get("timestamp_baseline")
+    if timestamp_baseline:
+        clip["times"] = utils.convert_clock_pairs_to_relative(
+            clip["times"], timestamp_baseline, cell_ref=cell_ref
+        )
     if config.DEBUGGING:
         config.debug_ic(clip["times"])
 
@@ -408,12 +480,12 @@ def prepare_clip(clip: ClipRecord) -> ClipRecord:
                 f"No valid timestamps found in cell {cell_ref}",
                 [
                     f"Cell contents: '{clip['cell'].value}'",
-                    f"Participant: {clip['participant']}, Description: {clip['desc'][:50]}...",
+                    f"Participant: {clip['participant']}, Description: {(clip.get('desc') or '')[:50]}...",
                 ],
             )
 
-    # Clean description: remove bracketed prefix and sanitize for use in filename
-    raw_desc = clip["desc"]
+    # Strip bracketed prefix, sanitize for filename. `.get`: desc/category may be absent.
+    raw_desc = clip.get("desc") or ""
     bracket_pos = raw_desc.rfind("]")
     cleaned_desc = (
         raw_desc[bracket_pos + 1 :].strip() if bracket_pos >= 0 else raw_desc.strip()
@@ -422,8 +494,8 @@ def prepare_clip(clip: ClipRecord) -> ClipRecord:
     if config.DEBUGGING:
         config.debug_ic(clip["desc"])
 
-    # Sanitize category (handle None/empty)
-    if clip["category"]:
+    # Sanitize category (handle missing/None/empty)
+    if clip.get("category"):
         clip["category"] = utils.sanitize_filename(clip["category"])
     else:
         clip["category"] = "uncategorized"
@@ -434,8 +506,7 @@ def prepare_clip(clip: ClipRecord) -> ClipRecord:
 
 
 _WORKFLOW_CELL_COL = 3  # synthetic cell column for Workflows clip artifacts
-# (col 1 = --ss-clips, col 2 = --transcript-clips; the distinct column keeps
-# synthetic artifact ids from colliding across the three sheet-free clip paths.)
+# Distinct column: 1 = --ss-clips, 2 = --transcript-clips, so ids can't collide.
 
 
 def _make_synthetic_clip_record(
@@ -504,26 +575,19 @@ def build_clip_records(
     CLI ``--ss-clips`` / ``--transcript-clips`` paths.
 
     Args:
-        participant: Participant id stamped on every record (e.g. ``"P01"``).
         source_filename: Source video basename, or a ``" + "``-joined list of
             parts for a multi-video participant (resolved by
             ``pipeline._check_source_video``).
-        time_ranges: ``(start_seconds, end_seconds)`` pairs to cut.
-        description: Clip description applied to every produced record.
-        category: Clip category applied to every produced record.
-        study: Normalized study name for output paths.
-        severity: Optional severity label.
         cell_col: Synthetic cell column for artifact-id namespacing.
         cell_row_base: Added to each record's synthetic (negative) cell row so
             callers can keep ids unique/stable across batches.
-        cluster_gap: When set, merge ranges whose gap is within this many seconds
-            via :func:`utils.cluster_spans` before building records.
-        pad_pre / pad_post / max_duration: Forwarded to ``cluster_spans`` when
-            ``cluster_gap`` is set.
+        cluster_gap: When set, merge ranges closer than this many seconds via
+            :func:`utils.cluster_spans` first; *pad_pre* / *pad_post* /
+            *max_duration* are forwarded to it and ignored otherwise.
 
     Returns:
-        A list of ClipRecords ready for ``pipeline.process_clips`` /
-        ``process_reel`` (not yet prepared — those call :func:`prepare_clip`).
+        ClipRecords ready for ``pipeline.process_clips`` / ``process_reel``, but
+        not yet prepared — those call :func:`prepare_clip`.
     """
     if cluster_gap is not None:
         clustered = utils.cluster_spans(
@@ -559,16 +623,17 @@ def build_clip_records(
 def discover_clips() -> list[str]:
     """Find generated clips in the effective output directory.
 
-    Scans for .mp4 files and excludes source videos (those matching the
-    pattern study_P01.mp4, study_G02.mp4, etc.).
+    Scans for FILEFORMAT files and excludes source videos — anything matching
+    the configured ``SOURCE_FILENAME_PATTERN`` (study_P01.mp4, study_G02-2.mp4,
+    etc.), via :func:`utils.compile_source_video_regex`.
 
     Returns:
         Sorted list of clip filenames (relative to the output directory)
     """
     base_dir = utils.get_effective_output_dir()
+    source_re = utils.compile_source_video_regex()
     return sorted(
         p.name
         for p in base_dir.iterdir()
-        if p.name.endswith(config.FILEFORMAT)
-        and not re.search(config.SOURCE_VIDEO_PATTERN, p.name, re.IGNORECASE)
+        if p.name.endswith(config.FILEFORMAT) and not source_re.fullmatch(p.name)
     )

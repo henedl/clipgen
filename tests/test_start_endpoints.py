@@ -8,6 +8,7 @@ Exercises the routes registered directly on ``combined`` (not on a blueprint):
 * ``POST /api/sessions/record``
 * ``GET  /api/spreadsheets/google``
 * ``POST /api/spreadsheets/google/auth``
+* ``GET  /api/update/status``  ``POST /api/update/{check,download,apply,reveal}``
 
 We build the live app via :func:`server.build_combined_app` and drive it
 through ``test_client``. State globals (``_google_auth``, ``config.INPUT_DIR``,
@@ -24,6 +25,8 @@ import pytest
 pytest.importorskip("flask")
 
 import config
+import native_dialogs
+import manifest
 import server
 import start_settings
 
@@ -103,7 +106,8 @@ def test_changelog_returns_entries(client):
     # parser regex drifted from the file format.
     assert body["entries"], "CHANGELOG.md present but no entries parsed"
     first = body["entries"][0]
-    assert {"version", "date", "tool", "title", "body"} <= set(first)
+    assert {"version", "date", "changes"} <= set(first)
+    assert {"tool", "kind", "text"} <= set(first["changes"][0])
 
 
 def test_changelog_handles_missing_file(client, monkeypatch):
@@ -177,11 +181,10 @@ def test_dirs_post_rejects_output_under_file(client, tmp_path):
 
 
 def test_folder_picker_returns_chosen_path(client, monkeypatch):
-    """The route returns whatever utils.open_native_folder_picker returns."""
-    import utils
+    """The route returns whatever native_dialogs.open_native_folder_picker returns."""
 
     monkeypatch.setattr(
-        utils, "open_native_folder_picker", lambda initial="": "/picked"
+        native_dialogs, "open_native_folder_picker", lambda initial="": "/picked"
     )
     resp = client.post(
         "/api/folder-picker",
@@ -193,9 +196,10 @@ def test_folder_picker_returns_chosen_path(client, monkeypatch):
 
 
 def test_folder_picker_returns_null_on_cancel(client, monkeypatch):
-    import utils
 
-    monkeypatch.setattr(utils, "open_native_folder_picker", lambda initial="": None)
+    monkeypatch.setattr(
+        native_dialogs, "open_native_folder_picker", lambda initial="": None
+    )
     resp = client.post(
         "/api/folder-picker",
         data=json.dumps({}),
@@ -464,14 +468,19 @@ def test_preview_reports_expected_filenames_and_disk_status(client, tmp_path):
             "filenames": ["study_P01.mp4"],
             "found": True,
             "override": False,
+            "override_value": "",
+            "sheet_value": "",
         },
         {
             "id": "P02",
             "filenames": ["study_P02.mp4"],
             "found": False,
             "override": False,
+            "override_value": "",
+            "sheet_value": "",
         },
     ]
+    assert body["unmatched"] == []
 
 
 def test_preview_honours_the_filename_row_override(client, tmp_path):
@@ -494,6 +503,165 @@ def test_preview_honours_the_filename_row_override(client, tmp_path):
     assert entry["filenames"] == ["morning.mp4", "afternoon.mp4"]
     assert entry["override"] is True
     assert entry["found"] is False  # afternoon.mp4 is missing
+
+
+def test_preview_lists_unclaimed_videos_for_the_override_datalist(client, tmp_path):
+    """Footage sitting unused in the folder is what an override is likely to want."""
+    wb_path = tmp_path / "in" / "preview.xlsx"
+    _write_preview_workbook(wb_path, ["P01"])
+    (tmp_path / "in" / "study_P01.mp4").write_bytes(b"")
+    (tmp_path / "in" / "session two.mp4").write_bytes(b"")
+
+    body = client.get(
+        "/api/spreadsheets/preview",
+        query_string={
+            "type": "excel",
+            "id_or_path": str(wb_path),
+            "input_dir": str(tmp_path / "in"),
+        },
+    ).get_json()
+    # The claimed file is not offered; the orphan is.
+    assert body["unmatched"] == ["session two.mp4"]
+
+
+def test_preview_applies_a_stored_user_override(client, tmp_path):
+    """A saved override wins over the sheet's own Filename row."""
+    wb_path = tmp_path / "in" / "override.xlsx"
+    _write_preview_workbook(wb_path, ["P01"], filename_row={"P01": "morning.mp4"})
+    (tmp_path / "in" / "actually-this-one.mp4").write_bytes(b"")
+    start_settings.set_filename_override(
+        "excel", str(wb_path), "Data", "P01", "actually-this-one.mp4"
+    )
+
+    body = client.get(
+        "/api/spreadsheets/preview",
+        query_string={
+            "type": "excel",
+            "id_or_path": str(wb_path),
+            "input_dir": str(tmp_path / "in"),
+        },
+    ).get_json()
+    entry = body["participants"][0]
+    assert entry["filenames"] == ["actually-this-one.mp4"]
+    assert entry["found"] is True
+    assert entry["override_value"] == "actually-this-one.mp4"
+    assert entry["sheet_value"] == "morning.mp4"  # what Restore falls back to
+
+
+def test_override_route_persists_and_recomputes_the_row(client, tmp_path):
+    (tmp_path / "in" / "recording 3.mp4").write_bytes(b"")
+
+    body = client.post(
+        "/api/spreadsheets/preview/override",
+        json={
+            "type": "excel",
+            "id_or_path": str(tmp_path / "in" / "study.xlsx"),
+            "worksheet": "Data",
+            "participant": "P01",
+            "filename": "recording 3.mp4",
+            "study": "study",
+            "input_dir": str(tmp_path / "in"),
+        },
+    ).get_json()
+
+    assert body["ok"] is True
+    assert body["row"] == {
+        "id": "P01",
+        "filenames": ["recording 3.mp4"],
+        "found": True,
+        "override": True,
+        "override_value": "recording 3.mp4",
+        "sheet_value": "",
+    }
+    assert start_settings.filename_overrides(
+        "excel", str(tmp_path / "in" / "study.xlsx"), "Data"
+    ) == {"P01": "recording 3.mp4"}
+
+
+def test_override_route_clears_back_to_the_sheet_value(client, tmp_path):
+    wb = str(tmp_path / "in" / "study.xlsx")
+    start_settings.set_filename_override("excel", wb, "Data", "P01", "wrong.mp4")
+
+    body = client.post(
+        "/api/spreadsheets/preview/override",
+        json={
+            "type": "excel",
+            "id_or_path": wb,
+            "worksheet": "Data",
+            "participant": "P01",
+            "filename": "",
+            "study": "study",
+            "sheet_value": "morning.mp4",
+            "input_dir": str(tmp_path / "in"),
+        },
+    ).get_json()
+
+    assert body["row"]["filenames"] == ["morning.mp4"]
+    assert body["row"]["override_value"] == ""
+    assert start_settings.filename_overrides("excel", wb, "Data") == {}
+
+
+def test_override_route_refreshes_the_cached_participant_lists(client, tmp_path):
+    """Transcripts/Screenspace cache on the input dir's mtime, which an override
+    does not move — the edit has to poke that gate or those pages keep serving
+    the previous file."""
+    import transcripts_server
+
+    in_dir = tmp_path / "in"
+    (in_dir / "study_P01.mp4").write_bytes(b"")
+    (in_dir / "recording 3.mp4").write_bytes(b"")
+    wb_path = in_dir / "cache.xlsx"
+    _write_preview_workbook(wb_path, ["P01"])
+
+    client.post(
+        "/api/spreadsheets/open", json={"type": "excel", "id_or_path": str(wb_path)}
+    )
+    transcripts_server._refresh_participants()
+    before = transcripts_server._participants[0]["video_paths"]
+    assert [Path(p).name for p in before] == ["study_P01.mp4"]
+
+    client.post(
+        "/api/spreadsheets/preview/override",
+        json={
+            "type": "excel",
+            "id_or_path": str(wb_path),
+            "worksheet": "Data",
+            "participant": "P01",
+            "filename": "recording 3.mp4",
+            "study": "study",
+            "input_dir": str(in_dir),
+        },
+    )
+    transcripts_server._refresh_participants()
+    after = transcripts_server._participants[0]["video_paths"]
+    assert [Path(p).name for p in after] == ["recording 3.mp4"]
+
+
+def test_override_route_rejects_a_missing_participant(client):
+    body = client.post(
+        "/api/spreadsheets/preview/override",
+        json={"type": "excel", "id_or_path": "/x.xlsx", "filename": "a.mp4"},
+    ).get_json()
+    assert body["ok"] is False
+
+
+def test_open_seeds_the_session_filename_overrides(client, tmp_path):
+    """Opening a sheet points the whole session at that sheet's overrides."""
+    wb_path = tmp_path / "in" / "open.xlsx"
+    _write_preview_workbook(wb_path, ["P01"])
+    start_settings.set_filename_override(
+        "excel", str(wb_path), "Data", "P01", "recording 3.mp4"
+    )
+
+    resp = client.post(
+        "/api/spreadsheets/open",
+        json={"type": "excel", "id_or_path": str(wb_path)},
+    )
+    assert resp.get_json()["ok"] is True
+    assert config.FILENAME_OVERRIDES == {"P01": "recording 3.mp4"}
+
+    client.post("/api/spreadsheets/close", json={})
+    assert config.FILENAME_OVERRIDES == {}
 
 
 def test_preview_does_not_swap_the_active_sheet(client, tmp_path):
@@ -948,7 +1116,7 @@ def test_google_auth_records_thread_error(client, monkeypatch):
 def test_spreadsheets_open_rejected_during_generation(client, monkeypatch):
     """Switching spreadsheets is rejected with 409 while a clip generation is
     in progress, so the generated lists are not rebound under an active stream."""
-    monkeypatch.setattr(server, "_generate_in_progress", True)
+    monkeypatch.setitem(server._busy_slots, "generate", True)
     resp = client.post(
         "/api/spreadsheets/open",
         json={"type": "excel", "id_or_path": "/tmp/whatever.xlsx"},
@@ -974,7 +1142,7 @@ def test_spreadsheets_open_rejected_during_timeline_viewer(client, monkeypatch):
     """A timeline-viewer build blocks a spreadsheet switch: it appends into the
     shared generated list/manifest, so a swap mid-build would rebind those under
     it and mix old-sheet artifacts into the new sheet."""
-    monkeypatch.setattr(server, "_timeline_viewer_in_progress", True)
+    monkeypatch.setitem(server._busy_slots, "timeline_viewer", True)
     resp = client.post(
         "/api/spreadsheets/open",
         json={"type": "excel", "id_or_path": "/tmp/whatever.xlsx"},
@@ -985,7 +1153,7 @@ def test_spreadsheets_open_rejected_during_timeline_viewer(client, monkeypatch):
 
 def test_spreadsheets_open_rejected_during_gallery(client, monkeypatch):
     """A gallery build also blocks a spreadsheet switch."""
-    monkeypatch.setattr(server, "_gallery_in_progress", True)
+    monkeypatch.setitem(server._busy_slots, "gallery", True)
     resp = client.post(
         "/api/spreadsheets/open",
         json={"type": "excel", "id_or_path": "/tmp/whatever.xlsx"},
@@ -996,29 +1164,38 @@ def test_spreadsheets_open_rejected_during_gallery(client, monkeypatch):
 
 def test_spreadsheets_close_rejected_during_reel(client, monkeypatch):
     """Closing the spreadsheet is rejected with 409 while a reel build runs."""
-    monkeypatch.setattr(server, "_reel_in_progress", True)
+    monkeypatch.setitem(server._busy_slots, "reel", True)
     resp = client.post("/api/spreadsheets/close")
     assert resp.status_code == 409
     assert resp.get_json()["ok"] is False
 
 
 def test_combined_server_forces_non_interactive(monkeypatch):
-    """The web server has no console: start_combined_server must flip
+    """The web server has no console: serve_combined_app must flip
     utils.NO_INPUT_MODE on so a missing source video is skipped-and-reported
     instead of blocking a Flask/daemon thread on input() (regression: watch-dir
     triggered runs + Studio generate hung on the fuzzy-match prompt)."""
     import utils
 
-    class _FakeApp:
-        def run(self, **kwargs):  # never actually serve
-            pass
+    def _fake_app(environ, start_response):
+        start_response("200 OK", [("Content-Type", "text/plain")])
+        return [b"ok"]
 
     monkeypatch.setattr(utils, "NO_INPUT_MODE", False)
-    monkeypatch.setattr(server, "build_combined_app", lambda **kwargs: _FakeApp())
-    monkeypatch.setattr(server.webbrowser, "open", lambda *a, **k: None)
+    monkeypatch.setattr(utils, "preload_vision_libs_quietly", lambda **kwargs: None)
+    monkeypatch.setattr(manifest, "sweep_stale_temp_artifacts", lambda: None)
+    monkeypatch.setattr(server, "build_combined_app", lambda **kwargs: _fake_app)
+    monkeypatch.setattr(server, "_SERVER_POLL_INTERVAL", 0.01)
 
-    server.start_combined_server(port=0)
-    assert utils.NO_INPUT_MODE is True
+    live = server.serve_combined_app(port=0, block_until_ready=True)
+    try:
+        assert utils.NO_INPUT_MODE is True
+        assert live.boot["ready"] is True
+    finally:
+        # Close the socket directly: stop_combined_app would import the heavy
+        # blueprint modules to stop workers the fake app never started.
+        live.srv.shutdown()
+        live.srv.server_close()
 
 
 def test_start_settings_toggles_are_independent(client):
@@ -1063,3 +1240,511 @@ def test_start_settings_get_reports_desktop_launch(client, monkeypatch):
     assert client.get("/api/start-settings").get_json()["desktop"] is False
     monkeypatch.setattr(utils, "GUI_LAUNCH", True)
     assert client.get("/api/start-settings").get_json()["desktop"] is True
+
+
+# ---------- startup notice ---------------------------------------------------
+
+
+def test_status_startup_notice_empty_by_default(client):
+    assert client.get("/api/status").get_json()["startup_notice"] == ""
+
+
+def test_status_carries_startup_notice(client, monkeypatch):
+    monkeypatch.setattr(
+        server,
+        "_startup_notice",
+        {"message": "boot could not open 'X'", "source_type": "excel"},
+    )
+    s = client.get("/api/status").get_json()
+    assert s["startup_notice"] == "boot could not open 'X'"
+    assert s["startup_notice_source"] == "excel"
+
+
+def test_successful_open_clears_startup_notice(client, monkeypatch, tmp_path):
+    """Opening any sheet moots whatever the boot build failed to open."""
+    monkeypatch.setattr(
+        server,
+        "_startup_notice",
+        {"message": "boot could not open 'X'", "source_type": "google"},
+    )
+    wb_path = tmp_path / "in" / "study.xlsx"
+    _write_preview_workbook(wb_path, ["P01"])
+    resp = client.post(
+        "/api/spreadsheets/open", json={"type": "excel", "id_or_path": str(wb_path)}
+    )
+    assert resp.get_json()["ok"] is True
+    assert client.get("/api/status").get_json()["startup_notice"] == ""
+
+
+# ---------- /api/settings ---------------------------------------------------
+
+
+def test_settings_get_reports_the_config_dir_path(client, monkeypatch, tmp_path):
+    """The GET carries the settings path so the modal can show it."""
+    monkeypatch.setattr(start_settings, "config_dir", lambda: tmp_path)
+    body = client.get("/api/settings").get_json()
+    assert body["ok"] is True
+    assert body["path"] == str(tmp_path / config.STUDIO_SETTINGS_FILENAME)
+
+
+@pytest.mark.parametrize("gui_launch", [True, False])
+def test_settings_get_reports_the_desktop_flag(client, monkeypatch, gui_launch):
+    """The reveal button follows GUI_LAUNCH, so every native window gets it.
+
+    Not ``html[data-desktop-chrome]``: that is macOS-only, and a Windows or
+    Linux webview has no address bar either.
+    """
+    monkeypatch.setattr(server.utils, "GUI_LAUNCH", gui_launch)
+    assert client.get("/api/settings").get_json()["desktop"] is gui_launch
+
+
+def test_settings_put_writes_beside_start_json(client, monkeypatch, tmp_path):
+    """A settings PUT lands in the config dir, never in the output dir."""
+    cfg = tmp_path / "cfg"
+    monkeypatch.setattr(start_settings, "config_dir", lambda: cfg)
+    monkeypatch.setattr(server.config, "WEBP_QUALITY", server.config.WEBP_QUALITY)
+
+    resp = client.put("/api/settings", json={"settings": {"WEBP_QUALITY": 55}})
+    assert resp.get_json()["ok"] is True
+
+    saved = json.loads(
+        (cfg / config.STUDIO_SETTINGS_FILENAME).read_text(encoding="utf-8")
+    )
+    assert saved["WEBP_QUALITY"] == 55
+    output_copy = Path(config.OUTPUT_DIR) / config.STUDIO_SETTINGS_FILENAME
+    assert not output_copy.exists()
+
+
+def test_settings_reveal_shows_the_file(client, monkeypatch, tmp_path):
+    """The reveal route hands the settings file to the OS file browser."""
+    monkeypatch.setattr(start_settings, "config_dir", lambda: tmp_path)
+    settings_file = tmp_path / config.STUDIO_SETTINGS_FILENAME
+    settings_file.write_text("{}", encoding="utf-8")
+    shown: list[Path] = []
+    monkeypatch.setattr(
+        server.native_dialogs,
+        "reveal_in_file_manager",
+        lambda p: shown.append(p) or True,
+    )
+
+    body = client.post("/api/settings/reveal", json={}).get_json()
+    assert body["ok"] is True
+    assert shown == [settings_file]
+
+
+def test_settings_reveal_falls_back_to_the_folder(client, monkeypatch, tmp_path):
+    """With everything at default there is no file, so the folder opens."""
+    cfg = tmp_path / "cfg"
+    monkeypatch.setattr(start_settings, "config_dir", lambda: cfg)
+    shown: list[Path] = []
+    monkeypatch.setattr(
+        server.native_dialogs,
+        "reveal_in_file_manager",
+        lambda p: shown.append(p) or True,
+    )
+
+    body = client.post("/api/settings/reveal", json={}).get_json()
+    assert body["ok"] is True
+    assert shown == [cfg]
+    assert cfg.is_dir()
+
+
+def test_settings_reveal_reports_failure(client, monkeypatch, tmp_path):
+    """A file browser that would not start is an error, not a silent ok."""
+    monkeypatch.setattr(start_settings, "config_dir", lambda: tmp_path)
+    (tmp_path / config.STUDIO_SETTINGS_FILENAME).write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(
+        server.native_dialogs, "reveal_in_file_manager", lambda p: False
+    )
+
+    body = client.post("/api/settings/reveal", json={}).get_json()
+    assert body["ok"] is False
+    assert "folder" in body["error"]
+
+
+# ---------- /studio/api/reveal-artifact -----------------------------------
+
+
+def test_reveal_artifact_shows_the_file(client, monkeypatch):
+    """A log row's basename resolves against the output dir and is revealed."""
+    out_dir = Path(config.OUTPUT_DIR)
+    clip = out_dir / "study_P01_clip.mp4"
+    clip.write_bytes(b"stub")
+    shown: list[Path] = []
+    monkeypatch.setattr(
+        server.native_dialogs,
+        "reveal_in_file_manager",
+        lambda p: shown.append(p) or True,
+    )
+
+    body = client.post(
+        "/studio/api/reveal-artifact", json={"file": clip.name}
+    ).get_json()
+    assert body["ok"] is True
+    assert shown == [clip.resolve()]
+    assert body["path"] == str(clip.resolve())
+
+
+def test_reveal_artifact_stays_inside_the_output_dir(client, monkeypatch, tmp_path):
+    """A path that escapes the output dir is refused before any OS call."""
+    outside = tmp_path / "secret.txt"
+    outside.write_text("x", encoding="utf-8")
+    monkeypatch.setattr(server.native_dialogs, "reveal_in_file_manager", lambda p: True)
+
+    for name in ("../secret.txt", str(outside)):
+        resp = client.post("/studio/api/reveal-artifact", json={"file": name})
+        assert resp.status_code == 403, name
+        assert resp.get_json()["error"] == "Invalid file path"
+
+
+def test_reveal_artifact_reports_a_missing_file(client, monkeypatch):
+    """A row whose file was deleted is a 404, not a blank file-browser call."""
+    monkeypatch.setattr(server.native_dialogs, "reveal_in_file_manager", lambda p: True)
+
+    resp = client.post("/studio/api/reveal-artifact", json={"file": "gone.mp4"})
+    assert resp.status_code == 404
+    assert client.post("/studio/api/reveal-artifact", json={}).get_json()["ok"] is False
+
+
+@pytest.mark.parametrize("gui_launch", [True, False])
+def test_status_reports_the_desktop_flag(client, monkeypatch, gui_launch):
+    """Studio gates its Artifact Log reveal buttons on this one status field."""
+    monkeypatch.setattr(server.utils, "GUI_LAUNCH", gui_launch)
+    assert client.get("/api/status").get_json()["desktop"] is gui_launch
+
+
+# ---------- /api/models/llm ------------------------------------------------
+
+
+def test_llm_reveal_shows_the_gguf(client, monkeypatch, tmp_path):
+    """Reveal hands the model's file in the models dir to the file browser."""
+    monkeypatch.setattr(start_settings, "config_dir", lambda: tmp_path)
+    models = tmp_path / "models"
+    models.mkdir()
+    gguf = models / "tiny.gguf"
+    gguf.write_bytes(b"stub")
+    shown: list[Path] = []
+    monkeypatch.setattr(
+        server.native_dialogs,
+        "reveal_in_file_manager",
+        lambda p: shown.append(p) or True,
+    )
+
+    body = client.post("/api/models/llm/reveal", json={"model": "tiny"}).get_json()
+    assert body["ok"] is True
+    assert shown == [gguf]
+    assert body["path"] == str(gguf)
+
+
+def test_llm_reveal_rejects_an_unknown_model(client, monkeypatch, tmp_path):
+    """Nothing on disk under that name is a 404, not a blank file-browser call."""
+    monkeypatch.setattr(start_settings, "config_dir", lambda: tmp_path)
+    monkeypatch.setattr(server.native_dialogs, "reveal_in_file_manager", lambda p: True)
+
+    resp = client.post("/api/models/llm/reveal", json={"model": "ghost"})
+    assert resp.status_code == 404
+    assert resp.get_json()["error"] == "Model not found"
+
+
+def test_llm_reveal_reports_failure(client, monkeypatch, tmp_path):
+    """A file browser that would not start is an error, not a silent ok."""
+    monkeypatch.setattr(start_settings, "config_dir", lambda: tmp_path)
+    models = tmp_path / "models"
+    models.mkdir()
+    (models / "tiny.gguf").write_bytes(b"stub")
+    monkeypatch.setattr(
+        server.native_dialogs, "reveal_in_file_manager", lambda p: False
+    )
+
+    body = client.post("/api/models/llm/reveal", json={"model": "tiny"}).get_json()
+    assert body["ok"] is False
+    assert "folder" in body["error"]
+
+
+def test_llm_delete_is_reachable_from_the_combined_root(client, monkeypatch, tmp_path):
+    """The settings modal opens from every page, so it calls the root path.
+
+    The rule itself lives on the transcripts blueprint; without the root
+    registration this 404s on routing and the Delete button does nothing.
+    """
+    monkeypatch.setattr(start_settings, "config_dir", lambda: tmp_path)
+    models = tmp_path / "models"
+    models.mkdir()
+    gguf = models / "tiny.gguf"
+    gguf.write_bytes(b"stub")
+
+    body = client.delete("/api/models/llm/tiny").get_json()
+    assert body["ok"] is True
+    assert not gguf.exists()
+
+
+def test_ollama_models_are_flagged_and_refuse_delete(client, monkeypatch, tmp_path):
+    """Ollama owns the blob; the row says so instead of failing with "not found"."""
+    import llm_client
+
+    monkeypatch.setattr(start_settings, "config_dir", lambda: tmp_path)
+    blob = tmp_path / "blobs" / "sha256-abc"
+    blob.parent.mkdir()
+    blob.write_bytes(b"stub")
+    monkeypatch.setattr(
+        llm_client,
+        "_ollama_manifest_models",
+        lambda: [{"stem": "gemma4-latest", "path": blob, "size_bytes": 4}],
+    )
+    monkeypatch.setattr(llm_client, "load_failures", dict)
+
+    models = client.get("/api/models").get_json()["llm"]["models"]
+    assert [(m["name"], m["source"]) for m in models] == [("gemma4-latest", "ollama")]
+
+    resp = client.delete("/api/models/llm/gemma4-latest")
+    assert resp.status_code == 409
+    assert "Ollama" in resp.get_json()["error"]
+    assert blob.exists()
+
+
+def test_models_payload_lists_suggested_models_with_install_state(client, monkeypatch):
+    """Every catalog entry is offered; only the one on disk reads installed."""
+    import hardware
+    import llm_client
+
+    fixed_hw = {
+        "memory_mb": 16384,
+        "cpu_count": 8,
+        "arch": "arm64",
+        "gpu": "apple",
+        "chip": "Apple M2",
+        "unified_memory": True,
+    }
+    monkeypatch.setattr(hardware, "profile", lambda: fixed_hw)
+    on_disk = llm_client.model_name(llm_client.SUGGESTED_MODELS[1]["name"])
+    monkeypatch.setattr(
+        llm_client, "list_models", lambda: [{"name": on_disk, "size_bytes": 1024}]
+    )
+    monkeypatch.setattr(llm_client, "load_failures", dict)
+    monkeypatch.setattr(
+        llm_client,
+        "is_model_installed",
+        lambda m, installed=None: any(
+            x["name"] == llm_client.model_name(m) for x in installed or []
+        ),
+    )
+
+    body = client.get("/api/models").get_json()
+    suggested = body["llm"]["suggested"]
+    assert [m["name"] for m in suggested] == [
+        m["name"] for m in llm_client.SUGGESTED_MODELS
+    ]
+    for entry, catalog in zip(suggested, llm_client.SUGGESTED_MODELS):
+        assert entry["size_mb"] == catalog["size_mb"]
+        assert entry["description"] == catalog["description"]
+        assert entry["stem"] == llm_client.model_name(catalog["name"])
+        assert entry["label"] == catalog["label"]
+        repo = catalog["name"].split(":", 1)[0]
+        assert entry["model_url"] == f"https://huggingface.co/{repo}"
+        assert entry["unusable"] == ""
+        assert entry["rank"] == catalog["rank"]
+        assert entry["fit"]["level"] == "fits"
+    assert [m["installed"] for m in suggested] == [False, True, False, False]
+
+    # The recommendation widget reads the machine and the pick off the same payload.
+    llm = body["llm"]
+    assert llm["hardware"]["memory_mb"] == 16384
+    assert llm["hardware"]["chip"] == "Apple M2"
+    assert llm["hardware"]["note"] == ""
+    assert llm["recommended"] == llm_client.recommend_model(fixed_hw)
+    assert llm["models"][0]["fit"]["level"] == "fits"
+    for agent in llm["agents"]:
+        assert agent["fit"]["level"] in {"fits", "tight", "too_big", "unknown"}
+
+    # The downloaded list and the agent gate name and link the same model.
+    installed = body["llm"]["models"][0]
+    catalog = llm_client.SUGGESTED_MODELS[1]
+    assert installed["label"] == catalog["label"]
+    assert installed["model_url"] == suggested[1]["model_url"]
+    for agent in body["llm"]["agents"]:
+        assert agent["label"] == llm_client.model_label(agent["model"])
+        assert agent["model_url"] == llm_client.model_card_url(agent["model"])
+
+
+def test_llm_download_routes_are_reachable_from_the_combined_root(client, monkeypatch):
+    """The Summaries tab's Download button posts to the root, like Delete."""
+    import time
+
+    import llm_client
+    import transcripts_server
+
+    monkeypatch.setattr(
+        llm_client, "download_model", lambda model, on_progress=None: True
+    )
+    transcripts_server._llm_downloads.clear()
+
+    body = client.post("/api/models/llm/download", json={"model": "acme/tiny"})
+    assert body.get_json()["started"] is True
+
+    status = {}
+    for _ in range(100):
+        status = client.get(
+            "/api/models/llm/download-status?model=acme/tiny"
+        ).get_json()
+        if status.get("found") and status.get("done"):
+            break
+        time.sleep(0.02)
+    assert status["succeeded"] is True
+
+
+def test_models_payload_flags_a_model_that_would_not_load(client, monkeypatch):
+    """The picker must say which models are known-bad, and why.
+
+    Nothing about a GGUF on disk predicts this — an Ollama-converted file looks
+    healthy until llama.cpp tries to read it — so the payload reports what the
+    last attempt learned.
+    """
+    import llm_client
+
+    monkeypatch.setattr(
+        llm_client, "list_models", lambda: [{"name": "tiny", "size_bytes": 1024}]
+    )
+    monkeypatch.setattr(
+        llm_client,
+        "load_failures",
+        lambda: {"tiny": "model name=tiny failed to load"},
+    )
+
+    body = client.get("/api/models").get_json()
+    entry = next(m for m in body["llm"]["models"] if m["name"] == "tiny")
+    assert entry["unusable"] == "model name=tiny failed to load"
+
+
+def test_models_payload_leaves_working_models_unflagged(client, monkeypatch):
+    import llm_client
+
+    monkeypatch.setattr(
+        llm_client, "list_models", lambda: [{"name": "tiny", "size_bytes": 1024}]
+    )
+    monkeypatch.setattr(llm_client, "load_failures", dict)
+
+    body = client.get("/api/models").get_json()
+    entry = next(m for m in body["llm"]["models"] if m["name"] == "tiny")
+    assert entry["unusable"] == ""
+
+
+# ---------- /api/update/* ---------------------------------------------------
+
+
+@pytest.fixture
+def updater_state(monkeypatch, tmp_path):
+    import updater
+
+    updater.reset_for_tests()
+    monkeypatch.setattr(start_settings, "config_dir", lambda: tmp_path / "cfg")
+    yield updater
+    updater.reset_for_tests()
+
+
+def test_update_status_is_unsupported_from_source(client, updater_state):
+    body = client.get("/api/update/status").get_json()
+    assert body["ok"] is True
+    assert body["supported"] is False
+    assert body["phase"] == "idle"
+
+
+def test_update_check_skips_the_thread_when_unsupported(
+    client, updater_state, monkeypatch
+):
+    calls = []
+    monkeypatch.setattr(updater_state, "finish_check", lambda **kw: calls.append(kw))
+    body = client.post("/api/update/check", json={"force": True}).get_json()
+    assert body["ok"] is True and body["supported"] is False
+    assert calls == []
+
+
+def test_update_check_runs_on_a_thread_when_supported(
+    client, updater_state, monkeypatch
+):
+    import threading
+
+    done = threading.Event()
+    calls = []
+
+    def fake_finish_check(**kw):
+        calls.append(kw)
+        done.set()
+
+    monkeypatch.setattr(updater_state, "is_supported", lambda: True)
+    monkeypatch.setattr(updater_state, "finish_check", fake_finish_check)
+    body = client.post("/api/update/check", json={"force": True}).get_json()
+    assert body["ok"] is True
+    # The reply already carries the in-flight phase so the page starts polling.
+    assert body["phase"] == "checking"
+    assert done.wait(timeout=5)
+    assert calls == [{"force": True}]
+
+
+def test_update_download_replies_with_the_downloading_phase(
+    client, updater_state, monkeypatch
+):
+    import threading
+
+    done = threading.Event()
+    monkeypatch.setattr(updater_state, "is_supported", lambda: True)
+    monkeypatch.setattr(updater_state, "finish_download", done.set)
+    with updater_state._lock:
+        updater_state._latest = {"tag": "v9.9.9", "url": "", "assets": []}
+        updater_state._status.update(phase="available", asset="x")
+    body = client.post("/api/update/download").get_json()
+    assert body["phase"] == "downloading"
+    assert done.wait(timeout=5)
+
+
+def test_update_download_and_apply_refuse_the_wrong_phase(client, updater_state):
+    assert client.post("/api/update/download").status_code == 409
+    assert client.post("/api/update/apply").status_code == 409
+    assert client.post("/api/update/skip").status_code == 409
+    assert client.post("/api/update/reveal").status_code == 404
+
+
+def test_update_reveal_replies_with_a_full_snapshot(client, updater_state, monkeypatch):
+    monkeypatch.setattr(updater_state, "reveal_download", lambda: True)
+    body = client.post("/api/update/reveal").get_json()
+    assert body["ok"] is True and "phase" in body and "supported" in body
+
+
+class TestCrossOriginGuard:
+    """State-changing requests from another origin are refused."""
+
+    def test_foreign_origin_post_is_refused(self, app):
+        client = app.test_client()
+        r = client.post(
+            "/api/dirs",
+            json={"input_dir": "x"},
+            headers={"Origin": "http://evil.example"},
+        )
+        assert r.status_code == 403
+        assert r.get_json()["ok"] is False
+
+    def test_foreign_referer_post_is_refused(self, app):
+        client = app.test_client()
+        r = client.post(
+            "/api/dirs",
+            json={},
+            headers={"Referer": "http://evil.example/page"},
+        )
+        assert r.status_code == 403
+
+    def test_same_origin_post_passes(self, app):
+        client = app.test_client()
+        r = client.post(
+            "/api/dirs",
+            json={},
+            headers={"Origin": "http://localhost"},
+        )
+        assert r.status_code != 403
+
+    def test_headerless_post_passes(self, app):
+        client = app.test_client()
+        assert client.post("/api/dirs", json={}).status_code != 403
+
+    def test_foreign_get_passes(self, app):
+        client = app.test_client()
+        r = client.get("/api/dirs", headers={"Origin": "http://evil.example"})
+        assert r.status_code == 200

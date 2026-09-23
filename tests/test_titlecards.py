@@ -1,4 +1,6 @@
+import os
 import subprocess
+import time
 
 
 import config
@@ -109,7 +111,15 @@ def test_wrap_clip_with_cards_single_encode_happy_path(monkeypatch, make_clip):
             "width": 1280,
             "height": 720,
             "video_codec": "h264",
-            "audio_codec": "aac",
+            "audio_tracks": [
+                {
+                    "index": 0,
+                    "codec": "aac",
+                    "channels": 2,
+                    "sample_rate": 48000,
+                    "channel_layout": "stereo",
+                }
+            ],
             "fps": 30.0,
             "duration": 12.0,
             "nb_frames": 360,
@@ -171,7 +181,15 @@ def test_wrap_clip_with_cards_title_only_fallback(monkeypatch, make_clip):
             "width": 1920,
             "height": 1080,
             "video_codec": "h264",
-            "audio_codec": "aac",
+            "audio_tracks": [
+                {
+                    "index": 0,
+                    "codec": "aac",
+                    "channels": 2,
+                    "sample_rate": 48000,
+                    "channel_layout": "stereo",
+                }
+            ],
             "fps": 30.0,
             "duration": 8.0,
             "nb_frames": 240,
@@ -217,7 +235,7 @@ def test_wrap_clip_with_cards_no_audio_drops_audio_stream(monkeypatch, make_clip
             "width": 1280,
             "height": 720,
             "video_codec": "h264",
-            "audio_codec": None,
+            "audio_tracks": [],
             "fps": 30.0,
             "duration": 4.0,
             "nb_frames": 120,
@@ -265,7 +283,15 @@ def test_wrap_clip_with_cards_no_cards_is_noop(monkeypatch, make_clip):
             "width": 1280,
             "height": 720,
             "video_codec": "h264",
-            "audio_codec": "aac",
+            "audio_tracks": [
+                {
+                    "index": 0,
+                    "codec": "aac",
+                    "channels": 2,
+                    "sample_rate": 48000,
+                    "channel_layout": "stereo",
+                }
+            ],
             "fps": 30.0,
             "duration": 4.0,
             "nb_frames": 120,
@@ -291,11 +317,16 @@ _COPY_SAFE_PROBE = {
     "width": 1280,
     "height": 720,
     "video_codec": "h264",
-    "audio_codec": "aac",
     "pix_fmt": "yuv420p",
-    "audio_sample_rate": 48000,
-    "audio_channels": 2,
-    "audio_channel_layout": "stereo",
+    "audio_tracks": [
+        {
+            "index": 0,
+            "codec": "aac",
+            "channels": 2,
+            "sample_rate": 48000,
+            "channel_layout": "stereo",
+        }
+    ],
     "fps": 30.0,
     "duration": 12.0,
     "nb_frames": 360,
@@ -355,10 +386,7 @@ def test_wrap_clip_with_cards_copy_path_no_audio(monkeypatch, make_clip):
     titlecards.clear_endcard_cache()
     probe: dict = {
         **_COPY_SAFE_PROBE,
-        "audio_codec": None,
-        "audio_sample_rate": 0,
-        "audio_channels": 0,
-        "audio_channel_layout": None,
+        "audio_tracks": [],
     }
     monkeypatch.setattr(titlecards.config, "TITLECARDS_ENABLED", True)
     monkeypatch.setattr(titlecards.config, "ENDCARD_IMAGE", "")
@@ -405,20 +433,21 @@ def test_wrap_clip_with_cards_non_copy_safe_reencodes(monkeypatch, make_clip):
     monkeypatch.setattr(video, "verify_output_file", lambda *_a, **_k: True)
 
     commands = []
-    monkeypatch.setattr(
-        video,
-        "run_ffmpeg_process",
-        lambda cmd, **_k: (
-            commands.append(cmd)
-            or subprocess.CompletedProcess(args=cmd, returncode=0, stderr="")
-        ),
-    )
+    kinds = []
+
+    def fake_run(cmd, **kwargs):
+        commands.append(cmd)
+        kinds.append(kwargs.get("kind"))
+        return subprocess.CompletedProcess(args=cmd, returncode=0, stderr="")
+
+    monkeypatch.setattr(video, "run_ffmpeg_process", fake_run)
     monkeypatch.setattr(titlecards.os, "replace", lambda src, dst: None)
 
     ok, cards_applied = titlecards.wrap_clip_with_cards(clip, "clip.mp4")
     assert ok is True
     assert cards_applied is True
     assert len(commands) == 1
+    assert kinds == ["wrap"]  # not "card": the profile must split the two
     joined = " ".join(commands[0])
     assert "-filter_complex" in joined
     assert "concat=n=3:v=1:a=1" in joined
@@ -740,7 +769,15 @@ def test_wrap_reencode_uses_fast_preset(monkeypatch, make_clip):
             "width": 1280,
             "height": 720,
             "video_codec": "h264",
-            "audio_codec": "aac",
+            "audio_tracks": [
+                {
+                    "index": 0,
+                    "codec": "aac",
+                    "channels": 2,
+                    "sample_rate": 48000,
+                    "channel_layout": "stereo",
+                }
+            ],
             "fps": 30.0,
             "duration": 12.0,
             "nb_frames": 360,
@@ -801,7 +838,15 @@ def test_pipeline_wraps_clip_without_forcing_source_resolution(monkeypatch, make
             "width": 1280,
             "height": 720,
             "video_codec": "h264",
-            "audio_codec": "aac",
+            "audio_tracks": [
+                {
+                    "index": 0,
+                    "codec": "aac",
+                    "channels": 2,
+                    "sample_rate": 48000,
+                    "channel_layout": "stereo",
+                }
+            ],
             "fps": 30.0,
             "duration": 60.0,
             "nb_frames": 1800,
@@ -824,7 +869,7 @@ def test_pipeline_wraps_clip_without_forcing_source_resolution(monkeypatch, make
     monkeypatch.setattr(pipeline.titlecards, "wrap_clip_with_cards", fake_wrap)
 
     generated, _paths, _ = pipeline._process_single_clip_segments(
-        clip, "source.mp4", set(), output_format="clip"
+        clip, "source.mp4", output_format="clip"
     )
 
     assert generated == 2
@@ -835,3 +880,98 @@ def test_pipeline_wraps_clip_without_forcing_source_resolution(monkeypatch, make
         ("out1.mp4", None),
         ("out2.mp4", None),
     ]
+
+
+def test_build_titlecard_frame_validates_before_creating_a_temp_file(
+    monkeypatch, make_clip
+):
+    def boom(*_args, **_kwargs):
+        raise AssertionError("temp file created before validation")
+
+    monkeypatch.setattr(titlecards.tempfile, "NamedTemporaryFile", boom)
+    monkeypatch.setattr(titlecards.Path, "is_file", lambda self: True)
+
+    assert titlecards.build_titlecard_frame(make_clip(), "1280") is None
+
+
+def test_build_titlecard_frame_removes_card_when_verify_fails(monkeypatch, make_clip):
+    seen = {}
+
+    def fake_verify(path, *_args, **_kwargs):
+        seen["path"] = path
+        return False
+
+    monkeypatch.setattr(
+        video,
+        "run_ffmpeg_process",
+        lambda cmd, **_k: subprocess.CompletedProcess(
+            args=cmd, returncode=0, stderr=""
+        ),
+    )
+    monkeypatch.setattr(video, "verify_output_file", fake_verify)
+    monkeypatch.setattr(titlecards.Path, "is_file", lambda self: True)
+
+    assert titlecards.build_titlecard_frame(make_clip(), "1280x720") is None
+    assert not os.path.exists(seen["path"])
+
+
+def test_card_font_prefers_a_fontfile_over_fontconfig(monkeypatch, tmp_path):
+    font = tmp_path / "a:b" / "Mono.ttf"
+    font.parent.mkdir()
+    font.write_bytes(b"\0")
+    monkeypatch.setattr(titlecards, "_CARD_FONT_PATHS", (str(font),))
+    titlecards._card_font_option.cache_clear()
+    try:
+        option = titlecards._card_font_option()
+        assert option == f"fontfile='{str(font).replace(':', chr(92) + ':')}'"
+        assert f":{option}:fontcolor" in titlecards._build_drawtext_filter("x")
+    finally:
+        titlecards._card_font_option.cache_clear()
+
+
+def test_card_font_falls_back_to_fontconfig_monospace(monkeypatch):
+    monkeypatch.setattr(titlecards, "_CARD_FONT_PATHS", ("/nonexistent/Mono.ttf",))
+    titlecards._card_font_option.cache_clear()
+    try:
+        assert titlecards._card_font_option() == "font=monospace"
+        assert ":font=monospace:" in titlecards._build_drawtext_filter("x")
+    finally:
+        titlecards._card_font_option.cache_clear()
+
+
+def test_get_or_build_endcard_builds_once_under_parallel_workers(monkeypatch, tmp_path):
+    import threading
+
+    titlecards.clear_endcard_cache()
+    calls = []
+    entered = threading.Event()
+    release = threading.Event()
+
+    def slow_build(resolution, **_kwargs):
+        calls.append(resolution)
+        entered.set()
+        release.wait(timeout=5)
+        card = tmp_path / f"endcard-{len(calls)}.mp4"
+        card.write_bytes(b"\0")
+        return str(card)
+
+    monkeypatch.setattr(titlecards, "build_endcard_frame", slow_build)
+    results: list[str | None] = []
+    threads = [
+        threading.Thread(
+            target=lambda: results.append(titlecards.get_or_build_endcard("1280x720"))
+        )
+        for _ in range(4)
+    ]
+    for t in threads:
+        t.start()
+    assert entered.wait(timeout=5)
+    time.sleep(0.1)  # let the other workers queue on the flight lock
+    release.set()
+    for t in threads:
+        t.join(timeout=10)
+    try:
+        assert len(calls) == 1
+        assert len(set(results)) == 1 and results[0]
+    finally:
+        titlecards.clear_endcard_cache()

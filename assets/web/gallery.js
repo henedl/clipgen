@@ -49,6 +49,7 @@
 
   document.addEventListener("DOMContentLoaded", function () {
     initThemeToggle();
+    clipgenRenderFooter((data || {}).meta);
 
     if (!data || !data.artifacts || data.artifacts.length === 0) {
       var grid = qs("#galleryGrid");
@@ -100,6 +101,10 @@
   // ---- Grid ----
 
   function renderGrid() {
+    return clipgenPerf.span("gallery.renderGrid", renderGridImpl);
+  }
+
+  function renderGridImpl() {
     var grid = qs("#galleryGrid");
     if (!grid) return;
 

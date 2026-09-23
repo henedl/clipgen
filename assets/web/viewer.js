@@ -31,17 +31,8 @@
   var _thumbActive = 0;
   var THUMB_CONCURRENCY = 3;
   var _thumbObserver = null;
-  var _thumbCache = {};
-  var _filmstripCache = {};
-
-  window.addEventListener("pagehide", function () {
-    [_thumbCache, _filmstripCache].forEach(function (cache) {
-      Object.keys(cache).forEach(function (id) {
-        try { URL.revokeObjectURL(cache[id]); } catch (_) {}
-        delete cache[id];
-      });
-    });
-  });
+  var _thumbCache = createBlobCache();
+  var _filmstripCache = createBlobCache();
 
   var _filmstripEnabled = false;
   var _filmstripObserver = null;
@@ -52,10 +43,7 @@
 
   var _cardScrub = null; // { mediaEl, videoEl, raf, audioKey, audioUrl }
 
-  // Opt-in: layer the shared card-scrubber's audio snippets + waveform overlay
-  // onto the existing <video>-seek scrub. Audio is decoded in-browser from the
-  // clip file (no server, no extra exported assets); degrades to silent if the
-  // browser can't decode that codec.
+  // Opt-in: card-scrubber audio + waveform over the <video>-seek scrub; decoded in-browser, silent if undecodable.
   var _scrubAudioEnabled = false;
   var SCRUBAUDIO_STORAGE_KEY = "clipgen-viewer-scrubaudio";
 
@@ -83,17 +71,14 @@
     return "clip";
   }
 
-  // Non-timeline artifact types: single output files surfaced in the Attachments
-  // panel rather than on the timeline track.
+  // Single output files shown in the Attachments panel, not on the timeline.
   var ATTACHMENT_TYPES = { timelapse: true, heatmap: true, export: true };
 
   function isAttachmentType(a) {
     return !!ATTACHMENT_TYPES[a && a.type];
   }
 
-  // Render the Attachments panel: heatmaps as <img>, timelapse mp4 as a looping
-  // <video>, timelapse gif as <img>, document exports (json/csv/md/srt/vtt) as
-  // download-link cards. Hidden when there are no attachments.
+  // Attachments panel: heatmaps/gifs as <img>, timelapse mp4 as looping <video>, exports as download cards.
   function renderAttachments(attachments) {
     var pane = qs("#attachmentsPane");
     var grid = qs("#attachmentsGrid");
@@ -108,8 +93,7 @@
       var card = document.createElement("div");
       card.className = "attachment-card";
       var media;
-      // Reels (from a Build Reel node) are full mp4s, played with sound and no
-      // loop; timelapse mp4s loop muted. Both render as a <video>.
+      // Reels play with sound, no loop; timelapse mp4s loop muted.
       var isVideo =
         (a.type === "timelapse" || a.type === "reel") && /\.mp4$/i.test(a.file);
       var isDoc = /\.(json|csv|md|srt|vtt|txt)$/i.test(a.file || "");
@@ -190,10 +174,7 @@
 
   // ---- Clip thumbnails ----
 
-  // Off-DOM video element seeks to ~25% (clamped to 0.5–5s) and captures a
-  // 320x180 JPEG poster. The 8s timeout guards against clips that never fire
-  // 'seeked' (corrupt files, codec stalls); finish() is idempotent so timeout
-  // and seek both safely call it. Blob URL is owned by _thumbCache.
+  // Off-DOM video poster capture at ~25%; the 8s timeout covers clips that never fire 'seeked'.
   function generateClipThumbnail(mediaEl, artifact, callback) {
     var done = false;
     function finish() {
@@ -237,11 +218,7 @@
         ctx.drawImage(video, 0, 0, 320, 180);
         canvas.toBlob(function (blob) {
           if (!blob) { mediaEl.classList.remove("thumb-pending"); finish(); return; }
-          var url = URL.createObjectURL(blob);
-          if (_thumbCache[artifact.id]) {
-            try { URL.revokeObjectURL(_thumbCache[artifact.id]); } catch (_) {}
-          }
-          _thumbCache[artifact.id] = url;
+          var url = _thumbCache.setBlob(artifact.id, blob);
           var img = document.createElement("img");
           img.decoding = "async";
           img.src = url;
@@ -373,11 +350,7 @@
     _cardScrub = null;
   }
 
-  // Lazy clip thumbnails. Called on initial render and again after any list
-  // rebuild — we tear down the previous observer first so old card elements
-  // (now detached) don't keep firing intersection callbacks. Each card is
-  // either served from `_thumbCache` immediately or queued for generation;
-  // unobserve fires once the card has been seen so we don't re-enqueue.
+  // Lazy thumbnails, rebuilt per render; disconnect the old observer or detached cards keep firing.
   function initClipThumbnails() {
     if (_thumbObserver) { _thumbObserver.disconnect(); _thumbObserver = null; }
     _thumbQueue = [];
@@ -392,10 +365,10 @@
       if (!a || a.type !== "clip") return;
       var media = card.querySelector(".artifact-media");
       if (!media || media.querySelector("img")) return;
-      if (_thumbCache[a.id]) {
+      if (_thumbCache.get(a.id)) {
         var img = document.createElement("img");
         img.decoding = "async";
-        img.src = _thumbCache[a.id];
+        img.src = _thumbCache.get(a.id);
         img.alt = a.description || "";
         media.classList.remove("thumb-pending");
         media.classList.add("thumb-loaded");
@@ -472,8 +445,8 @@
         m.classList.add("filmstrip-thumb");
         if (hasSev) m.classList.add("filmstrip-sev-border");
       } else if (a.type === "clip") {
-        if (_filmstripCache[a.id]) {
-          m.style.backgroundImage = "url(" + _filmstripCache[a.id] + ")";
+        if (_filmstripCache.get(a.id)) {
+          m.style.backgroundImage = "url(" + _filmstripCache.get(a.id) + ")";
           m.classList.add("filmstrip-thumb");
           if (hasSev) m.classList.add("filmstrip-sev-border");
         } else {
@@ -579,11 +552,7 @@
           video.onseeked = null;
           canvas.toBlob(function (blob) {
             if (!blob) { markerEl.classList.remove("filmstrip-loading"); finish(); return; }
-            var url = URL.createObjectURL(blob);
-            if (_filmstripCache[artifact.id]) {
-              try { URL.revokeObjectURL(_filmstripCache[artifact.id]); } catch (_) {}
-            }
-            _filmstripCache[artifact.id] = url;
+            var url = _filmstripCache.setBlob(artifact.id, blob);
             if (_filmstripEnabled && markerEl.classList.contains("filmstrip-loading")) {
               markerEl.style.backgroundImage = "url(" + url + ")";
               markerEl.classList.remove("filmstrip-loading");
@@ -614,9 +583,9 @@
   function processFilmstripThumbQueue() {
     while (_filmstripThumbActive < FILMSTRIP_CONCURRENCY && _filmstripThumbQueue.length) {
       var item = _filmstripThumbQueue.shift();
-      if (_filmstripCache[item.artifact.id]) {
+      if (_filmstripCache.get(item.artifact.id)) {
         if (_filmstripEnabled && item.el.classList.contains("filmstrip-loading")) {
-          item.el.style.backgroundImage = "url(" + _filmstripCache[item.artifact.id] + ")";
+          item.el.style.backgroundImage = "url(" + _filmstripCache.get(item.artifact.id) + ")";
           item.el.classList.remove("filmstrip-loading");
           item.el.classList.add("filmstrip-thumb");
         }
@@ -731,22 +700,19 @@
 
   document.addEventListener("DOMContentLoaded", function () {
     initThemeToggle();
+    clipgenRenderFooter((data || {}).meta);
 
     if (!data || !data.artifacts) {
       showEmptyState();
       return;
     }
 
-    // Attachments (timelapse / heatmap) are single output files, not timeline
-    // events — split them out before the timeline pipeline and render separately.
+    // Attachments are single files, not timeline events; split them out before the timeline pipeline.
     var rawArtifacts = (data.artifacts || []).filter(function (a) {
       return a.id && a.file;
     });
     state.attachments = rawArtifacts.filter(isAttachmentType);
-    // Reels (from a Build Reel node) live in their own `reels` slot and have no
-    // start/end, so they never fit the timeline. Surface them as playable cards
-    // in the Attachments pane (mirrors the CLI, where a reel-only run would
-    // otherwise produce an empty viewer too).
+    // Reels have no start/end, so they show as playable Attachments cards instead of timeline events.
     var reelCards = (data.reels || [])
       .filter(function (r) {
         return r && r.file;
@@ -807,8 +773,7 @@
 
   // ---- Hotkeys (shared hotkeys.js registry, inlined into exports) ----
 
-  // j/k walk the filtered artifact list in its current sort order, selecting
-  // the adjacent card (which also seeks the player / opens the detail pane).
+  // j/k select the adjacent card in the filtered list's current sort order.
   function selectAdjacentArtifact(delta) {
     var list = state.filtered || [];
     if (!list.length) return;
@@ -848,9 +813,7 @@
   function showEmptyState(hasOtherOutputs) {
     var empty = qs("#emptyState");
     if (empty) {
-      // The Attachments pane sits outside #layout and stays visible, so when a
-      // reel/timelapse/heatmap is the only output, point the reader to it rather
-      // than claiming nothing was generated.
+      // The Attachments pane stays visible; when it holds the only output, point there.
       var p = empty.querySelector("p");
       if (p) {
         p.textContent = hasOtherOutputs
@@ -1403,10 +1366,7 @@
     updateSortToolbarUI();
   }
 
-  // Single pair of delegated listeners on #artifactList that dispatch to the
-  // scrub/tooltip/click handlers based on the event target. Installed once on
-  // first render and reused on subsequent renders — avoids attaching 4+
-  // listeners per card (O(N) with the artifact count).
+  // One delegated listener pair on #artifactList, installed once; avoids 4+ listeners per card.
   var _artifactListDelegated = false;
   var _hoveredCardId = null;
   var _hoveredMediaEl = null;
@@ -1446,8 +1406,7 @@
         var card = document.querySelector(
           '#artifactList .artifact-card[data-id="' + _hoveredCardId + '"]'
         );
-        // If the card is gone (list re-rendered mid-hover) or the pointer left
-        // it, drop the hover state so the tooltip can't get orphaned.
+        // Card gone (re-rendered mid-hover) or pointer left it: drop hover state so no orphaned tooltip.
         if (!card || !related || !card.contains(related)) {
           _hoveredCardId = null;
           hideTooltip();
@@ -1468,6 +1427,10 @@
   }
 
   function renderList() {
+    return clipgenPerf.span("viewer.renderList", renderListImpl);
+  }
+
+  function renderListImpl() {
     var list = qs("#artifactList");
     if (!list) return;
     list.innerHTML = "";
@@ -1489,10 +1452,10 @@
         img.loading = "lazy";
         media.appendChild(img);
       } else if (a.type === "clip") {
-        if (_thumbCache[a.id]) {
+        if (_thumbCache.get(a.id)) {
           var cimg = document.createElement("img");
           cimg.decoding = "async";
-          cimg.src = _thumbCache[a.id];
+          cimg.src = _thumbCache.get(a.id);
           cimg.alt = a.description || "";
           media.classList.add("thumb-loaded");
           media.appendChild(cimg);
@@ -1845,7 +1808,9 @@
     }
     vid.muted = false;
     vid.controls = true;
-    vid.play();
+    // Exported viewers lack video-controls.js, so handle the play() promise here instead of safePlay().
+    var playing = vid.play();
+    if (playing && playing.catch) playing.catch(function () {});
     if (_preview.overlay) _preview.overlay.classList.add("hidden");
     if (_preview.timeBadge) _preview.timeBadge.classList.add("hidden");
   }
@@ -1898,9 +1863,9 @@
     var metaEl = qs("#playerMeta");
     if (metaEl) {
       var parts = [];
-      if (a.participant) parts.push(escHtml(a.participant));
+      if (a.participant) parts.push(escapeHtml(a.participant));
       parts.push(formatTime(a.start) + (a.end != null ? " \u2013 " + formatTime(a.end) : ""));
-      if (a.category) parts.push(escHtml(a.category));
+      if (a.category) parts.push(escapeHtml(a.category));
       metaEl.innerHTML = parts.join("&ensp;\u00B7&ensp;");
     }
   }
@@ -1918,21 +1883,21 @@
     if (!tip) return;
     tip.style.borderLeft = "";
 
-    var html = "<strong>" + escHtml(a.description || "(no description)") + "</strong><br>";
+    var html = "<strong>" + escapeHtml(a.description || "(no description)") + "</strong><br>";
     html += '<span class="tooltip-time">' + formatTime(a.start);
     if (a.end != null) html += " – " + formatTime(a.end);
     html += "</span>";
-    if (a.category) html += "<br>" + escHtml(a.category);
-    if (a.participant) html += " · " + escHtml(a.participant);
+    if (a.category) html += "<br>" + escapeHtml(a.category);
+    if (a.participant) html += " · " + escapeHtml(a.participant);
     if ((a.severity || "").trim()) {
-      html += "<br>" + escHtml(a.severity);
+      html += "<br>" + escapeHtml(a.severity);
     }
     var transcript = (a.transcriptText || "").trim();
     if (transcript) {
       html +=
         '<div class="tooltip-transcript">' +
         '<span class="tooltip-transcript-label">Transcript</span>' +
-        escHtml(transcript) +
+        escapeHtml(transcript) +
         "</div>";
     }
 
@@ -1963,8 +1928,7 @@
     tip.appendChild(header);
 
     var time = el("span", "tooltip-time");
-    // A boundary is a single instant; padded/range display would misstate when
-    // it occurred. Show one time for a point boundary, a span for a run.
+    // A boundary is one instant; show a single time, a span only for a run.
     if (c.navigational && c.start === c.end) {
       time.textContent = formatTime(c.start);
     } else {
@@ -2022,11 +1986,6 @@
     if (tip) tip.classList.add("hidden");
   }
 
-  function escHtml(str) {
-    var div = document.createElement("div");
-    div.textContent = str;
-    return div.innerHTML;
-  }
 
   // ---- Participant timeline viewer ----
 
@@ -2214,6 +2173,9 @@
     template: { viewBox: "0 0 16 16", paths: [
       { d: "M2 3.5A1.5 1.5 0 0 1 3.5 2H5a.75.75 0 0 1 0 1.5H3.5v1.75a.75.75 0 0 1-1.5 0V3.5ZM11 2a.75.75 0 0 0 0 1.5h1.5v1.75a.75.75 0 0 0 1.5 0V3.5A1.5 1.5 0 0 0 12.5 2H11ZM2.75 10.75a.75.75 0 0 1 .75.75v1.5H5a.75.75 0 0 1 0 1.5H3.5A1.5 1.5 0 0 1 2 13v-1.5a.75.75 0 0 1 .75-.75ZM13.25 10.75a.75.75 0 0 1 .75.75V13a1.5 1.5 0 0 1-1.5 1.5H11a.75.75 0 0 1 0-1.5h1.5v-1.5a.75.75 0 0 1 .75-.75ZM10 8a2 2 0 1 1-4 0 2 2 0 0 1 4 0Z", fillRule: "evenodd" }
     ]},
+    shape: { viewBox: "0 0 16 16", paths: [
+      { d: "M8 .25a.75.75 0 0 1 .673.418l1.882 3.815 4.21.612a.75.75 0 0 1 .416 1.279l-3.046 2.97.719 4.192a.751.751 0 0 1-1.088.791L8 12.347l-3.766 1.98a.75.75 0 0 1-1.088-.79l.72-4.194L.818 6.374a.75.75 0 0 1 .416-1.28l4.21-.611L7.327.668A.75.75 0 0 1 8 .25Z" }
+    ]},
     flow: { viewBox: "0 0 16 16", paths: [
       { d: "M5.28 10.22a.75.75 0 0 1 0 1.06l-1.47 1.47h8.44a.75.75 0 0 1 0 1.5H3.81l1.47 1.47a.75.75 0 0 1-1.06 1.06l-2.75-2.75a.75.75 0 0 1 0-1.06l2.75-2.75a.75.75 0 0 1 1.06 0ZM10.72.22a.75.75 0 0 1 1.06 0l2.75 2.75a.75.75 0 0 1 0 1.06l-2.75 2.75a.75.75 0 1 1-1.06-1.06l1.47-1.47H3.75a.75.75 0 0 1 0-1.5h8.44L10.72 1.28a.75.75 0 0 1 0-1.06Z", fillRule: "evenodd" }
     ]},
@@ -2222,6 +2184,9 @@
     ]},
     inactivity: { viewBox: "0 0 16 16", paths: [
       { d: "M15 8C15 11.866 11.866 15 8 15C4.13401 15 1 11.866 1 8C1 4.13401 4.13401 1 8 1C11.866 1 15 4.13401 15 8ZM5.5 5.5C5.5 5.22386 5.72386 5 6 5H6.5C6.77614 5 7 5.22386 7 5.5V10.5C7 10.7761 6.77614 11 6.5 11H6C5.72386 11 5.5 10.7761 5.5 10.5V5.5ZM9.5 5C9.22386 5 9 5.22386 9 5.5V10.5C9 10.7761 9.22386 11 9.5 11H10C10.2761 11 10.5 10.7761 10.5 10.5V5.5C10.5 5.22386 10.2761 5 10 5H9.5Z", fillRule: "evenodd" }
+    ]},
+    boundary: { viewBox: "0 0 16 16", paths: [
+      { d: "M2.75 2C2.33579 2 2 2.33579 2 2.75V13.25C2 13.6642 2.33579 14 2.75 14C3.16421 14 3.5 13.6642 3.5 13.25V10.6255L3.83069 10.5428C5.23054 10.1928 6.7094 10.3552 8 11.0005C9.2906 11.6458 10.7695 11.8081 12.1693 11.4581L13.6498 11.088C13.8556 11.0366 14 10.8517 14 10.6395V3.56111C14 3.27633 13.7324 3.06737 13.4561 3.13644L12.1693 3.45814C10.7695 3.8081 9.2906 3.64576 8 3.00046C6.7094 2.35517 5.23054 2.19283 3.8307 2.54279L3.49012 2.62794C3.43182 2.27178 3.12265 2 2.75 2Z" }
     ]},
     attention: { viewBox: "0 0 16 16", paths: [
       { d: "M8 9.5a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3Z" },
@@ -2263,8 +2228,7 @@
         !cur ||
         ev.participant !== cur.participant ||
         ev.eventType !== cur.eventType ||
-        // Boundary ticks are individual points — never merge them, or a cluster
-        // would render only its first tick and hide later boundaries.
+        // Never merge boundary ticks; a cluster would hide all but its first.
         ev.navigational ||
         ev.timeIn - cur.end > 5
       ) {
@@ -2293,9 +2257,7 @@
     if (cur) clusters.push(cur);
 
     for (var j = 0; j < clusters.length; j++) {
-      // Navigational (boundary) ticks must sit at the real boundary time — keep
-      // their exact instant. Other point detections get a ±2s window so their
-      // hover/clip context is usable.
+      // Boundary ticks keep their real instant; other point detections get a ±2s window.
       if (!clusters[j].navigational && clusters[j].start === clusters[j].end) {
         clusters[j].start = Math.max(0, clusters[j].start - 2);
         clusters[j].end = Math.min(timelineDuration, clusters[j].end + 2);
@@ -2315,8 +2277,7 @@
       var width = Math.max(((clampedEnd - clampedStart) / timelineDuration) * 100, 0.4);
       var marker = document.createElement("div");
       marker.className = "screenspace-marker ss-type-" + c.type;
-      // Navigational (boundary) events are orientation scaffolding — draw them
-      // as thin, lighter ticks rather than findings spans.
+      // Boundary events are orientation scaffolding: thin, lighter ticks, not finding spans.
       if (c.navigational) marker.className += " screenspace-marker--navigational";
       marker.style.left = left + "%";
       marker.style.width = c.navigational ? "1px" : (width + "%");

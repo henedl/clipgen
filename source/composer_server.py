@@ -22,10 +22,10 @@ span via the ffmpeg ``overlay`` filter with span-relative
 recording-part boundary is first stitched into a temp clip (t=0 == span start)
 via ``pipeline.cut_global_range`` — the same cut/stitch chain Studio's intake
 uses — so the overlay pass always sees one continuous input. Exported artifacts
-land in the regular ``clipgen_manifest.json`` via ``viewer.save_manifest``.
+land in the ``clips`` section of the output-dir manifest via ``viewer.save_manifest``.
 
-All Composer state lives in ``composer_manifest.json`` in the output dir
-(load-on-startup, save-after-mutations). Composer never writes to the
+All Composer state lives in the ``composer`` section of the output-dir
+manifest (load-on-startup, save-after-mutations). Composer never writes to the
 spreadsheet — cut pairs feed clip generation through Studio's
 ``/api/generate-intake`` endpoint, which takes raw start/end seconds.
 
@@ -34,15 +34,16 @@ recorded across several files) is addressed on the stitched timeline, and the
 frontend maps global time onto parts using the ``parts[].offset`` values from
 ``GET /api/participants``.
 
-Module-level state (``_input_dir``, ``_sheet_context``, ``_manifest``) is
-initialized by :func:`_init_composer_state`, mirroring the other blueprints.
+Module-level state (``_sheet_context``, ``_manifest``) is initialized by
+:func:`_init_composer_state`, mirroring the other blueprints. The input
+directory is not among them: it is read live per request, since it can move
+mid-session via ``POST /api/dirs``.
 Mutations hold ``_manifest_lock`` and persist via :func:`_persist_locked`.
 """
 
 from __future__ import annotations
 
 import copy
-import json
 import math
 import os
 import threading
@@ -51,30 +52,56 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from flask import Blueprint, Response, request, send_file
+from flask import Blueprint, request, send_file
 
 import config
 import files
 import pipeline
 import remux_server
+import manifest as manifest_io
+import server_utils
 import utils
 import video
-from server_utils import MediaCache, err, ok, parse_clip_window
+from server_utils import (
+    MediaCache,
+    clip_media_response,
+    err,
+    err_no_video,
+    find_by_id,
+    json_endpoint,
+    make_participant_cache,
+    ok,
+    parse_number_arg,
+    remove_by_id,
+)
 import itertools
+import sys
 
 # ---- Module state (initialized by _init_composer_state) ----
 
-_input_dir: str = ""
 _sheet_context: Any = None
+# Cache globals for make_participant_cache; the setters below reset the source.
+_participants: list[dict[str, Any]] = []
+_participant_source: dict[str, Any] | None = None
+_participants_lock = threading.Lock()
+
+
+def _fresh_participant_source() -> dict[str, Any]:
+    return {"sheet_context": None, "dir": "", "mtime": None}
+
+
+_refresh_participants, _find_participant_record = make_participant_cache(
+    sys.modules[__name__],
+    input_dir_getter=utils.get_effective_input_dir,
+    resolve=lambda _unused: files.resolve_participant_videos(_sheet_context),
+)
 _manifest: dict[str, Any] = {}
 _manifest_lock = threading.Lock()
 
 # Shortest allowed cut pair. Anything under this is a misclick, not a clip.
 MIN_CUT_SECONDS = 0.2
 
-# The read-only marker lanes shown in Composer are the *other* streams, never
-# Composer itself. "composer" is a Convergence swim-lane source (Overview), so we
-# strip it here to keep Composer's Sheet/Screenspace/Transcript lanes unchanged.
+# Marker lanes are the other streams; "composer" is a Convergence source, so drop it.
 _MARKER_SOURCES: tuple[str, ...] = tuple(
     src for src in config.CONVERGENCE_SOURCES if src != "composer"
 )
@@ -83,10 +110,11 @@ _MARKER_SOURCES: tuple[str, ...] = tuple(
 
 composer_bp = Blueprint("composer", __name__)
 
-utils.register_static_routes(
+server_utils.register_static_routes(
     composer_bp,
     "composer.html",
-    media_dir_getter=lambda: _input_dir,
+    # Per request: POST /api/dirs moves config.INPUT_DIR mid-session. See transcripts_bp.
+    media_dir_getter=lambda: str(utils.get_effective_input_dir()),
     media_error="Input directory not configured",
     icons=True,
 )
@@ -97,15 +125,11 @@ remux_server.register_remux_routes(composer_bp, lambda: _sheet_context)
 # ---- Manifest I/O ----
 
 
-def _manifest_path() -> Path:
-    return Path(utils.get_effective_output_dir()) / config.COMPOSER_MANIFEST_FILENAME
-
-
 def _empty_manifest() -> dict[str, Any]:
     return {
         "cuts": [],
         "ui": {
-            "markerSources": {src: True for src in _MARKER_SOURCES},
+            "markerSources": dict.fromkeys(_MARKER_SOURCES, True),
             "markerThumbnails": False,
             "markerAudioScrub": False,
             "followPlayhead": True,
@@ -114,26 +138,23 @@ def _empty_manifest() -> dict[str, Any]:
 
 
 def _load_manifest() -> dict[str, Any]:
-    path = _manifest_path()
-    if path.is_file():
-        try:
-            data = json.loads(path.read_text(encoding="utf-8"))
-            if isinstance(data, dict):
-                return data
-        except (OSError, json.JSONDecodeError):
-            utils.warning_print(
-                f"Could not read {path.name}; starting with an empty composer manifest."
-            )
-    return _empty_manifest()
+    data = manifest_io.load_manifest_section("composer")
+    return data if isinstance(data, dict) else _empty_manifest()
+
+
+def _is_empty_manifest(data: dict[str, Any]) -> bool:
+    """True when no cuts, trims, or annotations exist and the UI is at defaults."""
+    if data.get("cuts") or data.get("trims") or data.get("annotations"):
+        return False
+    return data.get("ui") == _empty_manifest()["ui"]
 
 
 def _persist_locked() -> None:
-    """Write the composer manifest to disk atomically (tmp + ``os.replace`` via
-    :func:`utils.save_json_manifest`) so an interrupted write can't truncate the
-    file and silently drop the session's cuts/trims/annotations. Caller must hold
+    """Write the composer section (atomic via the manifest store); drop it when
+    empty so an untouched Composer launch leaves no junk. Caller must hold
     ``_manifest_lock``."""
-    utils.save_json_manifest(
-        config.COMPOSER_MANIFEST_FILENAME, _manifest, warn_label="composer manifest"
+    manifest_io.save_manifest_section(
+        "composer", None if _is_empty_manifest(_manifest) else _manifest
     )
 
 
@@ -162,27 +183,27 @@ def _participant_parts(video_paths: list[str]) -> list[dict[str, Any]] | None:
 
 def _participant_duration(participant: str) -> float | None:
     """Total stitched duration for a participant, or None when unknown."""
-    for p in files.resolve_participant_videos(_sheet_context):
-        if p["id"] == participant and p.get("has_video"):
-            parts = _participant_parts(p["video_paths"])
-            if parts is None:
-                return None
-            return float(sum(part["duration"] for part in parts))
-    return None
+    p = files.find_participant_record(_sheet_context, participant)
+    if not p or not p.get("has_video"):
+        return None
+    parts = _participant_parts(p["video_paths"])
+    if parts is None:
+        return None
+    return float(sum(part["duration"] for part in parts))
 
 
 @composer_bp.route("/api/participants")
 def api_participants() -> Any:
     """Participants with source videos, plus part timelines for stitched seeks."""
     participants: list[dict[str, Any]] = []
-    for p in files.resolve_participant_videos(_sheet_context):
-        if not p.get("has_video"):
-            continue
+    _refresh_participants()
+    resolved = [p for p in _participants if p.get("has_video")]
+    # Prewarm so the loop reads cached probes; serialized ffprobe measured 1.06 s
+    # for 24 participants.
+    video.prewarm_probes(vp for p in resolved for vp in p["video_paths"])
+    for p in resolved:
         parts = _participant_parts(p["video_paths"])
-        # Resolution + fps for the subheader source readout (mirrors Screenspace's
-        # video-info line). Probed from the first part; stitched parts share the
-        # same source setup. probe_video_properties returns None on unprobeable
-        # files and only ever reports width/height > 0.
+        # Subheader readout, probed from the first part; stitched parts share one setup.
         props = (
             video.probe_video_properties(str(p["video_paths"][0]))
             if p["video_paths"]
@@ -194,7 +215,10 @@ def api_participants() -> Any:
                 "has_video": True,
                 "in_sheet": p.get("in_sheet", False),
                 "browser_seekable": p.get("browser_seekable"),
-                "parts": parts or [{"name": Path(vp).name} for vp in p["video_paths"]],
+                # Fallback parts keep offset: the client adds part.offset on every
+                # timeupdate.
+                "parts": parts
+                or [{"name": Path(vp).name, "offset": 0} for vp in p["video_paths"]],
                 "total_duration": (
                     sum(part["duration"] for part in parts) if parts else None
                 ),
@@ -205,8 +229,7 @@ def api_participants() -> Any:
                 "audio_track_count": props.get("audio_track_count") if props else 0,
             }
         )
-    # ``has_sheet`` gates the off-sheet badge: with no sheet loaded every entry
-    # is ``in_sheet: False`` and marking them all would be noise.
+    # has_sheet gates the off-sheet badge; with no sheet every entry is off-sheet.
     return ok(
         participants=participants,
         has_sheet=_sheet_context is not None,
@@ -225,7 +248,13 @@ def api_manifest() -> Any:
 
 def _clamp_span(participant: str, start: float, end: float) -> tuple[float, float]:
     """Clamp a cut span to ``0 <= start < end <= duration`` at MIN_CUT_SECONDS."""
-    duration = _participant_duration(participant)
+    return _clamp_times(_participant_duration(participant), start, end)
+
+
+def _clamp_times(
+    duration: float | None, start: float, end: float
+) -> tuple[float, float]:
+    """Pure half of _clamp_span; safe to call under _manifest_lock."""
     start = max(0.0, start)
     if duration is not None:
         start = min(start, max(0.0, duration - MIN_CUT_SECONDS))
@@ -235,16 +264,14 @@ def _clamp_span(participant: str, start: float, end: float) -> tuple[float, floa
 
 
 @composer_bp.route("/api/cuts", methods=["POST"])
+@json_endpoint
 def api_cut_create() -> Any:
     data = request.get_json(silent=True) or {}
     participant = str(data.get("participant", "")).strip()
     if not participant:
         return err("participant is required")
-    try:
-        start = float(data.get("start", 0))
-        end = float(data.get("end", 0))
-    except (TypeError, ValueError):
-        return err("start/end must be numbers")
+    start = parse_number_arg(data.get("start", 0), "start", finite=True)
+    end = parse_number_arg(data.get("end", 0), "end", finite=True)
     if end <= start:
         return err("end must be after start")
     start, end = _clamp_span(participant, start, end)
@@ -263,26 +290,39 @@ def api_cut_create() -> Any:
 
 
 @composer_bp.route("/api/cuts/<cut_id>", methods=["PATCH"])
+@json_endpoint
 def api_cut_update(cut_id: str) -> Any:
+    """Patch a cut's times and/or label.
+
+    Times merge over the cut's *current* values under the lock, so a label-only
+    PATCH never rewrites times and two overlapping edits keep each other's
+    fields. The duration probe (a cold-cache ffprobe) runs outside the lock.
+    """
     data = request.get_json(silent=True) or {}
+    new_start = new_end = None
+    if data.get("start") is not None:
+        new_start = parse_number_arg(data["start"], "start", finite=True)
+    if data.get("end") is not None:
+        new_end = parse_number_arg(data["end"], "end", finite=True)
     with _manifest_lock:
-        cut = next(
-            (c for c in _manifest.get("cuts", []) if c.get("id") == cut_id), None
-        )
+        cut = find_by_id(_manifest.get("cuts", []), cut_id)
         if cut is None:
             return err(f"No cut {cut_id}", 404)
-        start = cut["start"]
-        end = cut["end"]
-        try:
-            if data.get("start") is not None:
-                start = float(data["start"])
-            if data.get("end") is not None:
-                end = float(data["end"])
-        except (TypeError, ValueError):
-            return err("start/end must be numbers")
-        if end <= start:
-            return err("end must be after start")
-        cut["start"], cut["end"] = _clamp_span(cut["participant"], start, end)
+        participant = cut["participant"]
+    duration = None
+    if new_start is not None or new_end is not None:
+        duration = _participant_duration(participant)
+    with _manifest_lock:
+        # Re-find: the cut may have been deleted while the lock was released.
+        cut = find_by_id(_manifest.get("cuts", []), cut_id)
+        if cut is None:
+            return err(f"No cut {cut_id}", 404)
+        if new_start is not None or new_end is not None:
+            start = cut["start"] if new_start is None else new_start
+            end = cut["end"] if new_end is None else new_end
+            if end <= start:
+                return err("end must be after start")
+            cut["start"], cut["end"] = _clamp_times(duration, start, end)
         if data.get("label") is not None:
             cut["label"] = str(data["label"])
         _persist_locked()
@@ -292,16 +332,14 @@ def api_cut_update(cut_id: str) -> Any:
 @composer_bp.route("/api/cuts/<cut_id>", methods=["DELETE"])
 def api_cut_delete(cut_id: str) -> Any:
     with _manifest_lock:
-        cuts = _manifest.get("cuts", [])
-        remaining = [c for c in cuts if c.get("id") != cut_id]
-        if len(remaining) == len(cuts):
+        if remove_by_id(_manifest.get("cuts", []), cut_id) is None:
             return err(f"No cut {cut_id}", 404)
-        _manifest["cuts"] = remaining
         _persist_locked()
     return ok()
 
 
 @composer_bp.route("/api/trims/<path:key>", methods=["PUT"])
+@json_endpoint
 def api_trim_put(key: str) -> Any:
     """Set a non-destructive span override for one source marker.
 
@@ -311,18 +349,18 @@ def api_trim_put(key: str) -> Any:
     times only.
     """
     data = request.get_json(silent=True) or {}
-    try:
-        start = float(data["start"])
-        end = float(data["end"])
-    except (KeyError, TypeError, ValueError):
+    if data.get("start") is None or data.get("end") is None:
         return err("start and end are required numbers")
+    # Clamp before the ordering check so a negative span can't slip through.
+    start = max(0.0, parse_number_arg(data["start"], "start", finite=True))
+    end = parse_number_arg(data["end"], "end", finite=True)
     if end < start + MIN_CUT_SECONDS:
         return err("end must be after start")
     with _manifest_lock:
         trims = _manifest.setdefault("trims", {})
         existing = trims.get(key, {})
         trim = {
-            "start": round(max(0.0, start), 3),
+            "start": round(start, 3),
             "end": round(end, 3),
             "participant": str(
                 data.get("participant") or existing.get("participant", "")
@@ -427,8 +465,8 @@ def _sanitize_annotation_geometry(
                 "text": text,
             }
         if ann_type == "shape":
-            # x/y = normalized center, w/h = normalized size, rotation in
-            # degrees clockwise around the center (matches ctx.rotate).
+            # x/y normalized center, w/h normalized size, rotation degrees clockwise
+            # (matches ctx.rotate).
             kind = str(geometry.get("shape") or "")
             if kind not in ANNOTATION_SHAPES:
                 return None
@@ -525,26 +563,26 @@ def api_annotation_create() -> Any:
 
 @composer_bp.route("/api/annotations/<ann_id>", methods=["PATCH"])
 def api_annotation_update(ann_id: str) -> Any:
+    """Validate every supplied field before touching the stored annotation."""
     data = request.get_json(silent=True) or {}
     with _manifest_lock:
-        ann = next(
-            (a for a in _manifest.get("annotations", []) if a.get("id") == ann_id),
-            None,
-        )
+        ann = find_by_id(_manifest.get("annotations", []), ann_id)
         if ann is None:
             return err(f"No annotation {ann_id}", 404)
+        changes: dict[str, Any] = {}
         if data.get("span") is not None:
             span = _parse_annotation_span(data["span"])
             if span is None:
                 return err("span with start < end is required")
-            ann["span"] = {"start": span[0], "end": span[1]}
+            changes["span"] = {"start": span[0], "end": span[1]}
         if data.get("geometry") is not None:
             geometry = _sanitize_annotation_geometry(ann["type"], data["geometry"])
             if geometry is None:
                 return err("invalid geometry for type " + str(ann["type"]))
-            ann["geometry"] = geometry
+            changes["geometry"] = geometry
         if data.get("style") is not None:
-            ann["style"] = _sanitize_annotation_style(data["style"])
+            changes["style"] = _sanitize_annotation_style(data["style"])
+        ann.update(changes)
         _persist_locked()
         return ok(annotation=copy.deepcopy(ann))
 
@@ -552,19 +590,16 @@ def api_annotation_update(ann_id: str) -> Any:
 @composer_bp.route("/api/annotations/<ann_id>", methods=["DELETE"])
 def api_annotation_delete(ann_id: str) -> Any:
     with _manifest_lock:
-        annotations = _manifest.get("annotations", [])
-        remaining = [a for a in annotations if a.get("id") != ann_id]
-        if len(remaining) == len(annotations):
+        if remove_by_id(_manifest.get("annotations", []), ann_id) is None:
             return err(f"No annotation {ann_id}", 404)
-        _manifest["annotations"] = remaining
         _persist_locked()
     return ok()
 
 
 # ---- Annotation rendering (PIL; no ffmpeg drawtext) ----
 
-# Common system font locations, probed in order. load_default() is the
-# fixed-size last resort (visibly cruder, but never fails).
+# Probed in order; load_default() never fails. Text metrics differ from the Inter
+# preview (see composer-annotate.js).
 _ANNOTATION_FONT_PATHS = (
     "/System/Library/Fonts/Helvetica.ttc",
     "/Library/Fonts/Arial.ttf",
@@ -746,10 +781,8 @@ def _render_annotation_overlay(
             )
             stroke_style = str(style.get("strokeStyle") or "solid")
             if geometry.get("shape") == "rect":
-                # Rotate the corners with the same transform the browser's
-                # ctx.rotate applies (y-down: positive = clockwise), so the
-                # burn-in matches the preview exactly. Closing through the
-                # second corner again keeps the start joint filled.
+                # Match the browser's ctx.rotate (y-down, positive = clockwise).
+                # Repeating a corner fills the start joint.
                 rad = math.radians(rotation)
                 cos_r, sin_r = math.cos(rad), math.sin(rad)
                 corners = [
@@ -773,9 +806,8 @@ def _render_annotation_overlay(
                         draw, corners + [corners[0]], color, stroke, stroke_style
                     )
             elif stroke_style != "solid":
-                # Dashed/dotted ellipse: sample the (rotated) perimeter as a
-                # polygon and dash-walk it — PIL can't dash an ellipse outline,
-                # and this also handles rotation without the composite trick.
+                # PIL cannot dash an ellipse: sample the rotated perimeter as a polygon
+                # and dash-walk it.
                 a, b = sw / 2, sh / 2
                 perim = math.pi * (
                     3 * (a + b) - math.sqrt(max(0.0, (3 * a + b) * (a + 3 * b)))
@@ -796,10 +828,8 @@ def _render_annotation_overlay(
                 if abs(rotation) < 0.01:
                     draw.ellipse(box, outline=color, width=stroke)
                 else:
-                    # PIL can't stroke a rotated ellipse directly: draw it
-                    # axis-aligned on a temp layer and rotate that around the
-                    # center (Image.rotate's positive angle is counter-
-                    # clockwise, hence the negation for clockwise rotation).
+                    # PIL cannot stroke a rotated ellipse; rotate a temp layer instead.
+                    # PIL's angle is counter-clockwise.
                     layer = Image.new("RGBA", (width, height), (0, 0, 0, 0))
                     ImageDraw.Draw(layer).ellipse(box, outline=color, width=stroke)
                     layer = layer.rotate(
@@ -834,11 +864,8 @@ def _render_annotation_overlay(
 
 # ---- Exports (annotated screenshot / burned video / GIF) ----
 
-# One export at a time is plenty for a single-user tool; the cancel event
-# terminates the in-flight ffmpeg via run_ffmpeg_process's cancel_flag.
-# _export_busy enforces the single-export assumption the shared event relies
-# on: without it, a second export's clear() would un-cancel the first, and one
-# cancel POST would abort both in-flight encodes.
+# One export at a time. _export_busy keeps a second export's clear() from
+# un-cancelling the first.
 _export_cancel = threading.Event()
 _export_busy = threading.Lock()
 
@@ -848,15 +875,15 @@ MAX_OVERLAY_WINDOWS = 20
 
 def _find_participant_parts(participant: str) -> list[dict[str, Any]] | None:
     """Ordered ``{name, path, duration, offset}`` parts, or None."""
-    for p in files.resolve_participant_videos(_sheet_context):
-        if p["id"] == participant and p.get("has_video"):
-            parts = _participant_parts(p["video_paths"])
-            if parts is None:
-                return None
-            for part, vp in zip(parts, p["video_paths"]):
-                part["path"] = str(vp)
-            return parts
-    return None
+    p = files.find_participant_record(_sheet_context, participant)
+    if p is None or not p.get("has_video"):
+        return None
+    parts = _participant_parts(p["video_paths"])
+    if parts is None:
+        return None
+    for part, vp in zip(parts, p["video_paths"], strict=True):
+        part["path"] = str(vp)
+    return parts
 
 
 def _part_for_time(parts: list[dict[str, Any]], t: float) -> dict[str, Any]:
@@ -868,9 +895,8 @@ def _part_for_time(parts: list[dict[str, Any]], t: float) -> dict[str, Any]:
 
 # ---- Scrubber media (sprite sheets / audio snippets) ----
 
-# Backs the marker/cut thumbnail strips + hover audio scrub on the timeline.
-# Same LRU + single-flight pattern as Studio's /api/sprite and /api/clip-audio,
-# but resolved against Composer's part model and with no spreadsheet dependency.
+# Timeline thumbnail strips and hover audio; same LRU + single-flight as Studio's
+# /api/sprite.
 _sprite_cache = MediaCache(128)
 _audio_cache = MediaCache(32)
 
@@ -893,64 +919,6 @@ def _resolve_scrub_source(
     return part["path"], local_start, clamped
 
 
-def _scrub_media_response(participant: str, cache: MediaCache, kind: str) -> Any:
-    """Shared guts of the sprite / audio scrub routes (parse → resolve → cache)."""
-    window = parse_clip_window()
-    if window is None:
-        return err("Invalid time range")
-    start_sec, duration = window
-    if kind == "audio":
-        duration = min(duration, config.COMPOSER_SCRUB_MAX_AUDIO_SECONDS)
-
-    resolved = _resolve_scrub_source(participant, start_sec, duration)
-    if resolved is None:
-        return err("Source video not found", 404)
-    video_path, local_start, duration = resolved
-
-    try:
-        mtime = os.stat(video_path).st_mtime
-    except OSError:
-        mtime = 0.0
-
-    if kind == "sprite":
-        cols = config.STUDIO_SCRUBBER_SPRITE_COLS
-        rows = config.STUDIO_SCRUBBER_SPRITE_ROWS
-        cache_key: tuple = (
-            video_path,
-            round(local_start, 3),
-            round(duration, 3),
-            cols,
-            rows,
-            mtime,
-        )
-        media_bytes = cache.get_or_compute(
-            cache_key,
-            # seek_frames: per-frame fast seeks keep the cost O(frames), not
-            # O(span) — timeline tiles can cover minutes of source video.
-            lambda: video.extract_sprite_sheet_bytes(
-                video_path, local_start, duration, cols, rows, seek_frames=True
-            ),
-        )
-        mimetype = "image/jpeg"
-    else:
-        cache_key = (video_path, round(local_start, 3), round(duration, 3), mtime)
-        media_bytes = cache.get_or_compute(
-            cache_key,
-            lambda: video.extract_audio_segment_bytes(
-                video_path, local_start, duration
-            ),
-        )
-        mimetype = "audio/wav"
-
-    if media_bytes is None:
-        return err(f"{kind.capitalize()} extraction failed", 404)
-    return Response(
-        media_bytes,
-        mimetype=mimetype,
-        headers={"Cache-Control": "public, max-age=86400"},
-    )
-
-
 @composer_bp.route("/api/sprite/<participant>")
 def api_sprite(participant: str) -> Any:
     """Tiled JPEG sprite sheet for one thumbnail-strip tile.
@@ -959,7 +927,20 @@ def api_sprite(participant: str) -> Any:
     slot-seconds ladder), not per marker span, so zooming in refines the strip
     with additional frames instead of stretching the same ones.
     """
-    return _scrub_media_response(participant, _sprite_cache, "sprite")
+    cols = config.STUDIO_SCRUBBER_SPRITE_COLS
+    rows = config.STUDIO_SCRUBBER_SPRITE_ROWS
+    return clip_media_response(
+        cache=_sprite_cache,
+        resolve=lambda start, dur: _resolve_scrub_source(participant, start, dur),
+        # seek_frames keeps the cost O(frames), not O(span); tiles can cover minutes.
+        produce=lambda path, local_start, dur: video.extract_sprite_sheet_bytes(
+            path, local_start, dur, cols, rows, seek_frames=True
+        ),
+        mimetype="image/jpeg",
+        kind_label="Sprite",
+        key_extras=(cols, rows),
+        invalid_message="Invalid time range",
+    )
 
 
 @composer_bp.route("/api/audio/<participant>")
@@ -969,7 +950,16 @@ def api_audio(participant: str) -> Any:
     Capped at ``config.COMPOSER_SCRUB_MAX_AUDIO_SECONDS`` — markers can span
     minutes, and the WAV is decoded whole in the browser's WebAudio context.
     """
-    return _scrub_media_response(participant, _audio_cache, "audio")
+    return clip_media_response(
+        cache=_audio_cache,
+        resolve=lambda start, dur: _resolve_scrub_source(
+            participant, start, min(dur, config.COMPOSER_SCRUB_MAX_AUDIO_SECONDS)
+        ),
+        produce=video.extract_audio_segment_bytes,
+        mimetype="audio/wav",
+        kind_label="Audio",
+        invalid_message="Invalid time range",
+    )
 
 
 @composer_bp.route("/api/audio-track/<participant>/<int:idx>")
@@ -977,7 +967,7 @@ def api_audio_track(participant: str, idx: int) -> Any:
     """Stream one demuxed audio track for the browser's per-track volume mixer."""
     parts = _find_participant_parts(participant)
     if not parts:
-        return err(f"No video for participant {participant}", 404)
+        return err_no_video(participant)
     out = video.extract_audio_track(parts[0]["path"], idx)
     if out is None:
         return err("Could not extract audio track", 500)
@@ -1059,16 +1049,7 @@ def _build_overlay_command(
     *encoder* selects the H.264 encoder for video output (see
     ``video.resolve_video_encoder``); gif output has none to pick.
     """
-    cmd = [
-        "ffmpeg",
-        "-y",
-        "-loglevel",
-        config.FFMPEG_LOGLEVEL,
-        "-ss",
-        f"{max(0.0, local_start):.3f}",
-        "-i",
-        input_path,
-    ]
+    cmd = video.ffmpeg_cmd("-ss", f"{max(0.0, local_start):.3f}", "-i", input_path)
     for png_path, _, _ in overlay_specs:
         cmd += ["-loop", "1", "-i", png_path]
     chain = []
@@ -1091,8 +1072,7 @@ def _build_overlay_command(
         cmd += ["-t", f"{duration:.3f}", out_path]
     else:
         cmd += ["-map", "0:a?"]
-        # veryfast: spans are short and re-encoded once; quality over speed
-        # tuning is not worth a config knob here.
+        # veryfast: spans are short and encoded once; not worth a config knob.
         cmd += video.video_encoder_args(encoder, crf=20, preset="veryfast")
         cmd += [
             "-pix_fmt",
@@ -1157,17 +1137,15 @@ def api_export_cancel() -> Any:
 
 
 @composer_bp.route("/api/export/screenshot", methods=["POST"])
+@json_endpoint
 def api_export_screenshot() -> Any:
     """Annotated screenshot at one timestamp (PIL composite; no ffmpeg filter)."""
     data = request.get_json(silent=True) or {}
     participant = str(data.get("participant", "")).strip()
-    try:
-        at_time = float(data.get("time", 0))
-    except (TypeError, ValueError):
-        return err("time must be a number")
+    at_time = parse_number_arg(data.get("time", 0), "time")
     parts = _find_participant_parts(participant)
     if not parts:
-        return err(f"No video for {participant}", 404)
+        return err_no_video(participant)
     part = _part_for_time(parts, at_time)
     frame = video.extract_frame_at_timestamp(part["path"], at_time - part["offset"])
     if frame is None:
@@ -1207,20 +1185,23 @@ def api_export_screenshot() -> Any:
 def _run_overlay_export(data: dict[str, Any], *, gif: bool) -> Any:
     """Shared burn/GIF export: validate span, render windows, run ffmpeg."""
     participant = str(data.get("participant", "")).strip()
-    try:
-        start = float(data.get("start", 0))
-        end = float(data.get("end", 0))
-    except (TypeError, ValueError):
-        return err("start/end must be numbers")
+    start = parse_number_arg(data.get("start", 0), "start")
+    end = parse_number_arg(data.get("end", 0), "end")
     if end <= start:
         return err("end must be after start")
     parts = _find_participant_parts(participant)
     if not parts:
-        return err(f"No video for {participant}", 404)
+        return err_no_video(participant)
     annotations = _annotations_in_span(participant, start, end)
     if not annotations:
         return err("No annotations in this span — use Generate for plain clips.")
     windows = _annotation_windows(annotations, start, end)
+    # A sub-0.01 s overlap yields no window; an empty filter graph fails on [0:v].
+    if not windows:
+        return err(
+            "No annotation is visible for long enough in this span — widen the "
+            "span or the annotation's visibility."
+        )
     if len(windows) > MAX_OVERLAY_WINDOWS:
         return err(
             f"Too many distinct annotation windows ({len(windows)}); "
@@ -1232,19 +1213,17 @@ def _run_overlay_export(data: dict[str, Any], *, gif: bool) -> Any:
     out_dir = str(utils.get_effective_output_dir())
     _export_cancel.clear()
 
-    # Resolve the source the overlay pass decodes. A within-part span decodes the
-    # owning part directly with a local seek; a span that straddles a part boundary
-    # is first stitched into a temp clip (t=0 == span start) via the same cut chain
-    # Studio's intake uses, so the overlay filter sees one continuous input.
+    # Within-part spans seek the part directly; straddling spans are stitched first
+    # (t=0 = span start).
     video_paths = [p["path"] for p in parts]
     timeline = video.timeline_or_none(video_paths)
-    pieces = (
-        utils.map_global_range_to_segments(timeline, start, end)
-        if timeline is not None
-        else None
-    )
-    if pieces is not None and not pieces:
-        return err("The span is outside the recording", 400)
+    pieces = None
+    if timeline is not None:
+        pieces = utils.map_global_range_to_segments(timeline, start, end)
+        # None means out-of-range or empty, never []; for multi-part that is
+        # "outside the recording".
+        if not pieces:
+            return err("The span is outside the recording", 400)
 
     stitch_tmp: str | None = None
     if pieces is not None and len(pieces) > 1:
@@ -1328,8 +1307,14 @@ def _run_overlay_export(data: dict[str, Any], *, gif: bool) -> Any:
             input_file=overlay_input,
             output_file=out_path,
             os_error_message="Annotated export failed.",
+            kind="burn",
             cancel_flag=_export_cancel.is_set,
         )
+    except Exception:
+        # Release the get_unique_filename placeholder; the ffmpeg failure paths below
+        # release it themselves.
+        files.release_reservation(out_path)
+        raise
     finally:
         for png_path, _, _ in overlay_specs:
             _unlink_quiet(png_path)
@@ -1355,6 +1340,7 @@ def _run_overlay_export(data: dict[str, Any], *, gif: bool) -> Any:
 
 
 @composer_bp.route("/api/export/burn", methods=["POST"])
+@json_endpoint
 def api_export_burn() -> Any:
     """Burn annotations into a video span (seek-first; span-only encode)."""
     if not _export_busy.acquire(blocking=False):
@@ -1366,6 +1352,7 @@ def api_export_burn() -> Any:
 
 
 @composer_bp.route("/api/export/gif", methods=["POST"])
+@json_endpoint
 def api_export_gif() -> Any:
     """Burn annotations into an animated GIF of the span."""
     if not _export_busy.acquire(blocking=False):
@@ -1382,11 +1369,30 @@ def api_export_gif() -> Any:
 def _init_composer_state(sheet_context: Any = None) -> None:
     """Initialize module-level state for Composer routes.
 
-    Participants are resolved from ``_sheet_context`` + the input dir on demand
-    (:func:`files.resolve_participant_videos`), so nothing is snapshotted here.
-    """
-    global _input_dir, _sheet_context, _manifest
+    Participants are resolved from ``_sheet_context`` + the input dir through
+    the mtime-guarded cache (``server_utils.make_participant_cache``), reset here.
 
-    _input_dir = str(utils.get_effective_input_dir())
+    Called once, from ``build_combined_app``. A worksheet swap goes through
+    :func:`repin_sheet_state` instead — re-running this would reload the
+    manifest and could drop a write still sitting in the persist debounce.
+    """
+    global _sheet_context, _manifest, _participant_source
+
     _sheet_context = sheet_context
+    _participant_source = _fresh_participant_source()
     _manifest = _load_manifest()
+
+
+def repin_sheet_state(sheet_context: Any = None) -> None:
+    """Point the blueprint at a newly opened (or closed) worksheet.
+
+    The sheet-only half of :func:`_init_composer_state`, called by
+    ``server._swap_worksheet``. Without it Composer kept the sheet the
+    *process* started with — normally none — so opening a spreadsheet from the
+    Start overlay left its participant list on bare disk discovery, missing
+    every sheet-only column and every filename override.
+    """
+    global _sheet_context, _participant_source
+
+    _sheet_context = sheet_context
+    _participant_source = _fresh_participant_source()

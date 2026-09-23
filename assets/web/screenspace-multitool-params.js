@@ -34,6 +34,13 @@
     refTimeChip = SS.refTimeChip,
     refreshCalibration = SS.refreshCalibration;
 
+  // Model-view satellite loads first; late-bound so its focus state stays there.
+  function refreshModelView(opts) { return SS.refreshModelView && SS.refreshModelView(opts); }
+  function focusedStepIdx() {
+    var n = state.multitoolSteps.length;
+    return n ? Math.min(Math.max(state.multitoolFocus || 0, 0), n - 1) : 0;
+  }
+
   // ---- Multitool step list (drag reorder + drop-to-import from task queue) ----
 
   var MULTITOOL_ALLOWED_TYPES = [
@@ -83,6 +90,7 @@
         state.multitoolSteps[capturedIdx].region_ref = ref ? regionRefPayload(ref) : null;
         // Region drives the color presence min-area pixel estimate.
         _updateMinAreaReadout("_mt" + capturedIdx);
+        refreshModelView({ debounce: true });
       });
     })(idx);
     regionCtrl.appendChild(regionSel);
@@ -91,8 +99,7 @@
 
     var renderer = MULTITOOL_PARAM_RENDERERS[stepType];
     if (renderer) renderer(body, idx, sfx);
-    // _initial is consumed at first render; drop it so adding/removing other steps later
-    // doesn't overwrite the user's in-progress edits with the original saved values.
+    // _initial is consumed once; keep it and later re-renders clobber in-progress edits.
     delete state.multitoolSteps[idx]._initial;
   }
 
@@ -153,8 +160,7 @@
     // Match mode (average vs presence) + presence-only min-area row, mirroring
     // the single-tool color panel.
     var initMode = _colorMode(init.color_mode);
-    // A restored presence step with no min_coverage means "any presence" (0%);
-    // a fresh/average step defaults to 1% for when the user switches to presence.
+    // Restored presence step without min_coverage means any presence (0%); fresh steps default 1%.
     var initMinArea = initMode === "presence"
       ? (init.min_coverage != null ? init.min_coverage * 100 : 0)
       : 1;
@@ -260,8 +266,7 @@
     var init = state.multitoolSteps[idx]._initial || {};
     var step = state.multitoolSteps[idx];
 
-    // Capture-or-upload row, mirroring the single-tool template workflow but
-    // scoped per step (state on the step object, not the global uploadedTemplate).
+    // Capture-or-upload row like the single-tool template, but state lives on the step.
     var row = el("div", "param-row");
     row.appendChild(el("span", "param-label", "Template"));
     var ctrl = el("div", "param-control");
@@ -281,6 +286,7 @@
           step._upload = null;
           renderInfo();
           refreshCalibration({ debounce: true });
+          refreshModelView({ debounce: true });
         });
         info.appendChild(clearBtn);
       } else if (step._refTs !== undefined) {
@@ -300,6 +306,7 @@
       step._upload = null;
       renderInfo();
       refreshCalibration({ debounce: true });
+      refreshModelView({ debounce: true });
     });
     ctrl.appendChild(capBtn);
 
@@ -316,6 +323,7 @@
         step._refTs = undefined;
         renderInfo();
         refreshCalibration({ debounce: true });
+        refreshModelView({ debounce: true });
         showToast("Template loaded");
       };
       reader.readAsDataURL(file);
@@ -445,8 +453,7 @@
     r.appendChild(el("span", "param-label", label));
     var c = el("div", "param-control");
     var capBtn = el("button", "btn btn-small", "Capture Frame");
-    // Swapped wholesale on capture: an uncaptured step has no frame to seek to,
-    // so it renders as a bare em dash without the jump affordance.
+    // Rebuilt on capture: an uncaptured step has no frame, so no jump affordance.
     var cell = el("span", "mt-ref-cell");
     function renderCell() {
       cell.innerHTML = "";
@@ -464,6 +471,7 @@
       state.multitoolSteps[idx]._refTs = state.currentTimestamp;
       renderCell();
       refreshCalibration({ debounce: true });
+      refreshModelView({ debounce: true });
     });
     c.appendChild(capBtn);
     c.appendChild(cell);
@@ -531,12 +539,8 @@
     return step;
   }
 
-  // Walk the current step list, read each step's per-input DOM values, and
-  // store them on step._initial in the same shape the _mtRender* helpers
-  // expect. Call before any list mutation (add / remove / reorder / import)
-  // so the upcoming renderWorkflowParams() restores values instead of
-  // collapsing them back to per-input defaults. Region, _refTs and _scenes
-  // already live on the step object, so they don't need snapshotting.
+  // Snapshot DOM values onto step._initial before list mutations, or
+  // renderWorkflowParams() resets them.
   function snapshotMultitoolStepValues() {
     state.multitoolSteps.forEach(function (step, idx) {
       var sfx = "_mt" + idx;
@@ -596,6 +600,8 @@
 
   function renderMultitoolParams(container) {
     var stepsDiv = el("div", "multitool-steps");
+    var focusIdx = focusedStepIdx();
+    state.multitoolFocus = focusIdx;
     state.multitoolSteps.forEach(function (step, idx) {
       if (idx > 0) {
         var opRow = el("div", "multitool-operator-row");
@@ -627,9 +633,8 @@
         rail.appendChild(el("div", "multitool-operator-line"));
         opRow.appendChild(rail);
 
-        // Offset window: a pill that reveals min/max second inputs. The window
-        // is measured relative to the previous step's matched frame (see
-        // scan_multitool's offset path). Presence of `step.offset` = enabled.
+        // Offset window: min/max seconds after the previous step's match
+        // (scan_multitool); step.offset present = enabled.
         var maxOffset = (CLIPGEN_CONFIG && CLIPGEN_CONFIG.screenspaceMultitoolMaxOffset) || 30;
         var offWrap = el("div", "multitool-offset");
         var offBtn = el("button", "multitool-offset-btn");
@@ -703,7 +708,7 @@
         opRow.appendChild(offWrap);
         stepsDiv.appendChild(opRow);
       }
-      var card = el("div", "multitool-step");
+      var card = el("div", "multitool-step" + (idx === focusIdx ? " is-selected" : ""));
       card.dataset.stepIdx = String(idx);
       var header = el("div", "multitool-step-header");
 
@@ -728,11 +733,18 @@
         removeBtn.addEventListener("click", function (e) {
           e.stopPropagation();
           snapshotMultitoolStepValues();
+          var focus = focusedStepIdx();
           state.multitoolSteps.splice(capturedIdx, 1);
+          if (capturedIdx < focus) state.multitoolFocus = focus - 1;
           renderWorkflowParams();
           updateRunButton();
         });
       })(idx);
+      var chevron = el("button", "multitool-step-chevron");
+      chevron.type = "button";
+      chevron.title = step.collapsed ? "Expand step" : "Collapse step";
+      chevron.appendChild(iconSpan("chevron-down"));
+      header.appendChild(chevron);
       header.appendChild(removeBtn);
       card.appendChild(header);
 
@@ -740,19 +752,48 @@
       renderMultitoolStepBody(body, step.type, idx);
       card.appendChild(body);
 
-      header.addEventListener("click", function (e) {
-        if (e.target.closest(".multitool-step-drag-handle") || e.target.closest(".multitool-step-remove")) return;
-        step.collapsed = !step.collapsed;
-        body.classList.toggle("collapsed", step.collapsed);
+      function setCollapsed(collapsed) {
+        step.collapsed = collapsed;
+        body.classList.toggle("collapsed", collapsed);
+        card.classList.toggle("is-collapsed", collapsed);
+        chevron.title = collapsed ? "Expand step" : "Collapse step";
+      }
+      card.classList.toggle("is-collapsed", !!step.collapsed);
+      chevron.addEventListener("click", function (e) {
+        e.stopPropagation();
+        setCollapsed(!step.collapsed);
       });
+      // Header click focuses the step (model view + calibration follow); the chevron folds it.
+      (function (capturedIdx) {
+        header.addEventListener("click", function (e) {
+          if (e.target.closest(".multitool-step-drag-handle") || e.target.closest(".multitool-step-remove")) return;
+          if (step.collapsed) setCollapsed(false);
+          selectStep(capturedIdx);
+        });
+      })(idx);
 
       stepsDiv.appendChild(card);
     });
 
+    // Compare against shared state: the pipette focuses steps from outside this closure.
+    function selectStep(idx) {
+      if (idx === focusedStepIdx()) return;
+      SS.setMultitoolFocus(idx);
+    }
+
+    // Per-step rows skip the hub's addParamRow, so this is their preview-refresh path.
+    function onStepEdit(e) {
+      var card = e.target.closest(".multitool-step");
+      if (!card) return;
+      selectStep(parseInt(card.dataset.stepIdx, 10) || 0);
+      refreshModelView({ debounce: true });
+    }
+    stepsDiv.addEventListener("input", onStepEdit);
+    stepsDiv.addEventListener("change", onStepEdit);
+
     if (state.multitoolSteps.length === 0) {
-      // Visible drop target so a Task card has somewhere to land when the
-      // step list is empty (an empty flex container is 0px tall and never
-      // receives dragover events).
+      // Empty flex containers are 0px tall and never receive dragover; give
+      // Task cards a target.
       var emptyDz = el("div", "multitool-empty-dropzone",
         "Drag a Task here, or use + Add Step below");
       stepsDiv.appendChild(emptyDz);
@@ -832,15 +873,14 @@
         }
         snapshotMultitoolStepValues();
         state.multitoolSteps.push(step);
+        state.multitoolFocus = state.multitoolSteps.length - 1;
         renderWorkflowParams();
         showToast("Imported " + task.type + " task as step");
         return;
       }
 
-      // Step reorder. _cacheMultitoolDragMidpoints excludes the dragging
-      // card, so getMultitoolDropIndex already returns an index aligned with
-      // the array AFTER the dragging step is spliced out — no further
-      // adjustment needed.
+      // getMultitoolDropIndex excludes the dragging card, so toIdx already fits
+      // the post-splice array.
       var fromIdx = parseInt(e.dataTransfer.getData("text/plain"), 10);
       if (isNaN(fromIdx)) return;
       var toIdx = getMultitoolDropIndex(stepsDiv, e.clientY);
@@ -848,6 +888,11 @@
       snapshotMultitoolStepValues();
       var moved = state.multitoolSteps.splice(fromIdx, 1)[0];
       state.multitoolSteps.splice(toIdx, 0, moved);
+      // Focus rides the step, not the slot.
+      var focus = focusedStepIdx();
+      if (fromIdx === focus) state.multitoolFocus = toIdx;
+      else if (fromIdx < focus && toIdx >= focus) state.multitoolFocus = focus - 1;
+      else if (fromIdx > focus && toIdx <= focus) state.multitoolFocus = focus + 1;
       renderWorkflowParams();
     });
 
@@ -868,6 +913,7 @@
       var chosen = sel.value;
       snapshotMultitoolStepValues();
       state.multitoolSteps.push({ type: chosen, collapsed: false, logic: "AND" });
+      state.multitoolFocus = state.multitoolSteps.length - 1;
       renderWorkflowParams();
       updateRunButton();
     });
@@ -882,8 +928,7 @@
   // ---- Published back to the hub (screenspace.js calls these) ----
   SS.renderMultitoolParams = renderMultitoolParams;
   SS.clearMultitoolDragIndicators = clearMultitoolDragIndicators;
-  // The global dragend handler lives in the hub (it also clears task-list drag);
-  // expose the multitool-drag half so the hub doesn't touch our internal state.
+  // The hub's global dragend handler calls this; keeps drag state private here.
   SS.cancelMultitoolDrag = function () {
     if (_multitoolDragOverRaf != null) {
       cancelAnimationFrame(_multitoolDragOverRaf);

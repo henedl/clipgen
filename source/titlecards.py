@@ -12,6 +12,7 @@ Key functions:
   wrap_clip_with_cards(clip, clip_path)   – single-pass prepend+append via one ffmpeg encode
 """
 
+import functools
 import os
 import tempfile
 import threading
@@ -19,16 +20,17 @@ from collections.abc import Callable
 from pathlib import Path
 
 import config
+import profiling
 import utils
 import video
 from utils import ClipRecord
 
-# ---------------------------------------------------------------------------
-# Endcard cache — keyed by resolution, shared across threads
-# ---------------------------------------------------------------------------
+# Endcard cache, keyed by resolution
 
 _endcard_cache: dict[str, str] = {}
 _endcard_lock = threading.Lock()
+# One build per key: parallel clip workers otherwise all encode the first endcard.
+_endcard_flights: dict[str, threading.Lock] = {}
 
 
 def _x264_video_args() -> list[str]:
@@ -52,16 +54,16 @@ def _x264_video_args() -> list[str]:
     ]
 
 
-def _resolve_channel_layout(probed: dict) -> str | None:
-    """Resolve a silent-audio channel layout matching the probed body audio.
+def _resolve_channel_layout(track: dict) -> str | None:
+    """Resolve a silent-audio channel layout matching the body's first audio track.
 
     Prefers the probed channel_layout; falls back to mono/stereo derived from the
     channel count. Returns None when the layout can't be resolved (unsupported).
     """
-    layout = probed.get("audio_channel_layout")
+    layout = track.get("channel_layout")
     if isinstance(layout, str) and layout.strip():
         return layout.strip()
-    channels = probed.get("audio_channels") or 0
+    channels = track.get("channels") or 0
     if channels == 1:
         return "mono"
     if channels == 2:
@@ -87,29 +89,50 @@ def _body_is_copy_safe(probed: dict | None) -> bool:
     fps = probed.get("fps") or 0.0
     if not (isinstance(fps, (int, float)) and fps > 0):
         return False
-    if probed.get("audio_codec"):
-        if probed.get("audio_codec") != "aac":
+    track = video.first_audio_track(probed)
+    if track is not None:
+        if track.get("codec") != "aac":
             return False
-        if not (probed.get("audio_sample_rate") or 0) > 0:
+        if not (track.get("sample_rate") or 0) > 0:
             return False
-        if _resolve_channel_layout(probed) is None:
+        if _resolve_channel_layout(track) is None:
             return False
     return True
 
 
+# Probed in order; fontconfig's monospace lookup cost 46 ms per card.
+_CARD_FONT_PATHS = (
+    "/System/Library/Fonts/Menlo.ttc",
+    "/System/Library/Fonts/Monaco.ttf",
+    "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf",
+    "/usr/share/fonts/truetype/liberation/LiberationMono-Regular.ttf",
+    "C:/Windows/Fonts/consola.ttf",
+    "C:/Windows/Fonts/cour.ttf",
+)
+
+
+def _escape_drawtext(value: str) -> str:
+    """Escape drawtext metacharacters for a single-quoted option value."""
+    return value.replace("\\", "\\\\").replace(":", "\\:").replace("'", "'\\''")
+
+
+@functools.cache
+def _card_font_option() -> str:
+    """The drawtext font option: a probed fontfile, else fontconfig's monospace."""
+    for path in _CARD_FONT_PATHS:
+        # os.path, not Path.is_file: tests patch the latter to True
+        if os.path.isfile(path):
+            return f"fontfile='{_escape_drawtext(path)}'"
+    return "font=monospace"
+
+
 def _build_drawtext_filter(text: str) -> str:
-    safe_text = (text or "").strip()
-    # The description has already been sanitized for filenames, but escape colons and backslashes just in case.
-    safe_text = (
-        safe_text.replace("\\", "\\\\").replace(":", "\\:").replace("'", "'\\''")
-    )
+    safe_text = _escape_drawtext((text or "").strip())
     return (
         f"drawtext=text='{safe_text}'"
-        # The text is static — disable drawtext's %{...} expansion so a
-        # description containing "%" (which sanitize_filename keeps) renders
-        # literally instead of erroring the encode.
+        # Static text: expansion off so a literal % can't error the encode
         ":expansion=none"
-        ":font=monospace"
+        f":{_card_font_option()}"
         ":fontcolor=white"
         ":fontsize=min(w\\,h)/16"
         ":x=(w-text_w)/2"
@@ -165,20 +188,9 @@ def _build_card_frame(
     if not use_image_background and not allow_color_fallback:
         return None
 
-    try:
-        with tempfile.NamedTemporaryFile(suffix=config.FILEFORMAT, delete=False) as tmp:
-            card_path = tmp.name
-    except OSError as error:
-        utils.warning_print(
-            f"Could not create temporary file for {label}.",
-            [str(error)],
-        )
-        return None
-
     if config.DEBUGGING:
         utils.debug_print(
-            f"Debugging enabled, would generate {label} '{card_path}' "
-            f"at resolution {resolution}."
+            f"Debugging enabled, would generate {label} at resolution {resolution}."
         )
         return None
 
@@ -186,6 +198,16 @@ def _build_card_frame(
         utils.warning_print(
             f"Invalid resolution string '{resolution}' for {label}.",
             ["Expected format 'WIDTHxHEIGHT' (e.g. '1280x720')."],
+        )
+        return None
+
+    try:
+        with tempfile.NamedTemporaryFile(suffix=config.FILEFORMAT, delete=False) as tmp:
+            card_path = tmp.name
+    except OSError as error:
+        utils.warning_print(
+            f"Could not create temporary file for {label}.",
+            [str(error)],
         )
         return None
 
@@ -200,16 +222,13 @@ def _build_card_frame(
     if drawtext_filter:
         vf_with_scale += f",{drawtext_filter}"
 
+    output_trim: list[str] = []
     if use_image_background:
         assert background_path is not None  # guaranteed by use_image_background
-        video_input = [
-            "-loop",
-            "1",
-            "-t",
-            str(duration),
-            "-i",
-            str(background_path),
-        ]
+        # Render one frame and loop it; `-loop 1` re-rendered text every frame.
+        video_input = ["-i", str(background_path)]
+        vf_with_scale += ",loop=loop=-1:size=1:start=0"
+        output_trim = ["-t", str(duration)]
         input_label = str(background_path)
     else:
         video_input = [
@@ -220,8 +239,7 @@ def _build_card_frame(
         ]
         input_label = "lavfi:color"
 
-    # Silent AAC track matching the body so the card can be stream-copied alongside
-    # it (stream-copy wrap path only). Video is always input 0, silence input 1.
+    # Silent AAC matching the body so the card can be stream-copied alongside it
     audio_input: list[str] = []
     audio_out_args: list[str] = []
     map_args: list[str] = []
@@ -242,7 +260,7 @@ def _build_card_frame(
 
     video_out_args = list(_x264_video_args())
     if match_fps:
-        # Fixed framerate + timebase so concat-demuxer copy sees consistent cards.
+        # Fixed fps and timebase for concat
         video_out_args += [
             "-r",
             f"{match_fps:g}",
@@ -250,11 +268,7 @@ def _build_card_frame(
             "90000",
         ]
 
-    ffmpeg_command = [
-        "ffmpeg",
-        "-y",
-        "-loglevel",
-        config.FFMPEG_LOGLEVEL,
+    ffmpeg_command = video.ffmpeg_cmd(
         *video_input,
         *audio_input,
         "-vf",
@@ -262,8 +276,9 @@ def _build_card_frame(
         *map_args,
         *video_out_args,
         *audio_out_args,
+        *output_trim,
         card_path,
-    ]
+    )
 
     utils.debug_print(f"ffmpeg {label} command: {' '.join(ffmpeg_command)}")
     ffmpeg_result = video.run_ffmpeg_process(
@@ -271,6 +286,7 @@ def _build_card_frame(
         input_file=input_label,
         output_file=card_path,
         os_error_message=f"ffmpeg could not successfully run for {label} generation.",
+        kind="card",
         cancel_flag=cancel_flag,
     )
     if ffmpeg_result is None or ffmpeg_result.returncode != 0:
@@ -284,6 +300,7 @@ def _build_card_frame(
         return None
 
     if not video.verify_output_file(card_path, f"{label.capitalize()} generation"):
+        Path(card_path).unlink(missing_ok=True)
         return None
     return card_path
 
@@ -291,24 +308,22 @@ def _build_card_frame(
 def resolve_card_background(kind: str) -> tuple[Path | None, bool, bool, str]:
     """Resolve the configured background for a card from config.
 
-    *kind* is "title" or "end". Returns (background_path, allow_color, skip, fill_color):
-      - background_path: image to use, or None for a solid-color card.
-      - allow_color: whether to fall back to a color fill when no image is present.
-      - skip: True when no card should be produced at all (endcard "none").
-      - fill_color: the color used for the fill (the configured solid color when
-        the card is set to a solid color, otherwise "black" for the
-        missing-image fallback).
+    *kind* is "title" or "end". Returns
+    ``(background_path, allow_color, skip, fill_color)``: the image or None for a
+    solid-color card; whether a missing image may fall back to a color fill;
+    whether to produce no card at all (endcard "none"); and the fill color — the
+    configured solid color, else "black" for the missing-image fallback.
 
     Selection ids (config.TITLECARD_IMAGE / config.ENDCARD_IMAGE): empty = bundled
-    default asset; CARD_IMAGE_COLOR = solid color; CARD_IMAGE_NONE = no endcard;
-    any other value is an uploaded filename under TITLECARD_IMAGES_DIRNAME (falling
-    back to the bundled default when the file is missing). Title cards always render
-    (their text is the point), so they never skip.
+    default asset, CARD_IMAGE_COLOR = solid color, CARD_IMAGE_NONE = no endcard,
+    anything else an uploaded filename under TITLECARD_IMAGES_DIRNAME (falling back
+    to the bundled default when absent). Title cards never skip — their text is the
+    point.
     """
     if kind == "end":
         value = config.ENDCARD_IMAGE
         default_asset = "endcard.png"
-        # Endcards historically only render when an image exists (no color fill).
+        # Endcards need an image, no color
         default_allow_color = False
         solid_color = config.ENDCARD_COLOR
     else:
@@ -326,10 +341,7 @@ def resolve_card_background(kind: str) -> tuple[Path | None, bool, bool, str]:
     if not value:
         return (default_path, default_allow_color, False, "black")
 
-    # Only a bare filename inside the upload pool is a valid selection. Reject
-    # path separators / traversal so a stray config value can't resolve outside
-    # TITLECARD_IMAGES_DIRNAME. The Studio settings route validates this already;
-    # this guards the CLI / persisted-settings path too.
+    # Bare filenames only: a stray config value must not resolve outside the pool
     if Path(value).name != value:
         return (default_path, default_allow_color, False, "black")
 
@@ -338,7 +350,6 @@ def resolve_card_background(kind: str) -> tuple[Path | None, bool, bool, str]:
     )
     if upload_path.is_file():
         return (upload_path, default_allow_color, False, "black")
-    # Selected upload is missing — fall back to the bundled default.
     return (default_path, default_allow_color, False, "black")
 
 
@@ -415,11 +426,7 @@ def get_or_build_endcard(
         if card_duration_seconds is None
         else card_duration_seconds
     )
-    # Key by the selected endcard so switching the background (or, for a solid
-    # color, the color itself) doesn't reuse a stale cached file. The fps + audio
-    # signature must be part of the key: a copy-path endcard is encoded to match a
-    # specific body's framerate/audio, so reusing it for a body with different
-    # params would silently desync the stream-copy concat.
+    # Key by selection, fps, and audio: a copy-path endcard must match its body
     endcard_id = config.ENDCARD_IMAGE or "__default__"
     if config.ENDCARD_IMAGE == config.CARD_IMAGE_COLOR:
         endcard_id = endcard_id + config.ENDCARD_COLOR
@@ -430,24 +437,24 @@ def get_or_build_endcard(
         cached = _endcard_cache.get(cache_key)
         if cached and Path(cached).is_file():
             return cached
-    path = build_endcard_frame(
-        resolution,
-        cancel_flag=cancel_flag,
-        card_duration_seconds=duration,
-        match_fps=match_fps,
-        audio_match=audio_match,
-    )
-    if path:
+        flight = _endcard_flights.setdefault(cache_key, threading.Lock())
+    with flight:
+        # Re-check: a waiter finds the first builder's card here
         with _endcard_lock:
-            existing = _endcard_cache.get(cache_key)
-            if existing and Path(existing).is_file():
-                try:
-                    Path(path).unlink()
-                except OSError:
-                    pass
-                return existing
-            _endcard_cache[cache_key] = path
-    return path
+            cached = _endcard_cache.get(cache_key)
+            if cached and Path(cached).is_file():
+                return cached
+        path = build_endcard_frame(
+            resolution,
+            cancel_flag=cancel_flag,
+            card_duration_seconds=duration,
+            match_fps=match_fps,
+            audio_match=audio_match,
+        )
+        if path:
+            with _endcard_lock:
+                _endcard_cache[cache_key] = path
+        return path
 
 
 def clear_endcard_cache() -> None:
@@ -459,6 +466,7 @@ def clear_endcard_cache() -> None:
             except OSError:
                 pass
         _endcard_cache.clear()
+        _endcard_flights.clear()
 
 
 def _input_count(input_args: list[str]) -> int:
@@ -501,7 +509,7 @@ def _build_wrap_filter_and_inputs(
             "anullsrc=channel_layout=stereo:sample_rate=48000",
         ]
 
-    # Video inputs, in playback order: title, clip, end.
+    # Playback order: title, clip, end
     title_idx: int | None = None
     end_idx: int | None = None
 
@@ -519,7 +527,7 @@ def _build_wrap_filter_and_inputs(
     filter_parts: list[str] = []
 
     if has_clip_audio:
-        # Matching silent audio tracks for each card so concat sees a 1:1 v/a pairing.
+        # Silent tracks keep concat 1:1
         title_a_label: str | None = None
         end_a_label: str | None = None
         if title_idx is not None:
@@ -529,7 +537,7 @@ def _build_wrap_filter_and_inputs(
             idx = add_input(anullsrc_input(card_duration))
             end_a_label = f"[{idx}:a]"
 
-        # Normalize clip audio to a consistent rate/layout so concat doesn't reject it.
+        # Normalize clip audio for concat
         filter_parts.append(
             f"[{clip_idx}:a]aresample=48000,"
             "aformat=channel_layouts=stereo:sample_rates=48000[aclip]"
@@ -542,7 +550,7 @@ def _build_wrap_filter_and_inputs(
             audio_labels.append(end_a_label)
 
         interleaved: list[str] = []
-        for v_label, a_label in zip(video_labels, audio_labels):
+        for v_label, a_label in zip(video_labels, audio_labels, strict=True):
             interleaved.append(v_label)
             interleaved.append(a_label)
         n = len(video_labels)
@@ -556,6 +564,7 @@ def _build_wrap_filter_and_inputs(
     return (input_args, ";".join(filter_parts), map_args)
 
 
+@profiling.timed("titlecard.wrap")
 def wrap_clip_with_cards(
     clip: ClipRecord,
     clip_path: str,
@@ -568,28 +577,24 @@ def wrap_clip_with_cards(
 ) -> tuple[bool, bool]:
     """Prepend a titlecard and append an endcard to a clip.
 
-    Fast path: when the clip body is a copy-safe shape (see _body_is_copy_safe), only
-    the two cards are encoded — matched to the body's fps/pixel-format and (if present)
-    a silent AAC track at the body's audio params — then all three are joined with the
-    concat demuxer + ``-c copy``, so the already-cut body is not re-encoded. Any
-    non-copy-safe body, or a failed copy concat, falls back to a single filter_complex
-    encode that re-encodes the whole clip.
+    Fast path: a copy-safe body (see _body_is_copy_safe) means only the two cards
+    are encoded — matched to the body's fps/pixel-format and, if present, a silent
+    AAC track at its audio params — then all three join via the concat demuxer with
+    ``-c copy``, leaving the cut body untouched. A non-copy-safe body or a failed
+    copy concat falls back to one filter_complex encode of the whole clip.
 
-    Returns ``(clip_ok, cards_applied)``:
+    Returns ``(clip_ok, cards_applied)``. ``clip_ok`` is True whenever the clip file
+    is usable afterwards — wrapped, or left untouched on soft failure — and False
+    only on a hard failure such as a missing clip. ``cards_applied`` is True only
+    when the cards really are in the output.
 
-    - ``clip_ok`` is True when the clip file is usable afterwards (either wrapped or
-      left untouched on soft failure), and False only on a hard failure (e.g. the clip
-      file is missing).
-    - ``cards_applied`` is True only when the cards are actually in the output file.
+    Both matter: a soft failure leaves a perfectly good *unwrapped* clip that must
+    still be recorded, but recording it as ``titlecards: true`` makes the manifest
+    lie, and the generate-cache check then skips that clip forever so the card can
+    never be applied. Persist ``cards_applied``, not the requested flag.
 
-    Both values matter to the caller. A soft failure leaves a perfectly good *unwrapped*
-    clip, so it must still be recorded — but recording it as ``titlecards: true`` makes
-    the manifest lie, and the generate-cache check (``server.py`` Phase 1) then skips
-    the clip forever, so the card can never be applied. Callers must persist
-    ``cards_applied``, not the requested flag.
-
-    When *cancel_flag* is supplied and returns True during a card or wrap encode, the
-    in-flight ffmpeg is terminated and the original clip is left untouched.
+    A *cancel_flag* returning True mid-encode terminates ffmpeg and leaves the
+    original clip untouched.
     """
     cards_enabled = (
         config.TITLECARDS_ENABLED
@@ -618,8 +623,7 @@ def wrap_clip_with_cards(
         )
         return (False, False)
 
-    # One probe gives us both audio presence and (when needed) resolution; it's
-    # cached by resolved path in video.probe_video_properties.
+    # One probe: audio presence and resolution
     probed = video.probe_video_properties(clip_path)
     if not resolution and probed:
         resolution = f"{probed['width']}x{probed['height']}"
@@ -630,7 +634,8 @@ def wrap_clip_with_cards(
         )
         return (True, False)
 
-    has_clip_audio = bool(probed and probed.get("audio_codec"))
+    clip_track = video.first_audio_track(probed)
+    has_clip_audio = clip_track is not None
     clip_duration = (
         float(probed["duration"]) if probed and probed.get("duration") else 0.0
     )
@@ -638,20 +643,17 @@ def wrap_clip_with_cards(
         clip_duration + 2 * card_duration if clip_duration > 0 else None
     )
 
-    # When the body is a known copy-safe shape (h264 / yuv420p / aac), encode only
-    # the cards to match it and concat-demux with -c copy, avoiding a full body
-    # re-encode. Otherwise (or if the copy concat fails) fall back to the
-    # filter_complex re-encode path below.
+    # Copy-safe body: encode only the cards and concat-copy, skipping a full re-encode
     copy_safe = _body_is_copy_safe(probed)
     match_fps: float | None = None
     audio_match: dict | None = None
     if copy_safe and probed:
         match_fps = float(probed["fps"])
-        if has_clip_audio:
+        if clip_track is not None:
             audio_match = {
-                "sample_rate": probed["audio_sample_rate"],
-                "channel_layout": _resolve_channel_layout(probed),
-                "channels": probed.get("audio_channels") or 0,
+                "sample_rate": clip_track["sample_rate"],
+                "channel_layout": _resolve_channel_layout(clip_track),
+                "channels": clip_track.get("channels") or 0,
             }
 
     titlecard_temps: list[str] = []
@@ -676,7 +678,7 @@ def wrap_clip_with_cards(
                 audio_match=audio_match,
             )
             if not titlecard_path and not endcard_path:
-                # Both cards failed to build; nothing to do, keep clip as-is.
+                # No cards built, keep clip
                 return (True, False)
 
             segments = [p for p in (titlecard_path, clip_path, endcard_path) if p]
@@ -693,9 +695,9 @@ def wrap_clip_with_cards(
             ):
                 os.replace(output_temp_path, clip_path)
                 output_temp_path = None
+                profiling.count("titlecard.copy")
                 return (True, True)
-            # Copy concat failed — discard the temp output and fall through to the
-            # re-encode path (which rebuilds video-only cards).
+            # Copy concat failed, re-encode below
             if output_temp_path:
                 try:
                     Path(output_temp_path).unlink()
@@ -706,7 +708,7 @@ def wrap_clip_with_cards(
                 f"Stream-copy card wrap failed for '{clip_path}'; re-encoding instead."
             )
 
-        # Fallback: single filter_complex encode that re-encodes the whole clip.
+        # Fallback: re-encode the whole clip
         titlecard_path = build_titlecard_frame(
             clip,
             resolution,
@@ -721,7 +723,7 @@ def wrap_clip_with_cards(
             card_duration_seconds=card_duration,
         )
         if not titlecard_path and not endcard_path:
-            # Both cards failed to build; nothing to do, keep clip as-is.
+            # No cards built, keep clip
             return (True, False)
 
         input_args, filter_complex, map_args = _build_wrap_filter_and_inputs(
@@ -737,17 +739,13 @@ def wrap_clip_with_cards(
         ) as out_tmp:
             output_temp_path = out_tmp.name
 
-        ffmpeg_command: list[str] = [
-            "ffmpeg",
-            "-y",
-            "-loglevel",
-            config.FFMPEG_LOGLEVEL,
+        ffmpeg_command = video.ffmpeg_cmd(
             *input_args,
             "-filter_complex",
             filter_complex,
             *map_args,
             *_x264_video_args(),
-        ]
+        )
         if has_clip_audio:
             ffmpeg_command.extend(["-c:a", "aac"])
         ffmpeg_command.append(output_temp_path)
@@ -760,6 +758,7 @@ def wrap_clip_with_cards(
             input_file=clip_path,
             output_file=output_temp_path,
             os_error_message="Filter-based concat failed while wrapping clip with cards.",
+            kind="wrap",
             cancel_flag=cancel_flag,
             on_progress=on_progress,
             expected_duration_sec=expected_wrap_duration,
@@ -778,9 +777,10 @@ def wrap_clip_with_cards(
 
         os.replace(output_temp_path, clip_path)
         output_temp_path = None
+        profiling.count("titlecard.reencode")
         return (True, True)
     finally:
-        # Titlecards are per-clip temps; endcards are managed by _endcard_cache.
+        # Endcards are cached, titlecards temporary
         for titlecard_temp in titlecard_temps:
             try:
                 Path(titlecard_temp).unlink()

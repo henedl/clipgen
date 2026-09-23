@@ -1,20 +1,20 @@
-# clipgen-new-thinking-agent — Add an Ollama thinking agent
+# clipgen-new-thinking-agent — Add a local-LLM thinking agent
 
-Both the orchestrator **and** the HTTP routes in `transcripts_server.py` auto-pick up new agents from the `AGENTS` list by key. No orchestrator or route edits needed. The frontend touch is a descriptor entry, not new plumbing.
+Both the orchestrator **and** the HTTP routes in `transcripts_server.py` auto-pick up new agents from the `AGENTS` list by key. No orchestrator or route edits needed. The frontend touch is a descriptor entry, not new plumbing. `tests/test_thinking_agents.py` enforces registry parity: config keys exist, topological order, `on_upstream_change` values, and a frontend `api/agent/<key>` surface.
 
 ## Checklist
 
 1. **Config** (`config.py`)
-   - Add `OLLAMA_{NAME}_ENABLED: bool` toggle
-   - Add `OLLAMA_{NAME}_MODEL: str` default model name
+   - Add `LLM_{NAME}_ENABLED: bool` toggle
+   - Add `LLM_{NAME}_MODEL: str` default model value (HF ref or GGUF stem)
 
 2. **Agent implementation** (`thinking_agents.py`)
    - Write a `run(transcript_entry: dict) -> value | None` callable
      - Returns the value to store in the manifest field, or `None` to skip
-     - `transcript_entry` is the dict for one participant from `transcripts_manifest.json`
+     - `transcript_entry` is the dict for one participant from the `transcripts` section of `clipgen.json`
    - Append an `Agent(...)` entry to the `AGENTS` list
      - Respect topological order: dependencies must appear before dependents
-     - Set `depends_on` to the `manifest_field` names of agents this one needs
+     - Set `depends_on` to the agent *keys* (not `manifest_field` names) of agents this one needs
      - Set `manifest_field` to the key that will be written into the transcript entry
      - Set `on_upstream_change` to `"clear"` (drop the result when an upstream
        dependency regenerates, the default) or `"stale"` (keep it but flag for a
@@ -49,4 +49,4 @@ Both the orchestrator **and** the HTTP routes in `transcripts_server.py` auto-pi
 
 - `transcripts_server.py` routes (the generic `/api/agent/<key>/...` routes and
   orchestrator both key off `AGENTS`; the chain auto-advances)
-- `ollama_client.py` (pure transport layer)
+- `llm_client.py` (pure transport layer)

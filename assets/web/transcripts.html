@@ -103,6 +103,7 @@
         <button id="videoFollowBtn" class="player-btn" data-tooltip="Auto-scroll transcript with playback" aria-label="Auto-scroll transcript with playback" aria-pressed="true">
           <span class="player-btn-icon player-icon-follow"></span>
         </button>
+        <span id="markerInfo" class="marker-info"></span>
         <span id="videoTime" class="player-time">0:00 / 0:00</span>
       </div>
       <div id="timelineRow">
@@ -148,7 +149,7 @@
         </div>
         <div id="summaryEmpty" class="panel-empty hidden">
           <p class="panel-empty-text">No summary yet.</p>
-          <!-- Filled by renderSummaryEmpty() when Ollama is missing or stopped,
+          <!-- Filled by renderSummaryEmpty() when the AI server is missing or stopped,
                so the Run button below doesn't just fail silently. -->
           <p id="summaryEmptyHint" class="panel-empty-hint hidden"></p>
           <button id="summaryRunCta" type="button" class="btn btn-small" data-tooltip="Runs a local AI thinking agent on this transcript">
@@ -173,7 +174,7 @@
           <p class="panel-empty-text">No friction analysis yet.</p>
           <p class="panel-empty-hint" id="frictionEmptyHint"></p>
         </div>
-        <div id="frictionGenerating" class="friction-generating hidden">Analyzing friction&hellip;</div>
+        <div id="frictionGenerating" class="friction-generating hidden"><span class="cg-shimmer">Analyzing friction&hellip;</span></div>
         <div id="frictionContent" class="friction-content hidden">
           <div id="frictionStaleBanner" class="agent-stale-banner hidden">
             <span class="agent-stale-banner-text">Segments were edited since this analysis ran. Results may be out of date.</span>
@@ -223,31 +224,62 @@
     </section>
   </main>
 
-  <!-- Corrections modal -->
+  <!-- Corrections modal: corrections (fix past text) + known terms
+       (bias future transcription) -->
   <div id="correctionsModal" class="modal cg-modal-overlay hidden">
     <div class="modal-content">
       <div class="modal-header">
-        <h3>Corrections Dictionary</h3>
-        <button id="closeCorrectionsBtn" class="btn btn-small">Close</button>
+        <h3>Corrections</h3>
+        <div class="dict-actions">
+          <button id="importDictBtn" type="button" class="btn btn-small">Import CSV</button>
+          <button id="exportDictBtn" type="button" class="btn btn-small">Export CSV</button>
+          <button id="closeCorrectionsBtn" class="btn btn-small">Close</button>
+        </div>
       </div>
-      <div id="addCorrectionForm" class="correction-form">
-        <input id="correctionFrom" type="text" placeholder="Original text" autocomplete="off">
-        <span class="correction-arrow">&rarr;</span>
-        <input id="correctionTo" type="text" placeholder="Corrected text" autocomplete="off">
-        <button id="addCorrectionBtn" class="btn btn-small">Add</button>
-      </div>
-      <div id="correctionsList"></div>
+      <input id="importDictFile" type="file" accept="text/csv,.csv" hidden>
+      <section class="dict-section">
+        <h4>Corrections</h4>
+        <p class="dict-hint">Rewrites text in transcripts you already have.</p>
+        <div id="addCorrectionForm" class="correction-form">
+          <input id="correctionFrom" type="text" placeholder="Original text" autocomplete="off">
+          <span class="correction-arrow">&rarr;</span>
+          <input id="correctionTo" type="text" placeholder="Corrected text" autocomplete="off">
+          <button id="addCorrectionBtn" class="btn btn-small">Add</button>
+        </div>
+        <div id="correctionsList"></div>
+      </section>
+      <section class="dict-section">
+        <h4>Known terms</h4>
+        <p class="dict-hint">Study vocabulary sent to the transcriber. Applies on the next run.</p>
+        <div class="term-form">
+          <input id="termInput" type="text" placeholder="Product or feature name" autocomplete="off">
+          <button id="addTermBtn" class="btn btn-small">Add</button>
+        </div>
+        <div id="termsList" class="term-chips"></div>
+      </section>
+      <section class="dict-section dict-global">
+        <h4>Global dictionary</h4>
+        <p class="dict-hint" id="dictGlobalHint">Reuse one house glossary across studies.</p>
+        <div class="dict-global-actions">
+          <button id="saveGlobalDictBtn" type="button" class="btn btn-small">Save as global</button>
+          <button id="loadGlobalDictBtn" type="button" class="btn btn-small">Load global</button>
+        </div>
+      </section>
     </div>
   </div>
 
-  <!-- Model install/download confirmation (whisper download + ollama pull) -->
+  <!-- Model download confirmation (whisper download + GGUF download) -->
   <div id="modelInstallModal" class="modal cg-modal-overlay hidden">
     <div class="modal-content model-install-modal">
       <div class="modal-header">
         <h3 id="modelInstallTitle">Download model?</h3>
       </div>
       <p id="modelInstallMessage" class="model-install-message"></p>
-      <!-- Platform install commands, shown only for the "Ollama isn't
+      <p id="modelInstallLicense" class="model-install-license hidden">
+        <a id="modelInstallLicenseLink" target="_blank" rel="noopener noreferrer">License<span
+          class="model-install-license-icon"></span></a>
+      </p>
+      <!-- Platform install commands, shown only for the "AI runtime isn't
            installed" flavour. Monospaced because it holds shell commands. -->
       <pre id="modelInstallHint" class="model-install-hint hidden"></pre>
       <div id="modelInstallProgress" class="model-install-progress hidden">
@@ -256,11 +288,7 @@
       </div>
       <div class="model-install-actions">
         <button id="modelInstallCancel" type="button" class="btn btn-small">Cancel</button>
-        <!-- Secondary action for the "Ollama isn't installed" flavour when the
-             in-app download is offered: primary downloads, this one re-checks
-             after a manual install. Hidden in every other flavour. -->
-        <button id="modelInstallAlt" type="button" class="btn btn-small hidden">I've installed it — retry</button>
-        <button id="modelInstallConfirm" type="button" class="btn btn-small btn-primary">Install</button>
+        <button id="modelInstallConfirm" type="button" class="btn btn-small btn-primary">Download</button>
       </div>
     </div>
   </div>
@@ -268,33 +296,100 @@
   <!-- Clip marked lines: parameters for the Quick action that cuts one clip per
        cluster of marks through Studio's intake generation endpoint. -->
   <div id="clipMarksModal" class="modal cg-modal-overlay hidden">
-    <div class="modal-content clip-marks-modal">
+    <div class="modal-content param-modal-card">
       <div class="modal-header">
         <h3>Clip Marked Lines</h3>
       </div>
-      <p class="clip-marks-message">Cut one clip per manually marked line. Marks closer together than the merge window are combined into a single clip.</p>
-      <div class="clip-marks-fields">
-        <label class="clip-marks-label" data-tooltip="Clip only the participant open on this page, or every participant that has marks.">Scope
-          <select id="clipMarksScope" class="clip-marks-select">
+      <p class="param-modal-message">Cut one clip per manually marked line. Marks closer together than the merge window are combined into a single clip.</p>
+      <div class="param-modal-fields">
+        <label class="param-modal-label" data-tooltip="Clip only the participant open on this page, or every participant that has marks.">Scope
+          <select id="clipMarksScope" class="param-modal-select">
             <option value="current">Current participant</option>
             <option value="all">All participants</option>
           </select>
         </label>
-        <label class="clip-marks-label" data-tooltip="Marks less than this far apart become one clip covering all of them. 0 gives one clip per marked line.">Merge window (s)
-          <input id="clipMarksGap" type="number" min="0" max="120" step="1" value="10" class="clip-marks-input" autocomplete="off">
+        <label class="param-modal-label" data-tooltip="Marks less than this far apart become one clip covering all of them. 0 gives one clip per marked line.">Merge window (s)
+          <input id="clipMarksGap" type="number" min="0" max="120" step="1" value="10" class="param-modal-input" autocomplete="off">
         </label>
-        <label class="clip-marks-label" data-tooltip="Extra seconds kept before and after each clip, so a cut on a tight segment boundary does not clip the first or last word.">Padding (s)
-          <input id="clipMarksPad" type="number" min="0" max="10" step="0.5" value="0" class="clip-marks-input" autocomplete="off">
+        <label class="param-modal-label" data-tooltip="Extra seconds kept before and after each clip, so a cut on a tight segment boundary does not clip the first or last word.">Padding (s)
+          <input id="clipMarksPad" type="number" min="0" max="10" step="0.5" value="0" class="param-modal-input" autocomplete="off">
         </label>
       </div>
-      <p id="clipMarksSummary" class="clip-marks-summary"></p>
-      <div id="clipMarksProgress" class="clip-marks-progress hidden">
-        <div class="clip-marks-bar"><div id="clipMarksBarFill" class="clip-marks-bar-fill"></div></div>
-        <p id="clipMarksProgressText" class="clip-marks-progress-text"></p>
+      <p id="clipMarksSummary" class="param-modal-summary"></p>
+      <div id="clipMarksProgress" class="param-modal-progress hidden">
+        <div class="param-modal-bar"><div id="clipMarksBarFill" class="param-modal-bar-fill"></div></div>
+        <p id="clipMarksProgressText" class="param-modal-progress-text cg-shimmer"></p>
       </div>
-      <div class="clip-marks-actions">
+      <div class="param-modal-actions">
         <button id="clipMarksCancel" type="button" class="btn btn-small">Cancel</button>
         <button id="clipMarksConfirm" type="button" class="btn btn-small btn-primary">Generate</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Embed subtitles: parameters for the Quick action that muxes transcripts
+       back into subtitled copies of the source videos. -->
+  <div id="embedSubsModal" class="modal cg-modal-overlay hidden">
+    <div class="modal-content param-modal-card">
+      <div class="modal-header">
+        <h3>Embed Subtitles</h3>
+      </div>
+      <p class="param-modal-message">Write a subtitled copy of each source video into the output folder, with the transcript added as a selectable subtitle track. The originals are never modified.</p>
+      <div class="param-modal-fields">
+        <label class="param-modal-label" data-tooltip="Embed only the participant open on this page, or every participant that has a transcript.">Scope
+          <select id="embedSubsScope" class="param-modal-select">
+            <option value="current">Current participant</option>
+            <option value="all">All participants</option>
+          </select>
+        </label>
+        <label class="param-modal-label" data-tooltip="Mark the subtitle track as default so players show it without the viewer turning it on. Only .mkv and .webm can carry a track that is off — .mp4 and .mov always enable theirs.">Set as default track
+          <input id="embedSubsDefault" type="checkbox" class="param-modal-checkbox" checked>
+        </label>
+      </div>
+      <p id="embedSubsSummary" class="param-modal-summary"></p>
+      <div id="embedSubsProgress" class="param-modal-progress hidden">
+        <div class="param-modal-bar"><div id="embedSubsBarFill" class="param-modal-bar-fill"></div></div>
+        <p id="embedSubsProgressText" class="param-modal-progress-text cg-shimmer"></p>
+      </div>
+      <div class="param-modal-actions">
+        <button id="embedSubsCancel" type="button" class="btn btn-small">Cancel</button>
+        <button id="embedSubsConfirm" type="button" class="btn btn-small btn-primary">Embed</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Normalize audio: parameters for the Quick action that rewrites source
+       videos in place with loudness-normalized audio. The original file is
+       parked beside the source as .orig, same flow as the remux banner. -->
+  <div id="normAudioModal" class="modal cg-modal-overlay hidden">
+    <div class="modal-content param-modal-card">
+      <div class="modal-header">
+        <h3>Normalize Audio</h3>
+      </div>
+      <p class="param-modal-message">Rewrite each source video in place with loudness-normalized audio. The picture is copied untouched, and the original file is kept beside the source until you delete it.</p>
+      <div class="param-modal-fields">
+        <label class="param-modal-label" data-tooltip="Normalize only the participant open on this page, or every participant with a source video.">Scope
+          <select id="normAudioScope" class="param-modal-select">
+            <option value="current">Current participant</option>
+            <option value="all">All participants</option>
+          </select>
+        </label>
+        <label id="normAudioTrackModeLabel" class="param-modal-label" data-tooltip="Which audio tracks to normalize. Unselected tracks are copied untouched.">Tracks
+          <select id="normAudioTrackMode" class="param-modal-select">
+            <option value="auto">Speech track (auto-detected)</option>
+            <option value="all">All tracks</option>
+          </select>
+        </label>
+        <div id="normAudioTrackList" class="param-modal-track-list hidden"></div>
+      </div>
+      <p id="normAudioSummary" class="param-modal-summary"></p>
+      <div id="normAudioProgress" class="param-modal-progress hidden">
+        <div class="param-modal-bar"><div id="normAudioBarFill" class="param-modal-bar-fill"></div></div>
+        <p id="normAudioProgressText" class="param-modal-progress-text cg-shimmer"></p>
+      </div>
+      <div class="param-modal-actions">
+        <button id="normAudioCancel" type="button" class="btn btn-small">Cancel</button>
+        <button id="normAudioConfirm" type="button" class="btn btn-small btn-primary">Normalize</button>
       </div>
     </div>
   </div>
@@ -305,6 +400,16 @@
     <input class="mark-popover-label" type="text" placeholder="Label (optional)" autocomplete="off">
     <select class="mark-popover-severity" aria-label="Severity"></select>
     <button class="mark-popover-remove btn btn-small">Remove</button>
+  </div>
+
+  <!-- Speaker rename popover (shared, repositioned per chip) -->
+  <div id="speakerPopover" class="speaker-popover cg-menu hidden">
+    <div class="speaker-popover-name">
+      <input class="speaker-popover-input" type="text" placeholder="Speaker name" autocomplete="off" aria-label="Speaker name">
+      <button type="button" class="speaker-popover-reset" aria-label="Restore default name" data-tooltip="Restore default name"><span class="speaker-popover-reset-icon"></span></button>
+    </div>
+    <div class="speaker-popover-assign-label">This line</div>
+    <div class="speaker-popover-assign"></div>
   </div>
 
   <div id="trTooltip" class="tr-tooltip hidden"></div>
@@ -326,10 +431,12 @@
   <script src="intake-cluster.js" defer></script>
   <script src="media-banner.js" defer></script>
   <script src="transcripts.js" defer></script>
+  <script src="transcripts-speakers.js" defer></script>
   <script src="transcripts-corrections.js" defer></script>
   <script src="transcripts-search.js" defer></script>
   <script src="transcripts-video.js" defer></script>
   <script src="transcripts-pills.js" defer></script>
   <script src="transcripts-agents.js" defer></script>
+  <script src="transcripts-batch.js" defer></script>
 </body>
 </html>

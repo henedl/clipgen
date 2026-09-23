@@ -46,8 +46,9 @@ def test_hub_wires_topnav_chrome():
     them (they appear but do nothing otherwise)."""
     src = _workflows_js()
     assert "initThemeToggle(" in src
-    assert "#settingsBtn" in src
-    assert "openSettingsModal(" in src
+    # Settings wiring goes through settings-modal.js's shared helper, which
+    # owns the #settingsBtn lookup.
+    assert "wireSettingsButton(" in src
 
 
 def test_start_overlay_treats_workflows_as_video_tool():
@@ -146,7 +147,6 @@ def test_hub_and_satellites_publish_canvas_hooks():
         "WF.initWires",
         "WF.renderWires",
         "WF.startWireDrag",
-        "WF.isConnecting",
         "WF.cancelConnect",
         "WF.selectEdge",
         "WF.removeEdge",
@@ -272,6 +272,39 @@ def test_batch_via_all_participants_option():
     assert ".wf-batch-card" in css
 
 
+def test_participant_menu_portals_to_body():
+    """The picker mounts on <body> while open. In the card it was clipped by
+    .wf-canvas's overflow:hidden (and #wfWorld's transform is both a stacking
+    context and a containing block, so neither z-index nor position:fixed could
+    lift it out) — a long cohort showed ~6 rows with no way to reach the rest."""
+    nodes = (_WEB / "workflows-nodes.js").read_text(encoding="utf-8")
+    assert "document.body.appendChild(menu)" in nodes
+    assert "positionPopoverAnchored(" in nodes  # flips above + clamps, from utils.js
+
+    # Portaling makes the menu outlive its card, so every path that invalidates
+    # the anchor has to close it or it strands on <body> holding bindMenuToggle's
+    # document-level mousedown/keydown listeners.
+    assert nodes.index("closeParticipantMenu()") < nodes.index('world.innerHTML = ""')
+    assert 'window.addEventListener("pagehide", closeParticipantMenu)' in nodes
+    assert "WF.closeParticipantMenu = closeParticipantMenu" in nodes
+    # Pan/zoom slides the card out from under a screen-positioned menu.
+    canvas = (_WEB / "workflows-canvas.js").read_text(encoding="utf-8")
+    assert "WF.closeParticipantMenu()" in canvas
+
+    # The hooks are opt-in, so the Run split-button and shortcuts legend, which
+    # pass no opts, keep their plain toggle behaviour.
+    src = _workflows_js()
+    assert "opts.onOpen" in src and "opts.onClose" in src
+
+    css = WORKFLOWS_CSS.read_text(encoding="utf-8")
+    block = css[css.index(".wf-participant-menu {") :][:700]
+    assert "position: fixed" in block
+    assert "max-height: 12rem" not in block  # the old ~6-row cap
+    # A percentage min-width would resolve against the viewport once fixed.
+    assert "min-width: 100%" not in block
+    assert "min-width: var(--wf-node-width)" in block
+
+
 def test_stash_satellite_present_and_wired():
     """M5 stashes + P4 built-in recipes: the sidebar list, the "Stash selection"
     toolbar control, the satellite (loaded last), and the hub<->satellite stash
@@ -380,7 +413,7 @@ def test_validation_satellite_present_and_wired():
 
     src = _workflows_js()
     # Hub publishes nothing new, but the satellite attaches its interface onto WF.
-    for fn in ("WF.nodeIssues", "WF.graphHasCycle", "WF.refreshValidation"):
+    for fn in ("WF.nodeIssues", "WF.refreshValidation"):
         assert fn in src, fn
     # state.validation lives on the hub; recomputed on every edit (not debounced)
     # and once on blueprint load.
@@ -532,18 +565,22 @@ def test_node_mute_toggle():
 
 def test_validation_warns_on_node_with_no_inputs_wired():
     """A node whose data inputs are all optional + unwired (e.g. make_clips,
-    measure) warns instead of passing validation and running empty. Suppressed
-    when the clearer orphan "not connected" message fires instead."""
+    gate_collection) warns instead of passing validation and running empty.
+    Suppressed when the clearer orphan "not connected" message fires instead."""
     validate = (_WEB / "workflows-validate.js").read_text(encoding="utf-8")
     assert "Wire at least one input" in validate
     assert "willShowOrphan" in validate
 
 
-def test_validation_warns_on_non_numeric_filter_value():
-    """A filter/partition with an ordering comparison but a non-numeric value
-    warns — that value fails the backend float() coerce and drops every item."""
+def test_validation_rejects_drop_everything_predicates():
+    """A filter/partition predicate that would silently drop every item is an
+    error, not a warning: an ordering comparison on a text field, or a numeric
+    field compared against a non-numeric value (fails the backend float()
+    coerce). Numeric-ness comes from the field spec's numericChoices."""
     validate = (_WEB / "workflows-validate.js").read_text(encoding="utf-8")
-    assert "Value must be a number for this comparison" in validate
+    assert "numericChoices" in validate
+    assert "needs a numeric field" in validate
+    assert "must be a number" in validate
 
 
 def test_empty_canvas_offers_builtin_recipes():

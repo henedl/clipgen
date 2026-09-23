@@ -105,7 +105,7 @@ uv run clipgen.py --ss-clips --ss-clips-region dialog --ss-clips-participant P01
     --ss-clips-min-confidence 0.8 -i INPUT -o OUTPUT
 ```
 
-Generated clips are appended to `clipgen_manifest.json` (synthetic artifact ids using negative cell rows so they never collide with spreadsheet-derived clips). Reruns with the same filters update existing entries idempotently.
+Generated clips are appended to the `clips` section of `clipgen.json` (synthetic artifact ids using negative cell rows so they never collide with spreadsheet-derived clips). Reruns with the same filters update existing entries idempotently.
 
 ## Export results
 
@@ -113,10 +113,10 @@ Generated clips are appended to `clipgen_manifest.json` (synthetic artifact ids 
 uv run clipgen.py --export -i INPUT_DIR -o OUTPUT_DIR
 ```
 
-Produces `screenspace_export.json` and `screenspace_export.csv` from `screenspace_manifest.json`.
+Produces `screenspace_export.json` and `screenspace_export.csv` from the `screenspace` section of `clipgen.json`.
 
 ## Notes
 
 - Regions must be defined before running headless tasks (define via UI or import from a stash)
 - Task statuses: `queued`, `running`, `completed`, `failed`, `cancelled`, `paused`
-- Results are persisted in `screenspace_manifest.json` in the output directory
+- Results are persisted in the `screenspace` section of `clipgen.json` in the output directory

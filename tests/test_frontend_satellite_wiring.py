@@ -1,31 +1,25 @@
 """Guard that hub/satellite JS groups have no undefined cross-file calls.
 
-Several web pages are split into an IIFE-wrapped hub plus IIFE-wrapped feature
-satellites that share state through a ``window.Clipgen*`` namespace (Screenspace,
-Transcripts, Studio, Workflows — see AGENTS.md "Workspace facts"). Because every
-file is its own ``(function(){ ... })()`` scope, a function defined in one file
-is **not** visible in a sibling: the hub reaches a satellite's function through a
-same-named guarded delegator (``function f(){ return SS.f && SS.f.apply(...); }``)
-or a late-bound ``SS.f(...)`` call, and satellites reach the hub the same way.
+Each hub+satellite page is a set of separate ``(function(){ ... })()`` scopes, so
+a function defined in one file is **not** visible in a sibling: cross-file calls
+go through a same-named guarded delegator or a late-bound ``SS.f(...)``.
 
-When a carve forgets a delegator (or never publishes a moved helper), the bare
-call survives ``node --check`` — it is syntactically valid — but throws
-``ReferenceError`` at runtime, often aborting page init. This shipped at least
-3x (``e4f67b2`` screenspace tasks/results, ``8c7f347`` transcripts, plus the
-historical ``_calibrationGen`` bug). ``node --check`` cannot see it and neither
-can the linter; this static check does, the same way ``test_packaging.py`` guards
-the Python ``py-modules`` analogue.
+When a carve forgets a delegator, the bare call is syntactically valid — so
+``node --check`` and the linter both pass it — and throws ``ReferenceError`` at
+runtime, often aborting page init. That shipped at least 3x (``e4f67b2``
+screenspace, ``8c7f347`` transcripts, plus the ``_calibrationGen`` bug). This
+static check catches it, as ``test_packaging.py`` does for the Python
+``py-modules`` analogue.
 
-Detection is a heuristic source scan (no node runtime, no browser — per the
-"no heavy software" rule): for each IIFE file in a group, every *bare* function
-call must resolve to a local definition/import, an ambient global (a top-level
-def in a non-IIFE shared script such as ``utils.js``/``screenspace-utils.js``),
-or a JS/DOM builtin. A bare call that resolves to none of those **but is defined
-in a sibling file of the same group** is the carve-bug signature and fails here.
+Detection is a heuristic source scan, no node runtime or browser: in each IIFE
+file, every *bare* call must resolve to a local definition/import, an ambient
+global (a top-level def in a non-IIFE script like ``utils.js``), or a builtin. One
+resolving to none of those **but defined in a sibling of the same group** is the
+carve-bug signature.
 
-This covers the function-call ReferenceError class. The rarer bare-*variable*
-class (a moved ``var`` read across files, e.g. ``_segTooltipRaf``) is a manual
-checklist item in agents/skills/carve-satellite/SKILL.md.
+This covers the function-call class only. The rarer bare-*variable* class (a moved
+``var`` read across files) is a manual checklist item in
+agents/skills/carve-satellite/SKILL.md.
 """
 
 import re
@@ -255,4 +249,94 @@ def test_no_undefined_cross_file_calls(group: str, pattern: str) -> None:
         f"them). Add a same-named guarded delegator or late-bind via the "
         f"namespace. See agents/skills/carve-satellite/SKILL.md. Offenders: "
         f"{offenders}"
+    )
+
+
+_NAMESPACES = "SS|TS|STUDIO|WF|CO|OV"
+_PAGE_HTML = {
+    "overview": "overview.html",
+    "screenspace": "screenspace.html",
+    "transcripts": "transcripts.html",
+    "studio": "studio.html",
+    "workflows": "workflows.html",
+    "composer": "composer.html",
+}
+
+
+def _load_time_imports(src: str) -> set[str]:
+    """Names bound as ``local = NS.name`` at load; late ``NS.name(...)`` calls are not."""
+    pattern = rf"\b[A-Za-z_$][\w$]*\s*=\s*(?:{_NAMESPACES})\.([A-Za-z_$][\w$]*)\s*[,;]"
+    return set(re.findall(pattern, src))
+
+
+def _published(src: str) -> set[str]:
+    """Names a file puts on the namespace: ``NS.x = …`` or the ``{ x: … }`` literal."""
+    names = set(
+        re.findall(rf"^\s*(?:{_NAMESPACES})\.([A-Za-z_$][\w$]*)\s*=", src, re.MULTILINE)
+    )
+    for body in re.findall(
+        rf"(?:var\s+(?:{_NAMESPACES})|window\.Clipgen\w+)\s*=\s*\{{([^}}]*)\}}", src
+    ):
+        names |= set(re.findall(r"([A-Za-z_$][\w$]*)\s*:", body))
+    return names
+
+
+@pytest.mark.parametrize("group, html", sorted(_PAGE_HTML.items()))
+def test_load_time_imports_have_an_earlier_publisher(group: str, html: str) -> None:
+    """``local = NS.fn`` at load stays undefined unless the owner loaded first."""
+    order = re.findall(
+        r'<script src="([^"]+)"', (_WEB / html).read_text(encoding="utf-8")
+    )
+    files = [f for f in order if f.startswith(group) and (_WEB / f).exists()]
+    sources = {f: _strip((_WEB / f).read_text(encoding="utf-8")) for f in files}
+    publishers: dict[str, str] = {}
+    for f in files:
+        for name in _published(sources[f]):
+            publishers.setdefault(name, f)
+    offenders: dict[str, list[str]] = {}
+    for idx, f in enumerate(files):
+        for name in sorted(_load_time_imports(sources[f])):
+            owner = publishers.get(name)
+            if owner is None or files.index(owner) >= idx:
+                offenders.setdefault(f, []).append(f"{name} (owner: {owner or 'none'})")
+    assert not offenders, (
+        f"{group}: load-time namespace imports whose owner loads later or never "
+        f"publishes; late-bind at the call site or reorder <script> tags: {offenders}"
+    )
+
+
+def _bare_refs(src: str) -> set[str]:
+    """Identifiers read bare: not a property (``.x``), not an object key (``x:``)."""
+    refs = set(re.findall(r"(?<![.\w$])([A-Za-z_$][\w$]*)(?!\s*:)(?![\w$])", src))
+    return refs - _KEYWORDS
+
+
+@pytest.mark.parametrize("group, pattern", sorted(_GROUPS.items()))
+def test_no_undefined_cross_file_references(group: str, pattern: str) -> None:
+    """The non-call twin of the test above: a sibling's function passed as a
+    callback (``addEventListener("click", fn)``) binds ``undefined`` silently."""
+    files = [
+        p for p in sorted(_WEB.glob(pattern)) if _is_iife(p.read_text(encoding="utf-8"))
+    ]
+    ambient = _ambient_globals()
+    stripped = {p.name: _strip(p.read_text(encoding="utf-8")) for p in files}
+    defs = {name: _local_defs(s) for name, s in stripped.items()}
+    top = {
+        name: _top_level_defs(re.sub(r"^  ", "", s, flags=re.MULTILINE))
+        for name, s in stripped.items()
+    }
+
+    offenders: dict[str, list[str]] = {}
+    for fname, src in stripped.items():
+        unresolved = _bare_refs(src) - defs[fname] - ambient - _BUILTINS
+        cross_file = sorted(
+            name
+            for name in unresolved
+            if any(name in top[other] for other in stripped if other != fname)
+        )
+        if cross_file:
+            offenders[fname] = cross_file
+    assert not offenders, (
+        f"{group}: bare cross-file reference(s) with no delegator / namespace "
+        f"import. Route them through the namespace. Offenders: {offenders}"
     )

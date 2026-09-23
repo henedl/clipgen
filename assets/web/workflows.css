@@ -44,8 +44,6 @@ body[data-frontend="workflows"] {
   background: var(--bg);
   color: var(--fg);
   font-family: var(--font-sans);
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
   letter-spacing: -0.005em;
   line-height: 1.5;
 }
@@ -141,10 +139,7 @@ body[data-frontend="workflows"] {
   font-size: var(--text-sm);
   color: var(--fg-faint);
   line-height: 1.5;
-}
-
-.hidden {
-  display: none !important;
+  text-wrap: pretty;
 }
 
 /* ---- Canvas pane: toolbar + pannable canvas ---- */
@@ -177,15 +172,8 @@ body[data-frontend="workflows"] {
   flex: 1 1 auto;
 }
 
-#wfBlueprintSelect {
-  background: var(--bg-input);
-  color: var(--fg);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  padding: var(--space-1) var(--space-2);
-  font-size: var(--text-sm);
-  font-family: inherit;
-}
+/* #wfBlueprintSelect carries no rule of its own: the global `select` base in
+ * tokens.css is this switcher's look, declaration for declaration. */
 
 #wfBlueprintName {
   flex: 1;
@@ -373,9 +361,12 @@ body[data-frontend="workflows"] {
 
 /* Keyboard focus rings across the page's interactive controls (matches the
    #themeToggle pattern). Covers the natively-focusable toolbar/sidebar controls;
-   harmless on the few div-based ones should they gain tabindex later. */
+   harmless on the few div-based ones should they gain tabindex later.
+   Selects are absent on purpose — tokens.css gives them a --shadow-focus ring,
+   and an ID-level outline here would paint a second ring around the first.
+   .wf-param-input stays: it also matches text inputs, and on a <select> it is
+   (0,2,0), which loses to the shared (0,2,1) rule. */
 #wfToolbar button:focus-visible,
-#wfBlueprintSelect:focus-visible,
 #wfBlueprintName:focus-visible,
 .wf-palette-search:focus-visible,
 .wf-param-input:focus-visible,
@@ -652,6 +643,17 @@ body[data-frontend="workflows"] {
   margin-top: var(--space-2);
 }
 
+/* Last-run outcome badge ("last: 14 events"), applied by the runs satellite
+   after each card rebuild. On filter nodes the out/unmatched pair doubles as
+   a selectivity readout. */
+.wf-node-lastrun {
+  margin-top: var(--space-1);
+  font-size: var(--text-xs);
+  color: var(--fg-muted);
+  border-top: 1px dashed var(--border);
+  padding-top: var(--space-1);
+}
+
 .wf-port-col {
   display: flex;
   flex-direction: column;
@@ -729,7 +731,8 @@ body[data-frontend="workflows"] {
 .wf-port-dot[data-port-type="transcript"],
 .wf-port-dot[data-port-type="summary"],
 .wf-port-dot[data-port-type="citations"],
-.wf-port-dot[data-port-type="friction"] {
+.wf-port-dot[data-port-type="friction"],
+.wf-port-dot[data-port-type="report"] {
   --wf-port-color: var(--wf-type-insight);
 }
 .wf-port-dot[data-port-type="video"],
@@ -814,7 +817,7 @@ body[data-frontend="workflows"] {
   cursor: not-allowed;
 }
 
-/* ---- Stash palette (M5) ---- */
+/* ---- Stash palette ---- */
 
 .wf-stash-list {
   display: flex;
@@ -975,7 +978,7 @@ body[data-frontend="workflows"] {
   --wf-swatch-color: var(--wf-type-value);
 }
 
-/* ---- Watch-dir trigger toggle (P6) ---- */
+/* ---- Auto-run trigger toggle ---- */
 
 #wfTriggerBtn {
   display: inline-flex;
@@ -1064,6 +1067,7 @@ body[data-frontend="workflows"] {
   margin: 0;
   font-size: var(--text-2xl);
   font-weight: 700;
+  text-wrap: balance;
 }
 
 .wf-canvas-empty p {
@@ -1076,6 +1080,7 @@ body[data-frontend="workflows"] {
 .wf-canvas-empty .wf-empty-sub {
   font-size: var(--text-sm);
   color: var(--fg-faint);
+  text-wrap: pretty;
 }
 
 /* Built-in recipe chips on the empty canvas. The parent is pointer-events:none,
@@ -1182,6 +1187,54 @@ body[data-frontend="workflows"] {
   gap: var(--space-1);
 }
 
+/* Inline node-rename input, swapped into the title bar on double-click. */
+.wf-node-rename {
+  width: 100%;
+  min-width: 0;
+  background: var(--bg-input);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 0 var(--space-1);
+  font-size: inherit;
+  font-family: inherit;
+  font-weight: inherit;
+}
+
+/* Label + reset-to-default chip on one line above the control. The chip is
+   hidden (tokens.css .hidden) while the value matches the spec default. */
+.wf-param-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-1);
+}
+
+.wf-param-reset {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--fg-muted);
+  cursor: pointer;
+}
+
+.wf-param-reset:hover {
+  color: var(--fg);
+}
+
+.wf-param-reset .wf-btn-icon {
+  width: var(--icon-size-xs);
+  height: var(--icon-size-xs);
+}
+
+.wf-reset-icon {
+  mask-image: url("icons/arrow-path.svg");
+  -webkit-mask-image: url("icons/arrow-path.svg");
+}
+
 .wf-param-label {
   flex: 0 0 auto;
   font-size: var(--text-xs);
@@ -1207,8 +1260,9 @@ body[data-frontend="workflows"] {
 
 /* ---- Participant multi-select (Video Source) ---- */
 
+/* No `position: relative` — the menu is portaled onto <body> and positioned in
+   viewport coordinates, so this is not its containing block. */
 .wf-participant-select {
-  position: relative;
   flex: 1;
   min-width: 0;
 }
@@ -1230,19 +1284,28 @@ body[data-frontend="workflows"] {
   text-overflow: ellipsis;
 }
 
+/* Portaled onto <body> by buildParticipantSelect and placed with
+   positionPopoverAnchored(), so it escapes .wf-canvas's overflow clip and the
+   #wfWorld transform's containing block, and is not scaled by the canvas zoom.
+   Shell (bg/border/radius/shadow/padding/z-index) comes from .cg-menu; only
+   geometry lives here, and left/top come from the positioner.
+
+   Sizing follows the "dropdowns size to their trigger, not their content" rule
+   in agents/CODE-REVIEW.md: shrink-to-fit against a viewport-sized containing
+   block would size to the longest id alone. The floor is the *unzoomed* node
+   width token rather than the trigger's measured rect — that rect is scaled by
+   the canvas zoom, so at 0.5x it would floor the menu at half the card width. */
 .wf-participant-menu {
-  position: absolute;
-  top: calc(100% + var(--space-1));
-  left: 0;
-  z-index: var(--z-dropdown);
-  min-width: 100%;
-  max-height: 12rem;
+  position: fixed;
+  width: max-content;
+  min-width: var(--wf-node-width);
+  max-width: 22rem;
+  max-height: min(24rem, 60vh);
   overflow-y: auto;
-  padding: var(--space-1);
-  background: var(--bg-elevated);
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-md);
-  box-shadow: var(--shadow-pop);
+  /* Zero out .cg-menu's top padding: a sticky row sticks to the *padding* box,
+     so that 4px would be a gap for rows to scroll into above the pinned "All
+     participants" header. .wf-participant-all carries it instead, below. */
+  padding-top: 0;
 }
 
 .wf-participant-opt {
@@ -1259,10 +1322,17 @@ body[data-frontend="workflows"] {
   background: var(--bg-hover);
 }
 
-/* Separate the "All participants" shortcut from the individual rows. */
+/* Separate the "All participants" shortcut from the individual rows, and keep
+   it pinned while a long cohort scrolls under it. It owns the menu's top
+   padding (see .wf-participant-menu) and needs an opaque background, since rows
+   scroll underneath. */
 .wf-participant-all {
+  position: sticky;
+  top: 0;
+  background: var(--bg-elevated);
   border-bottom: 1px solid var(--border);
   margin-bottom: var(--space-1);
+  padding-top: calc(var(--space-1) * 2);
   padding-bottom: var(--space-1-5);
 }
 
@@ -1408,6 +1478,13 @@ body[data-frontend="workflows"] {
     border-color var(--duration-fast);
 }
 
+/* Hit slop. */
+.wf-wire-delete-btn::after {
+  content: "";
+  position: absolute;
+  inset: calc(var(--space-1-5) * -1);
+}
+
 .wf-wire-delete-btn:hover {
   color: var(--severity-high);
   border-color: var(--severity-high);
@@ -1548,7 +1625,7 @@ body[data-frontend="workflows"] {
   transition: width var(--duration-fast);
 }
 
-/* ---- Pre-run validation panel (P5) ---- */
+/* ---- Pre-run validation panel ---- */
 
 .wf-validation {
   padding: var(--space-3) var(--space-4);
@@ -1575,6 +1652,7 @@ body[data-frontend="workflows"] {
 .wf-validation-count {
   font-size: var(--text-xs);
   color: var(--fg-faint);
+  font-variant-numeric: tabular-nums;
 }
 
 .wf-issue-list {
@@ -1678,6 +1756,7 @@ body[data-frontend="workflows"] {
   background: var(--bg);
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-card);
 }
 
 /* "Reconnecting…" pill shown on the active run/batch card while a dropped SSE
@@ -1845,7 +1924,17 @@ body[data-frontend="workflows"] {
   color: var(--fg-muted);
 }
 
-/* Re-run button on a terminal run card (P5). */
+/* A path chip is a link into the output dir (studio media route). */
+.wf-run-chip-link {
+  color: var(--accent);
+  text-decoration: none;
+}
+
+.wf-run-chip-link:hover {
+  text-decoration: underline;
+}
+
+/* Re-run button on a terminal run card. */
 .wf-run-rerun {
   flex: 0 0 auto;
   font-size: var(--text-xs);
@@ -1867,7 +1956,7 @@ body[data-frontend="workflows"] {
   cursor: default;
 }
 
-/* Expandable per-node result rows + lazily-fetched result panel (P5). */
+/* Expandable per-node result rows + lazily-fetched result panel. */
 .wf-run-node-expandable {
   cursor: pointer;
 }
@@ -1938,7 +2027,7 @@ body[data-frontend="workflows"] {
   word-break: break-word;
 }
 
-/* Batch card (P3: whole-study fan-out) — a run card with an accent edge so the
+/* Batch card (whole-study fan-out) — a run card with an accent edge so the
    "all participants" group reads as distinct from loose single runs. */
 .wf-batch-card {
   margin-bottom: var(--space-3);
@@ -1997,23 +2086,17 @@ body[data-frontend="workflows"] {
   display: none;
 }
 
+/* Shell comes from .cg-modal-card (tokens.css); this owns width + padding. */
 .wf-dialog {
-  background: var(--color-surface);
-  border: 1px solid var(--color-panel-border);
-  border-radius: var(--radius-lg);
-  box-shadow: var(--shadow-xl);
   width: 360px;
-  max-width: 92vw;
   padding: var(--space-4) var(--space-5);
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-3);
 }
 
 .wf-dialog-title {
   font-size: var(--text-md);
   font-weight: 600;
   color: var(--fg);
+  text-wrap: balance;
 }
 
 .wf-dialog-body {

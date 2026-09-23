@@ -1,11 +1,20 @@
 """Persistent per-user clipgen state: Start overlay settings and window geometry.
 
+Also owns the generic config-dir JSON helpers (:func:`config_json_path`,
+:func:`load_config_json`, :func:`save_config_json`, :func:`remove_config_json`)
+that ``server.py`` uses for ``studio_settings.json`` — the settings modal's
+values are application preferences, so they live beside ``start.json`` rather
+than in whichever output directory happens to be open.
+
 Stores last-used input/output directories and last-used spreadsheet so the
 frontend Start overlay can prefill its inputs across launches, plus the desktop
-window's last size and position. Two independent user-facing toggles gate the
-recording: ``persist_enabled`` for the project history and ``remember_window``
-for the window rect. When one is off its recording helpers short-circuit, but
-the flag itself is still written so the toggle survives sessions.
+window's last size and position, plus the per-source source-video filename
+overrides the Start overlay's preview rows edit. Two independent user-facing
+toggles gate the recording: ``persist_enabled`` for the project history and
+``remember_window`` for the window rect. When one is off its recording helpers
+short-circuit, but the flag itself is still written so the toggle survives
+sessions. Filename overrides are ungated by both — they are configuration, not
+history (see :func:`set_filename_override`).
 
 Settings file location:
 
@@ -21,6 +30,8 @@ genuinely concurrent: the Start overlay records from Flask request threads while
 """
 
 import json
+from collections.abc import Iterator
+from contextlib import contextmanager
 import os
 import sys
 import threading
@@ -33,10 +44,15 @@ import utils
 
 RECENTS_CAP = 12
 
-# Guards load -> mutate -> save in every helper below. Deliberately not inside
-# load_start_settings/save_start_settings: locking the halves separately would
-# still let two cycles interleave, which is the actual race.
+# Held across load -> mutate -> save; locking the halves separately still interleaves.
 _write_lock = threading.Lock()
+
+
+@contextmanager
+def _settings_lock() -> Iterator[None]:
+    """In-process lock plus the cross-process file lock on start.json."""
+    with _write_lock, utils.file_lock(_settings_path()):
+        yield
 
 
 def config_dir() -> Path:
@@ -55,7 +71,44 @@ def config_dir() -> Path:
 
 
 def _settings_path() -> Path:
-    return config_dir() / "start.json"
+    return config_json_path("start.json")
+
+
+def config_json_path(filename: str) -> Path:
+    """Resolve *filename* inside the per-user config directory."""
+    return config_dir() / filename
+
+
+def _read_json_file(path: Path, label: str) -> Any:
+    """Parsed JSON from *path*, or None when missing or unreadable."""
+    if not path.is_file():
+        return None
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        utils.warning_print(f"Could not read {label}; using defaults.")
+        return None
+
+
+def load_config_json(filename: str, *, default: Any = None) -> Any:
+    """Read a JSON file from the config dir, returning *default* if unusable."""
+    data = _read_json_file(config_json_path(filename), filename)
+    return default if data is None else data
+
+
+def save_config_json(filename: str, data: Any) -> Path | None:
+    """Write *data* as JSON into the config dir. Returns the path, or None."""
+    return utils.write_json_atomic(config_json_path(filename), data, filename)
+
+
+def remove_config_json(filename: str) -> None:
+    """Delete a config-dir JSON file and any stale .tmp sibling."""
+    path = config_json_path(filename)
+    for candidate in (path, path.with_suffix(path.suffix + ".tmp")):
+        try:
+            candidate.unlink(missing_ok=True)
+        except OSError:
+            pass
 
 
 def _defaults() -> dict[str, Any]:
@@ -67,31 +120,25 @@ def _defaults() -> dict[str, Any]:
         "recent_outputs": [],
         "last_spreadsheet": None,
         "recent_spreadsheets": [],
-        # Full session records: (name, input, output, spreadsheet|None,
-        # last_opened). Powers the Start overlay's "Recently opened" rail and
-        # lets a click restore the name plus all three picker values at once.
+        # (name, input, output, spreadsheet|None, last_opened); the "Recently opened" rail restores all at once.
         "recent_projects": [],
         # Desktop window rect: {"x", "y", "width", "height"} or None for
         # "use the defaults". See desktop.py.
         "window": None,
-        # Deliberately independent of persist_enabled: that toggle is about the
-        # project history the Start overlay collects ("Remember my choices"),
-        # and a window rect is not one of those choices. Someone who does not
-        # want their recent paths kept can still want their window back.
+        # Independent of persist_enabled: a window rect is not project history.
         "remember_window": True,
+        # {"<type>|<id_or_path>|<worksheet>": {pid: name}}; independent of persist_enabled (see set_filename_override).
+        "filename_overrides": {},
     }
 
 
 def load_start_settings() -> dict[str, Any]:
     """Return the persisted settings, falling back to defaults on missing/corrupt file."""
-    path = _settings_path()
-    if not path.is_file():
-        return _defaults()
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
+    data = _read_json_file(_settings_path(), "start settings")
+    if data is None:
         return _defaults()
     if not isinstance(data, dict):
+        utils.warning_print("Start settings file is not a JSON object; using defaults.")
         return _defaults()
     merged = _defaults()
     merged.update(data)
@@ -100,66 +147,47 @@ def load_start_settings() -> dict[str, Any]:
 
 def save_start_settings(settings: dict[str, Any]) -> None:
     """Persist *settings* to the platform config path via atomic replace."""
-    path = _settings_path()
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        tmp.write_text(
-            json.dumps(settings, ensure_ascii=False, indent=2), encoding="utf-8"
-        )
-        os.replace(tmp, path)
-    except (OSError, TypeError, ValueError) as exc:
-        try:
-            tmp.unlink(missing_ok=True)
-        except OSError:
-            pass
-        utils.warning_print(f"Could not write start settings: {exc}")
+    utils.write_json_atomic(_settings_path(), settings, "start settings")
 
 
 def _prepend_dedup(items: list[Any], new_item: Any, key: Any = None) -> list[Any]:
     if key is None:
         deduped = [x for x in items if x != new_item]
     else:
+        # Drop non-dict entries so a malformed file cannot crash the boot-build thread.
         new_key = key(new_item)
-        deduped = [x for x in items if key(x) != new_key]
+        deduped = [x for x in items if isinstance(x, dict) and key(x) != new_key]
     return [new_item] + deduped[: RECENTS_CAP - 1]
+
+
+def _record_recent_dir(path: str, last_key: str, recents_key: str) -> None:
+    """Store *path* under *last_key* and at the head of *recents_key*."""
+    with _settings_lock():
+        settings = load_start_settings()
+        if not settings.get("persist_enabled", True):
+            return
+        if not path:
+            return
+        settings[last_key] = path
+        settings[recents_key] = _prepend_dedup(settings.get(recents_key, []), path)
+        save_start_settings(settings)
 
 
 def record_recent_input(path: str) -> None:
     """Record *path* as the last-used input directory."""
-    with _write_lock:
-        settings = load_start_settings()
-        if not settings.get("persist_enabled", True):
-            return
-        if not path:
-            return
-        settings["last_input"] = path
-        settings["recent_inputs"] = _prepend_dedup(
-            settings.get("recent_inputs", []), path
-        )
-        save_start_settings(settings)
+    _record_recent_dir(path, "last_input", "recent_inputs")
 
 
 def record_recent_output(path: str) -> None:
     """Record *path* as the last-used output directory."""
-    with _write_lock:
-        settings = load_start_settings()
-        if not settings.get("persist_enabled", True):
-            return
-        if not path:
-            return
-        settings["last_output"] = path
-        settings["recent_outputs"] = _prepend_dedup(
-            settings.get("recent_outputs", []), path
-        )
-        save_start_settings(settings)
+    _record_recent_dir(path, "last_output", "recent_outputs")
 
 
 def record_recent_spreadsheet(
     type_: str, id_or_path: str, label: str, worksheet: str = ""
 ) -> None:
     """Record a spreadsheet selection as last/recent."""
-    with _write_lock:
+    with _settings_lock():
         settings = load_start_settings()
         if not settings.get("persist_enabled", True):
             return
@@ -217,7 +245,7 @@ def record_project_session(
     the CLI-launch and Studio sheet-switch call sites pass nothing, and without
     it every relaunch would silently wipe the label.
     """
-    with _write_lock:
+    with _settings_lock():
         settings = load_start_settings()
         if not settings.get("persist_enabled", True):
             return
@@ -241,6 +269,74 @@ def record_project_session(
             entry["name"] = name.strip()
         settings["recent_projects"] = _prepend_dedup(projects, entry, key=_project_key)
         save_start_settings(settings)
+
+
+def _override_key(type_: str, id_or_path: str, worksheet: str = "") -> str:
+    """Identity of the source a set of filename overrides belongs to.
+
+    The worksheet is part of the key on purpose: one workbook can hold several
+    studies, and a ``P01`` override for one of them must not leak into another.
+    Mind maps (``type_ == "mindnode"``) have no worksheet and key on the bundle
+    path alone.
+    """
+    return f"{type_}|{id_or_path}|{worksheet or ''}"
+
+
+def filename_overrides(
+    type_: str, id_or_path: str, worksheet: str = ""
+) -> dict[str, str]:
+    """Return ``{participant: filename}`` overrides for one spreadsheet/mind map.
+
+    These win over the spreadsheet's own ``Filename`` row; see
+    ``spreadsheet.participant_filename_overrides``.
+    """
+    if not type_ or not id_or_path:
+        return {}
+    stored = load_start_settings().get("filename_overrides")
+    if not isinstance(stored, dict):
+        return {}
+    entry = stored.get(_override_key(type_, id_or_path, worksheet))
+    if not isinstance(entry, dict):
+        return {}
+    return {str(k): str(v) for k, v in entry.items() if v}
+
+
+def set_filename_override(
+    type_: str, id_or_path: str, worksheet: str, participant: str, value: str
+) -> dict[str, str]:
+    """Set (or, with an empty *value*, clear) one participant's filename override.
+
+    Returns the source's full override map after the write, so a caller can
+    re-resolve without a second read.
+
+    Ungated by ``persist_enabled``: that toggle is about the project history the
+    Start overlay collects, while an override is functional configuration — it
+    decides which file a participant's clips are cut from. Dropping it on the
+    floor because recents are off would silently resurrect the naming mismatch
+    the user just fixed.
+    """
+    with _settings_lock():
+        settings = load_start_settings()
+        if not type_ or not id_or_path or not participant:
+            return {}
+        stored = settings.get("filename_overrides")
+        if not isinstance(stored, dict):
+            stored = {}
+        key = _override_key(type_, id_or_path, worksheet)
+        entry = stored.get(key)
+        entry = dict(entry) if isinstance(entry, dict) else {}
+        cleaned = (value or "").strip()
+        if cleaned:
+            entry[participant] = cleaned
+        else:
+            entry.pop(participant, None)
+        if entry:
+            stored[key] = entry
+        else:
+            stored.pop(key, None)  # do not accrete empty source dicts
+        settings["filename_overrides"] = stored
+        save_start_settings(settings)
+        return entry
 
 
 def load_window_geometry() -> dict[str, int] | None:
@@ -268,7 +364,7 @@ def record_window_geometry(x: int, y: int, width: int, height: int) -> None:
 
     Gated on ``remember_window``, not ``persist_enabled`` — see ``_defaults``.
     """
-    with _write_lock:
+    with _settings_lock():
         settings = load_start_settings()
         if not settings.get("remember_window", True):
             return
@@ -289,7 +385,7 @@ def clear_window_geometry() -> None:
     Ungated by ``persist_enabled``, like ``set_persist_enabled``: an explicit
     reset has to take effect whatever the toggle says.
     """
-    with _write_lock:
+    with _settings_lock():
         settings = load_start_settings()
         settings["window"] = None
         save_start_settings(settings)
@@ -297,7 +393,7 @@ def clear_window_geometry() -> None:
 
 def set_persist_enabled(enabled: bool) -> None:
     """Toggle the persist_enabled flag and save."""
-    with _write_lock:
+    with _settings_lock():
         settings = load_start_settings()
         settings["persist_enabled"] = bool(enabled)
         save_start_settings(settings)
@@ -309,7 +405,7 @@ def set_remember_window(enabled: bool) -> None:
     Turning it off also drops the stored rect, so the next launch opens at the
     default rather than at whatever was last recorded.
     """
-    with _write_lock:
+    with _settings_lock():
         settings = load_start_settings()
         settings["remember_window"] = bool(enabled)
         if not enabled:

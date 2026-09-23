@@ -1,19 +1,15 @@
 """Preprocessing preview generation for the Screenspace "Model view" pane.
 
-Given a frame (and optionally a prev_frame / reference_frame / template_image),
-a region, a tool type, and the tool's parameters, returns a composite BGR image
-showing what that tool's CV pipeline actually operates on — grayscale crops,
-diff masks, edge maps, flow vectors, pHash bit grids, etc.
-
-The produced image is always a single ``numpy.ndarray`` of shape (H, W, 3) in
-BGR uint8, suitable for ``cv2.imencode('.png', img)``.
+Renders what a tool's CV pipeline actually operates on — grayscale crops, diff
+masks, edge maps, flow vectors, pHash bit grids — from a frame (plus optional
+prev_frame / reference_frame / template_image), a region, and the tool's params.
+Output is always a (H, W, 3) BGR uint8 ndarray, ready for ``cv2.imencode``.
 
 Entry points:
 
 - :func:`build_preview` — labeled multi-panel composite for the side panel.
-- :func:`build_overlay_layer` — single layer at native region / frame
-  resolution, suitable for painting on top of the live frame canvas. The
-  catalog of overlay-eligible layers per tool lives in :data:`OVERLAY_LAYERS`.
+- :func:`build_overlay_layer` — one layer at native region/frame resolution, for
+  painting over the live frame canvas. Per-tool catalog: :data:`OVERLAY_LAYERS`.
 """
 
 from typing import Any
@@ -26,15 +22,12 @@ import screenspace_ocr
 import screenspace_primitives
 
 
-# Max width (px) of the composite preview image.  Kept modest: the UI pane is
-# small and generating larger images just wastes bandwidth.
+# Composite preview width cap; the UI pane is small.
 _MAX_WIDTH = 512
 _PANEL_GAP = 6
 _LABEL_HEIGHT = 16
 
-# Colormap for diff/magnitude visualizations (change diff, SSIM difference, flow
-# arrows). Python-only — not mirrored to JS. JET matches the template heatmap
-# path and _colorize_accumulator in screenspace_heatmap.py.
+# Diff/magnitude colormap; JET matches screenspace_heatmap's _colorize_accumulator.
 _DIFF_COLORMAP = cv2.COLORMAP_JET
 
 
@@ -57,12 +50,15 @@ def build_preview(
     if tool == "timelapse":
         return _preview_timelapse(frame, region)
     if tool == "template":
-        return _preview_template(frame, params)
+        return _preview_template(frame, region, params)
+    if tool == "shape":
+        return _preview_shape(frame, region, params)
     if tool == "flow":
         return _preview_flow(frame, prev_frame, region, params)
     if tool == "scene":
         return _preview_scene(frame, region, params)
-    if tool == "inactivity":
+    if tool in ("inactivity", "boundary"):
+        # Boundary compares consecutive pHashes; show the same bit grid.
         return _preview_inactivity(frame, region)
     if tool == "attention":
         return _preview_attention(frame, prev_frame, params)
@@ -82,15 +78,12 @@ def build_preview(
 
 
 # ---------------------------------------------------------------------------
-# Overlay layers — single-layer images sized to the region (or frame) that
-# the frontend paints on top of the live frame canvas as a "blink comparator".
-# Tools whose preview output isn't pixel-aligned (timelapse, inactivity) are
-# omitted on purpose; the toggle stays disabled in those cases.
+# Overlay layers: blink-comparator images over the live frame.
+# Non-pixel-aligned tools (timelapse, inactivity) omitted.
 # ---------------------------------------------------------------------------
 
 
-# (layer_id, label, scope) per tool. Scope is "region" (sized to the region
-# rect) or "frame" (sized to the full frame).
+# (layer_id, label, scope) per tool; scope "region" or "frame" sets the size.
 OVERLAY_LAYERS: dict[str, list[tuple[str, str, str]]] = {
     "color": [("region", "Region (≤64 px)", "region")],
     "change": [
@@ -106,6 +99,10 @@ OVERLAY_LAYERS: dict[str, list[tuple[str, str, str]]] = {
     "text": [("gray", "OCR input (gray)", "region")],
     "numbers": [("gray", "OCR input (gray)", "region")],
     "template": [("match_heatmap", "Match heatmap", "frame")],
+    "shape": [
+        ("edges", "Edge ridges", "frame"),
+        ("match_heatmap", "Match heatmap", "frame"),
+    ],
     "flow": [("flow_vectors", "Flow vectors", "region")],
     "scene": [("edges", "Canny edges", "region")],
     "attention": [("saliency_map", "Saliency map", "frame")],
@@ -181,11 +178,9 @@ def build_overlay_layer(
 
     if tool == "scene" and layer == "edges":
         gray = cv2.cvtColor(pixels, cv2.COLOR_BGR2GRAY)
-        edges = cv2.Canny(gray, 100, 200)
-        # Dilate proportionally so 1-px Canny lines remain visible after the
-        # browser scales this region-native overlay down to the display rect.
-        # Capped so high-res regions don't get chunky lines that obscure
-        # underlying frame content.
+        edges = screenspace_primitives.canny_edges(gray)
+        # Dilate so 1-px Canny lines survive browser downscaling; capped to
+        # avoid chunky lines.
         thickness = max(1, min(2, min(gray.shape[:2]) // 300))
         if thickness > 1:
             kernel = np.ones((thickness, thickness), np.uint8)
@@ -196,7 +191,14 @@ def build_overlay_layer(
         return _overlay_flow(pixels, prev_frame, region, params)
 
     if tool == "template" and layer == "match_heatmap":
-        return _overlay_template_heatmap(frame, params)
+        return _overlay_template_heatmap(frame, region, params)
+
+    if tool == "shape" and layer == "edges":
+        edges = screenspace_primitives._frame_edge_map(frame)
+        return _gray_to_bgr(np.clip(edges, 0, 255).astype(np.uint8))
+
+    if tool == "shape" and layer == "match_heatmap":
+        return _overlay_shape_heatmap(frame, region, params)
 
     if tool == "attention" and layer == "saliency_map":
         return _overlay_attention_saliency(frame, prev_frame, params)
@@ -225,16 +227,14 @@ def _overlay_change(
     )
     diff = cv2.absdiff(prev_gray, curr_gray)
     if layer == "abs_diff":
-        # Colorize the raw magnitude so faint change reads as color rather than a
-        # near-black grayscale image; keep static (zero) pixels black to blend.
+        # Colorize so faint change reads; zero pixels stay black to blend.
         return _colorize_diff(diff, keep_zero_black=True)
     if layer in ("mask", "changes"):
         noise = int(params.get("noise_threshold", config.SCREENSPACE_NOISE_THRESHOLD))
         _, mask = cv2.threshold(diff, noise, 255, cv2.THRESH_BINARY)
         mk = config.SCREENSPACE_MORPH_KERNEL
         mask_clean = cv2.morphologyEx(mask, cv2.MORPH_OPEN, np.ones((mk, mk), np.uint8))
-        # Shaped region: mirror the scan by suppressing changes outside the
-        # polygon exactly (the dimmed crop alone only attenuates them).
+        # Shaped region: zero changes outside the polygon, as the scan does.
         if region is not None:
             region_mask = screenspace_primitives.region_mask_for(
                 region, *mask_clean.shape[:2]
@@ -242,16 +242,13 @@ def _overlay_change(
             if region_mask is not None:
                 mask_clean = cv2.bitwise_and(mask_clean, region_mask)
         if layer == "mask":
-            # Render mask as cyan-on-black so it reads against varying frame
-            # content when alpha-blended onto the live frame canvas.
+            # Cyan-on-black reads against any frame content when alpha-blended.
             out = np.zeros(
                 (mask_clean.shape[0], mask_clean.shape[1], 3), dtype=np.uint8
             )
             out[mask_clean > 0] = (220, 220, 0)  # BGR cyan-ish
             return out
-        # layer == "changes": tint the real region where it changed (same as the
-        # composite's "changes on frame" panel). Unchanged pixels keep the live
-        # frame so the default overlay does not darken it.
+        # "changes": tint changed pixels; unchanged pixels keep the live frame.
         return _tint_changes(pixels, diff, mask_clean)
     return None
 
@@ -275,8 +272,7 @@ def _overlay_ssim_diff(pixels: "np.ndarray", params: dict[str, Any]) -> "np.ndar
     _score, smap = screenspace_primitives.ssim_diff_map(pixels, ref)
     dis = np.clip((1.0 - smap) * 0.5, 0.0, 1.0)
     colored = _colorize_diff((dis * 255).astype(np.uint8), keep_zero_black=True)
-    # ssim_diff_map runs at <=256; scale back to the region's native pixels so the
-    # overlay paints pixel-aligned to the frame.
+    # ssim_diff_map runs at <=256; upscale to native so the overlay aligns.
     if colored.shape[:2] != pixels.shape[:2]:
         colored = cv2.resize(
             colored,
@@ -354,11 +350,8 @@ def _overlay_flow(
     curr_gray = cv2.cvtColor(pixels, cv2.COLOR_BGR2GRAY)
     prev_gray = cv2.cvtColor(prev_pixels, cv2.COLOR_BGR2GRAY)
 
-    # Compute flow at the same downscaled resolution as
-    # screenspace_primitives.compute_optical_flow so the overlay shows the same vectors
-    # the CV pipeline actually scored. Background gray stays at native
-    # resolution so the user sees a crisp image; arrow coordinates are
-    # scaled up via _draw_flow_arrows' coord_scale.
+    # Match compute_optical_flow's downscale so arrows show the scored vectors;
+    # coords rescale via coord_scale.
     h, w = prev_gray.shape[:2]
     max_dim = 256
     if h > max_dim or w > max_dim:
@@ -400,7 +393,7 @@ def _overlay_flow(
 
 
 def _overlay_template_heatmap(
-    frame: "np.ndarray", params: dict[str, Any]
+    frame: "np.ndarray", region: dict[str, Any] | None, params: dict[str, Any]
 ) -> "np.ndarray | None":
     template = params.get("template_image")
     if not (isinstance(template, np.ndarray) and template.size > 0):
@@ -408,22 +401,26 @@ def _overlay_template_heatmap(
     mask = params.get("template_mask")
     if not (isinstance(mask, np.ndarray) and mask.size > 0):
         mask = None
-    # Reuse the scan's template-prep + correlation helpers so the preview
-    # heatmap reflects exactly what a real scan computes: the mask is binarized
-    # (not blurred), and the degeneracy/oversize checks match the scan path.
+    # Reuse the scan's template prep and correlation so the preview matches
+    # a real scan.
     prepared = screenspace_primitives._prepare_template(template, mask)
     result = screenspace_primitives._template_correlation_map(frame, prepared)
     if result is None:
         return None
     tmpl_gray = prepared[0]
+    window = screenspace_primitives.region_search_window(region or {})
+    if window is not None:
+        th_t, tw_t = tmpl_gray.shape[:2]
+        result = screenspace_primitives._mask_corr_outside_window(
+            result, tw_t, th_t, window
+        )
+        if result is None:
+            return None
     norm = np.empty_like(result)
     cv2.normalize(result, norm, 0, 255, cv2.NORM_MINMAX)
     heat = cv2.applyColorMap(norm.astype(np.uint8), cv2.COLORMAP_JET)
-    # matchTemplate output indexes the top-left anchor of each candidate match,
-    # so offset by half the template size to center the heatmap response over
-    # the match's actual location in the frame. Edge pixels (outside the valid
-    # match range) are filled by replicating nearest values so the overlay
-    # visually covers the whole frame rather than leaving a black border.
+    # matchTemplate anchors top-left: offset by half the template; replicate
+    # edges to fill the frame.
     fh, fw = frame.shape[:2]
     hh, hw = heat.shape[:2]
     if (hh, hw) == (fh, fw):
@@ -431,6 +428,83 @@ def _overlay_template_heatmap(
     th, tw = tmpl_gray.shape[:2]
     top = th // 2
     left = tw // 2
+    bottom = fh - hh - top
+    right = fw - hw - left
+    return cv2.copyMakeBorder(
+        heat, top, bottom, left, right, borderType=cv2.BORDER_REPLICATE
+    )
+
+
+def _shape_prepared(params: dict[str, Any]) -> "list[dict[str, Any]] | None":
+    """Prepared shape reference from preview params, or None without one."""
+    shape_img = params.get("shape_image")
+    if not (isinstance(shape_img, np.ndarray) and shape_img.size > 0):
+        return None
+    mask = params.get("shape_mask")
+    if not (isinstance(mask, np.ndarray) and mask.size > 0):
+        mask = None
+    return screenspace_primitives._prepare_shape_reference(
+        shape_img,
+        mask,
+        float(params.get("scale_min", 0) or 0),
+        float(params.get("scale_max", 0) or 0),
+        int(params.get("scale_steps", 0) or 0),
+        float(params.get("scale_y_min", 0) or 0),
+        float(params.get("scale_y_max", 0) or 0),
+        int(params.get("scale_y_steps", 0) or 0),
+    )
+
+
+def _shape_best_corr(
+    frame_edges: "np.ndarray",
+    prepared: "list[dict[str, Any]]",
+    window: "tuple[float, float, float, float] | None" = None,
+) -> "tuple[float, np.ndarray, dict[str, Any]] | None":
+    """Best cross-scale correlation map — the same matchTemplate call and
+    region-window masking the scan runs (see match_shape), so the preview
+    reflects exactly what a scan sees."""
+    best: tuple[float, np.ndarray, dict[str, Any]] | None = None
+    fh, fw = frame_edges.shape[:2]
+    for entry in prepared:
+        if entry["h"] > fh or entry["w"] > fw:
+            continue
+        result = cv2.matchTemplate(frame_edges, entry["edges"], cv2.TM_CCOEFF_NORMED)
+        result = screenspace_primitives._neutralize_nonfinite(result)
+        if window is not None:
+            result = screenspace_primitives._mask_corr_outside_window(
+                result, entry["w"], entry["h"], window
+            )
+            if result is None:
+                continue
+        peak = float(result.max()) if result.size else -1.0
+        if best is None or peak > best[0]:
+            best = (peak, result, entry)
+    return best
+
+
+def _overlay_shape_heatmap(
+    frame: "np.ndarray", region: dict[str, Any] | None, params: dict[str, Any]
+) -> "np.ndarray | None":
+    prepared = _shape_prepared(params)
+    if not prepared:
+        return None
+    window = screenspace_primitives.region_search_window(region or {})
+    best = _shape_best_corr(
+        screenspace_primitives._frame_edge_map(frame), prepared, window
+    )
+    if best is None:
+        return None
+    _peak, result, entry = best
+    norm = np.empty_like(result)
+    cv2.normalize(result, norm, 0, 255, cv2.NORM_MINMAX)
+    heat = cv2.applyColorMap(norm.astype(np.uint8), cv2.COLORMAP_JET)
+    # Center like the template overlay: half-size offset, replicated edges.
+    fh, fw = frame.shape[:2]
+    hh, hw = heat.shape[:2]
+    if (hh, hw) == (fh, fw):
+        return heat
+    top = entry["h"] // 2
+    left = entry["w"] // 2
     bottom = fh - hh - top
     right = fw - hw - left
     return cv2.copyMakeBorder(
@@ -570,9 +644,7 @@ def _clip_region_pixels(
     pixels = screenspace_primitives.extract_region(frame, region)
     if pixels.size == 0:
         return None
-    # Shaped region: dim everything outside the polygon so every per-tool
-    # preview panel and region-scoped overlay layer shows what the masked
-    # analysis actually weighs (preview mirrors the real scan's preprocessing).
+    # Shaped region: dim outside the polygon to show what the mask weighs.
     mask = screenspace_primitives.region_mask_for(region, *pixels.shape[:2])
     if mask is not None:
         pixels = pixels.copy()
@@ -594,7 +666,7 @@ def _preview_color(
     if pixels is None:
         return _placeholder("Select a region to preview")
 
-    # Downscaled crop (mirrors average_color_hsv's ≤64 resize)
+    # Downscale for display only; average_color_hsv uses the full-resolution crop.
     h, w = pixels.shape[:2]
     if h > 64 or w > 64:
         down = cv2.resize(
@@ -602,8 +674,7 @@ def _preview_color(
         )
     else:
         down = pixels.copy()
-    # Shaped region: the mean must match the scan's masked math (inside-mask
-    # pixels are undimmed, so stats over the dimmed crop are identical).
+    # Mask the mean to match the scan; inside pixels are undimmed.
     region_mask = (
         screenspace_primitives.region_mask_for(region, *pixels.shape[:2])
         if region is not None
@@ -656,13 +727,11 @@ def _preview_change(
     curr_gray = cv2.cvtColor(curr_blur, cv2.COLOR_BGR2GRAY)
 
     if prev_frame is None:
-        panel = _label_panel(_fit_width(curr_gray, 200), "gray-blur (no prev)")
-        return panel
+        return _label_panel(_fit_width(curr_gray, 200), "gray-blur (no prev)")
 
     prev_pixels = _clip_region_pixels(prev_frame, region)
     if prev_pixels is None or prev_pixels.shape[:2] != pixels.shape[:2]:
-        panel = _label_panel(_fit_width(curr_gray, 200), "gray-blur (no prev)")
-        return panel
+        return _label_panel(_fit_width(curr_gray, 200), "gray-blur (no prev)")
 
     prev_blur = cv2.GaussianBlur(prev_pixels, (k, k), 0)
     prev_gray = cv2.cvtColor(prev_blur, cv2.COLOR_BGR2GRAY)
@@ -673,8 +742,7 @@ def _preview_change(
     mk = config.SCREENSPACE_MORPH_KERNEL
     mask_clean = cv2.morphologyEx(mask, cv2.MORPH_OPEN, np.ones((mk, mk), np.uint8))
 
-    # Shaped region: mirror scan_changes — count and normalize only inside
-    # the polygon (dimming alone merely attenuates outside changes).
+    # Shaped region: count and normalize inside the polygon only, like scan_changes.
     region_mask = (
         screenspace_primitives.region_mask_for(region, *mask_clean.shape[:2])
         if region is not None
@@ -687,8 +755,7 @@ def _preview_change(
         denom = float(mask_clean.size)
     ratio = float(np.count_nonzero(mask_clean)) / denom if denom else 0.0
 
-    # "Changes on frame": tint the real region warm where the cleaned mask fired,
-    # so the change reads in context (colorized magnitude, not a bare binary mask).
+    # Tint the region where the cleaned mask fired, colorized by magnitude.
     changes = _tint_changes(pixels, diff, mask_clean)
 
     return _hstack_panels(
@@ -743,8 +810,7 @@ def _preview_similarity(
         )
         panels.append(_label_panel(_fit_width(ref_gray, 200), "reference gray"))
 
-        # SSIM difference map — visualize what the Similarity tool actually
-        # scores (warm = dissimilar). Reuses the scan's preprocessing.
+        # SSIM difference map, warm = dissimilar; reuses the scan's preprocessing.
         ref_for_ssim = ref_frame
         if ref_for_ssim.shape[:2] != pixels.shape[:2]:
             ref_for_ssim = cv2.resize(
@@ -787,6 +853,7 @@ def _preview_timelapse(
 
 def _preview_template(
     frame: "np.ndarray",
+    region: dict[str, Any] | None,
     params: dict[str, Any],
 ) -> "np.ndarray":
     k = config.SCREENSPACE_BLUR_KERNEL
@@ -800,15 +867,19 @@ def _preview_template(
         )
         panels.append(_label_panel(_fit_width(tmpl_gray, 120), "template"))
 
-        # Match heatmap. Reuse the real scan's prepared-template pipeline
-        # (binarized mask, degenerate-template guard, finite neutralization) so
-        # the preview reflects exactly what a scan computes — a blurred mask here
-        # would inflate TM_CCOEFF_NORMED and show a different model than reality.
+        # Reuse the scan's prepared-template pipeline; a blurred mask would
+        # inflate TM_CCOEFF_NORMED.
         mask = params.get("template_mask")
         if not (isinstance(mask, np.ndarray) and mask.size > 0):
             mask = None
         prepared = screenspace_primitives._prepare_template(template, mask)
         result = screenspace_primitives._template_correlation_map(frame, prepared)
+        window = screenspace_primitives.region_search_window(region or {})
+        if result is not None and window is not None:
+            th_t, tw_t = prepared[0].shape[:2]
+            result = screenspace_primitives._mask_corr_outside_window(
+                result, tw_t, th_t, window
+            )
         if result is not None:
             norm = np.empty_like(result)
             cv2.normalize(result, norm, 0, 255, cv2.NORM_MINMAX)
@@ -816,6 +887,48 @@ def _preview_template(
             panels.append(_label_panel(_fit_width(heat, 240), "match heatmap"))
     else:
         panels.append(_label_panel(_placeholder("no template", 120, 80), "template"))
+    return _hstack_panels(panels)
+
+
+def _preview_shape(
+    frame: "np.ndarray",
+    region: dict[str, Any] | None,
+    params: dict[str, Any],
+) -> "np.ndarray":
+    # Built only from the scan's own helpers so panels match the real model.
+    frame_edges = screenspace_primitives._frame_edge_map(frame)
+    edges_u8 = np.clip(frame_edges, 0, 255).astype(np.uint8)
+    panels = [_label_panel(_fit_width(edges_u8, 240), "frame edges")]
+
+    prepared = _shape_prepared(params)
+    if prepared is None:
+        panels.append(_label_panel(_placeholder("no reference", 120, 80), "reference"))
+        return _hstack_panels(panels)
+    if not prepared:
+        panels.append(
+            _label_panel(_placeholder("no usable edges", 140, 80), "reference")
+        )
+        return _hstack_panels(panels)
+    window = screenspace_primitives.region_search_window(region or {})
+    best = _shape_best_corr(frame_edges, prepared, window)
+    if best is None:
+        panels.append(
+            _label_panel(
+                _placeholder("reference larger than frame", 180, 80), "reference"
+            )
+        )
+        return _hstack_panels(panels)
+    _peak, result, entry = best
+    ref_u8 = np.clip(entry["edges"], 0, 255).astype(np.uint8)
+    # ASCII only: cv2.putText renders non-ASCII glyphs (a multiply sign) as ??.
+    scale_label = f"reference x{entry['scale']:.2f}"
+    if entry.get("scale_y") not in (None, entry["scale"]):
+        scale_label = f"reference x{entry['scale']:.2f}/{entry['scale_y']:.2f}"
+    panels.append(_label_panel(_fit_width(ref_u8, 120), scale_label))
+    norm = np.empty_like(result)
+    cv2.normalize(result, norm, 0, 255, cv2.NORM_MINMAX)
+    heat = cv2.applyColorMap(norm.astype(np.uint8), cv2.COLORMAP_JET)
+    panels.append(_label_panel(_fit_width(heat, 240), "match heatmap"))
     return _hstack_panels(panels)
 
 
@@ -861,8 +974,7 @@ def _preview_flow(
         config.SCREENSPACE_FLOW_GRID_MIN_MAG,
     )
 
-    # Shaped region: mirror compute_optical_flow's masked mean — flow runs
-    # over the full rect, statistics are restricted to polygon pixels.
+    # Shaped region: flow runs on the full rect, stats on polygon pixels only.
     region_mask = (
         screenspace_primitives.region_mask_for(region, *mag.shape[:2])
         if region is not None
@@ -907,14 +1019,11 @@ def _preview_scene(
     else:
         pixels_small = pixels
 
-    # Canny at native region resolution to match
-    # screenspace_primitives.compute_scene_fingerprint and the full-frame overlay; then
-    # downscale the binary edge map for display so the small panel reflects
-    # the same edges that drive scene scoring.
+    # Canny at native resolution (as compute_scene_fingerprint), then downscale
+    # the edge map for display.
     gray = cv2.cvtColor(pixels, cv2.COLOR_BGR2GRAY)
-    edges = cv2.Canny(gray, 100, 200)
-    # Shaped region: mirror compute_scene_fingerprint's masked edge density
-    # and histogram — only polygon pixels drive scene scoring.
+    edges = screenspace_primitives.canny_edges(gray)
+    # Shaped region: only polygon pixels feed edge density and histogram.
     region_mask = (
         screenspace_primitives.region_mask_for(region, *pixels.shape[:2])
         if region is not None
@@ -978,7 +1087,7 @@ def _preview_inactivity(
         return _placeholder("Select a region to preview")
 
     ph = screenspace_primitives.compute_phash(pixels)
-    # imagehash.ImageHash exposes .hash as a 2D bool ndarray (typically 8×8 for phash)
+    # PHash exposes .hash as a 2D bool ndarray (typically 8×8 for phash)
     bits = np.asarray(ph.hash, dtype=np.uint8) * 255
     # Upscale to a visible grid
     cell = 16

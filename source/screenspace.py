@@ -1,14 +1,15 @@
 """Screenspace analysis engine for clipgen.
 
-Thirteen analysis tools (passed as 'type' when creating a task):
+Fourteen analysis tools (passed as 'type' when creating a task):
   multitool   – chain multiple tools; each subsequent step only checks frames that passed previous steps
   color       – frames where a region's average HSV color matches a target within tolerance
   change      – frames where pixel diff ratio exceeds SCREENSPACE_CHANGE_RATIO_THRESHOLD
   similarity  – frames matching a reference capture via SSIM (SCREENSPACE_SSIM_THRESHOLD)
-  text        – OCR fuzzy search for a query string (SCREENSPACE_OCR_FUZZY_THRESHOLD); requires EasyOCR
+  text        – OCR fuzzy search for a query string (SCREENSPACE_OCR_FUZZY_THRESHOLD); requires RapidOCR
   numbers     – OCR numeric comparison with a relational condition (eq/gt/lt/gte/lte/range)
   timelapse   – sped-up video of a region over a time range
-  template    – find a reference image/template anywhere in the full frame via cv2.matchTemplate
+  template    – find a reference image/template in the run region via cv2.matchTemplate
+  shape       – find a reference shape's outline in the run region via scale-swept edge matching (color/size tolerant)
   flow        – detect motion in a region via dense optical flow (cv2.calcOpticalFlowFarneback)
   scene       – classify frames by similarity to user-captured reference scenes
   inactivity  – detect spans of near-duplicate frames via perceptual hashing (loading screens, frozen states)
@@ -17,49 +18,45 @@ Thirteen analysis tools (passed as 'type' when creating a task):
 
 Workflow: user draws regions on a frame → enqueues tasks → ScreenspaceWorker processes in
 a background thread → results are timestamps or artifact files → state persisted to
-screenspace_manifest.json. Region coordinates are normalized (0–1); source_width/source_height
+the ``screenspace`` section of the output-dir manifest. Region coordinates are normalized (0–1); source_width/source_height
 are stored for denormalization to target video resolution.
 
-This module is a thin re-export facade. The implementation lives in cohesive sibling
-modules (imported deepest-first below); ``import screenspace; screenspace.NAME`` keeps
-resolving every public name — and the private names the test suite reaches for — from
-their new homes:
-
-  screenspace_primitives  – pure cv2/numpy region + image-analysis primitives
-  screenspace_ocr         – cached EasyOCR readers, number/text scoring helpers
-  screenspace_frames      – ffmpeg-pipe frame extraction + ffprobe metadata
-  screenspace_scans       – the eleven per-tool scan workflows
-  screenspace_heatmap     – template/flow/change/attention heatmap PNG + cumulative/rolling GIF generation
-  screenspace_tools       – AnalysisTool registry + per-frame dispatch
-  screenspace_multitool   – multitool chaining + offset joining
-  screenspace_manifest    – task/manifest persistence + event generation
-  screenspace_worker      – the background task-queue worker
+This module is a thin re-export facade: the implementation lives in the cohesive
+``screenspace_*`` siblings imported below (deepest-first), so ``screenspace.NAME``
+keeps resolving every public name — and the private names tests reach for.
+Per-module roles are tabulated in agents/ARCHITECTURE.md.
 """
 
 # ruff: noqa: F401
 # Deepest-first re-export so ``screenspace.NAME`` resolves from the new modules.
 
-# ``screenspace.utils`` is part of the public surface (a test monkeypatches
-# ``screenspace.utils.warning_print``); ``utils`` is a singleton module so the
-# patch is visible to every sibling that does ``import utils``.
+# Public: a test monkeypatches ``screenspace.utils.warning_print``, reaching
+# every sibling.
 import utils
 
 from screenspace_primitives import (
     FULL_FRAME_REGION,
     FULL_FRAME_REGION_NAME,
     ScanCallback,
+    PHash,
     _ConsecutiveBuffer,
+    _frame_edge_map,
     _merge_timestamp_spans,
     _morph_kernel,
+    _prepare_shape_reference,
     _prepare_template,
     _template_correlation_map,
     average_color_hsv,
+    attach_capture_mask,
+    canny_edges,
+    blur_gray,
     color_matches,
     color_present,
     compare_scene_fingerprints,
     compute_color_contrast,
     compute_face_saliency,
     compute_frame_diff,
+    compute_frame_diff_gray,
     compute_motion_saliency,
     compute_optical_flow,
     compute_phash,
@@ -70,28 +67,35 @@ from screenspace_primitives import (
     extract_region,
     face_detection_available,
     filter_matches_by_region_mask,
+    flow_downscale,
     mask_points_key,
+    match_shape,
     match_template,
+    mean_gray_diff,
+    nms_boxes_iou,
     point_in_mask_points,
     region_mask_for,
     region_masker,
     regions_are_similar,
     resolve_region_request,
     saliency_grid_from_map,
+    region_search_window,
+    sparse_grid_cells,
     saliency_kwargs_from_params,
     saliency_peak,
     ssim_diff_map,
+    structural_similarity,
 )
 from screenspace_ocr import (
+    _OCR_LANG_TO_MODEL,
     _preprocess_for_ocr,
+    _resolve_ocr_model,
     _score_numbers_readings,
     _score_text_readings,
     run_calibration_ocr,
 )
 
-# Re-exporting a name here only rebinds it on the facade — it does NOT propagate
-# to siblings that imported it (e.g. ``screenspace_scans._probe_video_meta``). To
-# stub a seam in a test, patch the owning module, not the facade.
+# Re-exports rebind only the facade; tests must patch the owning module.
 from screenspace_frames import (
     _ffmpeg_pipe_frames,
     _probe_video_meta,
@@ -111,22 +115,28 @@ from screenspace_scans import (
     scan_inactivity,
     scan_numbers,
     scan_scene,
+    scan_shape,
     scan_similarity,
     scan_template,
     scan_text,
 )
 from screenspace_heatmap import (
+    GIF_FRAMES,
+    GridLayers,
     build_gif_sprite_bytes,
+    build_grid_layers,
     generate_attention_heatmap,
     generate_change_heatmap,
     generate_flow_heatmap,
     generate_heatmap_gif,
     generate_rolling_heatmap_gif,
     generate_template_heatmap,
+    grid_layer_count,
     sprite_grid,
 )
 from screenspace_tools import (
     TOOLS,
+    tool_catalog,
     AnalysisTool,
     AttentionTool,
     BoundaryTool,
@@ -137,6 +147,7 @@ from screenspace_tools import (
     MultitoolTool,
     NumbersTool,
     SceneTool,
+    ShapeTool,
     SimilarityTool,
     TemplateTool,
     TextTool,

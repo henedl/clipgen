@@ -1,5 +1,7 @@
 from unittest.mock import Mock
 
+import pytest
+
 import config
 import pipeline
 import viewer
@@ -436,13 +438,13 @@ def test_process_single_clip_segments_forwards_cancel_to_video(monkeypatch, make
 
     sentinel = lambda: False
     pipeline._process_single_clip_segments(
-        raw_clip, "src.mp4", set(), output_format="clip", cancel_flag=sentinel
+        raw_clip, "src.mp4", output_format="clip", cancel_flag=sentinel
     )
     pipeline._process_single_clip_segments(
-        raw_clip, "src.mp4", set(), output_format="screen", cancel_flag=sentinel
+        raw_clip, "src.mp4", output_format="screen", cancel_flag=sentinel
     )
     pipeline._process_single_clip_segments(
-        raw_clip, "src.mp4", set(), output_format="gif", cancel_flag=sentinel
+        raw_clip, "src.mp4", output_format="gif", cancel_flag=sentinel
     )
 
     assert captured["clip"] is sentinel
@@ -477,7 +479,6 @@ def test_process_single_clip_segments_unlinks_partial_on_cancel(
     generated, paths, _ = pipeline._process_single_clip_segments(
         raw_clip,
         "src.mp4",
-        set(),
         output_format="clip",
         cancel_flag=lambda: cancel_state["set"],
     )
@@ -595,14 +596,12 @@ def test_reel_part_cut_is_not_size_capped(monkeypatch, make_clip):
 
     # enforce_size=False (reel-part path) → no compression.
     pipeline._process_single_clip_segments(
-        prepared, "src.mp4", set(), collect_paths=True, enforce_size=False
+        prepared, "src.mp4", collect_paths=True, enforce_size=False
     )
     assert enforce.call_count == 0
 
     # enforce_size defaults True (final clip) → compression runs once.
-    pipeline._process_single_clip_segments(
-        prepared, "src.mp4", set(), collect_paths=True
-    )
+    pipeline._process_single_clip_segments(prepared, "src.mp4", collect_paths=True)
     assert enforce.call_count == 1
 
 
@@ -763,7 +762,7 @@ def test_process_single_clip_segments_releases_reservation_on_ffmpeg_failure(
 
     raw_clip = pipeline.files.prepare_clip(make_clip())
     generated, paths, _ = pipeline._process_single_clip_segments(
-        raw_clip, str(input_dir / "study_P01.mp4"), set(), output_format="clip"
+        raw_clip, str(input_dir / "study_P01.mp4"), output_format="clip"
     )
 
     assert generated == 0
@@ -793,6 +792,31 @@ def test_process_reel_releases_reservation_on_concat_failure(
     assert result == 0
     assert records == []
     assert list(output_dir.iterdir()) == []
+
+
+def test_process_reel_releases_output_when_concat_raises(
+    monkeypatch, make_clip, tmp_path
+):
+    """Ctrl-C mid-concat must not leave the reserved reel placeholder behind."""
+    output_dir = tmp_path / "out"
+    output_dir.mkdir()
+    part_path = output_dir / "part.mp4"
+    part_path.write_bytes(b"clip")
+    monkeypatch.setattr(config, "OUTPUT_DIR", str(output_dir), raising=False)
+    monkeypatch.setattr(
+        pipeline,
+        "_run_clip_pipeline",
+        lambda clips_list, **kwargs: ([([(str(part_path), 0)], [], [], True)], set()),
+    )
+
+    def interrupted(*a, **k):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(pipeline.video, "concatenate_clips", interrupted)
+    monkeypatch.setattr(pipeline.utils, "use_progress", lambda: False)
+    with pytest.raises(KeyboardInterrupt):
+        pipeline.process_reel([make_clip()])
+    assert not [p for p in output_dir.iterdir() if "reel" in p.name]
 
 
 def test_process_reel_releases_caller_reserved_output_when_no_clips(
@@ -1269,7 +1293,7 @@ def test_run_clip_pipeline_cancel_captures_started_clip_results(monkeypatch):
     assert len(results) == len(ran)
     assert all(r is not None for r in results)
     # Each captured result is the proper (segment_paths, components) tuple shape.
-    for segment_paths, components in results:
+    for segment_paths, _components in results:
         assert isinstance(segment_paths, list)
 
 
@@ -1365,3 +1389,93 @@ def test_process_reel_records_cards_that_actually_landed(monkeypatch, make_clip)
         [raw_clip], output_file="reel2.mp4", titlecards_enabled=True
     )
     assert records[0]["titlecards"] is True
+
+
+def test_completion_message_reports_aborted_reel(monkeypatch, capsys):
+    import app
+
+    monkeypatch.setattr(app.utils, "get_effective_output_dir", lambda: "/tmp/out")
+    app._print_completion_message(0, "clip", is_reel=True)
+    aborted = capsys.readouterr().out
+    assert "created 1 reel" not in aborted
+    assert "No reel was created" in aborted
+
+    app._print_completion_message(1, "clip", is_reel=True)
+    assert "created 1 reel" in capsys.readouterr().out
+
+
+def test_process_clips_parallel_survives_one_failing_clip(monkeypatch, make_clip):
+    """A clip that raises is reported and skipped; the batch still completes."""
+    clips = [make_clip(row=i, col=2) for i in range(3, 7)]
+    monkeypatch.setattr(
+        pipeline.files,
+        "prepare_clip",
+        lambda clip: _prepared_clip(clip, [("00:10", "00:20")]),
+    )
+    monkeypatch.setattr(pipeline.Path, "is_file", lambda self: True)
+    monkeypatch.setattr(pipeline.utils, "create_progress_bar", lambda: None)
+    monkeypatch.setattr(config, "CLIP_PARALLEL_WORKERS", 4)
+    monkeypatch.setattr(
+        pipeline.files,
+        "get_unique_filename",
+        lambda template, file_format=None: f"{template}{file_format or ''}",
+    )
+
+    import threading
+
+    calls = {"n": 0}
+    lock = threading.Lock()
+
+    def run_ffmpeg(*_args, **_kwargs):
+        with lock:
+            calls["n"] += 1
+            first = calls["n"] == 1
+        if first:
+            raise RuntimeError("boom")
+        return True
+
+    monkeypatch.setattr(pipeline.video, "run_ffmpeg", run_ffmpeg)
+
+    count, _artifacts = pipeline.process_clips(clips, output_format="clip")
+    assert count == 3
+
+
+def test_regenerate_gif_artifact_keeps_default_gif_length(monkeypatch, tmp_path):
+    """The stored span is the clip's; the GIF stays capped like generation."""
+    monkeypatch.setattr(config, "INPUT_DIR", str(tmp_path), raising=False)
+    monkeypatch.setattr(config, "OUTPUT_DIR", str(tmp_path), raising=False)
+    (tmp_path / "study_P01.mp4").write_text("v")
+    extract_gif = Mock(return_value=True)
+    monkeypatch.setattr(pipeline.video, "extract_gif", extract_gif)
+
+    artifact = {
+        "type": "gif",
+        "file": "clip.gif",
+        "sourceVideo": "study_P01.mp4",
+        "localStart": 0.0,
+        "localEnd": 60.0,
+    }
+    assert pipeline._regenerate_single_artifact(artifact, set()) is True
+    _, kwargs = extract_gif.call_args
+    assert kwargs["duration_seconds"] == config.DEFAULT_GIF_DURATION_SECONDS
+
+
+def test_regenerate_artifact_rounds_fractional_local_times(monkeypatch, tmp_path):
+    """Rounding matches the original cut; truncation drifted by up to a second."""
+    monkeypatch.setattr(config, "INPUT_DIR", str(tmp_path), raising=False)
+    monkeypatch.setattr(config, "OUTPUT_DIR", str(tmp_path), raising=False)
+    (tmp_path / "study_P01.mp4").write_text("v")
+    run_ffmpeg = Mock(return_value=True)
+    monkeypatch.setattr(pipeline.video, "run_ffmpeg", run_ffmpeg)
+
+    artifact = {
+        "type": "clip",
+        "file": "clip.mp4",
+        "sourceVideo": "study_P01.mp4",
+        "localStart": 10.6,
+        "localEnd": 20.4,
+    }
+    assert pipeline._regenerate_single_artifact(artifact, set()) is True
+    _, kwargs = run_ffmpeg.call_args
+    assert kwargs["start_pos"] == "0:11"
+    assert kwargs["end_pos"] == "0:20"

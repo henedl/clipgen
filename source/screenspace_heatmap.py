@@ -1,10 +1,8 @@
 """Screenspace heatmap generation (pure cv2/PIL leaf).
 
-Template-, flow-, change-, and attention-heatmap PNGs plus animated-GIF views:
-a cumulative accumulation and a rolling-window (recent-only, fading) variant.
-A GIF gives the browser no way to seek, so build_gif_sprite_bytes() re-tiles one
-into a sprite sheet on demand for the frontend's hover-scrub.
-No sibling-module dependencies beyond config/utils.
+Template/flow/change/attention PNGs plus two animated-GIF views: cumulative, and
+a rolling window (recent-only, fading). A GIF gives the browser no way to seek,
+so build_gif_sprite_bytes() re-tiles one into a sprite sheet for hover-scrub.
 """
 
 import io
@@ -16,22 +14,34 @@ import cv2
 import numpy as np
 
 import config
+import profiling
 import utils
 
 if TYPE_CHECKING:
     from PIL import Image
 
 
-# ---------------------------------------------------------------------------
-# Heatmap generation
-# ---------------------------------------------------------------------------
+def _normalize_blur(accumulator: np.ndarray, max_val: float) -> np.ndarray:
+    """Normalize by *max_val* and blur → uint8 intensity (JET palette indexes)."""
+    normalized = (accumulator / max_val * 255).astype(np.uint8)
+    return cv2.GaussianBlur(normalized, (15, 15), 0)
 
 
 def _colorize_accumulator(accumulator: np.ndarray, max_val: float) -> np.ndarray:
     """Normalize by *max_val*, blur, and apply the JET colormap → BGR uint8."""
-    normalized = (accumulator / max_val * 255).astype(np.uint8)
-    normalized = cv2.GaussianBlur(normalized, (15, 15), 0)
-    return cv2.applyColorMap(normalized, cv2.COLORMAP_JET)
+    return cv2.applyColorMap(_normalize_blur(accumulator, max_val), cv2.COLORMAP_JET)
+
+
+# JET palette as RGB bytes for "P"-mode GIF frames; index i = applyColorMap(i).
+_JET_PALETTE: bytes | None = None
+
+
+def _jet_palette() -> bytes:
+    global _JET_PALETTE
+    if _JET_PALETTE is None:
+        ramp = np.arange(256, dtype=np.uint8).reshape(1, 256)
+        _JET_PALETTE = cv2.applyColorMap(ramp, cv2.COLORMAP_JET)[0, :, ::-1].tobytes()
+    return _JET_PALETTE
 
 
 def _write_png(output_path: str, image: np.ndarray) -> bool:
@@ -57,13 +67,26 @@ def _write_png(output_path: str, image: np.ndarray) -> bool:
     return True
 
 
-# Heatmap types that accumulate sparse normalized {x, y, mag} grid cells at a
-# fixed 256×256 resolution (template accumulates match boxes frame-native).
+# Types accumulating sparse {x, y, mag} cells at 256×256; template stays frame-native.
 _GRID_KEYS: dict[str, str] = {
     "flow": "flow_grid",
     "change": "change_grid",
     "attention": "saliency_grid",
 }
+
+# Fixed accumulator edge; keeps per-bucket layers cheap to share (build_grid_layers).
+_GRID_ACC_SIZE = 256
+
+# Buckets per GIF. Public: prebuilt layers must bucket identically or read as stale.
+GIF_FRAMES = 24
+
+# One GIF bucket's drawn values plus the mask of pixels it drew.
+GridLayers = list[tuple[np.ndarray, np.ndarray]]
+
+
+def grid_layer_count(results: list[dict[str, Any]]) -> int:
+    """Bucket count the GIF generators will use for *results*."""
+    return min(GIF_FRAMES, len(results))
 
 
 def generate_template_heatmap(
@@ -94,36 +117,57 @@ def generate_template_heatmap(
     return output_path
 
 
+def _grid_accumulator(
+    results: list[dict[str, Any]],
+    heatmap_type: str,
+    layers: "GridLayers | None",
+) -> np.ndarray:
+    """Full-replay accumulator for a grid heatmap PNG, reusing *layers* if given."""
+    if layers:
+        return _fold_grid_layers(layers, len(layers) - 1)
+    accumulator = np.zeros((_GRID_ACC_SIZE, _GRID_ACC_SIZE), dtype=np.float32)
+    for r in results:
+        _accumulate_heatmap_result(accumulator, r, heatmap_type)
+    return accumulator
+
+
+def _render_grid_heatmap(
+    results: list[dict[str, Any]],
+    width: int,
+    height: int,
+    output_path: str,
+    kind: str,
+    layers: GridLayers | None,
+) -> str | None:
+    """Accumulate one grid *kind*, colorize, resize to the target, write PNG."""
+    accumulator = _grid_accumulator(results, kind, layers)
+    if accumulator.max() == 0:
+        return None
+    heatmap = _colorize_accumulator(accumulator, accumulator.max())
+    heatmap = cv2.resize(heatmap, (width, height), interpolation=cv2.INTER_LINEAR)
+    if not _write_png(output_path, heatmap):
+        return None
+    return output_path
+
+
 def generate_flow_heatmap(
     results: list[dict[str, Any]],
     region_width: int,
     region_height: int,
     output_path: str,
+    layers: GridLayers | None = None,
 ) -> str | None:
     """Generate a heatmap PNG from accumulated optical flow magnitudes.
 
     Uses ``flow_grid`` data from each result to paint per-cell motion
     intensity across all frames.
+
+    *layers* is an optional prebuilt :func:`build_grid_layers` result covering
+    every result; folding it is equivalent to the replay below and skips it.
     """
-    acc_size = 256
-    accumulator = np.zeros((acc_size, acc_size), dtype=np.float32)
-    for r in results:
-        for cell in r.get("flow_grid", []):
-            cx = int(cell["x"] * (acc_size - 1))
-            cy = int(cell["y"] * (acc_size - 1))
-            radius = max(1, acc_size // 16)
-            cv2.circle(accumulator, (cx, cy), radius, float(cell["mag"]), -1)
-
-    if accumulator.max() == 0:
-        return None
-
-    heatmap = _colorize_accumulator(accumulator, accumulator.max())
-    heatmap = cv2.resize(
-        heatmap, (region_width, region_height), interpolation=cv2.INTER_LINEAR
+    return _render_grid_heatmap(
+        results, region_width, region_height, output_path, "flow", layers
     )
-    if not _write_png(output_path, heatmap):
-        return None
-    return output_path
 
 
 def generate_change_heatmap(
@@ -131,27 +175,19 @@ def generate_change_heatmap(
     region_width: int,
     region_height: int,
     output_path: str,
+    layers: GridLayers | None = None,
 ) -> str | None:
     """Generate a heatmap PNG from accumulated per-frame change-mask grids.
 
     Uses ``change_grid`` data (downsampled change masks) from each result to
     paint where pixels changed most often across all detected change frames.
+
+    *layers* is an optional prebuilt :func:`build_grid_layers` result covering
+    every result; folding it is equivalent to the replay below and skips it.
     """
-    acc_size = 256
-    accumulator = np.zeros((acc_size, acc_size), dtype=np.float32)
-    for r in results:
-        _accumulate_heatmap_result(accumulator, r, "change")
-
-    if accumulator.max() == 0:
-        return None
-
-    heatmap = _colorize_accumulator(accumulator, accumulator.max())
-    heatmap = cv2.resize(
-        heatmap, (region_width, region_height), interpolation=cv2.INTER_LINEAR
+    return _render_grid_heatmap(
+        results, region_width, region_height, output_path, "change", layers
     )
-    if not _write_png(output_path, heatmap):
-        return None
-    return output_path
 
 
 def generate_attention_heatmap(
@@ -159,38 +195,37 @@ def generate_attention_heatmap(
     frame_width: int,
     frame_height: int,
     output_path: str,
+    layers: GridLayers | None = None,
 ) -> str | None:
     """Generate a heatmap PNG from accumulated per-frame saliency grids.
 
     Uses ``saliency_grid`` data (downsampled saliency maps, one per sampled
     frame) so heat reflects predicted attention dwell across the whole scan —
     the eye-tracking-style deliverable. Full-frame: sized to the video frame.
+
+    *layers* is an optional prebuilt :func:`build_grid_layers` result covering
+    every result; folding it is equivalent to the replay below and skips it.
     """
-    acc_size = 256
-    accumulator = np.zeros((acc_size, acc_size), dtype=np.float32)
-    for r in results:
-        _accumulate_heatmap_result(accumulator, r, "attention")
-
-    if accumulator.max() == 0:
-        return None
-
-    heatmap = _colorize_accumulator(accumulator, accumulator.max())
-    heatmap = cv2.resize(
-        heatmap, (frame_width, frame_height), interpolation=cv2.INTER_LINEAR
+    return _render_grid_heatmap(
+        results, frame_width, frame_height, output_path, "attention", layers
     )
-    if not _write_png(output_path, heatmap):
-        return None
-    return output_path
 
 
 def _accumulate_heatmap_result(
     accumulator: np.ndarray,
     result: dict[str, Any],
     heatmap_type: str,
+    mask_out: np.ndarray | None = None,
 ) -> None:
-    """Add a single result's contribution to a heatmap accumulator."""
+    """Add a single result's contribution to a heatmap accumulator.
+
+    *mask_out* (uint8, accumulator-shaped) additionally records which pixels
+    the grid branch drew — the geometry, not the values, so a ``mag`` of 0
+    still marks its pixels. The rolling-GIF bucket layers replay overwrites
+    through it (see :func:`generate_rolling_heatmap_gif`).
+    """
     acc_h, acc_w = accumulator.shape[:2]
-    if heatmap_type == "template":
+    if heatmap_type in ("template", "shape"):
         for m in result.get("matches", []):
             x, y, w, h = int(m["x"]), int(m["y"]), int(m["w"]), int(m["h"])
             y2 = min(y + h, acc_h)
@@ -202,6 +237,72 @@ def _accumulate_heatmap_result(
             cy = int(cell["y"] * (acc_h - 1))
             radius = max(1, acc_w // 16)
             cv2.circle(accumulator, (cx, cy), radius, float(cell["mag"]), -1)
+            if mask_out is not None:
+                cv2.circle(mask_out, (cx, cy), radius, 1, -1)
+
+
+def build_grid_layers(
+    results: list[dict[str, Any]],
+    heatmap_type: str,
+    num_frames: int,
+) -> GridLayers | None:
+    """Draw each temporal bucket's grid cells once, as ``(values, mask)`` layers.
+
+    Grid types (flow/change/attention) draw with ``cv2.circle``, which *sets*
+    rather than accumulates — so a bucket's layer plus the mask of pixels it
+    drew reproduces any replay of that bucket exactly (see
+    :func:`generate_rolling_heatmap_gif`, which has always relied on this).
+
+    The three artifacts a grid scan produces — the PNG, the cumulative GIF and
+    the rolling GIF — all replayed the same results independently, four full
+    passes of per-cell Python-level circle draws in total. Measured on a 962-
+    result 16×16-grid attention scan those passes are ~0.26 s *each*, and the
+    two GIF generators run concurrently, so they also spent that time fighting
+    over the GIL: overlapping them measured **slower** than running them back to
+    back (0.82×). Building the buckets once up front leaves only numpy folds and
+    PIL's encoder in the threads, which does parallelize (measured 1.45×).
+
+    Within a bucket the same "last wins" rule means only a center's final draw
+    can show, so each center is drawn once, in the order of its last occurrence,
+    with its last magnitude — the same pixels as a frame-by-frame replay
+    (``test_bucket_layers_match_sequential_draws_exactly``) from one circle per
+    center instead of one per frame: 490k → 12k ``cv2.circle`` calls on that
+    same 962-frame scan, 0.47 s → 0.05 s.
+
+    Returns ``None`` for non-grid types (template accumulates additively and
+    frame-native; see :func:`generate_rolling_heatmap_gif`).
+    """
+    if heatmap_type not in _GRID_KEYS:
+        return None
+    key = _GRID_KEYS[heatmap_type]
+    scale = _GRID_ACC_SIZE - 1
+    radius = max(1, _GRID_ACC_SIZE // 16)
+    layers: GridLayers = []
+    for bucket in range(max(1, num_frames)):
+        vals = np.zeros((_GRID_ACC_SIZE, _GRID_ACC_SIZE), dtype=np.float32)
+        mask = np.zeros((_GRID_ACC_SIZE, _GRID_ACC_SIZE), dtype=np.uint8)
+        start_idx, end_idx = _frame_bucket_bounds(bucket, len(results), num_frames)
+        # Draws set pixels: keep each center's last draw, in last-seen order.
+        last: dict[tuple[int, int], float] = {}
+        for r_idx in range(start_idx, end_idx):
+            for cell in results[r_idx].get(key, []):
+                center = (int(cell["x"] * scale), int(cell["y"] * scale))
+                last.pop(center, None)
+                last[center] = float(cell["mag"])
+        for center, mag in last.items():
+            cv2.circle(vals, center, radius, mag, -1)
+            cv2.circle(mask, center, radius, 1, -1)
+        layers.append((vals, mask.astype(bool)))
+    return layers
+
+
+def _fold_grid_layers(layers: GridLayers, upto: int) -> np.ndarray:
+    """Replay buckets ``0..upto`` onto one accumulator (last draw wins per pixel)."""
+    acc = np.zeros((_GRID_ACC_SIZE, _GRID_ACC_SIZE), dtype=np.float32)
+    for bucket in range(upto + 1):
+        vals, mask = layers[bucket]
+        acc[mask] = vals[mask]
+    return acc
 
 
 def _heatmap_frame_image(
@@ -216,14 +317,26 @@ def _heatmap_frame_image(
     Grid-based heatmaps (flow, change, attention) accumulate at a fixed
     resolution and are resized to the requested frame size; template
     accumulates frame-native.
+
+    Frames are built in palette ("P") mode: the JET colormap maps the 256
+    normalized intensity values onto exactly 256 colors, so the blurred
+    intensity image *is* the palette index image. Handing PIL RGB frames
+    instead made the GIF encoder re-derive a 256-color palette per frame
+    (quantizing ~1M pixels each) — the dominant cost of heatmap GIF
+    generation: a 24-frame 1280×720 attention GIF drops 1.59 s → 0.66 s
+    (rolling 1.87 s → 0.98 s), file size roughly unchanged. Grid types now
+    interpolate in intensity space rather than between mapped colors;
+    decoded output differs from the old quantized frames by ≤ ~5% per
+    channel, comparable to the quantizer's own error.
     """
     from PIL import Image
 
-    colored = _colorize_accumulator(accumulator, global_max)
+    idx = _normalize_blur(accumulator, global_max)
     if heatmap_type in _GRID_KEYS:
-        colored = cv2.resize(colored, (width, height), interpolation=cv2.INTER_LINEAR)
-    rgb = cv2.cvtColor(colored, cv2.COLOR_BGR2RGB)
-    return Image.fromarray(rgb)
+        idx = cv2.resize(idx, (width, height), interpolation=cv2.INTER_LINEAR)
+    frame = Image.fromarray(idx, mode="P")
+    frame.putpalette(_jet_palette())
+    return frame
 
 
 def _frame_bucket_bounds(
@@ -240,6 +353,53 @@ def _frame_bucket_bounds(
     return (frame_idx * total) // num_frames, ((frame_idx + 1) * total) // num_frames
 
 
+def _delta_frames(
+    frames: list["Image.Image"], frame_duration_ms: int
+) -> tuple[list["Image.Image"], list[int]]:
+    """Frame-difference the animation in numpy: PIL's ``optimize`` without its cost.
+
+    PIL's default GIF ``optimize`` rewrites every frame after the first as a
+    delta — unchanged pixels become a palette index the frame does not use,
+    flagged transparent — and folds identical frames into the previous one's
+    duration. It builds that delta through ``get_flattened_data()``/
+    ``putdata()``, a Python tuple of every pixel per frame: 8-10 ms of a
+    1280×720 frame's ~15 ms encode. Doing the same comparison as one ``!=``
+    on the index arrays, then saving with ``optimize=False``, decodes to the
+    same pixels (frames and durations alike, pinned by ``TestDeltaFrames``) at
+    about the same file size — a few percent either way — and cuts the encode
+    to a third (measured 388 ms → 130 ms for 24 frames at 1280×720).
+
+    Returns ``(frames, durations)``: the frames to write — the first verbatim,
+    the rest pre-filled with their own spare index in ``info["transparency"]``
+    (PIL reads it per frame), or verbatim when the frame's changed pixels use
+    every index — and one duration per kept frame with collapsed repeats
+    folded in.
+    """
+    from PIL import Image
+
+    arrays = [np.asarray(frame) for frame in frames]
+    kept = [frames[0]]
+    durations = [frame_duration_ms]
+    prev = arrays[0]
+    for frame, arr in zip(frames[1:], arrays[1:], strict=True):
+        changed = arr != prev
+        if not changed.any():
+            durations[-1] += frame_duration_ms
+            continue
+        spare = np.flatnonzero(np.bincount(arr[changed], minlength=256) == 0)
+        if spare.size:
+            index = int(spare[-1])
+            delta = Image.fromarray(np.where(changed, arr, np.uint8(index)))
+            delta.putpalette(_jet_palette())
+            delta.info["transparency"] = index
+            kept.append(delta)
+        else:
+            kept.append(frame)
+        durations.append(frame_duration_ms)
+        prev = arr
+    return kept, durations
+
+
 def _save_animation(
     frames: list["Image.Image"],
     output_path: str,
@@ -253,22 +413,24 @@ def _save_animation(
     same GIF later.
 
     ``frames`` is re-read from the written file rather than taken from ``len()``:
-    PIL collapses a run of identical frames into one, which happens whenever
-    consecutive buckets add no new heat (``cv2.circle`` sets rather than
-    accumulates, so repeat detections at one spot render identically). Trusting
-    the input count would tell the frontend to scrub to cells the sheet doesn't
-    have.
+    a run of identical frames collapses into one (see :func:`_delta_frames`),
+    which happens whenever consecutive buckets add no new heat (``cv2.circle``
+    sets rather than accumulates, so repeat detections at one spot render
+    identically). Trusting the input count would tell the frontend to scrub to
+    cells the sheet doesn't have.
     """
     from PIL import Image
 
-    frames[0].save(
+    kept, durations = _delta_frames(frames, frame_duration_ms)
+    kept[0].save(
         output_path,
         save_all=True,
-        append_images=frames[1:],
-        duration=frame_duration_ms,
+        append_images=kept[1:],
+        duration=durations,
         loop=0,
+        optimize=False,
     )
-    written = len(frames)
+    written = len(kept)
     try:
         with Image.open(output_path) as anim:
             written = int(getattr(anim, "n_frames", written))
@@ -308,12 +470,8 @@ def build_gif_sprite_bytes(gif_path: str, cols: int) -> bytes | None:
         with Image.open(gif_path) as anim:
             frames = [f.convert("RGB") for f in ImageSequence.Iterator(anim)]
     except Exception as exc:
-        # Deliberately broad: this decodes a file that may be truncated or
-        # half-written (a scan killed mid-save), and PIL's GIF frame walk leaks
-        # whatever its parser hits — IndexError and struct.error as readily as
-        # OSError. Every one of them means the same thing to the caller: no
-        # sprite, fall back to plain playback. Letting one escape would 500 the
-        # route instead of degrading a thumbnail.
+        # Broad on purpose: a half-written GIF raises IndexError or struct.error
+        # too; fall back, don't 500.
         utils.warning_print(f"Could not read heatmap GIF {gif_path}: {exc}")
         return None
     if not frames:
@@ -335,20 +493,26 @@ def build_gif_sprite_bytes(gif_path: str, cols: int) -> bytes | None:
     return buf.getvalue()
 
 
+@profiling.timed("heatmap.gif")
 def generate_heatmap_gif(
     results: list[dict[str, Any]],
     width: int,
     height: int,
     output_path: str,
     heatmap_type: str = "template",
-    num_frames: int = 24,
+    num_frames: int = GIF_FRAMES,
     frame_duration_ms: int = 120,
+    layers: GridLayers | None = None,
 ) -> dict[str, Any] | None:
     """Generate an animated GIF showing heatmap accumulation over time.
 
     Divides *results* into *num_frames* temporal buckets, progressively
     accumulates heatmap data, and writes frames as an animated GIF. Returns the
     :func:`_save_animation` descriptor, or ``None`` when there is nothing to draw.
+
+    *layers* is an optional prebuilt :func:`build_grid_layers` result covering the
+    same buckets, which replaces both replays below with numpy folds. Grid types
+    only; ignored for template.
     """
     if not results:
         return None
@@ -359,29 +523,37 @@ def generate_heatmap_gif(
 
     acc_h, acc_w = height, width
     if heatmap_type in _GRID_KEYS:
-        acc_h = acc_w = 256
+        acc_h = acc_w = _GRID_ACC_SIZE
+    if heatmap_type not in _GRID_KEYS or (
+        layers is not None and len(layers) != num_frames
+    ):
+        layers = None
 
-    # Pass 1: accumulate everything to find the shared ceiling. Accumulation is
-    # monotonic, so the final cumulative state already carries the global max —
-    # no per-frame snapshots needed to compute it.
-    accumulator = np.zeros((acc_h, acc_w), dtype=np.float32)
-    for r in results:
-        _accumulate_heatmap_result(accumulator, r, heatmap_type)
-    global_max = float(accumulator.max())
+    # Pass 1: accumulation is monotonic, so the final state holds the global max.
+    if layers is not None:
+        global_max = float(_fold_grid_layers(layers, num_frames - 1).max())
+    else:
+        accumulator = np.zeros((acc_h, acc_w), dtype=np.float32)
+        for r in results:
+            _accumulate_heatmap_result(accumulator, r, heatmap_type)
+        global_max = float(accumulator.max())
     if global_max == 0:
         return None
 
-    # Pass 2: replay the accumulation bucket-by-bucket, colorizing each frame
-    # inline against that shared max. Only one float32 accumulator is ever
-    # resident, so peak memory is ~one frame instead of all `num_frames`
-    # snapshots at once (~190MB → ~8MB at 1080p). `_heatmap_frame_image` reads
-    # the accumulator without mutating it, so accumulation safely continues.
+    # Pass 2: replay per bucket, colorizing inline; one accumulator resident
+    # (~8MB, not ~190MB).
     accumulator = np.zeros((acc_h, acc_w), dtype=np.float32)
     frames: list[Image.Image] = []
     for frame_idx in range(num_frames):
-        start_idx, end_idx = _frame_bucket_bounds(frame_idx, len(results), num_frames)
-        for r_idx in range(start_idx, end_idx):
-            _accumulate_heatmap_result(accumulator, results[r_idx], heatmap_type)
+        if layers is not None:
+            vals, mask = layers[frame_idx]
+            accumulator[mask] = vals[mask]
+        else:
+            start_idx, end_idx = _frame_bucket_bounds(
+                frame_idx, len(results), num_frames
+            )
+            for r_idx in range(start_idx, end_idx):
+                _accumulate_heatmap_result(accumulator, results[r_idx], heatmap_type)
         frames.append(
             _heatmap_frame_image(accumulator, global_max, heatmap_type, width, height)
         )
@@ -389,15 +561,17 @@ def generate_heatmap_gif(
     return _save_animation(frames, output_path, frame_duration_ms)
 
 
+@profiling.timed("heatmap.rolling")
 def generate_rolling_heatmap_gif(
     results: list[dict[str, Any]],
     width: int,
     height: int,
     output_path: str,
     heatmap_type: str = "template",
-    num_frames: int = 24,
+    num_frames: int = GIF_FRAMES,
     window_frames: int = 6,
     frame_duration_ms: int = 120,
+    layers: GridLayers | None = None,
 ) -> dict[str, Any] | None:
     """Generate an animated GIF showing a sliding-window heatmap over time.
 
@@ -416,28 +590,45 @@ def generate_rolling_heatmap_gif(
     window_frames = max(1, window_frames)
     acc_h, acc_w = height, width
     if heatmap_type in _GRID_KEYS:
-        acc_h = acc_w = 256
+        acc_h = acc_w = _GRID_ACC_SIZE
 
-    def _accumulate_window(frame_idx: int) -> np.ndarray:
-        acc = np.zeros((acc_h, acc_w), dtype=np.float32)
-        win_start = max(0, frame_idx - window_frames + 1)
-        for bucket in range(win_start, frame_idx + 1):
-            start_idx, end_idx = _frame_bucket_bounds(bucket, len(results), num_frames)
-            for r_idx in range(start_idx, end_idx):
-                _accumulate_heatmap_result(acc, results[r_idx], heatmap_type)
-        return acc
+    if heatmap_type in _GRID_KEYS:
+        # Grid draws set pixels (last wins), so folding bucket layers in order
+        # matches replay bit-for-bit.
+        if layers is None or len(layers) != num_frames:
+            layers = build_grid_layers(results, heatmap_type, num_frames) or []
+        bucket_layers = layers
 
-    # Pass 1: build each window once to find the shared ceiling, discarding each
-    # array immediately so only one window is ever resident.
+        def _accumulate_window(frame_idx: int) -> np.ndarray:
+            acc = np.zeros((acc_h, acc_w), dtype=np.float32)
+            for bucket in range(max(0, frame_idx - window_frames + 1), frame_idx + 1):
+                vals, mask = bucket_layers[bucket]
+                acc[mask] = vals[mask]
+            return acc
+
+    else:
+        # Template accumulates additively and frame-native: layer sums would
+        # drift and cost memory. Rebuild from results.
+        def _accumulate_window(frame_idx: int) -> np.ndarray:
+            acc = np.zeros((acc_h, acc_w), dtype=np.float32)
+            win_start = max(0, frame_idx - window_frames + 1)
+            for bucket in range(win_start, frame_idx + 1):
+                start_idx, end_idx = _frame_bucket_bounds(
+                    bucket, len(results), num_frames
+                )
+                for r_idx in range(start_idx, end_idx):
+                    _accumulate_heatmap_result(acc, results[r_idx], heatmap_type)
+            return acc
+
+    # Pass 1: build each window once for the shared ceiling; one window resident.
     global_max = 0.0
     for i in range(num_frames):
         global_max = max(global_max, float(_accumulate_window(i).max()))
     if global_max == 0:
         return None
 
-    # Pass 2: rebuild each window and colorize inline against that shared max —
-    # peak memory is ~one window instead of all `num_frames` at once. Windows are
-    # independent, so rebuilding them is cheap relative to holding them all.
+    # Pass 2: rebuild each window and colorize against the shared max; one
+    # window resident.
     frames: list[Image.Image] = []
     for idx in range(num_frames):
         frames.append(
@@ -447,15 +638,3 @@ def generate_rolling_heatmap_gif(
         )
 
     return _save_animation(frames, output_path, frame_duration_ms)
-
-
-# ---------------------------------------------------------------------------
-# Analysis tools (strategy registry)
-# ---------------------------------------------------------------------------
-#
-# Each tool is a small class wrapping the corresponding module-level ``scan_*``
-# function (preserved for tests that monkeypatch them). The two registry-level
-# dispatch points are:
-#   - :func:`check_frame_for_tool` (single-frame eval used by multitool)
-#   - :meth:`ScreenspaceWorker._dispatch` (full-video scan, called by the worker)
-# Both look up the tool by name in ``TOOLS`` and delegate to its methods.

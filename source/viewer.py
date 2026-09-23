@@ -1,27 +1,30 @@
 """Timeline and gallery viewer generation, manifest persistence.
 
-Timeline viewer (--viewer / interactive 'viewer'):
-  Injects window.CLIPGEN_DATA into viewer.html, replacing <!-- CLIPGEN_DATA_HERE -->.
-  Data shape: { meta: {study, participant, generatedAt, mode, sourceSpreadsheet,
-    sourceFileType, filmstripEnabled}, artifacts: [{id, type, file, start, end,
-    study, participant, category, description, cellRow, cellCol, cellA1, annotations,
-    sourceVideo}], timeline: {duration, startOffset} }
-  Artifact ``type`` is one of clip / screen / gif / reel (timeline events) or the
-    non-timeline "attachment" types timelapse / heatmap / export (start/end 0; the viewer JS
-    branches on type and surfaces these in a separate Attachments panel).
-  Key functions: build_artifact_records_for_clip(), finalize_timeline_data(),
-    generate_timeline_viewer().
+Both viewers inject ``window.CLIPGEN_DATA`` into their HTML template, replacing
+``<!-- CLIPGEN_DATA_HERE -->``.
 
-Gallery viewer (--gallery):
-  Same inlining pattern using gallery.html.
-  Data shape: { meta: {sourceVideo, generatedAt, mode, format, interval, videoDuration},
-    artifacts: [{file, timestamp, timestamp_formatted, type, duration}] }
-  Key functions: finalize_gallery_data(), generate_gallery_viewer().
-  Gallery artifacts are NOT written to the manifest by default.
+Timeline (--viewer / interactive 'viewer'), from viewer.html::
 
-Artifact manifest (save_manifest / load_manifest_*):
-  Merges new artifacts/reels into clipgen_manifest.json, deduplicating by id (newer wins).
-  Consumed by --regenerate and standalone --viewer.
+    { meta: {study, participant, generatedAt, clipgenVersion, repoUrl, mode,
+      sourceSpreadsheet, sourceFileType, filmstripEnabled},
+      artifacts: [{id, type, file, start, end, study, participant, category,
+      description, cellRow, cellCol, cellA1, annotations, sourceVideo}],
+      timeline: {duration, startOffset} }
+
+Artifact ``type`` is clip / screen / gif / reel (timeline events) or the
+non-timeline "attachment" types timelapse / heatmap / export, which carry
+start/end 0 — the viewer JS branches on type and gives those their own panel.
+
+Gallery (--gallery), from gallery.html::
+
+    { meta: {sourceVideo, generatedAt, clipgenVersion, repoUrl, mode, format,
+      interval, videoDuration},
+      artifacts: [{file, timestamp, timestamp_formatted, type, duration}] }
+
+Gallery artifacts are NOT written to the manifest by default.
+
+The manifest helpers merge new artifacts/reels into the manifest's clips section,
+deduplicating by id (newer wins), for --regenerate and standalone --viewer.
 """
 
 import base64
@@ -36,6 +39,7 @@ from typing import Any
 
 import config
 import files
+import manifest as manifest_io
 import utils
 
 # Mutable lists of records collected during an interactive session.
@@ -52,6 +56,8 @@ def _export_config() -> dict[str, Any]:
     """
     cfg = utils.get_frontend_config()
     cfg.pop("hotkeyOverrides", None)
+    # Exports have no report sink, so never profile.
+    cfg.pop("profiling", None)
     return cfg
 
 
@@ -134,6 +140,8 @@ def finalize_timeline_data(
             "study": study,
             "participant": participant,
             "generatedAt": datetime.now(UTC).isoformat(),
+            "clipgenVersion": utils.get_version(),
+            "repoUrl": config.REPO_URL,
             "mode": mode,
             "sourceSpreadsheet": worksheet_title,
             "sourceFileType": "excel" if is_excel else "google",
@@ -154,11 +162,7 @@ def finalize_timeline_data(
     return data
 
 
-# Module-level mtime cache for the screenspace-events-for-viewer transform.
-# Viewer exports call load_screenspace_events_for_viewer() repeatedly; re-reading
-# and re-parsing screenspace_manifest.json each time is pure overhead. Keyed on
-# the manifest's (path, mtime_ns), so it invalidates automatically when the file
-# is rewritten. Bounded at one entry — this is a single-process export path.
+# One-entry cache keyed on (output dir, mtime_ns); exports call this repeatedly.
 _SS_EVENTS_CACHE_LOCK = threading.Lock()
 _ss_events_cache: dict[str, Any] = {
     "path": None,
@@ -183,12 +187,8 @@ def load_screenspace_events_for_viewer() -> list[dict[str, Any]]:
     """
     import screenspace
 
-    path = Path(utils.get_effective_output_dir()) / config.SCREENSPACE_MANIFEST_FILENAME
-    path_str = str(path)
-    try:
-        mtime_ns: int | None = path.stat().st_mtime_ns if path.is_file() else None
-    except OSError:
-        mtime_ns = None
+    path_str = str(utils.get_effective_output_dir())
+    mtime_ns: int | None = manifest_io.manifest_mtime() or None
 
     with _SS_EVENTS_CACHE_LOCK:
         if (
@@ -286,9 +286,7 @@ def _generate_viewer_html(
         except OSError:
             pass
 
-    # Inline the shared hotkey registry (cheatsheet + dispatcher). Exported
-    # viewers always run the default keymap: the embedded config deliberately
-    # omits hotkeyOverrides (see _export_config).
+    # Inline the hotkey registry; exports run the default keymap (see _export_config).
     hk_css_tag = '<link rel="stylesheet" href="hotkeys.css">'
     hk_js_tag = '<script src="hotkeys.js" defer></script>'
     if hk_css_tag in template_html:
@@ -303,19 +301,13 @@ def _generate_viewer_html(
         hk_js_path = assets_dir / "hotkeys.js"
         if hk_js_path.is_file():
             try:
-                # utils.js is prepended below, ahead of this, so the final
-                # order stays utils -> hotkeys -> page modules.
+                # utils.js is prepended later, so the order stays utils -> hotkeys -> page.
                 js_text = _read_bundled_asset(str(hk_js_path)) + "\n" + js_text
             except OSError:
                 pass
         template_html = template_html.replace(hk_js_tag, "")
 
-    # Inline the shared motion engine (ClipgenMotion) so exported viewers animate
-    # the same way the live pages do — an export has no asset routes, so without
-    # this the toast's guarded fade silently no-ops and it snaps instead. JS-only:
-    # motion.js ships no stylesheet. Position among these blocks is immaterial —
-    # utils.js is prepended last (so it always ends up first) and every consumer
-    # reads window.ClipgenMotion lazily inside a function, never at load time.
+    # Inline motion.js (JS-only) or the export's toast fade no-ops; consumers read ClipgenMotion lazily.
     mo_js_tag = '<script src="motion.js" defer></script>'
     if mo_js_tag in template_html:
         mo_js_path = assets_dir / "motion.js"
@@ -326,9 +318,7 @@ def _generate_viewer_html(
                 pass
         template_html = template_html.replace(mo_js_tag, "")
 
-    # Inline the card-scrubber module into viewers that reference it (timeline,
-    # not gallery). Its CSS/JS join the shared bundles so the export stays
-    # self-contained; the external tags are stripped below.
+    # Inline card-scrubber where referenced (timeline only); external tags are stripped below.
     cs_css_tag = '<link rel="stylesheet" href="card-scrubber.css">'
     cs_js_tag = '<script src="card-scrubber.js" defer></script>'
     if cs_css_tag in template_html:
@@ -391,9 +381,7 @@ def _generate_viewer_html(
         template_html = template_html.replace("</body>", f"{inline_js_block}\n</body>")
 
     data_json = json.dumps(data, ensure_ascii=False, separators=(",", ":"))
-    # Escape chars that could break out of the <script> tag or a JS string literal
-    # (</script>, <!--, <script, and the U+2028/U+2029 line separators). All stay valid
-    # JSON via \uXXXX, so JSON.parse decodes the payload back to the original unchanged.
+    # Escape </script>, <!--, and U+2028/U+2029 as \uXXXX; JSON.parse still round-trips.
     data_json = (
         data_json.replace("<", "\\u003c")
         .replace(">", "\\u003e")
@@ -476,6 +464,8 @@ def finalize_gallery_data(
         "meta": {
             "sourceVideo": source_video,
             "generatedAt": datetime.now(UTC).isoformat(),
+            "clipgenVersion": utils.get_version(),
+            "repoUrl": config.REPO_URL,
             "mode": "gallery",
             "format": output_format,
             "interval": interval,
@@ -503,76 +493,19 @@ def generate_gallery_viewer(
     )
 
 
-# Module-level cache for the parsed manifest, keyed on the file's path and
-# mtime_ns. Studio/Transcripts all hit `load_manifest_artifacts()`
-# repeatedly on every request; re-reading and re-parsing the JSON each time is
-# pure overhead. The cache is invalidated automatically whenever the file is
-# rewritten (save_manifest bumps mtime) so no explicit bust is required in the
-# normal happy path — _reset_manifest_cache() exists only for tests that reuse
-# the same output directory across mutations without touching mtime.
-_MANIFEST_CACHE_LOCK = threading.Lock()
-# Serializes the full load-merge-write cycle in save_manifest() so concurrent
-# Studio completions cannot last-writer-wins a partial merge. Always acquired
-# before _MANIFEST_CACHE_LOCK, never the reverse, so the two cannot deadlock.
+# Serializes save_manifest()'s load-merge-write cycle across concurrent Studio completions.
 _MANIFEST_WRITE_LOCK = threading.Lock()
-_manifest_cache: dict[str, Any] = {
-    "path": None,
-    "mtime_ns": None,
-    "artifacts": [],
-    "reels": [],
-}
-
-
-def _reset_manifest_cache() -> None:
-    """Drop the in-memory manifest cache. Intended for test fixtures."""
-    with _MANIFEST_CACHE_LOCK:
-        _manifest_cache["path"] = None
-        _manifest_cache["mtime_ns"] = None
-        _manifest_cache["artifacts"] = []
-        _manifest_cache["reels"] = []
 
 
 def load_manifest_both() -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    """Load artifact and reel records from the manifest in a single read.
+    """Load artifact and reel records from the manifest's ``clips`` section.
 
     Returns (artifacts, reels). Both default to [] on missing/corrupt file.
-
-    Memoizes the parsed result keyed on the manifest's path + mtime_ns so
-    repeated calls from the same process share a single read/parse until the
-    file is rewritten. Returns shallow copies so callers that mutate the
-    returned lists do not corrupt the cached state.
     """
-    path = Path(utils.get_effective_output_dir()) / config.MANIFEST_FILENAME
-    path_str = str(path)
-    try:
-        mtime_ns: int | None = path.stat().st_mtime_ns if path.is_file() else None
-    except OSError:
-        mtime_ns = None
-
-    with _MANIFEST_CACHE_LOCK:
-        if (
-            mtime_ns is not None
-            and _manifest_cache["path"] == path_str
-            and _manifest_cache["mtime_ns"] == mtime_ns
-        ):
-            return (
-                list(_manifest_cache["artifacts"]),
-                list(_manifest_cache["reels"]),
-            )
-
-    data = utils.load_json_manifest(
-        config.MANIFEST_FILENAME, default={"artifacts": [], "reels": []}
-    )
-    artifacts = data.get("artifacts", [])
-    reels = data.get("reels", [])
-
-    with _MANIFEST_CACHE_LOCK:
-        _manifest_cache["path"] = path_str
-        _manifest_cache["mtime_ns"] = mtime_ns
-        _manifest_cache["artifacts"] = artifacts
-        _manifest_cache["reels"] = reels
-
-    return (list(artifacts), list(reels))
+    data = manifest_io.load_manifest_section("clips", default={})
+    if not isinstance(data, dict):
+        return [], []
+    return data.get("artifacts", []), data.get("reels", [])
 
 
 def load_manifest_artifacts() -> list[dict[str, Any]]:
@@ -596,10 +529,7 @@ def save_manifest(
     Deduplicates by ``id``; newer entries win.
     Returns the manifest path on success, or None on failure.
     """
-    # Hold the write lock across the whole load-merge-write cycle: a concurrent
-    # writer must see this writer's persisted result before computing its merge,
-    # otherwise both read the same old manifest and the second write drops the
-    # first writer's records.
+    # Hold the lock across load-merge-write, or a concurrent writer drops this one's records.
     with _MANIFEST_WRITE_LOCK:
         existing, existing_reels = load_manifest_both()
         merged = {a["id"]: a for a in existing}
@@ -622,11 +552,4 @@ def save_manifest(
             mode=mode,
         )
 
-        result = utils.save_json_manifest(
-            config.MANIFEST_FILENAME, data, warn_label="manifest"
-        )
-        # Invalidate the cache so the next load picks up what we just wrote,
-        # even if the filesystem's mtime resolution elides the change.
-        if result is not None:
-            _reset_manifest_cache()
-    return result
+        return manifest_io.save_manifest_section("clips", data)

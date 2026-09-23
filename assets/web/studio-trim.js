@@ -24,14 +24,8 @@
   var saveQueues = STUDIO.saveQueues,
     isIntakeSource = STUDIO.isIntakeSource;
 
-  // ---- Duration-badge trim pop-over -------------------------------------
-  // Clicking a queue card's duration badge opens a small three-row pop-over
-  // (same dark "badge" styling) for adjusting the clip's in/out points:
-  //   Row 1  total duration — drag horizontally to grow/shrink symmetrically
-  //   Row 2  in / out times — drag each marker independently; click to type
-  //   Row 3  ±30s quick buttons for the front and back
-  // Edits mutate the queue item's start/end (seconds) and set item.edited, so
-  // generation sends them as overrides (spreadsheet cells) or directly (intake).
+  // ---- Duration-badge trim pop-over ----
+  // Edits set item.start/end (seconds) and item.edited; see buildCellOverrides.
   var TRIM_SECONDS_PER_PX = 0.2; // drag sensitivity (seconds per pixel)
   var TRIM_MIN_CLIP = 1; // shortest allowed clip, seconds
   var TRIM_STEP = 30; // ±30s quick-button step
@@ -49,9 +43,7 @@
     if (t.popover && t.popover.parentNode) {
       t.popover.parentNode.removeChild(t.popover);
     }
-    // Re-render the queue so derived totals (e.g. the reel duration in the
-    // toolbar) reflect the new in/out points — but only when something actually
-    // changed, so merely opening and dismissing the pop-over is cheap.
+    // Re-render only on change so derived totals (reel duration) update.
     if (t.dirty && t.renderFn) t.renderFn();
   }
 
@@ -69,9 +61,8 @@
     popover.style.top = top + "px";
   }
 
-  // Horizontal drag-to-adjust. handlers: { onStart(): base, onDelta(sec, base),
-  // onClick() }. A press that never crosses TRIM_DRAG_THRESHOLD is treated as a
-  // click (so the in/out values can switch to manual numeric entry).
+  // handlers: { onStart(): base, onDelta(sec, base), onClick() }. A press under
+  // TRIM_DRAG_THRESHOLD is a click.
   function bindTrimDrag(target, handlers) {
     target.addEventListener("pointerdown", function (ev) {
       if (ev.button !== 0) return;
@@ -196,8 +187,7 @@
       badge.textContent = d;
     }
 
-    // Clamp + apply new in/out points. skipSave defers the sessionStorage write
-    // to the drag's pointerup so we don't write on every animation frame.
+    // skipSave defers the sessionStorage write to pointerup, not every frame.
     function setTimes(newStart, newEnd, skipSave) {
       newStart = Math.max(0, Math.round(newStart));
       newEnd = Math.round(newEnd);
@@ -314,8 +304,7 @@
     };
   }
 
-  // Build the duration badge as an editable trigger for the trim pop-over.
-  // Used by both the artifact and reel queue renderers.
+  // Editable badge opening the trim pop-over; artifact and reel queues share it.
   function appendDurationBadge(thumb, item, renderFn) {
     var badge = el(
       "span",
@@ -338,14 +327,7 @@
     thumb.appendChild(badge);
   }
 
-  // Collect per-cell time overrides for spreadsheet clips the user trimmed on
-  // the duration badge or pruned from the queue. The backend replaces a cell's
-  // whole time list, so whenever a cell has an edited segment OR has had cards
-  // removed (fewer queued segments than its original segTotal) we send every
-  // remaining segment (segIdx-ordered) as [startSec, endSec] pairs — that
-  // becomes the cell's complete output. Returns {} when a cell is untouched
-  // (no edits, no removals) so artifact caching still applies. Intake items
-  // carry their own start/end and are skipped here.
+  // Edited cells send their full remaining time list; untouched cells stay cached.
   function buildCellOverrides(items) {
     var byCell = {};
     for (var i = 0; i < items.length; i++) {

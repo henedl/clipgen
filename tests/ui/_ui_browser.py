@@ -69,12 +69,14 @@ def browsers_root() -> Path:
     override = os.environ.get("PLAYWRIGHT_BROWSERS_PATH")
     if override:
         return Path(override).expanduser()
+    # The developer's real home: tests/conftest.py sandboxes Path.home().
+    home = Path(os.path.expanduser("~"))
     if sys.platform == "darwin":
-        return Path.home() / "Library" / "Caches" / "ms-playwright"
+        return home / "Library" / "Caches" / "ms-playwright"
     if sys.platform == "win32":
-        base = os.environ.get("LOCALAPPDATA") or str(Path.home() / "AppData" / "Local")
+        base = os.environ.get("LOCALAPPDATA") or str(home / "AppData" / "Local")
         return Path(base) / "ms-playwright"
-    return Path.home() / ".cache" / "ms-playwright"
+    return home / ".cache" / "ms-playwright"
 
 
 def _build_number(name: str) -> int:
@@ -83,13 +85,19 @@ def _build_number(name: str) -> int:
     return int(tail) if tail.isdigit() else -1
 
 
-def resolve_chromium() -> Path:
+def resolve_chromium(prefer_full: bool = False) -> Path:
     """Return the highest-numbered installed Chromium executable.
+
+    ``prefer_full=True`` flips the candidate order so the full Chromium build
+    wins over the headless shell: the shell's paint/compositor timings are
+    only indicative (no GPU/compositor parity), so perf captures that care
+    about paint fidelity opt into the full build (``shot.py --full-chromium``).
 
     Raises :class:`UiUnavailable` with the install command when none is found.
     """
     root = browsers_root()
-    for dir_glob, exe_globs in _CANDIDATES:
+    candidates = tuple(reversed(_CANDIDATES)) if prefer_full else _CANDIDATES
+    for dir_glob, exe_globs in candidates:
         directories = sorted(
             (path for path in root.glob(dir_glob) if path.is_dir()),
             key=lambda path: _build_number(path.name),

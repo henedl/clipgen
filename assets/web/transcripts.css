@@ -22,8 +22,6 @@ html {
 
 body {
   font-family: var(--font-sans);
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
   letter-spacing: -0.005em;
   background-color: var(--color-bg);
   color: var(--color-text);
@@ -35,10 +33,6 @@ body {
 }
 
 /* Utility */
-
-.hidden {
-  display: none !important;
-}
 
 /* Header — subheader (status / corrections / search, right-aligned) +
    participant pills row. The chromed panel treatment was dropped so the
@@ -100,31 +94,6 @@ body {
   .status-indicator--working { animation: none; }
 }
 
-/* Theme toggle (matches Screenspace/Studio) */
-
-#tooltipToggle {
-  position: relative;
-  width: 32px;
-  height: 32px;
-  border-radius: var(--radius-full);
-  border: 1px solid var(--color-border);
-  background: transparent;
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  color: var(--color-text);
-  transition: opacity var(--duration-fast), background var(--duration-fast);
-}
-
-#tooltipToggle:hover {
-  background: var(--color-surface);
-}
-
-#tooltipToggle[aria-pressed="false"] {
-  opacity: 0.4;
-}
-
 /* Search bar */
 
 #headerSearch {
@@ -167,6 +136,7 @@ body {
   font-family: var(--font-mono);
   color: var(--color-text-dim);
   white-space: nowrap;
+  font-variant-numeric: tabular-nums;
 }
 
 /* 150% of #headerSearch — result text is the whole point of the dropdown, and
@@ -332,7 +302,7 @@ body {
   cursor: pointer;
   padding: var(--space-1);
   border-radius: var(--radius-sm);
-  transition: background var(--duration-fast), color var(--duration-fast);
+  transition: background var(--duration-fast), color var(--duration-fast), transform var(--duration-instant);
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -342,6 +312,11 @@ body {
 .player-btn:hover {
   background: var(--color-surface-alt);
   color: var(--color-accent);
+}
+
+/* Press feedback; ungated by reduced motion like every press affordance. */
+.player-btn:active:not(:disabled) {
+  transform: scale(var(--scale-press));
 }
 
 .player-btn.active {
@@ -420,6 +395,18 @@ body {
   font-variant-numeric: tabular-nums;
   color: var(--color-text-dim);
   margin-left: auto;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+/* Transcribe-range marker readout (matches Screenspace's .marker-info, minus
+   the auto push — .player-time owns the right edge of this bar). */
+.marker-info {
+  font-size: var(--text-xs);
+  font-family: var(--font-mono);
+  color: var(--color-text-dim);
+  margin-left: var(--space-2);
+  white-space: nowrap;
 }
 
 #timelineRow {
@@ -587,7 +574,7 @@ body {
   -webkit-mask-image: url(icons/fire.svg);
 }
 
-/* Marks a control that starts a local Ollama thinking agent (the Summary /
+/* Marks a control that starts a local AI thinking agent (the Summary /
    Citations / Friction run buttons, in the panel and in the pill dropdown), so
    the glyph sits on the action that spends local compute rather than on the
    pane showing its output. Lives here rather than in tokens.css because
@@ -636,15 +623,18 @@ body {
   gap: var(--space-2);
   color: var(--color-text-dim);
   font-size: var(--text-sm);
+  text-wrap: balance;
 }
 
 .panel-empty-text {
   margin: 0;
+  text-wrap: balance;
 }
 
 .panel-empty-hint {
   margin: 0;
   font-size: var(--text-xs);
+  text-wrap: pretty;
 }
 
 #summaryBody {
@@ -680,6 +670,7 @@ body {
   white-space: pre-wrap;
   color: var(--color-text);
   margin-bottom: var(--space-2);
+  text-wrap: pretty;
 }
 
 .summary-stream:empty {
@@ -725,6 +716,14 @@ body {
   align-items: center;
   justify-content: center;
   border-radius: var(--radius-sm);
+  position: relative;
+}
+
+/* Hit slop. Vertical only: the actions sit side by side. */
+.summary-action-btn::after {
+  content: "";
+  position: absolute;
+  inset: calc(var(--space-1-5) * -1) 0;
 }
 
 .summary-action-btn:hover {
@@ -1163,7 +1162,6 @@ body {
   gap: var(--space-1);
   overflow-x: auto;
   white-space: nowrap;
-  scrollbar-width: thin;
 }
 
 .friction-jump-chip {
@@ -1333,11 +1331,13 @@ body {
   padding: var(--space-8) var(--space-4);
   color: var(--color-text-dim);
   gap: var(--space-2);
+  text-wrap: balance;
 }
 
 .empty-hint {
   font-size: var(--text-sm);
   opacity: 0.7;
+  text-wrap: pretty;
 }
 
 /* Segment mark gutter — 14 px circular dot, hollow when unmarked
@@ -1398,16 +1398,8 @@ body {
   border-radius: var(--radius-full);
   margin-top: var(--space-2);
   margin-left: calc(var(--space-1-5) - var(--space-3));
-  background: var(--sev-unknown);
+  background: var(--sev, var(--sev-unknown)); /* tokens.css severity indirection */
 }
-
-.segment-sev-dot.sev-critical { background: var(--sev-critical); }
-.segment-sev-dot.sev-high { background: var(--sev-high); }
-.segment-sev-dot.sev-medium { background: var(--sev-medium); }
-.segment-sev-dot.sev-low { background: var(--sev-low); }
-.segment-sev-dot.sev-na { background: var(--sev-na); }
-.segment-sev-dot.sev-positive { background: var(--sev-positive); }
-.segment-sev-dot.sev-very-positive { background: var(--sev-very-positive); }
 
 /* Mark popover — mirrors the redesign's AnnoPopover anatomy
    (180 px wide, 10 px padding, 18 px circular swatches with white border on
@@ -1461,7 +1453,8 @@ body {
   transform: scale(1.1);
 }
 
-.mark-popover-label {
+.mark-popover-label,
+.speaker-popover-input {
   width: 100%;
   height: 26px;
   padding: 0 var(--space-2);
@@ -1475,8 +1468,91 @@ body {
   box-sizing: border-box;
 }
 
-.mark-popover-label:focus {
+.mark-popover-label:focus,
+.speaker-popover-input:focus {
   border-color: var(--color-accent);
+}
+
+/* Speaker popover: rename (global) above, reassign this line below. */
+.speaker-popover {
+  position: fixed;
+  width: 200px;
+  padding: var(--space-2);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.speaker-popover.hidden {
+  display: none;
+}
+
+.speaker-popover-name {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+
+.speaker-popover-reset {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  padding: var(--space-1);
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--color-text-dim);
+  cursor: pointer;
+  transition: color var(--duration-fast), background var(--duration-fast);
+}
+
+.speaker-popover-reset:hover {
+  color: var(--color-text);
+  background: var(--color-surface-alt);
+}
+
+.speaker-popover-reset-icon {
+  display: block;
+  width: var(--icon-size-sm);
+  height: var(--icon-size-sm);
+  background-color: currentColor;
+  mask-image: url(icons/arrow-uturn-left.svg);
+  -webkit-mask-image: url(icons/arrow-uturn-left.svg);
+  mask-size: contain;
+  -webkit-mask-size: contain;
+  mask-repeat: no-repeat;
+  -webkit-mask-repeat: no-repeat;
+}
+
+.speaker-popover-assign-label {
+  color: var(--color-text-dim);
+  font-size: var(--text-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.speaker-popover-assign {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+}
+
+/* Reuses the .segment-speaker chip look; sized to content, clickable. */
+.speaker-popover-chip {
+  flex: 0 0 auto;
+  margin-top: 0;
+  cursor: pointer;
+  font-family: inherit;
+}
+
+.speaker-popover-chip.active {
+  outline: 2px solid var(--spk);
+  outline-offset: 1px;
+}
+
+.speaker-popover-chip--new {
+  --spk: var(--color-text-dim);
+  border-style: dashed;
 }
 
 /* Optional severity selector — mirrors the label input's shell. Options are
@@ -1601,6 +1677,61 @@ body {
   position: relative;
 }
 
+/* Speaker chip: second gutter column; --spk comes from the .spk-N ring below. */
+.segment-speaker {
+  flex: 0 0 5rem;
+  min-width: 0;
+  align-self: flex-start;
+  margin-top: var(--space-1);
+  padding: 0 var(--space-1-5);
+  font-size: var(--text-xs);
+  font-weight: 500;
+  line-height: 1.5;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  border-radius: var(--radius-sm);
+  border: 1px solid color-mix(in oklch, var(--spk) 50%, transparent);
+  background: color-mix(in oklch, var(--spk) 18%, transparent);
+  color: var(--spk);
+  cursor: text;
+  user-select: none;
+  transition: opacity var(--duration-fast), background var(--duration-fast);
+}
+
+.segment-speaker--repeat {
+  opacity: 0.45;
+}
+
+.segment-row:hover .segment-speaker--repeat {
+  opacity: 0.8;
+}
+
+.segment-speaker:hover {
+  background: color-mix(in oklch, var(--spk) 30%, transparent);
+}
+
+.segment-speaker--none {
+  visibility: hidden;
+}
+
+.search-result-row .segment-speaker {
+  flex-basis: auto;
+  max-width: 5rem;
+  margin-top: 0;
+  cursor: default;
+}
+
+/* Eight categorical hues shared with Screenspace regions; ids wrap in JS. */
+.spk-1 { --spk: var(--region-color-1); }
+.spk-2 { --spk: var(--region-color-2); }
+.spk-3 { --spk: var(--region-color-3); }
+.spk-4 { --spk: var(--region-color-4); }
+.spk-5 { --spk: var(--region-color-5); }
+.spk-6 { --spk: var(--region-color-6); }
+.spk-7 { --spk: var(--region-color-7); }
+.spk-8 { --spk: var(--region-color-8); }
+
 .segment-xref-badges {
   position: absolute;
   right: 6px;
@@ -1654,6 +1785,11 @@ body {
 }
 
 .segment-word:hover {
+  background: var(--color-selected);
+}
+
+/* Word-level karaoke sweep on the playing row (transcripts-video.js) */
+.segment-row.active .segment-word.word-active {
   background: var(--color-selected);
 }
 
@@ -1745,13 +1881,13 @@ body {
   justify-content: center;
   overflow-x: auto;
   overflow-y: hidden;
-  scrollbar-width: thin;
 }
 
 .pill-row-empty {
   font-size: var(--text-sm);
   color: var(--color-text-dim);
   font-style: italic;
+  text-wrap: balance;
 }
 
 /* Pre-fetch placeholder in #participantPills. Geometry only — the shimmer and
@@ -1851,7 +1987,7 @@ body {
 
 .pill-id {
   font-family: var(--font-mono);
-  font-feature-settings: "tnum";
+  font-variant-numeric: tabular-nums;
   font-size: 11.5px;
   font-weight: 500;
   letter-spacing: 0.01em;
@@ -1869,7 +2005,6 @@ body {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .pill-trigger--running .pill-trigger-icon--rest { animation: none; }
   .pill-progress { transition: none; }
 }
 
@@ -1888,7 +2023,29 @@ body {
   flex-shrink: 0;
   position: relative;
   color: var(--color-text-dim);
-  transition: color var(--duration-fast);
+  /* transform rides the transition so the press springs back on release rather
+     than snapping. --duration-instant, not --duration-fast: a quick click is
+     often shorter than 150ms and would never reach full depth. */
+  transition: color var(--duration-fast), transform var(--duration-instant);
+}
+
+/* Press feedback for both faces of the trigger: the microphone that starts a run
+   and the stop-circle that cancels one.
+ *
+ * 0.86, not the repo's usual 0.96 (gallery/topnav/viewer/studio) — those squish a
+ * ~30px chrome button, this is an 18px icon, where 4% is a sub-pixel change.
+ *
+ * On the button, NOT on .pill-trigger-icon. The running glyph's `spin` sets
+ * `transform` from a CSS animation, and an animation outranks a normal
+ * declaration in the cascade — an icon-level squish would be silently dropped on
+ * exactly the running pill a Cancel click lands on. A transform here composes
+ * with the child's rotation, leaves the opacity crossfade alone, and cannot
+ * reflow (fixed 18px flex item) or clip (it scales down inside .pill's
+ * overflow: hidden). Ungated by prefers-reduced-motion, like every other press
+ * affordance in the repo: a 120ms scale bound to the pointer is direct
+ * manipulation, not ambient motion. */
+.pill-trigger:active:not(:disabled) {
+  transform: scale(0.86);
 }
 
 .pill-trigger-icon {
@@ -1927,6 +2084,17 @@ body {
 .pill-trigger--failed { color: var(--sev-critical); }
 .pill-trigger--idle { color: var(--color-text-dim); }
 
+/* Cancel acknowledged, worker not stopped yet. The glyph is the stop-circle the
+   user just pressed, held in the same critical red the hover showed, breathing
+   rather than spinning: spin means "work is progressing", which is precisely the
+   claim being retracted. On the button, so both stacked icons breathe together
+   and the --running spin selector is never in play. cg-pulse animates only
+   opacity, so it never fights the :active transform above. */
+.pill-trigger--cancelling {
+  color: var(--sev-critical);
+  animation: cg-pulse 1s ease-in-out infinite;
+}
+
 .pill-trigger--running .pill-trigger-icon--rest {
   animation: spin 1.2s linear infinite;
 }
@@ -1945,6 +2113,15 @@ body {
 .pill-trigger--failed:hover,
 .pill-trigger--failed:focus-visible {
   color: var(--color-accent);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  /* Must sit AFTER the .pill-trigger--running spin rule above: same selector,
+     same specificity, so source order decides. Placed before it (where this
+     block used to live) the opt-out lost to the animation and the icon kept
+     spinning for every reduced-motion user. */
+  .pill-trigger--running .pill-trigger-icon--rest { animation: none; }
+  .pill-trigger--cancelling { animation: none; opacity: 0.75; }
 }
 
 .pill-chevron {
@@ -1991,6 +2168,17 @@ body {
   padding: 1px var(--space-2);
   border: 1px solid currentColor;
   border-radius: var(--radius-sm);
+}
+
+/* Speaker detection in flight; --color-pulse is the working hue. */
+.pill-speakers-badge {
+  display: inline-block;
+  font-size: var(--text-xs);
+  color: var(--color-pulse);
+}
+
+.pill-progress--speakers {
+  background: color-mix(in srgb, var(--color-pulse) 22%, transparent);
 }
 
 /* Bare muted glyph, no border/chip — this is informational (the video simply
@@ -2041,14 +2229,38 @@ body {
   letter-spacing: 0.05em;
 }
 
+/* One width for every picker whatever the model/language names are; the closed
+   control ellipsizes, the open list sizes itself. Base look: tokens.css. */
 .pill-options select {
-  font-size: var(--text-sm);
-  padding: var(--space-1) var(--space-2);
-  border: 1px solid var(--color-border);
-  border-radius: calc(var(--radius) - 2px);
-  background: var(--color-surface);
+  width: 132px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Native box like .param-modal-checkbox; accent matches the selects. */
+.pill-options-check {
+  width: auto;
+  height: auto;
+  flex: none;
+  margin: 0;
+  accent-color: var(--color-accent);
+  cursor: pointer;
+}
+
+.pill-options-check:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+/* Transcribe-range readout in the Range row (set via the timeline's I/O). */
+.pill-options-range {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  font-variant-numeric: tabular-nums;
   color: var(--color-text);
-  min-width: 110px;
+  margin-left: auto;
 }
 
 /* Stacks a row with a sub-line beneath it (audio track + its "Last run" hint). */
@@ -2062,6 +2274,7 @@ body {
   color: var(--color-text-dim);
   font-size: var(--text-xs);
   text-align: right;
+  text-wrap: pretty;
 }
 
 .pill-options-footer {
@@ -2133,6 +2346,7 @@ body {
 .modal-header h3 {
   font-size: var(--text-lg);
   font-weight: 600;
+  text-wrap: balance;
 }
 
 .model-install-modal {
@@ -2144,6 +2358,44 @@ body {
   line-height: 1.5;
   color: var(--color-text-dim);
   margin-bottom: var(--space-4);
+}
+
+/* The model's source page, where its license is stated. Only curated models
+   have one, so the row is hidden by default. */
+.model-install-license {
+  margin: calc(-1 * var(--space-2)) 0 var(--space-4);
+  font-size: var(--text-sm);
+}
+
+.model-install-license.hidden {
+  display: none;
+}
+
+.model-install-license a {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  color: var(--color-accent);
+  text-decoration: none;
+}
+
+.model-install-license a:hover {
+  text-decoration: underline;
+}
+
+.model-install-license-icon {
+  display: inline-block;
+  width: var(--icon-size-sm);
+  height: var(--icon-size-sm);
+  background-color: currentColor;
+  -webkit-mask-image: url("icons/arrow-up-right.svg");
+  mask-image: url("icons/arrow-up-right.svg");
+  -webkit-mask-size: contain;
+  mask-size: contain;
+  -webkit-mask-repeat: no-repeat;
+  mask-repeat: no-repeat;
+  -webkit-mask-position: center;
+  mask-position: center;
 }
 
 .model-install-hint {
@@ -2158,6 +2410,7 @@ body {
   line-height: 1.5;
   white-space: pre-wrap;
   overflow-x: auto;
+  text-wrap: pretty;
 }
 
 .model-install-hint.hidden {
@@ -2191,6 +2444,7 @@ body {
   margin-top: var(--space-2);
   font-size: var(--text-xs);
   color: var(--color-text-dim);
+  font-variant-numeric: tabular-nums;
 }
 
 .model-install-actions {
@@ -2199,28 +2453,30 @@ body {
   gap: var(--space-2);
 }
 
-/* Clip-marked-lines modal. Geometry mirrors .model-install-* above so the two
-   dialogs on this page read as one family; the fields borrow the mark
-   popover's input treatment. */
-.clip-marks-modal {
+/* Shared parameter-dialog family, used by #clipMarksModal and #embedSubsModal:
+   a labelled field stack, a live summary line, a streaming progress bar, and a
+   Cancel/confirm row. Geometry mirrors .model-install-* above so every dialog
+   on this page reads as one family; the fields borrow the mark popover's input
+   treatment. Ids stay per-modal; only the presentation is shared. */
+.param-modal-card {
   max-width: 460px;
 }
 
-.clip-marks-message {
+.param-modal-message {
   font-size: var(--text-sm);
   line-height: 1.5;
   color: var(--color-text-dim);
   margin-bottom: var(--space-4);
 }
 
-.clip-marks-fields {
+.param-modal-fields {
   display: flex;
   flex-direction: column;
   gap: var(--space-2);
   margin-bottom: var(--space-3);
 }
 
-.clip-marks-label {
+.param-modal-label {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -2228,8 +2484,8 @@ body {
   font-size: var(--text-sm);
 }
 
-.clip-marks-select,
-.clip-marks-input {
+.param-modal-select,
+.param-modal-input {
   height: 28px;
   padding: 0 var(--space-2);
   border: 1px solid var(--color-border);
@@ -2242,45 +2498,57 @@ body {
   box-sizing: border-box;
 }
 
-.clip-marks-select {
+.param-modal-select {
   flex: 1;
   min-width: 0;
   cursor: pointer;
 }
 
-.clip-marks-input {
+.param-modal-input {
   width: 88px;
   flex: none;
 }
 
-.clip-marks-select:focus,
-.clip-marks-input:focus {
+/* Checkbox rows read right-to-left of the text ones: the control sits where the
+   select/input sits, so the field stack keeps one alignment edge. */
+.param-modal-checkbox {
+  width: auto;
+  height: auto;
+  flex: none;
+  margin: 0;
+  accent-color: var(--color-accent);
+  cursor: pointer;
+}
+
+.param-modal-select:focus,
+.param-modal-input:focus {
   border-color: var(--color-accent);
 }
 
-.clip-marks-summary {
+.param-modal-summary {
   font-size: var(--text-xs);
   color: var(--color-text-dim);
   margin-bottom: var(--space-4);
   min-height: 1.2em;
+  text-wrap: pretty;
 }
 
-.clip-marks-progress {
+.param-modal-progress {
   margin-bottom: var(--space-4);
 }
 
-.clip-marks-progress.hidden {
+.param-modal-progress.hidden {
   display: none;
 }
 
-.clip-marks-bar {
+.param-modal-bar {
   height: 8px;
   border-radius: var(--radius-full);
   background: var(--color-border);
   overflow: hidden;
 }
 
-.clip-marks-bar-fill {
+.param-modal-bar-fill {
   height: 100%;
   width: 0;
   background: var(--color-accent);
@@ -2288,16 +2556,104 @@ body {
   transition: width var(--duration-normal) ease;
 }
 
-.clip-marks-progress-text {
+.param-modal-progress-text {
   margin-top: var(--space-2);
   font-size: var(--text-xs);
   color: var(--color-text-dim);
+  font-variant-numeric: tabular-nums;
 }
 
-.clip-marks-actions {
+.param-modal-actions {
   display: flex;
   justify-content: flex-end;
   gap: var(--space-2);
+}
+
+/* Per-track checkbox rows (#normAudioModal, current-participant scope): an
+   indented stack of .param-modal-label rows so the track names align under the
+   Tracks field they replace. */
+.param-modal-track-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  padding-left: var(--space-3);
+}
+
+.param-modal-track-list.hidden {
+  display: none;
+}
+
+/* Dictionary modal: a Corrections section and a Known-terms section. */
+.dict-section + .dict-section {
+  margin-top: var(--space-5);
+  padding-top: var(--space-4);
+  border-top: 1px solid var(--color-border);
+}
+
+.dict-section h4 {
+  margin: 0;
+  font-size: var(--text-sm);
+  font-weight: 600;
+}
+
+.dict-hint {
+  margin: var(--space-1) 0 var(--space-3);
+  color: var(--color-text-dim);
+  font-size: var(--text-xs);
+  text-wrap: pretty;
+}
+
+.dict-actions,
+.dict-global-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.dict-empty {
+  color: var(--color-text-dim);
+  font-size: var(--text-sm);
+  padding: var(--space-2) 0;
+  text-wrap: balance;
+}
+
+.term-form {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-bottom: var(--space-3);
+}
+
+.term-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.term-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: var(--space-1) var(--space-2);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-full);
+  background: var(--color-surface-alt);
+  font-size: var(--text-xs);
+}
+
+.term-remove {
+  background: none;
+  border: none;
+  color: var(--color-text-dim);
+  cursor: pointer;
+  font-size: var(--text-sm);
+  line-height: 1;
+  padding: 0;
+  transition: color var(--duration-fast);
+}
+
+.term-remove:hover {
+  color: var(--sev-critical);
 }
 
 .correction-form {
@@ -2309,7 +2665,8 @@ body {
   border-bottom: 1px solid var(--color-border);
 }
 
-.correction-form input {
+.correction-form input,
+.term-form input {
   flex: 1;
   padding: var(--space-2) var(--space-3);
   border: 1px solid var(--color-border);
@@ -2320,7 +2677,8 @@ body {
   outline: none;
 }
 
-.correction-form input:focus {
+.correction-form input:focus,
+.term-form input:focus {
   border-color: var(--color-accent);
 }
 

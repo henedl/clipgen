@@ -25,6 +25,7 @@
     findIntakeInQueue = STUDIO.findIntakeInQueue,
     findOverlappingData = STUDIO.findOverlappingData,
     intakeAddItem = STUDIO.intakeAddItem,
+    intakeAddItems = STUDIO.intakeAddItems,
     intakeToggleItem = STUDIO.intakeToggleItem,
     renderArtifactQueue = STUDIO.renderArtifactQueue,
     renderReelQueue = STUDIO.renderReelQueue,
@@ -36,9 +37,7 @@
 
   // ---- Screenspace Intake ----
 
-  // Ordered detector list for the intake filter chips — copied from utils.js's
-  // canonical `_DETECTOR_TYPES` (includes `boundary`) so a new detector automatically
-  // gets a chip instead of being silently un-filterable.
+  // Mirrors utils.js `_DETECTOR_TYPES`, so a new detector gets a chip automatically.
   var INTAKE_DETECTORS = _DETECTOR_TYPES.slice();
 
   function setTabDot(elId, on) {
@@ -62,13 +61,9 @@
     setTabDot("trIntakeTabDot", on);
   }
 
-  // Screenspace intake poll: one combined request (../screenspace/api/intake-poll)
-  // for the task-status dot + curation events. Returns a Promise<boolean> — truthy
-  // ("active this tick") keeps createPoller at the fast cadence; falsy lets it back
-  // off. Replaces the former pollIntakeStatus + pollIntakeEvents pair.
+  // Resolves true when active this tick, which keeps the poller at its fast cadence.
   function pollScreenspaceIntake() {
-    // Echo the last-seen events version so the server can skip the events
-    // payload (deep-copy + sanitize + ship) when nothing changed this tick.
+    // Echo the last events version so the server can skip an unchanged payload.
     var url = "../screenspace/api/intake-poll?excluded=false";
     if (state._intakeEventsVersion != null) {
       url += "&events_version=" + state._intakeEventsVersion;
@@ -97,9 +92,7 @@
       });
   }
 
-  // Transcript intake poll: one combined request (../transcripts/api/intake-poll)
-  // for the running-state dot + resolved marks. Returns a Promise<boolean> as above.
-  // Replaces the former pollTrIntakeStatus (3-request fan-out) + pollTranscriptIntakeMarks.
+  // Resolves true when a transcript task or agent runs, or when marks changed.
   function pollTranscriptIntake() {
     return apiGet("../transcripts/api/intake-poll")
       .then(function (data) {
@@ -119,11 +112,7 @@
       });
   }
 
-  // On-demand refresh after a user action (or the subheader Refresh button):
-  // wake the adaptive poller so it refetches now AND resets its idle backoff to
-  // the fast cadence. Falls back to a direct poll if the poller hasn't been
-  // created yet (pre-boot). Each returns a promise settling when the refetch
-  // has landed, so the Refresh button can spin until then.
+  // Wake the poller (refetch now, reset backoff); poll directly before boot.
   function refreshScreenspaceIntake() {
     if (state.ssIntakePoller) return state.ssIntakePoller.wake();
     return pollScreenspaceIntake();
@@ -137,17 +126,12 @@
     return pollComposerIntake();
   }
 
-  // Events fed into the intake clustering surface. Navigational (boundary)
-  // events are orientation scaffolding, not clip candidates, so they never
-  // reach the curation queue. state.intakeEvents still holds ALL events
-  // (Metadata's boundary count reads from it).
+  // Boundary events are orientation, never clip candidates. state.intakeEvents keeps all events.
   function intakeClusterSource() {
     return state.intakeEvents.filter(function (ev) { return !ev.navigational; });
   }
 
-  // Apply the events slice from a Screenspace intake poll. Dirty-checks against
-  // the last raw payload; returns true when it changed (and re-rendered), false
-  // when nothing changed (so the poller can back off).
+  // Returns true when the payload changed and cards re-rendered, false otherwise.
   function applyIntakeEvents(events) {
     var raw = JSON.stringify(events);
     if (raw === state._intakeEventsPollRaw) return false;
@@ -167,8 +151,7 @@
   }
 
   function highlightIntakeCard(idx) {
-    // Scope to the Screenspace intake panel: transcript cards also carry
-    // .intake-queue-card, so an unscoped query would index across both panels.
+    // Scope to this panel: transcript cards carry .intake-queue-card too.
     var cards = qsa("#intakeCards .intake-queue-card");
     for (var i = 0; i < cards.length; i++) {
       if (i === idx) {
@@ -195,8 +178,7 @@
         active: state.intakeFilterDetector === det,
         count: counts[det],
         hue: categoryHue(det),
-        // Pin detector chips to the canonical `--color-task-*` token so the
-        // dot matches Screenspace's workflow tab + result row exactly.
+        // The `--color-task-*` token matches Screenspace's workflow tab and result rows.
         color: detectorColor(det),
         onClick: function () {
           state.intakeFilterDetector = state.intakeFilterDetector === det ? "" : det;
@@ -207,8 +189,7 @@
     });
   }
 
-  // Shared participant-pill builder for both intake panels. The cluster source,
-  // selected-participant list, container, and re-render are all per-type (cfg).
+  // Shared across panels; source, selection, container and re-render come from cfg.
   function buildIntakeParticipantPills(cfg) {
     var container = qs(cfg.participantsSel);
     if (!container) return;
@@ -237,16 +218,11 @@
     });
   }
 
-  // Density-timeline component refs for both intake panels. Declared together
-  // (before the SS_INTAKE/TR_INTAKE configs) so the get/set hooks close over a
-  // stable binding; the shared builder/handlers always read the live value at
-  // call-time so a rebuild can never leave a stale node behind .setHovered().
+  // Declared before the configs so the cfg get/set hooks read the live node.
   var _intakeDensityEl = null;
   var _trIntakeDensityEl = null;
 
-  // Shared density timeline for both intake panels. Per-type bits (timeline
-  // host, bar count/color, hover state, highlight, toggle, density-el get/set)
-  // come from the SS_INTAKE / TR_INTAKE config.
+  // Shared across panels; the per-type bits come from the cfg object.
   function buildIntakeDensityTimeline(cfg, filtered) {
     var host = qs(cfg.timelineSel);
     if (!host) return;
@@ -297,9 +273,7 @@
     host.appendChild(dt);
   }
 
-  // Shared intake card rendering. Screenspace and Transcript intake build the
-  // same card skeleton (thumb + xref badges + participant/type/time meta); the
-  // per-type bits are supplied via SS_INTAKE / TR_INTAKE config objects.
+  // Per-type config for the shared card renderer and panel init.
   var SS_INTAKE = {
     cardsSel: "#intakeCards",
     cardSel: ".intake-queue-card",
@@ -336,9 +310,7 @@
     setDensityEl: function (dt) { _intakeDensityEl = dt; },
     barCount: function (c) { return c.events ? c.events.length : 1; },
     barColor: function (c) {
-      // Density bars match Screenspace's `--color-task-*` exactly when the
-      // cluster's detector is a known type; falls back to the hue-based oklch
-      // path otherwise.
+      // Known detectors get the `--color-task-*` token; others fall back to hue.
       return { hue: categoryHue(c.detector), color: detectorColor(c.detector) };
     },
     // --- init / delegated listeners ---
@@ -450,18 +422,20 @@
   };
 
   function renderIntakeCards(cfg, items) {
+    return clipgenPerf.span("studio.renderIntakeCards", function () {
+      renderIntakeCardsImpl(cfg, items);
+    });
+  }
+
+  function renderIntakeCardsImpl(cfg, items) {
     var container = qs(cfg.cardsSel);
     container.innerHTML = "";
+    var frag = document.createDocumentFragment();
     items.forEach(function (c, idx) {
       var card = el("div", "queue-card intake-queue-card" + (cfg.cardClass ? " " + cfg.cardClass : ""));
       card.style.setProperty("--cg-card-hue", cfg.cardHue(c));
       card.dataset[cfg.idxAttr] = idx;
       card.setAttribute("draggable", "true");
-      card.addEventListener("dragstart", function (ev) {
-        ev.dataTransfer.setData("application/json", JSON.stringify(cfg.clusterToItem(c)));
-        ev.dataTransfer.effectAllowed = "copyMove";
-        setCardDragImage(ev, this);
-      });
 
       var thumb = buildQueueCardThumb(card, {
         participant: c.participant,
@@ -474,13 +448,11 @@
       var badgeStack = buildXrefBadges(xref, cfg.selfSource, cfg.selfBadge(c));
       if (badgeStack) thumb.appendChild(badgeStack);
 
-      // Asterisk badge: this cluster has a trimmed counterpart in Composer —
-      // click jumps to the Composer Intake tab and highlights it.
+      // Badge for a trimmed counterpart; click jumps to the Composer Intake tab.
       if (cfg.trimBadgeKey) {
         var trimKey = cfg.trimBadgeKey(c);
         if (trimKey) {
-          // iconHTML lives in the studio.js hub IIFE (not reachable here), so
-          // inline the sanctioned mask-icon span directly.
+          // The hub's iconHTML is not reachable here; inline the mask-icon span.
           var trimBadge = el("button", "intake-trim-badge");
           trimBadge.innerHTML = '<span class="cg-icon cg-icon--scissors"></span>';
           trimBadge.type = "button";
@@ -523,8 +495,9 @@
           .join("\n");
       }
 
-      container.appendChild(card);
+      frag.appendChild(card);
     });
+    container.appendChild(frag);
     attachQueueScrubbers(container);
     refreshIntakeCardStates();
     // Re-renders wipe the hub's keyboard-cursor outline; repaint it.
@@ -573,9 +546,7 @@
   function screenspaceClusterToItem(cluster) {
     var start = cluster.start;
     var end = cluster.end;
-    // Navigational boundaries are points (no intake padding), so a clip would be
-    // zero-length. Give one a forward default-duration window so "Add to
-    // Artifacts/Reel" still produces a real clip starting at the boundary.
+    // A point boundary would cut a zero-length clip; give it a forward window.
     if (cluster.navigational && start === end) {
       end = start + (CLIPGEN_CONFIG.defaultDuration || 5);
     }
@@ -613,32 +584,41 @@
     intakeToggleItem(state.reelQueue, screenspaceClusterToItem(cluster), renderReelQueue);
   }
 
-  // Mark intake cards whose cluster is in either queue, mirroring how
-  // updateCellClasses highlights queued spreadsheet cells. Driven by the render
-  // queue functions (so every mutation re-syncs) and the intake render functions
-  // (so the highlight survives the poll that rebuilds cards).
+  // Every panel, so a new one cannot miss the queued highlight.
+  function intakeCardPanels() {
+    return [
+      {
+        cardsSel: "#intakeCards",
+        cardSel: ".intake-queue-card",
+        idxAttr: "intakeIdx",
+        filtered: filteredIntakeClusters,
+        clusterToItem: screenspaceClusterToItem,
+      },
+      {
+        cardsSel: "#trIntakeCards",
+        cardSel: ".tr-intake-queue-card",
+        idxAttr: "trIntakeIdx",
+        filtered: filteredTranscriptIntakeClusters,
+        clusterToItem: transcriptClusterToItem,
+      },
+      CO_INTAKE,
+      MN_INTAKE,
+    ];
+  }
+
   function refreshIntakeCardStates() {
-    var ssClusters = filteredIntakeClusters();
-    qsa("#intakeCards .intake-queue-card").forEach(function (card) {
-      var c = ssClusters[parseInt(card.dataset.intakeIdx, 10)];
-      if (!c) return;
-      var item = screenspaceClusterToItem(c);
-      card.classList.toggle(
-        "in-queue",
-        findIntakeInQueue(state.artifactQueue, item) >= 0 ||
-          findIntakeInQueue(state.reelQueue, item) >= 0,
-      );
-    });
-    var trClusters = filteredTranscriptIntakeClusters();
-    qsa("#trIntakeCards .tr-intake-queue-card").forEach(function (card) {
-      var c = trClusters[parseInt(card.dataset.trIntakeIdx, 10)];
-      if (!c) return;
-      var item = transcriptClusterToItem(c);
-      card.classList.toggle(
-        "in-queue",
-        findIntakeInQueue(state.artifactQueue, item) >= 0 ||
-          findIntakeInQueue(state.reelQueue, item) >= 0,
-      );
+    intakeCardPanels().forEach(function (panel) {
+      var items = panel.filtered();
+      qsa(panel.cardsSel + " " + panel.cardSel).forEach(function (card) {
+        var c = items[parseInt(card.dataset[panel.idxAttr], 10)];
+        if (!c) return;
+        var item = panel.clusterToItem(c);
+        card.classList.toggle(
+          "in-queue",
+          findIntakeInQueue(state.artifactQueue, item) >= 0 ||
+            findIntakeInQueue(state.reelQueue, item) >= 0,
+        );
+      });
     });
   }
 
@@ -658,13 +638,7 @@
     });
   }
 
-  // Shared init for both intake panels. Attaches the delegated card listeners
-  // (click/contextmenu/mouseover/mouseleave) ONCE on the cards container, plus
-  // the Add-All/Reel-All buttons, threshold, search, and the per-type extra
-  // control. Must be called exactly once per panel at startup — never from a
-  // render path (CODE-REVIEW.md listener-cleanup rule). Per-type behavior is
-  // supplied via cfg; the shared `#trIntakeTooltip` host and the
-  // `trIntakeTooltipsEnabled` gate are owned here so both panels behave alike.
+  // Listeners are delegated: call once per panel at startup, never from a render path.
   function initIntakePanel(cfg) {
     var cards = qs(cfg.cardsSel);
     if (!cards) return;
@@ -677,6 +651,16 @@
       if (!cluster) return;
       if (e.shiftKey) cfg.toggleReel(cluster);
       else cfg.toggleArtifacts(cluster);
+    });
+
+    cards.addEventListener("dragstart", function (ev) {
+      var card = ev.target.closest(cfg.cardSel);
+      if (!card) return;
+      var cluster = cfg.filtered()[parseInt(card.dataset[cfg.idxAttr], 10)];
+      if (!cluster) return;
+      ev.dataTransfer.setData("application/json", JSON.stringify(cfg.clusterToItem(cluster)));
+      ev.dataTransfer.effectAllowed = "copyMove";
+      setCardDragImage(ev, card);
     });
 
     // Right-click to dismiss
@@ -700,7 +684,7 @@
         if (densityEl) densityEl.setHovered(idx);
       }
       var tooltip = qs("#trIntakeTooltip");
-      if (tooltip && state.trIntakeTooltipsEnabled) {
+      if (tooltip && CLIPGEN_CONFIG.crossReferences) {
         var tooltipText = cfg.onCardHover(card, idx) || "";
         if (tooltipText) {
           tooltip.textContent = tooltipText;
@@ -725,13 +709,19 @@
     var addAllBtn = qs(cfg.addAllBtnSel);
     if (addAllBtn) {
       addAllBtn.addEventListener("click", function () {
-        cfg.filtered().forEach(function (c) { cfg.addToArtifacts(c); });
+        var clusters = cfg.filtered();
+        var items = [];
+        for (var i = 0; i < clusters.length; i++) items.push(cfg.clusterToItem(clusters[i]));
+        intakeAddItems(state.artifactQueue, items, renderArtifactQueue);
       });
     }
     var reelAllBtn = qs(cfg.reelAllBtnSel);
     if (reelAllBtn) {
       reelAllBtn.addEventListener("click", function () {
-        cfg.filtered().forEach(function (c) { cfg.addToReel(c); });
+        var clusters = cfg.filtered();
+        var items = [];
+        for (var i = 0; i < clusters.length; i++) items.push(cfg.clusterToItem(clusters[i]));
+        intakeAddItems(state.reelQueue, items, renderReelQueue);
       });
     }
     var thresholdInput = qs(cfg.thresholdSel);
@@ -768,11 +758,6 @@
     bookmark:   { label: "Bookmark",   token: "--cat-bookmark" },
   };
 
-  function trIntakeCategoryColor(key) {
-    var entry = TR_INTAKE_CATEGORIES[key] || TR_INTAKE_CATEGORIES.bookmark;
-    return getCSSVar(entry.token, "");
-  }
-
   function _syncMarkCategoriesFromSettings(settings) {
     if (!settings) return;
     for (var i = 0; i < settings.length; i++) {
@@ -783,12 +768,7 @@
     }
   }
 
-  // Apply the marks block ({marks, categories}) from a transcript intake poll.
-  // In default mode a fingerprint dirty-check skips redundant re-renders and
-  // returns false so the poller can back off; returns true when it re-rendered.
-  // In "Show all" mode it always refreshes (via applyTranscriptShowAll, its own
-  // participants+transcripts fan-out) and returns false — backoff there is
-  // governed by the status flags, so the heavy fan-out slows when nothing runs.
+  // Returns true when re-rendered. Show-all always refreshes and returns false; status flags drive backoff.
   function applyTranscriptMarks(block) {
     var marks = block.marks || [];
     var categories = block.categories;
@@ -814,8 +794,7 @@
     return true;
   }
 
-  // "Show all": append every unmarked segment as a queue item. Its own fan-out
-  // (participants + one transcript fetch each) — user-toggled, not always-on.
+  // Appends every unmarked segment. Fans out one transcript fetch per participant; user-toggled.
   function applyTranscriptShowAll(threshold) {
     apiGet("../transcripts/api/participants")
       .then(function (pData) {
@@ -932,10 +911,7 @@
     });
   }
 
-  // Severity filter chips — multi-select (mirrors the Sheet-grid severity
-  // filter): each chip toggles its label in/out of state.trIntakeFilterSeverities;
-  // only severities present in the data render. Cluster severity is the most-
-  // severe of its marks (hoisted in clusterTranscriptMarks).
+  // Multi-select, like the Sheet grid. Only severities present in the data render.
   function buildTrIntakeSeverityPills() {
     var container = qs("#trIntakeSeverityPills");
     if (!container) return;
@@ -974,6 +950,8 @@
       desc: cluster.category || "transcript",
       source: "transcript",
       mark_ids: cluster.marks.map(function (m) { return m.id; }),
+      text: cluster.text || "",
+      label: cluster.label || "",
     };
   }
 
@@ -1018,13 +996,7 @@
   }
 
   // ---- Composer Intake ----
-  //
-  // The simplest of the three panels: Composer cuts and trims are already
-  // curated in/out pairs (no clustering, no dismiss — both are managed on
-  // the Composer page), so this is a fingerprint-polled list of cards
-  // sharing the generic panel machinery via a CO_INTAKE config. Trimmed
-  // source markers appear alongside cuts (item.isTrim), and the SS/TR
-  // panels' asterisk badges deep-link here via focusComposerIntakeItem.
+  // Curated in/out pairs; no clustering, no dismiss.
 
   var _coIntakeDensityEl = null;
 
@@ -1057,9 +1029,7 @@
     intakeToggleItem(state.reelQueue, composerCutToItem(cut), renderReelQueue);
   }
 
-  // The four kinds of item the Composer feeds into intake: its own in/out cut
-  // pairs, plus the non-destructive trims of each read-only marker lane. Order
-  // here is the pill order.
+  // Composer cut pairs plus one trim type per marker lane; pill order.
   var CO_INTAKE_TYPES = [
     { key: "cut", label: "Cuts", color: "var(--color-accent)" },
     { key: "transcript", label: "Transcript edit", color: "var(--stream-transcript)" },
@@ -1067,10 +1037,7 @@
     { key: "sheet", label: "Sheet edit", color: "var(--stream-sheet)" },
   ];
 
-  // Which lane a trim came from. Named cutType, not source: the queue items
-  // composerCutToItem() builds already carry source "composer". The key prefix
-  // is load-bearing rather than the stored `source`, because trims written
-  // before trims carried metadata have source "".
+  // The key prefix decides: trims written before trim metadata carry an empty source.
   function composerTrimType(key, stored) {
     if (key.indexOf("sheet:") === 0) return "sheet";
     if (key.indexOf("screenspace:") === 0) return "screenspace";
@@ -1093,8 +1060,7 @@
     });
   }
 
-  // Type filter chips — multi-select, and all four always render (with a 0
-  // count) so the row reads as a legend even on an empty panel.
+  // Multi-select; all four always render so the row reads as a legend.
   function buildCoIntakeTypePills() {
     var container = qs("#coIntakeTypePills");
     if (!container) return;
@@ -1187,9 +1153,7 @@
     extraControl: function () {},
   };
 
-  // Composer intake poll: the cuts/trims lists are tiny, so fetch the whole
-  // composer manifest and fingerprint the spans — re-render only on change.
-  // Trims also repaint the SS/TR panels (their asterisk badges read coTrims).
+  // The cuts and trims lists are tiny: fetch the whole manifest and fingerprint it.
   function pollComposerIntake() {
     return apiGet("../composer/api/manifest")
       .then(function (data) {
@@ -1200,9 +1164,7 @@
           cut.cutType = "cut";
           return cut;
         });
-        // Keys that actually produce a card below — the asterisk badges on
-        // sheet/SS/TR/queue cards gate on this so a deep-link never lands on
-        // an empty panel.
+        // Keys that produce a card; asterisk badges gate on this before deep-linking.
         var cardKeys = {};
         Object.keys(trims).forEach(function (key) {
           var t = trims[key];
@@ -1210,9 +1172,7 @@
           var participant = t.participant || "";
           var label = t.label || "";
           if (!participant && key.indexOf("sheet:") === 0) {
-            // Sheet keys embed the row + participant ("sheet:<row>:<pid>:<seg>"),
-            // so metadata-less trims (written before trims carried metadata)
-            // can still be carded.
+            // Sheet keys embed the row and participant, so metadata-less trims still card.
             var bits = key.split(":");
             participant = bits[2] || "";
             if (!label && bits[1]) label = participant + "." + bits[1];
@@ -1236,7 +1196,6 @@
         if (fp === state._coIntakeFp) return false;
         state._coIntakeFp = fp;
         state.coIntakeItems = items;
-        state.coTrims = trims;
         state.coTrimCardKeys = cardKeys;
         renderComposerIntake();
         renderIntake(false);
@@ -1249,9 +1208,7 @@
       .catch(function () { return false; });
   }
 
-  // Deep link from an SS/TR card's asterisk badge: switch to the Composer
-  // Intake tab and highlight the trimmed counterpart (clearing any filters
-  // that would hide it).
+  // Switch to the Composer Intake tab and highlight the trimmed counterpart.
   function focusComposerIntakeItem(key) {
     var tab = qs('.preview-tab[data-tab="composer-intake"]');
     if (tab) tab.click();
@@ -1302,8 +1259,7 @@
     if (addAllBtn) addAllBtn.disabled = filtered.length === 0;
     if (reelAllBtn) reelAllBtn.disabled = filtered.length === 0;
 
-    // Both pill rows build before the empty-panel bail so the type legend and
-    // its counts stay visible when nothing matches.
+    // Build both pill rows before the empty bail so counts stay visible.
     buildCoIntakeTypePills();
     buildIntakeParticipantPills(CO_INTAKE);
     buildIntakeDensityTimeline(CO_INTAKE, filtered);
@@ -1318,13 +1274,7 @@
 
   // ---- MindNode Intake ----
 
-  // Teams that work in mind maps rather than spreadsheets get their notes here.
-  // Like Composer's panel this is a fingerprint-polled list with no clustering:
-  // a note is already a discrete observation. Two things are specific to it —
-  // one note can carry several timestamp pairs (each becomes its own card, as a
-  // sheet cell expands to segments), and notes carrying no timestamp at all are
-  // kept and shown disabled rather than dropped, so the researcher can see what
-  // is not clippable instead of silently losing it.
+  // Fingerprint-polled notes, no clustering: a note is already one observation.
 
   var _mnIntakeDensityEl = null;
 
@@ -1333,8 +1283,7 @@
       participant: note.participant,
       start: note.start,
       end: note.end,
-      // A bare-timestamp node has no text; the server falls back to a generic
-      // "MindNode intake" label rather than inventing a name.
+      // A bare-timestamp node has no text; the server supplies a generic label.
       desc: note.desc,
       event_type: note.desc,
       category: note.category,
@@ -1391,8 +1340,7 @@
     return items.filter(mindnodeNoteMatchesFilters);
   }
 
-  // Category chips are the map's own question branches, so unlike the fixed
-  // Composer/detector lists they are derived from the loaded document.
+  // Categories come from the map's own question branches, not a fixed list.
   function buildMnIntakeCategoryPills() {
     var container = qs("#mnIntakeCategoryPills");
     if (!container) return;
@@ -1481,9 +1429,7 @@
     extraControl: function () {},
   };
 
-  // Poll the parsed document and fingerprint it — the server re-parses the
-  // bundle on each call, so editing the map in MindNode shows up here without
-  // reopening the workspace.
+  // The server re-parses the bundle each call, so MindNode edits show up here.
   function clearMindnodeIntake() {
     var dirty = state.mnIntakeItems.length || state.mnIntakeSkipped.length;
     state.mnIntakeItems = [];
@@ -1511,8 +1457,7 @@
             skipped.push(note);
             return;
           }
-          // One card per timestamp pair, the way a sheet cell expands to
-          // segments — the note id alone would collide across its own spans.
+          // One card per timestamp pair; the note id alone collides across spans.
           note.spans.forEach(function (span, segIdx) {
             items.push({
               id: note.id + "#" + segIdx,
@@ -1551,9 +1496,10 @@
         return true;
       })
       .catch(function (err) {
-        // 404 is the bundle disappearing. A timeout or a 500 leaves the cards
-        // up and stays on the fast poll so the next tick can recover.
-        if (!err || err.message !== "Server error 404") return true;
+        // 404 is the bundle disappearing. apiGet puts the HTTP status on the
+        // error and the server's message in err.message, so a timeout or a 500
+        // must not match on the text. Those leave the cards up.
+        if (!err || err.status !== 404) return true;
         var already =
           state.mnIntakeError &&
           !state.mnIntakeItems.length &&
@@ -1570,9 +1516,7 @@
     return pollMindnodeIntake();
   }
 
-  // The untimestamped notes, rendered disabled below the grid. They cannot be
-  // cut, but they are real observations the researcher wrote, so hiding them
-  // would read as clipgen having lost them.
+  // Untimestamped notes render disabled rather than hidden, so nothing looks lost.
   function renderMnIntakeSkipped() {
     var host = qs("#mnIntakeSkipped");
     if (!host) return;
@@ -1640,24 +1584,7 @@
     renderIntakeCards(MN_INTAKE, filtered);
   }
 
-  function initTooltipToggle() {
-    state.trIntakeTooltipsEnabled = getStoredTooltipPref();
-    var btn = qs("#tooltipToggle");
-    if (!btn) return;
-    btn.setAttribute("aria-pressed", state.trIntakeTooltipsEnabled ? "true" : "false");
-    btn.addEventListener("click", function () {
-      state.trIntakeTooltipsEnabled = !state.trIntakeTooltipsEnabled;
-      btn.setAttribute("aria-pressed", state.trIntakeTooltipsEnabled ? "true" : "false");
-      setStoredTooltipPref(state.trIntakeTooltipsEnabled);
-      if (!state.trIntakeTooltipsEnabled) {
-        var tt = qs("#trIntakeTooltip");
-        if (tt) tt.classList.add("hidden");
-      }
-    });
-  }
-
-  // Init the intake panels. Folded from the hub-boot initIntakePanel calls
-  // so the SS_INTAKE/TR_INTAKE/CO_INTAKE configs never need to leave this file.
+  // Keeps the panel configs local to this file.
   function initIntake() {
     initIntakePanel(SS_INTAKE);
     initIntakePanel(TR_INTAKE);
@@ -1710,7 +1637,6 @@
   STUDIO.refreshComposerIntake = refreshComposerIntake;
   STUDIO.refreshMindnodeIntake = refreshMindnodeIntake;
   STUDIO.focusComposerIntakeItem = focusComposerIntakeItem;
-  STUDIO.initTooltipToggle = initTooltipToggle;
   STUDIO.refreshIntakeCardStates = refreshIntakeCardStates;
   STUDIO.renderIntake = renderIntake;
   STUDIO._syncMarkCategoriesFromSettings = _syncMarkCategoriesFromSettings;

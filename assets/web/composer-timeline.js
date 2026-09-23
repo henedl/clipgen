@@ -17,7 +17,6 @@
 
   var RULER_H = 18;
   var STEP_TRACK_H = 8; // minor/major tick strip just under the timestamps
-  var CUT_TRACK_H = 26; // the single cuts track, directly under the ruler
   var LANE_GAP = 3;
   var ROW_H = 15;       // one marker sub-row (14px bar + 1px gap)
   var THUMB_ROW_H = 42; // marker sub-row with thumbnail strips (41px bar + 1px gap)
@@ -43,8 +42,7 @@
     return _laneColors;
   }
 
-  // Subtle timeline chrome: alternating-row stripe fill + minor step-track tick
-  // color. Cached like laneColors() and re-sampled on theme flips.
+  // Stripe fill + step-track tick color; cached like laneColors(), re-sampled on theme flips.
   function chromeColors() {
     if (!_chromeColors) {
       _chromeColors = {
@@ -57,8 +55,7 @@
 
   function canvasEl() { return qs("#coTimelineCanvas"); }
 
-  // Minimal sub-row count for a lane's markers: greedy interval packing over
-  // markers sorted by start yields the optimal (lowest) row count.
+  // Minimal sub-row count: greedy packing over start-sorted markers is optimal.
   function neededRows(markers) {
     var sorted = markers.slice().sort(function (a, b) { return a.start - b.start; });
     var rowEnds = [];
@@ -76,14 +73,13 @@
 
   function laneRows(source) {
     if (!state.sourceToggles[source]) return 0; // hidden lane occupies no space
+    // Empty lanes occupy none either: no wasted row, no no-op fold button.
+    if (!(state.markers[source] || []).length) return 0;
     if (state.laneFolds[source]) return 1;
-    return neededRows(state.markers[source] || []);
+    return neededRows(state.markers[source]);
   }
 
-  // Marker sub-rows and the cuts track always use their large (thumb-sized)
-  // heights so each bar can fit a recognizable frame; the Thumbs toggle only
-  // controls whether thumbnails are drawn, not the geometry. Only the
-  // annotations lane stays flat (its spans are drawings, not video content).
+  // Always thumb-sized so bars fit a frame; the Thumbs toggle only gates drawing.
   function laneRowH() { return THUMB_ROW_H; }
   function cutTrackH() { return THUMB_CUT_H; }
 
@@ -95,12 +91,7 @@
     });
   }
 
-  // Vertical layout, driven by fold state: ruler → cuts track (the user's
-  // working track) → the annotations lane right under it (both are Composer-
-  // owned, editable content; only present when annotations exist) → one lane
-  // per visible read-only source. Every lane folds to a single row and
-  // unfolds to its minimal packed row count. The strip's height follows via
-  // updateTimelineHeight(), not vice versa.
+  // Ruler → cuts → annotations (when any) → visible source lanes; strip height follows (updateTimelineHeight).
   function layout() {
     var cutY = RULER_H + STEP_TRACK_H + 2;
     var y = cutY + cutTrackH() + 4;
@@ -127,18 +118,17 @@
     };
   }
 
-  // Grow/shrink the whole timeline strip to fit the current fold state by
-  // writing the shared --co-timeline-height var (both the shell and the strip
-  // are sized from it); the wrapper's ResizeObserver then re-renders.
-  var _sectionExtra = null;
-
+  // Write --co-timeline-height (sizes shell and strip); the wrapper's ResizeObserver re-renders.
   function updateTimelineHeight() {
     var section = qs("#coTimelineSection");
     var wrapper = qs("#coTimelineWrapper");
-    if (_sectionExtra === null) {
-      _sectionExtra = Math.max(section.offsetHeight - wrapper.offsetHeight, 24);
-    }
-    var target = layout().canvasH + _sectionExtra;
+    // Re-measured every call: the media banner lands in this column asynchronously.
+    var sectionExtra = Math.max(section.offsetHeight - wrapper.offsetHeight, 24);
+    // Cap it: #coShell is 100vh minus this var; uncapped, the calc() goes negative.
+    var target = Math.min(
+      layout().canvasH + sectionExtra,
+      Math.round(window.innerHeight * 0.6)
+    );
     var current = parseFloat(
       getComputedStyle(document.documentElement)
         .getPropertyValue("--co-timeline-height")
@@ -179,9 +169,7 @@
     state.offset = clamp(state.offset, 0, Math.max(0, state.duration - visLen));
   }
 
-  // Pan the viewport minimally so *t* sits inside the visible window with a
-  // small edge margin. No-op when fully zoomed out (the whole timeline is
-  // visible) or while the user is mid pan/scrub drag (don't fight the gesture).
+  // Pan minimally so t is in view; no-op when zoomed out or mid-drag.
   function revealTime(t) {
     if (state.zoom <= 1 || !state.duration) return;
     if (state.dragging) return;
@@ -200,6 +188,8 @@
   function sizeCanvases() {
     var canvas = canvasEl();
     _cachedRect = null;
+    // Re-fit first: this resize may be the media banner toggling. Settles within 1px, never loops.
+    updateTimelineHeight();
     var rect = canvas.getBoundingClientRect();
     canvas.width = Math.floor(rect.width);
     canvas.height = Math.floor(rect.height);
@@ -211,8 +201,7 @@
 
   // ---- Rendering ----
 
-  // Greedy sub-row packing inside one source lane: overlapping markers go to
-  // the first free sub-row; overflow past maxRows collapses onto the last.
+  // Greedy sub-row packing; overflow past maxRows collapses onto the last row.
   function assignRows(markers, maxRows) {
     var sorted = markers.slice().sort(function (a, b) { return a.start - b.start; });
     var rowEnds = [];
@@ -239,9 +228,7 @@
     return sorted;
   }
 
-  // Minor + major tick marks in the step-track strip under the timestamps.
-  // Minors are subdivided only while they stay legible (>= ~8px apart), so the
-  // ruler declutters automatically as the view zooms out.
+  // Step-track ticks; minors subdivide only while >= ~8px apart, so zooming out declutters.
   function drawStepTrack(ctx, tx, vis, interval, w, chrome, tc) {
     var majorPx = (interval / vis.len) * w;
     var minorDiv = majorPx / 5 >= 8 ? 5 : majorPx / 2 >= 8 ? 2 : 1;
@@ -261,6 +248,10 @@
   }
 
   function renderTimeline() {
+    return clipgenPerf.span("composer.renderTimeline", renderTimelineImpl);
+  }
+
+  function renderTimelineImpl() {
     var canvas = canvasEl();
     if (!canvas.width || !canvas.height) return;
     var ctx = canvas.getContext("2d");
@@ -289,8 +280,7 @@
     var interval = niceTimeInterval(vis.len, { maxTicks: 20 });
     var chrome = chromeColors();
 
-    // Subtle alternating row bands, ledger-style: fill every other lane band
-    // (cuts → annotations → each visible source lane) under the content.
+    // Ledger-style alternating bands: cuts → annotations → each visible source lane.
     var bands = [{ y: L.cutY, h: L.cutH }];
     if (L.annotationsLane.rows) {
       bands.push({ y: L.annotationsLane.y, h: L.annotationsLane.h });
@@ -304,13 +294,10 @@
       if (i % 2 === 1) ctx.fillRect(0, b.y, w, b.h);
     });
 
-    // Step track: minor + major tick marks just under the timestamps (a
-    // video-editor-style ruler), instead of full-height gridlines that clutter
-    // the lanes. Majors align with the ruler labels; minors subdivide them.
+    // Step track under the timestamps instead of full-height gridlines that clutter the lanes.
     drawStepTrack(ctx, tx, vis, interval, w, chrome, tc);
 
-    // Labels only — the ruler's own ticks are suppressed (tickHeight 0) so the
-    // step track owns the tick marks.
+    // Labels only (tickHeight 0); the step track owns the tick marks.
     drawTimelineRuler(ctx, {
       visStart: vis.start,
       visEnd: vis.end,
@@ -322,10 +309,7 @@
       format: formatDuration,
     });
 
-    // Cuts track — the single working track for all in/out pairs, directly
-    // under the ruler so committed cuts land visibly on the timeline. Its
-    // boundary reads from the alternating band, so no separator outline.
-    // Chronological numbering shared with the cut list's index badges.
+    // Cuts track, directly under the ruler; numbering matches the cut list's index badges.
     var cutIndexById = {};
     if (CO.sortedCuts) {
       CO.sortedCuts().forEach(function (c, i) { cutIndexById[c.id] = i + 1; });
@@ -388,9 +372,7 @@
         if (state.markerThumbnails && CO.drawMarkerThumbs) {
           CO.drawMarkerThumbs(ctx, m.key, m.start, m.end, x1, y, rw, rowH - 1, color);
         }
-        // Trimmed affordance: a solid underline in the lane color marks a
-        // marker whose span deviates from its source (right-click resets).
-        // Drawn after any thumbnails so it stays visible on top.
+        // Trimmed underline (right-click resets), drawn after thumbnails so it stays on top.
         if (m.trimmed) {
           ctx.fillStyle = color;
           ctx.fillRect(x1, y + rowH - 3, rw, 2);
@@ -399,9 +381,7 @@
       });
     });
 
-    // Annotations lane (accent-colored spans; selection matches the overlay).
-    // Dimmed — not skipped — while the layer is hidden, so the spans stay
-    // findable and draggable.
+    // Annotations lane; dimmed, not skipped, while hidden so spans stay draggable.
     var annLane = L.annotationsLane;
     if (annLane.rows) {
       var annDim = state.annHidden ? 0.3 : 1;
@@ -431,14 +411,28 @@
     renderPlayhead();
   }
 
-  // Per-lane fold buttons in the DOM rail (rebuilt on every render, like
-  // screenspace's boundary flags). Hidden/empty lanes get no button.
+  // Fold-button rail. The signature skips per-frame innerHTML rebuilds that destroy hovered tooltip anchors.
+  var _railSig = null;
+  var _foldToggled = null; // lane whose fold button was just clicked
+
   function renderLaneRail(L) {
     var rail = qs("#coLaneRail");
     if (!rail) return;
+    var sig = !state.duration ? "" : SOURCES.map(function (s) {
+      return s + ":" + L.lanes[s].rows + ":" + L.lanes[s].y +
+        ":" + (state.laneFolds[s] ? 1 : 0);
+    }).join("|") + "|annotations:" + L.annotationsLane.rows +
+      ":" + L.annotationsLane.y + ":" + (state.laneFolds.annotations ? 1 : 0);
+    if (sig === _railSig) return;
+    _railSig = sig;
+    // The rebuild destroys a focused fold button; re-focus its replacement.
+    var focused = document.activeElement;
+    var focusSource = focused && rail.contains(focused)
+      ? focused.getAttribute("data-source") : null;
     rail.innerHTML = "";
     if (!state.duration) return;
     var frag = document.createDocumentFragment();
+    var swapTo = null;
 
     function foldButton(source, laneY, laneH) {
       var folded = !!state.laneFolds[source];
@@ -450,10 +444,15 @@
       btn.setAttribute("aria-label", foldLabel);
       // Vertically center in the lane (CSS translateY(-50%) does the rest).
       btn.style.top = (laneY + laneH / 2) + "px";
-      btn.appendChild(el("span",
-        "co-btn-icon " + (folded ? "co-icon-fold-closed" : "co-icon-fold-open")));
+      // The clicked lane's glyph starts as the old one, then cross-fades once attached.
+      var toggled = source === _foldToggled;
+      var icon = el("span",
+        "co-btn-icon " + (folded !== toggled ? "co-icon-fold-closed" : "co-icon-fold-open"));
+      btn.appendChild(icon);
+      if (toggled) swapTo = { icon: icon, cls: "co-btn-icon " + (folded ? "co-icon-fold-closed" : "co-icon-fold-open") };
       btn.addEventListener("click", function (e) {
         e.stopPropagation();
+        _foldToggled = source;
         state.laneFolds[source] = !state.laneFolds[source];
         if (CO.persistLaneUi) CO.persistLaneUi();
         updateTimelineHeight();
@@ -472,6 +471,12 @@
         foldButton("annotations", L.annotationsLane.y, L.annotationsLane.h));
     }
     rail.appendChild(frag);
+    _foldToggled = null;
+    if (swapTo) window.ClipgenMotion.swapIcon(swapTo.icon, swapTo.cls, true);
+    if (focusSource) {
+      var again = rail.querySelector('[data-source="' + focusSource + '"]');
+      if (again) again.focus();
+    }
   }
 
   function renderPlayhead() {
@@ -529,8 +534,7 @@
     return null;
   }
 
-  // Cut-edge hit: returns {cut, edge: "start"|"end"} when clientX/Y is within
-  // EDGE_SLOP of a cut boundary inside the cuts band.
+  // {cut, edge: "start"|"end"} when within EDGE_SLOP of a cut boundary, else null.
   function hitTestCutEdge(clientX, clientY) {
     var rect = getRect();
     var mx = clientX - rect.left;
@@ -558,9 +562,7 @@
     return hit && hit.cut ? hit.cut : null;
   }
 
-  // Lane-edge hit: like cut edges, but against the marker/annotation hit
-  // rects (their vertical band is per-row). Returns {marker?, annotation?,
-  // edge} or null.
+  // Like hitTestCutEdge, against marker/annotation rects. Returns {marker?, annotation?, edge} or null.
   function hitTestLaneEdge(clientX, clientY) {
     var rect = getRect();
     var mx = clientX - rect.left;
@@ -652,14 +654,25 @@
     qs("#coZoomOutBtn").appendChild(el("span", "co-btn-icon co-icon-zoom-out"));
 
     sizeCanvases();
+    // The RO sees wrapper size only; viewport-height changes move the canvas, so drop the rect.
+    var onWindowResize = function () {
+      _cachedRect = null;
+      updateTimelineHeight();
+    };
+    var onScroll = function () { _cachedRect = null; };
     if (typeof ResizeObserver === "function") {
       var obs = new ResizeObserver(function () { sizeCanvases(); });
       obs.observe(qs("#coTimelineWrapper"));
-      window.addEventListener("pagehide", function () { obs.disconnect(); });
+      window.addEventListener("resize", onWindowResize);
+      window.addEventListener("pagehide", function () {
+        obs.disconnect();
+        window.removeEventListener("resize", onWindowResize);
+        window.removeEventListener("scroll", onScroll, true);
+      });
     } else {
       window.addEventListener("resize", sizeCanvases);
     }
-    window.addEventListener("scroll", function () { _cachedRect = null; }, true);
+    window.addEventListener("scroll", onScroll, true);
 
     canvas.addEventListener("wheel", function (e) {
       e.preventDefault();
@@ -674,10 +687,11 @@
         state.offset = clamp(mouseTs - frac * visLen, 0, state.duration - visLen);
       }
       if (state.zoom <= 1) state.offset = 0;
-      renderTimeline();
+      // rAF-coalesced: trackpads deliver 100+ wheel events/s; one render per paint suffices.
+      scheduleRender();
     }, { passive: false });
 
-    // One pointer gesture at a time: edge drag > body drag > pan (zoomed) > scrub.
+    // One gesture at a time: edge drag > body drag > pan > scrub.
     var drag = null;   // {type, cut?, edge?, startX, startOffset?, origStart?, origEnd?, moved}
     var _dragRaf = 0;
 
@@ -690,9 +704,10 @@
     }
 
     canvas.addEventListener("pointerdown", function (e) {
+      // Primary button only; a right-click drag racing the trim DELETE could rewrite the deleted span.
+      if (e.button !== 0) return;
       if (!state.duration) return;
-      // Set early so the scrub branch's immediate seek sees an active drag and
-      // revealTime() no-ops (the clicked time is on-screen anyway).
+      // Set early so the scrub branch's seek makes revealTime() no-op.
       state.dragging = true;
       hideTooltip();
       if (CO.scrubHoverEnd) CO.scrubHoverEnd();
@@ -710,16 +725,14 @@
         CO.selectCut(edgeHit.cut.id);
         canvas.classList.add("co-drag-edge");
       } else if (laneEdgeHit && laneEdgeHit.marker) {
-        // Marker trim drag: same gesture as a cut edge, committed as a
-        // non-destructive trim override on pointer-up.
+        // Marker trim drag; committed as a non-destructive trim override on pointer-up.
         drag = {
           type: "marker-edge",
           marker: laneEdgeHit.marker,
           edge: laneEdgeHit.edge,
           origStart: laneEdgeHit.marker.start,
           origEnd: laneEdgeHit.marker.end,
-          // The trim in force before this drag (null = untrimmed) — the undo
-          // payload, captured before the drag mutates anything.
+          // Undo payload: the trim in force before this drag (null = untrimmed).
           beforeTrim: state.trims[laneEdgeHit.marker.key]
             ? {
                 start: state.trims[laneEdgeHit.marker.key].start,
@@ -784,7 +797,19 @@
       canvas.setPointerCapture(e.pointerId);
     });
 
+    // One pass per frame: hover runs two hit-tests plus tooltip writes, scrub seeks the video.
+    var _moveRaf = 0;
+    var _lastMove = null;
     canvas.addEventListener("pointermove", function (e) {
+      _lastMove = e;
+      if (_moveRaf) return;
+      _moveRaf = requestAnimationFrame(function () {
+        _moveRaf = 0;
+        handlePointerMove(_lastMove);
+      });
+    });
+
+    function handlePointerMove(e) {
       if (!drag) {
         // Hover: edge cursor affordance + tooltip + opt-in audio scrub.
         if (!state.duration) return;
@@ -881,7 +906,7 @@
         ts = xToTime(e.clientX);
         if (ts !== null) CO.seekVideo(ts);
       }
-    });
+    }
 
     function endDrag(e) {
       if (!drag) return;
@@ -920,9 +945,7 @@
     canvas.addEventListener("pointerup", endDrag);
     canvas.addEventListener("pointercancel", endDrag);
 
-    // Double-click on empty timeline space sets the pending in point, then a
-    // second double-click commits the out point (config-gated; the preceding
-    // single clicks already scrubbed the playhead to the clicked time).
+    // Double-click empty space: first sets the in point, second commits the out point (config-gated).
     canvas.addEventListener("dblclick", function (e) {
       if (!CLIPGEN_CONFIG.composerDoubleClickCuts) return;
       if (!state.duration || !state.participant) return;

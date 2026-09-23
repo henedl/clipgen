@@ -1,16 +1,8 @@
-"""Clip processing pipeline for clipgen.
+"""Clip processing pipeline: clips, reels, screenshots, GIFs, and manifest
+regeneration.
 
-Reusable functions for generating clips, reels, screenshots, GIFs, and
-regenerating artifacts from manifests.  Extracted from clipgen.py so that
-the web layer (server.py) can use the pipeline without importing the CLI
-entry-point module.
-
-Public API:
-    is_excel_worksheet(worksheet) -> bool
-    process_clips(clips_list, output_format, include_severity) -> (count, artifacts)
-    process_reel(clips_list, output_file) -> (count, reel_records)
-    compute_reel_id(components) -> str
-    regenerate_from_manifest(artifacts, reels) -> int
+Deliberately separate from the CLI entry-point module so the web layer can drive
+the pipeline without importing it.
 """
 
 import concurrent.futures
@@ -27,15 +19,14 @@ import config
 import files
 import titlecards
 import transcripts
+import profiling
 import utils
 import video
 import viewer
 from utils import ClipRecord
 
-# Active progress bar reference, set during clip pipeline so nested functions
-# (e.g. fuzzy match prompts) can pause/resume the live display.
+# Live progress bar; nested prompts (fuzzy match) pause and resume it.
 _active_progress = None
-_active_secondary_task = None
 
 
 def _resolve_titlecard_options(
@@ -114,13 +105,11 @@ def _resolve_clip_workers() -> int:
     return workers
 
 
-# Large .mp4 files in the input dir, keyed by path + mtime_ns (one glob/stat pass per run).
+# Large input .mp4s per dir, stamped with mtime_ns: one glob/stat pass per run.
 _fuzzy_input_videos_cache: dict[str, tuple[int | None, list[tuple[int, Path]]]] = {}
 
-# Serializes the missing-video branch of _check_source_video. Reel preparation
-# runs per-clip in worker threads (_run_clip_pipeline parallel=True), so the
-# shared missing_videos / fuzzy_matches structures and any fuzzy-match prompt
-# must not be touched concurrently.
+# Reel prep runs per-clip in threads; missing_videos, fuzzy_matches, and the
+# prompt need serializing.
 _fuzzy_match_lock = threading.Lock()
 
 
@@ -239,9 +228,10 @@ def _check_source_video(
 
     Resolution order:
     - Override present → resolve each plus-separated part; any missing → skip clip.
-    - No override → the plain ``{study}_{participant}.mp4`` wins when present
-      (single video). Only when it is absent do we auto-detect numbered parts;
-      if none exist, fall back to the fuzzy-match prompt on the plain name.
+    - No override → the plain patterned name (``config.SOURCE_FILENAME_PATTERN``,
+      default ``{study}_{participant}.mp4``) wins when present (single video).
+      Only when it is absent do we auto-detect numbered parts; if none exist,
+      fall back to the fuzzy-match prompt on the plain name.
 
     When 2+ videos resolve, the duration timeline is built and stored on
     ``clip['source_timeline']`` so the cut/artifact stages can map global
@@ -479,7 +469,6 @@ def cut_global_range(
 def _process_single_clip_segments(
     clip: ClipRecord,
     base_video: str,
-    missing_videos: set[str],
     *,
     filename_prefix: str = "",
     output_format: str = "clip",
@@ -530,8 +519,8 @@ def _process_single_clip_segments(
     """
     generated = 0
     output_paths: list[tuple[str, int]] = []
-    # Cards are per-segment; a single soft failure makes the whole clip uncarded
-    # as far as the manifest is concerned, so regeneration retries it.
+    # One soft card failure marks the whole clip uncarded, so regeneration retries
+    # it.
     all_cards_applied = True
     extension_map = {
         "clip": config.FILEFORMAT,
@@ -552,15 +541,12 @@ def _process_single_clip_segments(
         titlecards_enabled, titlecard_duration_seconds
     )
 
-    # Multi-video participants carry a duration timeline; global timestamps are
-    # mapped into the owning sub-video at cut time. Absent = single-video fast
-    # path (unchanged behavior, no probing).
+    # Multi-video participants map global timestamps into a sub-video at cut time;
+    # absent means single-video.
     timeline = clip.get("source_timeline")
 
-    # Padding / max-duration (Workflows artifact nodes). The default path is a
-    # no-op and never probes. We only need the EOF limit when *extending* the end
-    # (pad_post > 0), since run_ffmpeg silently skips a clip that runs past EOF;
-    # trimming or capping can never push the end out.
+    # Workflows padding: probe EOF only when extending the end, so the recorded
+    # span stays accurate.
     padding_active = pad_pre != 0.0 or pad_post != 0.0 or max_duration > 0.0
     span_limit: float | None = None
     if pad_post > 0.0:
@@ -638,10 +624,8 @@ def _process_single_clip_segments(
                     cancel_flag=cancel_flag,
                 )
             if ok and cards_enabled:
-                # Wrap at the generated clip's own resolution (probed inside
-                # wrap_clip_with_cards). For multi-video participants a clip may
-                # be cut from a later part whose resolution differs from the
-                # first source, so trusting the clip avoids a concat mismatch.
+                # Wrap at the clip's own resolution: a later part may differ from
+                # the first source.
                 ok, cards_applied = titlecards.wrap_clip_with_cards(
                     clip,
                     out_name,
@@ -649,12 +633,11 @@ def _process_single_clip_segments(
                     titlecards_enabled=cards_enabled,
                     titlecard_duration_seconds=card_duration,
                 )
-                # A soft wrap failure keeps a usable, unwrapped clip — record it,
-                # but not as carded, so the generate-cache retries it later.
+                # A soft wrap failure leaves a usable clip; record it uncarded so
+                # the cache retries.
                 if ok and not cards_applied:
                     all_cards_applied = False
-            # Enforce the size cap on the finished clip (after any wrap re-encode),
-            # not on intermediate reel parts (enforce_size=False).
+            # Cap size after any wrap re-encode; reel parts pass enforce_size=False.
             if ok and enforce_size:
                 video.enforce_filesize_limit(out_name, cancel_flag=cancel_flag)
         else:  # output_format == 'screen' or 'gif' — keys off the start time only
@@ -677,9 +660,8 @@ def _process_single_clip_segments(
                     cancel_flag=cancel_flag,
                 )
             else:  # output_format == 'gif'
-                # pad_pre already shifted cut_ts (start) above; pad_post is moot
-                # for a fixed-length gif. max_duration caps the gif's length,
-                # floored at 1s so a fractional cap (< 1) never yields a 0s gif.
+                # pad_pre already shifted cut_ts; pad_post is moot. max_duration
+                # caps, floored at 1s.
                 gif_duration = config.DEFAULT_GIF_DURATION_SECONDS
                 if remaining is not None:
                     gif_duration = min(gif_duration, remaining)
@@ -729,7 +711,13 @@ def _parallel_map_ordered(
     (e.g. to advance a progress bar). Returns the future->index map so callers
     that need post-cancel draining (see ``_run_clip_pipeline``) can use it.
     """
-    with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
+    # pipeline.clip / pipeline.pool_wall is effective parallelism, what
+    # CLIP_PARALLEL_WORKERS is tuned against; shared by every pool.
+    worker_fn = profiling.bind(profiling.timed("pipeline.clip")(worker_fn))
+    with (
+        profiling.span("pipeline.pool_wall"),
+        concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool,
+    ):
         future_to_idx = {
             pool.submit(worker_fn, item): idx for idx, item in enumerate(items)
         }
@@ -746,6 +734,12 @@ def _parallel_map_ordered(
             if on_done is not None:
                 on_done()
     return future_to_idx
+
+
+def _clip_progress_label(clip: ClipRecord) -> str:
+    """Progress-bar description: ``[P01] first words of the observation...``."""
+    desc = (clip.get("desc") or "")[: config.PROGRESS_DESCRIPTION_LENGTH]
+    return f"[{clip.get('participant', '')}] {desc}..."
 
 
 def _run_clip_pipeline(
@@ -823,32 +817,16 @@ def _run_clip_pipeline(
         )
         return []
 
+    global _active_progress
     if use_parallel:
         results: list[Any] = [None] * total_clips
-        progress = utils.create_progress_bar()
-        if progress:
-            global _active_progress, _active_secondary_task
-            _active_progress = progress
-            with progress:
-                task = progress.add_task(task_label, total=total_clips)
+        with utils.progress_scope(task_label, total_clips) as ps:
+            _active_progress = ps.progress
 
-                def _on_done() -> None:
-                    progress.update(task, advance=1)
-                    _notify_clip_done()
+            def _on_done() -> None:
+                ps.update(advance=1)
+                _notify_clip_done()
 
-                future_to_idx = _parallel_map_ordered(
-                    clips_list,
-                    wrapped_process,
-                    workers=workers,
-                    results=results,
-                    on_error=_clip_error,
-                    cancel_flag=cancel_flag,
-                    on_done=_on_done,
-                )
-                _drain_ran_futures(future_to_idx, results)
-            _active_progress = None
-            _active_secondary_task = None
-        else:
             future_to_idx = _parallel_map_ordered(
                 clips_list,
                 wrapped_process,
@@ -856,53 +834,35 @@ def _run_clip_pipeline(
                 results=results,
                 on_error=_clip_error,
                 cancel_flag=cancel_flag,
-                on_done=_notify_clip_done,
+                on_done=_on_done,
             )
             _drain_ran_futures(future_to_idx, results)
+        _active_progress = None
     else:
         results = []
-        progress = utils.create_progress_bar()
-        if progress:
-            _active_progress = progress
-            with progress:
-                task = progress.add_task(task_label, total=total_clips)
-                if secondary_task_label:
-                    _active_secondary_task = progress.add_task(
-                        secondary_task_label, total=total_clips
-                    )
-                for clip in clips_list:
-                    if cancel_flag and cancel_flag():
-                        break
-                    desc_preview = (clip.get("desc") or "")[
-                        : config.PROGRESS_DESCRIPTION_LENGTH
-                    ]
-                    participant = clip.get("participant", "")
-                    progress.update(
-                        task, description=f"[{participant}] {desc_preview}..."
-                    )
-                    results.append(wrapped_process(clip))
-                    progress.update(task, advance=1)
-                    _notify_clip_done()
-            _active_progress = None
-            _active_secondary_task = None
-        else:
+        with utils.progress_scope(task_label, total_clips) as ps:
+            _active_progress = ps.progress
+            if secondary_task_label:
+                ps.add_task(secondary_task_label, total_clips)
             for index, clip in enumerate(clips_list, start=1):
                 if cancel_flag and cancel_flag():
                     break
-                if (
+                if ps.live:
+                    ps.update(description=_clip_progress_label(clip))
+                elif (
                     show_fallback_counter
                     and getattr(config, "VERBOSITY", config.STANDARD) >= config.VERBOSE
                     and total_clips > 1
                 ):
                     utils.verbose_print(f"Processing clip {index} of {total_clips}...")
                 results.append(wrapped_process(clip))
+                ps.update(advance=1)
                 _notify_clip_done()
+        _active_progress = None
 
     if missing_videos:
         utils.standard_print(f"* Missing source video files: {len(missing_videos)}")
-    # Drop slots from cancelled futures in the parallel path so callers get a
-    # list of completed results only (the sequential path naturally produces
-    # the same shape via early-break + append).
+    # Drop cancelled futures' slots; the sequential path yields the same shape.
     results = [r for r in results if r is not None]
     return (results, missing_videos)
 
@@ -999,21 +959,34 @@ def _transcribe_segments(
                 language=entry.get("language", ""),
                 source_file=entry.get("source_file", str(base_video)),
                 model=entry.get("model", ""),
+                speaker_labels=dict((entry.get("speakers") or {}).get("labels") or {}),
             )
         else:
             context_keywords = transcripts.get_corrections_keywords(corrections) or None
+            known_terms = transcripts.get_known_terms(manifest) or None
             timeline = clip.get("source_timeline")
             if timeline:
-                # Multi-video participant: transcribe all parts as one global
-                # timeline so segment times match the clip artifacts.
+                # Multi-video: one global timeline so segment times match the clips.
                 transcript_cache[base_video] = transcripts.transcribe_timeline(
-                    timeline, context_keywords=context_keywords
+                    timeline,
+                    context_keywords=context_keywords,
+                    known_terms=known_terms,
                 )
             else:
                 resolved = str(utils.resolve_input_path(base_video))
                 transcript_cache[base_video] = transcripts.transcribe_video(
-                    resolved, context_keywords=context_keywords
+                    resolved,
+                    context_keywords=context_keywords,
+                    known_terms=known_terms,
                 )
+            fresh = transcript_cache[base_video]
+            if config.TRANSCRIBE_SPEAKERS and fresh and fresh["segments"]:
+                paths = (
+                    [p for p, _d, _c in timeline]
+                    if timeline
+                    else [str(utils.resolve_input_path(base_video))]
+                )
+                transcripts.label_speakers(paths, fresh["segments"], None)
     full_transcript = transcript_cache[base_video]
     if not full_transcript:
         return
@@ -1046,6 +1019,7 @@ def _transcribe_segments(
             files.release_reservation(t_path)
 
 
+@profiling.scoped("clips", work_of=lambda clips_list, *a, **k: len(clips_list))
 def process_clips(
     clips_list: list[ClipRecord],
     output_format: str = "clip",
@@ -1106,26 +1080,8 @@ def process_clips(
     skipped_no_video = 0
 
     global _active_progress
-    progress = utils.create_progress_bar()
-    if progress:
-        _active_progress = progress
-        with progress:
-            prep_task = progress.add_task("Preparing clips", total=len(clips_list))
-            for clip in clips_list:
-                if cancel_flag and cancel_flag():
-                    break
-                clip, base_video = _prepare_and_check_clip(
-                    clip, missing_videos, fuzzy_matches
-                )
-                if not clip["times"]:
-                    skipped_no_times += 1
-                elif base_video is None:
-                    skipped_no_video += len(clip["times"])
-                else:
-                    prepared.append((clip, base_video))
-                progress.update(prep_task, advance=1)
-        _active_progress = None
-    else:
+    with utils.progress_scope("Preparing clips", len(clips_list)) as ps:
+        _active_progress = ps.progress
         for clip in clips_list:
             if cancel_flag and cancel_flag():
                 break
@@ -1138,6 +1094,8 @@ def process_clips(
                 skipped_no_video += len(clip["times"])
             else:
                 prepared.append((clip, base_video))
+            ps.update(advance=1)
+    _active_progress = None
 
     if not prepared:
         utils.warning_print(
@@ -1156,50 +1114,35 @@ def process_clips(
         prepared
     )
 
+    def _cut(
+        pair: tuple[ClipRecord, str],
+    ) -> tuple[int, list[tuple[str, int]], bool]:
+        clip, base_video = pair
+        return _process_single_clip_segments(
+            clip,
+            base_video,
+            output_format=output_format,
+            collect_paths=True,
+            include_severity=include_severity,
+            cancel_flag=cancel_flag,
+            titlecards_enabled=titlecards_enabled,
+            titlecard_duration_seconds=titlecard_duration_seconds,
+            pad_pre=pad_pre,
+            pad_post=pad_post,
+            max_duration=max_duration,
+        )
+
+    def _cut_error(idx: int, exc: Exception) -> tuple[int, list[tuple[str, int]], bool]:
+        clip, _ = prepared[idx]
+        desc = (clip.get("desc") or "")[: config.PROGRESS_DESCRIPTION_LENGTH]
+        utils.error_print(
+            f"Clip failed: [{clip.get('participant', '')}] {desc}",
+            [str(exc)],
+        )
+        return _EMPTY_RESULT
+
     if use_parallel:
-
-        def _cut(
-            pair: tuple[ClipRecord, str],
-        ) -> tuple[int, list[tuple[str, int]], bool]:
-            clip, base_video = pair
-            return _process_single_clip_segments(
-                clip,
-                base_video,
-                missing_videos,
-                output_format=output_format,
-                collect_paths=True,
-                include_severity=include_severity,
-                cancel_flag=cancel_flag,
-                titlecards_enabled=titlecards_enabled,
-                titlecard_duration_seconds=titlecard_duration_seconds,
-                pad_pre=pad_pre,
-                pad_post=pad_post,
-                max_duration=max_duration,
-            )
-
-        def _cut_error(idx: int, exc: Exception) -> tuple[int, list[tuple[str, int]]]:
-            clip, _ = prepared[idx]
-            desc = (clip.get("desc") or "")[: config.PROGRESS_DESCRIPTION_LENGTH]
-            utils.error_print(
-                f"Clip failed: [{clip.get('participant', '')}] {desc}",
-                [str(exc)],
-            )
-            return (0, [])
-
-        progress = utils.create_progress_bar()
-        if progress:
-            with progress:
-                cut_task = progress.add_task("Processing clips", total=len(prepared))
-                _parallel_map_ordered(
-                    prepared,
-                    _cut,
-                    workers=workers,
-                    results=results,
-                    on_error=_cut_error,
-                    cancel_flag=cancel_flag,
-                    on_done=lambda: progress.update(cut_task, advance=1),
-                )
-        else:
+        with utils.progress_scope("Processing clips", len(prepared)) as ps:
             _parallel_map_ordered(
                 prepared,
                 _cut,
@@ -1207,64 +1150,25 @@ def process_clips(
                 results=results,
                 on_error=_cut_error,
                 cancel_flag=cancel_flag,
+                on_done=lambda: ps.update(advance=1),
             )
     else:
         # Sequential execution (workers=1 or single clip)
-        progress = utils.create_progress_bar()
-        if progress:
-            with progress:
-                cut_task = progress.add_task("Processing clips", total=len(prepared))
-                for idx, (clip, base_video) in enumerate(prepared):
-                    if cancel_flag and cancel_flag():
-                        break
-                    desc_preview = (clip.get("desc") or "")[
-                        : config.PROGRESS_DESCRIPTION_LENGTH
-                    ]
-                    participant = clip.get("participant", "")
-                    progress.update(
-                        cut_task,
-                        description=f"[{participant}] {desc_preview}...",
-                    )
-                    results[idx] = _process_single_clip_segments(
-                        clip,
-                        base_video,
-                        missing_videos,
-                        output_format=output_format,
-                        collect_paths=True,
-                        include_severity=include_severity,
-                        cancel_flag=cancel_flag,
-                        titlecards_enabled=titlecards_enabled,
-                        titlecard_duration_seconds=titlecard_duration_seconds,
-                        pad_pre=pad_pre,
-                        pad_post=pad_post,
-                        max_duration=max_duration,
-                    )
-                    progress.update(cut_task, advance=1)
-        else:
+        with utils.progress_scope("Processing clips", len(prepared)) as ps:
             for idx, (clip, base_video) in enumerate(prepared):
                 if cancel_flag and cancel_flag():
                     break
-                if (
+                if ps.live:
+                    ps.update(description=_clip_progress_label(clip))
+                elif (
                     getattr(config, "VERBOSITY", config.STANDARD) >= config.VERBOSE
                     and len(prepared) > 1
                 ):
                     utils.verbose_print(
                         f"Processing clip {idx + 1} of {len(prepared)}..."
                     )
-                results[idx] = _process_single_clip_segments(
-                    clip,
-                    base_video,
-                    missing_videos,
-                    output_format=output_format,
-                    collect_paths=True,
-                    include_severity=include_severity,
-                    cancel_flag=cancel_flag,
-                    titlecards_enabled=titlecards_enabled,
-                    titlecard_duration_seconds=titlecard_duration_seconds,
-                    pad_pre=pad_pre,
-                    pad_post=pad_post,
-                    max_duration=max_duration,
-                )
+                results[idx] = _cut((clip, base_video))
+                ps.update(advance=1)
 
     # -- Phase 3: Build artifacts and transcribe (sequential) ------------------
     outputs_generated = 0
@@ -1283,9 +1187,8 @@ def process_clips(
         if generated_count < len(clip["times"]):
             outputs_skipped += len(clip["times"]) - generated_count
         if segment_details:
-            # Record what actually landed on disk, not what was asked for: a clip
-            # whose wrap soft-failed is usable but uncarded, and claiming otherwise
-            # makes the Phase-1 generate cache skip it forever.
+            # Record what landed: a soft-failed wrap claimed carded makes the
+            # generate cache skip it forever.
             carded = cards_enabled and cards_applied
             title_img, end_img = _resolve_titlecard_images(carded)
             clip_artifacts = viewer.build_artifact_records_for_clip(
@@ -1315,32 +1218,9 @@ def process_clips(
             if results[idx][1]
         ]
         if transcribe_items:
-            progress = utils.create_progress_bar()
-            if progress:
-                with progress:
-                    t_task = progress.add_task(
-                        "Transcribing", total=len(transcribe_items)
-                    )
-                    for clip, base_video, segment_details in transcribe_items:
-                        desc_preview = (clip.get("desc") or "")[
-                            : config.PROGRESS_DESCRIPTION_LENGTH
-                        ]
-                        participant = clip.get("participant", "")
-                        progress.update(
-                            t_task,
-                            description=f"[{participant}] {desc_preview}...",
-                        )
-                        _transcribe_segments(
-                            clip,
-                            base_video,
-                            segment_details,
-                            all_artifacts,
-                            transcript_cache,
-                            transcripts_manifest,
-                        )
-                        progress.update(t_task, advance=1)
-            else:
+            with utils.progress_scope("Transcribing", len(transcribe_items)) as ps:
                 for clip, base_video, segment_details in transcribe_items:
+                    ps.update(description=_clip_progress_label(clip))
                     _transcribe_segments(
                         clip,
                         base_video,
@@ -1349,6 +1229,7 @@ def process_clips(
                         transcript_cache,
                         transcripts_manifest,
                     )
+                    ps.update(advance=1)
 
     if missing_videos:
         utils.standard_print(f"* Missing source video files: {len(missing_videos)}")
@@ -1403,10 +1284,8 @@ def _build_reel_transcript(
     cards_enabled, titlecard_duration = _resolve_titlecard_options(
         titlecards_enabled, titlecard_duration_seconds
     )
-    # Each wrapped clip is titlecard + clip body + endcard (wrap_clip_with_cards),
-    # so the per-component span the next component starts after is
-    # titlecard + clip + endcard. The endcard is skipped only when ENDCARD_IMAGE
-    # is the "none" sentinel; mirror that decision via resolve_card_background.
+    # Each component spans titlecard + clip + endcard; resolve_card_background
+    # decides whether the endcard exists.
     endcard_duration = 0
     if not cards_enabled:
         titlecard_duration = 0
@@ -1493,13 +1372,12 @@ def process_reel(
             max_duration=max_duration,
         )
     finally:
-        # Endcard temp files are cached per-process across every wrap call;
-        # purge them so per-request cards don't leak between reel builds. The
-        # CLI, interactive, and Studio /api/reel paths all route through here,
-        # mirroring the cleanup process_clips and /api/reel-direct already do.
+        # Endcard temp files are cached per-process; purge so cards don't leak
+        # between reel builds.
         titlecards.clear_endcard_cache()
 
 
+@profiling.scoped("reel", work_of=lambda clips_list, *a, **k: len(clips_list))
 def _process_reel(
     clips_list: list[ClipRecord],
     output_file: str | None = None,
@@ -1550,8 +1428,7 @@ def _process_reel(
         parts are missing their cards.
         """
         clip, base_video = _prepare_and_check_clip(clip, missing_videos, fuzzy_matches)
-        # `times` is populated by prepare_clip, so the expected segment count is
-        # only knowable after the call above.
+        # prepare_clip fills `times`, so the segment count is known only now.
         expected = len(clip.get("times") or [])
         label = (
             " ".join(
@@ -1567,15 +1444,13 @@ def _process_reel(
             or "(unnamed clip)"
         )
         if base_video is None:
-            # A row with no timestamps is not a failure — nothing was requested of
-            # it. A missing source video when timestamps *were* requested is.
+            # No timestamps is not a failure; a missing video with timestamps is.
             if not expected:
                 return ([], [], [], True)
             return ([], [], [f"{label} — source video not found"], False)
         _, segment_paths, cards_applied = _process_single_clip_segments(
             clip,
             base_video,
-            missing_videos,
             filename_prefix="_reel_part_",
             collect_paths=True,
             enforce_size=False,  # parts are concatenated into an uncapped reel
@@ -1627,9 +1502,8 @@ def _process_reel(
     components: list[dict[str, Any]] = []
     clip_paths = []
     reel_failures: list[str] = []
-    # One part whose wrap soft-failed makes the whole reel not-carded: the
-    # concatenated output really is missing that card, so recording it as carded
-    # would make the generate cache skip the rebuild (see process_clips).
+    # One soft-failed part wrap makes the reel uncarded, or the generate cache
+    # skips the rebuild.
     all_parts_carded = True
     for segment_paths, clip_components, clip_failures, clip_carded in all_results:
         for entry in segment_paths:
@@ -1639,10 +1513,8 @@ def _process_reel(
         if not clip_carded:
             all_parts_carded = False
 
-    # A reel is a single deliverable: concatenating only the clips that happened to
-    # succeed produces a silently short video that looks complete, and its reel id
-    # is hashed from the truncated component list, so the cache would then serve
-    # that truncated reel even after the problem is fixed. Abort instead.
+    # Abort: a partial reel looks complete and its truncated-list id would stay
+    # cached.
     if reel_failures:
         for path in clip_paths:
             try:
@@ -1687,9 +1559,7 @@ def _process_reel(
         files.release_reservation(output_file)
         return (0, [])
 
-    # Throttle concat progress events to ~5 Hz; ffmpeg's default -progress
-    # cadence (1/sec) is already low, but the throttle keeps things bounded
-    # if ffmpeg emits faster on short clips.
+    # Throttle concat progress to ~5 Hz in case ffmpeg emits faster on short clips.
     last_emit_ts: list[float] = [0.0]
 
     def _on_concat_progress(fraction: float) -> None:
@@ -1709,11 +1579,17 @@ def _process_reel(
             on_progress=_on_concat_progress if progress_cb is not None else None,
         )
 
-    ok = (
-        utils.run_with_spinner("Concatenating clips into final reel...", _concat)
-        if utils.use_progress()
-        else _concat()
-    )
+    ok = False
+    try:
+        ok = (
+            utils.run_with_spinner("Concatenating clips into final reel...", _concat)
+            if utils.use_progress()
+            else _concat()
+        )
+    finally:
+        if not ok:
+            # Ctrl-C or an ffmpeg error mid-concat must not leave the placeholder.
+            files.release_reservation(output_file)
 
     # If cancelled during concatenation, clean up output and temp clips
     if cancel_flag and cancel_flag():
@@ -1739,17 +1615,13 @@ def _process_reel(
             )
 
     if not ok:
-        # Concatenation failed; the output is empty or partial and useless —
-        # drop it whether we or the caller reserved the name.
-        files.release_reservation(output_file)
         return (0, [])
 
     cards_enabled, card_duration = _resolve_titlecard_options(
         titlecards_enabled, titlecard_duration_seconds
     )
-    # Persist the cards that actually landed on the parts, not the ones asked
-    # for: a reel whose part wraps soft-failed is genuinely missing those cards,
-    # and claiming otherwise makes the generate cache skip rebuilding it.
+    # Persist the cards that landed, not those requested, or the generate cache
+    # skips the rebuild.
     reel_carded = cards_enabled and all_parts_carded
     reel_id = compute_reel_id(components)
     title_img, end_img = _resolve_titlecard_images(reel_carded)
@@ -1831,6 +1703,10 @@ def _regenerate_batch(
     return count
 
 
+@profiling.scoped(
+    "regenerate",
+    work_of=lambda artifacts, reels=None: len(artifacts) + len(reels or []),
+)
 def regenerate_from_manifest(
     artifacts: list[dict[str, Any]],
     reels: list[dict[str, Any]] | None = None,
@@ -1867,9 +1743,8 @@ def regenerate_from_manifest(
 
     def _regen_reel(reel: dict[str, Any]) -> bool:
         local_missing: set[str] = set()
-        # When the reel batch itself runs concurrently (parallel_reels), cut each
-        # reel's components sequentially to avoid nested CPU oversubscription;
-        # otherwise let a lone/large reel parallelize its own segment cuts.
+        # Parallel reel batches cut components sequentially to avoid nested CPU
+        # oversubscription.
         ok = _regenerate_reel(reel, local_missing, parallel=not parallel_reels)
         if local_missing:
             with missing_lock:
@@ -1902,13 +1777,8 @@ def regenerate_from_manifest(
             task=task,
         )
 
-    progress = utils.create_progress_bar()
-    if progress:
-        with progress:
-            task = progress.add_task("Regenerating", total=total)
-            generated = _run(progress, task)
-    else:
-        generated = _run(None, None)
+    with utils.progress_scope("Regenerating", total) as ps:
+        generated = _run(ps.progress, ps.task)
 
     if missing_videos:
         utils.standard_print(f"* Missing source video files: {len(missing_videos)}")
@@ -1966,8 +1836,8 @@ def _regenerate_single_artifact(
             if video.run_ffmpeg(
                 input_file=part_path,
                 output_file=tmp,
-                start_pos=utils.seconds_to_timestamp(int(part.get("localStart", 0))),
-                end_pos=utils.seconds_to_timestamp(int(part.get("localEnd", 0))),
+                start_pos=utils.seconds_to_timestamp(round(part.get("localStart", 0))),
+                end_pos=utils.seconds_to_timestamp(round(part.get("localEnd", 0))),
                 reencode=config.REENCODING,
             ):
                 temp_paths.append(tmp)
@@ -2001,8 +1871,9 @@ def _regenerate_single_artifact(
 
     local_start = artifact.get("localStart", artifact.get("start", 0))
     local_end = artifact.get("localEnd", artifact.get("end", 0))
-    start_ts = utils.seconds_to_timestamp(int(local_start))
-    end_ts = utils.seconds_to_timestamp(int(local_end))
+    # Round like _local_timestamp so regeneration reproduces the original cut.
+    start_ts = utils.seconds_to_timestamp(round(local_start))
+    end_ts = utils.seconds_to_timestamp(round(local_end))
 
     if artifact_type == "clip":
         ok = video.run_ffmpeg(
@@ -2018,15 +1889,16 @@ def _regenerate_single_artifact(
         if ok:
             video.enforce_filesize_limit(output_path)
         return ok
-    elif artifact_type == "screen":
+    if artifact_type == "screen":
         return video.extract_screenshot(
             input_file=source_path,
             output_file=output_path,
             timestamp=start_ts,
         )
-    elif artifact_type == "gif":
+    if artifact_type == "gif":
+        # The span is the clip's, not the GIF's; the GIF stays capped like generation.
         duration = max(
-            int(local_end - local_start), config.DEFAULT_GIF_DURATION_SECONDS
+            1, min(int(local_end - local_start), config.DEFAULT_GIF_DURATION_SECONDS)
         )
         return video.extract_gif(
             input_file=source_path,
@@ -2034,11 +1906,10 @@ def _regenerate_single_artifact(
             timestamp=start_ts,
             duration_seconds=duration,
         )
-    else:
-        utils.warning_print(
-            f"Unknown artifact type '{artifact_type}' for '{artifact.get('file', '?')}', skipping."
-        )
-        return False
+    utils.warning_print(
+        f"Unknown artifact type '{artifact_type}' for '{artifact.get('file', '?')}', skipping."
+    )
+    return False
 
 
 def _regenerate_reel(
@@ -2061,10 +1932,8 @@ def _regenerate_reel(
     if not components:
         return False
 
-    # Pre-flight: flatten segments into an ordered task list and validate every
-    # source up front (cheap stat calls, single-threaded) before spending any
-    # ffmpeg time. A missing source aborts the whole reel without reserving or
-    # cutting anything.
+    # Pre-flight: stat every source before any ffmpeg time; a missing one aborts
+    # the reel.
     tasks: list[dict[str, Any]] = []
     for comp in components:
         for segment in comp.get("parts") or [comp]:
@@ -2081,9 +1950,8 @@ def _regenerate_reel(
                 {
                     "idx": len(tasks),
                     "source_path": source_path,
-                    # Match _local_timestamp's rounding + force_hours so a
-                    # regenerated segment reproduces the original cut instead
-                    # of truncating up to ~1s off it.
+                    # Match _local_timestamp's rounding and force_hours so
+                    # regeneration reproduces the original cut.
                     "start_ts": utils.seconds_to_timestamp(
                         round(local_start), force_hours=True
                     ),
@@ -2112,10 +1980,15 @@ def _regenerate_reel(
 
     workers = _resolve_clip_workers()
     cut_results: dict[int, tuple[str, bool]] = {}
+    # Second, separate pool from _parallel_map_ordered; same two labels (see there).
+    _cut_timed = profiling.timed("pipeline.clip")(_cut_segment)
     if parallel and len(tasks) >= 2 and workers >= 2:
-        with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
+        with (
+            profiling.span("pipeline.pool_wall"),
+            concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool,
+        ):
             for future in concurrent.futures.as_completed(
-                [pool.submit(_cut_segment, t) for t in tasks]
+                [pool.submit(_cut_timed, t) for t in tasks]
             ):
                 idx, out_name, ok = future.result()
                 cut_results[idx] = (out_name, ok)

@@ -1,9 +1,8 @@
 """Screenspace background worker.
 
-A daemon-thread task queue that runs analysis tasks sequentially with
+A daemon-thread task queue running analysis tasks sequentially, with
 pause/resume/cancel, multi-video timeline mapping, heatmap rendering, and event
-generation. Imports the tool registry, heatmap/manifest helpers, the multitool
-offset probe, and the ffprobe metadata helper from sibling modules.
+generation.
 """
 
 import copy
@@ -17,10 +16,14 @@ from pathlib import Path
 from typing import Any
 
 import config
+import profiling
 import utils
 import video
 from screenspace_tools import TOOLS
 from screenspace_heatmap import (
+    GridLayers,
+    build_grid_layers,
+    grid_layer_count,
     generate_attention_heatmap,
     generate_change_heatmap,
     generate_flow_heatmap,
@@ -43,15 +46,10 @@ from screenspace_manifest import (
 from screenspace_multitool import _multitool_has_offset
 from screenspace_frames import _probe_video_meta
 
-# Per-frame grid payloads consumed only by heatmap generation and never sent to
-# the client (unlike flow_grid, which the flow overlay needs). Stripped from
-# external reads and dropped from results once heatmaps are written.
+# Heatmap-only per-frame grids; stripped from reads and dropped after heatmaps write.
 _SERVER_ONLY_GRID_KEYS = ("change_grid", "saliency_grid")
 
-# Task keys carrying a heatmap artifact filename. The frontend turns every one of
-# these into an image URL, so they must never name a file that isn't on disk. Each
-# GIF also carries a "<key>_sprite" geometry descriptor, but that names no file —
-# the sprite sheet is rendered on demand from the GIF by /api/heatmap-sprite.
+# Keys the frontend turns into image URLs; each must name a file on disk.
 _HEATMAP_FILE_KEYS = ("heatmap", "heatmap_gif", "heatmap_rolling_gif")
 
 
@@ -88,8 +86,7 @@ def _heatmap_gif_attachments(info: dict[str, Any] | None, key: str) -> dict[str,
     name = _published_name(info.get("path"))
     if not name:
         return {}
-    # A GIF that collapsed to a single frame is a still, not something to scrub;
-    # omitting the descriptor drops the thumb to plain playback.
+    # A single-frame GIF is a still; no descriptor means plain playback.
     if info["frames"] < 2:
         return {key: name}
     cols, rows = sprite_grid(info["frames"])
@@ -144,8 +141,7 @@ def _copy_task_for_read(
                 ]
     else:
         res = task.get("result")
-        # Mirror the frontend's old count logic: list → len, truthy non-list
-        # (e.g. a single string artifact path) → 1, empty/None → 0.
+        # Old frontend count: list → len, truthy non-list → 1, else 0.
         slim["result_count"] = len(res) if isinstance(res, list) else (1 if res else 0)
         slim.pop("result", None)
         slim.pop("_raw_results", None)
@@ -194,10 +190,8 @@ def dispatch_tool_scan(
             fast_opts=fast_opts,
         )
 
-    # Multi-video: map the task's GLOBAL [start, end] range onto the timeline
-    # and scan each spanned sub-video at its local offsets. Emitted result
-    # times are shifted back to the global timeline and tagged with the
-    # sub-video they came from so events line up with clips/transcripts.
+    # Multi-video: split the GLOBAL range across sub-videos; results shift back
+    # to global time.
     total = timeline[-1][1] + timeline[-1][2]
     global_start = params.get("start_seconds", 0.0) or 0.0
     global_end = params.get("end_seconds")
@@ -210,7 +204,9 @@ def dispatch_tool_scan(
     span = sum(piece_durations) or 1.0
     accumulated = 0.0
     all_results: list[dict[str, Any]] = []
-    for (index, local_start, local_end), piece_dur in zip(pieces, piece_durations):
+    for (index, local_start, local_end), piece_dur in zip(
+        pieces, piece_durations, strict=True
+    ):
         if cancel_flag():
             break
         cumulative = timeline[index][2]
@@ -310,18 +306,41 @@ class ScreenspaceWorker:
                     )
                 self._tasks[restored["id"]] = restored
 
-    def stop(self) -> None:
-        """Signal the worker thread to stop."""
+    def stop(self, join_timeout: float = 15) -> None:
+        """Signal the worker thread to stop.
+
+        *join_timeout* bounds the wait for the thread: shutdown can afford the
+        full default, while a sheet swap passes a short one — the thread is a
+        daemon and, once ``_running`` is False and the callbacks are detached,
+        it can only finish its current (cancelled) task and exit.
+        """
         self._running = False
         self._queue.put((0, "", _SENTINEL))
         if self._thread is not None:
-            self._thread.join(timeout=15)
+            self._thread.join(timeout=join_timeout)
+
+    def cancel_all(self) -> None:
+        """Cancel every queued, paused, or running task (used when the worker is retired)."""
+        with self._lock:
+            for task in self._tasks.values():
+                if task["status"] in (TASK_STATUS_QUEUED, TASK_STATUS_PAUSED):
+                    task["status"] = TASK_STATUS_CANCELLED
+                elif task["status"] == TASK_STATUS_RUNNING:
+                    task["_cancelled"] = True
 
     def enqueue(self, task: dict[str, Any]) -> str:
         """Add a task to the queue. Returns the task ID."""
         task_id = task["id"]
         with self._lock:
             self._tasks[task_id] = task
+        profiling.op_open(
+            "screenspace_task",
+            op_id=task_id,
+            meta={
+                "type": task.get("type", ""),
+                "participant": task.get("participant", ""),
+            },
+        )
         self._queue.put((task.get("priority", 100), task["created_at"], task_id))
         return task_id
 
@@ -447,16 +466,15 @@ class ScreenspaceWorker:
             progress = task.get("progress", 0.0)
             params = task.get("parameters", {})
 
-            # Offset multitool chains run the two-phase scan: phase 2 joins
-            # across every frame from the original start, so they cannot resume
-            # mid-stream (advancing start_seconds would drop the pre-pause
-            # frames the join depends on). Restart these from scratch instead —
-            # ``start_seconds`` is left untouched and no partial results carry
-            # over, so the re-run reproduces the full result set.
+            # Offset multitool joins need every frame from the original start;
+            # restart from scratch.
             if task.get("type") == "multitool" and _multitool_has_offset(
                 params.get("steps", [])
             ):
                 with self._lock:
+                    # A Cancel that raced this Resume wins.
+                    if task["status"] != TASK_STATUS_PAUSED:
+                        continue
                     task.pop("_partial_results", None)
                     task.pop("_progress_offset", None)
                     task.pop("_progress_scale", None)
@@ -479,18 +497,17 @@ class ScreenspaceWorker:
                     end = timeline[-1][1] + timeline[-1][2]
                 else:
                     _, end = _probe_video_meta(task["video_paths"][0])
-            # ``progress`` is a GLOBAL fraction of the original scan range
-            # (mapped via _progress_offset/_progress_scale in _on_progress),
-            # but ``start`` is the CURRENT segment start — already advanced by
-            # any previous resume. Convert back to the current segment's local
-            # fraction before projecting, or a 2nd+ resume overshoots the true
-            # stop point and skips frames.
+            # ``progress`` is global; convert to segment-local or a 2nd resume
+            # skips frames.
             prev_offset = task.get("_progress_offset", 0.0)
             prev_scale = task.get("_progress_scale", 1.0)
             local = max(0.0, min(1.0, (progress - prev_offset) / prev_scale))
             resume_at = start + local * (end - start)
 
             with self._lock:
+                # A Cancel that raced the probe above wins.
+                if task["status"] != TASK_STATUS_PAUSED:
+                    continue
                 task["_partial_results"] = list(task.get("result") or [])
                 task["_progress_offset"] = progress
                 task["_progress_scale"] = max(1.0 - progress, 0.001)
@@ -507,13 +524,8 @@ class ScreenspaceWorker:
             if task is None:
                 return False
             if task["status"] == TASK_STATUS_RUNNING:
-                # The running scan's cancel_flag looks the task up by id, so the
-                # task must stay in ``_tasks`` for the cancel to land — popping it
-                # here would strand the worker thread, which would run the scan to
-                # completion and keep streaming progress (CPU + SSE spam). Flag it
-                # cancelled + remove-on-finish; ``get_all_tasks`` hides it from the
-                # UI/manifest immediately and ``_execute_task`` pops it once the
-                # scan unwinds.
+                # cancel_flag finds the task by id; keep it in ``_tasks`` until
+                # ``_execute_task`` pops it.
                 task["_cancelled"] = True
                 task["_remove_on_finish"] = True
                 return True
@@ -542,6 +554,7 @@ class ScreenspaceWorker:
         heatmap_type: str,
         *,
         rolling: bool,
+        layers: GridLayers | None = None,
     ) -> dict[str, Any]:
         """Write the cumulative (and optionally rolling-window) heatmap GIFs.
 
@@ -551,24 +564,48 @@ class ScreenspaceWorker:
         """
         out_dir = Path(utils.get_effective_output_dir())
         attachments: dict[str, Any] = {}
-        gif = generate_heatmap_gif(
-            results,
-            width,
-            height,
-            str(out_dir / f"heatmap_{task_id}.gif"),
-            heatmap_type=heatmap_type,
-        )
-        attachments.update(_heatmap_gif_attachments(gif, "heatmap_gif"))
-        if rolling:
-            roll = generate_rolling_heatmap_gif(
-                results,
-                width,
-                height,
-                str(out_dir / f"heatmap_rolling_{task_id}.gif"),
-                heatmap_type=heatmap_type,
-                window_frames=config.SCREENSPACE_HEATMAP_ROLLING_WINDOW,
-            )
-            attachments.update(_heatmap_gif_attachments(roll, "heatmap_rolling_gif"))
+        gif_path = str(out_dir / f"heatmap_{task_id}.gif")
+        with profiling.span("heatmap.gifs"):
+            if rolling:
+                # Cumulative and rolling share no state and OpenCV releases the
+                # GIL; overlap them.
+                roll_path = str(out_dir / f"heatmap_rolling_{task_id}.gif")
+                with ThreadPoolExecutor(max_workers=2) as pool:
+                    gif_f = pool.submit(
+                        generate_heatmap_gif,
+                        results,
+                        width,
+                        height,
+                        gif_path,
+                        heatmap_type=heatmap_type,
+                        layers=layers,
+                    )
+                    roll_f = pool.submit(
+                        generate_rolling_heatmap_gif,
+                        results,
+                        width,
+                        height,
+                        roll_path,
+                        heatmap_type=heatmap_type,
+                        window_frames=config.SCREENSPACE_HEATMAP_ROLLING_WINDOW,
+                        layers=layers,
+                    )
+                    gif = gif_f.result()
+                    roll = roll_f.result()
+                attachments.update(_heatmap_gif_attachments(gif, "heatmap_gif"))
+                attachments.update(
+                    _heatmap_gif_attachments(roll, "heatmap_rolling_gif")
+                )
+            else:
+                gif = generate_heatmap_gif(
+                    results,
+                    width,
+                    height,
+                    gif_path,
+                    heatmap_type=heatmap_type,
+                    layers=layers,
+                )
+                attachments.update(_heatmap_gif_attachments(gif, "heatmap_gif"))
         return attachments
 
     def _generate_heatmap(
@@ -589,6 +626,7 @@ class ScreenspaceWorker:
         """
         heatmap_enabled = {
             "template": config.SCREENSPACE_GENERATE_TEMPLATE_HEATMAP,
+            "shape": config.SCREENSPACE_GENERATE_SHAPE_HEATMAP,
             "flow": config.SCREENSPACE_GENERATE_FLOW_HEATMAP,
             "change": config.SCREENSPACE_GENERATE_CHANGE_HEATMAP,
             "attention": config.SCREENSPACE_GENERATE_ATTENTION_HEATMAP,
@@ -599,7 +637,12 @@ class ScreenspaceWorker:
         heatmap_path = str(
             Path(utils.get_effective_output_dir()) / f"heatmap_{task_id}.png"
         )
-        if task_type == "template":
+        # Draw grid buckets once and share the layers with the PNG and both GIFs.
+        with profiling.span("heatmap.grid_layers"):
+            layers = build_grid_layers(results, task_type, grid_layer_count(results))
+        if task_type in ("template", "shape"):
+            # Shape rows share template's {matches, best_score} contract, so the
+            # box-accumulation heatmap applies unchanged.
             props = video.probe_video_properties(video_paths[0])
             fw = props.get("width", 1920) if props else 1920
             fh = props.get("height", 1080) if props else 1080
@@ -610,24 +653,22 @@ class ScreenspaceWorker:
                 attachments["heatmap"] = hp
             attachments.update(
                 self._write_heatmap_gifs(
-                    task_id, results, fw, fh, "template", rolling=True
+                    task_id, results, fw, fh, task_type, rolling=True
                 )
             )
         elif task_type == "attention":
-            # Full-frame tool: region_coords is {0,0,0,0}, so size to the video
-            # frame like template. The rolling GIF is the eye-tracking-style
-            # gaze-replay deliverable.
+            # Full-frame tool: region_coords is zero, so size to the video frame.
             props = video.probe_video_properties(video_paths[0])
             fw = props.get("width", 1920) if props else 1920
             fh = props.get("height", 1080) if props else 1080
             hp = _published_name(
-                generate_attention_heatmap(results, fw, fh, heatmap_path)
+                generate_attention_heatmap(results, fw, fh, heatmap_path, layers=layers)
             )
             if hp:
                 attachments["heatmap"] = hp
             attachments.update(
                 self._write_heatmap_gifs(
-                    task_id, results, fw, fh, "attention", rolling=True
+                    task_id, results, fw, fh, "attention", rolling=True, layers=layers
                 )
             )
         elif task_type in ("flow", "change"):
@@ -635,17 +676,25 @@ class ScreenspaceWorker:
             rh = region_coords.get("h", 256)
             if task_type == "flow":
                 hp = _published_name(
-                    generate_flow_heatmap(results, rw, rh, heatmap_path)
+                    generate_flow_heatmap(results, rw, rh, heatmap_path, layers=layers)
                 )
             else:
                 hp = _published_name(
-                    generate_change_heatmap(results, rw, rh, heatmap_path)
+                    generate_change_heatmap(
+                        results, rw, rh, heatmap_path, layers=layers
+                    )
                 )
             if hp:
                 attachments["heatmap"] = hp
             attachments.update(
                 self._write_heatmap_gifs(
-                    task_id, results, rw, rh, task_type, rolling=task_type == "change"
+                    task_id,
+                    results,
+                    rw,
+                    rh,
+                    task_type,
+                    rolling=task_type == "change",
+                    layers=layers,
                 )
             )
         return attachments
@@ -733,6 +782,17 @@ class ScreenspaceWorker:
                     utils.warning_print(f"Worker loop error: {exc}")
 
     def _execute_task(self, task: dict[str, Any]) -> None:
+        """Run the task as one operation record; the body owns the status."""
+        task_id = task["id"]
+        with profiling.op_run(task_id, kind="screenspace_task"):
+            self._execute_task_body(task)
+            with self._lock:
+                status = str(task.get("status", ""))
+                result = task.get("result")
+            profiling.op_outcome(task_id, status)
+            profiling.op_work(task_id, len(result) if isinstance(result, list) else 0)
+
+    def _execute_task_body(self, task: dict[str, Any]) -> None:
         """Dispatch task to the appropriate workflow function."""
         task_id = task["id"]
 
@@ -754,7 +814,14 @@ class ScreenspaceWorker:
                     self.on_progress_update()
 
         def _on_progress(progress: float) -> None:
+            # Lock-wait timing settles whether SSE-snapshot reads under the same
+            # lock actually stall per-frame progress writes.
+            _t0 = time.perf_counter() if config.PROFILING else 0.0
             with self._lock:
+                if _t0:
+                    profiling.add(
+                        "worker.progress_lock_wait", time.perf_counter() - _t0
+                    )
                 t = self._tasks.get(task_id)
                 if t and not t.get("_paused_flag"):
                     offset = t.get("_progress_offset", 0.0)
@@ -783,11 +850,8 @@ class ScreenspaceWorker:
             result = self._dispatch(task, _on_progress, _cancel_flag, _on_result)
 
             def _visible_results(seq: Any) -> Any:
-                # Attention's visible results are the confirmed shifts only;
-                # the full per-sample stream (one entry per 0.5s, thousands on
-                # long videos) exists solely to feed heatmap dwell weighting
-                # and must never reach the results/timeline API — neither in
-                # the completed→heatmap-attached window nor while paused.
+                # Attention exposes confirmed shifts only; the per-sample stream
+                # only weights heatmap dwell.
                 if task.get("type") == "attention" and isinstance(seq, list):
                     return [r for r in seq if isinstance(r, dict) and r.get("shift")]
                 return seq
@@ -800,14 +864,9 @@ class ScreenspaceWorker:
                 if t:
                     if t.get("_paused_flag"):
                         t["status"] = TASK_STATUS_PAUSED
-                        # ``result`` holds only THIS invocation's detections;
-                        # prepend the pre-pause carry-over (like the completed
-                        # branch below) or a pause on a resumed scan drops the
-                        # earlier results for good — the next resume re-seeds
-                        # _partial_results from t["result"]. For attention that
-                        # re-seed is shift-only, so a resumed scan's heatmap
-                        # under-accumulates the pre-pause segment (accepted;
-                        # see plans/archive/ATTENTION-PLAN.md).
+                        # ``result`` holds this invocation only; prepend the pre-pause
+                        # carry-over. Heatmap under-accumulation accepted
+                        # (plans/archive/ATTENTION-PLAN.md).
                         partial = t.get("_partial_results")
                         if partial and isinstance(result, list):
                             result = partial + result
@@ -831,10 +890,8 @@ class ScreenspaceWorker:
                             t, raw
                         )
                         if isinstance(result, list) and result:
-                            # Defer heatmap/GIF generation to outside the lock —
-                            # it's heavy I/O (PNG + cumulative/rolling GIFs) that
-                            # would otherwise block status reads, cancellation,
-                            # dismissal, and SSE snapshots after scan completion.
+                            # Defer heavy heatmap I/O outside the lock so reads
+                            # and cancels stay responsive.
                             heatmap_inputs = (
                                 t.get("type", ""),
                                 list(t.get("video_paths", [])),
@@ -842,17 +899,12 @@ class ScreenspaceWorker:
                             )
                     t["completed_at"] = datetime.now(UTC).isoformat()
 
-            # Generate heatmaps without holding the lock, then reacquire it to
-            # strip the grids and attach the filenames. Safe because the scan has
-            # finished (no more _on_result appends); the strip+attach still needs
-            # the lock because readers deep-copy `result` under it.
+            # Heatmaps run lock-free (scan is done); strip and attach reacquire
+            # it for readers.
             if heatmap_inputs is not None and isinstance(result, list) and result:
                 task_type, video_paths, region_coords = heatmap_inputs
-                # Own try/except, deliberately not the outer one: the scan has
-                # already completed with valid results and emitted its events, so
-                # a failure to render a decorative artifact (zero-size region,
-                # disk error, missing PIL in a frozen bundle) must not demote the
-                # task to `failed` and throw those results away.
+                # Own try/except: a failed decorative artifact must not demote a
+                # completed scan to `failed`.
                 try:
                     attachments = self._generate_heatmap(
                         task_type, task_id, video_paths, region_coords, result
@@ -862,18 +914,8 @@ class ScreenspaceWorker:
                         f"Heatmap generation failed for task {task_id}: {exc}"
                     )
                     attachments = {}
-                # change_grid/saliency_grid are consumed only by heatmap
-                # generation; drop them so completed tasks don't retain
-                # per-frame grids in memory until dismissal. Attention's
-                # shift-only t["result"] shares these dicts, so its visible
-                # entries are stripped by the same pass.
-                #
-                # This strip must hold the lock: these dicts are reachable from
-                # self._tasks[task_id]["result"], and _copy_task_for_read /
-                # get_task_result_tail iterate r.items() under the lock. Popping
-                # concurrently raises "dictionary changed size during iteration"
-                # in whichever reader is mid-copy (a 500 on /api/tasks). The scan
-                # itself is finished, so nothing else appends here.
+                # Drop heatmap-only grids from results. Hold the lock: readers
+                # iterate these dicts under it.
                 with self._lock:
                     for r in result:
                         if isinstance(r, dict):
@@ -882,11 +924,8 @@ class ScreenspaceWorker:
                     t = self._tasks.get(task_id)
                     if t is not None:
                         t.update(attachments)
-                # The task was already marked completed before these heatmap
-                # filenames were attached, so emit an SSE update now — otherwise
-                # the frontend (which may already have seen the completed task via
-                # another worker's progress push) never re-renders the heatmap
-                # section until a page reload.
+                # Completed was already pushed; emit again so clients render the
+                # attached heatmap.
                 if attachments and self.on_progress_update:
                     self.on_progress_update()
         except Exception as exc:
@@ -897,8 +936,7 @@ class ScreenspaceWorker:
                     t["error"] = str(exc)
                     t["completed_at"] = datetime.now(UTC).isoformat()
         finally:
-            # A task dismissed while running was kept in _tasks so its cancel
-            # could land; now that the scan has unwound, drop it for good.
+            # A task dismissed while running stayed for its cancel; drop it now.
             with self._lock:
                 t = self._tasks.get(task_id)
                 if t is not None and t.get("_remove_on_finish"):
@@ -931,8 +969,7 @@ class ScreenspaceWorker:
                 "(this tool cannot honor a polygon mask)"
             )
 
-        # Shallow copy so fast-scan interval scaling is not persisted on the
-        # task dict (pause/resume re-dispatches the same parameters).
+        # Shallow copy: fast-scan interval scaling must not persist for pause/resume.
         params = dict(task.get("parameters", {}))
         scan_mode = params.get("scan_mode", "normal")
         fast_opts: dict[str, Any] | None = None

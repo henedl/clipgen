@@ -84,7 +84,7 @@ def test_motion_wired_at_mutation_sites():
     ss_overlay = (_WEB / "screenspace-overlay-interaction.js").read_text(
         encoding="utf-8"
     )
-    ss_hub = (_WEB / "screenspace.js").read_text(encoding="utf-8")
+    ss_regions = (_WEB / "screenspace-regions.js").read_text(encoding="utf-8")
 
     # Exit animations (stash + delete) are wired in both tools.
     assert 'ClipgenMotion.animateOut(card, "delete")' in studio  # remove one card
@@ -92,12 +92,12 @@ def test_motion_wired_at_mutation_sites():
     assert 'ClipgenMotion.animateOutAll(cards, "stash")' in studio  # stash queue
     assert 'ClipgenMotion.animateOut(chip, "delete")' in ss_overlay  # delete region
     assert 'ClipgenMotion.animateOutAll(chips, "delete")' in ss_overlay  # delete all
-    assert 'ClipgenMotion.animateOutAll(chips, "stash")' in ss_hub  # stash regions
+    assert 'ClipgenMotion.animateOutAll(chips, "stash")' in ss_regions  # stash regions
 
     # Stash-card landing goes through the shared system on both tools; region
     # pills reuse the same entry animation.
     assert 'ClipgenMotion.animateIn(card, "stashLand")' in studio
-    assert 'ClipgenMotion.animateIn(card, "stashLand")' in ss_hub
+    assert 'ClipgenMotion.animateIn(card, "stashLand")' in ss_regions
     assert 'ClipgenMotion.animateIn(chip, "stashLand")' in ss_overlay
 
 
@@ -115,7 +115,7 @@ def test_old_css_stash_landing_removed():
 # tokens.css that every page references by name, parameterized by a custom
 # property where the values differed. Redefining either per page is how five
 # near-identical opacity breathes accumulated in the first place.
-_HOISTED_LOOPS = ("spin", "cg-pulse")
+_HOISTED_LOOPS = ("spin", "cg-pulse", "cg-shimmer-sweep")
 _RETIRED_LOOPS = (
     "studio-tab-pulse",
     "status-pulse",
@@ -147,6 +147,34 @@ def test_retired_pulse_keyframes_are_gone():
                 f"{path.name} still references the retired {name}; "
                 "use the shared cg-pulse / spin from tokens.css instead"
             )
+
+
+def test_shimmer_is_parameterized_and_opts_out_of_reduced_motion():
+    # The sweep is a continuous loop like the two above, so it lives in
+    # tokens.css and is themed through --shimmer-base/--shimmer-peak rather than
+    # per-page greys. It also *replaces* the text colour, so losing the
+    # reduced-motion branch would leave those users staring at a moving band
+    # they asked not to see — and, worse, no fallback fill at all.
+    tokens = (_WEB / "tokens.css").read_text(encoding="utf-8")
+    assert "var(--shimmer-base)" in tokens and "var(--shimmer-peak)" in tokens
+    for block in ("  --shimmer-base:", "  --shimmer-peak:"):
+        assert tokens.count(block) == 2, (
+            f"{block.strip()} must be declared in both the dark :root and the "
+            'html[data-theme="light"] block'
+        )
+    reduced = re.search(
+        r"@media \(prefers-reduced-motion: reduce\) \{\s*\n"
+        r"(?:\s*/\*.*?\*/\s*\n)?"
+        r"\s*\.cg-shimmer \{(.*?)\}",
+        tokens,
+        re.DOTALL,
+    )
+    assert reduced, "tokens.css needs a prefers-reduced-motion opt-out for .cg-shimmer"
+    body = reduced.group(1)
+    assert "animation: none" in body
+    assert "-webkit-text-fill-color:" in body, (
+        "the opt-out must restore a visible fill, not just stop the animation"
+    )
 
 
 def test_pulse_trough_is_parameterized():
@@ -210,7 +238,7 @@ _MODAL_SURFACES = (
     # (page script, overlay id, card class)
     ("studio.js", "#statusOverlay", ".status-card"),
     ("studio.js", "#confirmOverlay", ".confirm-card"),
-    ("studio.js", "#galleryOverlay", ".gallery-card"),
+    ("studio-reel.js", "#galleryOverlay", ".gallery-card"),
     ("studio.js", "#buildStatus", ".build-status-card"),
     ("studio.js", "#logOverlay", ".log-panel"),
     ("composer.js", "#logOverlay", ".log-panel"),
@@ -237,13 +265,19 @@ def test_modal_animation_helpers_are_shared_in_utils():
 
 
 def test_every_modal_uses_the_shared_helpers():
+    # openPopModal / closePopModal wrap the pair; pages may call either layer.
+    utils = (_WEB / "utils.js").read_text(encoding="utf-8")
+    assert "var openPopModal = function (overlayEl, cardEl, opts)" in utils
+    assert "popModalIn(overlayEl, cardEl);" in utils
+    assert "popModalOut(overlayEl, cardEl, function () {" in utils
     for page, overlay, card in _MODAL_SURFACES:
         src = (_WEB / page).read_text(encoding="utf-8")
         assert re.search(
-            r"popModalIn\([^,]+, qs\(\"" + re.escape(card) + r'"\)', src
+            r"(popModalIn|openPopModal)\([^,]+, qs\(\"" + re.escape(card) + r'"\)', src
         ), f"{page} {overlay} should reveal through popModalIn()"
         assert re.search(
-            r"popModalOut\([^,]+, qs\(\"" + re.escape(card) + r'"\)', src
+            r"(popModalOut|closePopModal)\([^,]+, qs\(\"" + re.escape(card) + r'"\)',
+            src,
         ), f"{page} {overlay} should dismiss through popModalOut()"
 
 
@@ -314,9 +348,19 @@ def test_composer_log_traps_focus_like_studio():
     # It was the one modal without a trap: Tab walked out into the timeline
     # behind the veil and Escape fell through to the page's back-out cascade.
     composer = (_WEB / "composer.js").read_text(encoding="utf-8")
-    assert "openBlockingModal(overlay, {" in composer
-    assert "closeBlockingModal(overlay)" in composer
-    assert 'document.body.classList.add("modal-open")' in composer
+    utils = (_WEB / "utils.js").read_text(encoding="utf-8")
+    # Trap and topnav gate come from openPopModal's opts (utils.js).
+    assert (
+        'openPopModal(qs("#logOverlay"), qs(".log-panel"), { modalOpen: true, onEscape: closeLog })'
+        in composer
+    )
+    assert (
+        'closePopModal(qs("#logOverlay"), qs(".log-panel"), { modalOpen: true })'
+        in composer
+    )
+    assert "openBlockingModal(overlayEl, {" in utils
+    assert "closeBlockingModal(overlayEl)" in utils
+    assert 'if (opts.modalOpen) document.body.classList.add("modal-open");' in utils
     # With the trap owning Escape, a cascade branch for the log would be dead code.
     assert "logOverlayVisible" not in composer
 

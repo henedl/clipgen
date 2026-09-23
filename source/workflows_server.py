@@ -1,19 +1,17 @@
 """Workflows Flask blueprint — serves the node-canvas page and its REST API.
 
-Registered at ``/workflows`` by ``server.build_combined_app`` (mutually exclusive
-launch with the other web modes, but all blueprints are always mounted). M1
-ships the static page routes, module-state init, the ``/api/catalog`` node
-registry, and full blueprint CRUD (the canvas autosave target). M4 adds the run
-lifecycle: ``POST /api/runs`` spawns a :class:`workflows.WorkflowRunner` on a
-daemon thread, with per-run SSE (``/api/runs/<id>/stream``) + a polling fallback
-(``GET /api/runs/<id>``), mirroring ``screenspace_server``'s task stream.
+Registered at ``/workflows`` by ``server.build_combined_app``. Static page
+routes, module-state init, the ``/api/catalog`` node registry, blueprint CRUD
+(the canvas autosave target), and the run lifecycle: ``POST /api/runs`` spawns a
+:class:`workflows.WorkflowRunner` on a daemon thread, with per-run SSE
+(``/api/runs/<id>/stream``) plus a polling fallback, mirroring
+``screenspace_server``'s task stream.
 
-Module-level state (``_input_dir``, ``_sheet_context``, ``_worksheet``,
-``_manifest``, ``_runs``) is initialized by :func:`_init_workflows_state`,
-mirroring the Screenspace and Transcripts blueprints. Mutations hold
-``_manifest_lock`` and persist via :func:`_persist_locked` (mirrors
-``screenspace_server._do_persist``). Live runner progress stays in ``_runs``;
-the manifest is written only at run creation + terminal, never per progress tick.
+Module state (``_sheet_context``, ``_worksheet``, ``_manifest``, ``_runs``) is
+initialized by :func:`_init_workflows_state`, its sheet half re-pointed on a
+worksheet swap by :func:`repin_sheet_state`. Mutations hold ``_manifest_lock``
+and persist via :func:`_persist_locked`. Live runner progress stays in ``_runs``;
+the manifest is written only at run creation and terminal, never per tick.
 """
 
 from __future__ import annotations
@@ -26,41 +24,45 @@ import threading
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
-from pathlib import Path
 from typing import Any
 
 from flask import Blueprint, Response, request
 
 import config
+import profiling
+import manifest as manifest_io
+import server_utils
 import utils
 import workflows
-from server_utils import err, make_sse_channel, ok
+from server_utils import (
+    err,
+    find_by_id,
+    json_endpoint,
+    make_sse_channel,
+    ok,
+    remove_by_id,
+    require_json_body,
+)
 
 # ---- Module state (initialized by _init_workflows_state) ----
 
-_input_dir: str = ""
 _sheet_context: Any = None
 _worksheet: Any = None
 _manifest: dict[str, Any] = {}
 _manifest_lock = threading.Lock()
 
-# ---- Run state (M4) ----
+# ---- Run state ----
 
-# Live runners by id (authoritative for in-flight progress); the manifest holds
-# the persisted history. SSE clients are (run_id, queue) pairs scoped to one run.
+# Live runners by id; the manifest holds persisted history.
 _runs: dict[str, workflows.WorkflowRunner] = {}
 _runs_lock = threading.Lock()
-# SSE clients scoped to one run: notify with the run_id key. ``_sse_clients`` is
-# the channel's live registry (``(run_id, queue)`` tuples); see make_sse_channel.
+# Per-run SSE channel; ``_sse_clients`` holds ``(run_id, queue)`` pairs. See make_sse_channel.
 _notify_run_clients, _run_stream, _sse_clients = make_sse_channel()
 _MAX_RUN_HISTORY = 50  # cap persisted runs (small ephemeral tool; keep most recent)
 
-# ---- Batch state (P3: whole-study fan-out) ----
+# ---- Batch state (whole-study fan-out) ----
 
-# Live batch coordinators by id, symmetric to ``_runs`` (history is *derived* by
-# grouping persisted runs on their ``batchId`` tag — no separate manifest key).
-# Each value is ``{blueprintId, participants, runIds, cancel_event, status,
-# createdAt}``. A batch SSE client is a (batch_id, queue) pair.
+# Live batch coordinators by id; history is derived by grouping persisted runs on ``batchId``.
 _batches: dict[str, dict[str, Any]] = {}
 _batches_lock = threading.Lock()
 # A batch SSE client is a (batch_id, queue) pair; notify with the batch_id key.
@@ -72,25 +74,14 @@ _RUN_TERMINAL = {
     workflows.RUN_STATUS_CANCELLED,
 }
 
-# ---- Auto-run trigger state (P6 + W7 chaining) ----
-#
-# A single polling daemon thread (no extra dependency — mirrors the screenspace
-# worker's daemon posture) checks each trigger type's source while a blueprint
-# of that type is armed: the input dir for new participant videos, the
-# transcripts manifest for fresh ``transcribed_at`` stamps, and the screenspace
-# manifest for newly-completed tasks — one single run per arrival/completion.
-# Baselines are seeded at startup and re-seeded on arm so the pre-existing
-# backlog never fires; a new video must additionally stat identically across
-# two consecutive polls (the partial-copy guard). With nothing armed a tick
-# does no I/O at all.
+# ---- Auto-run trigger state ----
 _watch_seen: set[str] = set()  # pids already accounted for (never fire again)
-_watch_pending: dict[str, tuple[int, float]] = {}  # pid -> last-poll (size, mtime)
+_watch_pending: dict[str, tuple] = {}  # pid -> last-poll (path, size, mtime) per part
 # Chaining-trigger baselines: completions already accounted for (never re-fire).
 _watch_transcript_baseline: dict[str, str] = {}  # pid -> transcribed_at stamp
 _watch_scan_seen: set[str] = set()  # completed screenspace task ids
 # mtime-gated parse caches so an unchanged manifest is never re-read per poll.
-_watch_transcript_cache: tuple[float, dict[str, str]] = (-1.0, {})
-_watch_scan_cache: tuple[float, dict[str, str]] = (-1.0, {})
+_watch_memo: dict[str, tuple[tuple[int, int] | None, dict[str, str]]] = {}
 _watch_lock = threading.Lock()
 _watch_thread: threading.Thread | None = None
 _watch_stop = threading.Event()  # tests only; production never sets it
@@ -100,10 +91,11 @@ _watch_stop = threading.Event()  # tests only; production never sets it
 
 workflows_bp = Blueprint("workflows", __name__)
 
-utils.register_static_routes(
+server_utils.register_static_routes(
     workflows_bp,
     "workflows.html",
-    media_dir_getter=lambda: _input_dir,
+    # Per request: POST /api/dirs moves config.INPUT_DIR mid-session. See transcripts_bp.
+    media_dir_getter=lambda: str(utils.get_effective_input_dir()),
     media_error="Input directory not configured",
     icons=True,
 )
@@ -137,21 +129,25 @@ def api_catalog() -> Any:
     batch endpoint will fan out over (so the dropdown never offers a participant a
     run can't resolve).
     """
+    import screenspace
+
     videos = utils.discover_participant_videos()
+    # Region names for the Region node's picker; a typoed free string silently full-frames.
+    region_names = sorted(
+        (screenspace.load_screenspace_manifest().get("regions") or {}).keys()
+    )
     return ok(
-        # Bootstrap channel for shared frontend config (hotkey overrides etc.);
-        # this page has no sheet-data fetch, so the config rides along here.
+        # Shared frontend config rides along; this page has no sheet-data fetch.
         config=utils.get_frontend_config(),
         catalog=workflows.serialize_catalog(),
-        # Adapter pairs the runner coerces across (events→clipRecords, …) so
-        # the frontend's canConnect accepts the same wires the runner runs.
+        # Adapter pairs the runner coerces, so canConnect accepts the same wires.
         adapters=workflows.serialize_adapters(),
         context={
             "sheet": _sheet_context is not None,
             "videoDir": bool(videos),
             "participants": [v["id"] for v in videos if v.get("has_video")],
-            # Where a run's artifacts land — surfaced in the run panel so the
-            # user knows where to find their clips/reels/viewers.
+            "regions": region_names,
+            # Shown in the run panel so the user can find their artifacts.
             "outputDir": str(utils.get_effective_output_dir()),
             # Auto-run trigger types for the toolbar picker (no duplicated
             # Python↔JS constants; workflows.TRIGGER_TYPES is the source).
@@ -193,14 +189,13 @@ def api_blueprints_create() -> Any:
 
 
 @workflows_bp.route("/api/blueprints/<bp_id>", methods=["PUT"])
+@json_endpoint
 def api_blueprints_update(bp_id: str) -> Any:
     """Update a blueprint's name/nodes/edges/viewport (the debounced autosave)."""
-    data = request.get_json(silent=True)
-    if not data:
-        return err("JSON body required")
+    data = require_json_body()
     with _manifest_lock:
         blueprints = _manifest.get("blueprints", [])
-        blueprint = next((b for b in blueprints if b.get("id") == bp_id), None)
+        blueprint = find_by_id(blueprints, bp_id)
         if blueprint is None:
             return err("Blueprint not found", 404)
         for key in ("name", "nodes", "edges", "viewport"):
@@ -214,18 +209,15 @@ def api_blueprints_update(bp_id: str) -> Any:
 def api_blueprints_delete(bp_id: str) -> Any:
     """Delete a blueprint by id."""
     with _manifest_lock:
-        blueprints = _manifest.get("blueprints", [])
-        idx = next((i for i, b in enumerate(blueprints) if b.get("id") == bp_id), None)
-        if idx is None:
+        if remove_by_id(_manifest.get("blueprints", []), bp_id) is None:
             return err("Blueprint not found", 404)
-        blueprints.pop(idx)
         _persist_locked()
     return ok()
 
 
 @workflows_bp.route("/api/blueprints/<bp_id>/trigger", methods=["PUT"])
 def api_blueprint_trigger(bp_id: str) -> Any:
-    """Arm/disarm an auto-run trigger on a blueprint (P6 + chaining).
+    """Arm/disarm an auto-run trigger on a blueprint.
 
     ``type`` picks the trigger source: ``new_video`` (the watch-dir trigger),
     ``transcript_complete``, or ``scan_event``. A *single* blueprint may be
@@ -244,7 +236,7 @@ def api_blueprint_trigger(bp_id: str) -> Any:
         return err("Unknown trigger type")
     with _manifest_lock:
         blueprints = _manifest.get("blueprints", [])
-        target = next((b for b in blueprints if b.get("id") == bp_id), None)
+        target = find_by_id(blueprints, bp_id)
         if target is None:
             return err("Blueprint not found", 404)
         if enabled:
@@ -260,8 +252,7 @@ def api_blueprint_trigger(bp_id: str) -> Any:
                 else:
                     b["trigger"] = _disarmed_trigger(b.get("trigger"), trigger_type)
         else:
-            # Disarm whatever is currently bound on this blueprint (the client
-            # may not know its type); fall back to the requested type.
+            # Disarm whatever type is bound (the client may not know it).
             current = target.get("trigger")
             off_type = (
                 str(current.get("type"))
@@ -271,12 +262,9 @@ def api_blueprint_trigger(bp_id: str) -> Any:
             target["trigger"] = {"type": off_type, "enabled": False}
         _persist_locked()
         result = copy.deepcopy(target)
-    # Re-baseline when arming so the current backlog (present videos, already-
-    # finished transcripts/scans) never retro-fires. The poll doesn't maintain
-    # baselines while nothing is armed (it skips all work then), so this
-    # arm-time re-seed is what upholds the no-retro-fire promise.
+    # Re-seed this type only: the backlog never retro-fires, other armed types keep their pending arrivals.
     if enabled:
-        _seed_watch_seen()
+        _seed_watch_seen(trigger_type)
     return ok(blueprint=result)
 
 
@@ -287,13 +275,7 @@ def _disarmed_trigger(trigger: Any, trigger_type: str) -> Any:
     return trigger
 
 
-# ---- Stash CRUD (M5: save/instantiate sub-graphs) ----
-#
-# A stash is a reusable sub-graph fragment ({id, name, nodes, edges, createdAt,
-# builtin}). The server does CRUD only; the frontend instantiates a stash onto
-# the canvas (id remap + position offset) client-side. ``GET`` prepends the
-# read-only built-in recipes (P4) ahead of the user's persisted stashes. The
-# same single-combined-manifest locking the blueprint routes use applies here.
+# ---- Stash CRUD (save/instantiate sub-graphs) ----
 
 
 @workflows_bp.route("/api/stashes")
@@ -326,16 +308,15 @@ def api_stashes_create() -> Any:
 
 
 @workflows_bp.route("/api/stashes/<stash_id>", methods=["PUT"])
+@json_endpoint
 def api_stashes_update(stash_id: str) -> Any:
     """Rename a user stash. Built-in recipes are read-only (403)."""
     if any(s["id"] == stash_id for s in workflows.BUILTIN_STASHES):
         return err("Built-in recipes are read-only", 403)
-    data = request.get_json(silent=True)
-    if not data:
-        return err("JSON body required")
+    data = require_json_body()
     with _manifest_lock:
         stashes = _manifest.get("stashes", [])
-        stash = next((s for s in stashes if s.get("id") == stash_id), None)
+        stash = find_by_id(stashes, stash_id)
         if stash is None:
             return err("Stash not found", 404)
         if "name" in data:
@@ -350,23 +331,24 @@ def api_stashes_delete(stash_id: str) -> Any:
     if any(s["id"] == stash_id for s in workflows.BUILTIN_STASHES):
         return err("Built-in recipes are read-only", 403)
     with _manifest_lock:
-        stashes = _manifest.get("stashes", [])
-        idx = next((i for i, s in enumerate(stashes) if s.get("id") == stash_id), None)
-        if idx is None:
+        if remove_by_id(_manifest.get("stashes", []), stash_id) is None:
             return err("Stash not found", 404)
-        stashes.pop(idx)
         _persist_locked()
     return ok()
 
 
-# ---- Run lifecycle (M4) ----
+# ---- Run lifecycle ----
 
 
 def _build_node_context(cancel_event: threading.Event) -> workflows.NodeContext:
-    """Build the per-run ``NodeContext`` from the active launch context."""
-    input_dir = Path(_input_dir) if _input_dir else utils.get_effective_input_dir()
+    """Build the per-run ``NodeContext`` from the active launch context.
+
+    Both directories resolve live, for the same reason the media route does:
+    the Start overlay's folder picker moves ``config.INPUT_DIR`` long after
+    this blueprint was initialized.
+    """
     return workflows.NodeContext(
-        input_dir=input_dir,
+        input_dir=utils.get_effective_input_dir(),
         output_dir=utils.get_effective_output_dir(),
         sheet_context=_sheet_context,
         worksheet=_worksheet,
@@ -433,7 +415,7 @@ def _trim_run_history(runs: list[dict[str, Any]]) -> list[str]:
     earliest children and 404 on drill-in.
 
     Returns the run ids that were dropped, so the caller can prune their per-node
-    result sidecars (P5) in lockstep.
+    result sidecars in lockstep.
     """
     if len(runs) <= _MAX_RUN_HISTORY:
         return []
@@ -506,12 +488,13 @@ def _launch_run(
     target_node_id: str = "",
     seed_results: dict[str, dict[str, Any]] | None = None,
     seed_note: str = "",
+    sample_window: float = 0.0,
 ) -> dict[str, Any]:
     """Create + spawn one run on a daemon thread; return the initial snapshot.
 
     Shared by ``POST /api/runs`` and the watch-dir trigger. The blueprint is
     assumed already validated (``topo_order``) and, for a triggered run, already
-    participant-bound by the caller. ``target_node_id`` (P11) restricts the run to
+    participant-bound by the caller. ``target_node_id`` restricts the run to
     that node and its ancestors. ``seed_results`` (resume) pre-completes nodes
     whose output was reloaded from a prior run's sidecars.
     """
@@ -529,21 +512,26 @@ def _launch_run(
         target_node_id=target_node_id,
         seed_results=seed_results,
         seed_note=seed_note,
+        sample_window=sample_window,
     )
     with _runs_lock:
         _runs[run_id] = runner
     _persist_run(runner.snapshot())
+    profiling.op_open(
+        "workflow_run",
+        op_id=run_id,
+        meta={"blueprint": str(blueprint.get("id", "")), "participant": participant},
+    )
 
     def _run_and_finalize() -> None:
         try:
-            runner.run()
+            with profiling.op_run(run_id, kind="workflow_run"):
+                runner.run()
+                profiling.op_outcome(run_id, runner.status)
         finally:
             _persist_run(runner.snapshot())
             _notify_run_clients(run_id)
-            # Evict the terminal runner: its summary now lives in the manifest
-            # (``_run_snapshot`` falls back to it) and its inspectable per-node
-            # results are already on disk as sidecars (written during ``run()``),
-            # so holding the runner would only leak its full in-memory results.
+            # Evict the finished runner; its summary and sidecars are already on disk.
             with _runs_lock:
                 _runs.pop(run_id, None)
 
@@ -559,9 +547,7 @@ def api_run_create() -> Any:
     data = request.get_json(silent=True) or {}
     bp_id = data.get("blueprintId")
     with _manifest_lock:
-        blueprint = next(
-            (b for b in _manifest.get("blueprints", []) if b.get("id") == bp_id), None
-        )
+        blueprint = find_by_id(_manifest.get("blueprints", []), bp_id)
         blueprint = copy.deepcopy(blueprint) if blueprint else None
     if blueprint is None:
         return err("Blueprint not found", 404)
@@ -569,20 +555,18 @@ def api_run_create() -> Any:
         workflows.topo_order(blueprint.get("nodes", []), blueprint.get("edges", []))
     except workflows.WorkflowCycleError as exc:
         return err(str(exc))
-    # Optional partial run: restrict to this node + its ancestors. Reject an
-    # unknown id rather than silently running the whole graph (the runner would
-    # ignore it), so a stale selection surfaces as a clear error.
+    # Optional partial run (target + ancestors); an unknown id errors rather than running everything.
     target = str(data.get("targetNodeId") or "")
     if target and not any(n.get("id") == target for n in blueprint.get("nodes", [])):
         return err("Unknown target node")
 
-    # Optional resume: reload the prior run's completed-node sidecars as seeds
-    # and execute only what failed/changed (plus everything downstream of it).
-    # Resumes against the CURRENT blueprint — same semantics as Re-run; an
-    # edited graph simply seeds fewer nodes (compute_resume_plan invalidates
-    # changed/missing nodes). Sidecars are loaded into memory here, so a
-    # concurrent history-trim pruning the prior run's dir mid-flight is
-    # harmless.
+    # Optional sample window: bound unwired detector timeRanges (see WorkflowRunner._apply_sample_window).
+    try:
+        sample_window = max(0.0, float(data.get("sampleWindowSeconds") or 0.0))
+    except (TypeError, ValueError):
+        return err("sampleWindowSeconds must be a number")
+
+    # Optional resume: seed completed-node sidecars against the CURRENT blueprint; an edited graph seeds fewer nodes.
     participant = ""
     seed_results: dict[str, dict[str, Any]] | None = None
     seed_note = ""
@@ -615,10 +599,10 @@ def api_run_create() -> Any:
                 return None
             return loaded if isinstance(loaded, dict) else None
 
-        seed_results, _plan_notes = workflows.compute_resume_plan(
-            blueprint, prior.get("nodeStates") or {}, _load_sidecar
+        seed_results, plan_notes = workflows.compute_resume_plan(
+            blueprint, prior.get("nodeStates") or {}, _load_sidecar, sample_window
         )
-        seed_note = f"Reused from run {resume_from}"
+        seed_note = "; ".join([f"Reused from run {resume_from}"] + plan_notes)
 
     return ok(
         run=_launch_run(
@@ -627,6 +611,7 @@ def api_run_create() -> Any:
             target_node_id=target,
             seed_results=seed_results,
             seed_note=seed_note,
+            sample_window=sample_window,
         )
     )
 
@@ -636,7 +621,9 @@ def _merged_runs() -> dict[str, dict[str, Any]]:
     merged: dict[str, dict[str, Any]] = {}
     with _manifest_lock:
         for record in _manifest.get("runs", []):
-            merged[record.get("id")] = copy.deepcopy(record)
+            rid = record.get("id")
+            if rid:
+                merged[rid] = copy.deepcopy(record)
     with _runs_lock:
         live = list(_runs.items())
     for run_id, runner in live:
@@ -666,7 +653,7 @@ def api_run_get(run_id: str) -> Any:
 
 @workflows_bp.route("/api/runs/<run_id>/nodes/<node_id>/result")
 def api_run_node_result(run_id: str, node_id: str) -> Any:
-    """Serve a node's inspectable result sidecar written by the runner (P5).
+    """Serve a node's inspectable result sidecar written by the runner.
 
     Lazily fetched by the run-history UI on row-expand. Returns the raw stored
     payload (already JSON-sanitized at write time). 404 when no sidecar exists.
@@ -684,8 +671,7 @@ def api_run_node_result(run_id: str, node_id: str) -> Any:
         payload = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return err("No result for node", 404)
-    # Sidecars persist every JSON-safe port for resume; the inspector renders
-    # only the inspectable subset (and never the __type__ marker).
+    # Sidecars keep every port for resume; the inspector shows only the inspectable subset.
     view = workflows.inspectable_sidecar_view(payload)
     if not view:
         return err("No result for node", 404)
@@ -709,7 +695,7 @@ def api_run_stream(run_id: str) -> Response:
     return _run_stream(lambda: _sse_run_payload(run_id), key=run_id)
 
 
-# ---- Batch lifecycle (P3: whole-study fan-out) ----
+# ---- Batch lifecycle (whole-study fan-out) ----
 
 
 def _aggregate_batch_status(child_statuses: list[str], cancelled: bool) -> str:
@@ -767,7 +753,7 @@ def _batch_summary(batch_id: str) -> dict[str, Any] | None:
     children: list[dict[str, Any]] = []
     counts: dict[str, int] = {}
     child_statuses: list[str] = []
-    for run_id, participant in zip(run_ids, participants):
+    for run_id, participant in zip(run_ids, participants, strict=True):
         meta = all_meta.get(run_id)
         status = (meta or {}).get("status", workflows.RUN_STATUS_QUEUED)
         child_statuses.append(status)
@@ -791,11 +777,7 @@ def _sse_batch_payload(batch_id: str) -> str:
     return "data: " + json.dumps({"ok": summary is not None, "batch": summary}) + "\n\n"
 
 
-# Source node types whose result is participant-independent across a batch and
-# expensive enough to compute once and seed into every child. ``sheet_selection``
-# calls the heavily rate-limited Google Sheets API; ``bind_participant`` never
-# rebinds it, so re-running it per participant is N identical API round-trips.
-# (``region``/``time_range`` are cheap, local, and not worth the bookkeeping.)
+# Participant-independent sources computed once per batch; sheet_selection hits the rate-limited Sheets API.
 _BATCH_CACHEABLE_TYPES = {"sheet_selection"}
 
 
@@ -807,10 +789,15 @@ def _precompute_shared_nodes(
     Returns ``{node_id: result}`` to seed into every child runner, so a batch hits
     the rate-limited Sheets API once instead of once per participant. A node that
     raises is simply omitted — the child re-runs it normally (no behavior change).
+    A node with any incoming edge (a gate; these sources take no data) is left to
+    the children, whose gates must be able to skip it.
     """
+    gated = {str(e.get("to")) for e in blueprint.get("edges", [])}
     seeded: dict[str, dict[str, Any]] = {}
     for node in blueprint.get("nodes", []):
         if node.get("type") not in _BATCH_CACHEABLE_TYPES or node.get("disabled"):
+            continue
+        if str(node.get("id")) in gated:
             continue
         executor = workflows.NODE_TYPES.get(node["type"], {}).get("execute")
         if executor is None:
@@ -857,18 +844,23 @@ def _run_batch_child(
         on_update=_on_child_update,
         participant=participant,
         batch_id=batch_id,
-        # Every child gets its own deep copy: downstream executors mutate
-        # seeded values in place (files.prepare_clip adds `times` to sheet
-        # records), so one shared dict would cross-contaminate siblings —
-        # quasi-benign sequentially, an outright race with workers > 1.
+        # Own deep copy per child: executors mutate seeds in place (files.prepare_clip adds `times`).
         seed_results=copy.deepcopy(seed_results),
     )
     with _runs_lock:
         _runs[run_id] = runner
-    # A cancel that lands between the check above and run() still reaches this
-    # child: the cancel endpoint cancels every live runner tagged to the batch.
+        # A cancel between the check above and this registration saw no runner.
+        if batch_cancel.is_set():
+            runner.cancel()
     try:
-        runner.run()
+        with profiling.op_run(
+            run_id,
+            kind="workflow_run",
+            parent=batch_id,
+            meta={"participant": participant},
+        ):
+            runner.run()
+            profiling.op_outcome(run_id, runner.status)
     except Exception as exc:  # belt-and-suspenders; run() catches per node
         utils.error_print(f"workflow batch child {participant} crashed: {exc}")
     _persist_run(runner.snapshot())
@@ -895,39 +887,44 @@ def _run_batch(batch_id: str, blueprint: dict[str, Any]) -> None:
     if record is None:
         return
     cancel_event: threading.Event = record["cancel_event"]
-    plan = list(zip(record["runIds"], record["participants"]))
+    plan = list(zip(record["runIds"], record["participants"], strict=True))
 
-    # Compute participant-independent sources (sheet_selection) once and seed them
-    # into every child, so an N-participant batch hits the Sheets API once, not N.
+    # Shared sources once per batch: one Sheets API hit, not N.
     seed_results = _precompute_shared_nodes(
         blueprint, _build_node_context(threading.Event())
     )
 
     workers = max(1, min(4, int(config.WORKFLOWS_BATCH_WORKERS or 1)))
-    if workers == 1 or len(plan) <= 1:
-        for run_id, participant in plan:
-            _run_batch_child(
-                run_id, participant, batch_id, blueprint, seed_results, cancel_event
-            )
-    else:
-        with ThreadPoolExecutor(
-            max_workers=min(workers, len(plan)),
-            thread_name_prefix=f"workflow-{batch_id}",
-        ) as pool:
-            futures = [
-                pool.submit(
-                    _run_batch_child,
-                    run_id,
-                    participant,
-                    batch_id,
-                    blueprint,
-                    seed_results,
-                    cancel_event,
+    _child = profiling.timed("workflows.batch_child")(_run_batch_child)
+    with (
+        profiling.op_run(batch_id, kind="workflow_batch"),
+        profiling.span("workflows.batch_wall"),
+    ):
+        _child = profiling.bind(_child)
+        if workers == 1 or len(plan) <= 1:
+            for run_id, participant in plan:
+                _child(
+                    run_id, participant, batch_id, blueprint, seed_results, cancel_event
                 )
-                for run_id, participant in plan
-            ]
-            for future in futures:
-                future.result()  # child bodies swallow their own errors
+        else:
+            with ThreadPoolExecutor(
+                max_workers=min(workers, len(plan)),
+                thread_name_prefix=f"workflow-{batch_id}",
+            ) as pool:
+                futures = [
+                    pool.submit(
+                        _child,
+                        run_id,
+                        participant,
+                        batch_id,
+                        blueprint,
+                        seed_results,
+                        cancel_event,
+                    )
+                    for run_id, participant in plan
+                ]
+                for future in futures:
+                    future.result()  # child bodies swallow their own errors
 
     with _batches_lock:
         _batches.pop(batch_id, None)
@@ -936,13 +933,11 @@ def _run_batch(batch_id: str, blueprint: dict[str, Any]) -> None:
 
 @workflows_bp.route("/api/batches", methods=["POST"])
 def api_batch_create() -> Any:
-    """Fan a blueprint out across participants, one sequential run each (P3)."""
+    """Fan a blueprint out across participants, one sequential run each."""
     data = request.get_json(silent=True) or {}
     bp_id = data.get("blueprintId")
     with _manifest_lock:
-        blueprint = next(
-            (b for b in _manifest.get("blueprints", []) if b.get("id") == bp_id), None
-        )
+        blueprint = find_by_id(_manifest.get("blueprints", []), bp_id)
         blueprint = copy.deepcopy(blueprint) if blueprint else None
     if blueprint is None:
         return err("Blueprint not found", 404)
@@ -958,18 +953,12 @@ def api_batch_create() -> Any:
         v["id"] for v in utils.discover_participant_videos() if v.get("has_video")
     ]
     requested = data.get("participants")
-    if requested:
-        participants = [p for p in requested if p in available]
-    else:
-        participants = available
+    participants = [p for p in requested if p in available] if requested else available
     if not participants:
         return err("No participants with video found")
 
     batch_id = "batch_" + uuid.uuid4().hex[:8]
-    # Child runs are persisted as they execute, not up front: pre-persisting one
-    # queued record per participant would flood the run-history cap and could evict
-    # this batch's own not-yet-started children. The live ``_batches`` record makes
-    # the batch (and its queued children) visible immediately via ``_batch_summary``.
+    # Children persist as they run; pre-persisting N queued records could breach the history cap.
     run_ids = ["run_" + uuid.uuid4().hex[:8] for _ in participants]
     with _batches_lock:
         _batches[batch_id] = {
@@ -980,6 +969,12 @@ def api_batch_create() -> Any:
             "cancel_event": threading.Event(),
             "createdAt": datetime.now(UTC).isoformat(),
         }
+    profiling.op_open(
+        "workflow_batch",
+        op_id=batch_id,
+        work=len(participants),
+        meta={"blueprint": bp_id},
+    )
 
     threading.Thread(
         target=_run_batch,
@@ -1045,7 +1040,7 @@ def api_batch_stream(batch_id: str) -> Response:
     return _batch_stream(lambda: _sse_batch_payload(batch_id), key=batch_id)
 
 
-# ---- Watch-dir trigger watcher (P6) ----
+# ---- Auto-run trigger watcher ----
 
 
 def _trigger_enabled(trigger: Any, trigger_type: str) -> bool:
@@ -1057,95 +1052,84 @@ def _trigger_enabled(trigger: Any, trigger_type: str) -> bool:
     )
 
 
-def _manifest_mtime(filename: str) -> float:
-    """The manifest file's mtime in the output dir, or 0.0 when absent."""
-    try:
-        return os.stat(Path(utils.get_effective_output_dir()) / filename).st_mtime
-    except OSError:
-        return 0.0
-
-
 def _transcript_markers() -> dict[str, str]:
-    """``{pid: transcribed_at}`` for every transcribed participant.
+    """``{pid: transcribed_at}`` for every transcribed participant (mtime-gated)."""
 
-    mtime-gated: the (potentially large, all-segments) transcripts manifest is
-    re-parsed only when its file actually changed — a handful of times per
-    session, not once per poll tick.
-    """
-    global _watch_transcript_cache
-    mtime = _manifest_mtime(config.TRANSCRIPTS_MANIFEST_FILENAME)
-    if mtime == _watch_transcript_cache[0]:
-        return _watch_transcript_cache[1]
-    markers: dict[str, str] = {}
-    if mtime:
-        manifest = (
-            utils.load_json_manifest(config.TRANSCRIPTS_MANIFEST_FILENAME, default={})
-            or {}
-        )
+    def build(manifest: dict[str, Any]) -> dict[str, str]:
         source = manifest.get("source_transcripts", {}) or {}
-        if isinstance(source, dict):
-            for pid, entry in source.items():
-                if isinstance(entry, dict) and entry.get("transcribed_at"):
-                    markers[str(pid)] = str(entry["transcribed_at"])
-    _watch_transcript_cache = (mtime, markers)
-    return markers
+        if not isinstance(source, dict):
+            return {}
+        return {
+            str(pid): str(entry["transcribed_at"])
+            for pid, entry in source.items()
+            if isinstance(entry, dict) and entry.get("transcribed_at")
+        }
+
+    return manifest_io.memo_section(_watch_memo, "transcripts", "transcripts", build)
 
 
 def _scan_markers() -> dict[str, str]:
     """``{task_id: participant}`` for every completed Screenspace task (mtime-gated)."""
-    global _watch_scan_cache
-    mtime = _manifest_mtime(config.SCREENSPACE_MANIFEST_FILENAME)
-    if mtime == _watch_scan_cache[0]:
-        return _watch_scan_cache[1]
-    markers: dict[str, str] = {}
-    if mtime:
-        manifest = (
-            utils.load_json_manifest(config.SCREENSPACE_MANIFEST_FILENAME, default={})
-            or {}
-        )
-        for task in manifest.get("tasks", []) or []:
-            if (
-                isinstance(task, dict)
-                and task.get("status") == "completed"
-                and task.get("id")
-            ):
-                markers[str(task["id"])] = str(task.get("participant", "") or "")
-    _watch_scan_cache = (mtime, markers)
-    return markers
+
+    def build(manifest: dict[str, Any]) -> dict[str, str]:
+        return {
+            str(task["id"]): str(task.get("participant", "") or "")
+            for task in manifest.get("tasks", []) or []
+            if isinstance(task, dict)
+            and task.get("status") == "completed"
+            and task.get("id")
+        }
+
+    return manifest_io.memo_section(_watch_memo, "screenspace", "screenspace", build)
 
 
-def _seed_watch_seen() -> None:
-    """Baseline every trigger source so the existing backlog never auto-fires.
+def _seed_watch_seen(trigger_type: str | None = None) -> None:
+    """Baseline a trigger source so its existing backlog never auto-fires.
 
     Present videos, already-transcribed participants, and already-completed
-    scans are all recorded; the watcher fires only for arrivals/completions
-    that happen *after* this call.
+    scans are recorded; the watcher fires only for arrivals/completions that
+    happen *after* this call.
+
+    *trigger_type* scopes the reset to one source. ``None`` seeds all three and
+    belongs to startup only: re-seeding a type that is already armed throws away
+    its live state — a video mid-partial-copy sitting in ``_watch_pending`` would
+    be marked seen and never fire, and any completion since the last poll tick
+    would be swallowed. Arming passes the type it is arming.
     """
-    global _watch_transcript_cache, _watch_scan_cache
     with _watch_lock:
-        _watch_seen.clear()
-        _watch_pending.clear()
-        for entry in utils.discover_participant_videos():
-            if entry.get("has_video"):
-                _watch_seen.add(str(entry["id"]))
-        # Force a fresh parse (the cached mtime may predate this call).
-        _watch_transcript_cache = (-1.0, {})
-        _watch_scan_cache = (-1.0, {})
-        _watch_transcript_baseline.clear()
-        _watch_transcript_baseline.update(_transcript_markers())
-        _watch_scan_seen.clear()
-        _watch_scan_seen.update(_scan_markers())
+        if trigger_type in (None, "new_video"):
+            _watch_seen.clear()
+            _watch_pending.clear()
+            for entry in utils.discover_participant_videos():
+                if entry.get("has_video"):
+                    _watch_seen.add(str(entry["id"]))
+        if trigger_type in (None, "transcript_complete"):
+            # Force a fresh parse (the cached mtime may predate this call).
+            _watch_memo.pop("transcripts", None)
+            _watch_transcript_baseline.clear()
+            _watch_transcript_baseline.update(_transcript_markers())
+        if trigger_type in (None, "scan_event"):
+            _watch_memo.pop("screenspace", None)
+            _watch_scan_seen.clear()
+            _watch_scan_seen.update(_scan_markers())
 
 
-def _stat_first_video(video_paths: list[str]) -> tuple[int, float] | None:
-    """``(size, mtime)`` of a participant's first video, or ``None`` if unreadable."""
+def _stat_videos(video_paths: list[str]) -> tuple | None:
+    """``(path, size, mtime)`` per part, or ``None`` if any part is unreadable.
+
+    Every part counts: a multi-part recording whose later part is still copying
+    must not read as stable.
+    """
     if not video_paths:
         return None
-    try:
-        st = os.stat(video_paths[0])
-    except OSError:
-        return None  # mid-rename / vanished — treat as not-yet-stable
-    return (st.st_size, st.st_mtime)
+    stats = []
+    for path in video_paths:
+        try:
+            st = os.stat(path)
+        except OSError:
+            return None  # mid-rename / vanished — treat as not-yet-stable
+        stats.append((str(path), st.st_size, st.st_mtime))
+    return tuple(stats)
 
 
 def _armed_blueprint_locked(trigger_type: str) -> dict[str, Any] | None:
@@ -1186,8 +1170,8 @@ def _maybe_fire_trigger(participant: str, trigger_type: str) -> None:
 def _poll_new_videos() -> None:
     """The original watch-dir tick: fire on newly-arrived, stable participants.
 
-    A pid fires only after it stats identically across two consecutive polls
-    (the partial-copy guard).
+    A pid fires only after every part stats identically across two consecutive
+    polls (the partial-copy guard).
     """
     entries = {
         str(e["id"]): e
@@ -1203,7 +1187,7 @@ def _poll_new_videos() -> None:
         for pid, entry in entries.items():
             if pid in _watch_seen:
                 continue
-            stat = _stat_first_video(entry.get("video_paths", []))
+            stat = _stat_videos(entry.get("video_paths", []))
             if stat is None:
                 continue
             if _watch_pending.get(pid) == stat:
@@ -1225,9 +1209,10 @@ def _poll_transcript_completions() -> None:
     Transcribe nodes never write the transcripts manifest, so a triggered graph
     can't re-fire itself.
     """
-    markers = _transcript_markers()
     fire: list[str] = []
     with _watch_lock:
+        # Under the lock: an arming _seed_watch_seen also rebinds the cache.
+        markers = _transcript_markers()
         for pid, stamp in markers.items():
             if _watch_transcript_baseline.get(pid) != stamp:
                 _watch_transcript_baseline[pid] = stamp
@@ -1238,9 +1223,9 @@ def _poll_transcript_completions() -> None:
 
 def _poll_scan_completions() -> None:
     """Fire once per newly-completed Screenspace task (keyed by task id)."""
-    markers = _scan_markers()
     fire: list[str] = []
     with _watch_lock:
+        markers = _scan_markers()
         for task_id, pid in markers.items():
             if task_id not in _watch_scan_seen:
                 _watch_scan_seen.add(task_id)
@@ -1300,21 +1285,42 @@ def _init_workflows_state(
 ) -> None:
     """Initialize module-level state for Workflows routes.
 
-    Loads the workflows manifest and records the active input dir + sheet
-    context + worksheet (the latter feeds the ``sheet_selection`` executor), then
-    seeds the watch-dir baseline and starts the trigger daemon (P6).
-    Per-participant video paths are resolved on demand.
-    """
-    global _input_dir, _sheet_context, _worksheet, _manifest
+    Loads the workflows manifest and records the active sheet context +
+    worksheet (the latter feeds the ``sheet_selection`` executor), then seeds
+    the watch-dir baseline. Per-participant video paths and the input dir are
+    resolved on demand.
 
-    _input_dir = str(utils.get_effective_input_dir())
+    Deliberately does *not* start the trigger daemon: an armed trigger firing
+    here could launch a workflow run before the sibling blueprints (and
+    ``thinking_agents.configure``) are initialized. ``server._init_combined_state``
+    calls :func:`_start_watch_thread` as its last step instead.
+
+    Called once, from ``build_combined_app``. A worksheet swap goes through
+    :func:`repin_sheet_state` instead — re-running this would reload the
+    manifest, reseed the watch baseline and restart the trigger daemon on
+    every spreadsheet the user opens.
+    """
+    global _sheet_context, _worksheet, _manifest
+
     _sheet_context = sheet_context
     _worksheet = worksheet
     _manifest = workflows.load_workflows_manifest()
-    # Reclaim a stale empty manifest (e.g. an abandoned auto-created "Untitled"
-    # blueprint) left by a prior session: the guarded save removes the file when
-    # empty and is an idempotent rewrite otherwise.
+    # Reclaim a stale empty manifest from a prior session (the save deletes empty files).
     with _manifest_lock:
         _persist_locked()
     _seed_watch_seen()
-    _start_watch_thread()
+
+
+def repin_sheet_state(sheet_context: Any = None, worksheet: Any = None) -> None:
+    """Point the blueprint at a newly opened (or closed) worksheet.
+
+    The sheet-only half of :func:`_init_workflows_state`, called by
+    ``server._swap_worksheet``. Without it this blueprint kept whatever sheet
+    the *process* started with — normally none, since a desktop launch has no
+    ``-s`` — so a spreadsheet opened from the Start overlay never reached the
+    canvas or any run's ``NodeContext``.
+    """
+    global _sheet_context, _worksheet
+
+    _sheet_context = sheet_context
+    _worksheet = worksheet

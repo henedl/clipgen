@@ -1,12 +1,15 @@
 """Tests for template matching primitives and heatmap."""
 
+import cv2
 import numpy as np
 
 import config
 import screenspace
 import screenspace_frames
 import screenspace_heatmap
+import screenspace_primitives
 import screenspace_scans
+import screenspace_tools
 from _ss_helpers import _make_icon, _make_icon_frame
 
 
@@ -49,6 +52,202 @@ class TestMatchTemplate:
         assert len(results) >= 1
 
 
+class TestCorrelationMapReuse:
+    """The correlation map is the most expensive op here; compute it once."""
+
+    @staticmethod
+    def _frame_and_template():
+        rng = np.random.RandomState(42)
+        frame = rng.randint(0, 255, (100, 200, 3), dtype=np.uint8)
+        return frame, frame[30:60, 80:140].copy()
+
+    def test_supplied_corr_gives_the_same_matches(self):
+        frame, template = self._frame_and_template()
+        prepared = screenspace_primitives._prepare_template(template, None)
+        corr = screenspace_primitives._template_correlation_map(frame, prepared)
+        assert screenspace.match_template(
+            frame, template, threshold=0.9, prepared=prepared, corr=corr
+        ) == screenspace.match_template(frame, template, threshold=0.9)
+
+    def test_tool_check_frame_computes_the_map_once(self, monkeypatch):
+        frame, template = self._frame_and_template()
+        calls = []
+        real = screenspace_primitives._match_corr_window
+
+        def counting(source, template_arg, window):
+            calls.append(1)
+            return real(source, template_arg, window)
+
+        monkeypatch.setattr(screenspace_primitives, "_match_corr_window", counting)
+        params = {"template_image": template, "threshold": 0.9}
+        matched, details = screenspace_tools.TemplateTool().check_frame(
+            frame, None, {"x": 0, "y": 0, "w": 200, "h": 100}, params
+        )
+        assert matched
+        assert details["match_count"] >= 1
+        assert len(calls) == 1
+
+
+class TestNmsEquivalence:
+    """Vectorized NMS must reproduce the dict-loop NMS it replaced exactly."""
+
+    @staticmethod
+    def _reference_nms(result, tw, th, threshold, nms_overlap):
+        # The pre-vectorization implementation, kept as the behavioral spec.
+        import math
+
+        locs = np.where(result >= threshold)
+        scores = result[locs]
+        ys, xs = locs[0], locs[1]
+        detections = []
+        for pt_y, pt_x, raw in zip(ys, xs, scores):
+            score = float(raw)
+            if not math.isfinite(score):
+                continue
+            detections.append(
+                {"x": int(pt_x), "y": int(pt_y), "w": tw, "h": th, "score": score}
+            )
+        detections.sort(key=lambda d: d["score"], reverse=True)
+        kept = []
+        for det in detections:
+            overlaps = False
+            for k_det in kept:
+                xa = max(det["x"], k_det["x"])
+                ya = max(det["y"], k_det["y"])
+                xb = min(det["x"] + det["w"], k_det["x"] + k_det["w"])
+                yb = min(det["y"] + det["h"], k_det["y"] + k_det["h"])
+                inter = max(0, xb - xa) * max(0, yb - ya)
+                union = det["w"] * det["h"] + k_det["w"] * k_det["h"] - inter
+                if union > 0 and inter / union > nms_overlap:
+                    overlaps = True
+                    break
+            if not overlaps:
+                kept.append(det)
+        return kept
+
+    def test_matches_reference_on_dense_ties(self):
+        rng = np.random.RandomState(9)
+        template = rng.randint(0, 255, (8, 10, 3), dtype=np.uint8)
+        prepared = screenspace_primitives._prepare_template(template, None)
+        th, tw = prepared[0].shape[:2]
+        # Quantized map: hundreds of candidates, heavy score ties, one inf.
+        corr = (rng.randint(0, 8, (16, 24)) / 8.0).astype(np.float32)
+        corr[0, 0] = np.inf
+        frame = np.zeros((10, 10, 3), dtype=np.uint8)  # unused when corr is given
+        for nms_overlap in (0.0, 0.3, 0.9):
+            got = screenspace_primitives._match_template_prepared(
+                frame, prepared, 0.25, nms_overlap, corr=corr
+            )
+            want = self._reference_nms(corr, tw, th, 0.25, nms_overlap)
+            assert got == want
+
+
+def _assert_same_boxes(got, want, score_tolerance):
+    """Boxes match exactly; scores only to the platform's matchTemplate ulp drift."""
+    assert [(row["x"], row["y"], row["w"], row["h"]) for row in got] == [
+        (row["x"], row["y"], row["w"], row["h"]) for row in want
+    ]
+    drift = max(
+        (
+            abs(got_row["score"] - want_row["score"])
+            for got_row, want_row in zip(got, want, strict=True)
+        ),
+        default=0.0,
+    )
+    assert drift < score_tolerance
+
+
+class TestCorrelationRoi:
+    def test_unmasked_matches_full_map(self, monkeypatch):
+        monkeypatch.setattr(config, "SCREENSPACE_BLUR_KERNEL", 1)
+        rng = np.random.RandomState(81)
+        gray = rng.randint(0, 5, (180, 320), dtype=np.uint8).astype(np.float32)
+        frame = np.repeat(gray[:, :, None], 3, axis=2)
+        template = frame[20:52, 10:54].copy()
+        frame[130:162, 260:304] = template
+        prepared = screenspace_primitives._prepare_template(template, None)
+        full = screenspace_primitives._template_correlation_map(frame, prepared)
+        assert full is not None
+
+        windows = (
+            (0.0, 0.0, 64.0, 60.0),
+            (80.0, 45.0, 180.0, 120.0),
+            (250.0, 125.0, 320.0, 180.0),
+        )
+        for window in windows:
+            masked = screenspace_primitives._mask_corr_outside_window(
+                full, 44, 32, window
+            )
+            assert masked is not None
+            want = screenspace_primitives._match_template_prepared(
+                frame, prepared, 0.9, 0.3, corr=masked
+            )
+            got = screenspace_primitives._match_template_prepared(
+                frame, prepared, 0.9, 0.3, window=window
+            )
+            _assert_same_boxes(got, want, 1e-5)
+
+    def test_uint8_drift_is_bounded(self):
+        rng = np.random.RandomState(85)
+        frame = rng.randint(0, 255, (180, 320, 3), dtype=np.uint8)
+        template = frame[20:52, 10:54].copy()
+        prepared = screenspace_primitives._prepare_template(template, None)
+        full = screenspace_primitives._template_correlation_map(frame, prepared)
+        assert full is not None
+        window = (0.0, 0.0, 64.0, 60.0)
+        masked = screenspace_primitives._mask_corr_outside_window(full, 44, 32, window)
+        assert masked is not None
+        want = screenspace_primitives._match_template_prepared(
+            frame, prepared, 0.1, 0.3, corr=masked
+        )
+        got = screenspace_primitives._match_template_prepared(
+            frame, prepared, 0.1, 0.3, window=window
+        )
+        _assert_same_boxes(got, want, 5e-5)
+
+    def test_roi_values_track_full_map(self):
+        # Crop width picks the SIMD path: ulp-close to the full map, same peak.
+        rng = np.random.RandomState(82)
+        source = rng.randint(0, 5, (39, 61), dtype=np.uint8).astype(np.float32)
+        template = source[7:16, 13:27].copy()
+        full = cv2.matchTemplate(source, template, cv2.TM_CCOEFF_NORMED)
+        window = (0.0, 8.0, 31.0, 28.0)
+        packed = screenspace_primitives._match_corr_window(source, template, window)
+        assert packed is not None
+        corr, x_offset, y_offset = packed
+        want = full[
+            y_offset : y_offset + corr.shape[0],
+            x_offset : x_offset + corr.shape[1],
+        ]
+        assert corr.shape == want.shape
+        assert float(np.abs(corr - want).max()) < 1e-5
+        assert int(corr.argmax()) == int(want.argmax())
+
+    def test_masked_keeps_full_map(self, monkeypatch):
+        rng = np.random.RandomState(83)
+        frame = rng.randint(0, 255, (64, 96, 3), dtype=np.uint8)
+        template = frame[20:36, 33:55].copy()
+        mask = np.full((16, 22), 255, dtype=np.uint8)
+        prepared = screenspace_primitives._prepare_template(template, mask)
+        window = (25.0, 15.0, 68.0, 48.0)
+        full = screenspace_primitives._template_correlation_map(frame, prepared)
+        assert full is not None
+        masked = screenspace_primitives._mask_corr_outside_window(full, 22, 16, window)
+        assert masked is not None
+        want = screenspace_primitives._match_template_prepared(
+            frame, prepared, 0.1, 0.3, corr=masked
+        )
+
+        def fail(*_args):
+            raise AssertionError("masked correlation used ROI")
+
+        monkeypatch.setattr(screenspace_primitives, "_match_corr_window", fail)
+        got = screenspace_primitives._match_template_prepared(
+            frame, prepared, 0.1, 0.3, window=window
+        )
+        assert got == want
+
+
 class TestPrepareTemplateMask:
     def test_binarizes_alpha_mask(self):
         """Mask should come out as strictly 0 or 255 (no soft-blurred edges)."""
@@ -80,12 +279,55 @@ class TestScanTemplateControls:
             screenspace_frames, "_probe_video_meta", lambda p: (30.0, 1.0)
         )
 
+    def test_region_scopes_scan(self, monkeypatch):
+        """The run region scopes matches; a rect away from the icon finds none."""
+        frame = _make_icon_frame(400, 200, [(100, 50, 40)])
+        template = _make_icon(40)
+        self._patch_single_frame(monkeypatch, frame)
+
+        over = screenspace.scan_template(
+            "/fake.mp4",
+            {"x": 90, "y": 40, "w": 60, "h": 60},
+            template,
+            threshold=0.70,
+        )
+        assert len(over) == 1
+
+        self._patch_single_frame(monkeypatch, frame)
+        away = screenspace.scan_template(
+            "/fake.mp4",
+            {"x": 300, "y": 100, "w": 60, "h": 60},
+            template,
+            threshold=0.70,
+        )
+        assert away == []
+
+    def test_check_frame_region_scopes_peak(self):
+        """best_score is window-local, so calibration scores the targeted spot."""
+        frame = _make_icon_frame(400, 200, [(100, 50, 40)])
+        template = _make_icon(40)
+        tool = screenspace.TOOLS["template"]
+        passed, _detail = tool.check_frame(
+            frame,
+            None,
+            {"x": 90, "y": 40, "w": 60, "h": 60},
+            {"template_image": template, "threshold": 0.70},
+        )
+        assert passed is True
+        away, away_detail = tool.check_frame(
+            frame,
+            None,
+            {"x": 300, "y": 100, "w": 60, "h": 60},
+            {"template_image": template, "threshold": 0.70},
+        )
+        assert away is False
+        assert away_detail is not None and away_detail["best_score"] < 0.70
+
     def test_scale_fixes_size_mismatch(self, monkeypatch):
         """A 40px template should miss a 20px in-frame icon at scale 1.0
         but hit at scale 0.5."""
         frame = _make_icon_frame(400, 200, [(100, 50, 20)])
-        # Template at the original (larger) size — mimics an uploaded PNG
-        # captured at 2x the in-video rendering.
+        # Original-size template, like a PNG captured at 2x the in-video size.
         template = _make_icon(40)
         self._patch_single_frame(monkeypatch, frame)
 
@@ -269,8 +511,7 @@ class TestGenerateRollingHeatmapGif:
         assert (tmp_path / "rolling_change.gif").stat().st_size > 0
 
     def test_large_count_rolling_gif(self, tmp_path):
-        # 47 results / 24 frames: the old floor-division bucketing dumped the
-        # remainder onto the final frame; this just guards it still renders.
+        # 47 results over 24 frames once piled the remainder onto the last frame.
         out = str(tmp_path / "rolling_large.gif")
         info = screenspace.generate_rolling_heatmap_gif(
             self._matches(47), 200, 200, out
@@ -279,6 +520,103 @@ class TestGenerateRollingHeatmapGif:
         assert info["path"] == out
         assert info["frames"] == 24  # capped at num_frames, not one per result
         assert (tmp_path / "rolling_large.gif").stat().st_size > 0
+
+
+class TestRollingWindowLayerCompose:
+    def test_layered_windows_match_replayed_windows_bit_identically(self):
+        """The bucket-layer compose must equal replaying raw results exactly.
+
+        generate_rolling_heatmap_gif builds grid windows by overwriting each
+        bucket's drawn pixels in order instead of re-running every cv2.circle.
+        That is only valid because grid draws *set* values (last wins); this
+        replays both constructions for every window and requires array
+        equality — including cells whose mag is 0.0, which the mask must
+        still treat as drawn.
+        """
+        rng = np.random.default_rng(6)
+        results = []
+        for i in range(60):
+            cells = [
+                {
+                    "x": float(rng.random()),
+                    "y": float(rng.random()),
+                    "mag": float(rng.random()) if i % 7 else 0.0,
+                }
+                for _ in range(12)
+            ]
+            results.append({"timestamp": float(i), "saliency_grid": cells})
+
+        num_frames, window_frames, acc = 24, 6, 256
+
+        def bounds(i):
+            return screenspace_heatmap._frame_bucket_bounds(i, len(results), num_frames)
+
+        layers = []
+        for b in range(num_frames):
+            vals = np.zeros((acc, acc), dtype=np.float32)
+            mask = np.zeros((acc, acc), dtype=np.uint8)
+            for r in range(*bounds(b)):
+                screenspace_heatmap._accumulate_heatmap_result(
+                    vals, results[r], "attention", mask_out=mask
+                )
+            layers.append((vals, mask.astype(bool)))
+
+        for i in range(num_frames):
+            replayed = np.zeros((acc, acc), dtype=np.float32)
+            composed = np.zeros((acc, acc), dtype=np.float32)
+            for b in range(max(0, i - window_frames + 1), i + 1):
+                for r in range(*bounds(b)):
+                    screenspace_heatmap._accumulate_heatmap_result(
+                        replayed, results[r], "attention"
+                    )
+                vals, mask = layers[b]
+                composed[mask] = vals[mask]
+            assert np.array_equal(replayed, composed), f"window {i} drifted"
+
+
+class TestHeatmapGifPalette:
+    def test_gif_frames_use_the_jet_palette_verbatim(self, tmp_path):
+        """Every decoded GIF pixel must be an exact JET colormap color.
+
+        _heatmap_frame_image hands the encoder palette-native "P" frames
+        (blurred intensity image + the 256-entry JET palette), so no
+        quantizer ever runs. If RGB frames sneak back in, PIL re-derives a
+        per-frame palette — the dominant cost of GIF generation — and this
+        exactness breaks.
+        """
+        import cv2
+        from PIL import Image
+
+        rng = np.random.default_rng(5)
+        results = [
+            {
+                "timestamp": float(i),
+                "change_grid": [
+                    {
+                        "x": float(rng.random()),
+                        "y": float(rng.random()),
+                        "mag": float(rng.random()),
+                    }
+                    for _ in range(10)
+                ],
+            }
+            for i in range(8)
+        ]
+        out = str(tmp_path / "palette.gif")
+        info = screenspace.generate_heatmap_gif(
+            results, 200, 150, out, heatmap_type="change"
+        )
+        assert info is not None
+        ramp = np.arange(256, dtype=np.uint8).reshape(1, 256)
+        jet = {
+            tuple(int(v) for v in c)
+            for c in cv2.applyColorMap(ramp, cv2.COLORMAP_JET)[0, :, ::-1]
+        }
+        with Image.open(out) as gif:
+            gif.seek(int(getattr(gif, "n_frames", 1)) - 1)
+            pixels = np.asarray(gif.convert("RGB")).reshape(-1, 3)
+        colors = {tuple(int(v) for v in c) for c in np.unique(pixels, axis=0)}
+        assert colors <= jet
 
 
 class TestHeatmapSprite:
@@ -302,8 +640,7 @@ class TestHeatmapSprite:
             self._matches(8), 200, 100, str(tmp_path / "heatmap.gif")
         )
         assert info is not None
-        # Frame count and cell shape come from the animation itself, never from
-        # config, so a stored descriptor can't drift from a later-rendered sheet.
+        # Frame count and cell shape come from the GIF, never config; no drift.
         assert info["frames"] == 8
         assert (info["w"], info["h"]) == (200, 100)
         # The GIF is the only file written.
@@ -452,3 +789,127 @@ class TestHeatmapConfigConstants:
         assert config.SCREENSPACE_HEATMAP_ROLLING_WINDOW >= 1
         assert isinstance(config.SCREENSPACE_CHANGE_HEATMAP_GRID, int)
         assert config.SCREENSPACE_CHANGE_HEATMAP_GRID >= 2
+
+
+class TestGridLayerDedup:
+    def test_bucket_layers_match_sequential_draws_exactly(self):
+        """build_grid_layers draws each center once per bucket; pixels must not move.
+
+        Grid draws set pixels (last wins), so only a center's last draw in a
+        bucket can survive. Heavy overlap, repeated centers across frames and
+        zero mags all have to reproduce the frame-by-frame replay exactly.
+        """
+        rng = np.random.default_rng(11)
+        lattice = [round((i + 0.5) / 12, 3) for i in range(12)]
+        results = []
+        for i in range(90):
+            cells = [
+                {
+                    "x": lattice[int(rng.integers(0, 12))],
+                    "y": lattice[int(rng.integers(0, 12))],
+                    "mag": 0.0 if i % 9 == 0 else float(rng.random()),
+                }
+                for _ in range(int(rng.integers(1, 40)))
+            ]
+            results.append({"timestamp": float(i), "flow_grid": cells})
+        num_frames, acc = 24, screenspace_heatmap._GRID_ACC_SIZE
+
+        layers = screenspace_heatmap.build_grid_layers(results, "flow", num_frames)
+        assert layers is not None and len(layers) == num_frames
+        for b, (vals, mask) in enumerate(layers):
+            ref_vals = np.zeros((acc, acc), dtype=np.float32)
+            ref_mask = np.zeros((acc, acc), dtype=np.uint8)
+            start, end = screenspace_heatmap._frame_bucket_bounds(
+                b, len(results), num_frames
+            )
+            for r in range(start, end):
+                screenspace_heatmap._accumulate_heatmap_result(
+                    ref_vals, results[r], "flow", mask_out=ref_mask
+                )
+            assert np.array_equal(vals, ref_vals), f"bucket {b} values drifted"
+            assert np.array_equal(mask, ref_mask.astype(bool)), f"bucket {b} mask"
+
+
+class TestDeltaFrames:
+    """_save_animation frame-differences in numpy; PIL's optimize is the oracle."""
+
+    def _frames(self, seed, size=(160, 90), duplicates=True):
+        rng = np.random.default_rng(seed)
+        acc = np.zeros((256, 256), dtype=np.float32)
+        frames = []
+        for i in range(10):
+            if not (duplicates and i in (3, 4, 7)):
+                for _ in range(6):
+                    cx, cy = (int(v) for v in rng.integers(0, 256, size=2))
+                    cv2.circle(acc, (cx, cy), 20, float(rng.random()), -1)
+            frames.append(
+                screenspace_heatmap._heatmap_frame_image(
+                    acc, float(acc.max()), "attention", *size
+                )
+            )
+        return frames
+
+    @staticmethod
+    def _decode(path):
+        from PIL import Image, ImageSequence
+
+        out = []
+        with Image.open(path) as anim:
+            for frame in ImageSequence.Iterator(anim):
+                out.append(
+                    (
+                        int(frame.info.get("duration", 0)),
+                        np.asarray(frame.convert("RGB")),
+                    )
+                )
+        return out
+
+    def _assert_matches_pil(self, tmp_path, frames):
+        ours = str(tmp_path / "ours.gif")
+        oracle = str(tmp_path / "pil.gif")
+        info = screenspace_heatmap._save_animation(frames, ours, 120)
+        frames[0].save(
+            oracle, save_all=True, append_images=frames[1:], duration=120, loop=0
+        )
+        a, b = self._decode(ours), self._decode(oracle)
+        assert info["frames"] == len(a) == len(b)
+        for (da, fa), (db, fb) in zip(a, b):
+            assert da == db
+            assert np.array_equal(fa, fb)
+        return a
+
+    def test_decodes_like_pil_optimize_with_collapsed_repeats(self, tmp_path):
+        decoded = self._assert_matches_pil(tmp_path, self._frames(1))
+        assert len(decoded) == 7  # three repeats folded into their predecessors
+        assert decoded[2][0] == 360  # 3 x 120 ms
+
+    def test_decodes_like_pil_without_repeats(self, tmp_path):
+        decoded = self._assert_matches_pil(tmp_path, self._frames(2, duplicates=False))
+        assert len(decoded) == 10
+
+    def test_falls_back_when_every_index_is_used(self, tmp_path):
+        """Changed pixels spanning the palette leave no spare: frames go verbatim."""
+        from PIL import Image
+
+        ramp = np.tile(np.arange(256, dtype=np.uint8), (4, 1))
+        frames = []
+        for shift in (0, 1, 1, 5):
+            frame = Image.fromarray(np.roll(ramp, shift, axis=1))
+            frame.putpalette(screenspace_heatmap._jet_palette())
+            frames.append(frame)
+        kept, durations = screenspace_heatmap._delta_frames(frames, 120)
+        assert [id(f) for f in kept] == [id(frames[0]), id(frames[1]), id(frames[3])]
+        assert all("transparency" not in f.info for f in kept)
+        assert durations == [120, 240, 120]
+        self._assert_matches_pil(tmp_path, frames)
+
+    def test_file_size_stays_near_pil_optimize(self, tmp_path):
+        """optimize=False alone grows files ~30%; the numpy delta must not."""
+        frames = self._frames(3, size=(640, 360), duplicates=False)
+        ours = tmp_path / "ours.gif"
+        oracle = tmp_path / "pil.gif"
+        screenspace_heatmap._save_animation(frames, str(ours), 120)
+        frames[0].save(
+            str(oracle), save_all=True, append_images=frames[1:], duration=120, loop=0
+        )
+        assert ours.stat().st_size <= oracle.stat().st_size * 1.05

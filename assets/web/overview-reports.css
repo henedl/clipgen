@@ -200,6 +200,7 @@
   margin-top: var(--space-2);
   font-size: var(--text-base);
   line-height: 1.55;
+  text-wrap: pretty;
 }
 
 .rp-report-body h3 {
@@ -223,6 +224,7 @@
 
 .rp-report-hint {
   color: var(--color-text-dim);
+  text-wrap: pretty;
 }
 
 /* Streaming partial text keeps the model's raw line breaks until the final
@@ -251,15 +253,8 @@
   text-decoration: underline;
 }
 
-.rp-sev { font-weight: 600; }
-.rp-sev.sev-critical { color: var(--sev-critical); }
-.rp-sev.sev-high { color: var(--sev-high); }
-.rp-sev.sev-medium { color: var(--sev-medium); }
-.rp-sev.sev-low { color: var(--sev-low); }
-.rp-sev.sev-na { color: var(--sev-na); }
-.rp-sev.sev-positive { color: var(--sev-positive); }
-.rp-sev.sev-very-positive { color: var(--sev-very-positive); }
-.rp-sev.sev-unknown { color: var(--sev-unknown); }
+/* Colored via the tokens.css severity indirection. */
+.rp-sev { font-weight: 600; color: var(--sev, var(--sev-unknown)); }
 
 /* ---- Clips strip ---- */
 
@@ -324,6 +319,8 @@
   border-color: var(--accent);
 }
 
+/* Kept local (not the tokens.css --sev indirection): na/unknown deliberately
+   get no colored bottom edge, which the shared ladder cannot express. */
 .rp-clip.sev-critical { border-bottom-color: var(--sev-critical); }
 .rp-clip.sev-high { border-bottom-color: var(--sev-high); }
 .rp-clip.sev-medium { border-bottom-color: var(--sev-medium); }
@@ -337,6 +334,8 @@
   height: 74px;
   object-fit: cover;
   background: var(--color-surface-alt);
+  outline: 1px solid var(--outline-media);
+  outline-offset: -1px;
 }
 
 .rp-clip--noposter .rp-clip-thumb {
@@ -353,6 +352,7 @@
 
 .rp-clip-time {
   color: var(--color-text-dim);
+  font-variant-numeric: tabular-nums;
 }
 
 .rp-clip-sev {
@@ -361,14 +361,8 @@
   white-space: nowrap;
 }
 
-.rp-clip-sev.sev-critical { color: var(--sev-critical); }
-.rp-clip-sev.sev-high { color: var(--sev-high); }
-.rp-clip-sev.sev-medium { color: var(--sev-medium); }
-.rp-clip-sev.sev-low { color: var(--sev-low); }
-.rp-clip-sev.sev-na { color: var(--sev-na); }
-.rp-clip-sev.sev-positive { color: var(--sev-positive); }
-.rp-clip-sev.sev-very-positive { color: var(--sev-very-positive); }
-.rp-clip-sev.sev-unknown { color: var(--sev-unknown); }
+/* Colored via the tokens.css severity indirection. */
+.rp-clip-sev { color: var(--sev, var(--sev-unknown)); }
 
 /* ---- Inline player ---- */
 
@@ -402,4 +396,6 @@
   width: 100%;
   max-height: 380px;
   background: #000;
+  outline: 1px solid var(--outline-media);
+  outline-offset: -1px;
 }

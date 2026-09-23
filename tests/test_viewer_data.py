@@ -49,6 +49,18 @@ def test_finalize_timeline_data_duration_and_structure():
     assert "reels" not in data
 
 
+def test_finalize_data_carries_attribution():
+    import config
+    import utils
+
+    timeline = viewer.finalize_timeline_data([_make_artifact("a1")])
+    gallery = viewer.finalize_gallery_data([], source_video="vid.mp4")
+
+    for meta in (timeline["meta"], gallery["meta"]):
+        assert meta["clipgenVersion"] == utils.get_version()
+        assert meta["repoUrl"] == config.REPO_URL
+
+
 def test_finalize_timeline_data_empty_artifacts():
     data = viewer.finalize_timeline_data([])
     assert data["timeline"]["duration"] == 0.0
@@ -276,7 +288,7 @@ def test_load_screenspace_events_for_viewer_caches_by_mtime(tmp_path, monkeypatc
         ],
         pins={},
     )
-    manifest_path = tmp_path / config.SCREENSPACE_MANIFEST_FILENAME
+    manifest_path = tmp_path / config.MANIFEST_FILENAME
     st = manifest_path.stat()
     os.utime(manifest_path, ns=(st.st_atime_ns, st.st_mtime_ns + 1_000_000_000))
 

@@ -1,5 +1,7 @@
 """Tests for frame diff, region similarity, phash, and scene fingerprint."""
 
+import itertools
+
 import numpy as np
 
 import config
@@ -20,6 +22,35 @@ class TestComputeFrameDiff:
         white = np.full((50, 50, 3), 255, dtype=np.uint8)
         diff = screenspace.compute_frame_diff(black, white)
         assert diff > 0.9
+
+    def test_gray_split_is_bit_identical(self):
+        """The carried-forward blur_gray path must equal the pairwise BGR path.
+
+        scan_changes / ChangeTool now compute blur_gray once per frame and diff
+        via the _gray variants; any divergence from compute_frame_diff would
+        silently change every Change magnitude.
+        """
+        rng = np.random.default_rng(42)
+        for shape in ((50, 50, 3), (37, 61, 3), (128, 72, 3)):
+            a = rng.integers(0, 256, shape, dtype=np.uint8)
+            b = rng.integers(0, 256, shape, dtype=np.uint8)
+            assert screenspace.compute_frame_diff(a, b) == (
+                screenspace.compute_frame_diff_gray(
+                    screenspace.blur_gray(a), screenspace.blur_gray(b)
+                )
+            )
+
+    def test_gray_split_mask_is_bit_identical(self):
+        rng = np.random.default_rng(7)
+        a = rng.integers(0, 256, (60, 60, 3), dtype=np.uint8)
+        b = rng.integers(0, 256, (60, 60, 3), dtype=np.uint8)
+        mask = np.zeros((60, 60), dtype=np.uint8)
+        mask[10:40, 10:40] = 255
+        assert screenspace.compute_frame_diff(a, b, mask=mask) == (
+            screenspace.compute_frame_diff_gray(
+                screenspace.blur_gray(a), screenspace.blur_gray(b), mask=mask
+            )
+        )
 
 
 class TestRegionsAreSimilar:
@@ -50,6 +81,99 @@ class TestComputePhash:
         hash_a = screenspace.compute_phash(a)
         hash_b = screenspace.compute_phash(b)
         assert hash_a != hash_b
+
+    def test_precomputed_gray_matches(self):
+        """The gray= fast path (scan_similarity) must hash identically."""
+        import cv2
+
+        rng = np.random.default_rng(11)
+        region = rng.integers(0, 256, (64, 96, 3), dtype=np.uint8)
+        gray = cv2.cvtColor(region, cv2.COLOR_BGR2GRAY)
+        assert screenspace.compute_phash(region) == screenspace.compute_phash(
+            region, gray=gray
+        )
+
+
+def _one_step_phash(gray):
+    """The pre-split single-resize phash, kept verbatim as the oracle.
+
+    The two-step integer-ratio resize is a speedup, so its hash *distances*
+    (the only quantity scans consume) must track this expression.
+    """
+    import cv2
+
+    small = cv2.resize(gray, (32, 32), interpolation=cv2.INTER_AREA).astype(np.float32)
+    dct = cv2.dct(small)
+    dctlowfreq = dct[:8, :8]
+    return screenspace.PHash(dctlowfreq > np.median(dctlowfreq))
+
+
+def _structured_frame(rng, h, w, t):
+    """A deterministic screen-recording-like frame: gradient + moving shapes."""
+    import cv2
+
+    g = np.linspace(30, 220, w, dtype=np.uint8)[None, :].repeat(h, 0).copy()
+    cv2.rectangle(g, (t * 3 % w, 40), (t * 3 % w + 120, 200), 250, -1)
+    cv2.circle(g, ((t * 7) % w, (t * 5) % h), 60, 10, -1)
+    g[(t * 11) % h : (t * 11) % h + 30, :] = rng.integers(0, 256, (1,), dtype=np.uint8)
+    return g
+
+
+class TestPhashTwoStepResize:
+    """The integer-ratio two-step resize must preserve hash distances.
+
+    compute_phash splits the 32×32 INTER_AREA resize into an integer-ratio
+    pass plus a strip pass when an axis divides by 32. The intermediate uint8
+    rounding may move individual bits, so the contract pinned here is on
+    *distances between frames* — what scan_similarity / scan_inactivity /
+    scan_boundaries and the fast-filter dedupe actually consume.
+    """
+
+    # One size per branch: w % 32 == 0 (landscape), h % 32 == 0 (portrait),
+    # and neither (odd region → one-step path, exact match). Dimensions are
+    # large enough to exercise INTER_AREA, small enough that 8 frames stay
+    # off the suite's critical path (full 720p/1080p × 24 frames was ~1.7 s).
+    SIZES = ((240, 640), (640, 240), (45, 61))
+
+    def test_distances_track_one_step_oracle(self):
+        rng = np.random.default_rng(7)
+        for h, w in self.SIZES:
+            frames = [_structured_frame(rng, h, w, t) for t in range(8)]
+            noisy = [
+                np.clip(
+                    f.astype(np.int16) + rng.integers(-2, 3, f.shape), 0, 255
+                ).astype(np.uint8)
+                for f in frames[:8]
+            ]
+            pairs = (
+                list(itertools.pairwise(frames))  # consecutive (inactivity)
+                + [(frames[0], f) for f in frames]  # vs reference (similarity)
+                + list(zip(frames, noisy))  # near-duplicates
+            )
+            for a, b in pairs:
+                d_new = screenspace.compute_phash(
+                    a, gray=a
+                ) - screenspace.compute_phash(b, gray=b)
+                d_old = _one_step_phash(a) - _one_step_phash(b)
+                assert abs(d_new - d_old) <= 2, (
+                    f"{h}x{w}: distance drifted {d_old} -> {d_new}"
+                )
+
+    def test_odd_sizes_stay_bit_identical_to_oracle(self):
+        """Sizes with no 32-divisible axis must take the untouched one-step path."""
+        rng = np.random.default_rng(8)
+        for h, w in ((567, 1001), (45, 60), (8, 8), (200, 333)):
+            gray = rng.integers(0, 256, (h, w), dtype=np.uint8)
+            assert screenspace.compute_phash(gray, gray=gray) == _one_step_phash(gray)
+
+    def test_self_distance_zero_on_every_branch(self):
+        rng = np.random.default_rng(9)
+        for h, w in self.SIZES:
+            gray = rng.integers(0, 256, (h, w), dtype=np.uint8)
+            assert (
+                screenspace.compute_phash(gray, gray=gray)
+                - screenspace.compute_phash(gray.copy(), gray=gray.copy())
+            ) == 0
 
 
 class TestSceneFingerprint:

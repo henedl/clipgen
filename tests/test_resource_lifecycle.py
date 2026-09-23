@@ -54,7 +54,10 @@ _CACHE_MODULES = (
     "server.py",
     "screenspace_server.py",
     "transcripts_server.py",
+    "utils.py",
     "viewer.py",
+    "manifest.py",
+    "server_utils.py",
 )
 
 # Caches whose size is bounded by the domain rather than by an explicit cap.
@@ -65,8 +68,12 @@ _NATURALLY_BOUNDED = {
     "_participant_timeline_cache": "one entry per participant in the cohort",
     "_video_metadata_cache": "one entry per participant video",
     "_corrected_cache": "one entry per participant transcript",
+    "_friction_cache": "one entry per participant transcript",
     "_ss_events_cache": "single entry, mtime-keyed",
-    "_manifest_cache": "single entry, mtime-keyed",
+    "_manifest_cache": "single entry (the one output dir), stamp-keyed",
+    "_manifest_indent_cache": "one entry per manifest section, pruned each write",
+    "_discover_videos_cache": "one entry per input dir seen this session",
+    "_index_html_cache": "one entry per page template",
 }
 
 

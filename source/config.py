@@ -20,9 +20,12 @@ Sections
 """
 
 import importlib
+import threading
 from typing import Any
 
 # ── Core Runtime ─────────────────────────────────────────────────────
+# Project home, shown in /api/status and credited in every exported viewer.
+REPO_URL: str = "https://github.com/henedl/clipgen"
 REENCODING: bool = False
 AUDIO_NORMALIZE: bool = False
 FILEFORMAT: str = ".mp4"
@@ -33,9 +36,7 @@ FILMSTRIP_ENABLED: bool = False  # use --filmstrip / --no-filmstrip to override 
 TITLECARD_DURATION_SECONDS: int = (
     2  # duration in seconds; falls back to color fill when no source frame available
 )
-# Selected card backgrounds (Studio picker). Empty = bundled default asset; the
-# sentinels below select a solid-color fill or (endcard only) no card; any other
-# value is an uploaded filename under <output>/TITLECARD_IMAGES_DIRNAME.
+# Empty = bundled default; sentinels below = solid fill or no card; else uploaded filename.
 TITLECARD_IMAGE: str = ""
 ENDCARD_IMAGE: str = ""
 CARD_IMAGE_COLOR: str = "__color__"  # solid color fill, no background image
@@ -57,6 +58,11 @@ WORKSHEET_PRIORITY: list[str] = [  # tried in order before falling back to first
 DEBUGGING: bool = (
     False  # enables icecream output, skips ffmpeg execution, returns stub transcripts
 )
+PROFILING: bool = False  # opt-in perf instrumentation (--profile); never changes behavior, only measures
+PROFILE_DEEP: str = (
+    ""  # --profile-deep LABEL: cProfile spans whose label contains this substring
+)
+PROFILE_OUTPUT: str = ""  # --profile-output PATH: write the exit report as JSON
 QUIET: int = 0
 STANDARD: int = 1
 VERBOSE: int = 2
@@ -76,10 +82,12 @@ def debug_ic(*args: Any, **kwargs: Any) -> Any:
     return _ICECREAM_IC(*args, **kwargs)
 
 
+# Request-thread writers of this module hold it; readers snapshot attributes.
+SETTINGS_LOCK = threading.RLock()
+
+
 # ── Directories ──────────────────────────────────────────────────────
-# When left empty, clipgen will use the current working directory for
-# both input (source videos) and output (generated artifacts), matching
-# the existing default behavior.
+# Empty means the current working directory.
 INPUT_DIR: str = ""
 OUTPUT_DIR: str = ""
 
@@ -88,6 +96,9 @@ ID_HEADER: str = "ID"
 OBSERVATION_HEADER: str = "Observation"
 CATEGORY_HEADER: str = "Category"
 FILENAME_HEADER: str = "Filename"
+# Runtime state, not a setting: per-participant filename overrides seeded from start.json;
+# beat the Filename row.
+FILENAME_OVERRIDES: dict[str, str] = {}
 SEVERITY_HEADER: str = (
     "Severity"  # optional column; when present adds severity metadata to clips
 )
@@ -137,76 +148,42 @@ GALLERY_BUNDLE_ENABLED: bool = False  # embed images as base64 data URIs in gall
 CLIP_PARALLEL_WORKERS: int = 0  # Max concurrent ffmpeg processes for clip/screenshot/GIF generation; 0 = auto (min(4, cpu_count))
 MAX_FILESIZE_MB: int = 0  # Maximum output file size in MB (0 = disabled)
 MIN_SOURCE_VIDEO_SIZE_MB: int = 100  # Minimum file size (MB) to consider as a source video candidate during fuzzy matching
-MANIFEST_FILENAME: str = (
-    "clipgen_manifest.json"  # cumulative artifact manifest; consumed by --regenerate
-)
+MANIFEST_FILENAME: str = "clipgen.json"  # one sectioned state file per output dir; see manifest.load_manifest_section
 MANIFEST_ENABLED: bool = (
     False  # use --manifest CLI flag or set True to write manifest alongside artifacts
 )
 SERVER_PORT: int = (
     8089  # port for the combined Studio/Screenspace/Transcripts Flask server
 )
-# Desktop-window chrome (see desktop_chrome.py). The native title bar is hidden and
-# the traffic lights float inside the topnav, so AppKit and CSS have to agree on the
-# same two numbers: these flow to the frontend as CSS custom properties via
-# utils.render_index_html(), rather than being written twice.
+# Desktop chrome (desktop_chrome.py): AppKit and CSS share these via render_index_html() custom properties.
 DESKTOP_CHROME_BAR_HEIGHT: int = 48  # titlebar band height; drives --topnav-height
-# Left gutter the three buttons need. They are inset from the window edge by the
-# same margin that centering leaves above them ((bar - 16) / 2 = 16) and pitched
-# 20px apart, so the row ends at 16 + 40 + 14 = 70; the rest is breathing room
-# before the brand.
+# Traffic lights span 16 + 40 + 14 = 70px; remainder is gap before brand.
 DESKTOP_TRAFFIC_LIGHT_INSET: int = 87
-STASHES_MANIFEST_FILENAME: str = "reel_stashes.json"
-ARTIFACT_STASHES_MANIFEST_FILENAME: str = "artifact_stashes.json"
+# Lives in the per-user config dir beside start.json: preferences, not project data.
 STUDIO_SETTINGS_FILENAME: str = "studio_settings.json"
-WORKFLOWS_MANIFEST_FILENAME: str = (
-    "workflows_manifest.json"  # node-canvas blueprints, stashes, run history
-)
-# Prefix for our own scratch temp-files written into the output dir (currently the
-# reel-builder's mkstemp clips). Lets sweep_stale_temp_artifacts() reclaim orphans
-# left by a hard kill without ever touching user files.
+# Prefix for scratch temp files so sweep_stale_temp_artifacts() reclaims orphans without touching user files.
 TEMP_ARTIFACT_PREFIX: str = "clipgen_tmp_"
-# Watch-dir trigger (P6): poll interval for the daemon that auto-runs an armed
-# blueprint when a new participant video lands in the input dir. The partial-copy
-# stability window is 2x this (a file must stat identically across two polls).
-# Server-only — never mirrored to the frontend.
+# New-video trigger poll interval; a file must stat identically across two polls. Server-only.
 WORKFLOWS_WATCH_POLL_SECONDS: float = 5.0
-# Concurrent participants per Workflows whole-study batch. 1 = sequential (the
-# default). Values >1 run child runs in a thread pool, multiplying peak
-# ffmpeg/Whisper/OCR/Ollama load — heavy graphs (Transcribe, Detect) serialize
-# on those shared resources anyway and rarely benefit past 2. The server clamps
-# to [1, 4]. Server-only — never mirrored to the frontend.
+# Parallel participants per whole-study batch; clamped to [1, 4]. Rarely helps past 2. Server-only.
 WORKFLOWS_BATCH_WORKERS: int = 1
-CONVERGENCE_OFFSETS_FILENAME: str = "convergence_offsets.json"
-COMPOSER_MANIFEST_FILENAME: str = (
-    "composer_manifest.json"  # Composer cut pairs, trims, annotations, UI state
-)
-# Composer annotation defaults. Geometry is normalized to the video frame
-# (stroke width to frame width, font size to frame height) so the browser
-# preview and the PIL/ffmpeg burn-in agree at any resolution. Mirrored to the
-# frontend via utils.get_frontend_config() — do not hardcode these in JS.
+# Composer annotation defaults, frame-normalized so preview and PIL burn-in agree. Mirrored to JS.
 COMPOSER_ANNOTATION_COLOR: str = "#f05a3c"
+# Inactive half of the primary/secondary swap (X); never written onto an annotation record.
+COMPOSER_ANNOTATION_COLOR_SECONDARY: str = "#f8fafc"
 COMPOSER_ANNOTATION_STROKE_WIDTH: float = 0.004  # fraction of frame width
 COMPOSER_ANNOTATION_STROKE_STYLE: str = "solid"  # solid | dashed | dotted
 COMPOSER_ANNOTATION_FONT_SIZE: float = 0.035  # fraction of frame height
 COMPOSER_ANNOTATION_SPAN_SECONDS: float = 10.0  # default visibility span
-# Double-click the Composer timeline to set the pending in point, then again
-# to commit the out point. Mirrored to the frontend via
-# utils.get_frontend_config() — do not hardcode this in JS.
+# Timeline double-click sets the in point, then the out point. Mirrored to JS.
 COMPOSER_DOUBLE_CLICK_CUTS: bool = True
-# Warn on pages that play source video when a recording is a fragmented MP4 the
-# browser cannot seek (OBS "fragmented recording"), and offer the one-click
-# remux that fixes it. Mirrored to the frontend via utils.get_frontend_config()
-# — do not hardcode this in JS.
+# Warn about fragmented MP4s the browser cannot seek and offer the remux. Mirrored to JS.
 MEDIA_CONTAINER_WARNING: bool = True
-# Cap on the WAV extracted for Composer's marker/cut audio scrub — markers can
-# span minutes (unlike Studio clips). Mirrored to the frontend via
-# utils.get_frontend_config() so the client skips scrubbing longer spans and
-# hover fraction ↔ audio buffer stay aligned; do not hardcode this in JS.
+# Desktop app asks GitHub Releases for a newer build once per launch. Server-only.
+UPDATE_CHECK_ON_LAUNCH: bool = True
+# Cap on Composer's scrub WAV; the client skips longer spans. Mirrored to JS.
 COMPOSER_SCRUB_MAX_AUDIO_SECONDS: float = 180.0
-# Data-source lanes shown (in order) per participant in the Convergence Browser.
-# Mirrored to the frontend via utils.get_frontend_config() so the swim-lane
-# layout and per-lane offset keys stay in sync; do not hardcode this list in JS.
+# Convergence Browser lanes, in order; mirrored to JS so lane layout and offset keys agree.
 CONVERGENCE_SOURCES: tuple[str, ...] = (
     "sheet",
     "screenspace",
@@ -218,24 +195,20 @@ GOOGLE_API_MAX_RETRIES: int = 3  # Retries for transient Google API errors (429,
 
 STUDIO_THUMBNAIL_WIDTH: int = 200
 
-# Card scrubber: hover a queue card to scrub frames (sprite sheet) + hear audio
-# with a waveform overlay. Opt-in. The sprite grid dims are mirrored to the
-# frontend via utils.get_frontend_config() (the scrubber computes frameCount /
-# per-frame interval from them), so they must not be hardcoded in JS.
+# Opt-in hover-to-scrub on queue cards; JS derives frameCount and interval from the grid dims.
 STUDIO_CARD_SCRUBBER: bool = False
 STUDIO_SCRUBBER_SPRITE_COLS: int = 5
 STUDIO_SCRUBBER_SPRITE_ROWS: int = 5
 
-# Metadata tab: count Screenspace as time-adjacent clusters instead of raw
-# events, so a dense scan (e.g. 10k events) reads as a handful of blocks and
-# doesn't overshadow the sheet/transcript streams in the tab's tables/charts.
-# Boot-embedded into /api/sheet (like STUDIO_CARD_SCRUBBER); not mirrored via
-# get_frontend_config.
+# Cross-reference badges on Studio, Transcripts, and Overview.
+# Mirrored to JS via get_frontend_config() (never hardcode).
+CROSS_REFERENCES_ENABLED: bool = True
+
+# Metadata tab counts Screenspace clusters, not raw events. Boot-embedded into
+# /api/sheet, not get_frontend_config.
 STUDIO_METADATA_CLUSTER_SCREENSPACE: bool = True
 
 # ── Screenspace ──────────────────────────────────────────────────────
-SCREENSPACE_MANIFEST_FILENAME: str = "screenspace_manifest.json"
-TRANSCRIPTS_MANIFEST_FILENAME: str = "transcripts_manifest.json"
 SCREENSPACE_DEFAULT_INTERVAL: float = (
     1.0  # default frame sampling interval (seconds) for analysis tasks
 )
@@ -249,29 +222,32 @@ SCREENSPACE_MORPH_KERNEL: int = 3  # image preprocessing tuning for change detec
 SCREENSPACE_OCR_FUZZY_THRESHOLD: float = (
     0.75  # min fuzzy match score for Text/Numbers tool matches
 )
-SCREENSPACE_OCR_MIN_CONFIDENCE: float = (
-    0.6  # min EasyOCR per-detection confidence for Text/Numbers; gates noisy OCR
-)
+SCREENSPACE_OCR_MIN_CONFIDENCE: float = 0.6  # min OCR confidence for Text/Numbers; calibrated on easyocr, unchecked against RapidOCR
 SCREENSPACE_OCR_MIN_HEIGHT: int = (
     60  # target px height for upscaling small ROIs in opt-in OCR preprocessing
 )
-SCREENSPACE_OCR_GPU: bool | str = (
-    True  # EasyOCR device: True = CUDA-if-available else CPU (preserves EasyOCR's default); False = force CPU; or a device string ("cuda:0", "mps")
-)
-SCREENSPACE_OCR_POOL_SIZE: int = 0  # max concurrent EasyOCR Readers per language set (0 = auto = SCREENSPACE_PARALLEL_WORKERS). Each Reader holds its own model copy, so raising this multiplies OCR RAM/VRAM
+SCREENSPACE_OCR_POOL_SIZE: int = 0  # RapidOCR engines per rec model (0 = SCREENSPACE_PARALLEL_WORKERS); each holds ONNX sessions, so RAM scales
 SCREENSPACE_MASK_FALLBACK_TOOLS: tuple[str, ...] = (
     "similarity",
     "inactivity",
     "boundary",
     "timelapse",
     "attention",
-)  # tools that analyze a shaped region's bounding rect instead of its polygon (SSIM/phash are global, boundary and attention are full-frame by design, timelapse is a pure ffmpeg crop)
+)  # tools that use a shaped region's bounding rect, not its polygon
 SCREENSPACE_PHASH_THRESHOLD: int = 15
 SCREENSPACE_STATIC_FRAME_SKIP_THRESHOLD: float = 2.0  # mean-abs-diff cutoff for skipping near-identical frames (Similarity/Text/Numbers/Scene scans)
 SCREENSPACE_TEMPLATE_MATCH_THRESHOLD: float = 0.70
 SCREENSPACE_TEMPLATE_NMS_OVERLAP: float = 0.50
 SCREENSPACE_TEMPLATE_SCALE_MIN: float = 0.25
 SCREENSPACE_TEMPLATE_SCALE_MAX: float = 2.0
+SCREENSPACE_SHAPE_MATCH_THRESHOLD: float = (
+    0.55  # edge correlations peak lower than intensity correlations
+)
+SCREENSPACE_SHAPE_SCALE_MIN: float = 0.5
+SCREENSPACE_SHAPE_SCALE_MAX: float = 2.0
+SCREENSPACE_SHAPE_SCALE_STEPS: int = 7
+SCREENSPACE_EDGE_CANNY_LOW: int = 100
+SCREENSPACE_EDGE_CANNY_HIGH: int = 200
 SCREENSPACE_FLOW_MAGNITUDE_THRESHOLD: float = 2.0
 SCREENSPACE_FLOW_PYR_SCALE: float = 0.5
 SCREENSPACE_SCENE_SIMILARITY_THRESHOLD: float = 0.75
@@ -295,9 +271,9 @@ SCREENSPACE_CHANGE_HEATMAP_MIN_FRAC: float = (
 )
 SCREENSPACE_FAST_SCAN_INTERVAL_MULTIPLIER: float = 3.0
 SCREENSPACE_FAST_SCAN_PHASH_THRESHOLD: int = 12  # tighter than general 15
-SCREENSPACE_FAST_SCAN_SKIP_NONKEY: bool = True  # fast-scan: decode only keyframes (H.264/HEVC) for GOP-sized decode savings; auto-disabled per-video when the probed worst-case keyframe gap is too long, and the sample grid is tightened by that gap so coverage is never coarser than the interval
+SCREENSPACE_FAST_SCAN_SKIP_NONKEY: bool = True  # fast-scan decodes keyframes only; auto-off per video when the probed keyframe gap is too long
 SCREENSPACE_KEYFRAME_PROBE_SECONDS: float = 20.0  # window (seconds from start) the keyframe-gap probe inspects to find the worst-case (max) GOP length
-SCREENSPACE_KEYFRAME_SKIP_MARGIN: float = 1.0  # enable keyframe-only decode only when the max keyframe gap <= sampling_interval * this margin (lower = only very dense keyframes qualify)
+SCREENSPACE_KEYFRAME_SKIP_MARGIN: float = 1.0  # keyframe-only decode needs max gap <= interval * this; lower = denser keyframes required
 SCREENSPACE_PARALLEL_WORKERS: int = (
     2  # max concurrent analysis tasks in ScreenspaceWorker
 )
@@ -322,9 +298,8 @@ SCREENSPACE_BOUNDARY_HASH_DIM: int = (
 SCREENSPACE_BOUNDARY_CONFIDENCE_EPSILON: float = (
     0.05  # confidence floor for a boundary that just crosses threshold
 )
-# Phase 4: scene-aware period segmentation. "phash" is the v1 consecutive-frame
-# spike detector; "scene" measures a content fingerprint against the current
-# period's reference (robust to motion); "hybrid" fires only when both agree.
+# phash: consecutive-frame spike; scene: fingerprint vs period reference (motion-robust);
+# hybrid: both must agree.
 SCREENSPACE_BOUNDARY_METRIC: str = "hybrid"
 SCREENSPACE_BOUNDARY_SCENE_THRESHOLD: float = 0.25  # fingerprint distance (1 − similarity) to call a scene shift; mirrors scene's 0.75 sim
 SCREENSPACE_BOUNDARY_CONFIRM_WINDOW: int = 2  # samples a scene shift must persist before it counts (suppresses one-frame blips)
@@ -336,9 +311,8 @@ SCREENSPACE_BOUNDARY_SHORT_PERIOD_SECONDS: float = (
 )
 SCREENSPACE_BOUNDARY_RELATIVE_PRUNE_ENABLED: bool = True  # post-run: drop boundaries far below the session-median strength (threshold-portability mitigation)
 SCREENSPACE_BOUNDARY_RELATIVE_PRUNE_FACTOR: float = 0.5  # prune boundaries with entry distance below this fraction of the session median
-# Attention tool: classic bottom-up saliency composite (spectral residual +
-# Lab contrast + frame-diff motion [+ optional Haar faces], center-biased,
-# EMA-smoothed). Full-frame only; predicts where visual attention goes.
+# Saliency composite (spectral residual, Lab contrast, motion, optional Haar faces),
+# center-biased, EMA-smoothed. Full-frame only.
 SCREENSPACE_ATTENTION_INTERVAL: float = (
     0.5  # default frame sampling interval for attention; also the heatmap's dwell unit
 )
@@ -385,6 +359,9 @@ SCREENSPACE_GROUPED_TOOL_NAV: bool = (
 )
 SCREENSPACE_GENERATE_TEMPLATE_HEATMAP: bool = (
     True  # generate detection heatmaps for Template tasks
+)
+SCREENSPACE_GENERATE_SHAPE_HEATMAP: bool = (
+    True  # generate detection heatmaps for Shape tasks
 )
 SCREENSPACE_GENERATE_FLOW_HEATMAP: bool = (
     True  # generate motion heatmaps for Flow tasks
@@ -437,20 +414,12 @@ SECONDS_PER_MINUTE: int = 60
 
 # ── FFmpeg ────────────────────────────────────────────────────────────
 FFMPEG_LOGLEVEL: str = "16"  # ffmpeg -loglevel value (16 = error)
-# H.264 encoder for the re-encode paths (reel concat, clip re-encode, timelapse,
-# Composer burn). "auto" uses Apple's VideoToolbox hardware encoder when ffmpeg
-# lists it and it hasn't failed this session, else libx264. compress_to_size is
-# deliberately excluded — see its docstring.
-# See video.resolve_video_encoder / video.video_encoder_args.
+# "auto" = VideoToolbox when listed and unfailed this session, else libx264.
+# See video.resolve_video_encoder.
 FFMPEG_VIDEO_ENCODER: str = "auto"  # "auto" | "libx264" | "h264_videotoolbox"
 FFMPEG_SCREENSHOT_QUALITY: str = "2"  # -q:v value for screenshots (1=best, 31=worst)
-# x264 settings for title/endcard generation and the card-wrap re-encode. The
-# wrap stream-copies a copy-safe clip body (titlecards._body_is_copy_safe) and
-# re-encodes only the ~2s cards, so the preset dominates titlecard time only on
-# the fallback re-encode path (non-h264/exotic bodies, or a failed copy concat);
-# "veryfast" is several times quicker than libx264's "medium" default at
-# negligible quality cost for short research clips. Raise quality with a lower
-# CRF, or trade quality for speed with "superfast"/"ultrafast".
+# x264 settings for the ~2s cards; copy-safe bodies stream-copy
+# (titlecards._body_is_copy_safe). Lower CRF raises quality.
 TITLECARD_ENCODE_PRESET: str = "veryfast"
 TITLECARD_ENCODE_CRF: int = 20
 SCREENSHOT_FORMAT: str = ".png"  # ".png" | ".jpg" | ".webp"
@@ -463,20 +432,18 @@ COMPRESSION_SIZE_FACTOR: float = 0.95  # Target 95% of max to leave headroom
 MIN_VIDEO_BITRATE_KBPS: int = 100
 
 # ── Source Video ──────────────────────────────────────────────────────
-# Matches source-video filenames so discover_clips() can exclude them from the
-# generated-clip list. The optional ``-N`` group matches numbered parts of a
-# multi-video participant (e.g. study_P01-1.mp4, study_P01-2.mp4).
-SOURCE_VIDEO_PATTERN: str = r"_[PG]\d+(-\d+)?\.mp4$"
-# Trailing numbered suffix used to auto-detect a participant's source-video parts
-# on disk (one continuous timeline): study_P01-1.mp4, study_P01-2.mp4. The
-# capture group is the integer order; parts are sorted numerically, not lexically.
-NUMBERED_SOURCE_VIDEO_SUFFIX_PATTERN: str = r"-(\d+)\.mp4$"
+# Stem template; see utils.format_source_video_stem() and utils.compile_source_video_regex().
+# {study} is optional.
+SOURCE_FILENAME_PATTERN: str = "{study}_{participant}"
 
 # ── Transcription ────────────────────────────────────────────────────
 TRANSCRIBE_ENABLED: bool = False  # use --transcribe CLI flag to enable per run
 TRANSCRIBE_MODEL: str = "base"  # tiny, base, small, medium, large-v3
 TRANSCRIBE_LANGUAGE: str | None = None  # None = auto-detect
 TRANSCRIBE_COMPUTE_TYPE: str = "int8"  # int8 (fastest), float16, float32
+# Device: auto, cpu, cuda. Frozen builds ship no CUDA, so auto means CPU
+# (transcripts._resolve_transcribe_device).
+TRANSCRIBE_DEVICE: str = "auto"
 TRANSCRIBE_FORMAT: str = "md"  # md, srt, vtt
 TRANSCRIBE_INITIAL_PROMPT: str = "This is a recorded user experience research session."  # biases Whisper toward UX research terminology
 TRANSCRIBE_BEAM_SIZE: int = (
@@ -485,9 +452,7 @@ TRANSCRIBE_BEAM_SIZE: int = (
 # CTranslate2 CPU threads for the Whisper model; 0 = auto (os.cpu_count()).
 TRANSCRIBE_CPU_THREADS: int = 0
 TRANSCRIBE_VAD_FILTER: bool = True  # Silero VAD: transcribe speech spans only
-# VAD tuning (only applied when TRANSCRIBE_VAD_FILTER is on). Defaults are chosen
-# recall-safe: a lower-than-Silero-default threshold plus boundary padding so quiet
-# speech and word onsets/offsets aren't clipped.
+# VAD tuning, applied only when TRANSCRIBE_VAD_FILTER is on; recall-safe defaults keep quiet speech.
 TRANSCRIBE_VAD_THRESHOLD: float = 0.2  # Silero speech-probability cutoff (lower = more permissive; 0.3 missed quiet speech in testing)
 TRANSCRIBE_VAD_SPEECH_PAD_MS: int = (
     400  # padding added to each speech span so word edges aren't clipped
@@ -498,16 +463,22 @@ TRANSCRIBE_NO_SPEECH_THRESHOLD: float = (
 )
 TRANSCRIBE_LOG_PROB_THRESHOLD: float = -1.0  # drop low-confidence segments
 TRANSCRIBE_COMPRESSION_RATIO_THRESHOLD: float = 2.4  # drop repetitive / looped text
-# Seconds of surrounding silence for hallucination skip logic; 0 = off (requires word_timestamps when > 0)
+# Surrounding silence for hallucination skip; 0 = off, > 0 requires word_timestamps
 TRANSCRIBE_HALLUCINATION_SILENCE_THRESHOLD: float = 0.0
+# DTW per-word timing: tightens segment bounds to first/last word and powers word highlight; slower.
+TRANSCRIBE_WORD_TIMESTAMPS: bool = True
+# Snap segment edges to speech energy, trimming Whisper's silence overshoot. One envelope pass per file.
+TRANSCRIBE_EDGE_SNAP: bool = True
 TRANSCRIBE_CONDITION_ON_PREVIOUS_TEXT: bool = (
     True  # False reduces chained hallucinations
 )
-# When to pre-load faster-whisper in the Transcripts web UI: off, queue_open (open Queue panel), page_load (after participants load).
+# Pre-load faster-whisper in Transcripts UI: off | queue_open | page_load.
 TRANSCRIBE_PREWARM: str = "queue_open"
-# Mark categories shown in the Transcripts mark popover. Each value is {label, color}.
-# "friction" is a single bucket for all friction-detection marks; the specific
-# friction type lives in each mark's label (e.g. "Friction · frustration").
+# Speaker attribution: label segments by detected speaker after transcription.
+TRANSCRIBE_SPEAKERS: bool = False
+TRANSCRIBE_SPEAKER_MAX: int = 4  # cluster cap, 2..8
+SPEAKER_LABEL_MAX_LEN: int = 40  # speaker rename length; mirrored to JS
+# Mark popover categories, {label, color}. "friction" is one bucket; type lives in each label.
 MARK_CATEGORIES: dict[str, dict[str, str]] = {
     "pain_point": {"label": "Pain Point", "color": "#dc2626"},
     "delight": {"label": "Delight", "color": "#16a34a"},
@@ -519,55 +490,50 @@ MARK_CATEGORIES: dict[str, dict[str, str]] = {
 }
 
 # ── Hotkeys ─────────────────────────────────────────────────────────
-# User overrides for web-frontend keyboard shortcuts, keyed by action id
-# (the catalog of ids and default combos lives in assets/web/hotkeys.js).
-# Values are space-separated combo strings ("Mod+Shift+Z Mod+Y"); an empty
-# string disables the shortcut. Edited via Settings → Hotkeys; the server
-# only persists and structurally validates this dict, never interprets it.
+# Per-action overrides (ids in assets/web/hotkeys.js); space-separated combos, empty disables.
+# Server only validates.
 HOTKEY_OVERRIDES: dict[str, str] = {}
 
-# ── Ollama (Local AI) ───────────────────────────────────────────────
-OLLAMA_SUMMARY_ENABLED: bool = (
-    True  # auto-generate transcript summaries via Ollama after transcription completes
+# ── Local AI (llama.cpp) ────────────────────────────────────────────
+LLM_SUMMARY_ENABLED: bool = (
+    True  # auto-generate transcript summaries after transcription completes
 )
-OLLAMA_CITATIONS_ENABLED: bool = (
-    True  # auto-generate citation links via Ollama after the summary completes
+LLM_CITATIONS_ENABLED: bool = (
+    True  # auto-generate citation links after the summary completes
 )
-OLLAMA_FRICTION_ENABLED: bool = (
-    False  # auto-detect friction moments via Ollama after the summary completes
+LLM_FRICTION_ENABLED: bool = (
+    False  # auto-detect friction moments after the summary completes
 )
-OLLAMA_SUMMARY_MODEL: str = (
-    "qwen3.5:9b"  # model for transcript summaries, citations, and friction
+LLM_SUMMARY_MODEL: str = (
+    # HF ref (user/repo:QUANT) or a local GGUF stem; see llm_client.model_name().
+    "unsloth/Qwen3.5-9B-GGUF:Q4_K_M"  # model for summaries, citations, and friction
 )
-OLLAMA_FRICTION_MODEL: str = (
-    ""  # friction agent model; blank → use OLLAMA_SUMMARY_MODEL, set to override
+LLM_FRICTION_MODEL: str = (
+    ""  # friction agent model; blank → use LLM_SUMMARY_MODEL, set to override
 )
-OLLAMA_REPORT_ENABLED: bool = False  # mini-report is manual-only (Overview → Summary); True adds it to the auto-chain
-OLLAMA_REPORT_MODEL: str = (
-    ""  # report agent model; blank → use OLLAMA_SUMMARY_MODEL, set to override
+LLM_REPORT_ENABLED: bool = False  # mini-report is manual-only (Overview → Summary); True adds it to the auto-chain
+LLM_REPORT_MODEL: str = (
+    ""  # report agent model; blank → use LLM_SUMMARY_MODEL, set to override
 )
-OLLAMA_BASE_URL: str = "http://localhost:11434"  # Ollama server address
-OLLAMA_UNLOAD_DELAY_SECONDS: float = 15.0  # after Stop, evict the model from memory if no new run starts within this delay
+LLM_BASE_URL: str = "http://127.0.0.1:8790"  # llama-server router address
+LLM_UNLOAD_DELAY_SECONDS: float = 15.0  # after Stop, evict the model from memory if no new run starts within this delay
 
 # ── Thinking-agent prompts ───────────────────────────────────────────
-# Editable via Settings → Summaries → "Agent prompts". thinking_agents.py reads
-# these at call time, so an edit takes effect on the next agent run. The user
-# prompts are .format()-ed with the placeholders noted below; the *_SYSTEM
-# prompts are sent verbatim (never formatted), so braces in them are literal.
-OLLAMA_SUMMARY_PROMPT: str = """\
+# thinking_agents.py reads these per run. User prompts .format(); *_SYSTEM sent verbatim.
+LLM_SUMMARY_PROMPT: str = """\
 Summarize this user research session transcript. Write a concise paragraph \
 (2-4 sentences) describing what happened in the session. Then list the key \
 topics or themes as bullet points (prefix each with "- ").
 
 Transcript:
 {text}"""
-OLLAMA_CITATIONS_SYSTEM: str = (
+LLM_CITATIONS_SYSTEM: str = (
     "You match transcript segments to summary claims. "
     "For each claim, select only the 1-3 most relevant and representative "
     "segments. Prefer segments that most clearly and directly support the claim. "
     "Use the exact format shown."
 )
-OLLAMA_CITATIONS_PROMPT: str = """\
+LLM_CITATIONS_PROMPT: str = """\
 Claims:
 {claims}
 
@@ -580,12 +546,12 @@ Format your response exactly as:
 1: 0:45, 1:02
 2: NONE
 Write NONE if no segments clearly support a claim."""
-OLLAMA_FRICTION_SYSTEM: str = (
+LLM_FRICTION_SYSTEM: str = (
     "You analyze UX research session transcripts for moments of friction: "
     "points where the participant struggled, hesitated, got confused, or showed "
     "frustration. You respond with a JSON array only."
 )
-OLLAMA_FRICTION_PROMPT: str = """\
+LLM_FRICTION_PROMPT: str = """\
 Session summary:
 {summary}
 
@@ -604,13 +570,13 @@ Output a JSON array only — no prose, no markdown fences, no <think> blocks:
   {{"segment_ids": ["P01:7", "P01:8"], "category": "frustration",
     "rationale": "Participant repeatedly tried to find the save button", "score": 0.85}}
 ]"""
-OLLAMA_REPORT_SYSTEM: str = (
+LLM_REPORT_SYSTEM: str = (
     "You are a UX research assistant writing a short per-participant session "
     "report. Ground every statement in the provided data. Never invent quotes, "
     "observations, or timestamps; if the data does not support a claim, leave "
     "it out."
 )
-OLLAMA_REPORT_PROMPT: str = """\
+LLM_REPORT_PROMPT: str = """\
 Write a concise research mini-report for participant {participant}, using only \
 the data below.
 
@@ -641,9 +607,7 @@ Keep the whole report under 300 words. If a section has no supporting data, \
 write "No data." under it instead of inventing content."""
 
 # ── Friction detection ───────────────────────────────────────────────
-# Ordered category keys → display labels. Single source of truth, mirrored to
-# the frontend via utils.get_frontend_config(). The programmatic scorer in
-# friction.py keys its patterns/weights by the same keys (enforced by tests).
+# Keys → labels, mirrored to JS; friction.py patterns share the keys.
 FRICTION_CATEGORIES: dict[str, str] = {
     "hesitation": "Hesitation",
     "confusion": "Confusion",
@@ -665,6 +629,7 @@ SETTINGS_DESCRIPTIONS: dict[str, str] = {
     "REENCODING": "Re-encode clips via ffmpeg instead of stream-copying. Slower but fixes some codec issues.",
     "AUDIO_NORMALIZE": "Normalize audio levels across generated clips for consistent volume.",
     "FILEFORMAT": "Output container format for generated video clips.",
+    "SOURCE_FILENAME_PATTERN": "Filename pattern for source session videos in the input folder. Placeholders: {study}, {participant} (required). Extension comes from the video file format; multi-part recordings append -1, -2, … Example: {study}_{participant} matches mystudy_P01.mp4.",
     "FFMPEG_VIDEO_ENCODER": "H.264 encoder used whenever clipgen re-encodes (reel concat, clip re-encode, timelapse, Composer burn-in). auto picks Apple's VideoToolbox hardware encoder on Macs that have it — several times faster, at the cost of somewhat larger files for the same visual quality — and falls back to libx264 if it is missing or fails. Pick libx264 to always encode in software. Size-capped compression (Max filesize) always uses libx264 regardless: hardware encoders cannot hit a bitrate target accurately.",
     "MAX_FILESIZE_MB": "Compress output to stay under this size limit. Set to 0 to disable.",
     "DEFAULT_DURATION_SECONDS": "Clip length when only a start time is provided.",
@@ -686,6 +651,7 @@ SETTINGS_DESCRIPTIONS: dict[str, str] = {
     "TRANSCRIBE_PREWARM": "When the Transcripts page pre-loads the Whisper model: off, queue_open (opening a pill's options pane or hovering a pill that needs transcription), or page_load (after listing participants).",
     "TRANSCRIBE_BEAM_SIZE": "Beam-search width. 1 = greedy (fastest); higher is slower for marginally better accuracy.",
     "TRANSCRIBE_CPU_THREADS": "CTranslate2 CPU threads for the Whisper model. 0 = auto (all cores).",
+    "TRANSCRIBE_DEVICE": "Compute device for the Whisper model. auto = GPU only where the CUDA runtime is actually available (always CPU in the desktop app, which ships no CUDA). Set cuda only if you installed a matching cuBLAS/cuDNN yourself.",
     "TRANSCRIBE_VAD_FILTER": "Use Silero VAD to transcribe speech spans only, skipping long silence (reduces silence hallucinations).",
     "TRANSCRIBE_VAD_THRESHOLD": "Silero speech-probability cutoff when VAD is on. Lower = more permissive (catches quieter speech, fewer dropped words).",
     "TRANSCRIBE_VAD_SPEECH_PAD_MS": "Padding (ms) added to each detected speech span so word onsets/offsets aren't clipped by VAD.",
@@ -695,44 +661,51 @@ SETTINGS_DESCRIPTIONS: dict[str, str] = {
     "TRANSCRIBE_COMPRESSION_RATIO_THRESHOLD": "Drop segments whose gzip compression ratio exceeds this (catches repetitive loops).",
     "TRANSCRIBE_HALLUCINATION_SILENCE_THRESHOLD": "Seconds of surrounding silence for hallucination skip logic; 0 = off. When > 0, enables word-level timestamps (slower).",
     "TRANSCRIBE_CONDITION_ON_PREVIOUS_TEXT": "Use prior segment text as context for the next decode; disable to reduce chained hallucinations.",
+    "TRANSCRIBE_WORD_TIMESTAMPS": "Per-word timing via alignment. Tightens segment boundaries to the spoken words and enables the word-level playback highlight; adds decode time (roughly 10–30%).",
+    "TRANSCRIBE_EDGE_SNAP": "Snap segment boundaries to measured speech energy in the decoded audio, trimming silence overshoot at segment edges. Effectively free.",
+    "TRANSCRIBE_SPEAKERS": "Detect who is speaking and label each transcript line (Speaker 1, Speaker 2, …). Runs the bundled speaker model after transcription; each participant pill can override this.",
+    "TRANSCRIBE_SPEAKER_MAX": "Most speakers to tell apart per session (2–8). The count is detected automatically up to this cap.",
     "MARK_CATEGORIES": "Categories available when marking transcript segments. Each entry has a label and a color swatch.",
     "HOTKEY_OVERRIDES": "Custom keyboard-shortcut bindings, keyed by action id. Click a shortcut to rebind it; an empty value disables the shortcut.",
     "HIGHLIGHTS_REEL_DURATION_SECONDS": "Maximum duration in seconds for the highlights reel time budget.",
     "MANIFEST_ENABLED": "Write a manifest JSON file alongside generated artifacts for session tracking.",
+    "UPDATE_CHECK_ON_LAUNCH": "Check GitHub for a newer clipgen release when the desktop app starts. You can always check manually from the Start panel's About tab.",
     "STUDIO_CELL_EXPAND_HOVER": "Expand overflowing timestamp cells on hover in the Sheet Preview.",
     "STUDIO_CARD_SCRUBBER": "Hover a queue card's thumbnail to scrub through frames, hear the clip's audio, and see a waveform overlay.",
+    "CROSS_REFERENCES_ENABLED": "Show cross-reference badges linking spreadsheet, Screenspace, transcript, and Composer data across pages.",
     "COMPOSER_DOUBLE_CLICK_CUTS": "Double-click the Composer timeline to set the in point, then double-click again to commit the out point.",
     "MEDIA_CONTAINER_WARNING": "Warn when a source recording is a fragmented MP4 that browsers cannot seek (OBS 'fragmented recording'), and offer a one-click remux to fix it.",
     "STUDIO_METADATA_CLUSTER_SCREENSPACE": "In the Metadata tab, count Screenspace data as time-adjacent clusters instead of raw events, so a dense scan doesn't overshadow the spreadsheet and transcript streams. On by default.",
     "FILMSTRIP_ENABLED": "Show thumbnail images on timeline markers instead of solid colors (in the HTML viewer).",
     "GALLERY_BUNDLE_ENABLED": "Embed gallery images as base64 data URIs in the HTML file, making it fully self-contained.",
     "CLIP_PARALLEL_WORKERS": "Number of concurrent ffmpeg processes for clip generation. 0 = auto, 1 = sequential.",
-    "OLLAMA_SUMMARY_ENABLED": "Auto-generate an AI summary of each transcript after transcription completes. Disable to keep summaries manual-only (the per-participant Regenerate Summary button still works).",
-    "OLLAMA_CITATIONS_ENABLED": "Auto-generate citation links between summary claims and transcript segments after the summary completes. Disable to keep citations manual-only (the per-participant Regenerate Citations button still works).",
-    "OLLAMA_FRICTION_ENABLED": "Auto-detect friction moments after the summary completes. Disable to keep friction manual-only (the per-participant Run/Re-run friction button still works). Uses the AI summary model.",
-    "OLLAMA_SUMMARY_MODEL": "Ollama model used for transcript summaries, citation linking, and friction detection.",
-    "OLLAMA_FRICTION_MODEL": "Ollama model for friction-moment detection. Leave as 'Same as summary model' to reuse the summary model, or pick a different installed model.",
-    "OLLAMA_BASE_URL": "Base URL of the local Ollama server.",
-    "OLLAMA_SUMMARY_PROMPT": "Prompt that generates each session summary. Keep the {text} placeholder. The transcript is inserted there.",
-    "OLLAMA_CITATIONS_SYSTEM": "System instruction that frames the citation agent's behavior. Sent verbatim; no placeholders.",
-    "OLLAMA_CITATIONS_PROMPT": "Prompt that links summary claims to transcript segments. Keep the {claims} and {transcript} placeholders.",
-    "OLLAMA_FRICTION_SYSTEM": "System instruction that frames the friction agent's behavior. Sent verbatim; no placeholders.",
-    "OLLAMA_FRICTION_PROMPT": "Prompt that detects friction moments. Keep the {summary}, {segments}, and {limit} placeholders.",
-    "OLLAMA_REPORT_ENABLED": "Auto-generate a per-participant mini-report after the summary completes. Off by default: generate reports from the Overview page's Reports tab instead.",
-    "OLLAMA_REPORT_MODEL": "Ollama model for mini-report generation. Leave as 'Same as summary model' to reuse the summary model, or pick a different installed model.",
-    "OLLAMA_REPORT_SYSTEM": "System instruction that frames the report agent's behavior. Sent verbatim; no placeholders.",
-    "OLLAMA_REPORT_PROMPT": "Prompt that writes the per-participant mini-report. Keep the {participant}, {summary}, {observations}, and {bookmarks} placeholders.",
+    "LLM_SUMMARY_ENABLED": "Auto-generate an AI summary of each transcript after transcription completes. Disable to keep summaries manual-only (the per-participant Regenerate Summary button still works).",
+    "LLM_CITATIONS_ENABLED": "Auto-generate citation links between summary claims and transcript segments after the summary completes. Disable to keep citations manual-only (the per-participant Regenerate Citations button still works).",
+    "LLM_FRICTION_ENABLED": "Auto-detect friction moments after the summary completes. Disable to keep friction manual-only (the per-participant Run/Re-run friction button still works). Uses the AI summary model.",
+    "LLM_SUMMARY_MODEL": "AI model for transcript summaries, citation linking, and friction detection. A Hugging Face ref (user/repo:QUANT) or a downloaded model name. Models already in the llama.cpp cache, HF cache, or Ollama are reused automatically.",
+    "LLM_FRICTION_MODEL": "AI model for friction-moment detection. Leave as 'Same as summary model' to reuse the summary model, or pick a different installed model.",
+    "LLM_BASE_URL": "Base URL of the local llama-server router.",
+    "LLM_SUMMARY_PROMPT": "Prompt that generates each session summary. Keep the {text} placeholder. The transcript is inserted there.",
+    "LLM_CITATIONS_SYSTEM": "System instruction that frames the citation agent's behavior. Sent verbatim; no placeholders.",
+    "LLM_CITATIONS_PROMPT": "Prompt that links summary claims to transcript segments. Keep the {claims} and {transcript} placeholders.",
+    "LLM_FRICTION_SYSTEM": "System instruction that frames the friction agent's behavior. Sent verbatim; no placeholders.",
+    "LLM_FRICTION_PROMPT": "Prompt that detects friction moments. Keep the {summary}, {segments}, and {limit} placeholders.",
+    "LLM_REPORT_ENABLED": "Auto-generate a per-participant mini-report after the summary completes. Off by default: generate reports from the Overview page's Reports tab instead.",
+    "LLM_REPORT_MODEL": "AI model for mini-report generation. Leave as 'Same as summary model' to reuse the summary model, or pick a different installed model.",
+    "LLM_REPORT_SYSTEM": "System instruction that frames the report agent's behavior. Sent verbatim; no placeholders.",
+    "LLM_REPORT_PROMPT": "Prompt that writes the per-participant mini-report. Keep the {participant}, {summary}, {observations}, and {bookmarks} placeholders.",
     "SCREENSHOT_FORMAT": "File format for screenshot artifacts. WebP is smaller but requires modern browsers (Safari 16+).",
     "GIF_FORMAT": "File format for animated artifacts. WebM (VP9) is the smallest and most-compatible modern option; animated WebP is also small but requires Safari 16+; GIF works everywhere but is large.",
     "WEBP_QUALITY": "WebP encoding quality (0-100). Higher values mean better quality and larger files.",
     "SCREENSPACE_CV_RESOLUTION_SCALE": "Scale extracted region frames before CV analysis. Higher (e.g. 2.0) gives the models more signal on noisy/compressed video at the cost of speed and memory; lower speeds up scans on large footage. 1.0 = unchanged.",
     "SCREENSPACE_FAST_SCAN_SKIP_NONKEY": "Fast scans decode only keyframes on H.264/HEVC when the source's keyframe interval is short enough that no samples are lost (auto-probed per video), giving large decode savings. Turn off to always full-decode. Only affects fast scans; the precise scan path is never changed.",
     "SCREENSPACE_STATIC_FRAME_SKIP_THRESHOLD": "Skip frames whose average pixel difference from the previous sampled frame is below this value (Similarity/Text/Numbers/Scene scans). Lower = process more frames (catch subtle changes); higher = skip more aggressively on noisy footage. Default 2.0.",
-    "SCREENSPACE_OCR_MIN_CONFIDENCE": "Default minimum EasyOCR per-detection confidence for Text/Numbers tasks. Raise to suppress noisy OCR misreads; lower if real hits are being dropped. Per-task slider overrides this default.",
+    "SCREENSPACE_OCR_MIN_CONFIDENCE": "Default minimum OCR per-detection confidence for Text/Numbers tasks. Raise to suppress noisy OCR misreads; lower if real hits are being dropped. Per-task slider overrides this default.",
     "SCREENSPACE_RESTORE_MARKERS_ON_EDIT": "When editing a task, restore the In/Out timeline markers to the range it was originally run with. Disable to keep your current markers in place when iterating across different parts of the timeline.",
     "SCREENSPACE_SHOW_CONFIDENCE_HISTOGRAM": "Show a confidence-distribution histogram above the Results list (for tools that have confidence scores). Lets you see where detections cluster before moving the certainty cutoff. Off by default.",
     "SCREENSPACE_GROUPED_TOOL_NAV": "Group the analysis tools into category dropdowns (Difference, Detection, Classification, Attention, Utility) with a standalone Multitool chip, instead of a flat row of tool tabs. Easier to scan when picking a tool. On by default; turn off for the classic flat tab row.",
     "SCREENSPACE_GENERATE_TEMPLATE_HEATMAP": "Generate detection heatmaps (static image plus accumulation and rolling-window animations) for Template tasks. Disable to skip heatmap generation when you don't need it. Useful on long videos where it adds processing time.",
+    "SCREENSPACE_GENERATE_SHAPE_HEATMAP": "Generate detection heatmaps (static image plus accumulation and rolling-window animations) for Shape tasks. Disable to skip heatmap generation when you don't need it. Useful on long videos where it adds processing time.",
     "SCREENSPACE_GENERATE_FLOW_HEATMAP": "Generate motion heatmaps (static image plus accumulation animation) for Flow tasks. Disable to skip heatmap generation when you don't need it.",
     "SCREENSPACE_GENERATE_CHANGE_HEATMAP": "Generate change heatmaps (static image plus accumulation and rolling-window animations) for Change tasks. Disable to skip heatmap generation when you don't need it. Useful on long videos where it adds processing time.",
     "SCREENSPACE_GENERATE_ATTENTION_HEATMAP": "Generate attention heatmaps (static image plus accumulation and rolling-window animations) for Attention tasks. The rolling-window animation is the closest analog to an eye-tracking gaze replay. Disable to skip heatmap generation when you don't need it.",
@@ -744,6 +717,7 @@ SETTINGS_DESCRIPTIONS: dict[str, str] = {
 # Studio-exposed settings with UI metadata (tab, group, type, constraints).
 STUDIO_SETTINGS: dict[str, dict[str, Any]] = {
     "MANIFEST_ENABLED": {"tab": "General", "group": "Manifest", "type": "bool"},
+    "UPDATE_CHECK_ON_LAUNCH": {"tab": "General", "group": "Updates", "type": "bool"},
     "CLIP_PARALLEL_WORKERS": {
         "tab": "General",
         "group": "Workers",
@@ -759,6 +733,11 @@ STUDIO_SETTINGS: dict[str, dict[str, Any]] = {
     "STUDIO_CARD_SCRUBBER": {
         "tab": "General",
         "group": "Sheet Preview",
+        "type": "bool",
+    },
+    "CROSS_REFERENCES_ENABLED": {
+        "tab": "General",
+        "group": "Cross-References",
         "type": "bool",
     },
     "STUDIO_METADATA_CLUSTER_SCREENSPACE": {
@@ -785,6 +764,11 @@ STUDIO_SETTINGS: dict[str, dict[str, Any]] = {
         "min": 0,
         "max": 100,
         "step": 1,
+    },
+    "SOURCE_FILENAME_PATTERN": {
+        "tab": "Video & Clips",
+        "group": "Source Videos",
+        "type": "str",
     },
     "REENCODING": {"tab": "Video & Clips", "group": "Video Output", "type": "bool"},
     "AUDIO_NORMALIZE": {
@@ -849,8 +833,7 @@ STUDIO_SETTINGS: dict[str, dict[str, Any]] = {
         "type": "card_picker",
         "kind": "end",
     },
-    # Persisted + sent to the frontend, but not rendered as their own rows —
-    # the card_picker widget edits them via its inline color box.
+    # Persisted and sent to the frontend; edited inline by card_picker, not as rows.
     "TITLECARD_COLOR": {
         "tab": "Video & Clips",
         "group": "Titlecards",
@@ -898,6 +881,12 @@ STUDIO_SETTINGS: dict[str, dict[str, Any]] = {
         "min": 0,
         "max": 64,
         "step": 1,
+    },
+    "TRANSCRIBE_DEVICE": {
+        "tab": "Transcription",
+        "group": "Transcription",
+        "type": "select",
+        "options": ["auto", "cpu", "cuda"],
     },
     "TRANSCRIBE_BEAM_SIZE": {
         "tab": "Transcription",
@@ -973,6 +962,29 @@ STUDIO_SETTINGS: dict[str, dict[str, Any]] = {
         "group": "Transcription quality",
         "type": "bool",
     },
+    "TRANSCRIBE_WORD_TIMESTAMPS": {
+        "tab": "Transcription",
+        "group": "Transcription quality",
+        "type": "bool",
+    },
+    "TRANSCRIBE_EDGE_SNAP": {
+        "tab": "Transcription",
+        "group": "Transcription quality",
+        "type": "bool",
+    },
+    "TRANSCRIBE_SPEAKERS": {
+        "tab": "Transcription",
+        "group": "Speakers",
+        "type": "bool",
+    },
+    "TRANSCRIBE_SPEAKER_MAX": {
+        "tab": "Transcription",
+        "group": "Speakers",
+        "type": "int",
+        "min": 2,
+        "max": 8,
+        "step": 1,
+    },
     "MARK_CATEGORIES": {
         "tab": "Transcription",
         "group": "Markers",
@@ -983,86 +995,86 @@ STUDIO_SETTINGS: dict[str, dict[str, Any]] = {
         "group": "",
         "type": "hotkeys",
     },
-    "OLLAMA_SUMMARY_ENABLED": {
+    "LLM_SUMMARY_ENABLED": {
         "tab": "Summaries",
         "group": "AI Summary",
         "type": "bool",
     },
-    "OLLAMA_CITATIONS_ENABLED": {
+    "LLM_CITATIONS_ENABLED": {
         "tab": "Summaries",
         "group": "AI Summary",
         "type": "bool",
     },
-    "OLLAMA_FRICTION_ENABLED": {
+    "LLM_FRICTION_ENABLED": {
         "tab": "Summaries",
         "group": "AI Summary",
         "type": "bool",
     },
-    "OLLAMA_REPORT_ENABLED": {
+    "LLM_REPORT_ENABLED": {
         "tab": "Summaries",
         "group": "AI Summary",
         "type": "bool",
     },
-    "OLLAMA_SUMMARY_MODEL": {
+    "LLM_SUMMARY_MODEL": {
         "tab": "Summaries",
         "group": "AI Summary",
         "type": "model_select",
-        "provider": "ollama",
+        "provider": "llm",
     },
-    "OLLAMA_FRICTION_MODEL": {
+    "LLM_FRICTION_MODEL": {
         "tab": "Summaries",
         "group": "AI Summary",
         "type": "model_select",
-        "provider": "ollama",
-        # Blank value inherits OLLAMA_SUMMARY_MODEL; surfaced as this option.
+        "provider": "llm",
+        # Blank value inherits LLM_SUMMARY_MODEL; surfaced as this option.
         "emptyLabel": "Same as summary model",
     },
-    "OLLAMA_REPORT_MODEL": {
+    "LLM_REPORT_MODEL": {
         "tab": "Summaries",
         "group": "AI Summary",
         "type": "model_select",
-        "provider": "ollama",
-        # Blank value inherits OLLAMA_SUMMARY_MODEL; surfaced as this option.
+        "provider": "llm",
+        # Blank value inherits LLM_SUMMARY_MODEL; surfaced as this option.
         "emptyLabel": "Same as summary model",
     },
-    "OLLAMA_BASE_URL": {"tab": "Summaries", "group": "AI Summary", "type": "str"},
-    "OLLAMA_SUMMARY_PROMPT": {
+    "LLM_BASE_URL": {"tab": "Summaries", "group": "AI Summary", "type": "str"},
+    "LLM_SUMMARY_PROMPT": {
         "tab": "Summaries",
         "group": "Agent prompts",
         "type": "prompt",
         "placeholders": ["text"],
     },
-    "OLLAMA_CITATIONS_SYSTEM": {
+    "LLM_CITATIONS_SYSTEM": {
         "tab": "Summaries",
         "group": "Agent prompts",
         "type": "prompt",
         "placeholders": [],
     },
-    "OLLAMA_CITATIONS_PROMPT": {
+    "LLM_CITATIONS_PROMPT": {
         "tab": "Summaries",
         "group": "Agent prompts",
         "type": "prompt",
         "placeholders": ["claims", "transcript"],
     },
-    "OLLAMA_FRICTION_SYSTEM": {
+    "LLM_FRICTION_SYSTEM": {
         "tab": "Summaries",
         "group": "Agent prompts",
         "type": "prompt",
         "placeholders": [],
     },
-    "OLLAMA_FRICTION_PROMPT": {
+    "LLM_FRICTION_PROMPT": {
         "tab": "Summaries",
         "group": "Agent prompts",
         "type": "prompt",
         "placeholders": ["summary", "segments", "limit"],
     },
-    "OLLAMA_REPORT_SYSTEM": {
+    "LLM_REPORT_SYSTEM": {
         "tab": "Summaries",
         "group": "Agent prompts",
         "type": "prompt",
         "placeholders": [],
     },
-    "OLLAMA_REPORT_PROMPT": {
+    "LLM_REPORT_PROMPT": {
         "tab": "Summaries",
         "group": "Agent prompts",
         "type": "prompt",
@@ -1105,6 +1117,11 @@ STUDIO_SETTINGS: dict[str, dict[str, Any]] = {
         "type": "bool",
     },
     "SCREENSPACE_GENERATE_TEMPLATE_HEATMAP": {
+        "tab": "Screenspace",
+        "group": "Heatmaps",
+        "type": "bool",
+    },
+    "SCREENSPACE_GENERATE_SHAPE_HEATMAP": {
         "tab": "Screenspace",
         "group": "Heatmaps",
         "type": "bool",

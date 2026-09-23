@@ -1,5 +1,6 @@
 import pytest
 
+import config
 import spreadsheet
 from types import SimpleNamespace
 
@@ -164,6 +165,42 @@ def test_make_clip_record_attaches_timestamp_baseline(fake_sheet_meta):
     )
     assert clip["participant"] == "P01"
     assert clip.get("timestamp_baseline") == "09:12:00"
+
+
+def test_make_clip_record_prefers_the_user_filename_override(monkeypatch):
+    """A Start-overlay override beats the sheet's Filename row for clip cutting.
+
+    Listing a participant against one file while cutting their clips from
+    another is the wrong-output-no-error class, so both paths resolve the same.
+    """
+    sheet_data = [
+        ["Study"],
+        ["ID", "P01", "Observation", "Category"],
+        ["Filename", "morning.mp4", "", ""],
+        ["1", "0:10-0:20", "Obs one", "CatA"],
+    ]
+    ctx = _make_context(
+        sheet_data=sheet_data,
+        id_cell=SimpleNamespace(row=2, col=1),
+        observation_cell=SimpleNamespace(row=2, col=3),
+        category_cell=SimpleNamespace(row=2, col=4),
+        num_participants=1,
+        study_name="study",
+        filename_row_idx=2,
+    )
+
+    clip = spreadsheet._make_clip_record(
+        ctx, row_idx=3, col_idx=1, cell_value=sheet_data[3][1]
+    )
+    assert clip["source_filename"] == "morning.mp4"
+
+    monkeypatch.setattr(
+        config, "FILENAME_OVERRIDES", {"P01": "recording 3.mp4"}, raising=False
+    )
+    clip = spreadsheet._make_clip_record(
+        ctx, row_idx=3, col_idx=1, cell_value=sheet_data[3][1]
+    )
+    assert clip["source_filename"] == "recording 3.mp4"
 
 
 def test_generate_reel_timestamps_preserves_input_cell_order(

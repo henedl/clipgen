@@ -12,15 +12,23 @@ has no JS DOM harness), but it catches HTML/JS drift for the elements that the
 render flow assumes exist.
 """
 
+import json
 import re
+import shutil
+import subprocess
 
+import pytest
+
+import thinking_agents
 from _frontend_source import WEB, concat_js, read
+
+NODE = shutil.which("node")
 
 _ICONS = WEB.parent / "icons"
 _CSS = read("transcripts.css")
 _HTML = read("transcripts.html")
 # The page script is a hub (transcripts.js) plus feature satellites
-# (transcripts-{corrections,search,video,pills,agents}.js); the friction/summary
+# (transcripts-{corrections,search,video,pills,agents,batch}.js); the friction/summary
 # element IDs live in the agents satellite, so read all of them together.
 _JS = concat_js("transcripts")
 
@@ -28,6 +36,7 @@ _JS = concat_js("transcripts")
 # present in transcripts.html. Dynamically-created nodes are intentionally
 # excluded; these are the ones the tabbed analysis panel / friction flow toggle.
 REQUIRED_IDS = [
+    "speakerPopover",
     "summarySection",
     "tabBtnSummary",
     "tabBtnFriction",
@@ -55,6 +64,8 @@ REQUIRED_IDS = [
     "frictionJumpPrev",
     "frictionJumpNext",
     "frictionStaleDot",
+    "modelInstallLicense",
+    "modelInstallLicenseLink",
     "clipMarksModal",
     "clipMarksScope",
     "clipMarksGap",
@@ -65,6 +76,24 @@ REQUIRED_IDS = [
     "clipMarksProgressText",
     "clipMarksCancel",
     "clipMarksConfirm",
+    "embedSubsModal",
+    "embedSubsScope",
+    "embedSubsDefault",
+    "embedSubsSummary",
+    "embedSubsProgress",
+    "embedSubsBarFill",
+    "embedSubsProgressText",
+    "embedSubsCancel",
+    "embedSubsConfirm",
+    "termInput",
+    "addTermBtn",
+    "termsList",
+    "importDictBtn",
+    "importDictFile",
+    "exportDictBtn",
+    "saveGlobalDictBtn",
+    "loadGlobalDictBtn",
+    "dictGlobalHint",
 ]
 
 
@@ -76,9 +105,19 @@ def test_required_ids_present_in_html():
     )
 
 
+def _batch_modal_ids() -> set[str]:
+    """IDs createBatchJobModal builds as prefix + suffix, per instantiated prefix."""
+    start = _JS.index("function createBatchJobModal(")
+    factory = _JS[start : _JS.index("\n  function ", start + 1)]
+    suffixes = set(re.findall(r'el\("(\w+)"\)', factory))
+    prefixes = re.findall(r'prefix: "(\w+)"', _JS)
+    return {p + s for p in prefixes for s in suffixes}
+
+
 def test_required_ids_referenced_in_js():
     # Keeps the guard honest: every ID we require must actually be used by the JS.
-    unused = [i for i in REQUIRED_IDS if i not in _JS]
+    dynamic = _batch_modal_ids()
+    unused = [i for i in REQUIRED_IDS if i not in _JS and i not in dynamic]
     assert not unused, f"REQUIRED_IDS not referenced in transcripts.js: {unused}"
 
 
@@ -100,8 +139,8 @@ def test_segment_rebuild_keeps_the_reader_in_place():
     """The rebuild wipes #segmentList, but scroll lives on #trMain — restoring
     the wrong element is a silent no-op, and restoring without marking the write
     as programmatic pauses playhead auto-follow for three seconds."""
-    start = _JS.index("function renderSegments(")
-    body = _JS[start : _JS.index("\n  // Which participant", start)]
+    start = _JS.index("function renderSegmentsImpl(")
+    body = _JS[start : _JS.index("\n  }\n", start)]
     assert 'qs("#trMain")' in body, "scroll lives on #trMain, not #segmentList"
     assert "_renderedSegmentsPid" in body, (
         "restore must be gated on the participant being unchanged"
@@ -124,8 +163,8 @@ def test_friction_decorations_are_the_only_friction_writer_on_the_segment_list()
     toggles classes on the result. If the string ALSO emitted friction markup the
     two paths would drift, and a threshold drag (which only runs the decoration
     pass) would disagree with the next full rebuild."""
-    start = _JS.index("function renderSegments(")
-    body = _JS[start : _JS.index("\n  // Which participant", start)]
+    start = _JS.index("function renderSegmentsImpl(")
+    body = _JS[start : _JS.index("\n  }\n", start)]
     assert "segment-friction" not in body and "seg-friction-alpha" not in body, (
         "friction markup must not be emitted by renderSegments' HTML string; "
         "applyFrictionDecorations owns every friction class and inline var"
@@ -246,6 +285,30 @@ def test_sheet_xref_leg_stops_polling_an_empty_studio():
     )
 
 
+def test_xref_poll_echoes_both_version_cursors():
+    """Every 30 s tick otherwise re-downloads every event and sheet row (488 KB +
+    182 KB on the benchmark fixtures) and re-parses every cell's timestamps."""
+    start = _JS.index("function loadCrossRefData(")
+    body = _JS[start : _JS.index("\n  function ", start + 1)]
+    assert "&events_version=" in body and "if (data.events_unchanged) return;" in body
+    assert "?sheet_version=" in body and "if (data.sheet_unchanged) {" in body
+    # Config must still apply on an unchanged tick: settings changes ride the poll.
+    unchanged = body.index("if (data.sheet_unchanged) {")
+    assert body.index("clipgenApplyConfig(data.config)") < unchanged
+    # ...and a changed parse config must re-parse the rows the tick did not resend.
+    assert body.index("var parseBefore = _sheetParseConfigKey();") < body.index(
+        "clipgenApplyConfig(data.config)"
+    )
+    assert (
+        "_sheetParseConfigKey() !== parseBefore) _buildSheetIndex();"
+        in body[unchanged:]
+    )
+    key = _JS.index("function _sheetParseConfigKey(")
+    key_body = _JS[key : _JS.index("\n  }", key)]
+    for field in ("defaultDuration", "annotationKeyphrases", "ignoredTimestampTokens"):
+        assert "CLIPGEN_CONFIG." + field in key_body
+
+
 def test_a_failed_boot_fetch_clears_the_placeholders():
     """Without this the pill row shimmers forever and the transcript pane stays
     blank, which reads as "still loading" rather than "server unreachable"."""
@@ -258,7 +321,7 @@ def test_a_failed_boot_fetch_clears_the_placeholders():
 
 
 def test_every_thinking_agent_run_button_carries_the_local_ai_badge():
-    """The badge marks the control that *starts* an Ollama run, not the pane that
+    """The badge marks the control that *starts* an LLM agent run, not the pane that
     shows its output — so it belongs on the run buttons and not on the tabs (which
     could never mark Citations, having no tab of its own)."""
     tabbar = _HTML[_HTML.index('class="panel-tabbar"') : _HTML.index('id="summaryTab"')]
@@ -292,7 +355,7 @@ def test_icon_only_agent_buttons_get_the_badge_via_the_tooltip_sidecar():
 
 
 def test_pill_dropdown_badges_the_thinking_agents_but_not_transcription():
-    """Transcription is Whisper, not an Ollama thinking agent — badging its row
+    """Transcription is Whisper, not an LLM thinking agent — badging its row
     would make the marker meaningless. All four rows share one builder, so the
     flag is the only thing keeping them apart."""
     pills = read("transcripts-pills.js")
@@ -301,7 +364,7 @@ def test_pill_dropdown_badges_the_thinking_agents_but_not_transcription():
     for agent in ("summary", "citations", "friction"):
         row = section[section.index(f'agent: "{agent}"') :]
         assert "aiBadge: true" in row[: row.index("onStart")], (
-            f"the {agent} pill row is Ollama-backed but passes no aiBadge"
+            f"the {agent} pill row is LLM-backed but passes no aiBadge"
         )
     transcription = section[section.index('agent: "transcription"') :]
     assert "aiBadge" not in transcription[: transcription.index("onStart")], (
@@ -397,9 +460,9 @@ def test_clip_marks_previews_and_cuts_from_one_clusterer():
         "clustering belongs in one place (_clipMarksClusters); the summary and "
         "the payload both call it"
     )
-    start = _JS.index("function submitClipMarks(")
+    start = _JS.index("function _clipMarksRequest(")
     body = _JS[start : _JS.index("\n  function ", start + 1)]
-    assert "_clipMarksClusters()" in body
+    assert "_clipMarksClusters(" in body
 
 
 def test_clip_marks_sends_the_text_and_label_studio_drops():
@@ -407,7 +470,7 @@ def test_clip_marks_sends_the_text_and_label_studio_drops():
     truncated text -> category. Studio's queue path omits both, so its clips are
     all named after the category; sending them is the whole reason these clips
     read as anything useful."""
-    start = _JS.index("function submitClipMarks(")
+    start = _JS.index("function _clipMarksRequest(")
     body = _JS[start : _JS.index("\n  function ", start + 1)]
     assert '"../studio/api/generate-intake"' in body
     assert 'source: "transcript"' in body
@@ -419,49 +482,148 @@ def test_clip_marks_pads_the_span_without_going_negative():
     """A mark's segment boundaries sit tight against the speech, so the cut is
     padded — but a mark near t=0 would otherwise ask ffmpeg for a negative
     start."""
-    start = _JS.index("function submitClipMarks(")
+    start = _JS.index("function _clipMarksRequest(")
     body = _JS[start : _JS.index("\n  function ", start + 1)]
     assert "Math.max(0, c.start - pad)" in body, (
         "the padded start must be floored at zero"
     )
 
 
-def test_clip_marks_ignores_the_trailing_cancelled_line():
-    """/api/generate-intake closes a cancelled stream with {"cancelled": true},
-    which has no index. Counting it as a completed item over-reports progress by
-    one (the bug live in overview-reports.js)."""
-    start = _JS.index("function submitClipMarks(")
-    body = _JS[start : _JS.index("\n  function ", start + 1)]
+def _batch_factory() -> str:
+    start = _JS.index("function createBatchJobModal(")
+    return _JS[start : _JS.index("\n  function ", start + 1)]
+
+
+def test_batch_modal_ignores_the_indexless_stream_lines():
+    """Header, {"cancelled": true} and {"done": true} lines carry no index and
+    stay out of the tally — but the per-flow hook must see them first, or the
+    embed run loses its output_dir and both lose the cancel token."""
+    body = _batch_factory()
     assert 'typeof data.index !== "number"' in body, (
         "the NDJSON handler must bail on lines with no index"
     )
+    assert body.index("cfg.onLine(data, job)") < body.index(
+        'typeof data.index !== "number"'
+    )
+    assert "if (data.output_dir) job.outputDir = data.output_dir;" in _JS, (
+        "the embed flow must read the header line's output_dir"
+    )
+    assert _JS.count("createBatchJobModal({") == 3
 
 
-def test_clip_marks_modal_classes_are_all_styled():
+def test_param_modal_classes_are_all_styled():
     """Standing toggle-completeness check: an unstyled modal class ships a
-    dialog that renders as unlaid-out text with no error anywhere."""
-    for cls in re.findall(r'class="([^"]*clip-marks[^"]*)"', _HTML):
+    dialog that renders as unlaid-out text with no error anywhere.
+
+    Scoped to the shared .param-modal-* family, so it covers every parameter
+    dialog on the page (#clipMarksModal, #embedSubsModal) rather than one."""
+    for cls in re.findall(r'class="([^"]*param-modal[^"]*)"', _HTML):
         for name in cls.split():
-            if name.startswith("clip-marks"):
+            if name.startswith("param-modal"):
                 assert "." + name in _CSS, f".{name} is used in HTML but never styled"
 
 
-def test_clip_marks_run_outlives_its_dialog():
-    """Escape/backdrop only close the modal; the batch keeps streaming and the
-    quick action must reopen onto live progress. Storing the run inside the open
-    handler (or clearing it on close) would strand a running job with no way to
-    stop it."""
-    assert "var _clipMarksRun = null;" in _JS
-    close_start = _JS.index("function closeClipMarksModal(")
-    close_body = _JS[close_start : _JS.index("\n  function ", close_start + 1)]
-    assert "_clipMarksRun" not in close_body, (
+def test_batch_modal_run_outlives_its_dialog():
+    """Escape mid-run hides the dialog; the stream keeps going and reopening
+    shows live progress instead of resetting the pickers."""
+    body = _batch_factory()
+    assert "var run = null;" in body
+    close_start = body.index("function close(")
+    close_body = body[close_start : body.index("\n    function ", close_start + 1)]
+    assert "run" not in close_body.replace("function close", ""), (
         "closing the dialog must not touch the in-flight run"
     )
-    open_start = _JS.index("function openClipMarksModal(")
-    open_body = _JS[open_start : _JS.index("\n  function ", open_start + 1)]
-    assert "if (_clipMarksRun) return;" in open_body, (
-        "reopening mid-run must show progress, not re-fetch and reset the pickers"
+    open_start = body.index("function open(")
+    open_body = body[open_start : body.index("\n    function ", open_start + 1)]
+    assert "if (run) return;" in open_body, (
+        "reopening mid-run must show progress, not reset the pickers"
     )
+
+
+def test_embed_subs_is_one_quick_action():
+    """The two old entries ("Embed Subtitle in Video" / "Embed all Subtitles")
+    differed only in scope, which now lives in the dialog. Leaving either label
+    behind means the menu still offers the split the merge removed."""
+    assert "Embed Subtitles…" in _JS
+    for gone in ("Embed Subtitle in Video", "Embed all Subtitles"):
+        assert gone not in _JS, f"the merged action replaces {gone!r}"
+    # The old endpoints are gone too — no caller may resurrect them.
+    for route in ("api/embed-subtitle/", "api/embed-all-subtitles"):
+        assert route not in _JS, f"{route} was replaced by api/embed-subtitles"
+
+
+def test_embed_subs_warns_the_default_toggle_is_inert_on_mp4():
+    """Measured on ffmpeg 8.1.2: the mp4 muxer reports default=1 for the
+    subtitle track whatever -disposition:s:0 is given (only .mkv/.webm have a
+    present-but-off state). Unticking the box therefore changes nothing for the
+    commonest source container, and a control that silently no-ops is the
+    "wrong output, no error" class — so the summary has to say so."""
+    # The container lists come from CLIPGEN_CONFIG (mirroring
+    # video.SUBTITLE_ALWAYS_DEFAULT_CONTAINERS), never a hardcoded JS regex —
+    # see the "no duplicated constants between Python and JS" rule.
+    assert "CLIPGEN_CONFIG.subtitleContainers" in _JS
+    assert "/\\.(mp4|m4v|mov)$/i" not in _JS, (
+        "the mp4-family list must not be re-hardcoded in JS"
+    )
+    start = _JS.index("function _embedSubsSummary(")
+    body = _JS[start : _JS.index("\n  function ", start + 1)]
+    assert "_embedSubsAlwaysDefault(" in body, (
+        "the summary must flag targets whose container ignores the toggle"
+    )
+    assert '"#embedSubsDefault"' in body and ".checked" in body, (
+        "the caveat only applies when the box is unticked, so the summary has "
+        "to read the checkbox"
+    )
+
+
+def test_embed_subs_filters_containers_the_muxer_cannot_write():
+    """mux_subtitles rejects any container it has no codec for. Filtering only
+    multi-part participants left the summary promising "8 subtitled videos" for
+    a study of .avi sources and the run returning 8 failure lines."""
+    assert "_embedSubsIsUnsupported(" in _JS
+    start = _JS.index("function _embedSubsTargets(")
+    body = _JS[start : _JS.index("\n  function ", start + 1)]
+    assert "_embedSubsIsUnsupported(p)" in body, (
+        "the target list must drop unsupported containers, not just multi-part"
+    )
+    summary = _JS[_JS.index("function _embedSubsSummary(") :]
+    summary = summary[: summary.index("\n  function ")]
+    assert "unsupported" in summary, (
+        "the summary must account for what it dropped, like it does multi-part"
+    )
+    # The caveat depends on the checkbox, so the checkbox must re-render it.
+    init_start = _JS.index("function _embedSubsInitExtra(")
+    init_body = _JS[init_start : _JS.index("\n  function ", init_start + 1)]
+    assert '"#embedSubsDefault"' in init_body, (
+        "toggling the checkbox must re-render the summary that carries the caveat"
+    )
+
+
+def test_embed_subs_empty_state_distinguishes_multi_part_from_no_transcript():
+    """When every scoped participant is multi-part the target list is empty but
+    transcripts exist, so the plain empty state ("transcribe a video first")
+    would contradict itself — and point at a fix that changes nothing."""
+    start = _JS.index("function _embedSubsSummary(")
+    body = _JS[start : _JS.index("\n  function ", start + 1)]
+    empty_branch = body[body.index("if (!targets.length)") :]
+    assert "if (skipped.length)" in empty_branch, (
+        "the empty state must branch on whether anything was skipped"
+    )
+    assert empty_branch.index("skipped.length") < empty_branch.index(
+        "transcribe a video first"
+    ), "the multi-part copy must pre-empt the no-transcript copy"
+
+
+def test_embed_subs_excludes_multi_part_participants():
+    """The server refuses a transcript spanning several source files. video_paths
+    already ships on /api/participants, so filtering client-side turns a wasted
+    ffmpeg round-trip plus a failure line into an up-front note in the summary."""
+    start = _JS.index("function _embedSubsTargets(")
+    body = _JS[start : _JS.index("\n  function ", start + 1)]
+    assert "_embedSubsIsMultiPart" in body, (
+        "targets must drop multi-part participants before the POST"
+    )
+    assert "video_paths.length > 1" in _JS
 
 
 def test_friction_refetch_keeps_the_programmatic_scores():
@@ -475,11 +637,14 @@ def test_friction_refetch_keeps_the_programmatic_scores():
     assert "if (state.frictionPid !== pid) {" in body, (
         "the wipe must be gated on the participant actually changing"
     )
-    assert body.index("frictionPid !== pid") < body.index(
-        "state.frictionData = null"
-    ), "the gate has to precede the wipe it exists to prevent"
+    gate = body[body.index("frictionPid !== pid") :]
+    assert "clearFriction()" in gate.split("state.frictionPid = pid")[0], (
+        "the gated branch must wipe state AND DOM via clearFriction — a "
+        "state-only wipe left the previous participant's panes painted when "
+        "the switch's fetch failed transiently"
+    )
     # Mid-run the server ships the scores alongside the generating flag.
-    gen = body[body.index("data.generating") :]
+    gen = body[body.index("isPending(data)") :]
     assert "if (data.friction) _setFrictionData(data.friction);" in gen, (
         "the generating branch must adopt the deterministic scores the server "
         "sends with it, or it renders the empty 'Analyzing…' box"
@@ -487,6 +652,64 @@ def test_friction_refetch_keeps_the_programmatic_scores():
     assert gen.index("_setFrictionData") < gen.index(
         "state.frictionGenerating = true"
     ), "_setFrictionData clears the generating flag, so it has to run first"
+
+
+# ---- Normalize Audio (Quick action -> in-place loudnorm rewrite) ----
+
+
+def test_norm_audio_quick_action_and_modal_exist():
+    assert "Normalize Audio…" in _JS
+    assert "openNormalizeAudioModal" in _JS
+    assert 'id="normAudioModal"' in _HTML
+
+
+def test_norm_audio_reloads_after_any_swapped_file():
+    """A swap pulled a source file out from under the page: the <video> is
+    mid-stream on a renamed-away inode and the per-track mixers point at stale
+    extracts. media-banner.js reloads for the identical file swap; skipping the
+    reload here leaves the player wedged on the old bytes. The reload must key
+    on files swapped (parts_done), not on ok-participants: a multi-part
+    participant that failed on part 2 still replaced part 1 on disk."""
+    start = _JS.index("function _normAudioOnLine(")
+    body = _JS[start : _JS.index("\n  function ", start + 1)]
+    assert 'typeof data.parts_done === "number"' in body, (
+        "the handler must tally swapped files off the lines' parts_done"
+    )
+    start = _JS.index("function _normAudioAfterFinish(")
+    reload_branch = _JS[start : _JS.index("\n  function ", start + 1)]
+    assert "window.location.reload" in reload_branch
+    assert "job.changed > 0" in reload_branch, (
+        "a run that swapped nothing must not reload; one that swapped anything "
+        "must, even when every participant line was ok=false"
+    )
+
+
+def test_norm_audio_excludes_only_fully_kept_participants():
+    """A participant is excluded only when *every* part's .orig slot is
+    occupied. Excluding on any kept original locked a half-finished multi-part
+    participant out of its own retry: the successful parts hold backups, so the
+    remaining parts could never be reached without restoring or deleting them."""
+    start = _JS.index("function _normAudioTargets(")
+    body = _JS[start : _JS.index("\n  function ", start + 1)]
+    assert "_normAudioIsFullyKept" in body, (
+        "targets must drop only fully-rewritten participants before the POST"
+    )
+    open_start = _JS.index("function _normAudioOnOpen(")
+    open_body = _JS[open_start : _JS.index("\n  function ", open_start + 1)]
+    assert '"api/remux/status"' in open_body, (
+        "kept-original state lives on disk, not in state.participants"
+    )
+
+
+def test_norm_audio_track_checkboxes_guard_against_stale_fetches():
+    """The current-scope track list is built from an async audio-info fetch; a
+    scope flip or participant change while the probe runs must not dress the
+    dialog with the wrong participant's tracks (or worse, their indices)."""
+    start = _JS.index("function _renderNormAudioTrackField(")
+    body = _JS[start : _JS.index("\n  function ", start + 1)]
+    assert "_normAudioTrackPid !== pid" in body, (
+        "the async render must be rejected when the pinned participant changed"
+    )
 
 
 # ---- Friction evidence table (programmatic vs agentic) ----
@@ -586,7 +809,7 @@ def test_the_density_band_covers_both_evidence_sources():
     around. The union is derived once, in the same producer as everything else,
     so the canvas can never disagree with the pane about what is flagged."""
     start = _JS.index("function _recomputeFrictionMatches(")
-    body = _JS[start : _JS.index("\n  // The single entry point", start)]
+    body = _JS[start : _JS.index("\n  }\n", start)]
     assert "state.frictionBandBySegId = band;" in body, (
         "the union belongs in the one derived-state producer"
     )
@@ -595,8 +818,9 @@ def test_the_density_band_covers_both_evidence_sources():
     )
     video = read("transcripts-video.js")
     assert "state.frictionBandBySegId" in video
+
     draw = video.index("function _drawFrictionBand(")
-    draw_body = video[draw : video.index("\n  // The selected participant", draw)]
+    draw_body = video[draw : video.index("\n  }\n", draw)]
     assert "frictionMatchBySegId" not in draw_body, (
         "the band must draw from the union, not the keyword-only map"
     )
@@ -656,6 +880,52 @@ def test_the_wip_badge_is_shared_not_forked():
 
 
 # ---- Transcribe All (Quick action -> batch transcription enqueue) ----
+
+
+def test_llm_start_posts_to_the_transcripts_blueprint():
+    """A leading slash would hit GET-only /api/models on the combined app.
+
+    The start route lives on transcripts_bp as POST /transcripts/api/models/llm/start
+    (sibling of download). apiPost("/api/models/llm/start") 404s; the .catch
+    swallows it, so the AI server never comes up and the Start button is a
+    no-op.
+    """
+    assert _JS.count('apiPost("api/models/llm/start"') == 1
+    assert 'apiPost("/api/models/llm/start"' not in _JS
+
+
+def test_llm_start_toasts_the_server_reason():
+    start = _JS.index("function _startAiServer(")
+    body = _JS[start : _JS.index("\n  function ", start + 1)]
+    assert "e.serverMessage" in body
+
+
+def test_transcript_markers_are_scoped_to_the_study():
+    video = read("transcripts-video.js")
+    assert "function _markersScope(" in video
+    assert "_writeStoredMarkers(all)" in video
+    assert (
+        "sessionStorage.setItem(MARKERS_STORAGE_KEY, JSON.stringify(all))" not in video
+    )
+
+
+def test_a_stopped_ai_server_is_started_not_asked_about():
+    """The gate starts the runtime itself; only a missing one raises a dialog.
+
+    A user who has llama-server installed should never be asked for permission
+    to run it — that dialog was the reason the AI "never started by itself".
+    """
+    gate = _JS[
+        _JS.index("function ensureAgentModelInstalled") : _JS.index(
+            "function _ensureModelFromPayload"
+        )
+    ]
+    assert 'status.state === "stopped"' in gate
+    assert "_startAiServer()" in gate
+    # The dialog is reached for "missing" only, so it no longer takes a state.
+    assert 'kind: "llm-runtime"' in gate
+    assert "state: status.state" not in gate
+    assert "Start AI server" not in _JS
 
 
 def test_transcribe_all_reaches_a_published_satellite_function():
@@ -737,3 +1007,377 @@ def test_transcribe_enqueue_adopts_the_returned_tasks_immediately():
     assert body.index("state.tasks.concat") < body.index("renderPills()"), (
         "adopt before repainting, or the pills render the pre-enqueue state"
     )
+
+
+# ---- Cancelling a transcription ----
+#
+# The server keeps reporting a cancelled-but-still-running task as "running"
+# until the worker reaches its next checkpoint — up to a whole uninterruptible
+# cold model load away. Every assertion below defends some part of the
+# client-side optimistic state that closes that gap.
+
+
+def test_the_cancel_trigger_reports_before_the_server_does():
+    """A flag written in the DELETE's callback is no better than the poll: the
+    round trip is the short part of the wait. Cancelling during loading_model
+    means ~10s of a spinning icon, a creeping fill and a dotted timeline band all
+    insisting the transcription is still running."""
+    start = _JS.index("function cancelTranscribeTask(")
+    body = _JS[start : _JS.index("\n  function ", start + 1)]
+    flag = body.index("state.cancellingTasks[taskId] = {")
+    request = body.index("apiDelete(")
+    assert flag < request, "the optimistic flag must go down before the request"
+    for repaint in (
+        "renderPills()",
+        "updateTranscribeFill()",
+        "refreshTranscribeWording()",
+    ):
+        assert body.index(repaint) < request, (
+            f"{repaint} must run before the request, not in its callback"
+        )
+
+
+def test_the_cancelling_flag_is_keyed_by_task_not_participant():
+    """A re-transcribe issued right after a cancel is a *new* task. Keyed by
+    participant, a flag the poll had not yet swept would paint the fresh run as
+    "Cancelling…" and disable its own stop button, stranding the pill until the
+    stale-flag timeout."""
+    for wrong in (
+        "cancellingTasks[p.id]",
+        "cancellingTasks[pid]",
+        "cancellingTasks[p.participant]",
+    ):
+        assert wrong not in _JS, f"{wrong} keys the flag by participant"
+    start = _JS.index("function cancelTranscribeTask(")
+    body = _JS[start : _JS.index("\n  function ", start + 1)]
+    assert "state.cancellingTasks[taskId] = {" in body
+
+
+def test_a_pending_cancel_stops_the_timeline_band_immediately():
+    """The dotted band is the loudest "still working" signal on the page. It is
+    driven purely off task.status === "running", which stays true across the
+    whole cancel — so the band has to ask the flag too, or it outlives the click
+    by a model load."""
+    start = _JS.index("function _selectedTranscribeProgress()")
+    body = _JS[start : _JS.index("\n  function ", start + 1)]
+    assert "state.cancellingTasks[t.id]" in body and "return null" in body
+
+
+def test_a_pending_cancel_is_swept_off_every_exit():
+    """Four ways a cancelling task stops being active: it flips to cancelled (the
+    happy path), to completed or failed (the cancel raced the finish line), or it
+    vanishes from the list (dismissed, worker restart). A flag that survives any
+    of them leaves the pill permanently inert."""
+    start = _JS.index("function _sweepCancellingTasks()")
+    body = _JS[start : _JS.index("\n  function ", start + 1)]
+    assert '"running"' in body and '"queued"' in body, (
+        "the live set is both active statuses"
+    )
+    assert "!active[id]" in body, "a task that vanished entirely must clear too"
+    assert "CANCEL_PENDING_MAX_MS" in body, "a wedged worker needs an age backstop"
+
+    poll_start = _JS.index("function pollTaskStatus()")
+    poll = _JS[poll_start : _JS.index("\n  // ---- ", poll_start)]
+    assert (
+        poll.index("state.tasks = data.tasks")
+        < poll.index("_sweepCancellingTasks()")
+        < poll.index("updateTranscribeFill()")
+    ), "sweep after adopting the tasks, before anything reads the flag"
+
+
+def test_a_failed_cancel_reverts_the_optimistic_state():
+    """The usual rejection is "already finished" from a task that crossed the line
+    mid-request. The early return is the load-bearing half: if the poll already
+    swept the flag the pill is correct, and a toast would contradict it."""
+    start = _JS.index("function cancelTranscribeTask(")
+    body = _JS[start : _JS.index("\n  function ", start + 1)]
+    catch = body[body.index(".catch(function ()") :]
+    assert catch.index("if (!state.cancellingTasks[taskId]) return;") < catch.index(
+        "delete state.cancellingTasks[taskId]"
+    ), "bail out before reverting when the poll already resolved the race"
+    assert catch.index("delete state.cancellingTasks[taskId]") < catch.index(
+        "showToast("
+    )
+
+
+def test_every_transcribing_surface_asks_the_same_cancel_question():
+    """Five surfaces word a task's progress. Any one of them re-deriving "running
+    means working" from task.status alone goes on claiming the transcription is
+    live for the whole cancel — which is the original bug, just relocated."""
+    for fn in (
+        "function computeIndicatorState()",
+        "function _setTranscriptEmptyText(",
+        "function _streamingTextStr(",
+    ):
+        start = _JS.index(fn)
+        body = _JS[start : _JS.index("\n  function ", start + 1)]
+        assert "_cancelPending(" in body, f"{fn} must consult the shared predicate"
+    start = _JS.index("function buildAgentRow(")
+    assert "opts.cancelPending" in _JS[start : _JS.index("\n  function ", start + 1)]
+
+
+def test_the_press_squish_survives_the_running_spin():
+    """The press feedback has to work on the stop-circle of a *running* pill —
+    the one case where the icon already carries a transform from an animation.
+    Animations outrank normal declarations in the cascade, so an icon-level
+    :active rule is silently dropped exactly where it is needed."""
+    assert ".pill-trigger:active" in _CSS, "the trigger needs a press affordance"
+    # Comments stripped: the rule below carries this reasoning in prose, and the
+    # prose names both halves of what it forbids.
+    declarations = re.sub(r"/\*.*?\*/", "", _CSS, flags=re.DOTALL)
+    assert not re.search(r"\.pill-trigger-icon[^{;]*:active", declarations), (
+        "the squish belongs on the button; on the icon the spin animation wins"
+    )
+    start = _CSS.index(".pill-trigger {")
+    assert "transform" in _CSS[start : _CSS.index("}", start)], (
+        "transform must be in the transition list or the press snaps"
+    )
+
+
+def test_reduced_motion_opt_outs_come_after_the_animations_they_cancel():
+    """Regression test for a bug that already shipped: the spin opt-out sat above
+    the spin rule with an identical selector and identical specificity, so source
+    order handed the win to the animation and the icon spun anyway."""
+    for selector, animation in (
+        (".pill-trigger--running .pill-trigger-icon--rest", "animation: spin"),
+        (".pill-trigger--cancelling", "animation: cg-pulse"),
+    ):
+        anim_at = _CSS.index(animation)
+        opt_out = _CSS.index(selector + " { animation: none")
+        assert opt_out > anim_at, (
+            f"{selector}'s reduced-motion opt-out must follow its animation"
+        )
+
+
+def test_the_cancelling_trigger_cannot_fire_a_second_delete():
+    """Two ways a click on an in-flight cancel goes wrong: a repeat DELETE the
+    server rejects, or — worse — falling through the action table's trailing
+    else and enqueueing a whole second transcription."""
+    start = _JS.index("var PILL_TRIGGER = {")
+    table = _JS[start : _JS.index("};", start)]
+    cancelling = table[table.index("cancelling:") :]
+    assert 'action: "none"' in cancelling[: cancelling.index("\n")]
+
+    start = _JS.index("function buildPillTrigger(")
+    body = _JS[start : _JS.index("\n  function ", start + 1)]
+    assert 'else if (cfg.action === "transcribe")' in body, (
+        "a bare trailing else turns a cancelling click into a start"
+    )
+    assert 's.status === "cancelling"' in body and 'setAttribute("disabled"' in body
+
+
+def test_a_cancelled_stream_does_not_leave_its_footer_behind():
+    """Nothing calls renderSegments() on the non-completed path, and
+    renderSegmentsImpl is the only other place the indicator is removed — so a
+    cancelled run used to leave its progress footer frozen under the partial rows
+    until the participant was reselected."""
+    start = _JS.index("function _finalizeStreamingIfComplete(")
+    body = _JS[start : _JS.index("\n  function ", start + 1)]
+    branch = body[body.index("if (!completed) {") :]
+    branch = branch[: branch.index("\n    }")]
+    assert "_cancelStreamingIndicator()" in branch, (
+        "cancel the queued insert first, or a backgrounded RAF re-adds the footer"
+    )
+    assert ".streaming-indicator" in branch and "removeChild" in branch
+
+
+def test_agent_failures_are_reported_to_the_user():
+    """An AI failure used to be a terminal warning and a silently empty panel.
+
+    Two polls can see the reason first: the per-agent panel poll (fastest, but
+    only for the selected participant) and the participants poll (the only one
+    watching a run started from another pill's menu). Both go through the hub's
+    one reporter so the toast fires once, whichever wins.
+    """
+    agents = read("transcripts-agents.js")
+    assert "reportAgentError(pid, desc.key, data.error)" in agents
+    assert "reportAgentError(pid, desc.key, err.serverMessage)" in agents
+    assert "TS.reportAgentError" in agents, "the satellite must not fork the toast"
+    assert "TS.reportAgentError = reportAgentError" in _JS
+    assert "_reportAgentErrors(data.participants)" in _JS
+    # Deduped per participant+agent, or a 1.2s poll would toast every tick.
+    assert "state.agentErrorsSeen[key] === message" in _JS
+    # The generic "Server error 404" filler must not reach the user.
+    assert "e.serverMessage = message" in read("utils.js")
+
+
+# ---- Citation claim numbering (frontend <-> backend contract) ----
+
+
+def _js_summary_claims(summary: str) -> list[str]:
+    """Claims renderSummary would number, run through node.
+
+    The claim-splitting block is sliced out of the real source, so the test
+    cannot drift from the shipped code the way a reimplementation would.
+    """
+    start = _JS.index('var lines = text.split("\\n");')
+    block = _JS[start : _JS.index("content.innerHTML = html;", start)]
+    script = (
+        "const text = JSON.parse(process.argv[1]);\n"
+        "const clipgenRenderInlineMarkdown = (s) => s;\n" + block + "const out = [];\n"
+        'const re = /data-cite-index="(\\d+)">([\\s\\S]*?)<\\/(?:span|li)>/g;\n'
+        "let m; while ((m = re.exec(html))) out[Number(m[1])] = m[2];\n"
+        "process.stdout.write(JSON.stringify(out));\n"
+    )
+    result = subprocess.run(
+        [str(NODE), "-e", script, json.dumps(summary)],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return json.loads(result.stdout)
+
+
+@pytest.mark.skipif(NODE is None, reason="node not installed")
+def test_summary_claim_numbering_matches_the_backend():
+    """data-cite-index IS the backend's claim index, so the two splits must agree.
+
+    A sticky "we're in bullets now" flag used to send prose written after the
+    list into the <ul>, which slid every later citation onto the wrong sentence
+    while the backend kept counting in document order.
+    """
+    summary = (
+        "The participant explored the dashboard. They struggled with filters.\n"
+        "\n"
+        "- Filters were hard to find\n"
+        "* Export flow was smooth\n"
+        "\n"
+        "Overall the session went well. Follow-up needed."
+    )
+    assert _js_summary_claims(summary) == thinking_agents._split_summary_sentences(
+        summary
+    )
+
+
+# ---- Speaker attribution ----
+
+
+def _fn_body(src: str, header: str) -> str:
+    start = src.index(header)
+    end = src.find("\n  function ", start + 1)
+    return src[start:] if end < 0 else src[start:end]
+
+
+def test_speaker_tasks_never_drive_transcription_surfaces():
+    """Diarization rides the transcription task list. Every reader that turns a
+    task into a transcribing state must skip kind === "speakers", or the pill
+    flips to "Cancel transcription", the timeline draws a transcribe band, and
+    the streaming view waits for the speaker pass to end."""
+    for header in (
+        "function _taskForSelectedParticipant()",
+        "function _finalizeStreamingIfComplete(",
+        "function _selectedRunningTask()",
+        "function _indexTasks()",
+    ):
+        assert "_isSpeakerTask(" in _fn_body(_JS, header), header
+    poll = _fn_body(_JS, "function pollTaskStatus()")
+    running = poll[
+        poll.index("var selectedRunningTask") : poll.index("if (selectedRunningTask)")
+    ]
+    assert "_isSpeakerTask(" in running
+    assert "newlySpeakers" in poll, "speaker completions must reload labels"
+
+
+def test_speakers_switch_is_keyboard_reachable():
+    """The pane's arrow/Enter navigation only knew selects and agent buttons."""
+    pills = read("transcripts-pills.js")
+    assert ".pill-options-check" in _fn_body(pills, "function pillNavControls()")
+    assert '"checkbox"' in _fn_body(pills, "function pillNavAdjust(")
+    assert '"checkbox"' in _fn_body(pills, "function pillNavActivate()")
+    assert 'setAttribute("data-nav-id", "speakers")' in pills
+
+
+def test_speaker_chip_only_on_final_rows():
+    """Partial (streaming) rows never carry speakers; the chip is a final-render thing."""
+    assert "speakerChipHtml(" in _fn_body(_JS, "function renderSegmentsImpl()")
+    assert "speakerChipHtml(" not in _fn_body(_JS, "function _renderPartialSegmentRow(")
+
+
+def test_speaker_rename_is_delegated_and_routed():
+    hub = read("transcripts.js")
+    assert ".segment-speaker" in _fn_body(
+        hub, "function _ensureSegmentListDelegation()"
+    )
+    sat = read("transcripts-speakers.js")
+    assert 'apiPut("api/speakers/" + pid' in sat
+    assert '"/labels"' in sat
+    assert "TS.showSpeakerPopover = showSpeakerPopover" in sat
+    assert "function showSpeakerPopover() { return TS.showSpeakerPopover" in hub
+    assert "registerEscape(" in sat, "Escape must cancel through the shared registry"
+
+
+def test_speaker_classes_are_styled():
+    for cls in (
+        ".segment-speaker",
+        ".pill-options-check",
+        ".speaker-popover",
+        ".pill-speakers-badge",
+    ):
+        assert cls + " {" in _CSS, f"{cls} is created in JS but never styled"
+    rings = re.findall(r"\.spk-(\d) \{ --spk: var\(--region-color-(\d)\); \}", _CSS)
+    assert [(a, b) for a, b in rings] == [(str(i), str(i)) for i in range(1, 9)]
+
+
+def test_speakers_setting_live_applies():
+    body = _fn_body(_JS, "function _applySettingsSnapshot(")
+    assert "TRANSCRIBE_SPEAKERS" in body
+    assert "transcribeSpeakers" in body
+    assert "renderPills()" in body
+
+
+def test_speakers_satellite_loads_before_its_importers():
+    order = re.findall(r'<script src="(transcripts[^"]*\.js)" defer>', _HTML)
+    assert order.index("transcripts-speakers.js") == order.index("transcripts.js") + 1
+
+
+def test_speaker_popover_offers_reset_and_reassignment():
+    """Rename is global; the reset arrow and the per-line chips must be wired."""
+    sat = read("transcripts-speakers.js")
+    for cls in (
+        ".speaker-popover-reset",
+        ".speaker-popover-assign",
+        ".speaker-popover-chip",
+    ):
+        assert cls in _HTML or cls in sat, f"{cls} is never referenced"
+        assert cls + " {" in _CSS, f"{cls} is never styled"
+    assert '"/segment"' in sat, (
+        "per-line reassignment must PUT api/speakers/<pid>/segment"
+    )
+    assert "arrow-uturn-left.svg" in _CSS, "the reset button is an icon mask, not text"
+    assert "e.preventDefault()" in _fn_body(sat, "function showSpeakerPopover("), (
+        "mousedown on the buttons must not blur the input, or blur commits first"
+    )
+
+
+def test_pill_pane_refresh_patches_in_place_when_shape_is_unchanged():
+    """The poll rebuilds the open pane every 3 s. Replacing the whole node
+    re-fetched the model list ("Loading…" → options) and re-laid the pane each
+    tick, which read as thrash during a run. Same row shape must swap only the
+    agent section."""
+    pills = read("transcripts-pills.js")
+    body = _fn_body(pills, "function _refreshPillOptionsContent(")
+    assert "_paneShape(fresh) === _paneShape(floating)" in body
+    assert ".pill-options-agents" in body, "only the agent buttons are poll-driven"
+    assert "_syncPaneRows(" in body
+
+
+def test_pip_controls_have_no_range_buttons():
+    """Set In / Set Out / Clear Markers crowded the PiP bar until the time
+    readout wrapped; the I/O hotkeys and the pill's Range row cover them."""
+    for old in ("setInBtn", "setOutBtn", "clearMarkersBtn"):
+        assert old not in _HTML, old
+        assert old not in _JS, old
+    assert 'id="markerInfo"' in _HTML
+    assert (
+        "white-space: nowrap"
+        in _CSS[
+            _CSS.index(".player-time {") : _CSS.index("}", _CSS.index(".player-time {"))
+        ]
+    )
+
+
+def test_pill_pickers_share_one_width():
+    block = _CSS[_CSS.index(".pill-options select {") :]
+    block = block[: block.index("}")]
+    assert "width: 132px" in block and "text-overflow: ellipsis" in block
+    assert "min-width: 110px" not in block

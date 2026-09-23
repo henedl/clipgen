@@ -61,9 +61,7 @@
     renderQueue: renderArtifactQueue,
   };
 
-  // Set to a stash id right before renderStashes rebuilds the list, so the
-  // freshly-saved card animates in once. One-shot: nulled the moment the
-  // matching card is built, so unrelated rerenders (delete/rename) don't flash.
+  // One-shot: the matching card animates in once, then nulls this.
   var _justStashedId = null;
 
   function loadStashes() {
@@ -130,11 +128,7 @@
       img.draggable = false;
       img.style.zIndex = String(picks.length - idx);
       img.style.transform = "translate(" + (idx * 2) + "px, " + (-idx * 2) + "px)";
-      // Append before enqueuing: ssEnqueueThumbCustom runs synchronously into
-      // ssProcessQueue, which skips (and the error path no-ops on) any img that
-      // isn't in the DOM yet. Route through the throttled/cached thumb queue
-      // instead of loading all 3×N frames eagerly; drop the img on failure
-      // (hue-tinted backing shows). picks[] guarantees participant/start (see key).
+      // Append first: ssProcessQueue runs synchronously and skips detached imgs.
       icon.appendChild(img);
       ssEnqueueThumbCustom(img, item.participant, item.start, function () {
         if (img.parentNode) img.parentNode.removeChild(img);
@@ -233,17 +227,14 @@
 
   function recallStashItem(cfg, stash) {
     if (cfg.isLocked()) return;
-    state[cfg.queueKey] = stash.items.slice();
+    // Deep copy: the trim pop-over edits queue items in place.
+    state[cfg.queueKey] = JSON.parse(JSON.stringify(stash.items));
     cfg.renderQueue();
     var q = state[cfg.queueKey];
     for (var i = 0; i < q.length; i++) {
       var it = q[i];
       if (it.row) updateSingleCellClass(it.participant, it.row);
     }
-  }
-
-  function recallStash(stash) {
-    recallStashItem(REEL_STASH, stash);
   }
 
   function deleteStash(stashId, endpoint, stateArray, renderFn) {
@@ -324,10 +315,6 @@
 
   function stashCurrentArtifacts() {
     stashCurrent(ARTIFACT_STASH);
-  }
-
-  function recallArtifactStash(stash) {
-    recallStashItem(ARTIFACT_STASH, stash);
   }
 
   // ---- Stash drag-reveal ----

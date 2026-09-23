@@ -18,6 +18,19 @@ import files
 import video
 
 
+def _fresh_jobs(seeded: dict | None = None):
+    """A remux JobRegistry like remux_server's, optionally pre-seeded."""
+    import remux_server
+    from server_utils import JobRegistry
+
+    registry = JobRegistry(
+        fresh=remux_server._jobs._fresh, running=remux_server._jobs._running
+    )
+    for pid, token in (seeded or {}).items():
+        registry.seed(pid, token)
+    return registry
+
+
 def _have_ffmpeg() -> bool:
     return shutil.which("ffmpeg") is not None and shutil.which("ffprobe") is not None
 
@@ -235,6 +248,92 @@ class TestRemuxToFaststart:
         assert video.discard_remux_original(str(source))[0] is False
 
 
+# ---- In-place audio normalization ----
+
+
+def _encode_two_codec(path) -> None:
+    """A 2 s clip with an AAC track 0 and an MP3 track 1.
+
+    The codec split is the test's tracer: after normalizing one track, the
+    other's codec proves whether it was stream-copied (mp3 survives) or
+    silently re-encoded (it would come back aac).
+    """
+    command = ["ffmpeg", "-y", "-v", "error"]
+    command += ["-f", "lavfi", "-i", "testsrc=duration=2:size=160x120:rate=15"]
+    command += ["-f", "lavfi", "-i", "sine=frequency=440:duration=2"]
+    command += ["-f", "lavfi", "-i", "sine=frequency=880:duration=2"]
+    command += ["-map", "0:v", "-map", "1:a", "-map", "2:a"]
+    command += ["-c:v", "libx264", "-pix_fmt", "yuv420p"]
+    command += ["-c:a:0", "aac", "-c:a:1", "libmp3lame"]
+    command += ["-f", "mp4", str(path)]
+    subprocess.run(command, check=True, capture_output=True)
+
+
+@requires_ffmpeg
+class TestNormalizeAudioInplace:
+    def test_normalizes_only_the_selected_track(self, tmp_path):
+        source = tmp_path / "study_P80.mp4"
+        _encode_two_codec(source)
+
+        succeeded, message = video.normalize_audio_inplace(str(source), [0])
+
+        assert succeeded is True, message
+        assert video.original_backup_path(str(source)).is_file()
+        after = _properties(source)
+        assert after["audio_track_count"] == 2
+        codecs = [t["codec"] for t in after["audio_tracks"]]
+        # Track 0 went through the loudnorm encode; track 1 was stream-copied,
+        # which only its surviving mp3 codec can prove.
+        assert codecs == ["aac", "mp3"]
+        assert _seekability(source)["browser_seekable"] is True
+
+    def test_refuses_while_an_original_is_still_kept(self, tmp_path):
+        """The backup slot is shared with remux on purpose: two in-place
+        rewriters stacking .orig files would leave 'restore' ambiguous."""
+        source = tmp_path / "study_P81.mp4"
+        _encode(source, fragmented=True, audio_tracks=1)
+        assert video.remux_to_faststart(str(source))[0]
+
+        succeeded, message = video.normalize_audio_inplace(str(source), [0])
+
+        assert succeeded is False
+        assert "still kept" in message
+
+    def test_a_bad_output_leaves_the_source_untouched(self, tmp_path, monkeypatch):
+        source = tmp_path / "study_P82.mp4"
+        _encode(source, fragmented=False, audio_tracks=1)
+        original_bytes = source.read_bytes()
+        monkeypatch.setattr(
+            video, "_remux_output_mismatch", lambda *_a, **_k: "synthetic mismatch"
+        )
+
+        succeeded, message = video.normalize_audio_inplace(str(source), [0])
+
+        assert succeeded is False
+        assert "synthetic mismatch" in message
+        assert source.read_bytes() == original_bytes
+        assert not video.original_backup_path(str(source)).exists()
+        assert not list(tmp_path.glob(".*"))  # scratch file cleaned up
+
+    def test_refuses_a_container_it_cannot_rewrite(self, tmp_path):
+        source = tmp_path / "study_P83.webm"
+        source.write_bytes(b"stand-in")
+
+        succeeded, message = video.normalize_audio_inplace(str(source), [0])
+
+        assert succeeded is False
+        assert ".webm" in message
+
+    def test_refuses_a_file_with_no_audio(self, tmp_path):
+        source = tmp_path / "study_P84.mp4"
+        _encode(source, fragmented=False, audio_tracks=0)
+
+        succeeded, message = video.normalize_audio_inplace(str(source), [0])
+
+        assert succeeded is False
+        assert "no audio" in message
+
+
 # ---- Shared blueprint routes ----
 
 
@@ -269,7 +368,7 @@ def remux_client(remux_app, tmp_path, monkeypatch):
         ],
     )
     (tmp_path / "study_P01.mp4").write_bytes(b"stand-in for a real recording")
-    monkeypatch.setattr(remux_server, "_jobs", {})
+    monkeypatch.setattr(remux_server, "_jobs", _fresh_jobs())
     return remux_app.test_client(), tmp_path
 
 
@@ -390,7 +489,7 @@ class TestMultiPartRemux:
 
         monkeypatch.setattr(remux_server.video, "remux_to_faststart", _fail_on_second)
         token: dict = {"state": "running", "progress": 0.0, "error": "", "message": ""}
-        monkeypatch.setattr(remux_server, "_jobs", {"P01": token})
+        monkeypatch.setattr(remux_server, "_jobs", _fresh_jobs({"P01": token}))
 
         remux_server._run_remux("P01", [str(p) for p in two_parts], token)
         assert token["state"] == "error"
@@ -402,7 +501,7 @@ class TestMultiPartRemux:
         calls.clear()
         monkeypatch.setattr(remux_server.video, "remux_to_faststart", real)
         token2: dict = {"state": "running", "progress": 0.0, "error": "", "message": ""}
-        monkeypatch.setattr(remux_server, "_jobs", {"P01": token2})
+        monkeypatch.setattr(remux_server, "_jobs", _fresh_jobs({"P01": token2}))
 
         remux_server._run_remux("P01", [str(p) for p in two_parts], token2)
 
@@ -435,7 +534,7 @@ class TestMultiPartRemux:
 
         monkeypatch.setattr(utils, "get_effective_input_dir", lambda: str(tmp_path))
         utils._discover_videos_cache.clear()
-        monkeypatch.setattr(remux_server, "_jobs", {})
+        monkeypatch.setattr(remux_server, "_jobs", _fresh_jobs())
         client = remux_app.test_client()
         assert client.get("/probe/api/remux/status").get_json()["unseekable"] == ["P01"]
 
@@ -460,7 +559,7 @@ class TestMultiPartRemux:
 
         monkeypatch.setattr(utils, "get_effective_input_dir", lambda: str(tmp_path))
         utils._discover_videos_cache.clear()
-        monkeypatch.setattr(remux_server, "_jobs", {})
+        monkeypatch.setattr(remux_server, "_jobs", _fresh_jobs())
         # Only the first part gets remuxed, so only it has a kept original.
         assert video.remux_to_faststart(str(two_parts[0]))[0]
 

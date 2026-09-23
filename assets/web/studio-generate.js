@@ -12,7 +12,7 @@
  * _generateEtaTracker + _studioEtaTicker objects are shared elapsed-time
  * infrastructure (also driven by job-status polling and the reel/build flows);
  * buildCellOverrides lives in studio-trim.js (reached via STUDIO). isIntakeSource
- * is a hub helper. apiPost / qs / readNDJSONStream / setButtonProgress /
+ * is a hub helper. apiPost / qs / apiPostNDJSON / setButtonProgress /
  * clipgenPluralUnit are ambient utils.js / primitives.js globals (scope chain).
  *
  * The hub keeps same-named onGenerate/onCancelGenerate delegators for the button
@@ -25,11 +25,9 @@
 
   var STUDIO = window.ClipgenStudio;
   var state = STUDIO.state;
-  // setButtonProgress is a ClipgenPrimitives namespace fn (primitives.js global),
-  // aliased here the same way the hub aliases it.
+  // primitives.js global, aliased as in the hub.
   var setButtonProgress = ClipgenPrimitives.setButtonProgress;
-  // Hub-owned helpers + shared elapsed-time trackers, published during the hub's
-  // load (and buildCellOverrides during studio-trim.js's), before this file runs.
+  // Published by the hub (buildCellOverrides by studio-trim.js) before this file loads.
   var setArtifactGenerating = STUDIO.setArtifactGenerating,
     showResult = STUDIO.showResult,
     revealStatusOverlay = STUDIO.revealStatusOverlay,
@@ -43,6 +41,11 @@
     _generateEtaTracker = STUDIO._generateEtaTracker,
     _studioEtaTicker = STUDIO._studioEtaTicker;
 
+  // Result lines echo the sheet header's casing; every cell-ref map keys on this.
+  function generateCellKey(ref) {
+    return String(ref).toLowerCase();
+  }
+
   function buildGenerateCardIndex(listEl) {
     var map = {};
     var cards = listEl.querySelectorAll(".queue-card");
@@ -51,7 +54,7 @@
       var participant = card.getAttribute("data-participant");
       var row = card.getAttribute("data-row");
       if (!participant || row == null) continue;
-      var key = participant + "." + row;
+      var key = generateCellKey(participant + "." + row);
       if (!map[key]) map[key] = [];
       map[key].push(card);
     }
@@ -72,9 +75,7 @@
     _generateEtaTracker.start();
     _studioEtaTicker.ensure();
 
-    // Per-branch AbortControllers let onCancelGenerate stop the network
-    // fetches immediately; the server-side cancel endpoints also trip the
-    // cancel events so in-flight ffmpeg subprocesses get terminated.
+    // onCancelGenerate aborts these; the server cancel endpoints kill ffmpeg.
     var sheetAbort = new AbortController();
     var intakeAbort = new AbortController();
     state.activeGenerateAborts = [sheetAbort, intakeAbort];
@@ -83,17 +84,13 @@
     var list = qs("#artifactsList");
     var items = state.artifactQueue.slice();
 
-    // Capture the queue cards before any async work so per-item result
-    // markers don't drift onto the wrong card if the queue re-renders mid
-    // request. allCards is in DOM order, which matches state.artifactQueue.
+    // Capture cards before async work; a mid-request re-render must not move markers.
     var allCards = list.querySelectorAll(".queue-card");
     for (var i = 0; i < allCards.length; i++) {
       setCardQueued(allCards[i]);
     }
 
-    // Separate spreadsheet and intake items, keeping each split's card
-    // element parallel to its item array so the resolve handler can match
-    // by index against the captured card list (immune to later re-renders).
+    // Each split keeps its card list parallel to its item list.
     var sheetItems = [];
     var sheetCardEls = [];
     var intakeItems = [];
@@ -114,16 +111,21 @@
     var failReasons = [];
     var cancelled = false;
     var pending = (sheetItems.length > 0 ? 1 : 0) + (intakeItems.length > 0 ? 1 : 0);
-    var sheetCellTotal = 0;
-    var sheetCellsDone = 0;
+    // Counts are artifacts (one per card), never cells; a cell can hold several pairs.
+    var sheetArtifactTotal = sheetItems.length;
+    var sheetArtifactsDone = 0;
     var intakeDone = 0;
     var intakeTotal = intakeItems.length;
     var generateCardIndex = null;
+    updateGenerateProgress(0, sheetArtifactTotal + intakeTotal);
 
+    // One readout for both branches; /api/job-status reattaches to the same unit.
     function updateGenerateButtonProgress() {
-      var total = sheetCellTotal + intakeTotal;
+      var total = sheetArtifactTotal + intakeTotal;
       if (total <= 0) return;
-      setButtonProgress("generateBtn", (sheetCellsDone + intakeDone) / total);
+      var done = sheetArtifactsDone + intakeDone;
+      setButtonProgress("generateBtn", done / total);
+      updateGenerateProgress(done, total);
     }
 
     function finishBranch() {
@@ -131,8 +133,7 @@
       setButtonProgress("generateBtn", null);
       setArtifactGenerating(false);
       _generateEtaTracker.reset();
-      // Hide after artifactGenerating is false so the elapsed-only fallback in
-      // _paintGenerateProgress doesn't keep the readout visible.
+      // After setArtifactGenerating(false), or _paintGenerateProgress keeps the readout up.
       updateGenerateProgress(0, 0);
       qs("#cancelGenerateBtn").classList.add("hidden");
       var msg;
@@ -143,8 +144,7 @@
           : null;
         err = totalSuccess > 0 ? null : "Generation cancelled";
       } else if (totalSuccess === 0 && totalFail === 0) {
-        // Stream ended without any per-item results — treat as an error
-        // rather than silently reporting "Generated 0 artifacts".
+        // No per-item results at all is an error, not "Generated 0 artifacts".
         msg = null;
         err = "No artifacts were generated";
       } else {
@@ -155,8 +155,7 @@
           err = "All generations failed";
         }
       }
-      // Append up to 3 distinct failure reasons so the user can act on them
-      // instead of just seeing a count (full reason is also on each card title).
+      // Up to 3 distinct reasons; each card title holds the full one.
       if (totalFail > 0 && failReasons.length) {
         var seenReason = {};
         var uniqReasons = [];
@@ -179,15 +178,19 @@
 
     // Handle spreadsheet items via streaming api/generate
     if (sheetItems.length > 0) {
+      // One ref per cell; cardsPerCell lets a result line advance by its card count.
       var cellsSeen = {};
       var cells = [];
+      var cardsPerCell = {};
       for (var si = 0; si < sheetItems.length; si++) {
-        var ck = sheetItems[si].participant + "." + sheetItems[si].row;
-        if (!cellsSeen[ck]) { cellsSeen[ck] = true; cells.push(ck); }
+        // POST the ref as written; tally on the folded key.
+        var ref = sheetItems[si].participant + "." + sheetItems[si].row;
+        var ck = generateCellKey(ref);
+        if (!cellsSeen[ck]) { cellsSeen[ck] = true; cells.push(ref); }
+        cardsPerCell[ck] = (cardsPerCell[ck] || 0) + 1;
       }
-      sheetCellTotal = cells.length;
+      var cellCounted = {};
       generateCardIndex = buildGenerateCardIndex(list);
-      updateGenerateProgress(0, sheetCellTotal);
 
       function handleLine(line) {
         var data;
@@ -202,10 +205,14 @@
           return;
         }
         if (!data.cell) return;
-        sheetCellsDone++;
-        updateGenerateProgress(sheetCellsDone, sheetCellTotal);
-        updateGenerateButtonProgress();
-        var cards = generateCardIndex[data.cell] || [];
+        // One advance per cell; a result line and "No clip found" may both arrive.
+        var cellKey = generateCellKey(data.cell);
+        if (!cellCounted[cellKey]) {
+          cellCounted[cellKey] = true;
+          sheetArtifactsDone += cardsPerCell[cellKey] || 1;
+          updateGenerateButtonProgress();
+        }
+        var cards = generateCardIndex[cellKey] || [];
         if (data.ok) {
           for (var ci = 0; ci < cards.length; ci++) setCardResult(cards[ci], true);
           totalSuccess += (data.generated || 1);
@@ -234,18 +241,11 @@
         if (tcDur) genBody.titlecard_duration = parseInt(tcDur.value, 10) || 2;
       }
 
-      // Streaming NDJSON response — needs the raw Response (reader + AbortSignal),
-      // so this intentionally stays a manual fetch rather than an api* helper.
-      fetch("api/generate", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(genBody),
+      apiPostNDJSON("api/generate", genBody, {
         signal: sheetAbort.signal,
+        onLine: handleLine,
       })
-        .then(function (response) {
-          if (!response.ok) throw new Error("Server error " + response.status);
-          return readNDJSONStream(response, handleLine).then(finishBranch);
-        })
+        .then(finishBranch)
         .catch(function (err) {
           if (isGenerateFetchAborted(err)) {
             cancelled = true;
@@ -256,8 +256,7 @@
             finishBranch();
             return;
           }
-          // Mark every captured sheet card as failed so they don't stay
-          // visually queued; finishBranch reports the failure tally.
+          // Fail every captured sheet card; finishBranch reports the tally.
           for (var j = 0; j < sheetCardEls.length; j++) {
             if (sheetCardEls[j]) setCardResult(sheetCardEls[j], false);
           }
@@ -277,6 +276,8 @@
           event_ids: itm.event_ids || [],
           source: itm.source || "screenspace",
           mark_ids: itm.mark_ids || [],
+          text: itm.text || "",
+          label: itm.label || "",
         };
       });
 
@@ -286,9 +287,7 @@
         if (!data) return;
         if (data.cancelled) {
           cancelled = true;
-          // Clear queued state from any intake card that hasn't received a
-          // per-item result yet, so the cards don't stay visually queued
-          // after the server short-circuits on cancel.
+          // Cancel short-circuits the server; clear cards still marked queued.
           for (var qi = 0; qi < intakeCardEls.length; qi++) {
             var qcard = intakeCardEls[qi];
             if (qcard && qcard.classList.contains("queue-card-queued")) {
@@ -316,18 +315,12 @@
         updateGenerateButtonProgress();
       }
 
-      // Streaming NDJSON response — manual fetch is required to get a reader
-      // and parse line-delimited per-item events as ffmpeg finishes each cut.
-      fetch("api/generate-intake", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ items: intakePayload, format: format }),
-        signal: intakeAbort.signal,
-      })
-        .then(function (response) {
-          if (!response.ok) throw new Error("Server error " + response.status);
-          return readNDJSONStream(response, handleIntakeLine).then(finishBranch);
-        })
+      apiPostNDJSON(
+        "api/generate-intake",
+        { items: intakePayload, format: format },
+        { signal: intakeAbort.signal, onLine: handleIntakeLine }
+      )
+        .then(finishBranch)
         .catch(function (err) {
           if (isGenerateFetchAborted(err)) {
             cancelled = true;

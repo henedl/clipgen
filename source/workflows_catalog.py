@@ -1,21 +1,14 @@
 """Workflows node catalog: declarative registry + typed-port adapters.
 
-The data half of the workflows engine, split out of ``workflows.py`` (which
-keeps the executors, the import-time wiring, and the facade; the run engine
-lives in ``workflows_runner``). Owns:
+``NodeContext`` (the run-wide context handed to every executor), ``NODE_TYPES``
+(the node registry of typed ports + param schema, fed to ``/api/catalog`` by
+``serialize_catalog``), ``BUILTIN_STASHES``, the source-descriptor helpers, and
+the pure ``ADAPTERS`` coercion table.
 
-* ``NodeContext`` — the run-wide context handed to every node executor.
-* ``NODE_TYPES`` — the declarative single-source-of-truth node registry
-  (typed ports + param schema); ``serialize_catalog`` feeds ``/api/catalog``.
-* ``BUILTIN_STASHES`` — the read-only built-in recipe graphs.
-* The source-descriptor helpers embedded in every domain value.
-* ``ADAPTERS`` + ``_ADAPTER_DESCRIPTIONS`` — the typed-port coercion table the
-  runner applies (pure ``value -> value``; late-imports ``files``/``video``).
-
-**Wiring caveat:** the collection-algebra node types and every node's
-``execute`` key are attached by ``workflows.py`` at import time (it mutates
-the ``NODE_TYPES`` dict imported from here). Import ``workflows``, not this
-module, before running graphs — this module alone is an unwired catalog.
+**Wiring caveat:** the collection-algebra node types and every node's ``execute``
+key are attached by ``workflows.py`` at import time, which mutates the
+``NODE_TYPES`` dict imported from here. Import ``workflows``, not this module,
+before running graphs — on its own this is an unwired catalog.
 """
 
 from __future__ import annotations
@@ -60,24 +53,21 @@ class NodeContext:
     def resolve_videos(self, participant: str) -> list[str]:
         """Return a participant's ordered source video path(s), or ``[]`` if none.
 
-        Multi-part participants (a session split across numbered files) return all
-        parts in timeline order — mirrors ``utils.discover_participant_videos``.
+        Honours ``config.FILENAME_OVERRIDES``. Multi-part participants return all
+        parts in timeline order.
         """
-        for entry in utils.discover_participant_videos():
+        import files
+
+        for entry in files.resolve_participant_videos():
             if entry.get("id") == participant and entry.get("has_video"):
                 return list(entry["video_paths"])
         return []
 
 
 # ---------------------------------------------------------------------------
-# Node catalog (declarative single source of truth)
+# Node catalog: modelled on ``thinking_agents.AGENTS``; adding a node needs no
+# frontend edits
 # ---------------------------------------------------------------------------
-#
-# Modelled on ``thinking_agents.AGENTS``: a data-driven, enumerable registry
-# the frontend renders generically. Each node carries the typed ports the DAG
-# needs (the wire vocabulary lives in plans/archive/WORKFLOWS-PLAN.md). Adding
-# a node is "append a NodeType + an executor" (executors section below), zero
-# frontend edits. ``serialize_catalog`` strips ``execute`` for the JSON endpoint.
 
 
 class Port(TypedDict):
@@ -98,9 +88,22 @@ class ParamSpec(TypedDict):
     choices: NotRequired[list[Any]]
     min: NotRequired[float]
     max: NotRequired[float]
-    # P5: an empty value here is a guaranteed no-op/failure — the pre-run
-    # validation panel surfaces it as an error and disables Run.
+    # Empty means a guaranteed no-op; the validation panel errors and disables Run.
     required: NotRequired[bool]
+    # {"param": <sibling>, "equals": v} or {"param": <sibling>, "not": v}; hides
+    # the row, executor still defaults.
+    showIf: NotRequired[dict[str, Any]]
+    # Field-enum choices that compare numerically; the paired value editor and
+    # validation constrain to numbers.
+    numericChoices: NotRequired[list[str]]
+    # Sibling enum whose numericChoices decide whether this string input
+    # constrains to numbers.
+    numericFor: NotRequired[str]
+    # Static completion suggestions (rendered as a datalist; input stays free).
+    suggestions: NotRequired[list[str]]
+    # Dynamic completion source the frontend resolves ("llm-models" → GET
+    # ../api/models); input stays free.
+    datalist: NotRequired[str]
 
 
 class NodeType(TypedDict):
@@ -116,27 +119,26 @@ class NodeType(TypedDict):
     params: list[ParamSpec]
     requires: list[str]  # subset of {"sheet", "videoDir"}
     execute: NotRequired[Callable[..., dict[str, Any]]]
-    # Hidden from the palette but kept in the catalog (e.g. the per-detector
-    # ss_<tool> nodes, which the unified Detect node + Multitool read for specs).
+    # Hidden from the palette, kept in the catalog (the per-detector ss_<tool>
+    # nodes).
     hidden: NotRequired[bool]
-    # Whether a ss_<tool> detector can be a Multitool chain step (the frontend
-    # derives its step-type list from this flag — see _MULTITOOL_STEP_TOOLS).
+    # Detector usable as a Multitool step; the frontend's step list derives from
+    # this (see _MULTITOOL_STEP_TOOLS).
     multitoolStep: NotRequired[bool]
 
 
-# Shared by the three Ollama thinking nodes: a free-text override of the model
-# name (blank → the configured default). A ``string`` rather than ``enum`` because
-# the installed Ollama models are environment-specific and not known server-side.
-_OLLAMA_MODEL_PARAM: ParamSpec = {
+# Thinking nodes' model override; a string, not an enum, since installed models
+# vary per machine.
+_LLM_MODEL_PARAM: ParamSpec = {
     "name": "model",
     "type": "string",
     "default": "",
-    "label": "Ollama model (blank = default)",
+    "label": "AI model (blank = default)",
+    "datalist": "llm-models",
 }
 
 
-# Curated v1 node set (plans/archive/WORKFLOWS-PLAN.md). Keyed by id so the
-# frontend can both iterate (palette) and look up a placed node's type.
+# Keyed by id so the frontend can iterate the palette and look up placed nodes.
 NODE_TYPES: dict[str, NodeType] = {
     # ---- Sources ----
     "video_source": {
@@ -207,7 +209,7 @@ NODE_TYPES: dict[str, NodeType] = {
         "inputs": [],
         "outputs": [{"name": "region", "type": "region"}],
         "params": [
-            {"name": "name", "type": "string", "default": "", "label": "Region name"},
+            {"name": "name", "type": "region", "default": "", "label": "Region name"},
         ],
         "requires": ["videoDir"],
     },
@@ -236,6 +238,32 @@ NODE_TYPES: dict[str, NodeType] = {
                 "type": "string",
                 "default": "auto",
                 "label": "Language",
+                # ISO 639-1 codes for the common cases; free text covers the rest.
+                "suggestions": [
+                    "auto",
+                    "en",
+                    "sv",
+                    "da",
+                    "no",
+                    "fi",
+                    "de",
+                    "fr",
+                    "es",
+                    "it",
+                    "pt",
+                    "nl",
+                    "pl",
+                    "ja",
+                    "zh",
+                ],
+            },
+            {
+                "name": "speakers",
+                "type": "enum",
+                "default": "default",
+                "choices": ["default", "on", "off"],
+                # default follows TRANSCRIBE_SPEAKERS; on/off force it per node.
+                "label": "Speakers",
             },
         ],
         "requires": ["videoDir"],
@@ -270,6 +298,36 @@ NODE_TYPES: dict[str, NodeType] = {
         ],
         "requires": [],
     },
+    "transcript_marks": {
+        "id": "transcript_marks",
+        "label": "Transcript Marks",
+        "description": "Read the participant's marked transcript lines (from the Transcripts page) as time ranges.",
+        "domain": "transcript",
+        "category": "Transcript",
+        "inputs": [{"name": "video", "type": "video"}],
+        "outputs": [
+            {"name": "timeRange", "type": "timeRange"},
+            {"name": "timestamps", "type": "timestamps"},
+        ],
+        "params": [
+            {
+                "name": "category",
+                "type": "enum",
+                "default": "",
+                "choices": [""] + sorted(config.MARK_CATEGORIES),
+                "label": "Category (blank = all)",
+            },
+            {
+                "name": "pad",
+                "type": "number",
+                "default": 2,
+                "min": 0,
+                "max": 30,
+                "label": "Pad (seconds)",
+            },
+        ],
+        "requires": ["videoDir"],
+    },
     "transcript_export": {
         "id": "transcript_export",
         "label": "Transcript Export",
@@ -292,22 +350,22 @@ NODE_TYPES: dict[str, NodeType] = {
         ],
         "requires": [],
     },
-    # ---- Thinking (Ollama) ----
+    # ---- Thinking (local LLM) ----
     "summarize": {
         "id": "summarize",
         "label": "Summarize",
-        "description": "Summarize a transcript into a paragraph and key bullet points (Ollama).",
+        "description": "Summarize a transcript into a paragraph and key bullet points.",
         "domain": "thinking",
         "category": "Thinking",
         "inputs": [{"name": "transcript", "type": "transcript"}],
         "outputs": [{"name": "summary", "type": "summary"}],
-        "params": [_OLLAMA_MODEL_PARAM],
+        "params": [_LLM_MODEL_PARAM],
         "requires": [],
     },
     "citations": {
         "id": "citations",
         "label": "Citations",
-        "description": "Link summary claims back to the transcript segments that support them (Ollama).",
+        "description": "Link summary claims back to the transcript segments that support them.",
         "domain": "thinking",
         "category": "Thinking",
         "inputs": [
@@ -315,7 +373,7 @@ NODE_TYPES: dict[str, NodeType] = {
             {"name": "segments", "type": "segments"},
         ],
         "outputs": [{"name": "citations", "type": "citations"}],
-        "params": [_OLLAMA_MODEL_PARAM],
+        "params": [_LLM_MODEL_PARAM],
         "requires": [],
     },
     "friction": {
@@ -329,13 +387,28 @@ NODE_TYPES: dict[str, NodeType] = {
             {"name": "summary", "type": "summary", "optional": True},
         ],
         "outputs": [{"name": "friction", "type": "friction"}],
-        "params": [_OLLAMA_MODEL_PARAM],
+        "params": [_LLM_MODEL_PARAM],
+        "requires": [],
+    },
+    "report": {
+        "id": "report",
+        "label": "Report",
+        "description": "Synthesize a per-participant mini-report from the summary plus sheet observations and transcript marks.",
+        "domain": "thinking",
+        "category": "Thinking",
+        "inputs": [
+            {"name": "summary", "type": "summary"},
+            # Supplies the participant id that scopes cited observations/marks;
+            # without it, summary only.
+            {"name": "video", "type": "video", "optional": True},
+        ],
+        "outputs": [{"name": "report", "type": "report"}],
+        "params": [_LLM_MODEL_PARAM],
         "requires": [],
     },
     # ---- Screenspace ----
-    # The ten per-detector nodes (ss_text … ss_boundary) are appended below the
-    # literal from ``_SS_DETECTOR_SPECS`` so each tool's real params reach the
-    # scan (the old single ``ss_scan`` passed ``parameters={}``).
+    # Per-detector ss_<tool> nodes are appended after this literal from
+    # ``_SS_DETECTOR_SPECS``.
     "multitool": {
         "id": "multitool",
         "label": "Multitool",
@@ -405,9 +478,9 @@ NODE_TYPES: dict[str, NodeType] = {
             {
                 "name": "style",
                 "type": "enum",
-                "default": "change",
-                "choices": ["template", "flow", "change"],
-                "label": "Style (needs matching upstream detector)",
+                "default": "auto",
+                "choices": ["auto", "template", "flow", "change", "attention"],
+                "label": "Style (auto = match upstream detector)",
             },
             {
                 "name": "output",
@@ -422,6 +495,7 @@ NODE_TYPES: dict[str, NodeType] = {
                 "default": 24,
                 "min": 2,
                 "label": "GIF frames",
+                "showIf": {"param": "output", "not": "image"},
             },
             {
                 "name": "window",
@@ -429,6 +503,7 @@ NODE_TYPES: dict[str, NodeType] = {
                 "default": 6,
                 "min": 1,
                 "label": "Rolling window (frames)",
+                "showIf": {"param": "output", "equals": "rolling_gif"},
             },
         ],
         "requires": ["videoDir"],
@@ -492,9 +567,10 @@ NODE_TYPES: dict[str, NodeType] = {
                 "min": 1,
                 "max": 30,
                 "label": "Titlecard duration (s)",
+                "showIf": {"param": "titlecards", "equals": True},
             },
-            # Pad fields omit "min" so the number input accepts negatives
-            # (negative = trim inward); max_duration keeps min 0 (0 = no cap).
+            # Pads omit "min" so negatives (trim inward) are accepted; max_duration
+            # 0 = no cap.
             {
                 "name": "pad_start",
                 "type": "number",
@@ -528,7 +604,7 @@ NODE_TYPES: dict[str, NodeType] = {
                 "name": "interval",
                 "type": "number",
                 "default": config.GALLERY_INTERVAL_SECONDS,
-                "min": 1,
+                "min": 0.2,
                 "label": "Interval (s)",
                 "required": True,
             },
@@ -545,6 +621,7 @@ NODE_TYPES: dict[str, NodeType] = {
                 "default": config.GALLERY_GIF_DURATION_SECONDS,
                 "min": 1,
                 "label": "GIF duration (s)",
+                "showIf": {"param": "output_format", "equals": "gif"},
             },
         ],
         "requires": ["videoDir"],
@@ -568,8 +645,8 @@ NODE_TYPES: dict[str, NodeType] = {
                 "default": False,
                 "label": "Chronological order",
             },
-            # Pad fields omit "min" so the number input accepts negatives
-            # (negative = trim inward); max_duration keeps min 0 (0 = no cap).
+            # Pads omit "min" so negatives (trim inward) are accepted; max_duration
+            # 0 = no cap.
             {
                 "name": "pad_start",
                 "type": "number",
@@ -587,10 +664,59 @@ NODE_TYPES: dict[str, NodeType] = {
         ],
         "requires": ["videoDir"],
     },
+    "post_process": {
+        "id": "post_process",
+        "label": "Post-process Video",
+        "description": "Embed subtitles, normalize audio, remux for browser seeking, or write a size-capped copy of the source video.",
+        "domain": "artifact",
+        "category": "Artifact",
+        "inputs": [
+            {"name": "video", "type": "video"},
+            # Embed-subtitles takes its cues from a wired transcript; the other
+            # operations ignore this port.
+            {"name": "transcript", "type": "transcript", "optional": True},
+        ],
+        "outputs": [
+            # Pass-through video (repointed at copies) lets post-processing chain
+            # ahead of transcription or cutting.
+            {"name": "video", "type": "video"},
+            {"name": "artifacts", "type": "artifacts"},
+        ],
+        "params": [
+            {
+                "name": "operation",
+                "type": "enum",
+                "default": "embed_subtitles",
+                "choices": [
+                    "embed_subtitles",
+                    "normalize_audio",
+                    "remux_faststart",
+                    "compress",
+                ],
+                "label": "Operation",
+            },
+            {
+                "name": "default_track",
+                "type": "bool",
+                "default": True,
+                "label": "Default subtitle track",
+                "showIf": {"param": "operation", "equals": "embed_subtitles"},
+            },
+            {
+                "name": "target_mb",
+                "type": "number",
+                "default": 100,
+                "min": 1,
+                "label": "Target size (MB)",
+                "showIf": {"param": "operation", "equals": "compress"},
+            },
+        ],
+        "requires": ["videoDir"],
+    },
     "data_export": {
         "id": "data_export",
         "label": "Data Export",
-        "description": "Export events and segments as analysis-ready JSON/CSV tables.",
+        "description": "Export events and segments as analysis-ready JSON/CSV tables (plus optional pins/friction tables from the app manifests).",
         "domain": "artifact",
         "category": "Artifact",
         "inputs": [
@@ -605,6 +731,20 @@ NODE_TYPES: dict[str, NodeType] = {
                 "default": "both",
                 "choices": ["both", "json", "csv"],
                 "label": "Format",
+            },
+            # These tables read the on-disk Screenspace/Transcripts manifests, not
+            # wires; opt-in so defaults follow wiring.
+            {
+                "name": "include_pins",
+                "type": "bool",
+                "default": False,
+                "label": "Include calibration pins",
+            },
+            {
+                "name": "include_friction",
+                "type": "bool",
+                "default": False,
+                "label": "Include friction tables",
             },
         ],
         "requires": [],
@@ -624,42 +764,29 @@ NODE_TYPES: dict[str, NodeType] = {
         "params": [],
         "requires": [],
     },
-    # ---- Control ----
-    "measure": {
-        "id": "measure",
-        "label": "Measure",
-        "description": "Reduce events, clips, or segments to a single number (count, confidence, or duration).",
-        "domain": "control",
-        "category": "Control",
-        "inputs": [
-            {"name": "events", "type": "events", "optional": True},
-            {"name": "clips", "type": "clipRecords", "optional": True},
-            {"name": "segments", "type": "segments", "optional": True},
-        ],
-        "outputs": [{"name": "value", "type": "scalar"}],
-        "params": [
-            {
-                "name": "metric",
-                "type": "enum",
-                "default": "count",
-                "choices": ["count", "max_confidence", "total_duration"],
-                "label": "Metric",
-            },
-        ],
+    "gallery_viewer": {
+        "id": "gallery_viewer",
+        "label": "Gallery Viewer",
+        "description": "Bundle screenshot/GIF artifacts into a standalone gallery HTML viewer.",
+        "domain": "artifact",
+        "category": "Artifact",
+        "inputs": [{"name": "artifacts", "type": "artifacts"}],
+        "outputs": [{"name": "viewer", "type": "viewerHtml"}],
+        "params": [],
         "requires": [],
     },
+    # ---- Control ----
+    # No standalone measure node: gates fuse measure+compare; nothing else
+    # consumes a measurement.
     "gate": {
         "id": "gate",
         "label": "Gate",
-        "description": "Compare a measured value to a threshold to allow or skip downstream nodes.",
+        "description": "Compare a scalar (e.g. a video's duration via the adapter) to a threshold to allow or skip downstream nodes.",
         "domain": "control",
         "category": "Control",
         "inputs": [{"name": "value", "type": "scalar"}],
-        # ``pass`` is a CONTROL output: it carries no data, it gates. The runner
-        # skips a node when an upstream gate completed with ``pass`` False, and
-        # excludes control edges from a node's data inputs. The universal
-        # ``__gate__`` input port the frontend renders is also ``control``-typed,
-        # so a gate can wire into any node (exact-match) as a control dependency.
+        # ``pass`` carries no data; it wires into any node's universal ``__gate__``
+        # control input.
         "outputs": [{"name": "pass", "type": "control"}],
         "params": [
             {
@@ -708,12 +835,8 @@ NODE_TYPES: dict[str, NodeType] = {
 }
 
 
-# Per-detector Screenspace nodes. Each entry's params are lifted from the matching
-# ``screenspace_tools`` class (the knobs its ``scan`` reads). The three
-# reference-based detectors (template/similarity/scene) self-extract their
-# reference from the node's region at ``reference_seconds`` so the canvas needs no
-# upload UI. ``_build_ss_scan_params`` (below) assembles these flat params into the
-# nested ``scan_params`` each scan expects.
+# Per-detector params, lifted from each ``screenspace_tools`` class; reference
+# detectors self-extract at ``reference_seconds``.
 _SS_DETECTOR_LABELS: dict[str, str] = {
     "text": "Detect Text",
     "color": "Detect Color",
@@ -721,10 +844,12 @@ _SS_DETECTOR_LABELS: dict[str, str] = {
     "similarity": "Detect Similarity",
     "numbers": "Detect Numbers",
     "template": "Detect Template",
+    "shape": "Detect Shape",
     "flow": "Detect Motion",
     "scene": "Detect Scene",
     "inactivity": "Detect Inactivity",
     "boundary": "Detect Boundary",
+    "attention": "Detect Attention",
 }
 
 _SS_DETECTOR_DESCRIPTIONS: dict[str, str] = {
@@ -734,10 +859,12 @@ _SS_DETECTOR_DESCRIPTIONS: dict[str, str] = {
     "similarity": "Detect frames matching a reference image sampled from the region.",
     "numbers": "Read numbers in the region via OCR and compare them to a target.",
     "template": "Detect a reference template (sampled from the region) appearing in the frame.",
+    "shape": "Detect a reference shape's outline (sampled from the region) via scale-swept edge matching.",
     "flow": "Detect motion in the region via optical flow.",
     "scene": "Detect scene changes against a reference fingerprint sampled from the region.",
     "inactivity": "Detect stretches of inactivity (no change) in the region.",
     "boundary": "Detect UI boundaries or edges appearing in the region.",
+    "attention": "Track predicted visual attention (saliency) and detect focus shifts. Full-frame.",
 }
 
 _INTERVAL_PARAM: ParamSpec = {
@@ -895,9 +1022,22 @@ _SS_DETECTOR_SPECS: dict[str, list[ParamSpec]] = {
             "type": "number",
             "default": 0,
             "label": "Target value",
+            "showIf": {"param": "operator", "not": "range"},
         },
-        {"name": "range_min", "type": "number", "default": 0, "label": "Range min"},
-        {"name": "range_max", "type": "number", "default": 0, "label": "Range max"},
+        {
+            "name": "range_min",
+            "type": "number",
+            "default": 0,
+            "label": "Range min",
+            "showIf": {"param": "operator", "equals": "range"},
+        },
+        {
+            "name": "range_max",
+            "type": "number",
+            "default": 0,
+            "label": "Range max",
+            "showIf": {"param": "operator", "equals": "range"},
+        },
         {
             "name": "integers_only",
             "type": "bool",
@@ -934,6 +1074,72 @@ _SS_DETECTOR_SPECS: dict[str, list[ParamSpec]] = {
             "default": 1.0,
             "min": 0,
             "label": "Template scale",
+        },
+        _INTERVAL_PARAM,
+    ],
+    "shape": [
+        {
+            "name": "reference_seconds",
+            "type": "number",
+            "default": 0.0,
+            "min": 0,
+            "label": "Reference time (s)",
+        },
+        {
+            "name": "threshold",
+            "type": "number",
+            "default": config.SCREENSPACE_SHAPE_MATCH_THRESHOLD,
+            "min": 0,
+            "max": 1,
+            "label": "Match threshold",
+        },
+        {
+            "name": "scale_min",
+            "type": "number",
+            "default": config.SCREENSPACE_SHAPE_SCALE_MIN,
+            "min": 0.1,
+            "max": 4,
+            "label": "Scale min",
+        },
+        {
+            "name": "scale_max",
+            "type": "number",
+            "default": config.SCREENSPACE_SHAPE_SCALE_MAX,
+            "min": 0.1,
+            "max": 4,
+            "label": "Scale max",
+        },
+        {
+            "name": "scale_steps",
+            "type": "number",
+            "default": config.SCREENSPACE_SHAPE_SCALE_STEPS,
+            "min": 1,
+            "max": 12,
+            "label": "Scale steps",
+        },
+        {
+            "name": "scale_y_min",
+            "type": "number",
+            "default": 0,
+            "min": 0,
+            "max": 4,
+            "label": "V scale min (0=linked)",
+        },
+        {
+            "name": "scale_y_max",
+            "type": "number",
+            "default": 0,
+            "min": 0,
+            "max": 4,
+            "label": "V scale max (0=linked)",
+        },
+        {
+            "name": "scale_y_steps",
+            "type": "number",
+            "default": 0,
+            "min": 0,
+            "max": 12,
+            "label": "V scale steps",
         },
         _INTERVAL_PARAM,
     ],
@@ -1013,17 +1219,31 @@ _SS_DETECTOR_SPECS: dict[str, list[ParamSpec]] = {
         },
         _INTERVAL_PARAM,
     ],
+    "attention": [
+        {
+            "name": "shift_threshold",
+            "type": "number",
+            "default": 0.0,
+            "min": 0,
+            "label": "Shift threshold (0=auto)",
+        },
+        {
+            "name": "ema_alpha",
+            "type": "number",
+            "default": 0.0,
+            "min": 0,
+            "max": 1,
+            "label": "Smoothing α (0=auto)",
+        },
+        _INTERVAL_PARAM,
+    ],
 }
 
 # Detectors whose scan needs a reference frame self-extracted from the node region.
-_SS_REFERENCE_DETECTORS = frozenset({"similarity", "template", "scene"})
+_SS_REFERENCE_DETECTORS = frozenset({"similarity", "template", "shape", "scene"})
 
-# Detectors usable as a Multitool chain step: the per-frame (``check_frame``)
-# detectors that need no uploaded reference. Single source of truth — served to
-# the frontend via each node's ``multitoolStep`` flag so the step editor derives
-# the list instead of hardcoding it (the "no duplicated JS constants" rule).
-# ``tests/test_workflows_executors`` cross-checks this against the actual tool
-# classes (override ``check_frame`` AND not reference-based) so it can't drift.
+# Per-frame detectors needing no reference; tests/test_workflows_executors
+# cross-checks against the tool classes.
 _MULTITOOL_STEP_TOOLS = frozenset(
     {"color", "change", "flow", "text", "numbers", "inactivity"}
 )
@@ -1043,19 +1263,14 @@ for _ss_tool, _ss_param_spec in _SS_DETECTOR_SPECS.items():
         "outputs": [{"name": "events", "type": "events"}],
         "params": list(_ss_param_spec),
         "requires": ["videoDir"],
-        # Hidden from the palette: the unified "detect" node below is the
-        # palette-facing entry. These stay in the catalog as the per-detector
-        # spec source (Detect editor + Multitool steps) and keep old blueprints
-        # and built-in recipes that reference ss_<tool> directly runnable.
+        # The unified ``detect`` node fronts the palette; these remain the spec
+        # source and stay runnable.
         "hidden": True,
-        # Whether this detector can be a Multitool step (the frontend derives the
-        # step-type list from this flag — see _MULTITOOL_STEP_TOOLS).
         "multitoolStep": _ss_tool in _MULTITOOL_STEP_TOOLS,
     }
 
-# Unified palette-facing detector: one node whose ``detector`` dropdown swaps the
-# per-detector param set (the frontend reads it from the hidden ss_<tool> nodes
-# above). Dispatches to the same _run_ss_detector body the ss_<tool> nodes use.
+# Palette-facing detector; its ``detector`` dropdown swaps in the hidden ss_<tool>
+# param sets.
 NODE_TYPES["detect"] = {
     "id": "detect",
     "label": "Detect",
@@ -1111,16 +1326,9 @@ def serialize_adapters() -> list[list[str]]:
 
 
 # ---------------------------------------------------------------------------
-# Built-in recipes (P4) — read-only stashes served alongside user stashes
+# Built-in recipes: read-only stashes prepended by ``GET /api/stashes``, never
+# persisted
 # ---------------------------------------------------------------------------
-#
-# These are the headline graphs shipped as ready-to-stamp sub-graphs. They are
-# *code, not data*: ``GET /api/stashes`` prepends them to the user's persisted
-# stashes, so they are never seeded into the manifest (no migration/dedup). The
-# ``builtin`` flag makes them read-only — the stash CRUD routes reject renaming
-# or deleting them. Node/edge shapes mirror the on-canvas blueprint shapes
-# (``{id, type, params, position}`` / ``{id, from, fromPort, to, toPort}``) with
-# stash-local ids; the frontend remaps to fresh ``n_``/``e_`` ids on instantiate.
 
 BUILTIN_STASHES: list[dict[str, Any]] = [
     {
@@ -1399,17 +1607,16 @@ BUILTIN_STASHES: list[dict[str, Any]] = [
 
 
 # ---------------------------------------------------------------------------
-# Source descriptors — embedded in every domain value so the pure adapters
-# (below) and the executors (in workflows.py) can reach a value's source
+# Source descriptors: embedded in every domain value; keeps the adapters pure
 # ---------------------------------------------------------------------------
 
 _DEFAULT_EVENT_CLUSTER_GAP = 5.0  # seconds; matches the CLI --cluster-gap default
 
 
 def _study_from_filename(filename: str) -> str:
-    """Derive the study name from a ``{study}_{pid}`` basename ('' when absent)."""
-    head, _sep, _tail = Path(filename).stem.rpartition("_")
-    return head
+    """Derive the study name from a patterned source basename ('' when absent)."""
+    parsed = utils.parse_source_video_name(filename)
+    return parsed[0] if parsed else ""
 
 
 def _source_descriptor(participant: str, video_paths: list[str]) -> dict[str, Any]:
@@ -1452,12 +1659,9 @@ def _clip_source_filename(source: dict[str, Any]) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Typed-port adapters (M3) — pure value -> value, applied by the runner (M4)
+# Typed-port adapters: pure value -> value coercions the runner applies across
+# port types
 # ---------------------------------------------------------------------------
-#
-# An adapter coerces an output value whose port type differs from the consuming
-# input's type. They are pure (no ctx/params), so each value self-carries its
-# source descriptor (see the executors in ``workflows.py``).
 
 
 def _adapt_transcript_to_segments(value: dict[str, Any]) -> dict[str, Any]:
@@ -1581,10 +1785,8 @@ ADAPTERS: dict[tuple[str, str], Callable[[Any], Any]] = {
     ("video", "scalar"): _adapt_video_to_scalar,
 }
 
-# Plain-language description of what each adapter does, served alongside the
-# table (see ``serialize_adapters``) so a coerced (dashed) wire's tooltip can
-# explain the transformation — not just that one happened. One per ADAPTERS key
-# (guarded by ``tests/test_workflows_api``); a missing one degrades to no suffix.
+# Tooltip text per ADAPTERS key (see serialize_adapters); tests/test_workflows_api
+# checks coverage.
 _ADAPTER_DESCRIPTIONS: dict[tuple[str, str], str] = {
     ("transcript", "segments"): "use the transcript's segments",
     ("segments", "timeRange"): "use each segment's time span",

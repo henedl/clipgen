@@ -21,9 +21,19 @@
   position: absolute;
   inset: 0;
   background: var(--color-backdrop);
-  opacity: 0.6;
+  opacity: 0;
+  transition: opacity var(--duration-instant) ease-out;
   backdrop-filter: blur(2px);
   -webkit-backdrop-filter: blur(2px);
+  pointer-events: none;
+}
+
+.cmdp-overlay.is-open::before {
+  opacity: 0.6;
+}
+
+/* Closing: let clicks through while the panel fades. */
+.cmdp-overlay:not(.is-open) {
   pointer-events: none;
 }
 
@@ -193,4 +203,11 @@
   display: flex;
   align-items: center;
   gap: var(--space-1);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .cmdp-panel,
+  .cmdp-overlay::before {
+    transition: none;
+  }
 }

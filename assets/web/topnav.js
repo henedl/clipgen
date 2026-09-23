@@ -52,23 +52,14 @@
     nav.appendChild(buildCenter());
     nav.appendChild(buildRight());
 
-    // In the native desktop window the title bar is hidden and the bar runs to
-    // the top of the window, so it has to double as the drag handle. WKWebView
-    // ignores -webkit-app-region, so opt into pywebview's substitute: it drags on
-    // mousedown over a .pywebview-drag-region element. desktop.py sets
-    // DRAG_REGION_DIRECT_TARGET_ONLY, so only the bar's own background and the
-    // flex gaps drag — the brand, tabs and buttons are their own event targets
-    // and keep behaving normally. The server sets data-desktop-chrome; a browser
-    // page never has it and is untouched.
+    // Desktop chrome hides the title bar; pywebview drags .pywebview-drag-region direct targets. See desktop.py.
     if (document.documentElement.dataset.desktopChrome) {
       nav.classList.add("pywebview-drag-region");
       var columns = nav.children;
       for (var c = 0; c < columns.length; c++) {
         columns[c].classList.add("pywebview-drag-region");
       }
-      // The hidden title bar also owes the user its double-click action, which
-      // AppKit can no longer deliver. Gate on the same direct-target rule the
-      // drag uses, so both gestures cover exactly the same pixels.
+      // Restore the title bar's double-click, gated on the same direct-target rule as dragging.
       nav.addEventListener("dblclick", function (e) {
         var cls = e.target && e.target.classList;
         if (!cls || !cls.contains("pywebview-drag-region")) return;
@@ -85,11 +76,9 @@
     els.qaWrap = nav.querySelector(".topnav-qa");
     els.qaTrigger = nav.querySelector(".topnav-qa-trigger");
     els.qaPanel = nav.querySelector(".topnav-qa-panel");
-    els.version = nav.querySelector(".topnav-version");
 
     bindEvents();
     setQuickActions(window.CLIPGEN_QUICK_ACTIONS || []);
-    setVersion();
 
     isReady = true;
     for (var i = 0; i < readyCallbacks.length; i++) {
@@ -161,9 +150,7 @@
     startBtn.appendChild(startIcon);
     right.appendChild(startBtn);
 
-    // Log button — only on surfaces that wire an artifact log (Studio's
-    // #logOverlay in studio.js; Composer's log panel in composer.js). On
-    // every other surface the button would be dead chrome.
+    // Log button only where an artifact log exists (studio.js #logOverlay, composer.js log panel).
     if (state.activeFrontend === "studio" || state.activeFrontend === "composer") {
       var logBtn = document.createElement("button");
       logBtn.type = "button";
@@ -191,27 +178,7 @@
     settingsBtn.appendChild(settingsIcon);
     right.appendChild(settingsBtn);
 
-    // Tooltip toggle — opt-in per page (Studio + Transcripts). Keeps the
-    // existing #tooltipToggle id so studio.js / transcripts.js bindings continue.
-    var showTooltip = state.activeFrontend === "studio" || state.activeFrontend === "transcripts";
-    if (showTooltip) {
-      var tooltipBtn = document.createElement("button");
-      tooltipBtn.type = "button";
-      tooltipBtn.id = "tooltipToggle";
-      tooltipBtn.className = "topnav-icon-btn";
-      tooltipBtn.setAttribute("data-tooltip", "Toggle cross-reference tooltips");
-      tooltipBtn.setAttribute("aria-label", "Toggle cross-reference tooltips");
-      tooltipBtn.setAttribute("aria-pressed", "true");
-      var tooltipIcon = document.createElement("span");
-      tooltipIcon.className = "topnav-icon";
-      tooltipIcon.style.cssText = iconMaskStyle("chat-bubble-left-ellipsis");
-      tooltipBtn.appendChild(tooltipIcon);
-      right.appendChild(tooltipBtn);
-    }
-
-    // Theme toggle.
-    // Keeps the existing #themeToggle id + .theme-toggle-icon class names so
-    // initThemeToggle() in utils.js continues to work without changes.
+    // Theme toggle. Keeps #themeToggle and .theme-toggle-icon for initThemeToggle() in utils.js.
     var themeBtn = document.createElement("button");
     themeBtn.type = "button";
     themeBtn.id = "themeToggle";
@@ -219,12 +186,6 @@
     themeBtn.setAttribute("aria-pressed", "false");
     themeBtn.innerHTML = '<span class="theme-toggle-icon theme-icon-sun"></span><span class="theme-toggle-icon theme-icon-moon"></span>';
     right.appendChild(themeBtn);
-
-    // Version pill
-    var version = document.createElement("span");
-    version.className = "topnav-version";
-    version.setAttribute("aria-label", "clipgen version");
-    right.appendChild(version);
 
     return right;
   }
@@ -278,8 +239,7 @@
   }
 
   function getQuickActions(opts) {
-    // refresh:true re-runs the same gating callbacks the menu runs on open,
-    // so callers (the command palette) see the same snapshot the menu would.
+    // refresh:true re-runs the menu's open-time gating so the palette sees the same snapshot.
     if (opts && opts.refresh) {
       for (var i = 0; i < beforeOpenCallbacks.length; i++) {
         try { beforeOpenCallbacks[i](); } catch (_) {}
@@ -295,8 +255,7 @@
     state.quickActions.forEach(function (item) {
       els.qaPanel.appendChild(buildQuickActionItem(item));
     });
-    // If the menu is empty, hide the trigger entirely so the cluster doesn't
-    // show a button that opens onto nothing.
+    // Hide the trigger when the menu is empty.
     els.qaWrap.style.display = state.quickActions.length === 0 ? "none" : "";
   }
 
@@ -344,22 +303,6 @@
     return btn;
   }
 
-  function setVersion() {
-    if (!els.version) return;
-    var v = "";
-    try {
-      if (window.CLIPGEN_CONFIG && typeof window.CLIPGEN_CONFIG.version === "string") {
-        v = window.CLIPGEN_CONFIG.version;
-      }
-    } catch (_) {}
-    if (!v) {
-      els.version.style.display = "none";
-      return;
-    }
-    els.version.style.display = "";
-    els.version.textContent = "v" + v;
-  }
-
   function onReady(cb) {
     if (typeof cb !== "function") return;
     if (isReady) {
@@ -374,10 +317,36 @@
     beforeOpenCallbacks.push(cb);
   }
 
+  // Build quick actions now, on export-status flips, and (opt-in) on open.
+  function installQuickActions(build, opts) {
+    opts = opts || {};
+    var exportActions = window.ClipgenExportActions;
+    function rebuild() {
+      setQuickActions(build());
+    }
+    rebuild();
+    if (exportActions) exportActions.refreshExportStatus(rebuild);
+    onBeforeOpen(function () {
+      if (opts.rebuildOnOpen) rebuild();
+      if (exportActions) exportActions.refreshExportStatus(rebuild);
+    });
+    return rebuild;
+  }
+
+  // "Update available" dot on the Start button; start-overlay.js drives it.
+  function setStartBadge(on) {
+    var btn = document.getElementById("startBtn");
+    if (!btn) return;
+    btn.classList.toggle("has-badge", !!on);
+    btn.setAttribute("data-tooltip", on ? "Update available" : "Start panel");
+    btn.setAttribute("aria-label", on ? "Start panel, update available" : "Start panel");
+  }
+
   window.ClipgenTopNav = {
+    setStartBadge: setStartBadge,
     setQuickActions: setQuickActions,
     getQuickActions: getQuickActions,
-    refreshVersion: setVersion,
+    installQuickActions: installQuickActions,
     onReady: onReady,
     onBeforeOpen: onBeforeOpen,
   };

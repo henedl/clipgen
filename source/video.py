@@ -4,6 +4,7 @@ import concurrent.futures
 import contextlib
 import hashlib
 import json
+import math
 import os
 import re
 import shutil
@@ -13,44 +14,114 @@ import sys
 import tempfile
 import threading
 from collections import Counter
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterable, Iterator
 from pathlib import Path
-from typing import Any
+from typing import Any, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    import numpy as np
 
 import config
 import files
+import profiling
 import utils
 import itertools
 
 INVALID_END_TIMESTAMP = None
 
-# Two-stage ffmpeg seek window. We pre-seek (fast, key-frame-aligned) to
-# `target - FFMPEG_PRESEEK_SECONDS` and then seek the rest accurately after
-# `-i`. This keeps long-video performance while landing on the exact frame
-# the caller asked for, instead of the nearest preceding key-frame.
-FFMPEG_PRESEEK_SECONDS = 2.0
-
-# Caches are keyed on (resolved_path, mtime_ns) so a re-encoded or replaced
-# source file naturally yields a fresh entry instead of stale data. Mirrors
-# the pattern in viewer.py and pipeline.py.
+# Keyed on (resolved_path, mtime_ns) so a replaced source misses the cache.
 _file_duration_cache: dict[tuple[str, int], int] = {}
 _video_properties_cache: dict[tuple[str, int], dict[str, Any]] = {}
-# Max keyframe gap (seconds) per file; None means "unknown / too sparse to
-# confirm" and callers must treat that as "do not enable keyframe-only decode".
+# Single-flight for probe_video_properties: concurrent routes share one ffprobe per
+# file.
+_probe_inflight: dict[tuple[str, int], threading.Lock] = {}
+_probe_inflight_guard = threading.Lock()
+# Max keyframe gap (s) per file; None means unknown, so no keyframe-only decode.
 _keyframe_gap_cache: dict[tuple[str, int], float | None] = {}
-# Container seekability per file; None means "shape not determined" (not an
-# MP4, truncated, unreadable) and callers must stay silent rather than warn.
+
+
+FFPROBE_TIMEOUT_SECONDS = 20
+
+
+# ---- ffmpeg / ffprobe invocation and capability probing ----
+
+
+def _ffprobe_check_output(cmd: list[str]) -> str:
+    """Run an ffprobe argv and return stdout text.
+
+    Split from ``ffmpeg.run`` so a profile report can tell probe I/O from
+    encode/extract work. ``_parallel_probe`` was a measured win with no
+    label to re-prove it; this is that label.
+
+    A stalled file (network mount, truncated container) must not pin a
+    request thread, so a timeout surfaces as ``CalledProcessError`` like
+    any other probe failure.
+    """
+    with profiling.span("ffprobe.run"):
+        try:
+            return subprocess.check_output(
+                cmd, encoding="utf-8", timeout=FFPROBE_TIMEOUT_SECONDS
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise subprocess.CalledProcessError(
+                124, cmd, output=exc.output, stderr=exc.stderr
+            ) from exc
+
+
+def _report_ffmpeg_missing() -> None:
+    utils.error_print(
+        "ffmpeg is not installed or not found in system PATH.",
+        [
+            "Please install ffmpeg and ensure it's in your PATH.",
+            "Download from: https://www.ffmpeg.org/download.html",
+        ],
+    )
+
+
+def ffmpeg_cmd(*args: str) -> list[str]:
+    """Standard ffmpeg argv prefix (``-y -loglevel ...``) plus *args.
+
+    A function rather than a constant: ``config.FFMPEG_LOGLEVEL`` must be read
+    at call time, not import time.
+    """
+    return ["ffmpeg", "-y", "-loglevel", config.FFMPEG_LOGLEVEL, *args]
+
+
+# Argv tail shared by the thumbnail/sprite grabbers: one JPEG frame on stdout.
+_MJPEG_PIPE_TAIL: tuple[str, ...] = (
+    "-f",
+    "image2pipe",
+    "-vcodec",
+    "mjpeg",
+    "-q:v",
+    "5",
+    "pipe:1",
+)
+
+
+def _ffmpeg_bytes(cmd: list[str], *, timeout: float) -> bytes | None:
+    """Run an ffmpeg argv, returning stdout bytes; None on any failure."""
+    try:
+        with profiling.span("ffmpeg.bytes"):
+            result = subprocess.run(
+                cmd, capture_output=True, timeout=timeout, check=False
+            )
+    except (FileNotFoundError, OSError, subprocess.TimeoutExpired):
+        return None
+    if result.returncode != 0 or not result.stdout:
+        return None
+    return result.stdout
+
+
+# Container seekability per file; None means undetermined and callers stay silent.
 _container_seekability_cache: dict[tuple[str, int], dict[str, Any] | None] = {}
 
-# Generic audio-stream handler names muxers emit by default — treated as "no
-# useful name" when labelling audio tracks (fall back to language / ordinal).
+# Default muxer handler names; treated as unnamed when labelling audio tracks.
 _GENERIC_AUDIO_HANDLERS = frozenset(
     {"soundhandler", "core media audio", "isom", "audio"}
 )
 
-# Track-name hints for pick_speech_audio_track(). Screen recorders name their
-# streams ("Participant Mic", "System Audio"), and that name is the only signal
-# available without decoding, so the heuristic is purely lexical.
+# Lexical hints for pick_speech_audio_track(); the stream name is the only cheap signal.
 _SPEECH_TRACK_HINTS = [
     "participant", "participants", "interview", "interviewee", "interviewer",
     "meeting", "mic", "mics", "microphone", "mikrofon", "voice", "voices",
@@ -59,10 +130,8 @@ _SPEECH_TRACK_HINTS = [
     "boom", "call", "zoom", "teams", "webex",
     "deltagare", "intervju", "röst", "samtal",
 ]  # fmt: skip
-# "speaker"/"speakers" is deliberately NEGATIVE: on macOS/Windows a track named
-# "Speakers" is the *output* capture (an aggregate device), not a person. Reading
-# it as speech would silently transcribe system audio — the exact failure this
-# whole feature exists to prevent.
+# "speaker(s)" is NEGATIVE on purpose: an OS "Speakers" track is output capture, not a
+# person.
 _NON_SPEECH_TRACK_HINTS = [
     "system", "screen", "desktop", "display", "music", "game", "output",
     "loopback", "playback", "monitor", "soundtrack", "background", "ambience",
@@ -97,8 +166,7 @@ def pick_speech_audio_track(audio_tracks: list[dict[str, Any]]) -> int:
     probe cache would serve stale picks if the hints ever become tunable.
     """
     best_index = 0
-    # None (not 0) so a field of only *negatively* scored tracks still moves off
-    # track 0 — "System Audio" then an unnamed track should pick the unnamed one.
+    # None, not 0: all-negative fields must still move off track 0.
     best_score: int | None = None
     for position, track in enumerate(audio_tracks):
         haystack = " ".join(
@@ -127,20 +195,49 @@ def _resolved_path_and_mtime(filepath: str) -> tuple[str, int] | None:
     return str(path.resolve()), st.st_mtime_ns
 
 
-def accurate_seek_args(timestamp_seconds: float) -> tuple[list[str], list[str]]:
-    """Return ``(pre_input_args, post_input_args)`` for a frame-accurate seek.
+def accurate_seek_args(timestamp_seconds: float) -> list[str]:
+    """Return the pre-input ``-ss`` args for a frame-accurate seek on t=0 media.
 
-    Splits a seek into a fast pre-input ``-ss`` near the target plus a small
-    accurate post-input ``-ss`` for the residual. Callers splice the lists
-    around ``-i <video>``. For ``timestamp <= FFMPEG_PRESEEK_SECONDS`` the
-    pre-input list is empty and the full seek is post-input.
+    A single pre-input ``-ss`` is frame-accurate on MP4/MOV (container
+    ``start_time`` 0) whenever the output is decoded (rawvideo/MJPEG — every
+    caller here): ffmpeg seeks the demuxer to the nearest keyframe at or before
+    the target, then decodes and discards up to the exact frame internally.
+    MPEG-TS and similar containers with a non-zero ``start_time`` need
+    :func:`accurate_seek_pre_post` instead — pre-input ``-ss`` is in stream
+    time there and lands on the wrong frame (or none).
+    Never valid for stream copy, which cannot decode-and-discard.
     """
-    if timestamp_seconds <= 0:
-        return [], []
-    if timestamp_seconds <= FFMPEG_PRESEEK_SECONDS:
-        return [], ["-ss", str(timestamp_seconds)]
-    pre = timestamp_seconds - FFMPEG_PRESEEK_SECONDS
-    return ["-ss", str(pre)], ["-ss", str(FFMPEG_PRESEEK_SECONDS)]
+    pre, _post = accurate_seek_pre_post(timestamp_seconds)
+    return pre
+
+
+def accurate_seek_pre_post(
+    timestamp_seconds: float, *, container_start: float = 0.0
+) -> tuple[list[str], list[str]]:
+    """Return ``(pre_input, post_input)`` ``-ss`` args for a decoded seek.
+
+    Zero ``container_start`` (typical MP4): one pre-input ``-ss``. Non-zero
+    (MPEG-TS): the old two-stage idiom — pre-input to ``target - 2s`` plus
+    post-input ``-ss 2``, or post-input only below 2s — which is frame-accurate
+    because post-input ``-ss`` counts decoded media, not stream timestamps.
+    """
+    ts = max(0.0, timestamp_seconds)
+    if container_start <= 1e-6:
+        return (["-ss", str(ts)] if ts > 0 else [], [])
+    if ts > 2.0:
+        return (["-ss", f"{ts - 2.0:.6g}"], ["-ss", "2.0"])
+    return ([], ["-ss", str(ts)] if ts > 0 else [])
+
+
+def _container_start_seconds(filepath: str) -> float:
+    """Format ``start_time`` from the properties cache, or 0 if unknown."""
+    props = probe_video_properties(filepath)
+    if not props:
+        return 0.0
+    try:
+        return max(0.0, float(props.get("start_time") or 0.0))
+    except (TypeError, ValueError):
+        return 0.0
 
 
 def _ffmpeg_install_guidance_lines() -> list[str]:
@@ -173,9 +270,7 @@ def check_ffmpeg_tools_available() -> bool:
         "clipgen requires both ffmpeg and ffprobe to cut and inspect videos.",
     ]
     if getattr(sys, "frozen", False):
-        # Desktop builds bundle both tools under <bundle>/bin, so reaching
-        # this branch means the bundle itself is damaged — installing a system
-        # ffmpeg would paper over a broken download or a stripped app.
+        # Frozen builds bundle both tools; missing here means a damaged bundle.
         details.append(
             "This build bundles ffmpeg — if it is missing, the app is "
             "damaged. Reinstall clipgen, or place ffmpeg on your PATH as a "
@@ -183,11 +278,9 @@ def check_ffmpeg_tools_available() -> bool:
         )
     details.extend(_ffmpeg_install_guidance_lines())
     if not getattr(sys, "frozen", False):
-        # Source checkouts ship a script that does the whole job; a frozen
-        # bundle has no repo to run it from, so only mention it when there is.
-        details.append("Or, from this checkout: scripts/install-ffmpeg-ollama.sh")
-    # Not error_print: this aborts startup, and a windowed launch has no console
-    # to read the guidance above — the app would just quit with nothing on screen.
+        # The install script only exists in a source checkout.
+        details.append("Or, from this checkout: scripts/install-deps.sh")
+    # Not error_print: a windowed launch has no console to show this.
     utils.fatal_startup_error("Required video tools are missing from PATH.", details)
     return False
 
@@ -201,9 +294,8 @@ def _probe_ffmpeg_listing(listing_arg: str, target_tokens: set[str]) -> bool:
     listing whose second column is the encoder/filter name.
     """
     try:
-        # check=False throughout this module: every ffmpeg/ffprobe call inspects
-        # returncode itself and turns a failure into a warning or a None return.
-        # check=True would raise past that handling and lose the diagnostics.
+        # check=False module-wide: every call inspects returncode and degrades to
+        # warning/None.
         result = subprocess.run(
             ["ffmpeg", "-hide_banner", listing_arg],
             capture_output=True,
@@ -221,15 +313,13 @@ def _probe_ffmpeg_listing(listing_arg: str, target_tokens: set[str]) -> bool:
 
 
 _webp_support_cache: bool | None = None
-_webp_missing_warned: bool = False
 _drawtext_support_cache: bool | None = None
 _vp9_support_cache: bool | None = None
-_vp9_missing_warned: bool = False
+# Encoder-missing errors print once per session, keyed by output format.
+_encoder_missing_warned: dict[str, bool] = {}
 _videotoolbox_support_cache: bool | None = None
 _hw_encoder_warned: bool = False
-# Session-sticky: one hardware-encode failure disables the hardware encoder for
-# the rest of the run, so a broken media engine costs one wasted encode, not one
-# per clip. Reset only by restarting clipgen (or by tests).
+# Session-sticky: one hardware-encode failure disables it for the run; tests reset it.
 _hw_encode_failed: bool = False
 
 
@@ -385,6 +475,9 @@ def note_hw_encode_failure(encoder: str) -> None:
     )
 
 
+# ---- Encode orchestration: encoder choice, progress, cancellation ----
+
+
 def run_ffmpeg_encode(
     build_command: Callable[[str], list[str]],
     *,
@@ -407,35 +500,28 @@ def run_ffmpeg_encode(
     return run_ffmpeg_process(build_command("libx264"), **kwargs)
 
 
-def _warn_webp_unavailable_once(output_file: str) -> None:
-    """Print a single clear error per session when WebP is requested but unsupported."""
-    global _webp_missing_warned
-    if _webp_missing_warned:
-        return
-    _webp_missing_warned = True
-    utils.error_print(
+_ENCODER_MISSING = {
+    "webp": (
         "WebP output requested but ffmpeg has no libwebp encoder.",
-        [
-            f"Tried to write: '{output_file}'",
-            "Install an ffmpeg build with libwebp, or change SCREENSHOT_FORMAT/GIF_FORMAT back to .png/.jpg/.gif.",
-            "Skipping all WebP outputs for this run.",
-        ],
-    )
-
-
-def _warn_vp9_unavailable_once(output_file: str) -> None:
-    """Print a single clear error per session when WebM/VP9 is requested but unsupported."""
-    global _vp9_missing_warned
-    if _vp9_missing_warned:
-        return
-    _vp9_missing_warned = True
-    utils.error_print(
+        "Install an ffmpeg build with libwebp, or change SCREENSHOT_FORMAT/GIF_FORMAT back to .png/.jpg/.gif.",
+        "Skipping all WebP outputs for this run.",
+    ),
+    "vp9": (
         "WebM output requested but ffmpeg has no libvpx-vp9 encoder.",
-        [
-            f"Tried to write: '{output_file}'",
-            "Install an ffmpeg build with libvpx, or change GIF_FORMAT back to .gif/.webp.",
-            "Skipping all WebM outputs for this run.",
-        ],
+        "Install an ffmpeg build with libvpx, or change GIF_FORMAT back to .gif/.webp.",
+        "Skipping all WebM outputs for this run.",
+    ),
+}
+
+
+def _warn_encoder_missing_once(kind: str, output_file: str) -> None:
+    """Print one clear error per session when an encoder is unavailable."""
+    if _encoder_missing_warned.get(kind):
+        return
+    _encoder_missing_warned[kind] = True
+    headline, install_hint, skip_note = _ENCODER_MISSING[kind]
+    utils.error_print(
+        headline, [f"Tried to write: '{output_file}'", install_hint, skip_note]
     )
 
 
@@ -448,6 +534,7 @@ def run_ffmpeg_process(
     cancel_flag: Callable[[], bool] | None = None,
     on_progress: Callable[[float], None] | None = None,
     expected_duration_sec: float | None = None,
+    kind: str = "",
 ) -> subprocess.CompletedProcess[str] | None:
     """Run an ffmpeg subprocess and wrap common OS-level failures.
 
@@ -459,7 +546,34 @@ def run_ffmpeg_process(
     progress (0.0–1.0) as encoding advances. *expected_duration_sec* is the
     **output** (not input) duration in seconds. See screenspace.py
     ``generate_timelapse`` for the canonical pattern.
+
+    *kind* names the caller's job (``cut``, ``card``, ``concat``, ``wrap``,
+    ``reel``, ``screenshot``, ``gif``, ``compress``, ``mux``, ``burn``) and becomes the
+    ``ffmpeg.run.<kind>`` profile label, so a report can tell which of a
+    clip's three subprocesses cost. Bare ``ffmpeg.run`` is the no-kind fallback.
     """
+    with profiling.span(f"ffmpeg.run.{kind}" if kind else "ffmpeg.run"):
+        return _run_ffmpeg_process(
+            ffmpeg_command,
+            input_file=input_file,
+            output_file=output_file,
+            os_error_message=os_error_message,
+            cancel_flag=cancel_flag,
+            on_progress=on_progress,
+            expected_duration_sec=expected_duration_sec,
+        )
+
+
+def _run_ffmpeg_process(
+    ffmpeg_command: list[str],
+    *,
+    input_file: str,
+    output_file: str,
+    os_error_message: str,
+    cancel_flag: Callable[[], bool] | None,
+    on_progress: Callable[[float], None] | None,
+    expected_duration_sec: float | None,
+) -> subprocess.CompletedProcess[str] | None:
     if (
         on_progress is not None
         and expected_duration_sec is not None
@@ -482,10 +596,8 @@ def run_ffmpeg_process(
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
             )
-            # Drain pipes via communicate() in a polling loop. Reading them
-            # only after proc.poll() returns can deadlock once ffmpeg fills
-            # the OS pipe buffer (~64 KB). Per Python docs, retrying after
-            # TimeoutExpired does not lose output.
+            # Poll with communicate(): reading only after poll() deadlocks on a full 64
+            # KB pipe.
             while True:
                 if cancel_flag():
                     utils.terminate_subprocess(proc)
@@ -501,13 +613,7 @@ def run_ffmpeg_process(
             ffmpeg_command, encoding="utf-8", capture_output=True, check=False
         )
     except FileNotFoundError:
-        utils.error_print(
-            "ffmpeg is not installed or not found in system PATH.",
-            [
-                "Please install ffmpeg and ensure it's in your PATH.",
-                "Download from: https://www.ffmpeg.org/download.html",
-            ],
-        )
+        _report_ffmpeg_missing()
         return None
     except OSError as error:
         utils.error_print(
@@ -549,13 +655,7 @@ def _run_ffmpeg_with_progress(
             stderr=subprocess.PIPE,
         )
     except FileNotFoundError:
-        utils.error_print(
-            "ffmpeg is not installed or not found in system PATH.",
-            [
-                "Please install ffmpeg and ensure it's in your PATH.",
-                "Download from: https://www.ffmpeg.org/download.html",
-            ],
-        )
+        _report_ffmpeg_missing()
         return None
     except OSError as error:
         utils.error_print(
@@ -575,8 +675,7 @@ def _run_ffmpeg_with_progress(
     stderr_chunks: list[str] = []
 
     def _drain_stderr() -> None:
-        # Read until EOF; without this the stderr pipe can fill its 64 KB
-        # OS buffer and deadlock ffmpeg while we're blocked on stdout.
+        # Drain to EOF or a full stderr pipe deadlocks ffmpeg while we read stdout.
         assert proc.stderr is not None
         stderr_chunks.extend(proc.stderr)
 
@@ -687,6 +786,9 @@ def _finalize_ffmpeg_output(
     return True
 
 
+# ---- Cut, subtitle mux, and the shared run_ffmpeg entry ----
+
+
 @contextlib.contextmanager
 def _concat_list_file(clip_paths: list[str]) -> Iterator[str]:
     """Write an ffmpeg concat-demuxer list file; unlink it on exit.
@@ -715,6 +817,10 @@ def _concat_list_file(clip_paths: list[str]) -> Iterator[str]:
                 )
 
 
+# EBU R128 single-pass preset: I=target LUFS, TP=true peak dB, LRA=loudness range.
+LOUDNORM_FILTER = "loudnorm=I=-16:TP=-1.5:LRA=11"
+
+
 def build_ffmpeg_cut_command(
     input_file: str,
     output_file: str,
@@ -739,21 +845,16 @@ def build_ffmpeg_cut_command(
     Returns:
         argv list for subprocess (e.g. ['ffmpeg', '-y', ...])
     """
-    base = [
-        "ffmpeg",
-        "-y",
-        "-loglevel",
-        config.FFMPEG_LOGLEVEL,
+    base = ffmpeg_cmd(
         "-ss",
         start_pos,
         "-i",
         input_file,
         "-t",
         str(duration_seconds),
-    ]
+    )
     if not reencode:
         if audio_normalize:
-            # loudnorm: I=-16 (target LUFS), TP=-1.5 (true peak dB), LRA=11 (loudness range)
             # -avoid_negative_ts 1: shift timestamps so output starts at 0 (avoids glitches after cut)
             return base + [
                 "-c:v",
@@ -761,7 +862,7 @@ def build_ffmpeg_cut_command(
                 "-c:a",
                 "aac",
                 "-af",
-                "loudnorm=I=-16:TP=-1.5:LRA=11",
+                LOUDNORM_FILTER,
                 "-avoid_negative_ts",
                 "1",
                 output_file,
@@ -774,22 +875,21 @@ def build_ffmpeg_cut_command(
         else []
     )
     if audio_normalize:
-        return (
-            base
-            + ["-af", "loudnorm=I=-16:TP=-1.5:LRA=11"]
-            + encoder_args
-            + [output_file]
-        )
+        return base + ["-af", LOUDNORM_FILTER] + encoder_args + [output_file]
     return base + encoder_args + [output_file]
 
 
-_SUBTITLE_CODEC_BY_CONTAINER = {
+# Containers mux_subtitles writes and their codec; JS gets it as subtitleContainers to
+# filter sources.
+SUBTITLE_CODEC_BY_CONTAINER = {
     ".mp4": "mov_text",
     ".m4v": "mov_text",
     ".mov": "mov_text",
     ".mkv": "srt",
     ".webm": "webvtt",
 }
+# ISOBMFF ignores -disposition:s:0 (measured, ffmpeg 8.1.2); only .mkv/.webm honour it.
+SUBTITLE_ALWAYS_DEFAULT_CONTAINERS = frozenset({".mp4", ".m4v", ".mov"})
 
 
 def mux_subtitles(
@@ -799,6 +899,7 @@ def mux_subtitles(
     *,
     track_title: str = "Transcript",
     track_language: str = "und",
+    set_default: bool = True,
 ) -> bool:
     """Stream-copy *input_video* and add *srt_path* as a soft subtitle stream.
 
@@ -806,6 +907,21 @@ def mux_subtitles(
     .mp4/.mov/.m4v, ``srt`` (subrip) for .mkv, ``webvtt`` for .webm.
     Video and audio streams are stream-copied (no re-encode). Returns True
     on success, False on any validation or ffmpeg failure.
+
+    *set_default* controls whether the new track carries the ``default``
+    disposition (players turn it on without the viewer picking it). The False
+    case writes ``0`` rather than omitting the flag, but **only .mkv/.webm
+    honour it**: measured on ffmpeg 8.1.2, the mp4 muxer reports ``default=1``
+    for the subtitle track no matter what is passed (an ISOBMFF track is
+    enabled or absent — there is no "present but off"), while ``forced`` on the
+    same command does take effect, so this is the muxer and not the argument.
+    Callers that expose the flag must say so; see the frontend's Embed
+    Subtitles dialog.
+
+    *track_language* is normalized to ISO 639-2 here rather than trusted: the
+    mp4 muxer stores only three-letter codes and drops anything else *without
+    an error*, so Whisper's two-letter output ("en") used to leave every mp4
+    subtitle track untagged. See :func:`utils.normalize_track_language`.
     """
     if not Path(input_video).is_file():
         utils.error_print(
@@ -821,28 +937,28 @@ def mux_subtitles(
         return False
 
     suffix = Path(output_video).suffix.lower()
-    codec = _SUBTITLE_CODEC_BY_CONTAINER.get(suffix)
+    codec = SUBTITLE_CODEC_BY_CONTAINER.get(suffix)
     if codec is None:
         utils.error_print(
             f"Unsupported output container '{suffix}' for subtitle muxing.",
             [
                 f"Output: '{output_video}'",
-                "Supported: " + ", ".join(sorted(_SUBTITLE_CODEC_BY_CONTAINER)),
+                "Supported: " + ", ".join(sorted(SUBTITLE_CODEC_BY_CONTAINER)),
             ],
         )
         return False
 
-    ffmpeg_command = [
-        "ffmpeg",
-        "-y",
-        "-loglevel",
-        config.FFMPEG_LOGLEVEL,
+    ffmpeg_command = ffmpeg_cmd(
         "-i",
         input_video,
         "-i",
         srt_path,
+        # Never -map 0: an old subtitle track would take index 0. `?` allows silent
+        # videos.
         "-map",
-        "0",
+        "0:v?",
+        "-map",
+        "0:a?",
         "-map",
         "1:0",
         "-c",
@@ -850,13 +966,13 @@ def mux_subtitles(
         "-c:s",
         codec,
         "-metadata:s:s:0",
-        f"language={track_language}",
+        f"language={utils.normalize_track_language(track_language)}",
         "-metadata:s:s:0",
         f"title={track_title}",
         "-disposition:s:0",
-        "default",
+        "default" if set_default else "0",
         output_video,
-    ]
+    )
 
     utils.verbose_print(f"Muxing subtitles into {Path(output_video).name} ({codec}).")
     if config.DEBUGGING:
@@ -868,6 +984,7 @@ def mux_subtitles(
         input_file=input_video,
         output_file=output_video,
         os_error_message="Failed to mux subtitles into video.",
+        kind="mux",
     )
     return _finalize_ffmpeg_output(
         result,
@@ -931,22 +1048,32 @@ def run_ffmpeg(
             [f"Video file: '{input_file}'"],
         )
         return False
-    if start_seconds is not None and start_seconds + duration > duration_seconds:
+    if duration <= 0:
         utils.error_print(
-            f"Clip range ({start_pos} to {end_pos}) extends beyond video duration ({duration_seconds}s). Skipping.",
-            [f"Video file: '{input_file}'"],
-        )
-        return False
-
-    if duration < 0:
-        utils.error_print(
-            "Negative duration calculated for video clip. Skipping.",
+            "Clip has no length. Skipping.",
             [
                 f"Start: {start_pos}, End: {end_pos}, Duration: {duration}s",
                 "The end timestamp must be after the start timestamp.",
             ],
         )
         return False
+    # Shorten, never drop, a span past EOF; tests/test_video_commands.py covers the end-
+    # of-session case.
+    if start_seconds is not None and start_seconds + duration > duration_seconds:
+        clamped = int(duration_seconds - start_seconds)
+        if clamped <= 0:
+            utils.error_print(
+                f"Clip range ({start_pos} to {end_pos}) leaves under a second before "
+                f"the end of the video ({duration_seconds}s). Skipping.",
+                [f"Video file: '{input_file}'"],
+            )
+            return False
+        utils.warning_print(
+            f"Clip range ({start_pos} to {end_pos}) extends beyond video duration "
+            f"({duration_seconds}s); shortening the clip to {clamped}s.",
+            [f"Video file: '{input_file}'"],
+        )
+        duration = clamped
     if duration > duration_seconds:
         utils.error_print(
             f"Timestamp duration ({duration}s) exceeds video file length ({duration_seconds}s). Skipping.",
@@ -964,7 +1091,7 @@ def run_ffmpeg(
             yn = utils.read_user_input(
                 f"The generated video will be {duration}s ({duration // 60}m {duration % 60}s), over 10 minutes long. Generate anyway? [y/n]\n>> "
             )
-            if yn != "y":
+            if yn.strip().lower() != "y":
                 return False
 
     utils.verbose_print(f"Cutting {input_file} from {start_pos} to {end_pos}.")
@@ -985,8 +1112,7 @@ def run_ffmpeg(
             encoder=encoder if reencode else None,
         )
 
-    # A stream copy has no encoder to fail over, so it stays on libx264's
-    # "add nothing" branch and never spends a probe on the hardware listing.
+    # Stream copy has no encoder to fail over; skip the hardware probe.
     encoder = resolve_video_encoder() if reencode else "libx264"
     utils.debug_print(f"ffmpeg_command is '{' '.join(build_command(encoder))}'")
     ffmpeg_result = run_ffmpeg_encode(
@@ -995,13 +1121,11 @@ def run_ffmpeg(
         input_file=input_file,
         output_file=output_file,
         os_error_message="ffmpeg could not successfully run.",
+        kind="cut",
         cancel_flag=cancel_flag,
     )
-    # NB: file-size enforcement is deliberately NOT done here. A cut is often
-    # followed by a titlecard wrap or a concat that re-encodes the body, which
-    # would discard any bitrate targeting applied at cut time (and waste two
-    # passes). Callers apply enforce_filesize_limit() to the *final* artifact
-    # after all wrapping/concat instead.
+    # No filesize enforcement here: later wraps/concats re-encode. Callers enforce on
+    # the final artifact.
     return _finalize_ffmpeg_output(
         ffmpeg_result,
         output_file,
@@ -1014,6 +1138,9 @@ def run_ffmpeg(
         success_noun="video",
         success_extra=f" Expected duration: {duration} s\n",
     )
+
+
+# ---- Extraction: screenshots, thumbnails, sprites, audio snippets, GIFs ----
 
 
 def extract_screenshot(
@@ -1038,7 +1165,7 @@ def extract_screenshot(
     if config.DEBUGGING:
         config.debug_ic(input_file, output_file, timestamp)
     if output_file.lower().endswith(".webp") and not check_webp_support():
-        _warn_webp_unavailable_once(output_file)
+        _warn_encoder_missing_once("webp", output_file)
         return False
     if not Path(input_file).is_file():
         utils.error_print(
@@ -1067,11 +1194,7 @@ def extract_screenshot(
         )
         return False
 
-    ffmpeg_command = [
-        "ffmpeg",
-        "-y",
-        "-loglevel",
-        config.FFMPEG_LOGLEVEL,
+    ffmpeg_command = ffmpeg_cmd(
         "-ss",
         timestamp,
         "-i",
@@ -1081,7 +1204,7 @@ def extract_screenshot(
         "-q:v",
         config.FFMPEG_SCREENSHOT_QUALITY,
         output_file,
-    ]
+    )
     utils.debug_print(f"ffmpeg screenshot command: {' '.join(ffmpeg_command)}")
 
     ffmpeg_result = run_ffmpeg_process(
@@ -1089,6 +1212,7 @@ def extract_screenshot(
         input_file=input_file,
         output_file=output_file,
         os_error_message="ffmpeg could not successfully run for screenshot extraction.",
+        kind="screenshot",
         cancel_flag=cancel_flag,
     )
     return _finalize_ffmpeg_output(
@@ -1112,11 +1236,10 @@ def extract_thumbnail_bytes(
 ) -> bytes | None:
     """Extract a small JPEG thumbnail frame from a video at *start_seconds*.
 
-    Uses two-stage seeking (fast pre-input ``-ss`` near the target, then a
-    small accurate ``-ss`` after ``-i``) so the returned thumbnail matches
-    the requested timestamp instead of snapping to the nearest preceding
-    key-frame. Returns raw JPEG bytes on success or ``None`` on any
-    failure.
+    Frame-accurate: :func:`accurate_seek_pre_post` chooses a single pre-input
+    ``-ss`` on t=0 media, or the two-stage idiom when the container's
+    ``start_time`` is non-zero (MPEG-TS). Returns raw JPEG bytes on success
+    or ``None`` on any failure.
     """
     if config.DEBUGGING:
         config.debug_ic(input_file, start_seconds, width)
@@ -1125,37 +1248,22 @@ def extract_thumbnail_bytes(
     if not Path(input_file).is_file():
         return None
 
-    pre_seek, post_seek = accurate_seek_args(max(0.0, start_seconds))
-    cmd = [
-        "ffmpeg",
-        "-y",
-        "-loglevel",
-        config.FFMPEG_LOGLEVEL,
-        *pre_seek,
+    pre, post = accurate_seek_pre_post(
+        max(0.0, start_seconds),
+        container_start=_container_start_seconds(input_file),
+    )
+    cmd = ffmpeg_cmd(
+        *pre,
         "-i",
         input_file,
-        *post_seek,
+        *post,
         "-vframes",
         "1",
         "-vf",
         f"scale={width}:-1",
-        "-f",
-        "image2pipe",
-        "-vcodec",
-        "mjpeg",
-        "-q:v",
-        "5",
-        "pipe:1",
-    ]
-
-    try:
-        result = subprocess.run(cmd, capture_output=True, timeout=15, check=False)
-    except (FileNotFoundError, OSError, subprocess.TimeoutExpired):
-        return None
-
-    if result.returncode != 0 or not result.stdout:
-        return None
-    return result.stdout
+        *_MJPEG_PIPE_TAIL,
+    )
+    return _ffmpeg_bytes(cmd, timeout=15)
 
 
 def extract_sprite_sheet_bytes(
@@ -1198,11 +1306,7 @@ def extract_sprite_sheet_bytes(
 
     frame_count = max(1, cols * rows)
     duration = max(0.1, duration_seconds)
-    cmd = [
-        "ffmpeg",
-        "-y",
-        "-loglevel",
-        config.FFMPEG_LOGLEVEL,
+    cmd = ffmpeg_cmd(
         "-ss",
         str(max(0.0, start_seconds)),
         "-t",
@@ -1213,23 +1317,9 @@ def extract_sprite_sheet_bytes(
         "1",
         "-vf",
         f"fps={frame_count}/{duration},scale={frame_width}:-1,tile={cols}x{rows}",
-        "-f",
-        "image2pipe",
-        "-vcodec",
-        "mjpeg",
-        "-q:v",
-        "5",
-        "pipe:1",
-    ]
-
-    try:
-        result = subprocess.run(cmd, capture_output=True, timeout=20, check=False)
-    except (FileNotFoundError, OSError, subprocess.TimeoutExpired):
-        return None
-
-    if result.returncode != 0 or not result.stdout:
-        return None
-    return result.stdout
+        *_MJPEG_PIPE_TAIL,
+    )
+    return _ffmpeg_bytes(cmd, timeout=20)
 
 
 def _extract_sprite_sheet_seek(
@@ -1256,11 +1346,7 @@ def _extract_sprite_sheet_seek(
     times = [start + (i + 0.5) * step for i in range(frame_count)]
 
     def grab(ts: float) -> bytes | None:
-        cmd = [
-            "ffmpeg",
-            "-y",
-            "-loglevel",
-            config.FFMPEG_LOGLEVEL,
+        cmd = ffmpeg_cmd(
             "-ss",
             str(ts),
             "-i",
@@ -1269,21 +1355,9 @@ def _extract_sprite_sheet_seek(
             "1",
             "-vf",
             f"scale={frame_width}:-1",
-            "-f",
-            "image2pipe",
-            "-vcodec",
-            "mjpeg",
-            "-q:v",
-            "5",
-            "pipe:1",
-        ]
-        try:
-            result = subprocess.run(cmd, capture_output=True, timeout=15, check=False)
-        except (FileNotFoundError, OSError, subprocess.TimeoutExpired):
-            return None
-        if result.returncode != 0 or not result.stdout:
-            return None
-        return result.stdout
+            *_MJPEG_PIPE_TAIL,
+        )
+        return _ffmpeg_bytes(cmd, timeout=15)
 
     workers = min(8, os.cpu_count() or 4, frame_count)
     if frame_count >= 2:
@@ -1353,11 +1427,7 @@ def extract_audio_segment_bytes(
     duration = max(0.05, duration_seconds)
     tmp_fd, tmp_path = tempfile.mkstemp(suffix=".wav")
     os.close(tmp_fd)
-    cmd = [
-        "ffmpeg",
-        "-y",
-        "-loglevel",
-        config.FFMPEG_LOGLEVEL,
+    cmd = ffmpeg_cmd(
         "-ss",
         str(max(0.0, start_seconds)),
         "-t",
@@ -1374,7 +1444,7 @@ def extract_audio_segment_bytes(
         "-f",
         "wav",
         tmp_path,
-    ]
+    )
 
     try:
         result = subprocess.run(cmd, capture_output=True, timeout=20, check=False)
@@ -1415,10 +1485,10 @@ def extract_gif(
     if config.DEBUGGING:
         config.debug_ic(input_file, output_file, timestamp, duration_seconds)
     if output_file.lower().endswith(".webp") and not check_webp_support():
-        _warn_webp_unavailable_once(output_file)
+        _warn_encoder_missing_once("webp", output_file)
         return False
     if output_file.lower().endswith(".webm") and not check_vp9_support():
-        _warn_vp9_unavailable_once(output_file)
+        _warn_encoder_missing_once("vp9", output_file)
         return False
     if not Path(input_file).is_file():
         utils.error_print(
@@ -1442,15 +1512,25 @@ def extract_gif(
                 [f"Video file: '{input_file}'"],
             )
             return False
+        # Shortened, not skipped; same reason as run_ffmpeg's clamp.
         if (
             start_seconds is not None
             and start_seconds + duration_seconds > file_duration
         ):
-            utils.error_print(
-                f"GIF range ({timestamp} + {duration_seconds}s) extends beyond video duration ({file_duration}s). Skipping.",
+            clamped = int(file_duration - start_seconds)
+            if clamped <= 0:
+                utils.error_print(
+                    f"GIF range ({timestamp} + {duration_seconds}s) leaves under a "
+                    f"second before the end of the video ({file_duration}s). Skipping.",
+                    [f"Video file: '{input_file}'"],
+                )
+                return False
+            utils.warning_print(
+                f"GIF range ({timestamp} + {duration_seconds}s) extends beyond video "
+                f"duration ({file_duration}s); shortening the GIF to {clamped}s.",
                 [f"Video file: '{input_file}'"],
             )
-            return False
+            duration_seconds = clamped
 
     utils.verbose_print(
         f"Extracting GIF from {input_file} at {timestamp} ({duration_seconds}s)."
@@ -1465,11 +1545,7 @@ def extract_gif(
     is_webm = out_lower.endswith(".webm")
     is_webp = out_lower.endswith(".webp")
 
-    ffmpeg_command = [
-        "ffmpeg",
-        "-y",
-        "-loglevel",
-        config.FFMPEG_LOGLEVEL,
+    ffmpeg_command = ffmpeg_cmd(
         "-ss",
         timestamp,
         "-t",
@@ -1478,10 +1554,9 @@ def extract_gif(
         input_file,
         "-vf",
         f"fps={config.GIF_FPS},scale={config.GIF_SCALE_WIDTH}:-1:flags=lanczos",
-    ]
+    )
     if is_webm:
-        # Silent VP9 loop; the loop is controlled by the <video loop> attribute
-        # in the viewer, not by the container. -an strips audio.
+        # Silent VP9; looping is the viewer's <video loop> job, not the container's.
         ffmpeg_command += [
             "-c:v",
             "libvpx-vp9",
@@ -1505,6 +1580,7 @@ def extract_gif(
         input_file=input_file,
         output_file=output_file,
         os_error_message="ffmpeg could not successfully run for GIF extraction.",
+        kind="gif",
         cancel_flag=cancel_flag,
     )
     return _finalize_ffmpeg_output(
@@ -1518,6 +1594,9 @@ def extract_gif(
         verify_label="ffmpeg GIF extraction",
         success_noun="GIF",
     )
+
+
+# ---- Probing: durations, properties, multi-part timelines, audio tracks ----
 
 
 def _probe_duration_seconds_ffprobe_format(filepath: str) -> int | None:
@@ -1535,9 +1614,7 @@ def _probe_duration_seconds_ffprobe_format(filepath: str) -> int | None:
     utils.debug_print(f"probe_command is {' '.join(probe_command)}")
 
     try:
-        duration_seconds = float(
-            subprocess.check_output(probe_command, encoding="utf-8")
-        )
+        duration_seconds = float(_ffprobe_check_output(probe_command))
         return round(duration_seconds)
     except FileNotFoundError:
         utils.error_print(
@@ -1589,9 +1666,12 @@ def get_file_duration(filepath: str) -> int | None:
         return None
     cached_dur = _file_duration_cache.get(key)
     if cached_dur is not None:
-        # -1 is a sentinel recording a prior probe that couldn't determine the
-        # duration, so repeat calls skip re-running the full probe chain.
+        if config.PROFILING:
+            profiling.count("video.duration_cache.hit")
+        # -1 caches a failed probe so repeat calls skip the probe chain.
         return cached_dur if cached_dur >= 0 else None
+    if config.PROFILING:
+        profiling.count("video.duration_cache.miss")
 
     cached_props = _video_properties_cache.get(key)
     if cached_props is not None:
@@ -1622,23 +1702,60 @@ def _parallel_probe(items: list[str], probe_fn: Callable[[str], Any]) -> list[An
     probe instead of the sum. Results land at their original index, which every
     caller relies on (props lists run parallel to their path list).
 
-    No lock is needed: the probe caches (``_video_properties_cache`` /
+    No lock is needed here: the probe caches (``_video_properties_cache`` /
     ``_file_duration_cache``) are plain dicts keyed by
     ``(resolved_path, mtime_ns)``, the paths in one call are distinct, and a
-    duplicate concurrent probe of the same file is idempotent — both threads
-    write the same value under the same key. Fewer than 2 items skips the pool.
+    duplicate concurrent probe of the same file is single-flighted inside
+    ``probe_video_properties`` itself. Fewer than 2 items skips the pool.
+
+    Every ``probe_fn`` passed here reads container headers (duration, stream
+    properties) rather than decoding, so the width is set by how many ffprobe
+    processes can wait on I/O at once, not by core count. Measured on 24 files:
+    1 worker 0.97 s, 4 workers 0.25 s, 8 workers 0.14 s, 12 workers 0.13 s — the
+    curve is flat past 8, which is where the cap sits. A decoding probe
+    (``probe_max_keyframe_gap``) would want a CPU-shaped cap instead; it does not
+    come through here.
     """
     if len(items) < 2:
         return [probe_fn(item) for item in items]
 
     results: list[Any] = [None] * len(items)
-    with concurrent.futures.ThreadPoolExecutor(max_workers=min(4, len(items))) as pool:
+    with concurrent.futures.ThreadPoolExecutor(max_workers=min(8, len(items))) as pool:
         future_to_idx = {
             pool.submit(probe_fn, item): idx for idx, item in enumerate(items)
         }
         for future in concurrent.futures.as_completed(future_to_idx):
             results[future_to_idx[future]] = future.result()
     return results
+
+
+def prewarm_probes(paths: Iterable[str]) -> None:
+    """Probe *paths* in parallel so later per-file lookups are cache hits.
+
+    For callers that walk a participant list and probe each entry inside the
+    loop: the loop stays sequential and readable, but the ffprobe subprocesses it
+    would have serialized are already paid for. Properties are what get probed
+    because ``get_file_duration`` reads its answer out of the properties cache,
+    so one probe per file warms both.
+
+    Duplicates are collapsed, and probe failures are swallowed here — a file that
+    cannot be probed simply stays uncached and its caller re-probes it and
+    handles the ``None`` as it always did. Prewarming must never be the thing
+    that fails a request.
+    """
+    unique = list(dict.fromkeys(str(p) for p in paths))
+    if len(unique) < 2:
+        return
+
+    def _quiet(path: str) -> None:
+        try:
+            probe_video_properties(path)
+        except Exception as exc:
+            # Deliberately broad: leave the file uncached and let the caller re-probe,
+            # never break the page.
+            utils.verbose_print(f"Could not prewarm probe for {path}: {exc}")
+
+    _parallel_probe(unique, _quiet)
 
 
 def build_source_timeline(paths: list[str]) -> list[tuple[str, int, int]] | None:
@@ -1663,7 +1780,7 @@ def build_source_timeline(paths: list[str]) -> list[tuple[str, int, int]] | None
 
     timeline: list[tuple[str, int, int]] = []
     cumulative = 0
-    for path, duration in zip(paths, durations):
+    for path, duration in zip(paths, durations, strict=True):
         timeline.append((path, duration, cumulative))
         cumulative += duration
     return timeline
@@ -1680,14 +1797,20 @@ def timeline_or_none(paths: list[str]) -> list[tuple[str, int, int]] | None:
     return build_source_timeline(paths) if len(paths) >= 2 else None
 
 
+def first_audio_track(props: dict[str, Any] | None) -> dict[str, Any] | None:
+    """First audio stream of a probe result, or None when the file has no audio."""
+    tracks = (props or {}).get("audio_tracks") or []
+    return tracks[0] if tracks else None
+
+
 def probe_video_properties(filepath: str) -> dict[str, Any] | None:
     """Probe video file for stream properties (resolution, codecs, timing).
 
     Returns:
         Dict with 'width' (int), 'height' (int), 'video_codec' (str),
-        'audio_codec' (str or None if no audio stream),
         'audio_tracks' (list of per-audio-stream dicts: index/codec/channels/
-        title/language/handler/label), 'audio_track_count' (int),
+        sample_rate/channel_layout/title/language/handler/label),
+        'audio_track_count' (int),
         'fps' (float, 0.0 if unknown), 'duration' (float seconds, 0.0 if unknown),
         'nb_frames' (int, 0 if unknown),
         or None if probe fails.
@@ -1697,16 +1820,14 @@ def probe_video_properties(filepath: str) -> dict[str, Any] | None:
             "width": 1920,
             "height": 1080,
             "video_codec": "h264",
-            "audio_codec": "aac",
             "pix_fmt": "yuv420p",
-            "audio_sample_rate": 48000,
-            "audio_channels": 2,
-            "audio_channel_layout": "stereo",
             "audio_tracks": [
                 {
                     "index": 0,
                     "codec": "aac",
                     "channels": 2,
+                    "sample_rate": 48000,
+                    "channel_layout": "stereo",
                     "title": "",
                     "language": "",
                     "handler": "",
@@ -1717,9 +1838,9 @@ def probe_video_properties(filepath: str) -> dict[str, Any] | None:
             "fps": 30.0,
             "duration": 300.0,
             "nb_frames": 9000,
+            "start_time": 0.0,
         }
-        # In DEBUGGING mode the file may not exist on disk; fall back to a
-        # synthetic key so callers still get a cached result.
+        # DEBUGGING files may not exist; a synthetic key keeps the cache working.
         key = _resolved_path_and_mtime(filepath) or (str(Path(filepath).resolve()), 0)
         _video_properties_cache[key] = result
         _file_duration_cache[key] = round(result["duration"])
@@ -1729,8 +1850,31 @@ def probe_video_properties(filepath: str) -> dict[str, Any] | None:
     if key is None:
         return None
     if key in _video_properties_cache:
+        if config.PROFILING:
+            profiling.count("video.props_cache.hit")
         return _video_properties_cache[key]
+    with _probe_inflight_guard:
+        flight = _probe_inflight.get(key)
+        if flight is None:
+            flight = _probe_inflight[key] = threading.Lock()
+    with flight:
+        if key in _video_properties_cache:
+            if config.PROFILING:
+                profiling.count("video.props_cache.hit")
+            return _video_properties_cache[key]
+        if config.PROFILING:
+            profiling.count("video.props_cache.miss")
+        try:
+            return _probe_video_properties_uncached(filepath, key)
+        finally:
+            with _probe_inflight_guard:
+                _probe_inflight.pop(key, None)
 
+
+def _probe_video_properties_uncached(
+    filepath: str, key: tuple[str, int]
+) -> dict[str, Any] | None:
+    """The ffprobe behind probe_video_properties; caller holds the key's flight."""
     probe_command = [
         "ffprobe",
         "-v",
@@ -1743,13 +1887,13 @@ def probe_video_properties(filepath: str) -> dict[str, Any] | None:
         "-show_entries",
         "stream_tags=title,language,handler_name",
         "-show_entries",
-        "format=duration",
+        "format=duration,start_time",
         "-of",
         "json",
         filepath,
     ]
     try:
-        raw = subprocess.check_output(probe_command, encoding="utf-8")
+        raw = _ffprobe_check_output(probe_command)
     except (subprocess.CalledProcessError, FileNotFoundError, OSError):
         return None
 
@@ -1761,11 +1905,7 @@ def probe_video_properties(filepath: str) -> dict[str, Any] | None:
     streams = data.get("streams", [])
     width = height = 0
     video_codec: str | None = None
-    audio_codec: str | None = None
     pix_fmt: str | None = None
-    audio_sample_rate = 0
-    audio_channels = 0
-    audio_channel_layout: str | None = None
     audio_tracks: list[dict[str, Any]] = []
     fps = 0.0
     nb_frames = 0
@@ -1798,11 +1938,9 @@ def probe_video_properties(filepath: str) -> dict[str, Any] | None:
             title = (tags.get("title") or "").strip()
             language = (tags.get("language") or "").strip()
             handler = (tags.get("handler_name") or "").strip()
-            # Audio-relative index (0, 1, 2…) — the `a:N` selector ffmpeg needs
-            # for per-track extraction (multitrack mixing lands in a follow-up).
+            # Audio-relative index: ffmpeg's a:N selector for per-track extraction.
             track_index = len(audio_tracks)
-            # Prefer an explicit title, then a meaningful handler name (skip the
-            # generic muxer defaults), then the language code, then an ordinal.
+            # Label priority: title, non-generic handler name, language, ordinal.
             meaningful_handler = (
                 handler
                 if handler and handler.lower() not in _GENERIC_AUDIO_HANDLERS
@@ -1815,38 +1953,46 @@ def probe_video_properties(filepath: str) -> dict[str, Any] | None:
             label = (
                 title or meaningful_handler or lang_label or f"Track {track_index + 1}"
             )
+            try:
+                track_sample_rate = int(stream.get("sample_rate") or 0)
+            except (ValueError, TypeError):
+                track_sample_rate = 0
             audio_tracks.append(
                 {
                     "index": track_index,
                     "codec": stream.get("codec_name"),
                     "channels": track_channels,
+                    "sample_rate": track_sample_rate,
+                    "channel_layout": stream.get("channel_layout"),
                     "title": title,
                     "language": language,
                     "handler": handler,
                     "label": label,
                 }
             )
-            # Retain the first audio stream's details as the flat top-level fields
-            # (backward-compatible with the ~20 existing callers).
-            if audio_codec is None:
-                audio_codec = stream.get("codec_name")
-                try:
-                    audio_sample_rate = int(stream.get("sample_rate") or 0)
-                except (ValueError, TypeError):
-                    audio_sample_rate = 0
-                audio_channels = track_channels
-                audio_channel_layout = stream.get("channel_layout")
 
     if not video_codec or width <= 0 or height <= 0:
         return None
 
     # Duration from format-level metadata (more reliable than stream-level)
     fmt_duration = 0.0
+    fmt_start = 0.0
     fmt = data.get("format", {})
     try:
         fmt_duration = float(fmt.get("duration", 0))
     except (ValueError, TypeError):
         pass
+    try:
+        raw_start = fmt.get("start_time")
+        if raw_start not in (None, "N/A", ""):
+            fmt_start = max(0.0, float(raw_start))
+    except (ValueError, TypeError):
+        fmt_start = 0.0
+    # ffprobe can print nan/inf; neither may reach JSON or round().
+    if not math.isfinite(fmt_duration):
+        fmt_duration = 0.0
+    if not math.isfinite(fmt_start):
+        fmt_start = 0.0
     # Fallback: compute from frame count and fps
     if fmt_duration <= 0 and nb_frames > 0 and fps > 0:
         fmt_duration = nb_frames / fps
@@ -1855,16 +2001,13 @@ def probe_video_properties(filepath: str) -> dict[str, Any] | None:
         "width": width,
         "height": height,
         "video_codec": video_codec,
-        "audio_codec": audio_codec,
         "pix_fmt": pix_fmt,
-        "audio_sample_rate": audio_sample_rate,
-        "audio_channels": audio_channels,
-        "audio_channel_layout": audio_channel_layout,
         "audio_tracks": audio_tracks,
         "audio_track_count": len(audio_tracks),
         "fps": fps,
         "duration": fmt_duration,
         "nb_frames": nb_frames,
+        "start_time": fmt_start,
     }
     _video_properties_cache[key] = result
     if fmt_duration > 0:
@@ -1872,10 +2015,8 @@ def probe_video_properties(filepath: str) -> dict[str, Any] | None:
     return result
 
 
-# Per-(file, index) locks for extract_audio_track. Two requests for the same
-# track are routine (a re-select tears the <audio> element down and re-requests
-# it; range requests can arrive on a second connection), and the Flask server is
-# threaded, so without this two ffmpeg processes would race on one output path.
+# Per-(file, index) locks: duplicate requests are routine and two ffmpegs would race on
+# one path.
 _audio_track_locks: dict[tuple[str, int], threading.Lock] = {}
 _audio_track_locks_guard = threading.Lock()
 
@@ -1942,15 +2083,12 @@ def extract_audio_track(filepath: str, audio_index: int) -> Path | None:
         # Re-check: another thread may have finished while we waited on the lock.
         if out_path.is_file() and out_path.stat().st_size > 0:
             return out_path
-        # Unique per caller so a concurrent extraction of a *different* track of
-        # the same file can never share a scratch path either.
+        # Unique per caller; concurrent extractions of other tracks never share it.
         tmp_path = (
             cache_dir
             / f"{out_path.stem}.partial.{os.getpid()}.{threading.get_ident()}.m4a"
         )
-        # +faststart relocates the moov atom to the front so the browser can
-        # stream and seek the track smoothly (a tail moov forces buffering
-        # stalls → pops).
+        # +faststart puts moov first; a tail moov stalls browser seeks.
         base = [
             "ffmpeg",
             "-y",
@@ -1962,18 +2100,16 @@ def extract_audio_track(filepath: str, audio_index: int) -> Path | None:
             "-movflags",
             "+faststart",
         ]
-        # Try a stream copy first (instant for AAC), then an AAC re-encode for
-        # codecs that can't be copied into an MP4/M4A container (Opus, PCM, …).
+        # Stream copy first (instant for AAC); re-encode codecs M4A can't carry (Opus,
+        # PCM).
         for codec_args in (["-c:a", "copy"], ["-c:a", "aac", "-b:a", "160k"]):
             try:
                 subprocess.run(
                     base + codec_args + [str(tmp_path)],
                     check=True,
                     capture_output=True,
-                    # Generous: the copy path is near-instant but the AAC
-                    # re-encode fallback runs the length of a long session
-                    # recording. Bounded all the same, so a wedged ffmpeg can't
-                    # pin this request thread (and every waiter on the lock).
+                    # Generous for the re-encode path; bounded so a wedged ffmpeg can't
+                    # pin lock waiters.
                     timeout=300,
                 )
             except (
@@ -1994,12 +2130,86 @@ def extract_audio_track(filepath: str, audio_index: int) -> Path | None:
         return None
 
 
+def decode_audio_pcm(
+    filepath: str,
+    audio_index: int = 0,
+    *,
+    start_seconds: float | None = None,
+    duration_seconds: float | None = None,
+) -> "np.ndarray | None":
+    """Decode one audio stream to 16 kHz mono float32 PCM for transcription.
+
+    Whisper consumes exactly this shape as an ndarray, which keeps PyAV out of
+    the dependency tree: faster-whisper only calls ``av`` to decode *path*
+    inputs, and ``-map 0:a:<index>`` selects the stream directly, so a
+    non-default track no longer needs a demux-to-temp-file round trip either.
+    ``start_seconds``/``duration_seconds`` bound the decode to a window via
+    input-side ``-ss`` (which zeroes PTS, so the returned samples are
+    window-relative) plus ``-t``. A start past EOF yields zero samples and
+    falls into the empty-stream failure path below.
+    Returns a writable ``np.ndarray`` (float32), or ``None`` on any failure —
+    including an empty stream, since zero samples would only fail later and
+    less legibly inside the model. ~4 MB per audio-minute; the transient
+    bytes→array copy briefly doubles that, matching what faster-whisper's own
+    ``decode_audio`` peaked at.
+    """
+    if config.DEBUGGING:
+        return None
+    import numpy as np  # deferred: keep video.py cheap for non-transcribe CLI paths
+
+    cmd = ["ffmpeg", "-nostdin", "-v", "error"]
+    if start_seconds:
+        cmd += ["-ss", f"{start_seconds:.3f}"]
+    cmd += [
+        "-i",
+        filepath,
+        "-map",
+        f"0:a:{audio_index}",
+    ]
+    if duration_seconds is not None:
+        cmd += ["-t", f"{duration_seconds:.3f}"]
+    cmd += [
+        "-ac",
+        "1",
+        "-ar",
+        "16000",
+        "-f",
+        "f32le",
+        "pipe:1",
+    ]
+    try:
+        with profiling.span("transcribe.decode_audio"):
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                check=False,
+                # Loose bound; a wedged ffmpeg must not pin a transcription worker.
+                timeout=900,
+            )
+    except (subprocess.TimeoutExpired, FileNotFoundError, OSError) as exc:
+        utils.verbose_print(f"PCM decode failed for {filepath}: {exc}")
+        return None
+    if result.returncode != 0 or not result.stdout:
+        stderr_tail = result.stderr.decode("utf-8", "replace").strip()[-300:]
+        utils.verbose_print(
+            f"PCM decode failed for {filepath} "
+            f"(exit {result.returncode}): {stderr_tail or 'no output'}"
+        )
+        return None
+    # bytearray copy: frombuffer over bytes is read-only, and the model needs a writable
+    # array.
+    return np.frombuffer(bytearray(result.stdout), dtype=np.float32)
+
+
 def _delete_quietly(path: Path) -> None:
     """Best-effort unlink; ignore a missing file or OS error."""
     try:
         path.unlink()
     except OSError:
         pass
+
+
+# ---- Container forensics and the faststart remux ----
 
 
 def probe_max_keyframe_gap(filepath: str) -> float | None:
@@ -2026,7 +2236,11 @@ def probe_max_keyframe_gap(filepath: str) -> float | None:
     if key is None:
         return None
     if key in _keyframe_gap_cache:
+        if config.PROFILING:
+            profiling.count("video.keyframe_cache.hit")
         return _keyframe_gap_cache[key]
+    if config.PROFILING:
+        profiling.count("video.keyframe_cache.miss")
 
     window = config.SCREENSPACE_KEYFRAME_PROBE_SECONDS
     probe_command = [
@@ -2045,13 +2259,12 @@ def probe_max_keyframe_gap(filepath: str) -> float | None:
     ]
     result: float | None = None
     try:
-        raw = subprocess.check_output(probe_command, encoding="utf-8")
+        raw = _ffprobe_check_output(probe_command)
     except (subprocess.CalledProcessError, FileNotFoundError, OSError):
         _keyframe_gap_cache[key] = None
         return None
 
-    # Each CSV row is "pts_time,flags" (e.g. "1.000000,K__"). A keyframe packet
-    # carries 'K' as the first flag char. Collect keyframe PTS in order.
+    # Rows are "pts_time,flags" (e.g. "1.000000,K__"); a leading K marks a keyframe.
     keyframe_times: list[float] = []
     for line in raw.splitlines():
         parts = line.split(",")
@@ -2075,11 +2288,7 @@ def probe_max_keyframe_gap(filepath: str) -> float | None:
     return result
 
 
-# Top-level boxes scanned before giving up on finding `moov`. A fragmented MP4
-# always writes `moov` before its first `moof`, and a normal MP4 writes at most
-# a handful of boxes (`ftyp`/`free`/`mdat`) before or after it, so the real
-# files need 2-4 iterations. The bound only exists so a corrupt file whose box
-# sizes walk us through garbage can't loop for long.
+# Real files find moov within a few boxes; the bound only stops corrupt files looping.
 _MAX_TOPLEVEL_BOXES = 64
 
 
@@ -2117,7 +2326,9 @@ def probe_container_seekability(filepath: str) -> dict[str, Any] | None:
 
     Detection is a bounded read of box headers — no ffprobe, no decoding, sub-
     millisecond even on multi-GB files — because ``moov`` always precedes the
-    fragments and box bodies are skipped by seeking, never read.
+    fragments and box bodies are skipped by seeking, never read. Do not try to
+    diagnose this class with ffprobe: it reads ``mfra`` and cannot tell the two
+    containers apart.
 
     Returns ``{"fragmented", "header_duration", "browser_seekable"}``, or
     ``None`` when the shape can't be determined: a non-MP4 container (Matroska,
@@ -2127,15 +2338,18 @@ def probe_container_seekability(filepath: str) -> dict[str, Any] | None:
     otherwise be reported as a problem. Cached per ``(resolved_path, mtime)``.
     """
     if config.DEBUGGING:
-        # Synthetic "fine" answer so DEBUGGING runs never touch the disk;
-        # mirrors the probe_max_keyframe_gap / probe_video_properties branches.
+        # Synthetic answer so DEBUGGING never touches disk; matches the other probes.
         return {"fragmented": False, "header_duration": 300.0, "browser_seekable": True}
 
     key = _resolved_path_and_mtime(filepath)
     if key is None:
         return None
     if key in _container_seekability_cache:
+        if config.PROFILING:
+            profiling.count("video.seekability_cache.hit")
         return _container_seekability_cache[key]
+    if config.PROFILING:
+        profiling.count("video.seekability_cache.miss")
 
     result = _walk_mp4_for_seekability(filepath)
     _container_seekability_cache[key] = result
@@ -2191,15 +2405,13 @@ def _scan_moov(handle: Any, start: int, end: int) -> dict[str, Any] | None:
         if size < 8:
             break
         if box_type == b"mvex":
-            # A movie-extends box is the spec's definition of "fragmented":
-            # sample data lives in later moof boxes, not in moov's tables.
+            # mvex is the spec's fragmentation marker: samples live in later moof boxes.
             fragmented = True
         elif box_type == b"mvhd":
             header_duration = _read_mvhd_duration(handle.read(min(size - 8, 32)))
         offset += size
     if not fragmented and header_duration is None:
-        # Found moov but neither marker — not a shape we understand well enough
-        # to make a claim about.
+        # moov without either marker is a shape we can't judge.
         return None
     return {
         "fragmented": fragmented,
@@ -2208,10 +2420,7 @@ def _scan_moov(handle: Any, start: int, end: int) -> dict[str, Any] | None:
     }
 
 
-# Kept beside the remuxed source until the user discards it. The suffix lands
-# *after* the extension (``study_P15.mp4.orig``) on purpose: the participant
-# scan globs ``*.mp4``, so anything still ending in .mp4 would come back as a
-# second, phantom participant.
+# Suffix goes after .mp4 on purpose: the participant glob (*.mp4) must not see backups.
 REMUX_ORIGINAL_SUFFIX = ".orig"
 
 _remux_locks: dict[str, threading.Lock] = {}
@@ -2228,7 +2437,8 @@ def _remux_lock(resolved: str) -> threading.Lock:
 
 
 def original_backup_path(filepath: str) -> Path:
-    """Return where :func:`remux_to_faststart` parks this file's original."""
+    """Return where the in-place rewriters (:func:`remux_to_faststart`,
+    :func:`normalize_audio_inplace`) park this file's original."""
     return Path(str(filepath) + REMUX_ORIGINAL_SUFFIX)
 
 
@@ -2277,19 +2487,14 @@ def remux_to_faststart(
         # Re-check under the lock: a racing job may have finished the swap.
         if backup.exists():
             return False, "Another remux of this file just completed."
-        # No .mp4 extension — pathlib.glob('*.mp4') matches dotfiles too, so a
-        # hidden name alone would not keep the scratch file out of the
-        # participant list. -f mp4 supplies the format the name no longer does.
+        # Extensionless: glob('*.mp4') matches dotfiles, so hiding alone leaks it. -f
+        # supplies the format.
         tmp = src.parent / f".{src.stem}.remux.{os.getpid()}.{threading.get_ident()}"
-        command = [
-            "ffmpeg",
-            "-y",
-            "-loglevel",
-            config.FFMPEG_LOGLEVEL,
+        command = ffmpeg_cmd(
             "-i",
             str(src),
-            # Every stream: these recordings routinely carry two audio tracks
-            # (mic + system) and ffmpeg's default mapping would keep only one.
+            # Every stream: recordings often carry mic + system audio; default mapping
+            # keeps one.
             "-map",
             "0",
             "-c",
@@ -2299,13 +2504,14 @@ def remux_to_faststart(
             "-f",
             "mp4",
             str(tmp),
-        ]
+        )
         try:
-            result = _run_ffmpeg_with_progress(
+            result = run_ffmpeg_process(
                 command,
                 input_file=str(src),
                 output_file=str(tmp),
                 os_error_message="Failed to remux the source video.",
+                kind="remux",
                 on_progress=progress,
                 expected_duration_sec=float(before.get("duration") or 0.0) or 1.0,
                 cancel_flag=cancel_flag,
@@ -2332,16 +2538,26 @@ def remux_to_faststart(
     return True, f"Remuxed. Original kept as '{backup.name}'."
 
 
-def _remux_output_mismatch(tmp: Path, before: dict[str, Any]) -> str | None:
-    """Return why a remux output must not be swapped in, or None if it is sound."""
+def _remux_output_mismatch(
+    tmp: Path, before: dict[str, Any], *, seekability_required: bool = True
+) -> str | None:
+    """Return why a rewritten output must not be swapped in, or None if it is sound.
+
+    ``seekability_required=False`` (the normalize path, which may write .mkv/.mov)
+    treats a ``None`` seekability probe as *unknown* rather than a failure; a
+    positive "not browser-seekable" still refuses the swap either way.
+    """
     if not tmp.is_file() or tmp.stat().st_size <= 0:
-        return "Remux produced no output."
+        return "Rewrite produced no output."
     seekability = probe_container_seekability(str(tmp))
-    if seekability is None or not seekability["browser_seekable"]:
-        return "The remuxed file is still not browser-seekable; keeping the original."
+    if seekability is None:
+        if seekability_required:
+            return "The rewritten file is still not browser-seekable; keeping the original."
+    elif not seekability["browser_seekable"]:
+        return "The rewritten file is still not browser-seekable; keeping the original."
     after = probe_video_properties(str(tmp))
     if after is None:
-        return "Could not probe the remuxed file; keeping the original."
+        return "Could not probe the rewritten file; keeping the original."
 
     source_duration = float(before.get("duration") or 0.0)
     new_duration = float(after.get("duration") or 0.0)
@@ -2349,19 +2565,19 @@ def _remux_output_mismatch(tmp: Path, before: dict[str, Any]) -> str | None:
         tolerance = max(1.0, source_duration * 0.01)
         if abs(new_duration - source_duration) > tolerance:
             return (
-                f"Remuxed duration ({new_duration:.0f}s) does not match the source "
+                f"Rewritten duration ({new_duration:.0f}s) does not match the source "
                 f"({source_duration:.0f}s); keeping the original."
             )
     if after.get("audio_track_count") != before.get("audio_track_count"):
         return (
-            f"Remux kept {after.get('audio_track_count')} audio track(s) but the "
+            f"The rewrite kept {after.get('audio_track_count')} audio track(s) but the "
             f"source has {before.get('audio_track_count')}; keeping the original."
         )
     if (after.get("width"), after.get("height")) != (
         before.get("width"),
         before.get("height"),
     ):
-        return "Remuxed dimensions do not match the source; keeping the original."
+        return "Rewritten dimensions do not match the source; keeping the original."
     return None
 
 
@@ -2392,16 +2608,167 @@ def discard_remux_original(filepath: str) -> tuple[bool, str]:
     return True, "Original deleted."
 
 
+# Muxer per container for the extensionless scratch file. No .webm: it can't carry AAC.
+NORMALIZE_MUXER_BY_EXT = {
+    ".mp4": "mp4",
+    ".m4v": "mp4",
+    ".mov": "mov",
+    ".mkv": "matroska",
+}
+_NORMALIZE_FASTSTART_MUXERS = frozenset({"mp4", "mov"})
+
+
+# ---- Loudness normalization ----
+
+
+def build_normalize_audio_command(
+    input_file: str,
+    output_file: str,
+    audio_indices: list[int],
+    muxer: str,
+    sample_rate: int,
+) -> list[str]:
+    """Build ffmpeg argv for loudness-normalizing selected audio tracks.
+
+    Every stream is mapped and copied; only the selected audio-relative track
+    indices are re-encoded to AAC through :data:`LOUDNORM_FILTER` (per-stream
+    ``-filter:a:N`` is only legal on re-encoded streams, which ``-c:a:N aac``
+    guarantees). Caller runs subprocess.
+    """
+    command = ffmpeg_cmd("-i", input_file, "-map", "0", "-c", "copy")
+    for index in audio_indices:
+        command += [
+            f"-c:a:{index}",
+            "aac",
+            f"-b:a:{index}",
+            f"{config.AUDIO_BITRATE_KBPS}k",
+            f"-filter:a:{index}",
+            LOUDNORM_FILTER,
+            # loudnorm upsamples to 192 kHz; without -ar the AAC encoder lands on 96
+            # kHz.
+            f"-ar:a:{index}",
+            str(sample_rate),
+        ]
+    if muxer in _NORMALIZE_FASTSTART_MUXERS:
+        command += ["-movflags", "+faststart"]
+    command += ["-f", muxer, output_file]
+    return command
+
+
+def normalize_audio_inplace(
+    filepath: str,
+    audio_indices: list[int],
+    *,
+    on_progress: Callable[[float], None] | None = None,
+    cancel_flag: Callable[[], bool] | None = None,
+) -> tuple[bool, str]:
+    """Rewrite a source video in place with loudness-normalized audio.
+
+    The picture and any unselected audio track are stream-copied; each selected
+    audio-relative track index is re-encoded to AAC through
+    :data:`LOUDNORM_FILTER`. The source is replaced in place — same rationale as
+    :func:`remux_to_faststart`: a sibling copy would register as a phantom
+    participant — and the original parked at ``<name>.orig``. It shares remux's
+    backup slot and per-file lock so the two in-place rewriters cannot race each
+    other, and a kept original from either tool blocks the other until it is
+    discarded or restored.
+
+    Returns ``(ok, message)``. On any failure the source is left exactly as it
+    was: the new file is only swapped in after it has been re-probed and matched
+    against the original's duration, dimensions and track count.
+    """
+    src = Path(filepath)
+    backup = original_backup_path(filepath)
+    progress = on_progress or (lambda _fraction: None)
+
+    if not src.is_file():
+        return False, "Source file is missing."
+    if backup.exists():
+        return False, (
+            f"An earlier original is still kept at '{backup.name}'. "
+            "Discard or restore it before normalizing."
+        )
+
+    muxer = NORMALIZE_MUXER_BY_EXT.get(src.suffix.lower())
+    if muxer is None:
+        return False, f"Audio can't be normalized in place in '{src.suffix}' files."
+
+    before = probe_video_properties(str(src))
+    if before is None:
+        return False, "Could not probe the source file."
+    track_count = int(before.get("audio_track_count") or 0)
+    if track_count == 0:
+        return False, "The source file has no audio track."
+    indices = sorted({i for i in audio_indices if 0 <= i < track_count})
+    if not indices:
+        return False, "No matching audio track to normalize."
+
+    resolved = str(src.resolve())
+    with _remux_lock(resolved):
+        # Re-check under the lock: a racing rewrite may have finished the swap.
+        if backup.exists():
+            return False, "Another rewrite of this file just completed."
+        # Extensionless for the same reason as remux_to_faststart's scratch file.
+        tmp = src.parent / f".{src.stem}.loudnorm.{os.getpid()}.{threading.get_ident()}"
+        command = build_normalize_audio_command(
+            str(src),
+            str(tmp),
+            indices,
+            muxer,
+            int((first_audio_track(before) or {}).get("sample_rate") or 0) or 48000,
+        )
+        if config.DEBUGGING:
+            config.debug_ic(command)
+            return False, "Skipped in DEBUGGING mode."
+        try:
+            result = run_ffmpeg_process(
+                command,
+                input_file=str(src),
+                output_file=str(tmp),
+                os_error_message="Failed to normalize the source video's audio.",
+                kind="normalize",
+                on_progress=progress,
+                expected_duration_sec=float(before.get("duration") or 0.0) or 1.0,
+                cancel_flag=cancel_flag,
+            )
+            if result is None:
+                return (
+                    False,
+                    "Normalization was cancelled or ffmpeg could not be started.",
+                )
+            if result.returncode != 0:
+                return False, f"ffmpeg failed: {(result.stderr or '').strip()[:400]}"
+
+            # Only the mp4 family is provably seekable; the probe returns None for .mkv.
+            problem = _remux_output_mismatch(
+                tmp, before, seekability_required=muxer == "mp4"
+            )
+            if problem is not None:
+                return False, problem
+
+            # Atomic within the directory: both names are on the same filesystem.
+            src.rename(backup)
+            try:
+                tmp.rename(src)
+            except OSError as error:
+                backup.rename(src)  # put the original back, leave no gap
+                return False, f"Could not swap in the normalized file: {error}"
+        finally:
+            _delete_quietly(tmp)
+
+    return True, f"Audio normalized. Original kept as '{backup.name}'."
+
+
 def extract_frame_at_timestamp(
     video_path: str,
     timestamp_seconds: float,
 ) -> Any | None:
     """Extract a single video frame at the given timestamp via ffmpeg.
 
-    Uses two-stage seeking (fast pre-input ``-ss`` near the target, then a
-    small accurate ``-ss`` after ``-i``) so the returned frame is the one
-    at ``timestamp_seconds`` rather than the nearest preceding key-frame.
-    Returns a BGR numpy array (H x W x 3) or None if extraction fails.
+    Frame-accurate: :func:`accurate_seek_pre_post` chooses a single pre-input
+    ``-ss`` on t=0 media, or the two-stage idiom when the container's
+    ``start_time`` is non-zero (MPEG-TS). Returns a BGR numpy array
+    (H x W x 3) or None if extraction fails.
     Requires ffprobe to determine resolution and ffmpeg to decode the frame.
     """
     if config.DEBUGGING:
@@ -2414,13 +2781,19 @@ def extract_frame_at_timestamp(
         return None
 
     width, height = props["width"], props["height"]
-    pre_seek, post_seek = accurate_seek_args(max(0.0, timestamp_seconds))
+    try:
+        container_start = max(0.0, float(props.get("start_time") or 0.0))
+    except (TypeError, ValueError):
+        container_start = 0.0
+    pre, post = accurate_seek_pre_post(
+        max(0.0, timestamp_seconds), container_start=container_start
+    )
     cmd = [
         "ffmpeg",
-        *pre_seek,
+        *pre,
         "-i",
         video_path,
-        *post_seek,
+        *post,
         "-frames:v",
         "1",
         "-pix_fmt",
@@ -2432,12 +2805,13 @@ def extract_frame_at_timestamp(
         "pipe:1",
     ]
     try:
-        result = subprocess.run(
-            cmd,
-            capture_output=True,
-            timeout=10,
-            check=False,
-        )
+        with profiling.span("ffmpeg.bytes"):
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                timeout=10,
+                check=False,
+            )
     except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
         return None
 
@@ -2452,6 +2826,9 @@ def extract_frame_at_timestamp(
         .reshape((height, width, 3))
         .copy()
     )
+
+
+# ---- Filesize targeting and compression ----
 
 
 def get_duration(start_time: str, end_time: str | None) -> int | None:
@@ -2475,13 +2852,8 @@ def get_duration(start_time: str, end_time: str | None) -> int | None:
         )
         return None
 
-    # Parse each end independently with the canonical timestamp parser rather
-    # than picking one strptime format for both ends: the two ends can
-    # legitimately need different formats (a clip 59:50 -> 1:00:10 straddling
-    # the hour, or a single timestamp whose default-duration end crosses it),
-    # and MM:SS minutes may exceed 59 ("75:00", a long session written without
-    # an hours component). A shared-format strptime rejected all of those and
-    # silently dropped the clip.
+    # Parse ends separately: formats differ across the hour boundary, and minutes may
+    # exceed 59.
     start_seconds = utils.timestamp_to_seconds(start_time)
     end_seconds = utils.timestamp_to_seconds(end_time)
     if start_seconds is None or end_seconds is None:
@@ -2605,11 +2977,7 @@ def compress_to_size(
 
     try:
         null_output = "/dev/null" if os.name != "nt" else "NUL"
-        pass1_command = [
-            "ffmpeg",
-            "-y",
-            "-loglevel",
-            config.FFMPEG_LOGLEVEL,
+        pass1_command = ffmpeg_cmd(
             "-i",
             filepath,
             "-c:v",
@@ -2624,11 +2992,10 @@ def compress_to_size(
             "-f",
             "null",
             null_output,
-        ]
+        )
 
         utils.debug_print(f"Pass 1 command: {' '.join(pass1_command)}")
-        # Split the progress bar 50/50 between the two passes so the UI shows a
-        # single monotonic 0→1 fill across both ffmpeg invocations.
+        # Progress splits 50/50 across the two passes for one monotonic fill.
         pass1_progress = (
             (lambda f: on_progress(f * 0.5)) if on_progress is not None else None
         )
@@ -2637,6 +3004,7 @@ def compress_to_size(
             input_file=filepath,
             output_file=null_output,
             os_error_message="ffmpeg could not successfully run during compression pass 1.",
+            kind="compress",
             cancel_flag=cancel_flag,
             on_progress=pass1_progress,
             expected_duration_sec=float(duration) if duration else None,
@@ -2655,11 +3023,7 @@ def compress_to_size(
             )
             return False
 
-        pass2_command = [
-            "ffmpeg",
-            "-y",
-            "-loglevel",
-            config.FFMPEG_LOGLEVEL,
+        pass2_command = ffmpeg_cmd(
             "-i",
             filepath,
             "-c:v",
@@ -2675,7 +3039,7 @@ def compress_to_size(
             "-b:a",
             f"{config.AUDIO_BITRATE_KBPS}k",
             compressed_temp_path,
-        ]
+        )
 
         utils.debug_print(f"Pass 2 command: {' '.join(pass2_command)}")
         pass2_progress = (
@@ -2686,6 +3050,7 @@ def compress_to_size(
             input_file=filepath,
             output_file=compressed_temp_path,
             os_error_message="ffmpeg could not successfully run during compression pass 2.",
+            kind="compress",
             cancel_flag=cancel_flag,
             on_progress=pass2_progress,
             expected_duration_sec=float(duration) if duration else None,
@@ -2746,6 +3111,9 @@ def compress_to_size(
                 )
 
 
+# ---- Reel concatenation ----
+
+
 def _detect_clip_mismatches(
     clip_paths: list[str],
 ) -> tuple[list[dict[str, Any] | None], bool, bool]:
@@ -2767,7 +3135,7 @@ def _detect_clip_mismatches(
 
     resolutions = Counter((p["width"], p["height"]) for p in probed)
     video_codecs = Counter(p["video_codec"] for p in probed)
-    has_audio = [p["audio_codec"] is not None for p in probed]
+    has_audio = [first_audio_track(p) is not None for p in probed]
 
     has_resolution_mismatch = len(resolutions) > 1
     has_audio_presence_mismatch = len(set(has_audio)) > 1
@@ -2818,9 +3186,7 @@ def _build_filter_complex_concat(
         (filter_complex_string, has_any_audio)
     """
     filter_parts: list[str] = []
-    has_any_audio = any(
-        p is not None and p.get("audio_codec") is not None for p in props_list
-    )
+    has_any_audio = any(first_audio_track(p) is not None for p in props_list)
 
     for i, props in enumerate(props_list):
         filter_parts.append(
@@ -2830,12 +3196,11 @@ def _build_filter_complex_concat(
             f"setsar=1[v{i}]"
         )
         if has_any_audio:
-            if props is not None and props.get("audio_codec") is not None:
+            if first_audio_track(props) is not None:
                 filter_parts.append(f"[{i}:a]aresample=44100[a{i}]")
             else:
-                # Reuse the duration already probed into props_list (by
-                # _detect_clip_mismatches) rather than a redundant lookup; fall
-                # back to a fresh probe only for an unprobed clip.
+                # Reuse the duration _detect_clip_mismatches already probed; re-probe
+                # only unprobed clips.
                 if props is not None and props.get("duration"):
                     dur = props["duration"]
                 else:
@@ -2938,7 +3303,7 @@ def _concatenate_filter_complex(
     )
 
     def build_command(encoder: str) -> list[str]:
-        ffmpeg_command = ["ffmpeg", "-y", "-loglevel", config.FFMPEG_LOGLEVEL]
+        ffmpeg_command = ffmpeg_cmd()
         for path in clip_paths:
             ffmpeg_command.extend(["-i", str(Path(path).resolve())])
         ffmpeg_command.extend(["-filter_complex", filter_str])
@@ -2960,6 +3325,7 @@ def _concatenate_filter_complex(
             input_file=clip_paths[0],
             output_file=output_file,
             os_error_message="Filter-complex concatenation failed.",
+            kind="reel",
             cancel_flag=cancel_flag,
             on_progress=on_progress,
             expected_duration_sec=expected_duration_sec,
@@ -2996,11 +3362,7 @@ def _concatenate_demuxer(
     """Concatenate clips using concat demuxer (fast path for matching properties)."""
     with _concat_list_file(clip_paths) as concat_list_file:
         try:
-            ffmpeg_command = [
-                "ffmpeg",
-                "-y",
-                "-loglevel",
-                config.FFMPEG_LOGLEVEL,
+            ffmpeg_command = ffmpeg_cmd(
                 "-f",
                 "concat",
                 "-safe",
@@ -3010,7 +3372,7 @@ def _concatenate_demuxer(
                 "-c",
                 "copy",
                 output_file,
-            ]
+            )
             utils.debug_print(f"ffmpeg concat command: {' '.join(ffmpeg_command)}")
 
             ffmpeg_result = run_ffmpeg_process(
@@ -3018,6 +3380,7 @@ def _concatenate_demuxer(
                 input_file=concat_list_file,
                 output_file=output_file,
                 os_error_message="Concatenation failed.",
+                kind="reel",
                 cancel_flag=cancel_flag,
             )
             if ffmpeg_result is None:
@@ -3029,11 +3392,7 @@ def _concatenate_demuxer(
                 )
 
                 def build_reencode(encoder: str) -> list[str]:
-                    return [
-                        "ffmpeg",
-                        "-y",
-                        "-loglevel",
-                        config.FFMPEG_LOGLEVEL,
+                    return ffmpeg_cmd(
                         "-f",
                         "concat",
                         "-safe",
@@ -3044,7 +3403,7 @@ def _concatenate_demuxer(
                         "-c:a",
                         "aac",
                         output_file,
-                    ]
+                    )
 
                 ffmpeg_result = run_ffmpeg_encode(
                     build_reencode,
@@ -3052,6 +3411,7 @@ def _concatenate_demuxer(
                     input_file=concat_list_file,
                     output_file=output_file,
                     os_error_message="Concatenation failed during re-encoding fallback.",
+                    kind="reel",
                     cancel_flag=cancel_flag,
                     on_progress=on_progress,
                     expected_duration_sec=expected_duration_sec,
@@ -3099,11 +3459,7 @@ def concat_copy(
     """
     with _concat_list_file(clip_paths) as concat_list_file:
         try:
-            ffmpeg_command = [
-                "ffmpeg",
-                "-y",
-                "-loglevel",
-                config.FFMPEG_LOGLEVEL,
+            ffmpeg_command = ffmpeg_cmd(
                 "-f",
                 "concat",
                 "-safe",
@@ -3113,13 +3469,14 @@ def concat_copy(
                 "-c",
                 "copy",
                 output_file,
-            ]
+            )
             utils.debug_print(f"ffmpeg concat-copy command: {' '.join(ffmpeg_command)}")
             ffmpeg_result = run_ffmpeg_process(
                 ffmpeg_command,
                 input_file=concat_list_file,
                 output_file=output_file,
                 os_error_message="Stream-copy concat failed.",
+                kind="concat",
                 cancel_flag=cancel_flag,
                 on_progress=on_progress,
                 expected_duration_sec=expected_duration_sec,
@@ -3130,6 +3487,9 @@ def concat_copy(
         except OSError as e:
             utils.debug_print(f"Stream-copy concat failed: {e}")
             return False
+
+
+# ---- Batch and parallel extraction ----
 
 
 def _batch_extract_screenshots(
@@ -3146,20 +3506,14 @@ def _batch_extract_screenshots(
     """
     ext = config.SCREENSHOT_FORMAT
     if ext.lower() == ".webp" and not check_webp_support():
-        _warn_webp_unavailable_once(f"frame_*{ext}")
+        _warn_encoder_missing_once("webp", f"frame_*{ext}")
         return None
     tmpdir = tempfile.mkdtemp(prefix="clipgen_gallery_")
     try:
-        # The fps filter samples from t=0, so for an offset grid (a multi-video
-        # part aligned to the global interval) seek the input first; frame index
-        # i then still maps to timestamps[i] because the grid is evenly spaced.
+        # fps samples from t=0: seek to the grid start so frame i maps to timestamps[i].
         start_offset = timestamps[0] if timestamps else 0
         seek_args = ["-ss", str(start_offset)] if start_offset > 0 else []
-        ffmpeg_command = [
-            "ffmpeg",
-            "-y",
-            "-loglevel",
-            config.FFMPEG_LOGLEVEL,
+        ffmpeg_command = ffmpeg_cmd(
             *seek_args,
             "-i",
             input_file,
@@ -3169,7 +3523,7 @@ def _batch_extract_screenshots(
             config.FFMPEG_SCREENSHOT_QUALITY,
             "-f",
             "image2",
-        ]
+        )
         if ext.lower() == ".webp":
             ffmpeg_command += ["-c:v", "libwebp", "-quality", str(config.WEBP_QUALITY)]
         ffmpeg_command.append(os.path.join(tmpdir, f"frame_%04d{ext}"))
@@ -3182,6 +3536,7 @@ def _batch_extract_screenshots(
             input_file=input_file,
             output_file=os.path.join(tmpdir, f"frame_*{ext}"),
             os_error_message="ffmpeg could not run for batch screenshot extraction.",
+            kind="screenshot",
             cancel_flag=cancel_flag,
         )
         if ffmpeg_result is None or ffmpeg_result.returncode != 0:
@@ -3217,7 +3572,6 @@ def _batch_extract_screenshots(
 def _parallel_extract_gifs(
     input_file: str,
     timestamps: list[int],
-    interval_seconds: int,
     gif_duration_seconds: int,
     duration: int,
     *,
@@ -3233,10 +3587,10 @@ def _parallel_extract_gifs(
         ts_str = utils.seconds_to_timestamp(ts)
         ts_safe = ts_str.replace(":", "_")
         filename = f"gallery_{ts_safe}{ext}"
-        output_path = files.get_unique_filename(filename, file_format=ext)
         gif_dur = min(gif_duration_seconds, duration - ts)
         if gif_dur <= 0:
             break
+        output_path = files.get_unique_filename(filename, file_format=ext)
         tasks.append((input_file, output_path, ts_str, gif_dur, float(ts)))
 
     if not tasks:
@@ -3358,7 +3712,6 @@ def generate_interval_captures(
         parallel_artifacts = _parallel_extract_gifs(
             input_file,
             timestamps,
-            interval_seconds,
             gif_duration_seconds,
             duration,
             cancel_flag=cancel_flag,
@@ -3375,9 +3728,9 @@ def generate_interval_captures(
         ts_str = utils.seconds_to_timestamp(ts)
         ts_safe = ts_str.replace(":", "_")
         filename = f"gallery_{ts_safe}{ext}"
-        output_path = files.get_unique_filename(filename, file_format=ext)
 
         if output_format == "screen":
+            output_path = files.get_unique_filename(filename, file_format=ext)
             ok = extract_screenshot(
                 input_file, output_path, ts_str, cancel_flag=cancel_flag
             )
@@ -3386,6 +3739,8 @@ def generate_interval_captures(
             gif_dur = min(gif_duration_seconds, duration - ts)
             if gif_dur <= 0:
                 break
+            # Reserve only once the GIF is known to have length.
+            output_path = files.get_unique_filename(filename, file_format=ext)
             ok = extract_gif(
                 input_file, output_path, ts_str, gif_dur, cancel_flag=cancel_flag
             )

@@ -17,6 +17,19 @@
  *  - Combo grammar: "[Mod+][Ctrl+][Alt+][Shift+]Key"; aliases separated by a
  *    space ("X Backspace"). Mod = Cmd on macOS, Ctrl elsewhere. Shift-produced
  *    punctuation keeps the produced character ("?", "{"), dropping Shift.
+ *  - Numeral convention: Shift+numeral targets a panel/region for keyboard
+ *    focus; a bare numeral is a tool/action within the current context
+ *    (Studio preview tabs, Screenspace tools). Pages route the two with
+ *    mutually-exclusive `when` gates on a focusRegion-style state field.
+ *    Arrow keys drive the focused surface; Escape returns focus to the page's
+ *    primary surface (the video player) before the rest of its cascade.
+ *  - Shift+digit yields layout-dependent symbols, so those combos match on
+ *    physical e.code — Shift+1 works across layouts, but only plain
+ *    arrows/Enter (never Tab) can be caught for in-panel navigation.
+ *  - Shared ids (transport.*, nav.*, edit.*, global.*) keep behavior uniform
+ *    across pages; the "?" cheatsheet is generated from what a page registers.
+ *    User rebinds persist as the HOTKEY_OVERRIDES setting and are stripped
+ *    from exported viewers (viewer._export_config) — exports run the defaults.
  */
 
 (function () {
@@ -24,10 +37,8 @@
 
   var IS_MAC = /Mac|iPhone|iPad/.test(navigator.platform || "");
 
-  // ---- Catalog (the keymap as data) ----
-  // Sections group actions for the cheatsheet and scope conflict detection:
-  // two bindings only conflict when their sections' page sets intersect
-  // (pages: null = every page).
+  // ---- Catalog ----
+  // Bindings conflict only when their sections' pages intersect (null = all pages).
 
   var HOTKEY_SECTIONS = [
     { id: "global",      label: "Everywhere",     pages: null },
@@ -97,13 +108,14 @@
     { id: "composer.nudgeRight",       section: "composer", group: "Cuts", label: "Nudge cut edge right (fine)", combos: ["]"] },
     { id: "composer.nudgeLeftBig",     section: "composer", group: "Cuts", label: "Nudge cut edge left (1 s)", combos: ["{"] },
     { id: "composer.nudgeRightBig",    section: "composer", group: "Cuts", label: "Nudge cut edge right (1 s)", combos: ["}"] },
-    { id: "composer.deleteSelection",  section: "composer", group: "Cuts", label: "Delete selected annotation / cut", combos: ["X", "Backspace"] },
+    { id: "composer.deleteSelection",  section: "composer", group: "Cuts", label: "Delete selected annotation / cut", combos: ["Backspace", "Delete"] },
     { id: "composer.toolSelect",       section: "composer", group: "Annotate", label: "Select tool", combos: ["V"] },
     { id: "composer.toolText",         section: "composer", group: "Annotate", label: "Text tool", combos: ["T"] },
     { id: "composer.toolDraw",         section: "composer", group: "Annotate", label: "Draw tool", combos: ["D"] },
     { id: "composer.toolErase",        section: "composer", group: "Annotate", label: "Erase tool", combos: ["E"] },
     { id: "composer.toolRect",         section: "composer", group: "Annotate", label: "Rectangle tool", combos: ["U"] },
     { id: "composer.toolEllipse",      section: "composer", group: "Annotate", label: "Circle tool", combos: ["C"] },
+    { id: "composer.swapColors",       section: "composer", group: "Annotate", label: "Swap primary / secondary color", combos: ["X"] },
     { id: "composer.holdHideAnnotations", section: "composer", group: "Annotate", label: "Hide annotations (hold or tap)", combos: ["B"] },
     { id: "composer.toggleSource",     section: "composer", group: "Marker lanes", label: "Toggle marker lane 1–3", combos: ["1", "2", "3"], rebindable: false, displayKeys: "1–3" },
     { id: "composer.toggleAllSources", section: "composer", group: "Marker lanes", label: "Toggle all marker lanes", combos: ["0"] },
@@ -112,7 +124,8 @@
     { id: "composer.toggleSidebar",    section: "composer", group: "Panels", label: "Collapse / expand timelines sidebar", combos: ["F"] },
     { id: "composer.note.zoomTimeline", section: "composer", group: "Timeline", label: "Zoom / pan timeline", note: "scroll · drag to pan" },
 
-    { id: "screenspace.blink", section: "screenspace", group: "", label: "Blink region overlay (hold)", combos: ["B"] },
+    { id: "screenspace.blink", section: "screenspace", group: "Overlay", label: "Peek overlay (hold) / toggle (tap)", combos: ["B"] },
+    { id: "screenspace.cycleOverlayLayer", section: "screenspace", group: "Overlay", label: "Next overlay layer", combos: ["N"] },
     { id: "screenspace.stepBackFine", section: "screenspace", group: "Transport", label: "Fine step back 1 s", combos: ["Shift+ArrowLeft"] },
     { id: "screenspace.stepFwdFine",  section: "screenspace", group: "Transport", label: "Fine step forward 1 s", combos: ["Shift+ArrowRight"] },
     { id: "screenspace.setIn",  section: "screenspace", group: "Marks", label: "Set in marker", combos: ["I"] },
@@ -133,9 +146,11 @@
     { id: "transcripts.nextMarked",   section: "transcripts", group: "Marks", label: "Next marked segment", combos: ["N"] },
     { id: "transcripts.prevMarked",   section: "transcripts", group: "Marks", label: "Previous marked segment", combos: ["P"] },
     { id: "transcripts.markCategory", section: "transcripts", group: "Marks", label: "Mark with category 1–9", combos: ["1", "2", "3", "4", "5", "6", "7", "8", "9"], rebindable: false, displayKeys: "1–9" },
+    { id: "transcripts.setIn",        section: "transcripts", group: "Transcribe range", label: "Set in marker", combos: ["I"] },
+    { id: "transcripts.setOut",       section: "transcripts", group: "Transcribe range", label: "Set out marker", combos: ["O"] },
     { id: "transcripts.cyclePartPrev",  section: "transcripts", group: "Participants", label: "Previous participant", combos: ["Z"] },
     { id: "transcripts.cyclePartNext",  section: "transcripts", group: "Participants", label: "Next participant", combos: ["X"] },
-    { id: "transcripts.pillMenu",       section: "transcripts", group: "Participants", label: "Open participant options (then 1–4)", combos: ["O"] },
+    { id: "transcripts.pillMenu",       section: "transcripts", group: "Participants", label: "Open participant options (then 1–5)", combos: ["Shift+O"] },
     { id: "transcripts.pillNav",        section: "transcripts", group: "Participants", label: "Navigate open participant options", combos: ["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"], rebindable: false, displayKeys: "←↑↓→" },
     { id: "transcripts.pillActivate",   section: "transcripts", group: "Participants", label: "Run the focused option", combos: ["Enter"], rebindable: false },
     { id: "transcripts.toggleCaptions", section: "transcripts", group: "Playback", label: "Toggle captions", combos: ["C"] },
@@ -173,6 +188,9 @@
     { id: "gallery.prev", section: "gallery", group: "", label: "Previous image", combos: ["ArrowLeft"] },
     { id: "gallery.next", section: "gallery", group: "", label: "Next image", combos: ["ArrowRight"] },
 
+    { id: "start.tabOpen",      section: "start", group: "Panel",       label: "Show Open tab",           combos: ["1"] },
+    { id: "start.tabAbout",     section: "start", group: "Panel",       label: "Show About tab",          combos: ["2"] },
+    { id: "start.tabUpdates",   section: "start", group: "Panel",       label: "Show Recent updates tab", combos: ["3"] },
     { id: "start.tabGoogle",    section: "start", group: "Spreadsheet", label: "Use Google Sheets",     combos: ["G"] },
     { id: "start.tabExcel",     section: "start", group: "Spreadsheet", label: "Use Excel file",        combos: ["E"] },
     { id: "start.tabMindnode",  section: "start", group: "Spreadsheet", label: "Use MindNode mind map", combos: ["M"] },
@@ -220,18 +238,11 @@
       shift = e.shiftKey;
     } else if (key.length === 1) {
       if (e.shiftKey && (e.code === "Comma" || e.code === "Period")) {
-        // Shifted , / . resolve to layout-dependent characters ("<" on US,
-        // ";" on Swedish), so "Shift+," would never match below. The physical
-        // Comma/Period keys are layout-stable — map these two by e.code so
-        // frame-step combos work everywhere.
+        // Shifted , / . produce layout-dependent characters; map by the layout-stable e.code.
         name = e.code === "Comma" ? "," : ".";
         shift = true;
       } else if (e.shiftKey && /^Digit[0-9]$/.test(e.code)) {
-        // Shifted digits resolve to layout-dependent symbols ("!" on US,
-        // "&" on French), so "Shift+1" would never match below. The physical
-        // DigitN keys are layout-stable — map by e.code so numbered combos
-        // (e.g. the Shift+1…N panel-focus keys in Studio/Screenspace) work
-        // everywhere.
+        // Shifted digits produce layout symbols ("!" on US, "&" on French); map by layout-stable e.code.
         name = e.code.charAt(5);
         shift = true;
       } else if (key.toUpperCase() !== key.toLowerCase()) {
@@ -239,15 +250,10 @@
         name = key.toUpperCase();
         shift = e.shiftKey;
       } else {
-        // Digit or punctuation: keep the produced character, drop Shift
-        // ("?" and "{" are combos of their own, not Shift+/).
+        // Digit or punctuation: keep the produced character, drop Shift ("?" is its own combo).
         name = key;
         if (!/[0-9]/.test(key)) {
-          // Punctuation often *requires* Option/AltGr on ISO layouts
-          // (Option+8 = "[" on a German/Swedish Mac; AltGr arrives as
-          // Ctrl+Alt on Windows), so the producing modifiers are not part
-          // of the combo — the produced character is. Digits keep their
-          // modifiers; they never need AltGr.
+          // ISO layouts need Option/AltGr (Ctrl+Alt on Windows) for punctuation; drop those modifiers.
           alt = false;
           if (!IS_MAC && e.altKey) mod = false;
         }
@@ -265,16 +271,9 @@
     return parts.join("+");
   }
 
-  // Fallback combo for a *bare* digit binding on a layout whose number row is
-  // shifted: on AZERTY the physical Digit1 produces e.key "&", so "1" would
-  // never match and the digit shortcuts (Studio preview tabs, Screenspace tool
-  // selection, transcript mark categories) would be unreachable. The DigitN
-  // codes are layout-stable. Returned as a *second* lookup key rather than
-  // replacing the primary name, so combos that legitimately are "&" still work.
-  // Alt/AltGr is excluded: on ISO layouts that is how punctuation is typed, and
-  // there the produced character — not the physical key — is the combo.
+  // Second lookup key so bare digits work on shifted number rows (AZERTY Digit1 yields "&").
   function codeDigitCombo(e) {
-    if (e.altKey || e.shiftKey) return null; // shifted digits: see normalizeEvent
+    if (e.altKey || e.shiftKey) return null; // Alt types ISO punctuation; shifted digits: see normalizeEvent
     if (!/^Digit[0-9]$/.test(e.code)) return null;
     var digit = e.code.charAt(5);
     if (e.key === digit) return null; // already matched as produced
@@ -285,11 +284,7 @@
     return parts.join("+");
   }
 
-  // The token keydown stored as `baseKey`, recomputed from a keyup. Shifted
-  // digits and , / . normalize from e.code on keydown (their e.key is the
-  // layout symbol: "!" / "<" / ";"), so keyup has to agree or onRelease never
-  // fires and the entry leaks in _held — later firing on an unrelated keyup
-  // whose e.key happens to equal the stored token.
+  // keyup counterpart of the keydown baseKey; must agree with normalizeEvent's e.code mapping or _held leaks.
   function keyupBaseKey(e) {
     if (e.key === " " || e.key === "Spacebar") return "SPACE";
     if (/^Digit[0-9]$/.test(e.code)) return e.code.charAt(5);
@@ -305,14 +300,10 @@
     Backspace: "⌫", Delete: "Del", Enter: "↩", Space: "Space"
   };
 
-  // The symbol glyphs (mac modifier keys + arrows / enter / backspace) that
-  // render visually smaller than Latin letters/digits at the same point size,
-  // so they get bumped up via .hk-glyph in fillKeycap.
+  // Glyphs that render smaller than Latin letters; fillKeycap bumps them via .hk-glyph.
   var _GLYPH_CHARS = { "⌘": 1, "⌃": 1, "⌥": 1, "⇧": 1, "←": 1, "→": 1, "↑": 1, "↓": 1, "⌫": 1, "↩": 1 };
 
-  // Combo string → array of display tokens, e.g. "Shift+A" → ["⇧", "A"] on
-  // macOS, ["Shift", "A"] on PC. "+" is the token separator; a literal "+" key
-  // arrives as empty split tokens and is re-joined into a "+" token.
+  // "Shift+A" → ["⇧", "A"] (mac) or ["Shift", "A"]; a literal "+" key survives the split.
   function comboTokens(combo) {
     var tokens = combo.split("+");
     var cleaned = [];
@@ -336,10 +327,7 @@
     return comboTokens(combo).join(IS_MAC ? "" : "+");
   }
 
-  // Render a combo into a key-cap element as DOM nodes, wrapping the small
-  // symbol glyphs in .hk-glyph so they read at a legible size beside letters.
-  // Used by the cheatsheet key-caps and the Alt-hold hint chips (the plain
-  // string formatCombo stays for the settings rebinder and elsewhere).
+  // Render a combo into a key-cap as DOM nodes; small glyphs get .hk-glyph.
   function fillKeycap(node, combo) {
     var out = comboTokens(combo);
     var sep = IS_MAC ? "" : "+";
@@ -388,9 +376,7 @@
     return false;
   }
 
-  // All catalog actions (any page) whose resolved combos include `combo` and
-  // whose section page-scope intersects `id`'s section. Used by the settings
-  // recorder for conflict warnings.
+  // Catalog actions sharing `combo` whose section page-scope intersects `id`'s; feeds the settings recorder.
   function comboConflicts(combo, id) {
     var self = ACTIONS_BY_ID[id];
     var out = [];
@@ -455,9 +441,7 @@
     return t.matches("input, textarea, select") || t.isContentEditable === true;
   }
 
-  // A free-text-entry field: text inputs, textareas, contenteditable. Excludes
-  // <select> and non-text inputs (checkbox / radio / range) — those are safe to
-  // blur on Escape without discarding half-typed text.
+  // Free-text fields only; <select> and checkbox/radio/range are safe to blur on Escape.
   function isTextEntry(t) {
     if (!t) return false;
     if (t.isContentEditable === true) return true;
@@ -472,11 +456,7 @@
     return false;
   }
 
-  // Drop a lingering native DOM focus (a tabbed-to button / select / link) so it
-  // leaves no focus ring competing with a page's painted keyboard cursor. Pages
-  // call this when a painted cursor takes over (Studio kbJumpTo, Screenspace
-  // Shift+1..4); the Escape dispatcher calls it as a last resort when nothing
-  // else claimed the key (so a focused <select> can be dismissed with Escape).
+  // Drop stray native focus so no ring competes with painted keyboard cursors; also Escape's fallback.
   function blurStrayFocus() {
     var el = document.activeElement;
     if (el && el !== document.body && el.blur && !isTextEntry(el)) {
@@ -493,13 +473,10 @@
 
   function onDocKeydown(e) {
     if (e.key === "Alt") {
-      // Bare Alt (no other modifiers) arms the discoverability hints. The
-      // !ctrlKey gate keeps Windows AltGr (which arrives as Ctrl+Alt) from
-      // arming them.
+      // Bare Alt arms the hints; !ctrlKey keeps Windows AltGr (Ctrl+Alt) from arming them.
       if (!e.repeat && !e.ctrlKey && !e.metaKey && !e.shiftKey) armHints();
     } else if (_hintTimer !== null || _hintsShown) {
-      // Any other key while armed/shown means a real chord (Alt+Tab,
-      // Option-typing, an Alt+X hotkey) — not a discoverability hold.
+      // Any other key while armed means a real chord (Alt+Tab, Option-typing), not a hold.
       disarmHints();
     }
     if (e.defaultPrevented) return;
@@ -512,16 +489,13 @@
           return;
         }
       }
-      // No page handler claimed Escape: drop a lingering native focus ring so it
-      // does not compete with painted keyboard cursors across the app.
+      // Nothing claimed Escape: drop a stray focus ring competing with painted keyboard cursors.
       if (blurStrayFocus()) e.preventDefault();
       return;
     }
     var modalOpen = blockingModalOpen();
-    if (modalOpen && _sheetEl && !_sheetEl.classList.contains("hidden")) {
-      // The cheatsheet is our own blocking modal: its toggle combo passes
-      // back through so a second "?" press closes it (like the old per-page
-      // popovers). Everything else stays suppressed while it owns the keyboard.
+    if (modalOpen && _sheetOpen) {
+      // Our own cheatsheet modal: its toggle combo still closes it; everything else stays suppressed.
       if (!isTypingTarget(e.target)) {
         var sheetCombo = normalizeEvent(e);
         if (sheetCombo && resolvedCombos("global.cheatsheet").indexOf(sheetCombo) !== -1) {
@@ -531,9 +505,7 @@
       }
       return;
     }
-    // A non-cheatsheet blocking modal (start launcher / settings) is open: fall
-    // through, but the loop below only fires attachments flagged inModal — the
-    // modal's own keyboard nav. Background page hotkeys stay dead.
+    // Another blocking modal is open: only attachments flagged inModal fire below; page hotkeys stay dead.
     var combo = normalizeEvent(e);
     if (!combo) return;
     var ids = _comboIndex[combo];
@@ -565,9 +537,7 @@
 
   function onDocKeyup(e) {
     if (e.key === "Alt" && (_hintTimer !== null || _hintsShown)) {
-      // Swallow the keyup when hints were shown so the Alt hold doesn't
-      // also focus the browser menubar (Firefox/Windows). A quick tap
-      // (released before the show delay) keeps native behavior.
+      // Swallow the keyup after hints showed so the Alt hold doesn't focus the menubar (Firefox/Windows).
       if (_hintsShown) e.preventDefault();
       disarmHints();
     }
@@ -582,8 +552,7 @@
   }
 
   function onWindowBlur() {
-    // Alt-tab etc. can swallow keyup; treat blur as release-all so hold-to-act
-    // actions (Screenspace blink) never get stuck on.
+    // Alt-tab can swallow keyup; release all so hold-to-act actions never stick on.
     for (var n = 0; n < _held.length; n++) _held[n].attachment.onRelease(null);
     _held = [];
     disarmHints();
@@ -594,22 +563,14 @@
   window.addEventListener("blur", onWindowBlur);
 
   // ---- Alt-hold hint chips ----
-  //
-  // Hold Alt for HINT_DELAY_MS and a small combo chip appears next to every
-  // visible control tagged data-hotkey="<catalog id>" (optionally
-  // data-hotkey-combo="<n>" to pick the Nth resolved combo). Release Alt,
-  // press any other key, scroll, resize, or blur the window and they vanish.
+  // Hold Alt: a combo chip beside each visible [data-hotkey] control.
 
   var HINT_DELAY_MS = 200;
   var _hintTimer = null;   // pending show timeout id
   var _hintLayer = null;   // fixed .hk-hints container, kept for reuse
   var _hintsShown = false;
 
-  // Context action-hint providers: a page with a keyboard cursor registers a
-  // function returning {anchor, entries: [{id, label}]} (or null while no
-  // cursor is active). On Alt-hold, showHints() stacks one labeled chip per
-  // entry vertically to the right of the anchor (e.g. Studio's cell browser:
-  // "↩ Send to Artifacts" over "⇧↩ Send to Reel").
+  // Providers return {anchor, entries: [{id, label}]} or null; showHints stacks labeled chips beside the anchor.
   var _actionHintProviders = [];
 
   function registerActionHints(fn) {
@@ -629,11 +590,7 @@
     hideHints();
   }
 
-  // True when another element covers the control's center — so a hint chip would
-  // otherwise float over whatever now sits on top (e.g. a dragged-up bottom panel
-  // covering the video controls). The .hk-hints layer is pointer-events:none, so
-  // it never registers as the occluder. elementFromPoint wants viewport coords,
-  // so clamp the sample point into the visible box.
+  // True when another element covers the control's center; the pointer-events:none hint layer never counts.
   function isOccluded(node, rect) {
     if (!document.elementFromPoint) return false;
     var cx = Math.min(Math.max(rect.left + rect.width / 2, 1), window.innerWidth - 1);
@@ -646,10 +603,7 @@
   function showHints() {
     _hintTimer = null;
     if (_hintsShown || isTypingTarget(document.activeElement)) return;
-    // When a modal owns the keyboard, scope hints to its own [data-hotkey]
-    // controls (so background-page chips never float over the modal). A modal
-    // we can't scope (bare body.modal-open with no registered root) suppresses
-    // hints entirely, exactly as before.
+    // Scope hints to a modal's own controls; an unscopable modal (bare body.modal-open) suppresses them.
     var modalRoot = (typeof getActiveModalRoot === "function") ? getActiveModalRoot() : null;
     if (blockingModalOpen() && !modalRoot) return;
     var scope = modalRoot || document;
@@ -658,9 +612,7 @@
     var targets = [];
     for (var n = 0; n < nodes.length; n++) {
       var node = nodes[n];
-      // A disabled control still gets a chip, dimmed, so the shortcut stays
-      // discoverable while showing it is currently inert (e.g. "Stash" with an
-      // empty queue).
+      // Disabled controls still get a dimmed chip so the shortcut stays discoverable.
       var dim = node.disabled === true;
       var combos = resolvedCombos(node.getAttribute("data-hotkey"));
       if (!combos.length) continue; // unknown id or user-disabled binding
@@ -671,8 +623,7 @@
       if (isOccluded(node, rect)) continue; // covered by another panel (e.g. a dragged-up bottom panel over the video controls)
       targets.push({ rect: rect, combo: combo, dim: dim });
     }
-    // Context action-hint providers anchor to background-page controls, so skip
-    // them while a modal owns the keyboard.
+    // Providers anchor to background-page controls; skip them while a modal owns the keyboard.
     for (var p = 0; !modalRoot && p < _actionHintProviders.length; p++) {
       var ctx = _actionHintProviders[p]();
       if (!ctx || !ctx.anchor || !ctx.entries) continue;
@@ -710,24 +661,18 @@
     }
     _hintLayer.appendChild(frag);
     _hintLayer.classList.remove("hidden");
-    // Second read pass (chip sizes), then one write pass placing each chip
-    // badge-style on its target's top-right corner, clamped into the viewport.
+    // Second read pass (sizes), then one write pass placing badges on top-right corners.
     var sizes = [];
     for (var m = 0; m < chips.length; m++) {
       sizes.push({ w: chips[m].offsetWidth, h: chips[m].offsetHeight });
     }
-    // Corner badges anchor to the anchor's vertical CENTER (minus a fixed
-    // half-height) rather than its top edge, so controls of different heights
-    // sharing a centered row — e.g. a <select> among icon buttons — still get
-    // level chips. For a standard ~24 px control this still straddles the top
-    // edge as before.
+    // Anchor badges to the vertical center so mixed-height controls in one row get level chips.
     var BADGE_RAISE = 12;
     for (var k = 0; k < chips.length; k++) {
       var r = targets[k].rect;
       var left, top;
       if (targets[k].label) {
-        // Labeled action chip: to the right of the anchor, stacked downward;
-        // flips to the anchor's left side when the viewport lacks room.
+        // Labeled chip: right of the anchor, stacked downward; flips left when the viewport lacks room.
         left = r.right + 6;
         if (left + sizes[k].w > window.innerWidth - 4) left = r.left - sizes[k].w - 6;
         top = r.top + targets[k].stack * (sizes[k].h + 4);
@@ -740,11 +685,7 @@
       chips[k].style.left = left + "px";
       chips[k].style.top = top + "px";
     }
-    // De-overlap corner badges: adjacent narrow buttons (e.g. undo ⌘Z / redo
-    // ⌘⇧Z) yield chips wider than the buttons, so their badges collide. Spread
-    // any colliding badge rightward to sit just past the previous one, so a
-    // tight cluster reads as a row of chips. Labeled action chips already stack
-    // downward, so they're excluded.
+    // De-overlap corner badges: chips wider than tight buttons (undo/redo) spread rightward. Labeled chips already stack.
     var order = [];
     for (var bi = 0; bi < chips.length; bi++) {
       if (!targets[bi].label) order.push(bi);
@@ -781,9 +722,7 @@
   }
 
   // ---- Shared "?" help button ----
-  // Every page carries a [data-hotkeys-help] button (see hotkeys.css for the
-  // shared look). Delegation instead of a per-page init: no load-order
-  // assumptions, and JS-created buttons work automatically.
+  // Delegated click: no load-order assumptions, and JS-created buttons work.
 
   document.addEventListener("click", function (e) {
     var t = e.target;
@@ -794,6 +733,7 @@
   // ---- Cheatsheet overlay ----
 
   var _sheetEl = null;
+  var _sheetOpen = false;
 
   function buildSheet() {
     var overlay = el("div", "hk-overlay hidden");
@@ -865,7 +805,13 @@
   function openCheatsheet() {
     if (!_sheetEl) _sheetEl = buildSheet();
     renderSheet();
-    _sheetEl.classList.remove("hidden");
+    _sheetOpen = true;
+    if (typeof popModalIn === "function") popModalIn(_sheetEl, _sheetEl.querySelector(".hk-panel"));
+    else _sheetEl.classList.remove("hidden");
+    // Next frame, so the backdrop has a painted start value to fade from.
+    requestAnimationFrame(function () {
+      if (_sheetOpen) _sheetEl.classList.add("is-open");
+    });
     if (typeof openBlockingModal === "function") {
       openBlockingModal(_sheetEl, {
         onEscape: closeCheatsheet,
@@ -876,13 +822,17 @@
   }
 
   function closeCheatsheet() {
-    if (!_sheetEl || _sheetEl.classList.contains("hidden")) return;
-    _sheetEl.classList.add("hidden");
+    if (!_sheetEl || !_sheetOpen) return;
+    _sheetOpen = false;
+    _sheetEl.classList.remove("is-open");
     if (typeof closeBlockingModal === "function") closeBlockingModal(_sheetEl);
+    var hide = function () { _sheetEl.classList.add("hidden"); };
+    if (typeof popModalOut === "function") popModalOut(_sheetEl, _sheetEl.querySelector(".hk-panel"), hide);
+    else hide();
   }
 
   function toggleCheatsheet() {
-    if (_sheetEl && !_sheetEl.classList.contains("hidden")) closeCheatsheet();
+    if (_sheetOpen) closeCheatsheet();
     else openCheatsheet();
   }
 
@@ -901,6 +851,7 @@
     applyOverrides: applyOverrides,
     normalizeEvent: normalizeEvent,
     formatCombo: formatCombo,
+    fillKeycap: fillKeycap,
     comboConflicts: comboConflicts,
     toggleCheatsheet: toggleCheatsheet,
     closeCheatsheet: closeCheatsheet,

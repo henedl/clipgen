@@ -16,9 +16,7 @@
 
   var audioPanel = null; // ClipgenVideoControls audio-popover controller
 
-  // Playback-speed cycle. Coarse like Screenspace's (not Transcripts' fine
-  // 0.75–2x list): Composer plays whole session recordings, where the point of
-  // the control is skimming rather than close listening.
+  // Coarse steps like Screenspace: whole-session recordings are skimmed, not listened closely.
   var VIDEO_SPEEDS = [0.5, 1, 2, 3, 5];
 
   var state = {
@@ -37,9 +35,11 @@
     annotations: [],        // all annotation records (all participants)
     selectedAnnotationIds: [], // multi-select: ids of the selected annotations
     annTool: "select",      // "select" | "text" | "draw"
-    annColor: "",           // filled from CLIPGEN_CONFIG at boot
+    annColor: "",           // palette's PRIMARY slot — the live annotation color (boot)
+    annColorSecondary: "",  // palette's parked second slot; X swaps the two (boot)
     annStrokeWidth: 0,      // default stroke width for new shapes/strokes (boot)
     annStrokeStyle: "solid", // default stroke style: solid | dashed | dotted (boot)
+    annFontSize: 0,         // default text size for new text annotations (boot)
     annHidden: false,       // hide the annotation layer (B: hold to peek, tap to toggle)
     selectedCutId: null,
     pendingIn: null,        // in-point awaiting its out-point (global seconds)
@@ -74,39 +74,18 @@
   function setAnnotateTool() { return CO.setAnnotateTool && CO.setAnnotateTool.apply(null, arguments); }
   function initMarkerScrub() { return CO.initMarkerScrub && CO.initMarkerScrub.apply(null, arguments); }
 
-  // ---- API client ----
-
-  function apiGet(path) {
-    return fetch(path).then(function (r) { return r.json(); });
-  }
-
-  function apiSend(method, path, body) {
-    return fetch(path, {
-      method: method,
-      headers: { "Content-Type": "application/json" },
-      body: body === undefined ? undefined : JSON.stringify(body),
-    }).then(function (r) { return r.json(); });
-  }
-
-  CO.apiGet = apiGet;
-  CO.apiSend = apiSend;
-
-  // ---- Multi-part video (forked from transcripts-video.js) ----
-  // The <video> plays one part at a time; these helpers present a single
-  // GLOBAL timeline so the playhead, cuts, and markers all use global seconds.
+  // ---- Multi-part video ----
+  // Global-seconds timeline over per-part playback; manifest part-start key is "offset".
 
   function partForGlobal(g) {
-    var parts = state.parts;
-    for (var i = 0; i < parts.length; i++) {
-      if (g >= parts[i].offset && g < parts[i].offset + parts[i].duration) return i;
-    }
-    return Math.max(0, parts.length - 1);
+    return clipgenPartForGlobal(state.parts, g, "offset");
   }
 
   function videoGlobalTime() {
     var video = qs("#coVideo");
     var part = state.parts[state.activePart];
-    return (video ? video.currentTime : 0) + (part ? part.offset : 0);
+    // `|| 0`: fallback parts (server couldn't probe) may lack a numeric offset.
+    return (video ? video.currentTime : 0) + ((part && part.offset) || 0);
   }
   CO.videoGlobalTime = videoGlobalTime;
 
@@ -126,7 +105,7 @@
     if (!state.parts.length) return;
     var g = clamp(time, 0, Math.max(0, state.duration - 0.001));
     var i = partForGlobal(g);
-    var local = g - state.parts[i].offset;
+    var local = g - (state.parts[i].offset || 0);
     state.playhead = g;
     if (i !== state.activePart) {
       switchToPart(i, local, state.playing);
@@ -144,39 +123,51 @@
     _seek.seek(time);
   }
 
+  // Pending part-switch loadedmetadata handler; newer switches drop it so it never seeks the wrong source.
+  var _pendingPartMeta = null;
+
+  function cancelPendingPartMeta() {
+    if (!_pendingPartMeta) return;
+    var video = qs("#coVideo");
+    if (video) video.removeEventListener("loadedmetadata", _pendingPartMeta);
+    _pendingPartMeta = null;
+  }
+
   function switchToPart(i, localTime, resume) {
     var video = qs("#coVideo");
     if (!video) return;
-    // A same-part seek may still be deferred on loadedmetadata; drop it so it
-    // can't fire after this part loads and clobber this cross-part seek.
+    // A deferred same-part seek would clobber this cross-part seek; drop it.
     cancelPendingSeek();
+    cancelPendingPartMeta();
     state.activePart = i;
     video.src = "media/" + encodeURIComponent(state.parts[i].name);
     video.load();
     var onMeta = function () {
       video.removeEventListener("loadedmetadata", onMeta);
+      if (_pendingPartMeta === onMeta) _pendingPartMeta = null;
       video.currentTime = localTime;
       applyPlaybackRate(); // load() reset the element to its default rate
-      if (resume) video.play();
+      if (resume) window.ClipgenVideoControls.safePlay(video);
     };
+    _pendingPartMeta = onMeta;
     video.addEventListener("loadedmetadata", onMeta);
   }
 
   function togglePlay() {
     var video = qs("#coVideo");
     if (!video || !video.src) return;
-    if (video.paused) video.play();
+    if (video.paused) window.ClipgenVideoControls.safePlay(video);
     else video.pause();
   }
 
   function updatePlayButton() {
     var icon = qs("#coPlayIcon");
-    if (icon) icon.className = "co-btn-icon " + (state.playing ? "co-icon-pause" : "co-icon-play");
+    window.ClipgenMotion.swapIcon(icon, "co-btn-icon " + (state.playing ? "co-icon-pause" : "co-icon-play"));
   }
 
   function updateMuteButton() {
     var icon = qs("#coMuteIcon");
-    if (icon) icon.className = "co-btn-icon " + (state.videoMuted ? "co-icon-mute-off" : "co-icon-mute");
+    window.ClipgenMotion.swapIcon(icon, "co-btn-icon " + (state.videoMuted ? "co-icon-mute-off" : "co-icon-mute"));
     // Accent tint while sound is on — matches Screenspace/Transcripts mute btns.
     var btn = qs("#coMuteBtn");
     if (btn) btn.classList.toggle("active", !state.videoMuted);
@@ -200,8 +191,7 @@
       " / " + formatTime(state.duration, { decimals: 0 });
   }
 
-  // The footer hint advertises double-click cuts only while the setting is on
-  // (config at boot; the Settings modal's onSave re-syncs it live).
+  // Advertises double-click cuts only while the setting is on; Settings onSave re-syncs it.
   function updateTimelineHint() {
     var hint = qs(".co-timeline-hint");
     if (!hint) return;
@@ -211,9 +201,7 @@
         : "");
   }
 
-  // Subheader source readout: duration · resolution · fps (Screenspace's
-  // video-info format). Resolution/fps ride along on the participant record;
-  // duration may firm up later for single-part participants (loadedmetadata).
+  // Subheader readout in Screenspace's format; single-part duration may firm up on loadedmetadata.
   function updateVideoInfo() {
     var elInfo = qs("#coVideoInfo");
     if (!elInfo) return;
@@ -237,10 +225,7 @@
       updatePlayButton();
     });
     video.addEventListener("ended", function () {
-      // A part can end before timeupdate ever lands inside the hand-off window
-      // below — timeupdate fires ~4x/s, so at 5x the element jumps ~1.25 s per
-      // event and steps clean over it. Hand off here too, or fast playback
-      // stalls at every part boundary.
+      // Fast playback can skip timeupdate's hand-off window entirely; hand off here too.
       if (state.activePart < state.parts.length - 1) {
         switchToPart(state.activePart + 1, 0.001, true);
         return;
@@ -267,12 +252,12 @@
         renderAnnotations(); // spans gate visibility against the playhead
       });
     });
-    // Single-part participants may have no probed duration (server couldn't
-    // ffprobe) — fall back to the element's own metadata.
+    // No probed duration (ffprobe failed): fall back to the element's metadata.
     video.addEventListener("loadedmetadata", function () {
       if (!state.duration && state.parts.length === 1 && isFinite(video.duration)) {
         state.duration = video.duration;
         state.parts[0].duration = video.duration;
+        state.parts[0].offset = 0; // fallback parts ship without probed offsets
         updateTimeLabel();
         updateVideoInfo();
         renderTimeline();
@@ -287,9 +272,7 @@
       updateSpeedButton();
     });
 
-    // Hover the mute button for a glassy 0–200% volume popover (click still
-    // mutes). getTracks reads the active participant's probed audio layout;
-    // trackAudioUrl enables per-track mixing for single-file participants.
+    // Hover volume popover; per-track mixing (trackAudioUrl) only for single-file participants.
     var muteBtn = qs("#coMuteBtn");
     audioPanel = window.ClipgenVideoControls.attachAudioPanel({
       video: video,
@@ -330,6 +313,7 @@
       window.clipgenMediaBanner.show(qs("#coTimelineSection"), p);
     }
     cancelPendingSeek();
+    cancelPendingPartMeta();
     state.participant = pid;
     setStoredUIStateField("composer", "participant", pid);
     state.parts = p.parts || [];
@@ -346,8 +330,7 @@
     // Drop cached sprites/audio + stop any playing snippet: they belong to the
     // previous participant's video.
     if (CO.resetScrubMedia) CO.resetScrubMedia();
-    // Undo ops reference the previous participant's cuts — an undo fired after
-    // a switch would invisibly mutate that other timeline. Drop the stacks.
+    // Undo ops target the previous participant's cuts; drop them.
     _undoStack.length = 0;
     _redoStack.length = 0;
     syncUndoButtons();
@@ -363,14 +346,14 @@
       video.removeAttribute("src");
       qs("#coVideoFrame").classList.remove("has-video");
     }
-    // Reconfigure the audio popover (per-track mixer vs master slider) and tear
-    // down the previous participant's track mix for this new participant.
+    // Rebuild the audio popover for this participant's track layout.
     if (audioPanel) audioPanel.refresh();
 
-    ["#coPlayBtn", "#coMuteBtn", "#coSpeedBtn", "#coSetInBtn", "#coSetOutBtn"].forEach(function (sel) {
+    ["#coPlayBtn", "#coMuteBtn", "#coSpeedBtn", "#coSetInBtn", "#coSetOutBtn",
+      "#coExportShotBtn", "#coExportGifBtn", "#coExportBurnBtn"].forEach(function (sel) {
       qs(sel).disabled = false;
     });
-    qs("#coAnnotateBar").classList.remove("hidden");
+    qs("#coPalette").classList.remove("hidden");
     state.annTool = "select";
     setAnnotateTool("select"); // also closes a pending text input
     updatePendingInfo();
@@ -399,9 +382,7 @@
     placeholder.value = "";
     select.appendChild(placeholder);
     state.participants.forEach(function (p) {
-      // An <option> can't hold a badge element, so an off-sheet participant —
-      // video on disk, no column in the loaded sheet — gets a label suffix.
-      // Only when a sheet is loaded: without one everything is off-sheet.
+      // <option> can't hold a badge, so off-sheet participants get a label suffix.
       var label = state.hasSheet && p.in_sheet === false ? p.id + " (off-sheet)" : p.id;
       var opt = el("option", "", label);
       opt.value = p.id;
@@ -417,8 +398,7 @@
   }
   CO.participantCuts = participantCuts;
 
-  // Chronological order — the cut list renders in this order and position+1 is
-  // the cut's index badge (list and timeline both number from here).
+  // Position+1 here is the cut's index badge in both list and timeline.
   function sortedCuts() {
     return participantCuts().slice().sort(function (a, b) { return a.start - b.start; });
   }
@@ -447,9 +427,7 @@
   }
   CO.setInPoint = setInPoint;
 
-  // Raw appliers — perform the API call + local state update, no undo
-  // recording. User actions wrap these and record an op; undo/redo replay
-  // them directly (recording again would corrupt the stacks).
+  // Raw appliers: API call + local state, no undo recording. Undo/redo replay them directly.
 
   function refreshCutViews() {
     updateGenerateButton();
@@ -458,7 +436,7 @@
   }
 
   function applyCreate(cutData) {
-    return apiSend("POST", "api/cuts", {
+    return apiPost("api/cuts", {
       participant: cutData.participant,
       start: cutData.start,
       end: cutData.end,
@@ -472,7 +450,7 @@
   }
 
   function applyDelete(id) {
-    return apiSend("DELETE", "api/cuts/" + encodeURIComponent(id)).then(function (data) {
+    return apiDelete("api/cuts/" + encodeURIComponent(id)).then(function (data) {
       if (!data.ok) throw new Error(data.error || "Could not delete cut");
       state.cuts = state.cuts.filter(function (c) { return c.id !== id; });
       if (state.selectedCutId === id) state.selectedCutId = null;
@@ -481,7 +459,7 @@
   }
 
   function applyTimes(id, times) {
-    return apiSend("PATCH", "api/cuts/" + encodeURIComponent(id), {
+    return apiPatch("api/cuts/" + encodeURIComponent(id), {
       start: times.start,
       end: times.end,
     }).then(function (data) {
@@ -500,9 +478,7 @@
     showToast(err && err.message ? err.message : "Cut update failed");
   }
 
-  // Find a loaded marker by key across the three lanes (markers are rebuilt on
-  // participant switch, so a trim op can outlive its marker — that's fine, the
-  // manifest still updates and the next lane load reflects it).
+  // Null is fine: a trim op can outlive its marker; the manifest still updates.
   function findMarker(key) {
     var sources = Object.keys(state.markers);
     for (var s = 0; s < sources.length; s++) {
@@ -520,11 +496,7 @@
     renderSidebar();
   }
 
-  // Raw trim applier: *values* = {start, end} sets the override, null resets
-  // it. Updates the manifest, the local trims map, and the loaded marker.
-  // Marker metadata rides along when the marker is loaded so Studio's
-  // Composer Intake can render the trim as a card; the server preserves
-  // previously stored metadata when a re-PUT (undo/redo) omits it.
+  // null resets the trim. Marker metadata lets Studio's Composer Intake render a card.
   function applyTrim(key, values, sourceSpan) {
     var payload = values ? { start: values.start, end: values.end } : null;
     var meta = values && findMarker(key);
@@ -534,8 +506,8 @@
       payload.source = meta.source;
     }
     var call = payload
-      ? apiSend("PUT", "api/trims/" + encodeURIComponent(key), payload)
-      : apiSend("DELETE", "api/trims/" + encodeURIComponent(key));
+      ? apiPut("api/trims/" + encodeURIComponent(key), payload)
+      : apiDelete("api/trims/" + encodeURIComponent(key));
     return call.then(function (data) {
       if (!data.ok) throw new Error(data.error || "Could not save trim");
       var marker = findMarker(key);
@@ -543,10 +515,7 @@
         state.trims[key] = { start: data.trim.start, end: data.trim.end };
         if (marker) {
           if (!marker.trimmed) {
-            // A drag-trim mutates marker.start/end live, so the current span is
-            // already the trimmed value; *sourceSpan* (the pre-drag span passed
-            // by commitMarkerTrim) is the true original. Non-drag callers omit it
-            // and fall back to the current span, which hasn't been mutated.
+            // A drag already mutated the span live; sourceSpan carries the pre-drag original.
             var src = sourceSpan || { start: marker.start, end: marker.end };
             marker.origStart = src.start;
             marker.origEnd = src.end;
@@ -585,32 +554,55 @@
     syncUndoButtons();
   }
 
-  // Apply *op* in the given direction. A re-created cut gets a fresh server id,
-  // so the op's stored cut is swapped for the new one — the paired redo/undo
-  // then targets the id that actually exists.
+  // Re-creation assigns a fresh server id; rewrite every stacked op naming the old one.
+  function remapHistoryId(oldId, newId) {
+    if (!oldId || oldId === newId) return;
+    function walk(op) {
+      if (op.type === "edit" || op.type === "ann-edit") {
+        if (op.id === oldId) op.id = newId;
+      } else if (op.type === "create" || op.type === "delete") {
+        if (op.cut.id === oldId) op.cut.id = newId;
+      } else if (op.type === "ann-create" || op.type === "ann-delete") {
+        if (op.annotation.id === oldId) op.annotation.id = newId;
+      } else if (op.type === "ann-group") {
+        op.ops.forEach(walk);
+      }
+    }
+    _undoStack.forEach(walk);
+    _redoStack.forEach(walk);
+  }
+
+  function recreateCut(op) {
+    var oldId = op.cut.id;
+    return applyCreate(op.cut).then(function (cut) {
+      remapHistoryId(oldId, cut.id);
+      op.cut = cut;
+    });
+  }
+
+  function recreateAnnotation(op) {
+    var oldId = op.annotation.id;
+    return applyAnnCreate(op.annotation).then(function (ann) {
+      remapHistoryId(oldId, ann.id);
+      op.annotation = ann;
+    });
+  }
+
   function applyOp(op, isUndo) {
     if (op.type === "create") {
-      return isUndo
-        ? applyDelete(op.cut.id)
-        : applyCreate(op.cut).then(function (cut) { op.cut = cut; });
+      return isUndo ? applyDelete(op.cut.id) : recreateCut(op);
     }
     if (op.type === "delete") {
-      return isUndo
-        ? applyCreate(op.cut).then(function (cut) { op.cut = cut; })
-        : applyDelete(op.cut.id);
+      return isUndo ? recreateCut(op) : applyDelete(op.cut.id);
     }
     if (op.type === "trim") {
       return applyTrim(op.key, isUndo ? op.before : op.after);
     }
     if (op.type === "ann-create") {
-      return isUndo
-        ? applyAnnDelete(op.annotation.id)
-        : applyAnnCreate(op.annotation).then(function (ann) { op.annotation = ann; });
+      return isUndo ? applyAnnDelete(op.annotation.id) : recreateAnnotation(op);
     }
     if (op.type === "ann-delete") {
-      return isUndo
-        ? applyAnnCreate(op.annotation).then(function (ann) { op.annotation = ann; })
-        : applyAnnDelete(op.annotation.id);
+      return isUndo ? recreateAnnotation(op) : applyAnnDelete(op.annotation.id);
     }
     if (op.type === "ann-edit") {
       var payload = {};
@@ -618,18 +610,14 @@
       return applyAnnPatch(op.id, payload);
     }
     if (op.type === "ann-group") {
-      // Sub-ops are independent per-annotation edits/deletes; apply them all in
-      // the same direction (order-independent) and resolve when the last lands.
+      // Sub-ops are independent; apply all in the same direction.
       return Promise.all(op.ops.map(function (sub) { return applyOp(sub, isUndo); }));
     }
     // edit
     return applyTimes(op.id, isUndo ? op.before : op.after);
   }
 
-  // Peek-apply-pop: the op moves between stacks only once the server has
-  // accepted it, so a failed request keeps the op available for retry (the
-  // raw appliers never mutate local state on failure). The busy flag stops a
-  // rapid second ⌘Z from re-applying the still-peeked op.
+  // Peek-apply-pop: an op moves stacks only after the server accepts; busy blocks a second ⌘Z.
   var _historyBusy = false;
 
   function shiftHistory(fromStack, toStack, isUndo) {
@@ -686,9 +674,7 @@
   }
   CO.deleteCut = deleteCut;
 
-  // Persist a cut's edited span (timeline edge/body drags land here on drag
-  // end, with *before* = the pre-drag times so the edit is undoable). On
-  // failure the optimistic drag is rolled back so the view matches the server.
+  // Drag end lands here; *before* is the pre-drag span. Failure rolls the drag back.
   function commitCutTimes(cut, before) {
     var changed = !before || before.start !== cut.start || before.end !== cut.end;
     applyTimes(cut.id, { start: cut.start, end: cut.end }).then(function (saved) {
@@ -744,7 +730,7 @@
   CO.refreshAnnotationViews = refreshAnnotationViews;
 
   function applyAnnCreate(record) {
-    return apiSend("POST", "api/annotations", record).then(function (data) {
+    return apiPost("api/annotations", record).then(function (data) {
       if (!data.ok) throw new Error(data.error || "Could not save annotation");
       state.annotations.push(data.annotation);
       refreshAnnotationViews();
@@ -753,7 +739,7 @@
   }
 
   function applyAnnDelete(id) {
-    return apiSend("DELETE", "api/annotations/" + encodeURIComponent(id))
+    return apiDelete("api/annotations/" + encodeURIComponent(id))
       .then(function (data) {
         if (!data.ok) throw new Error(data.error || "Could not delete annotation");
         state.annotations = state.annotations.filter(function (a) { return a.id !== id; });
@@ -764,7 +750,7 @@
   }
 
   function applyAnnPatch(id, fields) {
-    return apiSend("PATCH", "api/annotations/" + encodeURIComponent(id), fields)
+    return apiPatch("api/annotations/" + encodeURIComponent(id), fields)
       .then(function (data) {
         if (!data.ok) throw new Error(data.error || "Could not save annotation");
         var idx = state.annotations.findIndex(function (a) { return a.id === id; });
@@ -796,9 +782,7 @@
   }
   CO.deleteAnnotation = deleteAnnotation;
 
-  // Persist an edited field ("span" or "geometry"); *before* is the pre-edit
-  // value for undo. The record was already mutated locally by the caller —
-  // rolled back to *before* if the server rejects the edit.
+  // The caller already mutated *ann*; a rejected edit rolls it back to *before*.
   function commitAnnotationField(ann, field, before) {
     var payload = {};
     payload[field] = ann[field];
@@ -820,12 +804,7 @@
   }
   CO.commitAnnotationField = commitAnnotationField;
 
-  // Batch commit of *field* ("style" or "geometry") across many annotations —
-  // each ann[field] is already mutated; *before* is the pre-edit value. Records
-  // one undo step so a group style change / group move undoes atomically, and
-  // rolls every edit back if any patch is rejected. Each op's *after* is taken
-  // from the PATCH response (the server-sanitized value), like the single-
-  // annotation path — a partial local object can't reset backfilled defaults.
+  // One undo step per group. *after* is the PATCH response; only rejected edits roll back.
   function commitAnnotationFieldGroup(field, edits) {
     if (!edits.length) return Promise.resolve();
     var patches = edits.map(function (e) {
@@ -833,41 +812,62 @@
       payload[field] = e.ann[field];
       return applyAnnPatch(e.ann.id, payload).then(function (saved) {
         return {
-          type: "ann-edit",
-          id: e.ann.id,
-          field: field,
-          before: e.before,
-          after: JSON.parse(JSON.stringify(saved[field])),
+          op: {
+            type: "ann-edit",
+            id: e.ann.id,
+            field: field,
+            before: e.before,
+            after: JSON.parse(JSON.stringify(saved[field])),
+          },
         };
+      }, function (error) {
+        return { edit: e, error: error };
       });
     });
-    return Promise.all(patches).then(function (ops) {
-      recordOp(ops.length === 1 ? ops[0] : { type: "ann-group", ops: ops });
-    }, function (error) {
-      edits.forEach(function (e) {
-        var ann = findAnnotation(e.ann.id);
-        if (ann) ann[field] = JSON.parse(JSON.stringify(e.before));
+    return Promise.all(patches).then(function (results) {
+      var ops = [];
+      var firstError = null;
+      results.forEach(function (r) {
+        if (r.op) { ops.push(r.op); return; }
+        var ann = findAnnotation(r.edit.ann.id);
+        if (ann) ann[field] = JSON.parse(JSON.stringify(r.edit.before));
+        if (!firstError) firstError = r.error;
       });
-      refreshAnnotationViews();
-      opFailed(error);
+      if (ops.length) {
+        recordOp(ops.length === 1 ? ops[0] : { type: "ann-group", ops: ops });
+      }
+      if (firstError) {
+        refreshAnnotationViews();
+        opFailed(firstError);
+      }
     });
   }
   CO.commitAnnotationFieldGroup = commitAnnotationFieldGroup;
 
-  // Delete every selected annotation as a single undo step.
+  // One undo step; landed deletes still get an op when a sibling fails.
   function deleteSelectedAnnotations() {
     var snapshots = selectedAnnotations().map(function (ann) {
       return JSON.parse(JSON.stringify(ann));
     });
     if (!snapshots.length) return;
     Promise.all(snapshots.map(function (snap) {
-      return applyAnnDelete(snap.id);
-    })).then(function () {
-      var ops = snapshots.map(function (snap) {
-        return { type: "ann-delete", annotation: snap };
+      return applyAnnDelete(snap.id).then(function () {
+        return { op: { type: "ann-delete", annotation: snap } };
+      }, function (error) {
+        return { error: error };
       });
-      recordOp(ops.length === 1 ? ops[0] : { type: "ann-group", ops: ops });
-    }).catch(opFailed);
+    })).then(function (results) {
+      var ops = [];
+      var firstError = null;
+      results.forEach(function (r) {
+        if (r.op) ops.push(r.op);
+        else if (!firstError) firstError = r.error;
+      });
+      if (ops.length) {
+        recordOp(ops.length === 1 ? ops[0] : { type: "ann-group", ops: ops });
+      }
+      if (firstError) opFailed(firstError);
+    });
   }
   CO.deleteSelectedAnnotations = deleteSelectedAnnotations;
 
@@ -889,8 +889,7 @@
   }
   CO.selectedAnnotations = selectedAnnotations;
 
-  // The record iff exactly one annotation is selected — gates the single-shape
-  // resize/rotate handles (group resize is not supported).
+  // Gates the resize/rotate handles; group resize is unsupported.
   function singleSelectedAnnotation() {
     var sel = selectedAnnotations();
     return sel.length === 1 ? sel[0] : null;
@@ -920,25 +919,18 @@
   }
   CO.toggleAnnotationSelection = toggleAnnotationSelection;
 
-  // Hide/reveal the whole annotation layer: the overlay skips drawing and the
-  // timeline lane dims. The #coToolHide button mirrors the state; its icon
-  // shows the action (eye-slash = will hide, eye = will reveal).
+  // Overlay skips drawing and the lane dims; the button icon shows the next action.
   function setAnnotationsHidden(hidden) {
     state.annHidden = !!hidden;
     var btn = qs("#coToolHide");
     if (btn) {
       btn.setAttribute("aria-pressed", state.annHidden ? "true" : "false");
-      // No key hint here — the hotkey registry renders its own chip for
-      // [data-hotkey] controls on Alt-hold, and a hand-written one goes stale
-      // the moment the user rebinds.
+      // No key hint: the hotkey registry renders its own chip and survives rebinds.
       var hideLabel = (state.annHidden ? "Show" : "Hide") + " annotations";
       btn.setAttribute("aria-label", hideLabel);
       btn.setAttribute("data-tooltip", hideLabel + " (hold to peek, tap to toggle)");
       var icon = btn.querySelector(".co-btn-icon");
-      if (icon) {
-        icon.classList.toggle("co-icon-eye", state.annHidden);
-        icon.classList.toggle("co-icon-eye-slash", !state.annHidden);
-      }
+      window.ClipgenMotion.swapIcon(icon, "co-btn-icon " + (state.annHidden ? "co-icon-eye" : "co-icon-eye-slash"));
     }
     renderAnnotations();
     renderTimeline();
@@ -948,6 +940,12 @@
   // ---- Annotated exports (server PIL + ffmpeg overlay) ----
 
   var _exporting = false;
+
+  // Harmless when idle: the next export clears the cancel event.
+  function onCancelExport() {
+    apiPost("api/export/cancel", {}).catch(function () {});
+    showToast("Cancelling export…");
+  }
 
   function exportSpan() {
     // Burn/GIF need a span: the selected cut wins, else the selected
@@ -959,18 +957,33 @@
     return null;
   }
 
-  function runExport(path, body, busyLabel) {
+  // *btn* (burn/GIF only) reads "Cancel" while encoding; a re-click posts the cancel.
+  function runExport(path, body, busyLabel, btn) {
     if (_exporting) { showToast("An export is already running"); return; }
     _exporting = true;
-    showToast(busyLabel + "…");
-    apiSend("POST", path, body).then(function (data) {
+    var restoreLabel = btn ? btn.textContent : "";
+    var restoreTip = btn ? btn.getAttribute("data-tooltip") : "";
+    if (btn) {
+      btn.textContent = "Cancel";
+      btn.setAttribute("data-tooltip", "Cancel this export");
+    }
+    function done() {
       _exporting = false;
+      if (btn) {
+        btn.textContent = restoreLabel;
+        btn.setAttribute("data-tooltip", restoreTip);
+      }
+    }
+    showToast(busyLabel + "…");
+    apiPost(path, body).then(function (data) {
+      done();
       if (!data.ok) { showToast(data.error || "Export failed"); return; }
       logArtifactResult({ ok: true, artifact: data.artifact }, null);
       showToast("Exported " + (data.artifact.file || ""));
-    }).catch(function () {
-      _exporting = false;
-      showToast("Export failed");
+    }).catch(function (err) {
+      done();
+      // A 4xx envelope rejects with the server's message.
+      showToast(err && err.message ? err.message : "Export failed");
     });
   }
 
@@ -984,6 +997,8 @@
 
   function exportBurn(gif) {
     if (!state.participant) return;
+    // Re-click while an export runs = cancel it (the button reads "Cancel").
+    if (_exporting) { onCancelExport(); return; }
     var span = exportSpan();
     if (!span) {
       showToast("Select a cut (or an annotation) to define the export span");
@@ -993,14 +1008,13 @@
       participant: state.participant,
       start: span.start,
       end: span.end,
-    }, gif ? "Exporting GIF" : "Burning clip");
+    }, gif ? "Exporting GIF" : "Burning clip",
+    qs(gif ? "#coExportGifBtn" : "#coExportBurnBtn"));
   }
 
   // ---- Marker trims (user actions; non-destructive span overrides) ----
 
-  // Persist a marker's dragged span. The timeline mutated the marker live;
-  // *before* is the trim that was in force pre-drag (null = untrimmed) and
-  // *origSpan* the marker's pre-drag visual span (for failure rollback).
+  // *before* is the pre-drag trim (null = untrimmed); *origSpan* the pre-drag span for rollback.
   function commitMarkerTrim(marker, before, origSpan) {
     var after = { start: marker.start, end: marker.end };
     applyTrim(marker.key, after, origSpan).then(function () {
@@ -1030,8 +1044,7 @@
   }
   CO.resetTrim = resetTrim;
 
-  // Promote a marker's (possibly trimmed) span to a Composer cut so it feeds
-  // generation without new plumbing.
+  // A cut made from a marker feeds generation without new plumbing.
   function copyMarkerToCut(marker) {
     applyCreate({
       participant: state.participant,
@@ -1059,13 +1072,15 @@
 
   function commitCutLabel(cut, label) {
     if (label === (cut.label || "")) return;
-    apiSend("PATCH", "api/cuts/" + encodeURIComponent(cut.id), { label: label })
+    apiPatch("api/cuts/" + encodeURIComponent(cut.id), { label: label })
       .then(function (data) {
         if (!data.ok) throw new Error(data.error || "Could not save name");
         cut.label = data.cut.label;
       })
       .catch(opFailed);
   }
+
+  var _shownGenStatus = {}; // cut id -> status already rendered
 
   function renderCutList() {
     if (state.sidebarTab !== "cuts") return;
@@ -1083,9 +1098,7 @@
     cuts.forEach(function (cut, i) {
       var item = el("div", "co-cut-item" + (cut.id === state.selectedCutId ? " selected" : ""));
 
-      // Row 1: chronological index + editable name (carried into generated
-      // clips as the event type; also feeds the Studio Composer-intake tab's
-      // cards) + delete button.
+      // Row 1: index, editable name (becomes the clip's event type), delete.
       var nameRow = el("div", "co-cut-row");
       nameRow.appendChild(el("span", "co-cut-index", String(i + 1)));
       var name = el("input", "co-cut-name");
@@ -1118,7 +1131,12 @@
         statusIcon.setAttribute("data-tooltip",
           okStatus ? "Generated" : "Generation failed");
         nameRow.appendChild(statusIcon);
+        // Pop only when the status is new; the list re-renders often.
+        if (_shownGenStatus[cut.id] !== cut._genStatus) {
+          window.ClipgenMotion.animateIn(statusIcon, "pop");
+        }
       }
+      _shownGenStatus[cut.id] = cut._genStatus || "";
       var del = el("button", "co-cut-delete");
       del.type = "button";
       del.setAttribute("data-tooltip", "Delete cut");
@@ -1209,8 +1227,7 @@
       }
       item.appendChild(timeRow);
 
-      // Set-or-remove: an empty data-tooltip would still make the row a hover
-      // anchor, swallowing the child buttons' tooltips on the way past.
+      // An empty data-tooltip would still swallow the child buttons' tooltips.
       if (m.label) item.setAttribute("data-tooltip", m.label);
       else item.removeAttribute("data-tooltip");
       item.addEventListener("click", function () {
@@ -1258,10 +1275,7 @@
       var stored = localStorage.getItem(SIDEBAR_OPEN_KEY);
       if (stored !== null) state.sidebarOpen = stored !== "false";
     } catch (_) {}
-    // Apply before first paint so a persisted-collapsed panel shows collapsed
-    // immediately; the flex-basis transition is gated on `.tx-ready` (added
-    // after first paint below), so the initial open→collapsed flip never
-    // animates. Mirrors studio.js readPersistedSidebarOpen.
+    // Apply before first paint; .tx-ready gates the transition so the initial flip never animates.
     applySidebarOpen();
     var panel = qs("#coCutPanel");
     if (!panel) return;
@@ -1280,12 +1294,11 @@
     applySidebarOpen();
   }
 
-  // Run synchronously at script load (composer.js is deferred, so #coCutPanel
-  // already exists) rather than in boot(): sets data-open before first paint.
+  // Runs at script load, not boot(): data-open must land before first paint.
   readPersistedSidebarOpen();
 
   // ---- Generate (Studio intake endpoint; NDJSON streaming) ----
-  // readNDJSONStream is an ambient utils.js global.
+  // apiPostNDJSON is an ambient utils.js global.
 
   var _generateAbort = null;
 
@@ -1345,16 +1358,12 @@
     }
 
     _generateAbort = new AbortController();
-    fetch("../studio/api/generate-intake", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ items: items, format: "clip" }),
-      signal: _generateAbort.signal,
-    })
-      .then(function (response) {
-        if (!response.ok) throw new Error("Server error " + response.status);
-        return readNDJSONStream(response, handleLine).then(function () { finish(); });
-      })
+    apiPostNDJSON(
+      "../studio/api/generate-intake",
+      { items: items, format: "clip" },
+      { signal: _generateAbort.signal, onLine: handleLine }
+    )
+      .then(function () { finish(); })
       .catch(function (err) {
         var aborted = err && (err.name === "AbortError" || err.code === 20);
         finish(aborted ? "Generation cancelled" : "Generation failed: " + (err && err.message));
@@ -1362,16 +1371,12 @@
   }
 
   function onCancelGenerate() {
-    apiSend("POST", "../studio/api/generate-intake/cancel").catch(function () {});
+    apiPost("../studio/api/generate-intake/cancel", {}).catch(function () {});
     if (_generateAbort) _generateAbort.abort();
   }
 
-  // ---- Artifact log (TopNav #logBtn) ----
-  //
-  // Shares Studio's markup, styling AND open/close path: utils.js's
-  // popModalIn/popModalOut drive the card pop and ramp the shared
-  // .cg-modal-veil backdrop. This used to be a separate copy with its own veil
-  // constants and exit timer, which is why spam-toggling it popped.
+  // ---- Artifact log ----
+  // Shares Studio's markup and popModalIn/popModalOut; a private copy flickered on spam-toggle.
 
   function logArtifactResult(data, cut) {
     var artifact = data.artifact || {};
@@ -1407,8 +1412,7 @@
       row.appendChild(badge);
       row.appendChild(el("span", "log-entry-file",
         entry.ok ? (entry.file || "clip") : (entry.error || "unknown error")));
-      // A screenshot is a single instant (start === end): show one timestamp, not
-      // a zero-length "t – t" range; drop the time entirely if we have no numbers.
+      // A screenshot (start === end) shows one timestamp, not a zero-length range.
       var meta = entry.participant;
       var hasStart = typeof entry.start === "number" && isFinite(entry.start);
       var hasEnd = typeof entry.end === "number" && isFinite(entry.end);
@@ -1428,39 +1432,19 @@
   }
 
   function openLog() {
-    var overlay = qs("#logOverlay");
-    popModalIn(overlay, qs(".log-panel"));
-    // Gates the topnav's own backdrop-filter so this modal's veil composites
-    // over the bar instead of reading through it (see topnav.css).
-    document.body.classList.add("modal-open");
-    // Escape, Tab-trapping and focus restore, same as Studio's log. The trap
-    // owns Escape while it is active, so the page's back-out cascade does not
-    // need a branch for this overlay.
-    openBlockingModal(overlay, {
-      onEscape: closeLog,
-      trapFocus: true,
-      restoreFocus: true,
-    });
+    // modal-open composites the veil over the topnav; the trap owns Escape.
+    openPopModal(qs("#logOverlay"), qs(".log-panel"), { modalOpen: true, onEscape: closeLog });
     renderLog();
   }
 
   function closeLog() {
-    var overlay = qs("#logOverlay");
-    // Trap and topnav gate are released with the visual hide, not before it:
-    // focus jumping back to the trigger while the veil is still up reads as the
-    // panel already being gone. popModalOut's generation guard makes deferring
-    // them safe against a re-open mid-exit.
-    popModalOut(overlay, qs(".log-panel"), function () {
-      closeBlockingModal(overlay);
-      overlay.classList.add("hidden");
-      document.body.classList.remove("modal-open");
-    });
+    // Release trap and topnav gate with the hide, not before: early focus restore looks broken.
+    closePopModal(qs("#logOverlay"), qs(".log-panel"), { modalOpen: true });
   }
 
   // ---- Keyboard (shared hotkeys.js registry) ----
 
-  // j/k list-nav: select the next/previous cut (by start time) and move the
-  // playhead to its in point.
+  // j/k list-nav: select the adjacent cut and seek to its in point.
   function selectAdjacentCut(delta) {
     var cuts = sortedCuts();
     if (!cuts.length) return;
@@ -1534,6 +1518,12 @@
       { id: "composer.toolRect", handler: function () { setAnnotateTool("rect"); } },
       { id: "composer.toolEllipse", handler: function () { setAnnotateTool("ellipse"); } },
       {
+        id: "composer.swapColors",
+        handler: function () {
+          if (CO.swapAnnotationColors) CO.swapAnnotationColors();
+        },
+      },
+      {
         id: "composer.toggleSource",
         handler: function (e, combo) {
           var src = ["sheet", "screenspace", "transcript"][parseInt(combo, 10) - 1];
@@ -1560,10 +1550,7 @@
       { id: "composer.note.zoomTimeline" },
     ]);
 
-    // Back-out cascade, one level per press (order matters: overlay first,
-    // then pending in-point, then tool, then selections).
-    // The artifact log is absent here on purpose: it now runs a blocking-modal
-    // trap that owns Escape while open, so hotkeys.js never reaches this cascade.
+    // Back-out cascade, one level per press. The artifact log's modal trap owns its own Escape.
     window.ClipgenHotkeys.registerEscape(function () {
       if (state.pendingIn !== null) {
         state.pendingIn = null;
@@ -1578,40 +1565,17 @@
     });
   }
 
-  // Command palette (command-palette.js): Composer registers no TopNav quick
-  // actions, so besides the built-in nav/global entries this is the page's
-  // whole palette — toolbar actions, lane toggles, participant jumps.
+  // Composer registers no TopNav quick actions, so this is the page's whole palette.
   function initCommandPalette() {
     if (!window.ClipgenCommandPalette) return;
-    function buttonCommand(id, title, icon, keywords, elId) {
-      return {
-        id: id,
-        title: title,
-        icon: icon,
-        keywords: keywords,
-        section: "Composer",
-        enabled: function () {
-          var btn = qs("#" + elId);
-          return !!btn && !btn.disabled;
-        },
-        run: function () { qs("#" + elId).click(); },
-      };
+    var palette = window.ClipgenCommandPalette;
+    function buttonCommand(id, title, icon, keywords, elId, gate) {
+      return palette.buttonCommand("Composer", id, title, icon, keywords, elId, gate);
     }
-    // Left timeline-list tabs (Cuts / Sheet / Screen / Script) carry data-tab;
-    // click the matching tab so initSidebarTabs sets state.sidebarTab.
+    // Click the matching data-tab so initSidebarTabs owns the state change.
     function listTabCommand(dataTab, title, icon) {
-      return {
-        id: "composer:list-" + dataTab,
-        title: title,
-        icon: icon,
-        keywords: "list panel sidebar timeline show " + dataTab,
-        section: "Composer",
-        visible: function () { return !!qs('.co-panel-tab[data-tab="' + dataTab + '"]'); },
-        run: function () {
-          var t = qs('.co-panel-tab[data-tab="' + dataTab + '"]');
-          if (t) t.click();
-        },
-      };
+      return palette.selectorCommand("Composer", "composer:list-" + dataTab, title, icon,
+        "list panel sidebar timeline show " + dataTab, '.co-panel-tab[data-tab="' + dataTab + '"]');
     }
     window.ClipgenCommandPalette.setParticipants(function () {
       return (state.participants || []).map(function (p) { return p.id; });
@@ -1648,72 +1612,49 @@
         listTabCommand("sheet", "Show Sheet list", "table-cells"),
         listTabCommand("screenspace", "Show Screenspace list", "queue-list"),
         listTabCommand("transcript", "Show Transcript list", "queue-list"),
-        {
-          id: "composer:log",
-          title: "Toggle artifact log",
-          icon: "list-bullet",
-          keywords: "history builds panel drawer",
-          section: "Composer",
-          visible: function () { return !!document.getElementById("logBtn"); },
-          run: function () { document.getElementById("logBtn").click(); },
-        },
+        buttonCommand("composer:log", "Toggle artifact log", "list-bullet",
+          "history builds panel drawer", "logBtn", "visible"),
       ];
-      // "Jump to … in Composer" = stays here and selects in place; the
-      // palette's built-in provider adds the cross-page "Open … in <Page>".
-      (state.participants || []).forEach(function (p) {
-        cmds.push({
-          id: "composer:p:" + p.id,
-          title: "Jump to " + p.id + " in Composer",
-          icon: "user",
-          keywords: "participant select source",
-          section: "Participants",
-          run: function () {
-            qs("#coParticipantSelect").value = p.id;
-            selectParticipant(p.id);
-          },
-        });
-      });
-      return cmds;
+      return cmds.concat(palette.participantJumps("composer:p:", "Composer",
+        "participant select source", (state.participants || []).map(function (p) { return p.id; }),
+        function (pid) {
+          qs("#coParticipantSelect").value = pid;
+          selectParticipant(pid);
+        }));
     });
   }
 
   // ---- Boot ----
 
   function boot() {
-    // TopNav renders the theme toggle (#themeToggle) and Settings (#settingsBtn)
-    // buttons synchronously before this hub loads, so wire them here as the
-    // other surfaces do. Theme flips repaint the canvases (their colors are
-    // sampled from CSS variables at draw time).
+    // TopNav renders these buttons before the hub loads; wire them here. Theme flips repaint canvases.
     if (typeof initThemeToggle === "function") {
       initThemeToggle(function () {
         if (CO.invalidateLaneColors) CO.invalidateLaneColors();
         renderTimeline();
       });
     }
-    var settingsBtn = qs("#settingsBtn");
-    if (settingsBtn && typeof window.openSettingsModal === "function") {
-      settingsBtn.addEventListener("click", function () {
-        // Saved/reset settings apply live on this page: re-sync the mirrored
-        // config flag and the footer hint that advertises it.
-        function syncComposerSettings(settings) {
-          (settings || []).forEach(function (s) {
-            if (s.name === "COMPOSER_DOUBLE_CLICK_CUTS") {
-              CLIPGEN_CONFIG.composerDoubleClickCuts = !!s.value;
-            }
-          });
-          updateTimelineHint();
+    // Settings apply live: re-sync the mirrored flag and its footer hint.
+    function syncComposerSettings(settings) {
+      (settings || []).forEach(function (s) {
+        if (s.name === "COMPOSER_DOUBLE_CLICK_CUTS") {
+          CLIPGEN_CONFIG.composerDoubleClickCuts = !!s.value;
         }
-        window.openSettingsModal({
-          initialTab: "Composer",
-          onSave: function (_applied, settings) { syncComposerSettings(settings); },
-          onReset: function (_scope, settings) { syncComposerSettings(settings); },
-        });
+      });
+      updateTimelineHint();
+    }
+    if (window.wireSettingsButton) {
+      window.wireSettingsButton({
+        initialTab: "Composer",
+        onApply: function (_applied, settings) { syncComposerSettings(settings); },
       });
     }
 
     state.annColor = CLIPGEN_CONFIG.composerAnnotationColor;
+    state.annColorSecondary = CLIPGEN_CONFIG.composerAnnotationColorSecondary;
     state.annStrokeWidth = CLIPGEN_CONFIG.composerAnnotationStrokeWidth;
     state.annStrokeStyle = CLIPGEN_CONFIG.composerAnnotationStrokeStyle;
+    state.annFontSize = CLIPGEN_CONFIG.composerAnnotationFontSize;
     updateTimelineHint();
     initCommandPalette();
     initParticipantSelect();
@@ -1736,8 +1677,7 @@
     qs("#coCancelBtn").addEventListener("click", onCancelGenerate);
     qs("#coUndoBtn").addEventListener("click", undo);
     qs("#coRedoBtn").addEventListener("click", redo);
-    // Open-only, matching Studio: dismiss is the X, the backdrop, or Escape. A
-    // toggle here made the button a spam surface that fought its own animation.
+    // Open-only like Studio; a toggle here fought its own animation when spammed.
     var logBtn = qs("#logBtn");
     if (logBtn) logBtn.addEventListener("click", openLog);
     qs("#logClose").addEventListener("click", closeLog);
@@ -1747,10 +1687,7 @@
     qs("#coCutPanelToggle").addEventListener("click", toggleSidebar);
     initSidebarTabs();
 
-    // The two boot fetches run in parallel, but participant auto-select MUST
-    // wait for the manifest: selectParticipant → loadMarkers → commitLane
-    // overlays trims from state.trims, which is empty until the manifest
-    // lands — racing them showed saved trims at their source spans.
+    // Participant auto-select must wait for this: commitLane overlays trims from state.trims.
     var manifestLoaded = apiGet("api/manifest").then(function (data) {
       if (!data.ok || !data.manifest) return;
       state.cuts = data.manifest.cuts || [];
@@ -1791,22 +1728,21 @@
 
     apiGet("api/participants").then(function (data) {
       if (!data.ok) return;
-      if (data.config) clipgenApplyConfig(data.config);
+      if (data.config) {
+        clipgenApplyConfig(data.config);
+        // state.ann* was seeded from JS defaults; re-seed from the real config.
+        if (CO.syncAnnotationDefaults) CO.syncAnnotationDefaults();
+      }
       updateTimelineHint(); // the double-click hint follows the fetched config
       state.hasSheet = !!data.has_sheet;
       state.participants = data.participants || [];
       populateParticipantSelect();
       return manifestLoaded.then(function () {
-        // A /composer/#P07 hash (command palette / cross-page links) wins;
-        // otherwise restore the last-worked-on participant, falling back to
-        // auto-select when there is only one.
-        var hashPid = clipgenHashParticipant();
-        var stored = getStoredUIState("composer").participant;
-        var initial = hashPid && findParticipant(hashPid)
-          ? hashPid
-          : stored && findParticipant(stored)
-            ? stored
-            : state.participants.length === 1 ? state.participants[0].id : null;
+        // Hash wins, then the stored participant, then auto-select when there is one.
+        var initial = clipgenPickParticipant(state.participants, {
+          hashPid: clipgenHashParticipant(),
+          storedId: getStoredUIState("composer").participant,
+        }) || (state.participants.length === 1 ? state.participants[0].id : null);
         if (initial) {
           qs("#coParticipantSelect").value = initial;
           selectParticipant(initial);

@@ -5,6 +5,7 @@ from unittest.mock import Mock
 import pytest
 
 Flask = pytest.importorskip("flask").Flask
+import config
 import server
 import itertools
 
@@ -235,137 +236,144 @@ def test_settings_records_include_card_pickers(client):
     assert by_name["ENDCARD_COLOR"]["type"] == "hidden"
 
 
-def test_settings_records_include_ollama_model_pickers(client):
+def test_settings_records_include_llm_model_pickers(client):
     data = client.get("/studio/api/settings").get_json()
     by_name = {s["name"]: s for s in data["settings"]}
     # Summary and friction models are dynamic pickers populated from installed
-    # Ollama models (gemma/llama/qwen/...), not a fixed list.
-    assert by_name["OLLAMA_SUMMARY_MODEL"]["type"] == "model_select"
-    assert by_name["OLLAMA_SUMMARY_MODEL"]["provider"] == "ollama"
-    assert by_name["OLLAMA_FRICTION_MODEL"]["type"] == "model_select"
-    assert by_name["OLLAMA_FRICTION_MODEL"]["provider"] == "ollama"
+    # downloaded GGUF models, not a fixed list.
+    assert by_name["LLM_SUMMARY_MODEL"]["type"] == "model_select"
+    assert by_name["LLM_SUMMARY_MODEL"]["provider"] == "llm"
+    assert by_name["LLM_FRICTION_MODEL"]["type"] == "model_select"
+    assert by_name["LLM_FRICTION_MODEL"]["provider"] == "llm"
     # Friction and report inherit the summary model via a blank value, shown as
     # a label.
-    assert by_name["OLLAMA_FRICTION_MODEL"]["emptyLabel"]
-    assert by_name["OLLAMA_REPORT_MODEL"]["type"] == "model_select"
-    assert by_name["OLLAMA_REPORT_MODEL"]["provider"] == "ollama"
-    assert by_name["OLLAMA_REPORT_MODEL"]["emptyLabel"]
+    assert by_name["LLM_FRICTION_MODEL"]["emptyLabel"]
+    assert by_name["LLM_REPORT_MODEL"]["type"] == "model_select"
+    assert by_name["LLM_REPORT_MODEL"]["provider"] == "llm"
+    assert by_name["LLM_REPORT_MODEL"]["emptyLabel"]
+
+
+def test_settings_records_include_update_toggle(client):
+    data = client.get("/studio/api/settings").get_json()
+    by_name = {s["name"]: s for s in data["settings"]}
+    assert by_name["UPDATE_CHECK_ON_LAUNCH"]["type"] == "bool"
+    assert by_name["UPDATE_CHECK_ON_LAUNCH"]["group"] == "Updates"
 
 
 def test_settings_records_include_agent_prompts(client):
     data = client.get("/studio/api/settings").get_json()
     by_name = {s["name"]: s for s in data["settings"]}
     for name in (
-        "OLLAMA_SUMMARY_PROMPT",
-        "OLLAMA_CITATIONS_SYSTEM",
-        "OLLAMA_CITATIONS_PROMPT",
-        "OLLAMA_FRICTION_SYSTEM",
-        "OLLAMA_FRICTION_PROMPT",
-        "OLLAMA_REPORT_SYSTEM",
-        "OLLAMA_REPORT_PROMPT",
+        "LLM_SUMMARY_PROMPT",
+        "LLM_CITATIONS_SYSTEM",
+        "LLM_CITATIONS_PROMPT",
+        "LLM_FRICTION_SYSTEM",
+        "LLM_FRICTION_PROMPT",
+        "LLM_REPORT_SYSTEM",
+        "LLM_REPORT_PROMPT",
     ):
         assert by_name[name]["type"] == "prompt"
         assert by_name[name]["tab"] == "Summaries"
         assert by_name[name]["group"] == "Agent prompts"
     # User prompts are .format()-ed; their placeholders drive validation.
-    assert by_name["OLLAMA_SUMMARY_PROMPT"]["placeholders"] == ["text"]
-    assert by_name["OLLAMA_CITATIONS_PROMPT"]["placeholders"] == [
+    assert by_name["LLM_SUMMARY_PROMPT"]["placeholders"] == ["text"]
+    assert by_name["LLM_CITATIONS_PROMPT"]["placeholders"] == [
         "claims",
         "transcript",
     ]
-    assert by_name["OLLAMA_FRICTION_PROMPT"]["placeholders"] == [
+    assert by_name["LLM_FRICTION_PROMPT"]["placeholders"] == [
         "summary",
         "segments",
         "limit",
     ]
-    assert by_name["OLLAMA_REPORT_PROMPT"]["placeholders"] == [
+    assert by_name["LLM_REPORT_PROMPT"]["placeholders"] == [
         "participant",
         "summary",
         "observations",
         "bookmarks",
     ]
     # System prompts are sent verbatim — no placeholders.
-    assert by_name["OLLAMA_CITATIONS_SYSTEM"]["placeholders"] == []
-    assert by_name["OLLAMA_FRICTION_SYSTEM"]["placeholders"] == []
-    assert by_name["OLLAMA_REPORT_SYSTEM"]["placeholders"] == []
+    assert by_name["LLM_CITATIONS_SYSTEM"]["placeholders"] == []
+    assert by_name["LLM_FRICTION_SYSTEM"]["placeholders"] == []
+    assert by_name["LLM_REPORT_SYSTEM"]["placeholders"] == []
 
 
 def test_settings_put_persists_custom_prompt(client, tmp_path, monkeypatch):
     monkeypatch.setattr(server.config, "OUTPUT_DIR", str(tmp_path))
     # Baseline via monkeypatch so the PUT's direct setattr is restored on teardown.
     monkeypatch.setattr(
-        server.config, "OLLAMA_SUMMARY_PROMPT", server.config.OLLAMA_SUMMARY_PROMPT
+        server.config, "LLM_SUMMARY_PROMPT", server.config.LLM_SUMMARY_PROMPT
     )
     custom = "Custom summary instructions.\n\nTranscript:\n{text}"
     resp = client.put(
         "/studio/api/settings",
-        json={"settings": {"OLLAMA_SUMMARY_PROMPT": custom}},
+        json={"settings": {"LLM_SUMMARY_PROMPT": custom}},
     )
     assert resp.status_code == 200
     assert resp.get_json()["ok"] is True
-    assert server.config.OLLAMA_SUMMARY_PROMPT == custom
-    saved = server.utils.load_json_manifest(
+    assert server.config.LLM_SUMMARY_PROMPT == custom
+    saved = server.start_settings.load_config_json(
         server.config.STUDIO_SETTINGS_FILENAME, default={}
     )
-    assert saved.get("OLLAMA_SUMMARY_PROMPT") == custom
+    assert saved.get("LLM_SUMMARY_PROMPT") == custom
     # GET reflects the new value.
     by_name = {
         s["name"]: s for s in client.get("/studio/api/settings").get_json()["settings"]
     }
-    assert by_name["OLLAMA_SUMMARY_PROMPT"]["value"] == custom
+    assert by_name["LLM_SUMMARY_PROMPT"]["value"] == custom
 
 
 def test_settings_put_rejects_prompt_missing_placeholder(client, tmp_path, monkeypatch):
     monkeypatch.setattr(server.config, "OUTPUT_DIR", str(tmp_path))
-    default = server.config.OLLAMA_SUMMARY_PROMPT
-    monkeypatch.setattr(server.config, "OLLAMA_SUMMARY_PROMPT", default)
+    default = server.config.LLM_SUMMARY_PROMPT
+    monkeypatch.setattr(server.config, "LLM_SUMMARY_PROMPT", default)
     resp = client.put(
         "/studio/api/settings",
-        json={"settings": {"OLLAMA_SUMMARY_PROMPT": "No placeholder here."}},
+        json={"settings": {"LLM_SUMMARY_PROMPT": "No placeholder here."}},
     )
     assert resp.status_code == 400
     body = resp.get_json()
     assert body["ok"] is False
     assert "{text}" in body["error"]
-    assert server.config.OLLAMA_SUMMARY_PROMPT == default  # unchanged
+    assert server.config.LLM_SUMMARY_PROMPT == default  # unchanged
 
 
 def test_settings_put_rejects_prompt_unknown_placeholder(client, tmp_path, monkeypatch):
     monkeypatch.setattr(server.config, "OUTPUT_DIR", str(tmp_path))
-    default = server.config.OLLAMA_CITATIONS_PROMPT
-    monkeypatch.setattr(server.config, "OLLAMA_CITATIONS_PROMPT", default)
+    default = server.config.LLM_CITATIONS_PROMPT
+    monkeypatch.setattr(server.config, "LLM_CITATIONS_PROMPT", default)
     resp = client.put(
         "/studio/api/settings",
-        json={"settings": {"OLLAMA_CITATIONS_PROMPT": "{claims} {transcript} {bogus}"}},
+        json={"settings": {"LLM_CITATIONS_PROMPT": "{claims} {transcript} {bogus}"}},
     )
     assert resp.status_code == 400
     assert resp.get_json()["ok"] is False
-    assert server.config.OLLAMA_CITATIONS_PROMPT == default
+    assert server.config.LLM_CITATIONS_PROMPT == default
 
 
 def test_settings_put_accepts_system_prompt_verbatim(client, tmp_path, monkeypatch):
     """*_SYSTEM prompts are never .format()-ed, so braces are literal and any
     text is accepted."""
     monkeypatch.setattr(server.config, "OUTPUT_DIR", str(tmp_path))
-    monkeypatch.setattr(server.config, "OLLAMA_CITATIONS_SYSTEM", "baseline")
+    monkeypatch.setattr(server.config, "LLM_CITATIONS_SYSTEM", "baseline")
     weird = 'Reply with JSON like {"a": 1} and emphasise {clarity}.'
     resp = client.put(
         "/studio/api/settings",
-        json={"settings": {"OLLAMA_CITATIONS_SYSTEM": weird}},
+        json={"settings": {"LLM_CITATIONS_SYSTEM": weird}},
     )
     assert resp.status_code == 200
     assert resp.get_json()["ok"] is True
-    assert server.config.OLLAMA_CITATIONS_SYSTEM == weird
+    assert server.config.LLM_CITATIONS_SYSTEM == weird
 
 
 def test_settings_reset_summaries_restores_prompt(client, tmp_path, monkeypatch):
     monkeypatch.setattr(server.config, "OUTPUT_DIR", str(tmp_path))
-    default = server._settings_defaults["OLLAMA_SUMMARY_PROMPT"]
-    monkeypatch.setattr(server.config, "OLLAMA_SUMMARY_PROMPT", "Edited {text}")
+    default = server._settings_defaults["LLM_SUMMARY_PROMPT"]
+    monkeypatch.setattr(server.config, "LLM_SUMMARY_PROMPT", "Edited {text}")
     resp = client.put("/studio/api/settings", json={"reset": "tab:Summaries"})
     assert resp.status_code == 200
     assert resp.get_json()["ok"] is True
-    assert server.config.OLLAMA_SUMMARY_PROMPT == default
+    assert server.config.LLM_SUMMARY_PROMPT == default
 
 
 def test_settings_records_include_boundary_post_processing(client):
@@ -396,14 +404,14 @@ def test_settings_put_persists_boundary_knobs(client, tmp_path, monkeypatch):
 
 def test_settings_put_persists_friction_model(client, tmp_path, monkeypatch):
     monkeypatch.setattr(server.config, "OUTPUT_DIR", str(tmp_path))
-    monkeypatch.setattr(server.config, "OLLAMA_FRICTION_MODEL", "")
+    monkeypatch.setattr(server.config, "LLM_FRICTION_MODEL", "")
     resp = client.put(
         "/studio/api/settings",
-        json={"settings": {"OLLAMA_FRICTION_MODEL": "gemma4:latest"}},
+        json={"settings": {"LLM_FRICTION_MODEL": "gemma4:latest"}},
     )
     assert resp.status_code == 200
     assert resp.get_json()["ok"] is True
-    assert server.config.OLLAMA_FRICTION_MODEL == "gemma4:latest"
+    assert server.config.LLM_FRICTION_MODEL == "gemma4:latest"
 
 
 def test_settings_put_persists_card_color(client, tmp_path, monkeypatch):
@@ -434,7 +442,7 @@ def test_settings_partial_put_preserves_other_settings(client, tmp_path, monkeyp
     assert resp.status_code == 200
     assert resp.get_json()["ok"] is True
 
-    saved = server.utils.load_json_manifest(
+    saved = server.start_settings.load_config_json(
         server.config.STUDIO_SETTINGS_FILENAME, default={}
     )
     assert saved.get("TITLECARD_IMAGE") == "card.png"  # preserved, not dropped
@@ -1187,6 +1195,20 @@ def test_apply_time_overrides_single_and_multi_segment():
     assert "times" not in clips[2]
 
 
+def test_apply_time_overrides_matches_a_ref_case_insensitively():
+    """The posted ref and the sheet header only ever match case-insensitively.
+
+    find_participant_column resolves a ref against the header with .lower(), so
+    an exact-match lookup here would silently drop the user's trimmed in/out
+    points for any ref not spelled exactly like its column.
+    """
+    import types
+
+    clips = [{"participant": "P01", "cell": types.SimpleNamespace(row=5)}]
+    server._apply_time_overrides(clips, {"p01.5": [[10, 70]]})
+    assert clips[0]["times"] == [("0:10", "1:10")]
+
+
 def test_apply_time_overrides_forces_hours_across_hour_boundary():
     """When either endpoint crosses an hour, both render H:MM:SS (no mixed pair)."""
     import types
@@ -1594,7 +1616,7 @@ def test_api_timeline_viewer_short_circuits_after_cancel(client, monkeypatch):
 
     assert resp.status_code == 200
     data = resp.get_json()
-    assert data == {"ok": False, "cancelled": True}
+    assert data == {"ok": False, "reason": "cancelled", "cancelled": True}
     assert generated_calls == []
 
 
@@ -1633,7 +1655,7 @@ def test_api_gallery_short_circuits_after_cancel(client, monkeypatch, tmp_path):
 
     assert resp.status_code == 200
     data = resp.get_json()
-    assert data == {"ok": False, "cancelled": True}
+    assert data == {"ok": False, "reason": "cancelled", "cancelled": True}
     assert generated_calls == []
 
 
@@ -1683,7 +1705,7 @@ def test_api_timeline_viewer_discards_sheet_clips_on_cancel_during_intake(
         server._timeline_viewer_cancel_event.clear()
 
     assert resp.status_code == 200
-    assert resp.get_json() == {"ok": False, "cancelled": True}
+    assert resp.get_json() == {"ok": False, "reason": "cancelled", "cancelled": True}
     assert generated_calls == []
     assert server._generated_artifacts == []
 
@@ -1730,7 +1752,7 @@ def test_api_gallery_short_circuits_when_cancelled_before_finalize(
         server._gallery_cancel_event.clear()
 
     assert resp.status_code == 200
-    assert resp.get_json() == {"ok": False, "cancelled": True}
+    assert resp.get_json() == {"ok": False, "reason": "cancelled", "cancelled": True}
     assert generated_calls == []
 
 
@@ -2364,6 +2386,54 @@ def test_api_sheet_refresh_invalidates_derived_payload(client, monkeypatch):
     assert parse_calls == {"annotations": 2, "timestamps": 2}
 
 
+def test_api_sheet_version_cursor_skips_rows_until_context_swaps(client):
+    """A matching ?sheet_version= gets a slim unchanged reply; a swap invalidates it."""
+    import types
+
+    def make_context(observation):
+        sheet_data = [
+            ["ID", "P01", "Observation", "Category"],
+            ["1", "0:10-0:20", observation, "catA"],
+        ]
+        return types.SimpleNamespace(
+            header_row=sheet_data[0],
+            id_cell=types.SimpleNamespace(row=1, col=1),
+            num_participants=1,
+            study_name="study",
+            observation_cell=types.SimpleNamespace(col=3),
+            category_cell=types.SimpleNamespace(col=4),
+            severity_cell=None,
+            baseline_row_idx=None,
+            filename_row_idx=None,
+            first_data_row_idx=1,
+            sheet_data=sheet_data,
+        )
+
+    server._set_sheet_context(make_context("old obs"))
+    try:
+        first = client.get("/studio/api/sheet").get_json()
+        version = first["sheet_version"]
+        assert first["rows"][0]["observation"] == "old obs"
+        assert "sheet_unchanged" not in first
+
+        same = client.get(f"/studio/api/sheet?sheet_version={version}").get_json()
+        assert same["ok"] and same["sheet_loaded"] is True
+        assert same["sheet_unchanged"] is True
+        assert same["sheet_version"] == version
+        assert "rows" not in same and "participants" not in same
+        assert "config" in same  # live settings still ride along
+
+        stale = client.get("/studio/api/sheet?sheet_version=not-a-number").get_json()
+        assert stale["rows"][0]["observation"] == "old obs"
+
+        server._set_sheet_context(make_context("new obs"))
+        swapped = client.get(f"/studio/api/sheet?sheet_version={version}").get_json()
+        assert swapped["sheet_version"] != version
+        assert swapped["rows"][0]["observation"] == "new obs"
+    finally:
+        server._set_sheet_context(None)
+
+
 def test_swap_worksheet_rollback_clears_sheet_payload_cache(monkeypatch):
     """A failed sheet swap must not leave the attempted sheet payload cached."""
     import types
@@ -2417,6 +2487,120 @@ def test_swap_worksheet_rollback_clears_sheet_payload_cache(monkeypatch):
 
     assert server._sheet_context is prev_ctx
     assert server._sheet_payload_cache is None
+
+
+def test_swap_worksheet_repins_workflows_and_composer(monkeypatch):
+    """All five blueprints follow the swap, not just the three with a full init.
+
+    Workflows and Composer used to keep whatever sheet the *process* started
+    with — none, on a desktop launch — so a spreadsheet opened from the Start
+    overlay never reached a run's NodeContext or Composer's participant list.
+    """
+    import types
+
+    import composer_server
+    import screenspace_server
+    import spreadsheet
+    import transcripts_server
+    import workflows_server
+
+    new_ctx = spreadsheet.SheetContext(
+        sheet_data=[["ID"]],
+        id_cell=types.SimpleNamespace(row=1, col=1),
+        observation_cell=types.SimpleNamespace(row=1, col=1),
+        category_cell=types.SimpleNamespace(row=1, col=1),
+        num_participants=0,
+        study_name="opened",
+    )
+    new_ws = object()
+
+    def fake_init_studio_state(worksheet):
+        server._worksheet = worksheet
+        server._sheet_context = new_ctx if worksheet is not None else None
+
+    monkeypatch.setattr(server, "_worksheet", None)
+    monkeypatch.setattr(server, "_sheet_context", None)
+    monkeypatch.setattr(server, "_generated_artifacts", [])
+    monkeypatch.setattr(server, "_generated_reels", [])
+    monkeypatch.setattr(server, "_init_studio_state", fake_init_studio_state)
+    monkeypatch.setattr(
+        screenspace_server, "_init_screenspace_state", lambda **kw: None
+    )
+    monkeypatch.setattr(
+        transcripts_server, "_init_transcripts_state", lambda **kw: None
+    )
+    monkeypatch.setattr(workflows_server, "_sheet_context", None)
+    monkeypatch.setattr(workflows_server, "_worksheet", None)
+    monkeypatch.setattr(composer_server, "_sheet_context", None)
+
+    server._swap_worksheet(new_ws)
+
+    assert workflows_server._sheet_context is new_ctx
+    assert workflows_server._worksheet is new_ws
+    assert composer_server._sheet_context is new_ctx
+
+    # ...and closing has to clear them again, or both keep a dead worksheet.
+    server._swap_worksheet(None)
+
+    assert workflows_server._sheet_context is None
+    assert workflows_server._worksheet is None
+    assert composer_server._sheet_context is None
+
+
+def test_swap_worksheet_rollback_restores_workflows_and_composer(monkeypatch):
+    """A failed swap must leave the sister blueprints on the prior sheet, not
+    the half-applied one."""
+    import types
+
+    import composer_server
+    import screenspace_server
+    import spreadsheet
+    import workflows_server
+
+    prev_ctx = spreadsheet.SheetContext(
+        sheet_data=[["ID"]],
+        id_cell=types.SimpleNamespace(row=1, col=1),
+        observation_cell=types.SimpleNamespace(row=1, col=1),
+        category_cell=types.SimpleNamespace(row=1, col=1),
+        num_participants=0,
+        study_name="previous",
+    )
+    prev_ws = object()
+
+    attempted_ctx = spreadsheet.SheetContext(
+        sheet_data=[["ID"]],
+        id_cell=types.SimpleNamespace(row=1, col=1),
+        observation_cell=types.SimpleNamespace(row=1, col=1),
+        category_cell=types.SimpleNamespace(row=1, col=1),
+        num_participants=0,
+        study_name="attempted",
+    )
+
+    def fake_init_studio_state(worksheet):
+        server._worksheet = worksheet
+        server._sheet_context = attempted_ctx
+
+    monkeypatch.setattr(server, "_worksheet", prev_ws)
+    monkeypatch.setattr(server, "_sheet_context", prev_ctx)
+    monkeypatch.setattr(server, "_sheet_payload_cache", None)
+    monkeypatch.setattr(server, "_generated_artifacts", [])
+    monkeypatch.setattr(server, "_generated_reels", [])
+    monkeypatch.setattr(server, "_init_studio_state", fake_init_studio_state)
+
+    def _boom(**kwargs):
+        raise RuntimeError("screenspace failed")
+
+    monkeypatch.setattr(screenspace_server, "_init_screenspace_state", _boom)
+    monkeypatch.setattr(workflows_server, "_sheet_context", prev_ctx)
+    monkeypatch.setattr(workflows_server, "_worksheet", prev_ws)
+    monkeypatch.setattr(composer_server, "_sheet_context", prev_ctx)
+
+    with pytest.raises(RuntimeError, match="screenspace failed"):
+        server._swap_worksheet(object())
+
+    assert workflows_server._sheet_context is prev_ctx
+    assert workflows_server._worksheet is prev_ws
+    assert composer_server._sheet_context is prev_ctx
 
 
 def test_api_generate_passes_titlecard_options_to_pipeline(client, monkeypatch):
@@ -2546,6 +2730,7 @@ def test_api_reel_passes_titlecard_options_to_pipeline(client, monkeypatch):
         *,
         titlecards_enabled=None,
         titlecard_duration_seconds=None,
+        token=None,
     ):
         captured["enabled"] = titlecards_enabled
         captured["duration"] = titlecard_duration_seconds
@@ -2632,6 +2817,15 @@ def test_api_settings_includes_transcription_settings(client):
     quality = by_name["TRANSCRIBE_VAD_FILTER"]
     assert quality["group"] == "Transcription quality"
     assert quality["type"] == "bool"
+    speakers = by_name["TRANSCRIBE_SPEAKERS"]
+    assert speakers["group"] == "Speakers"
+    assert speakers["type"] == "bool"
+    assert speakers["value"] is False
+    cap = by_name["TRANSCRIBE_SPEAKER_MAX"]
+    assert cap["group"] == "Speakers"
+    assert (cap["min"], cap["max"], cap["step"]) == (2, 8, 1)
+    for name in ("TRANSCRIBE_SPEAKERS", "TRANSCRIBE_SPEAKER_MAX"):
+        assert name in config.SETTINGS_DESCRIPTIONS
 
 
 def test_api_settings_includes_cli_settings(client):
@@ -2677,15 +2871,69 @@ def test_api_settings_includes_grouped_tool_nav(client):
     assert s["default"] is True
 
 
+def test_api_settings_includes_source_filename_pattern(client):
+    """GET /api/settings exposes the source-video filename pattern."""
+    import config
+
+    assert "SOURCE_FILENAME_PATTERN" in config.SETTINGS_DESCRIPTIONS
+    resp = client.get("/studio/api/settings")
+    by_name = {s["name"]: s for s in resp.get_json()["settings"]}
+    s = by_name["SOURCE_FILENAME_PATTERN"]
+    assert s["tab"] == "Video & Clips"
+    assert s["group"] == "Source Videos"
+    assert s["type"] == "str"
+    assert s["default"] == "{study}_{participant}"
+
+
+def test_settings_put_rejects_bad_source_filename_pattern(
+    client, tmp_path, monkeypatch
+):
+    monkeypatch.setattr(server.config, "OUTPUT_DIR", str(tmp_path))
+    default = server.config.SOURCE_FILENAME_PATTERN
+    monkeypatch.setattr(server.config, "SOURCE_FILENAME_PATTERN", default)
+    for bad in (
+        "{study}",  # missing {participant}
+        "{foo}_{participant}",  # unknown placeholder
+        "a/{participant}",  # path separator
+        "{participant}_{participant}",  # duplicate
+        "",  # empty
+    ):
+        resp = client.put(
+            "/studio/api/settings",
+            json={"settings": {"SOURCE_FILENAME_PATTERN": bad}},
+        )
+        assert resp.status_code == 400, bad
+        assert resp.get_json()["ok"] is False
+        assert server.config.SOURCE_FILENAME_PATTERN == default  # unchanged
+
+
+def test_settings_put_applies_source_filename_pattern(client, tmp_path, monkeypatch):
+    monkeypatch.setattr(server.config, "OUTPUT_DIR", str(tmp_path))
+    monkeypatch.setattr(server.config, "INPUT_DIR", str(tmp_path), raising=False)
+    default = server.config.SOURCE_FILENAME_PATTERN
+    monkeypatch.setattr(server.config, "SOURCE_FILENAME_PATTERN", default)
+    (tmp_path / "P01_demo.mp4").write_text("v")
+    assert server.utils.discover_participant_videos() == []
+
+    resp = client.put(
+        "/studio/api/settings",
+        json={"settings": {"SOURCE_FILENAME_PATTERN": "{participant}_{study}"}},
+    )
+    assert resp.status_code == 200
+    assert server.config.SOURCE_FILENAME_PATTERN == "{participant}_{study}"
+    # Discovery honors the new pattern immediately (memo keys on the pattern).
+    assert [p["id"] for p in server.utils.discover_participant_videos()] == ["P01"]
+
+
 def test_api_settings_includes_provider_field(client):
     """model_select settings include a provider field."""
     resp = client.get("/studio/api/settings")
     data = resp.get_json()
     model_settings = [s for s in data["settings"] if s["type"] == "model_select"]
-    assert len(model_settings) >= 2  # TRANSCRIBE_MODEL + OLLAMA_SUMMARY_MODEL
+    assert len(model_settings) >= 2  # TRANSCRIBE_MODEL + LLM_SUMMARY_MODEL
     for s in model_settings:
         assert "provider" in s
-        assert s["provider"] in ("whisper", "ollama")
+        assert s["provider"] in ("whisper", "llm")
 
 
 def test_api_settings_put_applies_values(client, monkeypatch):
@@ -2834,7 +3082,7 @@ def test_load_studio_settings(monkeypatch, tmp_path):
     """_load_studio_settings reads file and applies to config."""
     import config
 
-    monkeypatch.setattr("config.OUTPUT_DIR", str(tmp_path))
+    monkeypatch.setattr(server.start_settings, "config_dir", lambda: tmp_path)
     # Capture+auto-restore (see test_api_settings_put_applies_values).
     monkeypatch.setattr(config, "REENCODING", config.REENCODING)
 
@@ -2848,7 +3096,7 @@ def test_load_studio_settings(monkeypatch, tmp_path):
 
 def test_load_studio_settings_missing_file(monkeypatch, tmp_path):
     """Missing settings file returns empty dict without error."""
-    monkeypatch.setattr("config.OUTPUT_DIR", str(tmp_path))
+    monkeypatch.setattr(server.start_settings, "config_dir", lambda: tmp_path)
     applied = server._load_studio_settings()
     assert applied == {}
 
@@ -2856,6 +3104,7 @@ def test_load_studio_settings_missing_file(monkeypatch, tmp_path):
 def test_load_studio_settings_skips_invalid_card_image(monkeypatch, tmp_path):
     """A persisted card image that PUT would reject is not applied on load."""
     monkeypatch.setattr("config.OUTPUT_DIR", str(tmp_path))
+    monkeypatch.setattr(server.start_settings, "config_dir", lambda: tmp_path)
     monkeypatch.setattr(server.config, "TITLECARD_IMAGE", "")
     monkeypatch.setattr(server.config, "ENDCARD_IMAGE", "")
 
@@ -2889,9 +3138,9 @@ def test_load_studio_settings_skips_invalid_prompt(monkeypatch, tmp_path):
     _validate_prompt. It must now be skipped (config keeps its default), matching
     the card_picker guard, while a valid setting alongside it still applies.
     """
-    monkeypatch.setattr("config.OUTPUT_DIR", str(tmp_path))
-    default_prompt = server.config.OLLAMA_FRICTION_PROMPT
-    monkeypatch.setattr(server.config, "OLLAMA_FRICTION_PROMPT", default_prompt)
+    monkeypatch.setattr(server.start_settings, "config_dir", lambda: tmp_path)
+    default_prompt = server.config.LLM_FRICTION_PROMPT
+    monkeypatch.setattr(server.config, "LLM_FRICTION_PROMPT", default_prompt)
     monkeypatch.setattr(server.config, "REENCODING", server.config.REENCODING)
 
     settings_file = tmp_path / server.config.STUDIO_SETTINGS_FILENAME
@@ -2899,15 +3148,15 @@ def test_load_studio_settings_skips_invalid_prompt(monkeypatch, tmp_path):
         json.dumps(
             {
                 # Missing required {summary}/{segments}/{limit} placeholders → rejected.
-                "OLLAMA_FRICTION_PROMPT": "tampered prompt with no placeholders",
+                "LLM_FRICTION_PROMPT": "tampered prompt with no placeholders",
                 "REENCODING": True,  # valid → applied
             }
         )
     )
 
     applied = server._load_studio_settings()
-    assert "OLLAMA_FRICTION_PROMPT" not in applied
-    assert server.config.OLLAMA_FRICTION_PROMPT == default_prompt
+    assert "LLM_FRICTION_PROMPT" not in applied
+    assert server.config.LLM_FRICTION_PROMPT == default_prompt
     assert applied["REENCODING"] is True
     assert server.config.REENCODING is True
 
@@ -2916,7 +3165,7 @@ def test_save_studio_settings_non_defaults_only(monkeypatch, tmp_path):
     """Only non-default values are written; all-defaults deletes the file."""
     import config
 
-    monkeypatch.setattr("config.OUTPUT_DIR", str(tmp_path))
+    monkeypatch.setattr(server.start_settings, "config_dir", lambda: tmp_path)
     settings_file = tmp_path / config.STUDIO_SETTINGS_FILENAME
 
     # Save a non-default value
@@ -3334,12 +3583,12 @@ def test_api_reel_continues_worker_after_client_disconnect(
         # No auto-cancel on disconnect anymore.
         assert server._reel_cancel_event.is_set() is False
         # Slot still held: worker is running.
-        assert server._reel_in_progress is True
+        assert server._busy_slots["reel"] is True
     finally:
         allow_finish.set()
 
     # Once the worker finishes, manifest is updated and slot is released.
-    assert _poll_until(lambda: server._reel_in_progress is False)
+    assert _poll_until(lambda: server._busy_slots["reel"] is False)
     assert reel_record in server._generated_reels
 
 
@@ -3380,7 +3629,7 @@ def test_api_reel_busy_slot_held_during_worker_after_disconnect(
         allow_finish.set()
 
     # After worker exits, the slot frees and a fresh request can proceed.
-    assert _poll_until(lambda: server._reel_in_progress is False)
+    assert _poll_until(lambda: server._busy_slots["reel"] is False)
     third = client.post("/studio/api/reel", json={"cells": ["P01.5"]})
     assert third.status_code == 200
 
@@ -3421,7 +3670,7 @@ def test_api_reel_explicit_cancel_still_works(client, monkeypatch, tmp_path):
     # The worker observes the cancel and emits a cancelled-error event.
     final = json.loads(resp.data.decode().strip().split("\n")[-1])
     assert final.get("cancelled") is True
-    assert _poll_until(lambda: server._reel_in_progress is False)
+    assert _poll_until(lambda: server._busy_slots["reel"] is False)
 
 
 def test_api_reel_releases_slot_on_no_clips_early_return(client, monkeypatch, tmp_path):
@@ -3434,7 +3683,7 @@ def test_api_reel_releases_slot_on_no_clips_early_return(client, monkeypatch, tm
     lines = [json.loads(line) for line in resp.data.decode().strip().split("\n")]
     assert lines[-1]["ok"] is False
     assert "No clips" in lines[-1]["error"]
-    assert server._reel_in_progress is False
+    assert server._busy_slots["reel"] is False
 
 
 def test_api_reel_releases_slot_on_cached_match(client, monkeypatch, tmp_path):
@@ -3461,7 +3710,7 @@ def test_api_reel_releases_slot_on_cached_match(client, monkeypatch, tmp_path):
     lines = [json.loads(line) for line in resp.data.decode().strip().split("\n")]
     assert lines[-1]["ok"] is True
     assert lines[-1]["skipped"] is True
-    assert server._reel_in_progress is False
+    assert server._busy_slots["reel"] is False
 
 
 def test_api_reel_releases_slot_on_pipeline_exception(client, monkeypatch, tmp_path):
@@ -3481,7 +3730,7 @@ def test_api_reel_releases_slot_on_pipeline_exception(client, monkeypatch, tmp_p
         ln.get("ok") is False and "ffmpeg exploded" in ln.get("error", "")
         for ln in lines
     )
-    assert _poll_until(lambda: server._reel_in_progress is False)
+    assert _poll_until(lambda: server._busy_slots["reel"] is False)
 
 
 def test_api_reel_direct_continues_worker_after_client_disconnect(
@@ -3524,11 +3773,11 @@ def test_api_reel_direct_continues_worker_after_client_disconnect(
         assert concat_blocked.wait(timeout=5)
         resp.close()
         assert server._reel_cancel_event.is_set() is False
-        assert server._reel_in_progress is True
+        assert server._busy_slots["reel"] is True
     finally:
         allow_finish.set()
 
-    assert _poll_until(lambda: server._reel_in_progress is False)
+    assert _poll_until(lambda: server._busy_slots["reel"] is False)
     assert len(server._generated_reels) == 1
     assert server._generated_reels[0]["source"] == "intake"
 
@@ -3589,7 +3838,7 @@ def test_api_reel_direct_cleans_temp_clips_after_disconnect(
     finally:
         allow_finish.set()
 
-    assert _poll_until(lambda: server._reel_in_progress is False)
+    assert _poll_until(lambda: server._busy_slots["reel"] is False)
     assert created_temps  # sanity: ffmpeg ran
     for tmp in created_temps:
         assert not Path(tmp).exists(), f"temp clip {tmp} was not cleaned up"
@@ -3637,7 +3886,7 @@ def test_api_reel_direct_explicit_cancel_still_works(client, monkeypatch, tmp_pa
 
     final = json.loads(resp.data.decode().strip().split("\n")[-1])
     assert final.get("cancelled") is True
-    assert _poll_until(lambda: server._reel_in_progress is False)
+    assert _poll_until(lambda: server._busy_slots["reel"] is False)
 
 
 def test_api_generate_persists_artifacts_after_disconnect(
@@ -3727,7 +3976,7 @@ def test_api_generate_persists_artifacts_after_disconnect(
         "no worker was still in flight when the client disconnected; "
         f"raise HOLD_SECONDS ({started_count[0]} started, {finished_count[0]} done)"
     )
-    assert _poll_until(lambda: server._generate_in_progress is False)
+    assert _poll_until(lambda: server._busy_slots["generate"] is False)
     persisted_rows = {a["cellRow"] for a in server._generated_artifacts}
     assert persisted_rows == {5, 6, 7, 8}
 
@@ -3799,7 +4048,7 @@ def test_api_job_status_reflects_reel_progress(client, monkeypatch, tmp_path):
         proceed.set()
         resp.close()
 
-    assert _poll_until(lambda: server._reel_in_progress is False)
+    assert _poll_until(lambda: server._busy_slots["reel"] is False)
     final = client.get("/studio/api/job-status").get_json()
     assert final["reel"]["in_progress"] is False
 
@@ -3877,7 +4126,117 @@ def test_api_job_status_reflects_generate_progress(client, monkeypatch, tmp_path
         proceed.set()
         resp.close()
 
-    assert _poll_until(lambda: server._generate_in_progress is False)
+    assert _poll_until(lambda: server._busy_slots["generate"] is False)
+
+
+def _setup_single_cell_generate(monkeypatch, tmp_path, cell_value, *, generated=1):
+    """Wire /api/generate down to one P01.5 cell holding *cell_value*."""
+    import types
+
+    monkeypatch.setattr(server, "_worksheet", object())
+    monkeypatch.setattr("config.OUTPUT_DIR", str(tmp_path))
+    _set_artifacts(monkeypatch, [])
+    monkeypatch.setattr(server, "_save_manifest_quiet", lambda: None)
+
+    cell = types.SimpleNamespace(row=5, col=2, value=cell_value)
+    monkeypatch.setattr("spreadsheet.parse_cell_specifications", lambda t: [("P01", 5)])
+    monkeypatch.setattr(
+        "spreadsheet.generate_list",
+        lambda ws, mode, *, ctx=None, cell_specs, skip_prompts: [
+            {"participant": "P01", "cell": cell, "desc": "obs", "category": "nav"}
+        ],
+    )
+    monkeypatch.setattr("pipeline.process_clips", lambda *a, **kw: (generated, []))
+
+
+def test_api_generate_progress_counts_artifacts_not_cells(
+    client, monkeypatch, tmp_path
+):
+    """A multi-timestamp cell is one NDJSON line but several artifacts.
+
+    Studio's Artifacts badge counts queue cards — one per timestamp segment — so
+    the job-state total has to count segments too. Counting cells is what made
+    the panel read "(58)" next to "51 / 52 cells" for one Generate click.
+    """
+    _setup_single_cell_generate(
+        monkeypatch, tmp_path, "1:00-1:30 2:00-2:30", generated=2
+    )
+
+    resp = client.post(
+        "/studio/api/generate", json={"cells": ["P01.5"], "format": "clip"}
+    )
+    lines = [json.loads(line) for line in resp.data.decode().strip().split("\n")]
+
+    assert len(lines) == 1, "one cell still yields one line"
+    assert lines[0]["ok"] is True
+    # ...but the progress snapshot advances by both segments, in one step.
+    assert server._generate_job_state["total"] == 2
+    assert server._generate_job_state["done"] == 2
+
+
+def test_api_generate_progress_counts_trimmed_override_segments(
+    client, monkeypatch, tmp_path
+):
+    """Trimming in the queue replaces the cell's segments, and the count follows.
+
+    The frontend posts the complete remaining segment list whenever a cell was
+    edited or had cards removed, so the override — not the sheet value — decides
+    how many artifacts that cell contributes.
+    """
+    _setup_single_cell_generate(monkeypatch, tmp_path, "1:00", generated=2)
+
+    resp = client.post(
+        "/studio/api/generate",
+        json={
+            "cells": ["P01.5"],
+            "format": "clip",
+            "overrides": {"P01.5": [[10, 40], [60, 90]]},
+        },
+    )
+    assert resp.status_code == 200
+    assert server._generate_job_state["total"] == 2
+    assert server._generate_job_state["done"] == 2
+
+
+def test_api_generate_progress_skips_unmatched_refs(client, monkeypatch, tmp_path):
+    """A ref that resolves to no clip contributes 0 segments to both counters.
+
+    It still gets its own "No clip found" line, but advancing on that line would
+    push done past total and overfill the Generate button.
+    """
+    _setup_single_cell_generate(monkeypatch, tmp_path, "1:00", generated=1)
+
+    resp = client.post(
+        "/studio/api/generate", json={"cells": ["P01.5", "P09.99"], "format": "clip"}
+    )
+    lines = [json.loads(line) for line in resp.data.decode().strip().split("\n")]
+
+    assert [line["cell"] for line in lines] == ["P01.5", "P09.99"]
+    assert lines[1]["error"] == "No clip found"
+    assert server._generate_job_state["total"] == 1
+    assert server._generate_job_state["done"] == 1
+
+
+def test_api_generate_ref_spelled_unlike_its_header_gets_one_line(
+    client, monkeypatch, tmp_path
+):
+    """A resolved ref must not also draw a trailing "No clip found".
+
+    The result line echoes the sheet header the ref resolved to, while the
+    unmatched-ref sweep compares against the ref as posted — and the two only
+    match case-insensitively. Exact-match comparison emitted both lines for one
+    cell, which double-advanced the readout and painted succeeded cards failed.
+    """
+    _setup_single_cell_generate(monkeypatch, tmp_path, "1:00", generated=1)
+
+    resp = client.post(
+        "/studio/api/generate", json={"cells": ["p01.5"], "format": "clip"}
+    )
+    lines = [json.loads(line) for line in resp.data.decode().strip().split("\n")]
+
+    assert [line["cell"] for line in lines] == ["P01.5"]
+    assert lines[0]["ok"] is True
+    assert server._generate_job_state["done"] == 1
 
 
 def test_api_job_status_cancelling_flag(client, monkeypatch, tmp_path):
@@ -3913,7 +4272,7 @@ def test_api_job_status_cancelling_flag(client, monkeypatch, tmp_path):
         proceed.set()
         resp.close()
 
-    assert _poll_until(lambda: server._reel_in_progress is False)
+    assert _poll_until(lambda: server._busy_slots["reel"] is False)
 
 
 def test_api_generate_explicit_cancel_still_works(client, monkeypatch, tmp_path):
@@ -3972,7 +4331,7 @@ def test_api_generate_explicit_cancel_still_works(client, monkeypatch, tmp_path)
     text = resp.data.decode()
     lines = [json.loads(ln) for ln in text.strip().split("\n") if ln.strip()]
     assert any(ln.get("cancelled") is True for ln in lines)
-    assert _poll_until(lambda: server._generate_in_progress is False)
+    assert _poll_until(lambda: server._busy_slots["generate"] is False)
 
 
 # ---- /api/reel-direct titlecards ----
@@ -4025,7 +4384,7 @@ def test_api_generate_discards_artifacts_completed_after_cancel(
     resp.data  # drain stream
     server._generate_cancel_event.clear()
 
-    assert _poll_until(lambda: server._generate_in_progress is False)
+    assert _poll_until(lambda: server._busy_slots["generate"] is False)
     ids = [a.get("id") for a in server._generated_artifacts]
     assert "a" not in ids
     assert not file_a.exists()
@@ -4255,7 +4614,7 @@ def test_api_reel_direct_wraps_segments_when_titlecards_enabled(
         },
     )
     _drain_ndjson(resp)
-    assert _poll_until(lambda: server._reel_in_progress is False)
+    assert _poll_until(lambda: server._busy_slots["reel"] is False)
     assert len(wrap_calls) == 2
     assert wrap_calls[0]["duration"] == 3
     assert wrap_calls[0]["enabled"] is True
@@ -4297,7 +4656,7 @@ def test_api_reel_direct_skips_wrap_when_titlecards_disabled(
         },
     )
     _drain_ndjson(resp)
-    assert _poll_until(lambda: server._reel_in_progress is False)
+    assert _poll_until(lambda: server._busy_slots["reel"] is False)
     assert wrap_calls == []
 
 
@@ -4325,7 +4684,7 @@ def test_api_reel_direct_clears_endcard_cache(client, monkeypatch, tmp_path):
         json={"segments": [{"participant": "P01", "start": 0, "end": 5}]},
     )
     _drain_ndjson(resp)
-    assert _poll_until(lambda: server._reel_in_progress is False)
+    assert _poll_until(lambda: server._busy_slots["reel"] is False)
     assert len(clear_calls) == 1
 
 
@@ -4458,3 +4817,88 @@ def test_media_route_serves_generated_artifacts(client, tmp_path, monkeypatch):
     monkeypatch.setattr(server.config, "OUTPUT_DIR", str(other))
     assert client.get("/studio/media/moved.mp4").status_code == 200
     assert client.get("/studio/media/Study%20P01%20clip.mp4").status_code == 404
+
+
+def test_api_generate_intake_resolves_mark_ids_to_segment_text(client, monkeypatch):
+    """Marks name segments; the fallback joins those segments' text."""
+    import transcripts_server
+
+    monkeypatch.setattr(
+        server, "_resolve_intake_video_paths", lambda p, s="": ["/fake/video.mp4"]
+    )
+    monkeypatch.setattr("video.run_ffmpeg", lambda *a, **kw: True)
+    monkeypatch.setattr(server, "_save_manifest_quiet", lambda: None)
+    monkeypatch.setattr(
+        transcripts_server,
+        "_manifest",
+        {
+            "source_transcripts": {
+                "P01": {
+                    "transcribed_at": "2026-01-01T00:00:00+00:00",
+                    "segments": [
+                        {"id": "P01:0", "text": "hello there"},
+                        {"id": "P01:1", "text": "not marked"},
+                    ],
+                }
+            },
+            "marks": [{"id": "m_1", "segment_id": "P01:0"}],
+        },
+    )
+
+    items = [
+        {
+            "participant": "P01",
+            "start": 0.0,
+            "end": 5.0,
+            "event_type": "transcript",
+            "event_ids": [],
+            "source": "transcript",
+            "mark_ids": ["m_1"],
+        }
+    ]
+    resp = client.post(
+        "/studio/api/generate-intake", json={"items": items, "format": "clip"}
+    )
+    assert resp.status_code == 200
+    line = json.loads(resp.data.decode().strip().split("\n")[0])
+    assert line["ok"] is True
+    assert line["artifact"]["transcriptText"] == "hello there"
+
+
+def test_api_reel_releases_busy_slot_when_stream_never_starts(
+    studio_app, client, monkeypatch, tmp_path
+):
+    """A response torn down before iteration must not hold the slot forever."""
+    _setup_api_reel(monkeypatch, tmp_path)
+    endpoint = next(
+        rule.endpoint
+        for rule in studio_app.url_map.iter_rules()
+        if rule.rule == "/studio/api/reel" and "POST" in (rule.methods or set())
+    )
+    view = studio_app.view_functions[endpoint]
+
+    with studio_app.test_request_context(
+        "/studio/api/reel", method="POST", json={"cells": ["P01.5"]}
+    ):
+        resp = view()
+        assert server._busy_slots["reel"] is True
+        resp.close()
+
+    assert server._busy_slots["reel"] is False
+
+
+def test_release_busy_ignores_a_stale_token():
+    """A late second release must not drop the next request's claim."""
+    server._release_busy("generate")
+    first = server._try_claim_busy("generate")
+    assert first
+    server._release_busy("generate", first)
+    second = server._try_claim_busy("generate")
+    assert second and second != first
+
+    server._release_busy("generate", first)  # stale: the generator's finally
+    assert server._busy_slots["generate"] is True
+    assert server._try_claim_busy("generate") is None
+
+    server._release_busy("generate", second)
+    assert server._busy_slots["generate"] is False

@@ -105,6 +105,20 @@ def test_discover_clips_excludes_numbered_source_videos(tmp_path, monkeypatch):
     assert clips == ["[cat] study P01 desc.mp4"]
 
 
+def test_discover_clips_exclusion_follows_pattern_setting(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        files.config, "SOURCE_FILENAME_PATTERN", "{participant}_{study}"
+    )
+    (tmp_path / "P01_study.mp4").write_text("video")  # plain source
+    (tmp_path / "P01_study-2.mp4").write_text("part")  # numbered source part
+    (tmp_path / "study_P01.mp4").write_text("clip")  # not a source under this pattern
+    (tmp_path / "study_P01_chronologic.mp4").write_text("reel")  # generated reel
+
+    clips = files.discover_clips()
+    assert clips == ["study_P01.mp4", "study_P01_chronologic.mp4"]
+
+
 def test_prepare_clip_pre_parsed_fast_path_keeps_times_and_sanitizes_desc():
     # Synthetic clips (e.g. --ss-clips) arrive with times already parsed and a
     # SimpleNamespace cell. prepare_clip should skip the cell-based parse,
@@ -460,3 +474,22 @@ def test_no_baseline_row_means_relative_timestamps_only():
     # Without a baseline row, times remain absolute clock values
     assert prepared_p01["times"] == [("09:13:00", "09:14:00")]
     assert prepared_p02["times"] == [("09:20:00", "09:21:00")]
+
+
+def test_prepare_clip_selects_segments_before_baseline_conversion(make_clip):
+    """Keyword indexes count the cell's tokens; conversion may drop earlier pairs."""
+    clip = make_clip(value="09:00:00-09:05:00 09:10:00-09:15:00 !key")
+    clip["timestamp_baseline"] = "09:08:00"
+    clip["selected_segment_indexes"] = [1]
+
+    prepared = files.prepare_clip(clip)
+
+    assert prepared["times"] == [("0:02:00", "0:07:00")]
+
+
+def test_safe_truncate_counts_utf8_bytes():
+    """Filesystems cap names in bytes; CJK text must back off further."""
+    cjk = files.safe_truncate("\u4f60" * 200, 255)
+    assert cjk
+    assert len(cjk.encode("utf-8")) <= 255
+    assert len(files.safe_truncate("a" * 300, 255)) == 255

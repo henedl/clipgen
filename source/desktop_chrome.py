@@ -35,6 +35,16 @@ contract does land here: that same surface reports double-clicks back through th
 JS bridge, and ``titlebar_double_click`` performs whatever the user has configured
 in System Settings → Desktop & Dock.
 
+Launch focus lands here too. pywebview's ``first_show`` calls
+``makeKeyAndOrderFront_`` and ``activateIgnoringOtherApps_`` *before* ``NSApp.run()``
+has finished launching, and on macOS 14+ activation is cooperative, so that early
+request sometimes loses to LaunchServices' own launch activation: the window is
+ordered front but never becomes key — grey lights, clicks ignored until an app
+switch resyncs it. ``ensure_key`` re-claims key status from the ``shown`` hook via
+``callAfter``, which only runs once the run loop is live, in a bounded burst; the
+``NSApplicationDidBecomeActiveNotification`` observer re-keys the window whenever
+the app activates with no key window, which is what the manual app switch did.
+
 Every entry point is a no-op off macOS and degrades to the standard title bar on
 any AppKit surprise — losing the styling must never cost the user their window.
 """
@@ -50,42 +60,35 @@ import utils
 
 # NSNotificationCenter observer tokens, held so teardown can unregister them.
 _observers: list[Any] = []
-# True while the window is in native fullscreen: AppKit owns the traffic lights
-# then (they live in the auto-hiding overlay), so we neither move them nor ask
-# the page to reserve room for them.
+# Native fullscreen: AppKit owns the lights, so skip layout and the page inset.
 _fullscreen = False
-# The views whose frames are watched for an AppKit reset, and the matching
-# observer tokens. Watching the container alone is not enough: a screen-sharing
-# transition puts the buttons back at their stock positions *inside* a container
-# that keeps our height, so the reset produces no container frame change at all.
-# AppKit can also hand the window different views across a transition, which
-# would leave the observers deaf, so the set is re-bound when identity changes.
+# Watched views and their observer tokens; re-bound when AppKit swaps views
+# (see _bind_frame_observer).
 _frame_observed: list[Any] = []
 _frame_tokens: list[Any] = []
 # Re-entrancy guard: our own setFrame_ posts the notification we listen for.
 _laying_out = False
-# Ping-pong budget. If AppKit pins the container height (constraint, or a re-layout
-# at the end of every pass) we would fight it forever on the main thread. Allow a
-# short burst, then stand down until a user-driven event re-arms the counter.
+# Re-assert budget; see _within_reassert_budget. A user event re-arms it.
 _REASSERT_BURST_LIMIT = 8
 _REASSERT_WINDOW_S = 1.0
 _reassert_count = 0
 _reassert_started = 0.0
 # Last verbose titlebar inventory, so a drag-resize does not print one per tick.
 _last_inventory: str | None = None
-# AppKit keeps shuffling the slot for a few hundred ms after a sharing
-# transition, and its *last* move lands after our pass with no further
-# notification — measured, that left the row at 7/45/74 until the user resized
-# the window. So a pass arms a short chain of deferred re-checks, each of which
-# stops as soon as the layout reads correct.
+# Deferred re-check chain; _schedule_settle explains why notifications alone fail.
 _SETTLE_DELAY_S = 0.15
 _SETTLE_ATTEMPTS = 5
 _settle_timer: Any = None
-# Last self-consistent button pitch. Mid-transition AppKit reports a lopsided
-# row (measured: gaps of 29 and 20 in one read) and writing that back is what
-# spread the buttons to 16/45/74 in the first place.
+# Last self-consistent button pitch; _button_pitch explains the lopsided
+# mid-transition read.
 _DEFAULT_PITCH = 20.0
 _pitch = _DEFAULT_PITCH
+# Launch key-claim burst; ensure_key explains the pre-run-loop activation race.
+_KEY_DELAY_S = 0.2
+_KEY_ATTEMPTS = 5
+_key_timer: Any = None
+# Last verbose focus line, deduped like the titlebar inventory.
+_last_focus: str | None = None
 
 
 def is_supported() -> bool:
@@ -98,21 +101,6 @@ def chrome_style() -> str | None:
     return "macos" if is_supported() else None
 
 
-def _appkit() -> Any:
-    """Import AppKit as an opaque module.
-
-    Imported by name rather than with a plain ``import AppKit`` because pyobjc
-    only exists on macOS, and CI type-checks on Linux — a literal import is an
-    ``unresolved-import`` error there. Do not "simplify" it back.
-
-    Typed as ``Any`` on purpose: pyobjc's stubs are incomplete (they omit
-    ``NSNotificationCenter``, among others) and every call below is a
-    dynamically-bridged ObjC selector, so checking against them buys nothing and
-    costs a suppression at each site.
-    """
-    return importlib.import_module("AppKit")
-
-
 def apply(window: Any) -> bool:
     """Style *window*'s native chrome. Returns whether anything was applied.
 
@@ -123,7 +111,7 @@ def apply(window: Any) -> bool:
     if not is_supported():
         return False
     try:
-        AppKit = _appkit()
+        AppKit = utils.import_appkit()
     except ImportError:  # pragma: no cover - pyobjc ships with pywebview on macOS
         utils.warning_print("AppKit unavailable — keeping the standard title bar.")
         return False
@@ -146,10 +134,9 @@ def apply(window: Any) -> bool:
 
 def teardown() -> None:
     """Unregister the notification observers. Safe to call more than once."""
-    global _fullscreen, _laying_out, _settle_timer, _pitch
-    global _reassert_count, _reassert_started, _last_inventory
-    # Above the early-out: a window that never registered an observer can still
-    # have left layout state behind (apply() runs the first pass before _observe).
+    global _fullscreen, _laying_out, _settle_timer, _pitch, _key_timer
+    global _reassert_count, _reassert_started, _last_inventory, _last_focus
+    # Reset before the early-out: apply() lays out before _observe registers anything.
     _fullscreen = False
     _frame_observed.clear()
     _frame_tokens.clear()
@@ -157,14 +144,18 @@ def teardown() -> None:
     _reassert_count = 0
     _reassert_started = 0.0
     _last_inventory = None
+    _last_focus = None
     _pitch = _DEFAULT_PITCH
     if _settle_timer is not None:
         _settle_timer.cancel()
         _settle_timer = None
+    if _key_timer is not None:
+        _key_timer.cancel()
+        _key_timer = None
     if not _observers:
         return
     try:
-        center = _appkit().NSNotificationCenter.defaultCenter()
+        center = utils.import_appkit().NSNotificationCenter.defaultCenter()
         for token in _observers:
             center.removeObserver_(token)
     except Exception as exc:
@@ -189,13 +180,34 @@ def on_shown(window: Any) -> None:
     if not is_supported() or native is None:
         return
     try:
-        AppKit = _appkit()
-        # Imported by name for the same reason as AppKit — see _appkit().
+        AppKit = utils.import_appkit()
+        # Imported by name for the same reason as AppKit — see utils.import_appkit().
         app_helper: Any = importlib.import_module("PyObjCTools.AppHelper")
         _rearm_reassert_budget()
         app_helper.callAfter(lambda: _apply_titlebar_layout(AppKit, native))
     except Exception as exc:
         utils.warning_print(f"Could not place the window buttons: {exc}")
+
+
+def ensure_key(window: Any) -> None:
+    """Make *window* key once the run loop is live.
+
+    pywebview asks for key status and app activation before ``NSApp.run()``; on
+    macOS 14+ that request is cooperative and sometimes lost, leaving the window
+    front but not key (grey lights, no clicks). ``callAfter`` from the ``shown``
+    hook is the first moment after ``finishLaunching``, so the claim made here is
+    the first one macOS treats as post-launch. Bounded: a launched app gets about
+    a second of nudging, then the window stays wherever the user put it.
+    """
+    native = getattr(window, "native", None)
+    if not is_supported() or native is None:
+        return
+    try:
+        AppKit = utils.import_appkit()
+        app_helper: Any = importlib.import_module("PyObjCTools.AppHelper")
+        app_helper.callAfter(lambda: _claim_key(AppKit, native, _KEY_ATTEMPTS))
+    except Exception as exc:
+        utils.warning_print(f"Could not focus the window: {exc}")
 
 
 def reassert(window: Any) -> None:
@@ -226,16 +238,15 @@ def set_appearance(window: Any, theme: str) -> None:
         return
     name = "NSAppearanceNameAqua" if theme == "light" else "NSAppearanceNameDarkAqua"
     try:
-        AppKit = _appkit()
+        AppKit = utils.import_appkit()
         # The constants are their own names; getattr is belt-and-braces.
         appearance = AppKit.NSAppearance.appearanceNamed_(getattr(AppKit, name, name))
-        # Imported by name for the same reason as AppKit — see _appkit().
+        # Imported by name for the same reason as AppKit — see utils.import_appkit().
         app_helper: Any = importlib.import_module("PyObjCTools.AppHelper")
 
         def apply_appearance() -> None:
             native.setAppearance_(appearance)
-            # Switching appearance re-lays out the titlebar, which puts the
-            # traffic lights back where AppKit wants them.
+            # Changing appearance re-lays out the titlebar and resets the lights.
             _apply_titlebar_layout(AppKit, native)
 
         app_helper.callAfter(apply_appearance)
@@ -255,7 +266,7 @@ def titlebar_double_click(window: Any) -> None:
     if not is_supported() or native is None:
         return
     try:
-        AppKit = _appkit()
+        AppKit = utils.import_appkit()
         if _is_fullscreen(AppKit, native):
             return  # AppKit owns the window's size in fullscreen
         defaults = AppKit.NSUserDefaults.standardUserDefaults()
@@ -264,8 +275,7 @@ def titlebar_double_click(window: Any) -> None:
         )
         if action is None:
             return
-        # Imported by name for the same reason as AppKit — see _appkit(). The
-        # hop matters: the JS bridge may deliver this on a worker thread.
+        # Imported by name (see utils.import_appkit). callAfter hops off the bridge's worker thread.
         app_helper: Any = importlib.import_module("PyObjCTools.AppHelper")
         if action == "minimize":
             app_helper.callAfter(lambda: native.performMiniaturize_(None))
@@ -324,11 +334,8 @@ def _style_window(AppKit: Any, native: Any) -> None:
     native.setTitlebarAppearsTransparent_(True)
     native.setTitleVisibility_(_mask_bit(AppKit, "NSWindowTitleHidden", 1))
 
-    # pywebview paints the titlebar windowBackgroundColor for non-frameless
-    # windows, which would show as an opaque strip across the top of the nav.
-    # lastObject() stays as the final fallback here and only here: the worst case
-    # is an unwanted background colour on some other frame-view subview, whereas
-    # the layout pass resizes what it is handed and must never guess.
+    # pywebview paints the titlebar opaque. Guessing via lastObject() is safe here
+    # only (cosmetic).
     try:
         titlebar = _titlebar_container(AppKit, native)
         if titlebar is None:
@@ -412,11 +419,8 @@ def _apply_titlebar_layout(AppKit: Any, native: Any) -> None:
         frame.origin.y = native.frame().size.height - bar
         container.setFrame_(frame)
 
-        # Growing the container autoresizes the views that fill it, but AppKit's
-        # own reset back to 28px does not shrink them again — so every re-assert
-        # left _NSTitlebarDecorationView 20px taller than the last (48, 68, 88…).
-        # Clamp them to the band we own; overshoot only, since the light group
-        # legitimately sits at 28 with its buttons anchored to the bottom edge.
+        # AppKit's 28px reset never shrinks fillers back (measured +20px per pass).
+        # Clamp overshoot only.
         for view in container.subviews():
             filler = view.frame()
             if filler.size.height > bar:
@@ -426,13 +430,10 @@ def _apply_titlebar_layout(AppKit: Any, native: Any) -> None:
 
         buttons = _light_buttons(AppKit, native)
         if all(buttons):
-            # Read the pitch before moving anything, and only trust a row whose
-            # two gaps agree — see _button_pitch.
+            # Read the pitch first; _button_pitch ignores a lopsided mid-transition row.
             pitch = _button_pitch(buttons)
             for index, button in enumerate(buttons):
-                # The lights sit in a group view that normally fills the grown
-                # container. Fall back to the bar when a reset has left the group
-                # short, so the row stays centered in the band the page reserves.
+                # A reset can leave the group view short; center in the bar instead.
                 parent_height = max(button.superview().frame().size.height, bar)
                 margin = _centered_origin(parent_height, button.frame().size.height)
                 origin = button.frame().origin
@@ -550,8 +551,7 @@ def _log_titlebar_inventory(container: Any, buttons: list[Any]) -> None:
             "nil" if b is None else ("hidden" if b.isHidden() else "shown")
             for b in buttons
         )
-        # Sorted left-to-right: AppKit reorders the titlebar's children between
-        # layout passes, and unsorted lines defeat the dedupe with pure noise.
+        # AppKit reorders children between passes; sort so the dedupe sees stable lines.
         views = "; ".join(
             " > ".join(
                 [shape(view)]
@@ -658,8 +658,7 @@ def _schedule_settle(AppKit: Any, native: Any, attempts: int) -> None:
 
     def fire() -> None:
         try:
-            # Imported by name for the same reason as AppKit — see _appkit().
-            # The hop matters: this runs on a timer thread, not AppKit's.
+            # Imported by name (see utils.import_appkit). callAfter hops off the timer thread.
             app_helper: Any = importlib.import_module("PyObjCTools.AppHelper")
             app_helper.callAfter(lambda: _settle(AppKit, native, attempts))
         except Exception as exc:
@@ -678,16 +677,84 @@ def _settle(AppKit: Any, native: Any, attempts: int) -> None:
         _apply_titlebar_layout(AppKit, native)
         _schedule_settle(AppKit, native, attempts - 1)
         return
-    # Settled — but AppKit shuffles the sharing pill through two positions of its
-    # own during a transition (measured: x 17, then 8, then 17) and does not
-    # always repaint what it vacated, which is what put two badges on screen at
-    # once. Marking dirty is not enough on its own here, so force the one redraw
-    # the user would otherwise have to trigger by touching the window. Once per
-    # chain, and never on the resize path, which repaints anyway.
+    # Settled. setNeedsDisplay alone leaves a ghost pill (AppKit moves it 17→8→17);
+    # force a redraw.
     container = _titlebar_container(AppKit, native)
     if container is not None:
         _invalidate(container)
         container.displayIfNeeded()
+
+
+def _claim_key(AppKit: Any, native: Any, attempts: int) -> None:
+    """One link of the launch key-claim chain: activate and order front, or stop.
+
+    ``activateWithOptions_`` is the call pywebview itself uses for its dialogs,
+    so it is known to work on the bundled pyobjc. Stops as soon as the window
+    reads key, or when the user has minimized it.
+    """
+    global _key_timer
+    try:
+        if native.isKeyWindow() or native.isMiniaturized():
+            _log_focus_state(AppKit, native, "claim")
+            return
+        AppKit.NSRunningApplication.currentApplication().activateWithOptions_(
+            AppKit.NSApplicationActivateIgnoringOtherApps
+        )
+        native.makeKeyAndOrderFront_(None)
+        _log_focus_state(AppKit, native, "claim")
+    except Exception as exc:
+        utils.verbose_print(f"Could not claim key window status: {exc}")
+        return
+    if attempts <= 1:
+        return
+
+    def fire() -> None:
+        try:
+            # Imported by name (see utils.import_appkit). callAfter hops off the timer thread.
+            app_helper: Any = importlib.import_module("PyObjCTools.AppHelper")
+            app_helper.callAfter(lambda: _claim_key(AppKit, native, attempts - 1))
+        except Exception as exc:
+            utils.verbose_print(f"Could not re-check the window focus: {exc}")
+
+    _key_timer = threading.Timer(_KEY_DELAY_S, fire)
+    _key_timer.daemon = True
+    _key_timer.start()
+
+
+def _rekey_if_forgotten(AppKit: Any, native: Any) -> bool:
+    """Key *native* when the app activated with no key window. Returns whether it did.
+
+    The desync this fixes: the app is active (its menu bar is up) but no window
+    is key, so clicks go nowhere. A manual app switch used to repair it by
+    accident; this does it on every activation.
+    """
+    app = AppKit.NSApplication.sharedApplication()
+    if app.keyWindow() is not None:
+        return False
+    if not native.isVisible() or native.isMiniaturized():
+        return False
+    native.makeKeyAndOrderFront_(None)
+    return True
+
+
+def _log_focus_state(AppKit: Any, native: Any, phase: str) -> None:
+    """Print the app/window focus state at ``-v``, once per change."""
+    global _last_focus
+    if getattr(config, "VERBOSITY", config.STANDARD) < config.VERBOSE:
+        return
+    try:
+        app = AppKit.NSApplication.sharedApplication()
+        line = (
+            f"focus {phase} app_active={bool(app.isActive())}"
+            f" key={bool(native.isKeyWindow())} main={bool(native.isMainWindow())}"
+            f" visible={bool(native.isVisible())}"
+            f" keyWindow={app.keyWindow() is not None}"
+        )
+    except Exception:
+        return
+    if line != _last_focus:
+        _last_focus = line
+        utils.verbose_print(line)
 
 
 def _bind_frame_observer(AppKit: Any, native: Any, handler: Any) -> None:
@@ -703,7 +770,7 @@ def _bind_frame_observer(AppKit: Any, native: Any, handler: Any) -> None:
     if not views:
         return
     if len(views) == len(_frame_observed) and all(
-        a is b for a, b in zip(views, _frame_observed)
+        a is b for a, b in zip(views, _frame_observed, strict=True)
     ):
         return
     center = AppKit.NSNotificationCenter.defaultCenter()
@@ -716,8 +783,7 @@ def _bind_frame_observer(AppKit: Any, native: Any, handler: Any) -> None:
     _frame_tokens.clear()
     _frame_observed.clear()
     for view in views:
-        # Already the NSView default; set explicitly so the one hook that catches
-        # a sharing transition cannot be switched off from under us.
+        # NSView default, set explicitly: this hook is the only sharing-transition signal.
         view.setPostsFrameChangedNotifications_(True)
         token = center.addObserverForName_object_queue_usingBlock_(
             AppKit.NSViewFrameDidChangeNotification, view, None, handler
@@ -735,8 +801,7 @@ def _observe(AppKit: Any, window: Any, native: Any) -> None:
         # Our own setFrame_/setFrameOrigin_ post this synchronously.
         if _laying_out:
             return
-        # Width-only changes (every tick of a drag-resize) are not a reset, and
-        # must be filtered out *before* the budget is charged.
+        # Width-only resize ticks are not a reset; filter before charging the budget.
         if _layout_is_current(AppKit, native, config.DESKTOP_CHROME_BAR_HEIGHT):
             return
         if not _within_reassert_budget(time.monotonic()):
@@ -746,14 +811,13 @@ def _observe(AppKit: Any, window: Any, native: Any) -> None:
                 )
             return
         _apply_titlebar_layout(AppKit, native)
-        # A transition can swap the views out from under us; re-bind after the
-        # pass so the next reset is still heard.
+        # A transition can swap the views; re-bind so the next reset is heard.
         _bind_frame_observer(AppKit, native, on_frame_change)
-        # AppKit is mid-transition and will move the slot again after this pass
-        # without posting anything. The deferred chain is what gets the last word.
+        # AppKit moves the slot again after this, silently; the settle chain finishes.
         _schedule_settle(AppKit, native, _SETTLE_ATTEMPTS)
 
     def on_become_key(_note: Any) -> None:
+        _log_focus_state(AppKit, native, "become_key")
         _rearm_reassert_budget()
         _bind_frame_observer(AppKit, native, on_frame_change)
         _apply_titlebar_layout(AppKit, native)
@@ -779,8 +843,7 @@ def _observe(AppKit: Any, window: Any, native: Any) -> None:
         ("NSWindowDidResizeNotification", on_resize),
         ("NSWindowDidEnterFullScreenNotification", on_enter_fullscreen),
         ("NSWindowDidExitFullScreenNotification", on_exit_fullscreen),
-        # Safety net for a swap that somehow leaves the container height alone:
-        # the user tabbing back into the window puts it right.
+        # Safety net: tabbing back into the window fixes a swap that kept the height.
         ("NSWindowDidBecomeKeyNotification", on_become_key),
     ):
         _observers.append(
@@ -788,6 +851,22 @@ def _observe(AppKit: Any, window: Any, native: Any) -> None:
                 getattr(AppKit, name), native, None, handler
             )
         )
+
+    def on_app_active(_note: Any) -> None:
+        try:
+            _rekey_if_forgotten(AppKit, native)
+        except Exception as exc:
+            utils.verbose_print(f"Could not re-key the window: {exc}")
+        _log_focus_state(AppKit, native, "app_active")
+
+    _observers.append(
+        center.addObserverForName_object_queue_usingBlock_(
+            AppKit.NSApplicationDidBecomeActiveNotification,
+            AppKit.NSApplication.sharedApplication(),
+            None,
+            on_app_active,
+        )
+    )
     _bind_frame_observer(AppKit, native, on_frame_change)
 
 

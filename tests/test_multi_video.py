@@ -7,6 +7,7 @@ from unittest.mock import Mock
 
 import pytest
 
+import cli_screenspace
 import config
 import files
 import pipeline
@@ -257,7 +258,7 @@ def test_single_video_cut_unchanged_and_no_mapping(monkeypatch, make_clip):
     )
 
     generated, _, _ = pipeline._process_single_clip_segments(
-        clip, "study_P01.mp4", set(), output_format="clip", collect_paths=True
+        clip, "study_P01.mp4", output_format="clip", collect_paths=True
     )
 
     assert generated == 1
@@ -276,7 +277,7 @@ def test_multi_video_clip_maps_into_second_video(monkeypatch, make_clip):
     )
 
     generated, _, _ = pipeline._process_single_clip_segments(
-        clip, "video1.mp4", set(), output_format="clip", collect_paths=True
+        clip, "video1.mp4", output_format="clip", collect_paths=True
     )
 
     assert generated == 1
@@ -318,7 +319,7 @@ def test_multi_video_titlecard_wraps_at_clip_resolution(monkeypatch, make_clip):
     monkeypatch.setattr(pipeline.titlecards, "wrap_clip_with_cards", fake_wrap)
 
     generated, _, _ = pipeline._process_single_clip_segments(
-        clip, "video1.mp4", set(), output_format="clip", collect_paths=True
+        clip, "video1.mp4", output_format="clip", collect_paths=True
     )
 
     assert generated == 1
@@ -340,7 +341,7 @@ def test_multi_video_clip_stitches_across_boundary(monkeypatch, make_clip):
     monkeypatch.setattr(pipeline.Path, "unlink", lambda self, **k: None)
 
     generated, _, _ = pipeline._process_single_clip_segments(
-        clip, "video1.mp4", set(), output_format="clip", collect_paths=True
+        clip, "video1.mp4", output_format="clip", collect_paths=True
     )
 
     assert generated == 1
@@ -359,7 +360,7 @@ def test_multi_video_screenshot_uses_start_segment(monkeypatch, make_clip):
     )
 
     pipeline._process_single_clip_segments(
-        clip, "video1.mp4", set(), output_format="screen", collect_paths=True
+        clip, "video1.mp4", output_format="screen", collect_paths=True
     )
 
     _, kwargs = shot.call_args
@@ -377,7 +378,7 @@ def test_multi_video_gif_duration_clamped_to_segment_end(monkeypatch, make_clip)
     )
 
     pipeline._process_single_clip_segments(
-        clip, "video1.mp4", set(), output_format="gif", collect_paths=True
+        clip, "video1.mp4", output_format="gif", collect_paths=True
     )
 
     _, kwargs = gif.call_args
@@ -592,9 +593,127 @@ def test_transcribe_timeline_shifts_segment_times(monkeypatch):
     assert merged["source_file"] == "a.mp4 + b.mp4"
 
 
+def test_transcribe_timeline_shifts_word_times(monkeypatch):
+    from typing import Any
+
+    results: dict[str, Any] = {
+        "a.mp4": {
+            "segments": [
+                {
+                    "start": 0.0,
+                    "end": 5.0,
+                    "text": "one",
+                    "words": [{"start": 0.5, "end": 4.5, "text": "one"}],
+                }
+            ],
+            "language": "en",
+            "source_file": "a.mp4",
+            "model": "base",
+        },
+        "b.mp4": {
+            "segments": [
+                {
+                    "start": 1.0,
+                    "end": 4.0,
+                    "text": "two",
+                    "words": [{"start": 1.25, "end": 3.75, "text": "two"}],
+                }
+            ],
+            "language": "en",
+            "source_file": "b.mp4",
+            "model": "base",
+        },
+    }
+    streamed: list = []
+
+    def _fake_transcribe(path, on_segment=None, **kwargs):
+        result = results[path]
+        if on_segment is not None:
+            for seg in result["segments"]:
+                on_segment(seg["end"], seg)
+        return result
+
+    monkeypatch.setattr(transcripts, "transcribe_video", _fake_transcribe)
+    timeline = [("a.mp4", 80, 0), ("b.mp4", 120, 80)]
+    merged = transcripts.transcribe_timeline(
+        timeline, on_segment=lambda end, seg: streamed.append(seg)
+    )
+    assert merged is not None
+    assert merged["segments"][0]["words"] == [{"start": 0.5, "end": 4.5, "text": "one"}]
+    assert merged["segments"][1]["words"] == [
+        {"start": 81.25, "end": 83.75, "text": "two"}
+    ]
+    # The streaming shifter rebases word times identically.
+    assert [s["words"] for s in streamed] == [s["words"] for s in merged["segments"]]
+
+
 def test_transcribe_timeline_none_on_failure(monkeypatch):
     monkeypatch.setattr(transcripts, "transcribe_video", lambda p, **kwargs: None)
     assert transcripts.transcribe_timeline([("a.mp4", 10, 0)]) is None
+
+
+def test_transcribe_timeline_window_inside_one_part_skips_the_others(monkeypatch):
+    """A global in/out window wholly inside part 2 never touches part 1, and the
+    part-local results land back on the global timeline."""
+    calls: list = []
+
+    def fake_video(path, **kwargs):
+        calls.append((path, kwargs.get("start_seconds"), kwargs.get("end_seconds")))
+        # transcribe_video returns times on the *file's* timeline.
+        return {
+            "segments": [{"start": 11.0, "end": 12.0, "text": "two"}],
+            "language": "en",
+            "source_file": path,
+            "model": "base",
+        }
+
+    monkeypatch.setattr(transcripts, "transcribe_video", fake_video)
+    timeline = [("a.mp4", 80, 0), ("b.mp4", 120, 80)]
+    merged = transcripts.transcribe_timeline(
+        timeline, start_seconds=90, end_seconds=100
+    )
+    assert merged is not None
+    assert calls == [("b.mp4", 10.0, 20.0)]  # part-local window; a.mp4 skipped
+    assert merged["segments"] == [{"start": 91.0, "end": 92.0, "text": "two"}]
+
+
+def test_transcribe_timeline_window_spanning_boundary(monkeypatch):
+    """A window straddling the part boundary gives each part its own sub-window,
+    unbounded on the side that runs to the part's edge."""
+    calls: list = []
+
+    def fake_video(path, **kwargs):
+        calls.append((path, kwargs.get("start_seconds"), kwargs.get("end_seconds")))
+        return {"segments": [], "language": "en", "source_file": path, "model": "base"}
+
+    monkeypatch.setattr(transcripts, "transcribe_video", fake_video)
+    timeline = [("a.mp4", 80, 0), ("b.mp4", 120, 80)]
+    merged = transcripts.transcribe_timeline(
+        timeline, start_seconds=60, end_seconds=100
+    )
+    assert merged is not None
+    assert calls == [("a.mp4", 60.0, None), ("b.mp4", None, 20.0)]
+
+
+def test_transcribe_timeline_attempted_part_failure_still_aborts(monkeypatch):
+    """Skipped-by-window is not failed — but a part that was attempted and
+    returned None aborts the job exactly as before."""
+
+    def fake_video(path, **kwargs):
+        return (
+            None
+            if path == "b.mp4"
+            else {
+                "segments": [],
+                "language": "en",
+                "source_file": path,
+                "model": "base",
+            }
+        )
+
+    monkeypatch.setattr(transcripts, "transcribe_video", fake_video)
+    timeline = [("a.mp4", 80, 0), ("b.mp4", 120, 80)]
+    assert transcripts.transcribe_timeline(timeline, start_seconds=60) is None
 
 
 def test_transcribe_segments_multi_video_uses_global_timeline(
@@ -762,6 +881,134 @@ def test_participant_id_from_source_name():
     assert utils.participant_id_from_source_name("study_P03 copy 2.mp4") is None
 
 
+def test_parse_source_video_name():
+    assert utils.parse_source_video_name("study_P01.mp4") == ("study", "P01", None)
+    assert utils.parse_source_video_name("study_P01-2.mp4") == ("study", "P01", 2)
+    # Study may contain the separator (greedy rsplit-like semantics) and dashes.
+    assert utils.parse_source_video_name("my_study_P01.mp4") == (
+        "my_study",
+        "P01",
+        None,
+    )
+    assert utils.parse_source_video_name("my-study_G02-10.mp4") == (
+        "my-study",
+        "G02",
+        10,
+    )
+    # Empty study accepted; a stem with no separator is not a source video.
+    assert utils.parse_source_video_name("_P01.mp4") == ("", "P01", None)
+    assert utils.parse_source_video_name("random.mp4") is None
+    assert utils.parse_source_video_name("study_P03 copy.mp4") is None
+    # A lowercase prefix groups under the configured casing.
+    assert utils.parse_source_video_name("study_p01.mp4") == ("study", "P01", None)
+
+
+def test_parse_source_video_name_custom_patterns(monkeypatch):
+    monkeypatch.setattr(config, "SOURCE_FILENAME_PATTERN", "{participant}_{study}")
+    assert utils.parse_source_video_name("P01_study.mp4") == ("study", "P01", None)
+    assert utils.parse_source_video_name("P01_study-2.mp4") == ("study", "P01", 2)
+    assert utils.parse_source_video_name("study_P01.mp4") is None
+
+    monkeypatch.setattr(config, "SOURCE_FILENAME_PATTERN", "{participant}")
+    assert utils.parse_source_video_name("P01.mp4") == ("", "P01", None)
+    assert utils.parse_source_video_name("G02-3.mp4") == ("", "G02", 3)
+    assert utils.parse_source_video_name("P01 copy.mp4") is None
+    assert utils.parse_source_video_name("random.mp4") is None
+
+    monkeypatch.setattr(config, "SOURCE_FILENAME_PATTERN", "{study} {participant}")
+    assert utils.parse_source_video_name("my study P01.mp4") == (
+        "my study",
+        "P01",
+        None,
+    )
+    assert utils.parse_source_video_name("my_study_P01.mp4") is None
+
+
+def test_format_source_video_stem(monkeypatch):
+    assert utils.format_source_video_stem("study", "P01") == "study_P01"
+    monkeypatch.setattr(config, "SOURCE_FILENAME_PATTERN", "{participant}")
+    # str.format ignores the unused study kwarg.
+    assert utils.format_source_video_stem("study", "P01") == "P01"
+
+
+def test_get_source_video_filenames_custom_pattern(monkeypatch):
+    monkeypatch.setattr(config, "SOURCE_FILENAME_PATTERN", "{participant}_{study}")
+    assert files.get_source_video_filenames("study", "P01") == ["P01_study.mp4"]
+    # Per-participant overrides still beat the pattern.
+    assert files.get_source_video_filenames("study", "P01", "x.mp4") == ["x.mp4"]
+
+
+def test_discover_numbered_source_videos_custom_pattern(monkeypatch, tmp_path):
+    monkeypatch.setattr(config, "SOURCE_FILENAME_PATTERN", "{participant}_{study}")
+    (tmp_path / "P01_study-1.mp4").write_text("v1")
+    (tmp_path / "P01_study-2.mp4").write_text("v2")
+    found = files.discover_numbered_source_videos(tmp_path, "study", "P01")
+    assert [p.name for p in found] == ["P01_study-1.mp4", "P01_study-2.mp4"]
+
+
+def test_discover_numbered_source_videos_glob_metachars_in_pattern(
+    monkeypatch, tmp_path
+):
+    # "[" / "]" are legal filename characters and pass pattern validation, but
+    # they are Path.glob metacharacters — an unescaped glob reads them as a
+    # character class and silently finds no parts, so regex-based participant
+    # discovery would list files that clip resolution then reports missing.
+    monkeypatch.setattr(config, "SOURCE_FILENAME_PATTERN", "[{study}] {participant}")
+    (tmp_path / "[study] P01-1.mp4").write_text("v1")
+    (tmp_path / "[study] P01-2.mp4").write_text("v2")
+    found = files.discover_numbered_source_videos(tmp_path, "study", "P01")
+    assert [p.name for p in found] == ["[study] P01-1.mp4", "[study] P01-2.mp4"]
+    # Numbered-part resolution and regex discovery agree on the same files.
+    paths = files.resolve_source_video_paths("study", "P01", None, tmp_path)
+    assert [p.name for p in paths] == ["[study] P01-1.mp4", "[study] P01-2.mp4"]
+    assert utils.parse_source_video_name("[study] P01-1.mp4") == ("study", "P01", 1)
+
+
+def test_discover_participant_videos_custom_pattern(monkeypatch, tmp_path):
+    monkeypatch.setattr(config, "INPUT_DIR", str(tmp_path), raising=False)
+    monkeypatch.setattr(config, "SOURCE_FILENAME_PATTERN", "{participant}")
+    (tmp_path / "P01.mp4").write_text("v")
+    (tmp_path / "G02-1.mp4").write_text("v1")
+    (tmp_path / "G02-2.mp4").write_text("v2")
+    (tmp_path / "random.mp4").write_text("x")
+    found = utils.discover_participant_videos()
+    assert [p["id"] for p in found] == ["G02", "P01"]
+    assert [_basename(p) for p in found[0]["video_paths"]] == [
+        "G02-1.mp4",
+        "G02-2.mp4",
+    ]
+
+
+def test_discover_participant_videos_rescans_on_pattern_change(monkeypatch, tmp_path):
+    # A settings PUT changes the pattern without touching the directory mtime;
+    # the memo must not serve the old pattern's participant list.
+    monkeypatch.setattr(config, "INPUT_DIR", str(tmp_path), raising=False)
+    (tmp_path / "P01_study.mp4").write_text("v")
+    assert utils.discover_participant_videos() == []
+    monkeypatch.setattr(config, "SOURCE_FILENAME_PATTERN", "{participant}_{study}")
+    assert [p["id"] for p in utils.discover_participant_videos()] == ["P01"]
+
+
+def test_validate_source_filename_pattern():
+    assert utils.validate_source_filename_pattern("{study}_{participant}") is None
+    assert utils.validate_source_filename_pattern("{participant}") is None
+    assert utils.validate_source_filename_pattern("{study} {participant}") is None
+    assert utils.validate_source_filename_pattern("session-{participant}") is None
+    # Each rejection rule.
+    assert utils.validate_source_filename_pattern("") is not None
+    assert utils.validate_source_filename_pattern("   ") is not None
+    assert utils.validate_source_filename_pattern("{study}_{p") is not None
+    assert utils.validate_source_filename_pattern("{foo}_{participant}") is not None
+    assert utils.validate_source_filename_pattern("{}_{participant}") is not None
+    assert utils.validate_source_filename_pattern("{study}") is not None
+    assert (
+        utils.validate_source_filename_pattern("{participant}_{participant}")
+        is not None
+    )
+    assert utils.validate_source_filename_pattern("a/{participant}") is not None
+    assert utils.validate_source_filename_pattern("a:{participant}") is not None
+
+
 def test_numbered_parts_are_contiguous():
     assert utils.numbered_parts_are_contiguous([1, 2, 3]) is True
     assert utils.numbered_parts_are_contiguous([2, 1, 3]) is True  # order-insensitive
@@ -853,6 +1100,21 @@ def test_screenspace_map_participant_time(monkeypatch):
 # ---- Transcripts worker: single vs multi-video execution ----
 
 
+@pytest.fixture(autouse=True)
+def _stub_whisper_load(monkeypatch):
+    """Keep _execute_task's model preload out of these tests.
+
+    The preload (added with the loading_model phase) runs before the
+    transcribe_video/transcribe_timeline stubs below get a look in, and it is
+    not stubbed by them — so without this these tests constructed a *real*
+    WhisperModel, downloading ~140 MB on any machine with a cold HF cache and
+    leaving the shared transcripts._cached_model populated for whatever ran
+    next. That shared cache is what made them fail intermittently depending on
+    file order.
+    """
+    monkeypatch.setattr(transcripts, "_load_model", lambda name=None: object())
+
+
 def test_transcript_worker_multi_video_builds_timeline(monkeypatch):
     worker = transcripts.TranscriptWorker()
     task = transcripts.create_transcript_task("P01", ["a.mp4", "b.mp4"])
@@ -862,7 +1124,7 @@ def test_transcript_worker_multi_video_builds_timeline(monkeypatch):
     monkeypatch.setattr(
         video,
         "probe_video_properties",
-        lambda p: {"audio_codec": "aac", "duration": 80.0},
+        lambda p: {"audio_tracks": [{"index": 0}], "duration": 80.0},
     )
     monkeypatch.setattr(
         video,
@@ -905,7 +1167,6 @@ def test_transcript_worker_records_the_audio_track_it_used(monkeypatch):
         video,
         "probe_video_properties",
         lambda p: {
-            "audio_codec": "aac",
             "duration": 80.0,
             "audio_tracks": [
                 {"index": 0, "label": "System"},
@@ -946,7 +1207,6 @@ def test_transcript_worker_rejects_out_of_range_audio_track(monkeypatch):
         video,
         "probe_video_properties",
         lambda p: {
-            "audio_codec": "aac",
             "duration": 10.0,
             "audio_tracks": [{"index": 0, "label": "Mic"}],
             "audio_track_count": 1,
@@ -997,7 +1257,7 @@ def test_transcript_worker_single_video_no_timeline(monkeypatch):
     monkeypatch.setattr(
         video,
         "probe_video_properties",
-        lambda p: {"audio_codec": "aac", "duration": 50.0},
+        lambda p: {"audio_tracks": [{"index": 0}], "duration": 50.0},
     )
     build = Mock()
     monkeypatch.setattr(video, "build_source_timeline", build)
@@ -1020,6 +1280,98 @@ def test_transcript_worker_single_video_no_timeline(monkeypatch):
     worker._execute_task(task)
     assert task["status"] == transcripts.TASK_STATUS_COMPLETED
     build.assert_not_called()  # single-video fast path: no duration probe via timeline
+
+
+def test_transcript_worker_window_reaches_transcribe_and_result(monkeypatch):
+    """The task's in/out window is clamped, forwarded to the transcribe call,
+    recorded on the result, and used as the progress denominator."""
+    worker = transcripts.TranscriptWorker()
+    task = transcripts.create_transcript_task(
+        "P01", ["solo.mp4"], start_seconds=10.0, end_seconds=40.0
+    )
+    worker._tasks[task["id"]] = task
+
+    monkeypatch.setattr(
+        video,
+        "probe_video_properties",
+        lambda p: {"audio_tracks": [{"index": 0}], "duration": 50.0},
+    )
+    monkeypatch.setattr(video, "timeline_or_none", lambda paths: None)
+    captured = {}
+
+    def fake_video(path, on_segment=None, **kwargs):
+        captured.update(kwargs)
+        # Emitted times are global (already shifted by the window start).
+        seg = {"start": 20.0, "end": 25.0, "text": "mid"}
+        if on_segment is not None:
+            on_segment(seg["end"], seg)
+        captured["progress_at_seg"] = task["progress"]
+        return {
+            "segments": [seg],
+            "language": "en",
+            "model": "base",
+            "source_file": "solo.mp4",
+        }
+
+    monkeypatch.setattr(transcripts, "transcribe_video", fake_video)
+
+    worker._execute_task(task)
+    assert task["status"] == transcripts.TASK_STATUS_COMPLETED
+    assert captured["start_seconds"] == 10.0
+    assert captured["end_seconds"] == 40.0
+    # Progress uses the window as denominator: (25 - 10) / (40 - 10) = 0.5.
+    assert captured["progress_at_seg"] == pytest.approx(0.5)
+    assert task["result"]["start_seconds"] == 10.0
+    assert task["result"]["end_seconds"] == 40.0
+
+
+def test_transcript_worker_unbounded_result_carries_null_window(monkeypatch):
+    """No markers → both provenance keys present as None, so a full re-run's
+    manifest merge overwrites any previous window rather than leaving it stale."""
+    worker = transcripts.TranscriptWorker()
+    task = transcripts.create_transcript_task("P01", ["solo.mp4"])
+    worker._tasks[task["id"]] = task
+
+    monkeypatch.setattr(
+        video,
+        "probe_video_properties",
+        lambda p: {"audio_tracks": [{"index": 0}], "duration": 50.0},
+    )
+    monkeypatch.setattr(video, "timeline_or_none", lambda paths: None)
+    captured = {}
+
+    def fake_video(path, **kwargs):
+        captured.update(kwargs)
+        return {"segments": [], "language": "en", "model": "base", "source_file": path}
+
+    monkeypatch.setattr(transcripts, "transcribe_video", fake_video)
+
+    worker._execute_task(task)
+    assert task["status"] == transcripts.TASK_STATUS_COMPLETED
+    assert captured["start_seconds"] is None
+    assert captured["end_seconds"] is None
+    assert task["result"]["start_seconds"] is None
+    assert task["result"]["end_seconds"] is None
+
+
+def test_transcript_worker_fails_window_outside_video(monkeypatch):
+    worker = transcripts.TranscriptWorker()
+    task = transcripts.create_transcript_task("P01", ["solo.mp4"], start_seconds=60.0)
+    worker._tasks[task["id"]] = task
+
+    monkeypatch.setattr(
+        video,
+        "probe_video_properties",
+        lambda p: {"audio_tracks": [{"index": 0}], "duration": 50.0},
+    )
+    monkeypatch.setattr(video, "timeline_or_none", lambda paths: None)
+    monkeypatch.setattr(
+        transcripts, "transcribe_video", lambda *a, **k: pytest.fail("must not run")
+    )
+
+    worker._execute_task(task)
+    assert task["status"] == transcripts.TASK_STATUS_FAILED
+    assert "Marker range" in task["error"]
 
 
 # ---- Screenspace: _dispatch scans each part with global-offset results ----
@@ -1105,11 +1457,22 @@ def test_screenspace_dispatch_single_video_unchanged(monkeypatch):
 
 
 def test_ss_cli_resolves_all_parts(monkeypatch, tmp_path):
-    import cli
 
     monkeypatch.setattr(config, "INPUT_DIR", str(tmp_path), raising=False)
     (tmp_path / "study_P01-1.mp4").write_text("v1")
     (tmp_path / "study_P01-2.mp4").write_text("v2")
-    paths = cli._ss_resolve_videos_for_participant("P01")
+    paths = cli_screenspace._ss_resolve_videos_for_participant("P01")
     assert [_basename(p) for p in paths] == ["study_P01-1.mp4", "study_P01-2.mp4"]
-    assert cli._ss_resolve_videos_for_participant("PX") == []
+    assert cli_screenspace._ss_resolve_videos_for_participant("PX") == []
+
+
+def test_ss_cli_honours_filename_overrides(monkeypatch, tmp_path):
+
+    monkeypatch.setattr(config, "INPUT_DIR", str(tmp_path), raising=False)
+    (tmp_path / "study_P01.mp4").write_text("pattern")
+    (tmp_path / "other.mp4").write_text("override")
+    monkeypatch.setattr(
+        config, "FILENAME_OVERRIDES", {"P01": "other.mp4"}, raising=False
+    )
+    paths = cli_screenspace._ss_resolve_videos_for_participant("P01")
+    assert [_basename(p) for p in paths] == ["other.mp4"]

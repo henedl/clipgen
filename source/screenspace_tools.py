@@ -1,13 +1,16 @@
 """Screenspace analysis tools (strategy registry) + per-frame dispatch.
 
-The ``AnalysisTool`` base class, one subclass per tool, the ``TOOLS`` registry,
-and the single-frame evaluation/scoring entry points used by the multitool
-chainer and pin calibration. Imports primitives, OCR helpers, and scan
-workflows from sibling modules; the one tools->multitool edge
-(``MultitoolTool.scan`` -> ``scan_multitool``) is a function-local import to
-keep the module graph acyclic.
+Each tool is a small class wrapping the module-level ``scan_*`` function (kept
+standalone so tests can monkeypatch them). Two dispatch points look a tool up in
+``TOOLS`` and delegate: :func:`check_frame_for_tool` (single-frame, used by the
+multitool chainer and pin calibration) and ``ScreenspaceWorker._dispatch``
+(full-video scan).
+
+The one tools->multitool edge (``MultitoolTool.scan`` -> ``scan_multitool``) is a
+function-local import, keeping the module graph acyclic.
 """
 
+import functools
 import math
 from collections.abc import Callable
 from pathlib import Path
@@ -19,26 +22,33 @@ import numpy as np
 import config
 import utils
 from screenspace_primitives import (
+    _frame_edge_map,
+    _mask_corr_outside_window,
+    _match_template_prepared,
+    _prepare_shape_reference,
     _prepare_template,
     _scale_template,
+    _template_corr_window,
     _template_correlation_map,
+    _template_is_evaluable,
+    blur_gray,
     color_matches,
     color_present,
     compare_scene_fingerprints,
-    compute_frame_diff,
+    compute_frame_diff_gray,
     compute_optical_flow,
     compute_phash,
     compute_scene_fingerprint,
     extract_region,
     filter_matches_by_region_mask,
     mask_points_key,
-    match_template,
+    match_shape,
     region_mask_for,
+    region_search_window,
     regions_are_similar,
     saliency_kwargs_from_params,
 )
 from screenspace_ocr import (
-    _numbers_ocr_allowlist,
     _ocr_region_readings,
     _score_numbers_readings,
     _score_text_readings,
@@ -53,6 +63,7 @@ from screenspace_scans import (
     scan_inactivity,
     scan_numbers,
     scan_scene,
+    scan_shape,
     scan_similarity,
     scan_template,
     scan_text,
@@ -63,27 +74,27 @@ def _extract_confidence(tool_type: str, result: dict[str, Any]) -> float:
     """Extract a normalized [0, 1] confidence from a tool-specific result dict."""
     if tool_type == "color":
         return result.get("_confidence", 1.0)
-    elif tool_type == "change":
+    if tool_type == "change":
         return min(result.get("magnitude", 0.0), 1.0)
-    elif tool_type == "similarity":
+    if tool_type == "similarity":
         return result.get("score", 0.0)
-    elif tool_type == "text":
+    if tool_type == "text":
         return result.get("confidence", 0.0)
-    elif tool_type == "numbers":
+    if tool_type == "numbers":
         return result.get("confidence", 1.0)
-    elif tool_type == "template":
+    if tool_type in {"template", "shape"}:
         return result.get("best_score", 0.0)
-    elif tool_type == "flow":
+    if tool_type == "flow":
         return min(result.get("magnitude", 0.0) / 10.0, 1.0)
-    elif tool_type == "scene":
+    if tool_type == "scene":
         return result.get("score", 0.0)
-    elif tool_type == "multitool":
+    if tool_type == "multitool":
         return result.get("min_confidence", 0.0)
-    elif tool_type == "inactivity":
+    if tool_type == "inactivity":
         if "_confidence" in result:
             return float(result["_confidence"])
         return min(result.get("duration", 0.0) / 30.0, 1.0)
-    elif tool_type == "boundary":
+    if tool_type == "boundary":
         if "_confidence" in result:
             return float(result["_confidence"])
         thr = config.SCREENSPACE_BOUNDARY_PHASH_THRESHOLD
@@ -91,7 +102,7 @@ def _extract_confidence(tool_type: str, result: dict[str, Any]) -> float:
         if thr <= 0:
             return 1.0
         return max(0.0, min((dist - thr) / float(thr), 1.0))
-    elif tool_type == "attention":
+    if tool_type == "attention":
         # Shift events carry _confidence; backfilled/raw samples fall back to
         # the peak strength.
         return float(result.get("_confidence", result.get("peak_value", 1.0)))
@@ -102,13 +113,7 @@ def _extract_confidence(tool_type: str, result: dict[str, Any]) -> float:
 # Per-frame memoization (multitool chains)
 # ---------------------------------------------------------------------------
 #
-# Within a multitool chain every step re-derives crop / gray / phash / OCR from
-# the same ``(frame, region)``. ``scan_multitool`` passes a fresh dict per frame
-# as ``cache`` (and the previous frame's dict as ``prev_cache``, rolled forward)
-# so steps sharing a region compute each derived value once, and temporal tools
-# (change / flow / inactivity) reuse the previous frame's already-computed crop /
-# gray instead of recomputing it. Single-frame callers (pin calibration) pass no
-# cache — ``None`` disables memoization and keeps results byte-identical.
+# scan_multitool passes per-frame cache/prev_cache; None disables memoization.
 
 _MISSING = object()
 
@@ -146,46 +151,84 @@ def _cached_crop(
     cache: dict[Any, Any] | None, frame: np.ndarray, region: dict[str, int]
 ) -> np.ndarray:
     """Region crop of *frame*, memoized on *cache* (shared across chain steps)."""
-    return _memo(
-        cache, _region_key("crop", region), lambda: extract_region(frame, region)
-    )
+    if cache is None:
+        return extract_region(frame, region)
+    key = _region_key("crop", region)
+    value = cache.get(key, _MISSING)
+    if value is _MISSING:
+        value = cache[key] = extract_region(frame, region)
+    return value
+
+
+@functools.lru_cache(maxsize=64)
+def _mask_raster_cached(
+    points_key: tuple[Any, ...], h: int, w: int
+) -> np.ndarray | None:
+    """Rasterized shaped-region mask, cached across frames (shape + size constant)."""
+    return region_mask_for({"mask_points": points_key}, h, w)
 
 
 def _cached_mask(
     cache: dict[Any, Any] | None, frame: np.ndarray, region: dict[str, Any]
 ) -> np.ndarray | None:
-    """Shaped-region mask at the cached crop's size, memoized on *cache*.
+    """Shaped-region mask at the cached crop's size, cached across frames.
 
     ``None`` for rect regions, so masked tools can pass the value straight to
-    the primitives' optional ``mask`` params.
+    the primitives' optional ``mask`` params. The per-frame memo dict is fresh
+    each frame, so the raster lives in :func:`_mask_raster_cached` instead —
+    the polygon and crop size never change mid-scan. Callers must not mutate.
     """
-    return _memo(
-        cache,
-        _region_key("mask", region),
-        lambda: region_mask_for(region, *_cached_crop(cache, frame, region).shape[:2]),
-    )
+    points = region.get("mask_points")
+    if not points:
+        return None
+    crop = _cached_crop(cache, frame, region)
+    return _mask_raster_cached(mask_points_key(points), *crop.shape[:2])
 
 
 def _cached_gray(
     cache: dict[Any, Any] | None, frame: np.ndarray, region: dict[str, int]
 ) -> np.ndarray:
     """Grayscale of the region crop, memoized on *cache* (reuses the cached crop)."""
-    return _memo(
-        cache,
-        _region_key("gray", region),
-        lambda: cv2.cvtColor(_cached_crop(cache, frame, region), cv2.COLOR_BGR2GRAY),
-    )
+    if cache is None:
+        return cv2.cvtColor(_cached_crop(cache, frame, region), cv2.COLOR_BGR2GRAY)
+    key = _region_key("gray", region)
+    value = cache.get(key, _MISSING)
+    if value is _MISSING:
+        value = cache[key] = cv2.cvtColor(
+            _cached_crop(cache, frame, region), cv2.COLOR_BGR2GRAY
+        )
+    return value
+
+
+def _cached_blur_gray(
+    cache: dict[Any, Any] | None, frame: np.ndarray, region: dict[str, int]
+) -> np.ndarray:
+    """``blur_gray`` of the region crop, memoized on *cache* (reuses the crop).
+
+    The multitool dispatcher rolls this frame's memo dict forward as the next
+    frame's ``prev_cache``, so ChangeTool's previous-side blur+grayscale is a
+    dict hit rather than a recompute.
+    """
+    if cache is None:
+        return blur_gray(_cached_crop(cache, frame, region))
+    key = _region_key("blurgray", region)
+    value = cache.get(key, _MISSING)
+    if value is _MISSING:
+        value = cache[key] = blur_gray(_cached_crop(cache, frame, region))
+    return value
 
 
 def _cached_phash(
     cache: dict[Any, Any] | None, frame: np.ndarray, region: dict[str, int]
 ) -> "Any":
     """Perceptual hash of the region crop, memoized on *cache* (reuses the crop)."""
-    return _memo(
-        cache,
-        _region_key("phash", region),
-        lambda: compute_phash(_cached_crop(cache, frame, region)),
-    )
+    if cache is None:
+        return compute_phash(_cached_crop(cache, frame, region))
+    key = _region_key("phash", region)
+    value = cache.get(key, _MISSING)
+    if value is _MISSING:
+        value = cache[key] = compute_phash(_cached_crop(cache, frame, region))
+    return value
 
 
 def _cached_ocr(
@@ -194,28 +237,33 @@ def _cached_ocr(
     region: dict[str, Any],
     *,
     languages: list[str],
-    allowlist: str | None,
     preprocess: bool,
 ) -> list[Any]:
     """OCR readings for the region crop, memoized on *cache*.
 
-    Keyed by ``(region, languages, allowlist, preprocess)`` so only *identical*
-    OCR calls dedup (e.g. two Text steps on one region). Text (no allowlist) and
-    Numbers (digit allowlist) key differently and are intentionally not shared.
+    Keyed by ``(region, languages, preprocess)`` so identical OCR calls dedup.
+    Text and Numbers steps on one region deliberately share readings: the
+    engine has no per-tool recognition mode, and every tool difference
+    (fuzzy match, numeric operators, integers_only) is applied at scoring time.
     """
     langs = tuple(languages)
-    key = _region_key("ocr", region) + (langs, allowlist, preprocess)
-    return _memo(
-        cache,
-        key,
-        lambda: _ocr_region_readings(
+    if cache is None:
+        return _ocr_region_readings(
             _cached_crop(cache, frame, region),
             languages=list(langs),
-            allowlist=allowlist,
             preprocess=preprocess,
             mask_points=region.get("mask_points"),
-        ),
-    )
+        )
+    key = _region_key("ocr", region) + (langs, preprocess)
+    value = cache.get(key, _MISSING)
+    if value is _MISSING:
+        value = cache[key] = _ocr_region_readings(
+            _cached_crop(cache, frame, region),
+            languages=list(langs),
+            preprocess=preprocess,
+            mask_points=region.get("mask_points"),
+        )
+    return value
 
 
 def check_frame_for_tool(
@@ -229,26 +277,27 @@ def check_frame_for_tool(
 ) -> tuple[bool, dict[str, Any] | None]:
     """Evaluate whether a single frame passes a tool's criteria.
 
-    Used by :func:`scan_multitool` for steps 1+ in the chain.  Returns
-    ``(passed, result_dict)`` where *result_dict* contains tool-specific
-    metadata when the check passes, or ``None`` when it does not.
+    Used by :func:`scan_multitool` for steps 1+ in the chain. Returns
+    ``(passed, result_dict)``, the dict carrying tool-specific metadata on a pass
+    and ``None`` otherwise.
 
-    For **change** and **flow** tools *prev_frame* is required (the frame
-    immediately before the candidate timestamp).  If it is ``None`` the
-    check is skipped (returns ``(False, None)``).
+    **change** and **flow** require *prev_frame* (the frame immediately before
+    the candidate timestamp); a ``None`` there skips the check as ``(False, None)``.
 
-    ``cache`` / ``prev_cache`` are optional per-frame memo dicts (this frame's and
-    the previous frame's) that let chained steps sharing a region reuse crop /
-    gray / phash / OCR work; ``None`` (the calibration path) disables memoization.
+    ``cache`` / ``prev_cache`` are optional per-frame memo dicts letting chained
+    steps that share a region reuse crop/gray/phash/OCR work; ``None`` (the
+    calibration path) disables memoization.
 
     Degenerate regions (width or height ≤ 0, e.g. a 1-px user draw rounded
     to zero pixels on a small preview) are treated as a non-match here so
-    downstream cv2 ops never see empty arrays.  Template is exempt: it matches
-    against the full frame and ignores ``region``, so an uploaded template step
-    with no region (zero-size region_coords) is valid — mirrors
+    downstream cv2 ops never see empty arrays.  Template and shape are exempt:
+    they match against the full frame and ignore ``region``, so an uploaded
+    reference with no region (zero-size region_coords) is valid — mirrors
     :func:`score_frame_for_tool`.
     """
-    if tool_type != "template" and (region.get("w", 0) <= 0 or region.get("h", 0) <= 0):
+    if tool_type not in ("template", "shape") and (
+        region.get("w", 0) <= 0 or region.get("h", 0) <= 0
+    ):
         return False, None
     tool = TOOLS.get(tool_type)
     if tool is None:
@@ -292,15 +341,14 @@ def score_frame_for_tool(
     regions and unknown / non-scorable tools (timelapse, multitool) return
     ``not_evaluable``.
 
-    ``ocr_reader`` (text/numbers only) supplies cached EasyOCR readings keyed per
+    ``ocr_reader`` (text/numbers only) supplies cached OCR readings keyed per
     pin so fuzzy/confidence changes re-score without re-running OCR; when absent
     the tool runs OCR live through its ``check_frame``.
     """
-    # Template matches against the full frame and ignores ``region``, so a
-    # zero-size region — the case when an uploaded template scans the whole
-    # frame with no region_ref — is valid for it. Every other tool crops the
-    # region, where an empty crop would break downstream cv2 ops.
-    if tool_type != "template" and (region.get("w", 0) <= 0 or region.get("h", 0) <= 0):
+    # Template and shape ignore region; every other tool crops, and empty crops break cv2.
+    if tool_type not in ("template", "shape") and (
+        region.get("w", 0) <= 0 or region.get("h", 0) <= 0
+    ):
         return {"status": "not_evaluable"}
     tool = TOOLS.get(tool_type)
     if tool is None or not tool.score_key:
@@ -327,17 +375,35 @@ class AnalysisTool:
     """
 
     name: ClassVar[str] = ""
-    # Max region dimension when running in "fast" scan mode (passed to the
-    # generic frame extractor as ``max_region_dim``). 0 means no downscale.
+    # Fast-scan max region dimension (max_region_dim to the frame extractor); 0 = no downscale.
     fast_scan_region_dim: ClassVar[int] = 0
-    # Whether the tool participates in the fast-scan optimization at all.
-    # Timelapse opts out because it has its own ``sample_interval``.
+    # False opts out of fast scan (timelapse has its own sample_interval).
     supports_fast_scan: ClassVar[bool] = True
     # Extra keys merged into ``fast_opts`` (e.g. ``{"template_downscale": True}``).
     fast_scan_extra_opts: ClassVar[dict[str, Any]] = {}
-    # Detail-dict key holding the threshold-independent calibration scalar that
-    # ``check_frame`` populates on both branches. Empty ⇒ tool not calibratable.
+    # Detail key of the threshold-independent calibration scalar; empty means not calibratable.
     score_key: ClassVar[str] = ""
+    # scan_<x> name, resolved via globals() per call so test monkeypatches apply. Empty: subclass overrides scan.
+    scan_fn_name: ClassVar[str] = ""
+    # Tool-specific scan kwargs, forwarded as ``params.get(key, default)``.
+    scan_defaults: ClassVar[dict[str, Any]] = {}
+    # Sampling interval when ``params`` carries none (the OCR tools use 2.0).
+    scan_interval_default: ClassVar[float] = 0
+    # Client-facing facts served by /api/tools; the frontend derives pickers from them.
+    fast_scan_description: ClassVar[str] = ""
+    # The results pane offers a certainty cutoff; not the same as score_key.
+    has_confidence: ClassVar[bool] = False
+    # (upload body key, image param, mask param) for reference-image tools.
+    reference: ClassVar[tuple[str, str, str] | None] = None
+    # Param that receives the region cut from the reference frame.
+    reference_region_param: ClassVar[str] = ""
+    # Temporal-pair tools preview against a prior frame; the setting names the gap.
+    needs_prev_frame: ClassVar[bool] = False
+    prev_gap_setting: ClassVar[str] = ""
+    # Preview query args copied into params as floats.
+    preview_float_args: ClassVar[tuple[str, ...]] = ()
+    # Preview query args as (arg, param, kind) with kind int | float | bool.
+    preview_args: ClassVar[tuple[tuple[str, str, str], ...]] = ()
 
     def check_frame(
         self,
@@ -374,6 +440,21 @@ class AnalysisTool:
         passed, detail = self.check_frame(frame, prev_frame, region, params)
         return _score_result(self.score_key, passed, detail)
 
+    def _scan_kwargs(self, params: dict[str, Any]) -> dict[str, Any]:
+        """Tool-specific kwargs for the scan function, from ``scan_defaults``.
+
+        Subclasses override to post-process (or-expression defaults, config
+        reads, saliency merges). Dict-valued defaults are copied so a callee
+        can never mutate the shared ClassVar.
+        """
+        kwargs: dict[str, Any] = {}
+        for key, default in self.scan_defaults.items():
+            value = params.get(key, default)
+            if value is default and isinstance(default, dict):
+                value = dict(default)
+            kwargs[key] = value
+        return kwargs
+
     def scan(
         self,
         video_path: str,
@@ -387,14 +468,43 @@ class AnalysisTool:
         on_result: Callable[[dict[str, Any]], None] | None,
         fast_opts: dict[str, Any] | None,
     ) -> Any:
-        """Run a full-video scan. Subclasses must override."""
-        raise NotImplementedError
+        """Run a full-video scan.
+
+        Declarative dispatch: forwards the common tail plus ``_scan_kwargs``
+        to the module-global named by ``scan_fn_name``. Tools whose scan
+        differs structurally (template's downscale, timelapse's output file,
+        multitool's chaining) override this outright.
+        """
+        if not self.scan_fn_name:
+            raise NotImplementedError
+        scan_fn = globals()[self.scan_fn_name]
+        return scan_fn(
+            video_path,
+            region,
+            interval_seconds=params.get("interval", self.scan_interval_default),
+            start_seconds=params.get("start_seconds", 0.0),
+            end_seconds=params.get("end_seconds"),
+            on_progress=on_progress,
+            cancel_flag=cancel_flag,
+            on_result=on_result,
+            fast_opts=fast_opts,
+            **self._scan_kwargs(params),
+        )
 
 
 class ColorTool(AnalysisTool):
     name = "color"
+    fast_scan_description = "Lower resolution, skips unchanged frames"
+    preview_float_args = ("h", "s", "v")
     fast_scan_region_dim = 32
     score_key = "_confidence"
+    scan_fn_name = "scan_color"
+    scan_defaults: ClassVar[dict[str, Any]] = {
+        "target_color": {"h": 0, "s": 0, "v": 0},
+        "tolerance": {"h": 10, "s": 50, "v": 50},
+        "color_mode": "average",
+        "min_coverage": 0.0,
+    }
 
     def check_frame(
         self, frame, prev_frame, region, params, cache=None, prev_cache=None
@@ -424,21 +534,15 @@ class ColorTool(AnalysisTool):
         on_result,
         fast_opts,
     ):
-        color_mode = params.get("color_mode", "average")
-        # Presence scans must stay full-resolution: the fast-scan max_region_dim
-        # downscale uses INTER_AREA averaging, which erases small color patches.
-        if color_mode == "presence":
+        # Presence needs full resolution: INTER_AREA downscaling erases small color patches.
+        if params.get("color_mode", "average") == "presence":
             fast_opts = None
-        return scan_color(
+        return super().scan(
             video_path,
             region,
-            target_color=params.get("target_color", {"h": 0, "s": 0, "v": 0}),
-            tolerance=params.get("tolerance", {"h": 10, "s": 50, "v": 50}),
-            interval_seconds=params.get("interval", 0),
-            start_seconds=params.get("start_seconds", 0.0),
-            end_seconds=params.get("end_seconds"),
-            color_mode=color_mode,
-            min_coverage=params.get("min_coverage", 0.0),
+            params,
+            task_id=task_id,
+            scan_mode=scan_mode,
             on_progress=on_progress,
             cancel_flag=cancel_flag,
             on_result=on_result,
@@ -448,69 +552,50 @@ class ColorTool(AnalysisTool):
 
 class ChangeTool(AnalysisTool):
     name = "change"
+    fast_scan_description = "Lower resolution, skips unchanged frames"
+    has_confidence = True
+    needs_prev_frame = True
+    preview_args = (("noise", "noise_threshold", "int"),)
     fast_scan_region_dim = 128
     score_key = "magnitude"
+    scan_fn_name = "scan_changes"
+    scan_defaults: ClassVar[dict[str, Any]] = {
+        "threshold": 0,
+        "noise_threshold": 0,
+        "require_consecutive": 1,
+    }
 
     def check_frame(
         self, frame, prev_frame, region, params, cache=None, prev_cache=None
     ):
         if prev_frame is None:
             return False, None
-        pixels = _cached_crop(cache, frame, region)
-        prev_pixels = _cached_crop(prev_cache, prev_frame, region)
         threshold = params.get("threshold", config.SCREENSPACE_CHANGE_RATIO_THRESHOLD)
         noise_threshold = params.get(
             "noise_threshold", config.SCREENSPACE_NOISE_THRESHOLD
         )
-        mag = compute_frame_diff(
-            prev_pixels,
-            pixels,
+        mag = compute_frame_diff_gray(
+            _cached_blur_gray(prev_cache, prev_frame, region),
+            _cached_blur_gray(cache, frame, region),
             noise_threshold,
             mask=_cached_mask(cache, frame, region),
         )
         return mag >= threshold, {"magnitude": round(mag, 4)}
 
-    def scan(
-        self,
-        video_path,
-        region,
-        params,
-        *,
-        task_id,
-        scan_mode,
-        on_progress,
-        cancel_flag,
-        on_result,
-        fast_opts,
-    ):
-        return scan_changes(
-            video_path,
-            region,
-            threshold=params.get("threshold", 0),
-            interval_seconds=params.get("interval", 0),
-            noise_threshold=params.get("noise_threshold", 0),
-            require_consecutive=params.get("require_consecutive", 1),
-            start_seconds=params.get("start_seconds", 0.0),
-            end_seconds=params.get("end_seconds"),
-            on_progress=on_progress,
-            cancel_flag=cancel_flag,
-            on_result=on_result,
-            fast_opts=fast_opts,
-        )
-
 
 class SimilarityTool(AnalysisTool):
-    # A spatial Similarity heatmap is feasible but deferred: this tool computes
-    # only a scalar SSIM via ``regions_are_similar``. An accumulated heatmap would
-    # need the per-pixel map (``ssim_diff_map`` /
-    # ``structural_similarity(..., full=True)``, already used by the Model view
-    # preview off the hot path), which adds per-frame CPU/memory; if added later,
-    # gate it behind the phash pre-filter so the full map is only computed on
-    # candidate frames. (See Change/Template heatmaps in screenspace_heatmap.py
-    # for the accumulation pattern.)
+    # Scalar SSIM only; a spatial heatmap needs per-frame ssim_diff_map, so gate it behind phash.
     name = "similarity"
+    fast_scan_description = "Lower resolution, skips unchanged frames"
+    has_confidence = True
+    reference_region_param = "reference_frame"
     fast_scan_region_dim = 128
     score_key = "score"
+    scan_fn_name = "scan_similarity"
+    scan_defaults: ClassVar[dict[str, Any]] = {
+        "reference_frame": None,
+        "threshold": 0,
+    }
 
     def check_frame(
         self, frame, prev_frame, region, params, cache=None, prev_cache=None
@@ -536,17 +621,15 @@ class SimilarityTool(AnalysisTool):
         on_result,
         fast_opts,
     ):
-        ref_frame = params.get("reference_frame")
-        if ref_frame is None:
+        # `is None`, not falsy: the reference is an ndarray with ambiguous truthiness.
+        if params.get("reference_frame") is None:
             raise ValueError("Similarity scan requires a reference_frame parameter")
-        return scan_similarity(
+        return super().scan(
             video_path,
             region,
-            reference_frame=ref_frame,
-            threshold=params.get("threshold", 0),
-            interval_seconds=params.get("interval", 0),
-            start_seconds=params.get("start_seconds", 0.0),
-            end_seconds=params.get("end_seconds"),
+            params,
+            task_id=task_id,
+            scan_mode=scan_mode,
             on_progress=on_progress,
             cancel_flag=cancel_flag,
             on_result=on_result,
@@ -556,10 +639,27 @@ class SimilarityTool(AnalysisTool):
 
 class TextTool(AnalysisTool):
     name = "text"
-    # Calibration scalar is fuzzy match quality. Deliberately distinct from
-    # ``_extract_confidence``'s "confidence" key (OCR reading confidence) — two
-    # different axes; do not unify them.
+    fast_scan_description = "Skips unchanged frames"
+    has_confidence = True
+    preview_args = (("ocr_preprocess", "ocr_preprocess", "bool"),)
+    # Fuzzy match quality, a different axis from _extract_confidence's OCR "confidence"; keep them apart.
     score_key = "fuzzy_ratio"
+    scan_fn_name = "scan_text"
+    scan_interval_default = 2.0
+    scan_defaults: ClassVar[dict[str, Any]] = {
+        "search_string": "",
+        "fuzzy_threshold": 0,
+        "ocr_confidence_threshold": None,
+        "ocr_preprocess": False,
+        "require_consecutive": 1,
+        "languages": None,
+    }
+
+    def _scan_kwargs(self, params):
+        kwargs = super()._scan_kwargs(params)
+        # or-expression, not a get-default: an explicit "" must coerce to "off".
+        kwargs["ocr_normalize"] = params.get("ocr_normalize") or "off"
+        return kwargs
 
     def check_frame(
         self, frame, prev_frame, region, params, cache=None, prev_cache=None
@@ -571,117 +671,61 @@ class TextTool(AnalysisTool):
             frame,
             region,
             languages=params.get("languages") or ["en"],
-            allowlist=None,
             preprocess=params.get("ocr_preprocess", False),
         )
         return _score_text_readings(readings, params)
 
-    def scan(
-        self,
-        video_path,
-        region,
-        params,
-        *,
-        task_id,
-        scan_mode,
-        on_progress,
-        cancel_flag,
-        on_result,
-        fast_opts,
-    ):
-        return scan_text(
-            video_path,
-            region,
-            search_string=params.get("search_string", ""),
-            interval_seconds=params.get("interval", 2.0),
-            fuzzy_threshold=params.get("fuzzy_threshold", 0),
-            ocr_confidence_threshold=params.get("ocr_confidence_threshold"),
-            ocr_preprocess=params.get("ocr_preprocess", False),
-            ocr_normalize=params.get("ocr_normalize") or "off",
-            require_consecutive=params.get("require_consecutive", 1),
-            languages=params.get("languages"),
-            start_seconds=params.get("start_seconds", 0.0),
-            end_seconds=params.get("end_seconds"),
-            on_progress=on_progress,
-            cancel_flag=cancel_flag,
-            on_result=on_result,
-            fast_opts=fast_opts,
-        )
-
 
 class NumbersTool(AnalysisTool):
     name = "numbers"
+    fast_scan_description = "Skips unchanged frames"
+    has_confidence = True
+    preview_args = (("ocr_preprocess", "ocr_preprocess", "bool"),)
     score_key = "confidence"
+    scan_fn_name = "scan_numbers"
+    scan_interval_default = 2.0
+    scan_defaults: ClassVar[dict[str, Any]] = {
+        "operator": "gt",
+        "target_value": 0,
+        "range_min": None,
+        "range_max": None,
+        "ocr_confidence_threshold": None,
+        "ocr_preprocess": False,
+        "integers_only": False,
+        "require_consecutive": 1,
+        "languages": None,
+    }
 
     def check_frame(
         self, frame, prev_frame, region, params, cache=None, prev_cache=None
     ):
-        languages = params.get("languages") or ["en"]
         readings = _cached_ocr(
             cache,
             frame,
             region,
-            languages=languages,
-            allowlist=_numbers_ocr_allowlist(
-                languages, params.get("integers_only", False)
-            ),
+            languages=params.get("languages") or ["en"],
             preprocess=params.get("ocr_preprocess", False),
         )
         return _score_numbers_readings(readings, params)
 
-    def scan(
-        self,
-        video_path,
-        region,
-        params,
-        *,
-        task_id,
-        scan_mode,
-        on_progress,
-        cancel_flag,
-        on_result,
-        fast_opts,
-    ):
-        return scan_numbers(
-            video_path,
-            region,
-            operator=params.get("operator", "gt"),
-            target_value=params.get("target_value", 0),
-            interval_seconds=params.get("interval", 2.0),
-            range_min=params.get("range_min"),
-            range_max=params.get("range_max"),
-            ocr_confidence_threshold=params.get("ocr_confidence_threshold"),
-            ocr_preprocess=params.get("ocr_preprocess", False),
-            integers_only=params.get("integers_only", False),
-            require_consecutive=params.get("require_consecutive", 1),
-            languages=params.get("languages"),
-            start_seconds=params.get("start_seconds", 0.0),
-            end_seconds=params.get("end_seconds"),
-            on_progress=on_progress,
-            cancel_flag=cancel_flag,
-            on_result=on_result,
-            fast_opts=fast_opts,
-        )
-
 
 class TemplateTool(AnalysisTool):
     name = "template"
+    fast_scan_description = "Downscales template 2\u00d7, skips unchanged frames"
+    has_confidence = True
+    reference = ("template_image_data", "template_image", "template_mask")
     fast_scan_extra_opts: ClassVar[dict[str, Any]] = {"template_downscale": True}
     score_key = "best_score"
 
     def check_frame(
         self, frame, prev_frame, region, params, cache=None, prev_cache=None
     ):
-        # Template matches the full frame (ignores region); nothing region-scoped
-        # to memoize, and it already caches its scaled template on ``params``.
+        # Nothing region-scoped to memoize: template searches the whole frame and caches its prep on params.
         template_img = params.get("template_image")
         if template_img is None:
             return False, None
         threshold = params.get("threshold", config.SCREENSPACE_TEMPLATE_MATCH_THRESHOLD)
-        # Cache the per-task-constant scaled template/mask + grayscale prep on the
-        # parameters dict so multitool scans amortize it across frames. The
-        # template_scale slider resizes the (often uploaded) template to its
-        # in-video pixel size before matching, mirroring scan_template.
+        # Cache the scaled template prep on params so multitool amortizes it; template_scale mirrors scan_template.
         cached = params.get("_prepared_template")
         if cached is None:
             scaled_img, scaled_mask = _scale_template(
@@ -695,26 +739,41 @@ class TemplateTool(AnalysisTool):
                 _prepare_template(scaled_img, scaled_mask),
             )
             params["_prepared_template"] = cached
-        scaled_img, scaled_mask, prepared = cached
-        # Peak correlation is the threshold-independent scalar; available even on
-        # a miss (unlike match_template, which only returns above-threshold hits).
-        corr = _template_correlation_map(frame, prepared)
-        if corr is None:
+        _scaled_img, _scaled_mask, prepared = cached
+        # Peak correlation scores even a miss; the run region (zero-size = anywhere) scopes it.
+        window = region_search_window(region)
+        origin = (0, 0)
+        # A template that cannot be correlated at all is unevaluable, whichever path runs.
+        if not _template_is_evaluable(frame, prepared):
             return False, None
+        if window is not None and prepared[1] is None:
+            packed = _template_corr_window(frame, prepared, window)
+            # None here means the window admits no match position: a scored miss.
+            if packed is None:
+                return False, {"best_score": -1.0, "match_count": 0}
+            corr, x_offset, y_offset = packed
+            origin = (x_offset, y_offset)
+        else:
+            corr = _template_correlation_map(frame, prepared)
+            if corr is None:
+                return False, None
+        if window is not None and prepared[1] is not None:
+            tpl_h, tpl_w = prepared[0].shape[:2]
+            corr = _mask_corr_outside_window(corr, tpl_w, tpl_h, window)
+            if corr is None:
+                return False, {"best_score": -1.0, "match_count": 0}
         peak = float(corr.max())
         if peak < threshold:
             return False, {"best_score": round(peak, 4), "match_count": 0}
-        matches = match_template(
+        matches = _match_template_prepared(
             frame,
-            scaled_img,
-            threshold=threshold,
-            mask=scaled_mask,
-            prepared=prepared,
+            prepared,
+            threshold,
+            config.SCREENSPACE_TEMPLATE_NMS_OVERLAP,
+            corr,
+            origin=origin,
         )
-        # Shaped region: the match still runs full-frame (template ignores the
-        # rect for rect regions too), but the polygon acts as a detection
-        # filter — passing requires at least one surviving match. best_score
-        # stays the frame peak (the threshold-independent calibration scalar).
+        # Region polygon filters detections; passing needs a surviving match. best_score stays the window peak.
         matches = filter_matches_by_region_mask(matches, region)
         if region.get("mask_points") and not matches:
             return False, {"best_score": round(peak, 4), "match_count": 0}
@@ -737,9 +796,7 @@ class TemplateTool(AnalysisTool):
         if template_img is None:
             raise ValueError("Template scan requires a template_image parameter")
         tmpl_mask = params.get("template_mask")
-        # Fast scan: downscale template + mask by 2x before passing to the
-        # scan function (which separately downscales the frame via the
-        # ``template_downscale`` fast_opts flag).
+        # Fast scan halves template + mask; the template_downscale fast_opts flag halves frames.
         if scan_mode == "fast":
             th, tw = template_img.shape[:2]
             ntw, nth = tw // 2, th // 2
@@ -768,10 +825,126 @@ class TemplateTool(AnalysisTool):
         )
 
 
+class ShapeTool(AnalysisTool):
+    name = "shape"
+    fast_scan_description = (
+        "Downscales reference 2\u00d7, skips unchanged frames; thin outlines may vanish"
+    )
+    has_confidence = True
+    reference = ("shape_image_data", "shape_image", "shape_mask")
+    preview_float_args = (
+        "threshold",
+        "scale_min",
+        "scale_max",
+        "scale_steps",
+        "scale_y_min",
+        "scale_y_max",
+        "scale_y_steps",
+    )
+    fast_scan_extra_opts: ClassVar[dict[str, Any]] = {"template_downscale": True}
+    score_key = "best_score"
+
+    def check_frame(
+        self, frame, prev_frame, region, params, cache=None, prev_cache=None
+    ):
+        # Shape ignores region; the per-scale edge prep is task-constant, so cache it on params.
+        shape_img = params.get("shape_image")
+        if shape_img is None:
+            return False, None
+        threshold = params.get("threshold", config.SCREENSPACE_SHAPE_MATCH_THRESHOLD)
+        prepared = params.get("_prepared_shape")
+        if prepared is None:
+            prepared = _prepare_shape_reference(
+                shape_img,
+                params.get("shape_mask"),
+                float(params.get("scale_min", 0.0)),
+                float(params.get("scale_max", 0.0)),
+                int(params.get("scale_steps", 0)),
+                float(params.get("scale_y_min", 0.0)),
+                float(params.get("scale_y_max", 0.0)),
+                int(params.get("scale_y_steps", 0)),
+            )
+            params["_prepared_shape"] = prepared
+        if not prepared:
+            # Degenerate reference: no scale kept enough edge pixels.
+            return False, None
+        # Cross-scale peak: threshold-independent, available on a miss. The run region scopes search and peak.
+        window = region_search_window(region)
+        matches, peak = match_shape(
+            _frame_edge_map(frame), prepared, threshold, window=window
+        )
+        if not matches:
+            return False, {"best_score": round(peak, 4), "match_count": 0}
+        # Shaped region: the polygon refines the window as a detection filter.
+        matches = filter_matches_by_region_mask(matches, region)
+        if region.get("mask_points") and not matches:
+            return False, {"best_score": round(peak, 4), "match_count": 0}
+        return True, {"best_score": round(peak, 4), "match_count": len(matches)}
+
+    def scan(
+        self,
+        video_path,
+        region,
+        params,
+        *,
+        task_id,
+        scan_mode,
+        on_progress,
+        cancel_flag,
+        on_result,
+        fast_opts,
+    ):
+        shape_img = params.get("shape_image")
+        if shape_img is None:
+            raise ValueError("Shape scan requires a shape_image parameter")
+        shape_mask = params.get("shape_mask")
+        # Fast scan halves reference + mask like TemplateTool; template_downscale halves frames.
+        if scan_mode == "fast":
+            sh, sw = shape_img.shape[:2]
+            nsw, nsh = sw // 2, sh // 2
+            if nsw > 0 and nsh > 0:
+                shape_img = cv2.resize(
+                    shape_img, (nsw, nsh), interpolation=cv2.INTER_AREA
+                )
+                if shape_mask is not None:
+                    shape_mask = cv2.resize(
+                        shape_mask, (nsw, nsh), interpolation=cv2.INTER_AREA
+                    )
+        return scan_shape(
+            video_path,
+            region,
+            shape_image=shape_img,
+            threshold=params.get("threshold", 0),
+            interval_seconds=params.get("interval", 0),
+            shape_mask=shape_mask,
+            scale_min=float(params.get("scale_min", 0.0)),
+            scale_max=float(params.get("scale_max", 0.0)),
+            scale_steps=int(params.get("scale_steps", 0)),
+            scale_y_min=float(params.get("scale_y_min", 0.0)),
+            scale_y_max=float(params.get("scale_y_max", 0.0)),
+            scale_y_steps=int(params.get("scale_y_steps", 0)),
+            start_seconds=params.get("start_seconds", 0.0),
+            end_seconds=params.get("end_seconds"),
+            on_progress=on_progress,
+            cancel_flag=cancel_flag,
+            on_result=on_result,
+            fast_opts=fast_opts,
+        )
+
+
 class FlowTool(AnalysisTool):
     name = "flow"
+    fast_scan_description = "Lower resolution, skips unchanged frames"
+    has_confidence = True
+    needs_prev_frame = True
+    preview_args = (("magnitude", "magnitude_threshold", "float"),)
     fast_scan_region_dim = 128
     score_key = "magnitude"
+    scan_fn_name = "scan_flow"
+    scan_defaults: ClassVar[dict[str, Any]] = {
+        "magnitude_threshold": 0,
+        "require_consecutive": 1,
+    }
 
     def check_frame(
         self, frame, prev_frame, region, params, cache=None, prev_cache=None
@@ -791,38 +964,18 @@ class FlowTool(AnalysisTool):
             "angle": flow_result["angle"],
         }
 
-    def scan(
-        self,
-        video_path,
-        region,
-        params,
-        *,
-        task_id,
-        scan_mode,
-        on_progress,
-        cancel_flag,
-        on_result,
-        fast_opts,
-    ):
-        return scan_flow(
-            video_path,
-            region,
-            magnitude_threshold=params.get("magnitude_threshold", 0),
-            interval_seconds=params.get("interval", 0),
-            require_consecutive=params.get("require_consecutive", 1),
-            start_seconds=params.get("start_seconds", 0.0),
-            end_seconds=params.get("end_seconds"),
-            on_progress=on_progress,
-            cancel_flag=cancel_flag,
-            on_result=on_result,
-            fast_opts=fast_opts,
-        )
-
 
 class SceneTool(AnalysisTool):
     name = "scene"
+    fast_scan_description = "Lower resolution, skips unchanged frames"
+    has_confidence = True
     fast_scan_region_dim = 64
     score_key = "score"
+    scan_fn_name = "scan_scene"
+    scan_defaults: ClassVar[dict[str, Any]] = {
+        "reference_scenes": None,
+        "threshold": 0,
+    }
 
     def check_frame(
         self, frame, prev_frame, region, params, cache=None, prev_cache=None
@@ -841,9 +994,7 @@ class SceneTool(AnalysisTool):
                 mask=_cached_mask(cache, frame, region),
             ),
         )
-        # Fingerprints are only comparable under the same mask, so the per-ref
-        # cache is keyed by the region's polygon (refs are cached on the ref
-        # dict, which multitool steps with different regions could share).
+        # Ref dicts are shared across steps with different regions; fingerprints only compare under one mask.
         mask_key = mask_points_key(region.get("mask_points"))
         best_name = ""
         best_score = 0.0
@@ -879,17 +1030,15 @@ class SceneTool(AnalysisTool):
         on_result,
         fast_opts,
     ):
-        ref_scenes = params.get("reference_scenes")
-        if not ref_scenes:
+        # Falsy on purpose: an empty list is as unusable as None. Contrast Similarity's `is None`.
+        if not params.get("reference_scenes"):
             raise ValueError("Scene scan requires reference_scenes parameter")
-        return scan_scene(
+        return super().scan(
             video_path,
             region,
-            reference_scenes=ref_scenes,
-            threshold=params.get("threshold", 0),
-            interval_seconds=params.get("interval", 0),
-            start_seconds=params.get("start_seconds", 0.0),
-            end_seconds=params.get("end_seconds"),
+            params,
+            task_id=task_id,
+            scan_mode=scan_mode,
             on_progress=on_progress,
             cancel_flag=cancel_flag,
             on_result=on_result,
@@ -899,10 +1048,16 @@ class SceneTool(AnalysisTool):
 
 class InactivityTool(AnalysisTool):
     name = "inactivity"
+    fast_scan_description = "Lower resolution, skips unchanged frames"
+    has_confidence = True
     fast_scan_region_dim = 64
-    # Calibration scalar is the raw phash distance (Sensitivity-slider units);
-    # the strip inverts the axis for display (lower distance = more inactive).
+    # Raw phash distance in Sensitivity-slider units; the strip inverts it (lower = more inactive).
     score_key = "distance"
+    scan_fn_name = "scan_inactivity"
+    scan_defaults: ClassVar[dict[str, Any]] = {
+        "threshold": 0,
+        "min_duration": 0.0,
+    }
 
     def check_frame(
         self, frame, prev_frame, region, params, cache=None, prev_cache=None
@@ -919,122 +1074,58 @@ class InactivityTool(AnalysisTool):
             conf = 1.0 if dist <= thresh else 0.0
         return dist <= thresh, {"distance": dist, "_confidence": conf}
 
-    def scan(
-        self,
-        video_path,
-        region,
-        params,
-        *,
-        task_id,
-        scan_mode,
-        on_progress,
-        cancel_flag,
-        on_result,
-        fast_opts,
-    ):
-        return scan_inactivity(
-            video_path,
-            region,
-            threshold=params.get("threshold", 0),
-            min_duration=params.get("min_duration", 0.0),
-            interval_seconds=params.get("interval", 0),
-            start_seconds=params.get("start_seconds", 0.0),
-            end_seconds=params.get("end_seconds"),
-            on_progress=on_progress,
-            cancel_flag=cancel_flag,
-            on_result=on_result,
-            fast_opts=fast_opts,
-        )
-
 
 class BoundaryTool(AnalysisTool):
     name = "boundary"
-    # The scanner is already coarse and runs its own phash on every sample;
-    # the generic fast-scan phash-skip would fight that logic, so opt out.
+    has_confidence = True
+    # The scanner runs its own phash per sample; the fast-scan phash-skip would fight it.
     supports_fast_scan = False
-    # Scan-only in v1: not a multitool step and not calibratable (no score_key),
-    # so the pinned-frame strip and /api/calibrate correctly skip it. Wiring
-    # calibration later means adding score_key + a per-frame check_frame here,
-    # plus a `needs_prev` entry and full-frame handling in the calibrate endpoint
-    # (boundary needs the previous sampled frame and always scans the full frame).
+    # Scan-only: no check_frame or score_key, so the pinned strip and /api/calibrate skip it.
+    scan_fn_name = "scan_boundaries"
+    scan_defaults: ClassVar[dict[str, Any]] = {
+        "threshold": 0,
+        "min_gap": 0.0,
+    }
 
-    def scan(
-        self,
-        video_path,
-        region,
-        params,
-        *,
-        task_id,
-        scan_mode,
-        on_progress,
-        cancel_flag,
-        on_result,
-        fast_opts,
-    ):
-        return scan_boundaries(
-            video_path,
-            region,
-            threshold=params.get("threshold", 0),
-            min_gap=params.get("min_gap", 0.0),
-            interval_seconds=params.get("interval", 0),
-            # Policy default lives here, not in the scan primitive: a task with
-            # no metric (UI "Auto") gets the configured default; the primitive's
-            # own default stays "phash" for direct callers/tests.
-            metric=params.get("metric") or config.SCREENSPACE_BOUNDARY_METRIC,
-            start_seconds=params.get("start_seconds", 0.0),
-            end_seconds=params.get("end_seconds"),
-            on_progress=on_progress,
-            cancel_flag=cancel_flag,
-            on_result=on_result,
-            fast_opts=fast_opts,
-        )
+    def _scan_kwargs(self, params):
+        kwargs = super()._scan_kwargs(params)
+        # Policy default lives here; the primitive keeps "phash" for direct callers and tests.
+        kwargs["metric"] = params.get("metric") or config.SCREENSPACE_BOUNDARY_METRIC
+        return kwargs
 
 
 class AttentionTool(AnalysisTool):
     name = "attention"
-    # The scanner controls its own pipe downscale and needs every sampled
-    # frame for dwell weighting (heatmap heat ∝ time on screen); the generic
-    # fast-scan phash-skip would drop exactly the static frames that matter.
+    has_confidence = True
+    needs_prev_frame = True
+    prev_gap_setting = "SCREENSPACE_ATTENTION_INTERVAL"
+    # Saliency overrides so the Model view tunes the scan's math.
+    preview_float_args = (
+        "weight_spectral",
+        "weight_contrast",
+        "weight_motion",
+        "weight_face",
+        "center_bias",
+    )
+    # Dwell weighting needs every sampled frame; the fast-scan phash-skip would drop the static ones.
     supports_fast_scan = False
-    # Scan-only: full-frame with temporal state (EMA + shift confirmation), so
-    # it is neither a multitool step nor calibratable (no score_key); the
-    # pinned-frame strip and /api/calibrate correctly skip it.
+    # Scan-only (full-frame, temporal state): no check_frame or score_key, so calibration skips it.
+    scan_fn_name = "scan_attention"
+    scan_defaults: ClassVar[dict[str, Any]] = {
+        "shift_threshold": 0.0,
+        "ema_alpha": 0.0,
+    }
 
-    def scan(
-        self,
-        video_path,
-        region,
-        params,
-        *,
-        task_id,
-        scan_mode,
-        on_progress,
-        cancel_flag,
-        on_result,
-        fast_opts,
-    ):
-        return scan_attention(
-            video_path,
-            region,
-            shift_threshold=params.get("shift_threshold", 0.0),
-            interval_seconds=params.get("interval", 0),
-            ema_alpha=params.get("ema_alpha", 0.0),
-            start_seconds=params.get("start_seconds", 0.0),
-            end_seconds=params.get("end_seconds"),
-            on_progress=on_progress,
-            cancel_flag=cancel_flag,
-            on_result=on_result,
-            fast_opts=fast_opts,
-            # Per-task channel weights / center bias / face toggle (absent
-            # keys fall back to the SCREENSPACE_ATTENTION_* config defaults).
-            **saliency_kwargs_from_params(params),
-        )
+    def _scan_kwargs(self, params):
+        kwargs = super()._scan_kwargs(params)
+        # Channel weights, center bias, face toggle; absent keys use SCREENSPACE_ATTENTION_* defaults.
+        kwargs.update(saliency_kwargs_from_params(params))
+        return kwargs
 
 
 class TimelapseTool(AnalysisTool):
     name = "timelapse"
-    # Has its own ``sample_interval`` and produces a media file rather than
-    # per-frame events, so the generic fast-scan path does not apply.
+    # Own sample_interval and a media-file output; fast scan and Viewer detector entries don't apply.
     supports_fast_scan = False
 
     def scan(
@@ -1072,6 +1163,8 @@ class TimelapseTool(AnalysisTool):
 
 class MultitoolTool(AnalysisTool):
     name = "multitool"
+    fast_scan_description = "Skips unchanged frames, widens interval"
+    has_confidence = True
 
     def scan(
         self,
@@ -1086,10 +1179,7 @@ class MultitoolTool(AnalysisTool):
         on_result,
         fast_opts,
     ):
-        # Function-local import breaks the tools<->multitool cycle: scan_multitool
-        # needs check_frame_for_tool/score_frame_for_tool from this module, while
-        # only this one method needs scan_multitool. Imported at task-execution
-        # time, never at module import, so there is no hot-path cost.
+        # Local import breaks the tools<->multitool cycle; runs at task time, not import time.
         from screenspace_multitool import scan_multitool
 
         steps = [dict(s) for s in params.get("steps", [])]
@@ -1124,6 +1214,7 @@ TOOLS: dict[str, AnalysisTool] = {
         TextTool(),
         NumbersTool(),
         TemplateTool(),
+        ShapeTool(),
         FlowTool(),
         SceneTool(),
         InactivityTool(),
@@ -1133,3 +1224,39 @@ TOOLS: dict[str, AnalysisTool] = {
         MultitoolTool(),
     )
 }
+
+
+def tool_catalog() -> dict[str, dict[str, Any]]:
+    """Per-tool client facts for /api/tools; the frontend derives its pickers from it."""
+    return {
+        name: {
+            "supports_fast_scan": tool.supports_fast_scan,
+            "fast_scan_description": tool.fast_scan_description,
+            "has_confidence": tool.has_confidence,
+            "score_key": tool.score_key,
+        }
+        for name, tool in TOOLS.items()
+    }
+
+
+# Keeps the by-name scan_<x> imports referenced; a typo'd scan_fn_name fails at import, not mid-scan.
+_DISPATCHABLE_SCAN_FNS = {
+    scan_attention,
+    scan_boundaries,
+    scan_changes,
+    scan_color,
+    scan_flow,
+    scan_inactivity,
+    scan_numbers,
+    scan_scene,
+    scan_similarity,
+    scan_text,
+}
+for _tool in TOOLS.values():
+    if (
+        _tool.scan_fn_name
+        and globals()[_tool.scan_fn_name] not in _DISPATCHABLE_SCAN_FNS
+    ):
+        raise AssertionError(
+            f"{_tool.name}: unknown scan_fn_name {_tool.scan_fn_name!r}"
+        )

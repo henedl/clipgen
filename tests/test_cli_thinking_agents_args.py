@@ -44,7 +44,7 @@ def _agent_args(**overrides):
         "transcript_format": None,
         "pre_transcribe": None,
         "whisper_model": None,
-        "ollama_model": None,
+        "llm_model": None,
         "summarize": None,
         "citations": None,
         "friction": None,
@@ -98,13 +98,13 @@ def test_parse_summarize(monkeypatch, argv_extra, expected):
     assert args.summarize == expected
 
 
-def test_parse_citations_with_ollama_model(monkeypatch):
+def test_parse_citations_with_llm_model(monkeypatch):
     monkeypatch.setattr(
-        "sys.argv", ["clipgen.py", "--citations", "P01", "--ollama-model", "gemma3:4b"]
+        "sys.argv", ["clipgen.py", "--citations", "P01", "--llm-model", "gemma3:4b"]
     )
     args = cli.parse_arguments()
     assert args.citations == ["P01"]
-    assert args.ollama_model == "gemma3:4b"
+    assert args.llm_model == "gemma3:4b"
 
 
 # ---- Conflict validation ----
@@ -128,7 +128,7 @@ def test_summarize_and_citations_conflict():
 def test_summarize_default_runs_all(monkeypatch):
     saved = {}
 
-    def fake_save(source_transcripts, corrections, marks=None):
+    def fake_save(source_transcripts, corrections, marks=None, known_terms=None):
         saved["source_transcripts"] = {
             k: dict(v) for k, v in source_transcripts.items()
         }
@@ -142,7 +142,7 @@ def test_summarize_default_runs_all(monkeypatch):
 
     import thinking_agents
 
-    monkeypatch.setattr(thinking_agents, "summarize_transcript", lambda segs: "S")
+    monkeypatch.setattr(thinking_agents, "summarize_transcript", lambda segs, **kw: "S")
 
     args = _agent_args(summarize=[])
     cli._run_summarize(args)
@@ -154,7 +154,7 @@ def test_summarize_default_runs_all(monkeypatch):
 def test_summarize_specific_ids_only(monkeypatch):
     saved = []
 
-    def fake_save(source_transcripts, corrections, marks=None):
+    def fake_save(source_transcripts, corrections, marks=None, known_terms=None):
         saved.append({k: dict(v) for k, v in source_transcripts.items()})
 
     manifest = _make_manifest(
@@ -166,7 +166,7 @@ def test_summarize_specific_ids_only(monkeypatch):
 
     import thinking_agents
 
-    monkeypatch.setattr(thinking_agents, "summarize_transcript", lambda segs: "S")
+    monkeypatch.setattr(thinking_agents, "summarize_transcript", lambda segs, **kw: "S")
 
     args = _agent_args(summarize=["P02"])
     cli._run_summarize(args)
@@ -180,7 +180,7 @@ def test_summarize_specific_ids_only(monkeypatch):
 def test_summarize_skips_existing_without_no_input(monkeypatch, capsys):
     saved = []
 
-    def fake_save(source_transcripts, corrections, marks=None):
+    def fake_save(source_transcripts, corrections, marks=None, known_terms=None):
         saved.append(True)
 
     manifest = _make_manifest(
@@ -191,7 +191,9 @@ def test_summarize_skips_existing_without_no_input(monkeypatch, capsys):
 
     import thinking_agents
 
-    monkeypatch.setattr(thinking_agents, "summarize_transcript", lambda segs: "NEW")
+    monkeypatch.setattr(
+        thinking_agents, "summarize_transcript", lambda segs, **kw: "NEW"
+    )
 
     args = _agent_args(summarize=["P01"], no_input=False)
     cli._run_summarize(args)
@@ -205,7 +207,7 @@ def test_summarize_skips_existing_without_no_input(monkeypatch, capsys):
 def test_summarize_overwrites_with_no_input(monkeypatch):
     saved = []
 
-    def fake_save(source_transcripts, corrections, marks=None):
+    def fake_save(source_transcripts, corrections, marks=None, known_terms=None):
         saved.append({k: dict(v) for k, v in source_transcripts.items()})
 
     manifest = _make_manifest(
@@ -216,7 +218,9 @@ def test_summarize_overwrites_with_no_input(monkeypatch):
 
     import thinking_agents
 
-    monkeypatch.setattr(thinking_agents, "summarize_transcript", lambda segs: "NEW")
+    monkeypatch.setattr(
+        thinking_agents, "summarize_transcript", lambda segs, **kw: "NEW"
+    )
 
     args = _agent_args(summarize=["P01"], no_input=True)
     cli._run_summarize(args)
@@ -235,7 +239,9 @@ def test_summarize_handles_none_result(monkeypatch, capsys):
 
     import thinking_agents
 
-    monkeypatch.setattr(thinking_agents, "summarize_transcript", lambda segs: None)
+    monkeypatch.setattr(
+        thinking_agents, "summarize_transcript", lambda segs, **kw: None
+    )
 
     args = _agent_args(summarize=["P01"])
     cli._run_summarize(args)
@@ -262,7 +268,7 @@ def test_citations_requires_summary(monkeypatch, capsys):
     monkeypatch.setattr(
         thinking_agents,
         "find_citations",
-        lambda s, segs: [{"sentence": "x", "refs": []}],
+        lambda s, segs, **kw: [{"sentence": "x", "refs": []}],
     )
 
     args = _agent_args(citations=["P01"])
@@ -276,7 +282,7 @@ def test_citations_requires_summary(monkeypatch, capsys):
 def test_citations_writes_refs(monkeypatch):
     saved = []
 
-    def fake_save(source_transcripts, corrections, marks=None):
+    def fake_save(source_transcripts, corrections, marks=None, known_terms=None):
         saved.append({k: dict(v) for k, v in source_transcripts.items()})
 
     manifest = _make_manifest(
@@ -292,7 +298,7 @@ def test_citations_writes_refs(monkeypatch):
 
     fake_citations = [{"sentence": "claim", "refs": [{"start": 0, "end": 1}]}]
     monkeypatch.setattr(
-        thinking_agents, "find_citations", lambda s, segs: fake_citations
+        thinking_agents, "find_citations", lambda s, segs, **kw: fake_citations
     )
 
     args = _agent_args(citations=["P01"])
@@ -314,8 +320,10 @@ def _fake_friction_agent(monkeypatch, result):
         calls.append(entry)
         return result
 
+    real = thinking_agents.get_agent("friction")
+    assert real is not None
     monkeypatch.setattr(
-        thinking_agents, "get_agent", lambda key: {"key": key, "run": fake_run}
+        thinking_agents, "get_agent", lambda key: {**real, "key": key, "run": fake_run}
     )
     return calls
 
@@ -382,7 +390,7 @@ def test_friction_skips_existing_without_no_input(monkeypatch, capsys):
 def test_friction_writes_result_with_no_input(monkeypatch):
     saved = []
 
-    def fake_save(source_transcripts, corrections, marks=None):
+    def fake_save(source_transcripts, corrections, marks=None, known_terms=None):
         saved.append({k: dict(v) for k, v in source_transcripts.items()})
 
     manifest = _make_manifest(

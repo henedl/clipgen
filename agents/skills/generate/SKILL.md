@@ -34,7 +34,7 @@
 ## Other useful flags
 
 - `--no-input` — non-interactive mode: skip confirmation prompts and fail fast on prompts that would block on stdin (good for agent automation)
-- `--manifest` — write `clipgen_manifest.json` alongside artifacts
+- `--manifest` — write the `clips` section of `clipgen.json` alongside artifacts
 - `--viewer` — generate `clips_viewer.html` timeline viewer
 - `--transcribe` — generate transcript files alongside artifacts
 - `--titlecards` / `--no-titlecards` — prepend title card to each clip

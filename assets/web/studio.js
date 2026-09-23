@@ -23,26 +23,21 @@
 
   var QUEUE_STORAGE_KEY = "clipgen-studio-queues";
 
-  // Pure intake clustering lives in intake-cluster.js (loaded first) so the
-  // Overview page can share it without reaching into Studio.
+  // Clustering lives in intake-cluster.js so Overview can share it.
   var clusterIntakeEvents = window.ClipgenIntakeCluster.clusterIntakeEvents;
   var clusterTranscriptMarks = window.ClipgenIntakeCluster.clusterTranscriptMarks;
 
-  // Hub namespace for the feature satellites (studio-{intake,generate,trim,
-  // scrubber}.js). The hub publishes `state` + the helpers a satellite needs
-  // onto this at load (tail); satellites publish their entry points back,
-  // reached via same-named guarded delegators throughout the hub.
+  // Satellite namespace: hub publishes state at the tail, satellites publish entry points back.
   var STUDIO = (window.ClipgenStudio = window.ClipgenStudio || {});
 
-  // Build a mask-image icon span as an HTML string. Sizing comes from a
-  // parent rule (e.g. .cg-btn-icon) or from extraClass. See
-  // .cg-icon family in studio.css.
+  // Mask-image icon span; sizing comes from the parent rule or extraClass (studio.css .cg-icon).
   function iconHTML(name, extraClass) {
     return '<span class="cg-icon cg-icon--' + name + (extraClass ? " " + extraClass : "") + '"></span>';
   }
 
   var state = {
     sheetData: null,
+    desktop: false, // native window: Artifact Log rows get "Show on disk"
     artifactQueue: [],
     reelQueue: [],
     generatedArtifacts: [],
@@ -87,17 +82,14 @@
     trIntakeFilterText: "",
     trIntakeShowAll: false,
     trIntakeHoveredIdx: -1,
-    trIntakeTooltipsEnabled: true,
     coIntakeItems: [],
-    coTrims: {},
     coTrimCardKeys: {},
     coIntakeFilterParticipants: [],
     coIntakeFilterTypes: [],
     coIntakeFilterText: "",
     coIntakeHoveredIdx: -1,
     _coIntakeFp: null,
-    // MindNode intake. mnIntakeItems holds one entry per timestamp pair;
-    // mnIntakeSkipped holds the notes with no timestamp, shown disabled.
+    // MindNode intake: one item per timestamp pair; skipped holds timestamp-less notes.
     mnIntakeItems: [],
     mnIntakeSkipped: [],
     mnIntakeError: "",
@@ -120,24 +112,10 @@
       source === "composer" || source === "mindnode";
   }
 
-  var ROW_FUNCTIONS = {
-    Count: function (row, participants) {
-      var total = 0;
-      for (var j = 0; j < participants.length; j++) {
-        var c = row.cells[participants[j]];
-        if (c && c.valid) total += parseClipTimestamps(c.value, participants[j]).length;
-      }
-      return total;
-    },
-    Unique: function (row, participants) {
-      var count = 0;
-      for (var j = 0; j < participants.length; j++) {
-        var c = row.cells[participants[j]];
-        if (c && c.valid) count++;
-      }
-      return count;
-    },
-  };
+  var _xref = createSheetXrefHelpers(function () { return state; });
+  var parseClipTimestamps = _xref.parseClipTimestamps,
+    ROW_FUNCTIONS = _xref.ROW_FUNCTIONS,
+    findOverlappingData = _xref.findOverlappingData;
 
   // ---- Helpers ----
 
@@ -164,13 +142,7 @@
     return -1;
   }
 
-  // Intake (Screenspace event / Transcript mark) identity. A cluster's span
-  // (start/end) drifts during normal use — the 10s poll merges newly-detected
-  // events into an existing cluster, and the user can change the cluster
-  // threshold — so span can't anchor a queued item's identity. Match on the
-  // underlying event/mark ids instead: those are globally unique and stable, and
-  // an overlap test (share ≥1 id) survives boundary drift. When ids are missing
-  // on either side, fall back to exact span equality.
+  // Cluster spans drift (poll merges, threshold edits); match on shared ids, else exact span.
   function intakeIds(item) {
     if (!item) return [];
     var raw =
@@ -208,22 +180,28 @@
     return -1;
   }
 
-  // Remove every queue entry the item overlaps — a drifted cluster can subsume
-  // two entries that were separate when added (mirrors removeAllCellEntries).
+  // Remove every overlapping entry: a drifted cluster can subsume several (mirrors removeAllCellEntries).
   function removeIntakeFromQueue(queue, item) {
     for (var i = queue.length - 1; i >= 0; i--) {
       if (intakeItemsOverlap(queue[i], item)) queue.splice(i, 1);
     }
   }
 
-  // Idempotent add (used by "Add all" and drag-drop) vs. toggle (used by single
-  // card click) — same split as addToQueue vs. toggleArtifactCell for cells.
-  function intakeAddItem(queue, item, renderFn) {
+  // Idempotent batch add renders once; per-item adds rebuilt the queue every push.
+  function intakeAddItems(queue, items, renderFn) {
     var locked = queue === state.artifactQueue ? isArtifactQueueLocked() : isReelQueueLocked();
     if (locked) return;
-    if (findIntakeInQueue(queue, item) >= 0) return;
-    queue.push(item);
-    renderFn();
+    var added = false;
+    for (var i = 0; i < items.length; i++) {
+      if (!items[i] || findIntakeInQueue(queue, items[i]) >= 0) continue;
+      queue.push(items[i]);
+      added = true;
+    }
+    if (added) renderFn();
+  }
+
+  function intakeAddItem(queue, item, renderFn) {
+    intakeAddItems(queue, [item], renderFn);
   }
 
   function intakeToggleItem(queue, item, renderFn) {
@@ -291,62 +269,7 @@
     if (td) td.classList.add("header-highlight");
   }
 
-  function parseClipTimestamps(raw, participantId) {
-    var DEFAULT_DUR = CLIPGEN_CONFIG.defaultDuration;
-    var baselineSeconds = 0;
-    if (participantId && state.convergenceBaselines) {
-      baselineSeconds = state.convergenceBaselines[participantId] || 0;
-    }
-    return parseClipSegmentsForCell(raw, baselineSeconds, DEFAULT_DUR);
-  }
-
-  // Cross-referencing: find overlapping data from other sources for a given
-  // participant + time range. Used by both Screenspace and Transcript intake
-  // card renderers to surface context from sibling data sources.
-  function findOverlappingData(participant, start, end) {
-    var result = { transcriptSnippets: [], screenspaceEvents: [], sheetObservations: [] };
-
-    // Transcript marks/clusters — keep a small projection because `text` has
-    // fallback logic (text || label) that consumers expect already resolved.
-    for (var i = 0; i < state.trIntakeClusters.length; i++) {
-      var tc = state.trIntakeClusters[i];
-      if (tc.participant === participant && tc.start < end && tc.end > start) {
-        result.transcriptSnippets.push({ text: tc.text || tc.label || "", category: tc.category, start: tc.start, end: tc.end });
-      }
-    }
-
-    // Screenspace event clusters — pass through the original object; consumers
-    // only read detector / event_type and the extra fields are harmless.
-    for (var j = 0; j < state.intakeClusters.length; j++) {
-      var sc = state.intakeClusters[j];
-      if (sc.participant === participant && sc.start < end && sc.end > start) {
-        result.screenspaceEvents.push(sc);
-      }
-    }
-
-    // Sheet observations — pass through the row directly.
-    if (state.sheetData && state.sheetData.rows) {
-      for (var k = 0; k < state.sheetData.rows.length; k++) {
-        var row = state.sheetData.rows[k];
-        var cell = row.cells[participant];
-        if (!cell || !cell.valid) continue;
-        var segs = parseClipTimestamps(cell.value, participant);
-        for (var s = 0; s < segs.length; s++) {
-          var segEnd = segs[s].startSeconds + segs[s].duration;
-          if (segs[s].startSeconds < end && segEnd > start) {
-            result.sheetObservations.push(row);
-            break;
-          }
-        }
-      }
-    }
-
-    return result;
-  }
-
-  // Cached once — `--radius` lives on :root in tokens.css and isn't expected to
-  // change at runtime. Avoids a getComputedStyle call inside setCardDragImage,
-  // which is on the dragstart hot path.
+  // Cached: --radius is static on :root, and setCardDragImage is on the dragstart hot path.
   var _cardDragImageRadius = null;
   function getCardDragImageRadius() {
     if (_cardDragImageRadius !== null) return _cardDragImageRadius;
@@ -363,10 +286,7 @@
     clone.style.left = "-9999px";
     clone.style.width = rect.width + "px";
     clone.style.zIndex = "-1";
-    // Some Chromium versions render the drag-image bitmap without honoring the
-    // class-driven border-radius / overflow clip, leaving square corners on
-    // an otherwise rounded card. Pin them inline on the clone so the snapshot
-    // captures the rounding.
+    // Some Chromium builds ignore class-driven rounding in the drag bitmap; pin it inline.
     clone.style.borderRadius = getCardDragImageRadius();
     clone.style.overflow = "hidden";
     document.body.appendChild(clone);
@@ -376,23 +296,14 @@
     });
   }
 
-  // Transparent 1×1 image used to suppress the browser's default drag preview
-  // when we want a custom DOM-based ghost (see bindDragFromGrid). Cached so
-  // the same Image instance is reused across drags.
-  var _TRANSPARENT_DRAG_IMAGE = null;
-  function getTransparentDragImage() {
-    if (_TRANSPARENT_DRAG_IMAGE) return _TRANSPARENT_DRAG_IMAGE;
-    var img = new Image(1, 1);
-    img.src = "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7";
-    _TRANSPARENT_DRAG_IMAGE = img;
-    return img;
+  // Must be a rendered element: WebKit aborts the drag on an `Image` or hidden box.
+  function createBlankDragImage() {
+    var blank = el("div", "drag-image-blank");
+    document.body.appendChild(blank);
+    return blank;
   }
 
-  // Single capture-phase gate: while a drag is in flight, `body.dragging` is
-  // set so CSS can suspend expensive effects (backdrop-filter on the floating
-  // nav, drop-target transitions, hover paint, etc.). Centralized here instead
-  // of patched into every dragstart handler — see studio.css / topnav.css /
-  // tokens.css for the matching rules.
+  // body.dragging lets CSS suspend expensive effects during drags (studio.css, topnav.css, tokens.css).
   function bindDragGate() {
     function clear() { document.body.classList.remove("dragging"); }
     document.addEventListener("dragstart", function () {
@@ -452,10 +363,7 @@
   }
 
   // ---- Sheet preview sorting ----
-  //
-  // One column at a time, cycling Ascending -> Descending -> Off (source order).
-  // Empty/unrecognized values always sink to the bottom regardless of direction;
-  // ties fall back to source row order so sorting is stable.
+  // Cycles asc/desc/off; empties sink, ties keep source order.
   function compareByColumn(a, b, column, participants, asc) {
     if (column === "row") {
       var dr = a.rowNum - b.rowNum;
@@ -512,9 +420,7 @@
     renderGrid();
   }
 
-  // Small cycling sort button for a sortable column header. Recreated on every
-  // renderGrid, so the click listener is attached fresh each time (matching the
-  // fnSelect/fnClear pattern).
+  // Rebuilt on every renderGrid, so the listener attaches fresh (like fnSelect/fnClear).
   function buildSortButton(column) {
     var active = state.sortColumn === column;
     var iconName = !active
@@ -548,9 +454,7 @@
   }
 
   function clearAllFilters() {
-    // Reset the source maps that back the category/keyword checkboxes too, not
-    // just the derived filter arrays — otherwise the sidebar rows would keep
-    // painting as active while the grid shows everything (state desync).
+    // Reset the checkbox source maps too, or sidebar rows stay active after clearing.
     state.sidebarCategories = {};
     state.sidebarKeywords = {};
     state.filters.categories = [];
@@ -560,429 +464,16 @@
     state.filters.fnMax = null;
   }
 
-  // ---- Sheet sidebar ----
-
-  var SIDEBAR_VIEW_KEY = "clipgen-studio-sidebar-open";
-  // VIEWS section: each entry overrides state.filters.severities. "all" clears
-  // the selection; "highlights"/"positive" derive their allowlists from
-  // CLIPGEN_CONFIG.severity by rank (negatives <= -2; positives >= 1) so a
-  // relabeled severity in config can't silently desync these views.
-  var _severityLabelsWhere = function (predicate) {
-    return CLIPGEN_CONFIG.severity
-      .filter(function (s) { return predicate(s.rank); })
-      .map(function (s) { return s.label; });
-  };
-  var SIDEBAR_VIEWS = [
-    { id: "all", label: "All" },
-    {
-      id: "highlights",
-      label: "Highlights",
-      severities: _severityLabelsWhere(function (r) { return r <= -2; }),
-    },
-    {
-      id: "positive",
-      label: "Positive",
-      severities: _severityLabelsWhere(function (r) { return r >= 1; }),
-    },
-  ];
-
-  function readPersistedSidebarOpen() {
-    try {
-      var stored = localStorage.getItem(SIDEBAR_VIEW_KEY);
-      if (stored !== null) state.sidebarOpen = (stored !== "false");
-    } catch (_) {}
-    // Apply to DOM here so the very first paint already shows the persisted
-    // state. Otherwise the HTML default `data-open="true"` paints first and
-    // the later renderSidebar() flip animates the open→collapsed transition,
-    // which reads as a Sheet-tab slide when navigating in from elsewhere.
-    // The transition is gated on `.tx-ready`, added after first paint below.
-    var sidebar = document.getElementById("studioSidebar");
-    if (!sidebar) return;
-    sidebar.setAttribute("data-open", state.sidebarOpen ? "true" : "false");
-    requestAnimationFrame(function () {
-      requestAnimationFrame(function () {
-        sidebar.classList.add("tx-ready");
-      });
-    });
-  }
-
-  // Run synchronously at script load (studio.js is non-defer at end of body,
-  // so the sidebar element already exists). DOMContentLoaded would be too
-  // late — first paint can happen before it fires.
-  readPersistedSidebarOpen();
-
-  function persistSidebarOpen() {
-    try { localStorage.setItem(SIDEBAR_VIEW_KEY, state.sidebarOpen ? "true" : "false"); } catch (_) {}
-  }
-
-  function applySidebarView(viewId) {
-    var view = null;
-    for (var i = 0; i < SIDEBAR_VIEWS.length; i++) {
-      if (SIDEBAR_VIEWS[i].id === viewId) { view = SIDEBAR_VIEWS[i]; break; }
-    }
-    state.filters.severities = (view && view.severities) ? view.severities.slice() : [];
-  }
-
-  function applySidebarCategories() {
-    state.filters.categories = Object.keys(state.sidebarCategories).filter(function (k) {
-      return !!state.sidebarCategories[k];
-    });
-  }
-
-  function applySidebarKeywords() {
-    state.filters.keywords = Object.keys(state.sidebarKeywords).filter(function (k) {
-      return !!state.sidebarKeywords[k];
-    });
-  }
-
-  // Persist the sidebar's filter selections (not just the open/collapsed state,
-  // which rides SIDEBAR_VIEW_KEY) so they survive a reload. Stored as one
-  // "filters" field on the shared per-page UI store. The raw category/keyword/
-  // participant maps round-trip; filters.categories/keywords are re-derived on
-  // restore via applySidebar* so they stay consistent.
-  function persistSidebarFilters() {
-    setStoredUIStateField("studio", "filters", {
-      severities: state.filters.severities,
-      categories: state.sidebarCategories,
-      keywords: state.sidebarKeywords,
-      participants: state.sidebarParticipants,
-      activeFunction: state.activeFunction,
-      fnMin: state.filters.fnMin,
-      fnMax: state.filters.fnMax,
-    });
-  }
-
-  function restoreSidebarFilters() {
-    var stored = getStoredUIState("studio").filters;
-    if (!stored) return;
-    if (stored.severities) state.filters.severities = stored.severities.slice();
-    if (stored.categories) state.sidebarCategories = stored.categories;
-    if (stored.keywords) state.sidebarKeywords = stored.keywords;
-    if (stored.participants) state.sidebarParticipants = stored.participants;
-    if (stored.activeFunction) state.activeFunction = stored.activeFunction;
-    if (stored.fnMin != null) state.filters.fnMin = stored.fnMin;
-    if (stored.fnMax != null) state.filters.fnMax = stored.fnMax;
-    applySidebarCategories();
-    applySidebarKeywords();
-  }
-
-  function keywordLabel(annotationId) {
-    if (!annotationId) return "";
-    return annotationId.charAt(0).toUpperCase() + annotationId.slice(1);
-  }
-
-  function countSidebarSelectedParticipants() {
-    var n = 0;
-    for (var k in state.sidebarParticipants) {
-      if (Object.prototype.hasOwnProperty.call(state.sidebarParticipants, k) && state.sidebarParticipants[k]) n++;
-    }
-    return n;
-  }
-
-  function renderSidebar() {
-    var sidebar = qs("#studioSidebar");
-    if (!sidebar) return;
-    sidebar.setAttribute("data-open", state.sidebarOpen ? "true" : "false");
-
-    if (!state.sheetData) return;
-    var d = state.sheetData;
-
-    // Counts per severity / category / participant / keyword
-    var sevCounts = { all: d.rows.length };
-    var catCounts = {};
-    var kwCounts = {};
-    var partCounts = {};
-    var participants = d.participants || [];
-    for (var p = 0; p < participants.length; p++) partCounts[participants[p]] = 0;
-    for (var i = 0; i < d.rows.length; i++) {
-      var row = d.rows[i];
-      var sev = (row.severity || "").trim();
-      sevCounts[sev] = (sevCounts[sev] || 0) + 1;
-      if (row.category) catCounts[row.category] = (catCounts[row.category] || 0) + 1;
-      if (row.keywords) {
-        for (var rk = 0; rk < row.keywords.length; rk++) {
-          var kid = row.keywords[rk];
-          kwCounts[kid] = (kwCounts[kid] || 0) + 1;
-        }
-      }
-      for (var j = 0; j < participants.length; j++) {
-        var c = row.cells[participants[j]];
-        if (c && c.valid) partCounts[participants[j]] += 1;
-      }
-    }
-    function countRowsBySeverities(severities) {
-      if (!severities || severities.length === 0) return d.rows.length;
-      var n = 0;
-      for (var k = 0; k < d.rows.length; k++) {
-        var sev = (d.rows[k].severity || "").trim();
-        if (sev && severities.indexOf(sev) >= 0) n++;
-      }
-      return n;
-    }
-
-    function severitiesEqual(a, b) {
-      if (a.length !== b.length) return false;
-      for (var i = 0; i < a.length; i++) {
-        if (b.indexOf(a[i]) < 0) return false;
-      }
-      return true;
-    }
-
-    // VIEWS — vertical-list rows with counts. Active is derived from the
-    // current state.filters.severities so picking severity pills below
-    // re-highlights the matching view.
-    var viewsBody = sidebar.querySelector('[data-target="views"]');
-    if (viewsBody) {
-      viewsBody.innerHTML = "";
-      SIDEBAR_VIEWS.forEach(function (view) {
-        var viewSevs = view.severities || [];
-        var count = view.id === "all" ? d.rows.length : countRowsBySeverities(viewSevs);
-        viewsBody.appendChild(createSidebarRow({
-          label: view.label,
-          count: count,
-          active: severitiesEqual(viewSevs, state.filters.severities),
-          onClick: function () {
-            applySidebarView(view.id);
-            persistSidebarFilters();
-            renderSidebar();
-            renderGrid();
-          },
-        }));
-      });
-    }
-
-    // CATEGORIES — vertical-list rows with counts and category-hue dots.
-    var catsBody = sidebar.querySelector('[data-target="categories"]');
-    if (catsBody) {
-      catsBody.innerHTML = "";
-      var cats = Object.keys(catCounts).sort();
-      cats.forEach(function (cat) {
-        catsBody.appendChild(createSidebarRow({
-          label: cat,
-          count: catCounts[cat],
-          active: !!state.sidebarCategories[cat],
-          dotColor: "oklch(0.7 0.16 " + categoryHue(cat) + ")",
-          onClick: function () {
-            state.sidebarCategories[cat] = !state.sidebarCategories[cat];
-            applySidebarCategories();
-            persistSidebarFilters();
-            renderSidebar();
-            renderGrid();
-          },
-        }));
-      });
-      if (cats.length === 0) {
-        var empty = el("span", "studio-sidebar-row-label", "(no categories)");
-        empty.style.padding = "6px 16px";
-        empty.style.color = "var(--fg-faint)";
-        catsBody.appendChild(empty);
-      }
-    }
-
-    // SEVERITY — multi-select pills. "Any severity" clears the selection;
-    // each pill below toggles its severity in/out of state.filters.severities.
-    var sevBody = sidebar.querySelector('[data-target="severity"]');
-    if (sevBody) {
-      sevBody.innerHTML = "";
-      if (!hasSeverityData(d.rows)) {
-        sevBody.appendChild(makeSidebarEmpty("(no severity data)"));
-      } else {
-        sevBody.appendChild(createSidebarRow({
-          label: "Any severity",
-          count: d.rows.length,
-          active: state.filters.severities.length === 0,
-          onClick: function () {
-            state.filters.severities = [];
-            persistSidebarFilters();
-            renderSidebar();
-            renderGrid();
-          },
-        }));
-        for (var si = 0; si < CLIPGEN_CONFIG.severity.length; si++) {
-          var sevLabel = CLIPGEN_CONFIG.severity[si].label;
-          var sevCount = sevCounts[sevLabel] || 0;
-          if (sevCount === 0) continue;
-          (function (label) {
-            sevBody.appendChild(createSidebarRow({
-              label: label,
-              count: sevCount,
-              active: state.filters.severities.indexOf(label) >= 0,
-              dotClass: severityClass(label),
-              onClick: function () {
-                var arr = state.filters.severities.slice();
-                var idx = arr.indexOf(label);
-                if (idx >= 0) arr.splice(idx, 1); else arr.push(label);
-                state.filters.severities = arr;
-                persistSidebarFilters();
-                renderSidebar();
-                renderGrid();
-              },
-            }));
-          })(sevLabel);
-        }
-      }
-    }
-
-    // KEYWORDS — multi-select pills for cell-level annotation tokens
-    // (e.g. "!key" → "Key"). Filter is row-level (any cell in the row carries
-    // the annotation) but cell-level emphasis is applied during grid render.
-    var kwBody = sidebar.querySelector('[data-target="keywords"]');
-    if (kwBody) {
-      kwBody.innerHTML = "";
-      var annotations = (CLIPGEN_CONFIG && CLIPGEN_CONFIG.annotations) || [];
-      var anyKw = false;
-      for (var ak = 0; ak < annotations.length; ak++) {
-        if (kwCounts[annotations[ak].id]) { anyKw = true; break; }
-      }
-      if (annotations.length === 0 || !anyKw) {
-        kwBody.appendChild(makeSidebarEmpty("(no keywords)"));
-      } else {
-        annotations.forEach(function (ann) {
-          var count = kwCounts[ann.id] || 0;
-          if (count === 0) return;
-          kwBody.appendChild(createSidebarRow({
-            label: keywordLabel(ann.id),
-            count: count,
-            active: !!state.sidebarKeywords[ann.id],
-            onClick: function () {
-              state.sidebarKeywords[ann.id] = !state.sidebarKeywords[ann.id];
-              applySidebarKeywords();
-              persistSidebarFilters();
-              renderSidebar();
-              renderGrid();
-            },
-          }));
-        });
-      }
-    }
-
-    // FUNCTION — min/max numeric inputs gated on the activeFunction picker
-    // in the table header.
-    var fnBody = sidebar.querySelector('[data-target="function"]');
-    if (fnBody) {
-      fnBody.innerHTML = "";
-      fnBody.appendChild(buildSidebarFunctionRange());
-    }
-
-    // PARTICIPANTS — compact 6-col grid of mono pills.
-    var partsBody = sidebar.querySelector('[data-target="participants"]');
-    if (partsBody) {
-      partsBody.innerHTML = "";
-      participants.forEach(function (pid) {
-        var pill = el("button", "studio-sidebar-pill cg-mono", pid);
-        pill.type = "button";
-        if (state.sidebarParticipants[pid]) pill.classList.add("is-active");
-        pill.addEventListener("click", function () {
-          state.sidebarParticipants[pid] = !state.sidebarParticipants[pid];
-          persistSidebarFilters();
-          renderSidebar();
-          renderGrid();
-        });
-        partsBody.appendChild(pill);
-      });
-    }
-  }
-
-  function buildSidebarFunctionRange() {
-    var row = el("div", "studio-sidebar-range");
-    var minIn = document.createElement("input");
-    minIn.type = "number";
-    minIn.id = "sidebarFnMin";
-    minIn.placeholder = "Min";
-    minIn.autocomplete = "off";
-    minIn.disabled = !state.activeFunction;
-    if (state.filters.fnMin !== null) minIn.value = String(state.filters.fnMin);
-
-    var maxIn = document.createElement("input");
-    maxIn.type = "number";
-    maxIn.id = "sidebarFnMax";
-    maxIn.placeholder = "Max";
-    maxIn.autocomplete = "off";
-    maxIn.disabled = !state.activeFunction;
-    if (state.filters.fnMax !== null) maxIn.value = String(state.filters.fnMax);
-
-    function onChange() {
-      var mn = minIn.value.trim();
-      var mx = maxIn.value.trim();
-      state.filters.fnMin = mn !== "" ? parseFloat(mn) : null;
-      state.filters.fnMax = mx !== "" ? parseFloat(mx) : null;
-      persistSidebarFilters();
-      applyGridFilters();
-    }
-    minIn.addEventListener("input", onChange);
-    maxIn.addEventListener("input", onChange);
-    row.appendChild(minIn);
-    row.appendChild(el("span", "studio-sidebar-range-sep", "to"));
-    row.appendChild(maxIn);
-    return row;
-  }
-
-  function makeSidebarEmpty(text) {
-    var span = el("span", "studio-sidebar-row-label", text);
-    span.style.padding = "6px 16px";
-    span.style.color = "var(--fg-faint)";
-    return span;
-  }
-
-  function createSidebarRow(opts) {
-    var row = el("button", "studio-sidebar-row");
-    row.type = "button";
-    if (opts.active) row.classList.add("is-active");
-    if (opts.dotColor || opts.dotClass) {
-      var dot = el("span", "studio-sidebar-row-dot");
-      if (opts.dotClass) dot.classList.add(opts.dotClass);
-      if (opts.dotColor) dot.style.background = opts.dotColor;
-      row.appendChild(dot);
-    }
-    var label = el("span", "studio-sidebar-row-label");
-    label.textContent = opts.label || "";
-    label.title = opts.label || "";
-    row.appendChild(label);
-    if (opts.count != null) {
-      var count = el("span", "studio-sidebar-row-count cg-mono");
-      count.textContent = String(opts.count);
-      row.appendChild(count);
-    }
-    if (typeof opts.onClick === "function") {
-      row.addEventListener("click", opts.onClick);
-    }
-    return row;
-  }
-
-  function toggleSidebar() {
-    state.sidebarOpen = !state.sidebarOpen;
-    persistSidebarOpen();
-    renderSidebar();
-  }
-
-  function bindSidebarToggle() {
-    var btn = qs("#studioSidebarToggle");
-    if (!btn) return;
-    btn.addEventListener("click", toggleSidebar);
-  }
-
-  function isParticipantHidden(pid) {
-    if (countSidebarSelectedParticipants() === 0) return false;
-    return !state.sidebarParticipants[pid];
-  }
-
-  function setActiveTabAttr(tab) {
-    document.body.setAttribute("data-active-tab", tab);
-  }
-
-  function syncFilterFnDisabled() {
-    var fnMin = qs("#sidebarFnMin");
-    var fnMax = qs("#sidebarFnMax");
-    var enabled = !!state.activeFunction;
-    if (fnMin) fnMin.disabled = !enabled;
-    if (fnMax) fnMax.disabled = !enabled;
-    if (!enabled && (state.filters.fnMin !== null || state.filters.fnMax !== null)) {
-      state.filters.fnMin = null;
-      state.filters.fnMax = null;
-      if (fnMin) fnMin.value = "";
-      if (fnMax) fnMax.value = "";
-    }
-  }
+  // ---- Sheet sidebar (impl in studio-sidebar.js) ----
+  function applySidebarView() { return STUDIO.applySidebarView && STUDIO.applySidebarView.apply(null, arguments); }
+  function bindSidebarToggle() { return STUDIO.bindSidebarToggle && STUDIO.bindSidebarToggle.apply(null, arguments); }
+  function isParticipantHidden() { return STUDIO.isParticipantHidden && STUDIO.isParticipantHidden.apply(null, arguments); }
+  function persistSidebarFilters() { return STUDIO.persistSidebarFilters && STUDIO.persistSidebarFilters.apply(null, arguments); }
+  function renderSidebar() { return STUDIO.renderSidebar && STUDIO.renderSidebar.apply(null, arguments); }
+  function restoreSidebarFilters() { return STUDIO.restoreSidebarFilters && STUDIO.restoreSidebarFilters.apply(null, arguments); }
+  function setActiveTabAttr() { return STUDIO.setActiveTabAttr && STUDIO.setActiveTabAttr.apply(null, arguments); }
+  function syncFilterFnDisabled() { return STUDIO.syncFilterFnDisabled && STUDIO.syncFilterFnDisabled.apply(null, arguments); }
+  function toggleSidebar() { return STUDIO.toggleSidebar && STUDIO.toggleSidebar.apply(null, arguments); }
 
   // ---- Preview tabs ----
 
@@ -992,8 +483,7 @@
       tabs[i].addEventListener("click", function () {
         var target = this.dataset.tab;
         if (target === state.activePreviewTab) return;
-        // The queues/stashes are shared across tabs, so a cursor parked in one
-        // of those list regions would leave a stale outline behind — drop it.
+        // Queues/stashes span tabs; a parked cursor would leave a stale outline.
         if (_kbRegion) kbClearCursor();
         state.activePreviewTab = target;
         setStoredUIStateField("studio", "activeTab", target);
@@ -1077,8 +567,7 @@
         });
       });
     }
-    // The keyboard cursor is per-surface: drop stale paint when the cursor's
-    // surface is no longer the active tab.
+    // Cursor is per-surface; repaint drops paint on the inactive tab.
     kbPaintCursor();
   }
 
@@ -1107,7 +596,7 @@
     buildSkeletonGrid(qs("#sheetLoading .skeleton-grid"), 9, 4);
     var loading = qs("#sheetLoading");
     if (loading && !loading.querySelector(".sheet-loading-caption")) {
-      var cap = el("div", "sheet-loading-caption", "Loading sheet…");
+      var cap = el("div", "sheet-loading-caption cg-shimmer", "Loading sheet…");
       cap.setAttribute("aria-live", "polite");
       loading.insertBefore(cap, loading.firstChild);
     }
@@ -1144,27 +633,19 @@
           clipgenApplyConfig(data.config);
           updateArtifactFormatLabels();
           state.sheetData = data;
-          // A mind-map-only session has a study and participants even with no
-          // sheet; without this the subheader stays blank. Guarded on `study`
-          // so a genuinely empty session keeps its blank subheader rather than
-          // reading "Unknown study — 0 participants".
+          // Mind-map-only sessions have a study; guard keeps empty sessions' subheader blank.
           if (data.study) renderHeader();
           return;
         }
         state.sheetData = data;
         clipgenApplyConfig(data.config);
         updateArtifactFormatLabels();
-        // Restore persisted sidebar filter selections before the first render so
-        // the grid and sidebar paint already-filtered (activeFunction first so
-        // the fn range stays enabled).
+        // Restore filters before first render (activeFunction first keeps the range enabled).
         restoreSidebarFilters();
         renderHeader();
         renderSidebar();
         renderGrid();
-        // Load per-participant baselines so the grid color-codes durations
-        // and segment metadata in the video-relative frame (matches Python
-        // prepare_clip behavior) instead of raw clock-time spans. Re-render
-        // once they arrive so cell intensities reflect baselined durations.
+        // Baselines put durations in the video-relative frame (matches prepare_clip); re-render on arrival.
         apiGet("api/sheet/baseline")
           .then(function (bdata) {
             state.convergenceBaselines = (bdata.ok && bdata.baselines) ? bdata.baselines : {};
@@ -1223,10 +704,7 @@
       });
   }
 
-  // The subheader Refresh acts on whatever the user is looking at. The Sheet
-  // tab re-reads the spreadsheet (a rate-limited Google round-trip, so it stays
-  // a Sheet-tab action); each intake tab wakes its own poller, which refetches
-  // now and snaps the cadence back off its idle backoff.
+  // Refresh acts on the visible tab: Sheet re-reads the spreadsheet, intakes wake their poller.
   function refreshActiveTab() {
     var btn = qs("#studioRefresh");
     if (!btn || btn.disabled) return;
@@ -1254,12 +732,7 @@
     });
   }
 
-  // On page load, reconcile the persisted manifest against the live sheet:
-  // for each manifest artifact, find its (participant, row) in sheetData,
-  // mark that cell green, and re-enqueue any artifact whose cell still has
-  // a valid timestamp but isn't already queued. The `seen` dedup guards
-  // against multiple artifacts mapping to the same cell (e.g. two clips
-  // generated from the same timestamp).
+  // Reconcile manifest against the sheet: mark cells green, re-enqueue valid ones; `seen` dedupes cells.
   function loadManifestState() {
     apiGet("api/manifest")
       .then(function (data) {
@@ -1301,9 +774,7 @@
           for (var ei = 0; ei < entries.length; ei++) state.artifactQueue.push(entries[ei]);
         }
 
-        // Dedupe by id (and fall back to file) so calling loadManifestState
-        // again after a background-completed build (re-attach from the
-        // job-status poll) doesn't double-list the same artifact or reel.
+        // Dedupe by id (fallback file) so a job-status reattach doesn't double-list.
         var seenArtifact = {};
         for (var ai = 0; ai < state.generatedArtifacts.length; ai++) {
           var prev = state.generatedArtifacts[ai];
@@ -1340,11 +811,7 @@
       .catch(function () {});
   }
 
-  // Poll /api/job-status so Studio re-attaches to a background build that
-  // started before the user navigated away (to /screenspace/ etc.). Without
-  // this the streaming fetch is gone after navigation, the progress bar is
-  // dark, and the Cancel button is hidden — leaving the user no way to stop
-  // a long-running build short of killing the server.
+  // Re-attach to a background build after navigating away; otherwise Cancel is unreachable.
   function applyJobStatus(status) {
     if (!status) return;
     var reel = status.reel || {};
@@ -1360,15 +827,12 @@
       var clipFraction = totalClips > 0 ? Math.min(clipsDone / totalClips, 1) : 0;
       // Same 0.7/0.3 weighting as the live stream handler in onBuildReel().
       setButtonProgress("buildReelBtn", clipFraction * 0.7 + concatFraction * 0.3);
-      // Seed from the server's start time so a reattach shows accurate elapsed;
-      // idempotent start() leaves a live build's own clock untouched.
+      // Seed from the server start time; idempotent start() leaves a live clock alone.
       _reelEtaTracker.start(reel.started_at ? reel.started_at * 1000 : undefined);
       _studioEtaTicker.ensure();
       _paintReelElapsed();
     } else if (state._jobStatusReelWasInProgress) {
-      // Transition busy → idle while we were polling: a build finished in
-      // the background. Clear UI and reload the manifest so any new reel
-      // shows up in the gallery without a full page refresh.
+      // Busy → idle while polling: a background build finished. Reload the manifest.
       setReelGenerating(false);
       qs("#cancelReelBtn").classList.add("hidden");
       setButtonProgress("buildReelBtn", null);
@@ -1378,11 +842,7 @@
     }
     state._jobStatusReelWasInProgress = !!reel.in_progress;
 
-    // ---- Generate side: sheet (/api/generate) and intake (/api/generate-intake)
-    // run concurrently from one Generate click and share the same button,
-    // progress readout, and elapsed clock. Combine their counts into a single
-    // state machine so the two streams don't clobber each other's progress or
-    // fire the idle reset while the other is still running.
+    // ---- Generate side: sheet and intake streams share one button, so combine their counts.
     var intake = status.intake || {};
     var genActive = !!gen.in_progress || !!intake.in_progress;
     if (genActive) {
@@ -1393,16 +853,14 @@
       if (combinedTotal > 0) {
         setButtonProgress("generateBtn", Math.min(combinedDone / combinedTotal, 1));
       }
-      // Seed elapsed from the earliest of the two start times; idempotent
-      // start() leaves a live build's own clock untouched.
+      // Seed elapsed from the earlier start; idempotent start() leaves a live clock alone.
       var genStartedAt =
         gen.started_at && intake.started_at
           ? Math.min(gen.started_at, intake.started_at)
           : gen.started_at || intake.started_at;
       _generateEtaTracker.start(genStartedAt ? genStartedAt * 1000 : undefined);
-      // The "N / M cells" readout counts sheet cells only (intake spans aren't
-      // cells); an intake-only run has no sheet count and shows elapsed alone.
-      updateGenerateProgress(gen.done || 0, gen.total || 0);
+      // Both sides count artifacts, so the totals sum and intake-only runs keep a readout.
+      updateGenerateProgress(combinedDone, combinedTotal);
       _studioEtaTicker.ensure();
     } else if (state._jobStatusGenerateWasInProgress) {
       setArtifactGenerating(false);
@@ -1420,8 +878,7 @@
       .then(function (data) {
         if (!data || !data.ok) return;
         applyJobStatus(data);
-        // Keep polling while either job is in flight. Stop otherwise so the
-        // page doesn't hammer the server when nothing is happening.
+        // Poll only while a job is in flight.
         var stillBusy =
           (data.reel && data.reel.in_progress) ||
           (data.generate && data.generate.in_progress) ||
@@ -1438,7 +895,10 @@
   function startJobStatusPoll() {
     if (state.jobStatusPoller) return;
     // runImmediately is false: the first poll fires after one interval (1s).
-    state.jobStatusPoller = createPoller(pollJobStatus, 1000, { runImmediately: false });
+    state.jobStatusPoller = createPoller(pollJobStatus, 1000, {
+      runImmediately: false,
+      label: "studio.jobStatus",
+    });
     state.jobStatusPoller.start();
   }
 
@@ -1453,8 +913,7 @@
 
   function renderHeader() {
     var d = state.sheetData;
-    // With no sheet the cohort comes from the mind map, which is carried on its
-    // own key — `participants` means *sheet columns* to every other consumer.
+    // Without a sheet the cohort is the mind map's; `participants` means sheet columns.
     var people = (d.participants && d.participants.length)
       ? d.participants
       : (d.mindnodeParticipants || []);
@@ -1482,6 +941,10 @@
   var _gridEventsBound = false;
 
   function renderGrid() {
+    return clipgenPerf.span("studio.renderGrid", renderGridImpl);
+  }
+
+  function renderGridImpl() {
     var d = state.sheetData;
     var grid = qs("#sheetGrid");
     var prevScrollTop = grid.scrollTop;
@@ -1508,9 +971,7 @@
     colFn.style.width = "3.25rem"; // fits the fn select + clear + optional sort button
     colgroup.appendChild(colFn);
     var colObs = document.createElement("col");
-    // Explicit width keeps the table size predictable under table-layout: fixed
-    // — `auto` collapses to 0 when other cols already exceed the table width.
-    // The td inside has overflow:hidden + ellipsis to clamp the long observation.
+    // Explicit width: under table-layout fixed, `auto` collapses to 0 when others overflow.
     colObs.style.width = "18rem";
     colgroup.appendChild(colObs);
     var colCat = document.createElement("col");
@@ -1538,7 +999,8 @@
     var fnTh = el("th", "col-function");
     var fnWrap = el("div", "fn-header-wrap");
     var fnSelect = document.createElement("select");
-    fnSelect.className = "fn-select";
+    // No caret: .col-function is 3.5rem and also holds .fn-clear.
+    fnSelect.className = "fn-select cg-select-nocaret";
     fnSelect.title = "Row function";
     var defaultOpt = document.createElement("option");
     defaultOpt.value = "";
@@ -1630,8 +1092,7 @@
     while (i < filteredRows.length) {
       var row = filteredRows[i];
       if (isRowEmpty(row, visibleParticipants)) {
-        // While sorted the spreadsheet's empty-row grouping is meaningless, so
-        // drop empty rows entirely instead of emitting "N empty rows" spacers.
+        // Sorted views drop empty rows; the spreadsheet grouping is meaningless there.
         if (state.sortColumn) {
           i++;
           continue;
@@ -1662,24 +1123,13 @@
     kbPaintCursor();
   }
 
-  // ---- Keyboard cursor (arrows / j / k selection over cells and intake cards) ----
-  //
-  // One logical cursor per surface: the sheet grid when the Sheet tab is
-  // active, otherwise the active intake tab's card row (satellite access via
-  // STUDIO.intakeCardCount/intakeCardAt/intakeToggleAt). Enter mirrors click
-  // (toggle in the artifact work area), Shift+Enter mirrors shift-click
-  // (toggle in the reel). The cursor is logical state — re-renders repaint it
-  // via kbPaintCursor() rather than keeping a live element reference.
+  // ---- Keyboard cursor ----
+  // One logical cursor per surface; re-renders repaint it via kbPaintCursor().
 
   var _kbCursor = null; // {surface: "sheet", participant, row} | {surface: <intake tab | list surface>, idx}
   var _kbRegion = null; // explicit list-surface override set by the jump hotkeys (kbJumpTo)
 
-  // Index-addressed list surfaces the cursor can jump into: the filter sidebar,
-  // the artifact/reel queues, and the two stash lists. Each names its item
-  // selector, how to reveal its container (ensure), what Enter does to the
-  // focused item (activate), and the Alt-hold verb. The sheet grid and intake
-  // card rows stay special-cased in the primitives below (stable participant/row
-  // addressing and satellite-owned cards respectively).
+  // Index-addressed list surfaces the cursor can jump into; sheet and intake cards stay special-cased.
   function kbActivateClick(el) { if (el) { el.click(); return true; } return false; }
   function kbActivateRemove(el) {
     var btn = el && el.querySelector(".queue-card-remove");
@@ -1706,9 +1156,7 @@
     return _kbRegion || state.activePreviewTab || "sheet";
   }
 
-  // Briefly double-pulse an empty queue's ghost card, acknowledging the focus
-  // hotkey while signaling there's nothing to select. Remove-then-reflow so a
-  // repeat keypress replays the animation.
+  // Double-pulse an empty queue's ghost; remove-then-reflow lets a repeat replay it.
   function pulseGhost(sel) {
     var ghost = qs(sel);
     if (!ghost) return;
@@ -1717,9 +1165,7 @@
     ghost.classList.add("queue-card-ghost-pulse");
   }
 
-  // Jump the cursor to the first item of a named list surface (the focus
-  // hotkeys). Reveals the container first, and no-ops (declines the key) when
-  // the surface is off-tab or empty.
+  // Jump to a list surface's first item; declines the key when off-tab or empty.
   function kbJumpTo(region) {
     var cfg = KB_LIST_SURFACES[region];
     if (!cfg) return false;
@@ -1729,8 +1175,7 @@
       if (cfg.ghostSel) pulseGhost(cfg.ghostSel);
       return false;
     }
-    // Taking over with the painted cursor: drop any lingering native DOM focus
-    // (e.g. a tabbed-to top-nav button) so only one focus indicator shows.
+    // Drop stray native focus so only one focus indicator shows.
     if (window.ClipgenHotkeys && window.ClipgenHotkeys.blurStrayFocus) {
       window.ClipgenHotkeys.blurStrayFocus();
     }
@@ -1766,11 +1211,7 @@
     }
   }
 
-  // Alt-hold context hints (via ClipgenHotkeys.registerActionHints): what
-  // Enter / Shift+Enter would do to the selected cell right now. Sheet cells
-  // know their queue membership (findInQueue), so the verb flips between
-  // Send and Remove; intake cards keep the generic Send labels (membership
-  // lives in the satellite).
+  // Alt-hold hints: sheet cells flip Send/Remove by queue membership; intake cards stay generic.
   function kbActionHintEntries() {
     if (_kbCursor && KB_LIST_SURFACES[_kbCursor.surface]) {
       // Single Enter chip labeled with the list surface's primary action.
@@ -1800,9 +1241,7 @@
     return true;
   }
 
-  // Linear step: row-major across sheet cells (wraps to the next row
-  // naturally), index step across intake cards. Returns false (declines the
-  // event) when the surface has nothing to select.
+  // Row-major step across cells, index step across cards; false when nothing to select.
   function kbStep(delta) {
     var surface = kbSurface();
     if (surface === "sheet") {
@@ -1841,10 +1280,7 @@
     return true;
   }
 
-  // Vertical step on the sheet: the nearest valid cell in a lower/higher row,
-  // preferring the same participant column (i.e. that participant's next
-  // timestamp), falling back to the first valid cell of the adjacent row.
-  // Intake cards are a single row, so vertical falls back to a linear step.
+  // Vertical: nearest valid cell in an adjacent row, same participant preferred; cards step linearly.
   function kbStepVertical(dir) {
     var surface = kbSurface();
     if (surface !== "sheet") return kbStep(dir);
@@ -1897,10 +1333,7 @@
       return true;
     }
     if (KB_LIST_SURFACES[surface]) {
-      // No artifact/reel distinction on these lists — Enter and Shift+Enter
-      // both fire the surface's primary action on the focused item. Repaint
-      // afterward: the action may rebuild the list (filter toggle) or shrink it
-      // (queue remove), and this keeps the outline on the item now at that index.
+      // Lists have one primary action; repaint because it may rebuild or shrink the list.
       var acted = KB_LIST_SURFACES[surface].activate(kbCursorEl(), reel);
       if (acted) kbPaintCursor();
       return acted;
@@ -1908,9 +1341,7 @@
     return !!(STUDIO.intakeToggleAt && STUDIO.intakeToggleAt(surface, _kbCursor.idx, reel));
   }
 
-  // Backspace / Delete remove the focused card when the cursor sits on a queue
-  // surface. Returns false elsewhere so Backspace keeps its default (browser
-  // back); on a queue surface it always consumes the key.
+  // Backspace/Delete remove the focused queue card; false elsewhere keeps browser-back.
   function kbRemoveCard() {
     var surface = kbSurface();
     if (surface !== "artifact-queue" && surface !== "reel-queue") return false;
@@ -1923,12 +1354,8 @@
     return true;
   }
 
-  // ---- Panel divider (resizable split between sheet preview and bottom panel) ----
-  //
-  // Layout model: #sheetPreview is `flex: 1 1 auto` and #bottomPanel has an
-  // explicit pixel `height` set from state.bottomH. The drag updates that
-  // pixel height directly; the upper pane absorbs the remainder via flex.
-  // state.bottomH is clamped to [BOTTOM_STRIP_MIN, BOTTOM_STRIP_MAX].
+  // ---- Panel divider ----
+  // #bottomPanel gets a pixel height from state.bottomH; #sheetPreview flexes.
   var BOTTOM_STRIP_MIN = 60;
   var BOTTOM_STRIP_MAX = 560;
   var BOTTOM_STRIP_DEFAULT = 380;
@@ -1983,10 +1410,7 @@
         state.bottomH = h;
         applyBottomHeight();
       },
-      // #bottomPanel carries a `transition: height` for the collapse animation,
-      // and the drag writes that same property every frame — without suppressing
-      // it the panel eases ~250 ms behind the cursor and keeps sliding after
-      // mouseup. Mirrors Screenspace's body.panel-dragging handling.
+      // Suppress the height transition during drag, or the panel lags the cursor (see Screenspace).
       onDragStart: function () {
         document.body.classList.add("panel-dragging");
       },
@@ -2021,9 +1445,7 @@
 
     if (state.bottomCollapsed) {
       // --- Restore ---
-      // Animate `height` between concrete pixel endpoints (0 → bottomH); the box
-      // is never `auto` mid-flight, so the reveal tracks linearly. Mirrors the
-      // Screenspace panel.
+      // Animate between pixel endpoints; never `auto` mid-flight.
       state.bottomCollapsed = false;
       document.body.classList.add("bottom-animating");
       document.body.classList.remove("bottom-collapsed");
@@ -2038,9 +1460,7 @@
       });
     } else {
       // --- Collapse ---
-      // Pin the current pixel height, then animate `height` to 0. Keeping the box
-      // height definite the whole way (never clearing to `auto`) is what avoids
-      // the mid-animation hitch.
+      // Pin the pixel height, then animate to 0; `auto` would hitch.
       state.bottomCollapsed = true;
       var currentH = bottom.offsetHeight;
       document.body.classList.add("bottom-animating");
@@ -2131,9 +1551,7 @@
         var chip = document.createElement("span");
         chip.className = "ts-chip cg-mono";
         chip.textContent = cellData.value;
-        // Native tooltip fallback for chips clipped by the fixed column width.
-        // Inert when the text isn't truncated; cheaper than per-cell scrollWidth
-        // reads in the render loop. Complements the richer hover-expand float.
+        // Native tooltip for clipped chips; cheaper than scrollWidth reads in the render loop.
         chip.title = cellData.value;
         td.appendChild(chip);
         if (cellData.valid) {
@@ -2411,7 +1829,7 @@
       }
     }
     if (added) {
-      renderFn();
+      if (renderFn) renderFn();
       if (info.row) updateSingleCellClass(info.participant, info.row);
     }
   }
@@ -2546,8 +1964,7 @@
 
     function showFloat(td) {
       if (!state.cellExpandHover) return;
-      // Anchor the float to the chip's box (not the td) so the float reads as
-      // the same chip widening rather than a tooltip popping in.
+      // Anchor to the chip, not the td, so it reads as the chip widening.
       var chip = td.querySelector(".ts-chip");
       if (!chip) return;
       if (chip.scrollWidth <= chip.clientWidth + 1) return;
@@ -2592,25 +2009,15 @@
 
   // ---- Drag from grid ----
 
-  // Defensive click-vs-drag threshold layered on top of the browser's own
-  // dragstart heuristic. The native ghost is suppressed at dragstart and we
-  // wait until the cursor has moved this many pixels before mounting our
-  // cascade preview, so a small click-with-jitter never flashes a ghost.
+  // Click-vs-drag threshold: the ghost mounts only after this much movement.
   var _CELL_DRAG_THRESHOLD_PX = 6;
   var _CELL_GHOST_OFFSET_X = 14;
   var _CELL_GHOST_OFFSET_Y = 10;
 
-  // Build the shared .queue-card-thumb (img + duration overlay) and append it
-  // to `card`. Returns the thumb element so callers can layer call-site badges
-  // on top. opts: { participant, start, duration, observe, nativeLazy,
-  //                 editItem, renderFn }
-  //   observe    true  -> lazy IntersectionObserver via ssObserveThumb
-  //              false -> eager img.src with the standard error fallback
-  //   nativeLazy eager-only; set img.loading="lazy" (default true; pass false
-  //              for the drag ghost, an off-DOM image that must load now)
-  //   editItem   when set, the duration overlay becomes a trim trigger for that
-  //              queue item (Artifact/Reel cards); renderFn re-renders its queue
-  //              after edits. Omit for read-only thumbs (drag ghost, intakes).
+  // dragover silence that counts as release. Measured worst Safari gap 52ms; WebKit's dragend lags ~560ms.
+  var _CELL_RELEASE_WATCHDOG_MS = 120;
+
+  // Shared .queue-card-thumb. observe: lazy via ssObserveThumb; nativeLazy false for off-DOM ghosts; editItem enables trim.
   function buildQueueCardThumb(card, opts) {
     var thumb = el("div", "queue-card-thumb");
     // Window coordinates for the optional hover card scrubber (sprite + audio).
@@ -2665,11 +2072,7 @@
     return badge;
   }
 
-  // Build a fixed-position overlay holding one queue-style card per parsed
-  // segment, matching the look of cards in the Artifact/Reel queues. Cards
-  // stack down-right via the --i custom property (see studio.css). The
-  // .queue-card-thumb's surface-alt background acts as a skeleton state
-  // until the eagerly-loaded thumbnail resolves.
+  // Fixed overlay of one queue-style card per segment; cards cascade via --i (studio.css).
   function buildCellDragGhost(info, segments) {
     var ghost = el("div", "cell-drag-ghost");
     var n = segments.length;
@@ -2679,8 +2082,7 @@
       card.style.setProperty("--i", i);
       if (info.severity) card.setAttribute("data-severity", info.severity);
 
-      // Eager (non-lazy) load: the ghost is an off-DOM drag image that must
-      // resolve immediately, so it can't defer behind loading="lazy".
+      // Off-DOM drag image: must load now, so no loading="lazy".
       buildQueueCardThumb(card, {
         participant: info.participant,
         start: seg.start,
@@ -2712,6 +2114,8 @@
     var rafPending = 0;
     var cursorX = 0;
     var cursorY = 0;
+    var releaseTimer = 0;      // dragover-gone deadline, see the constant above
+    var blankDragImage = createBlankDragImage();
 
     grid.addEventListener("pointerdown", function (ev) {
       var td = ev.target.closest(".ts-cell");
@@ -2735,7 +2139,7 @@
       ev.dataTransfer.effectAllowed = "copy";
 
       // Suppress the browser's snapshot — we render a custom cascade overlay.
-      try { ev.dataTransfer.setDragImage(getTransparentDragImage(), 0, 0); } catch (_) {}
+      try { ev.dataTransfer.setDragImage(blankDragImage, 0, 0); } catch (_) {}
 
       pendingDrag = {
         info: info,
@@ -2761,7 +2165,7 @@
       var info = pendingDrag.info;
       var segments = expandCellToSegments(info);
       ghost = buildCellDragGhost(info, segments);
-      pendingDrag = null;
+      // pendingDrag outlives the mount so a watchdog misfire re-mounts on the next dragover.
       positionGhost();
       // Flip on the .in class one frame later so the entrance transition runs.
       requestAnimationFrame(function () {
@@ -2773,6 +2177,9 @@
       if (!pendingDrag && !ghost) return;
       cursorX = ev.clientX;
       cursorY = ev.clientY;
+      // Each dragover pushes the release deadline back.
+      clearTimeout(releaseTimer);
+      releaseTimer = setTimeout(hideGhost, _CELL_RELEASE_WATCHDOG_MS);
       ensureGhostBuilt();
       if (!ghost || rafPending) return;
       rafPending = requestAnimationFrame(function () {
@@ -2781,32 +2188,34 @@
       });
     }
 
-    function cleanup() {
-      pendingDrag = null;
+    // Fade out and drop the node; pendingDrag stays so a misfire self-heals.
+    function hideGhost() {
       if (rafPending) {
         cancelAnimationFrame(rafPending);
         rafPending = 0;
       }
-      if (ghost) {
-        var node = ghost;
-        ghost = null;
-        node.classList.remove("in");
-        node.classList.add("out");
-        setTimeout(function () {
-          if (node.parentNode) node.parentNode.removeChild(node);
-        }, 140);
-      }
+      if (!ghost) return;
+      var node = ghost;
+      ghost = null;
+      node.classList.remove("in");
+      node.classList.add("out");
+      setTimeout(function () {
+        if (node.parentNode) node.parentNode.removeChild(node);
+      }, 140);
+    }
+
+    function cleanup() {
+      clearTimeout(releaseTimer);
+      releaseTimer = 0;
+      pendingDrag = null;
+      hideGhost();
       pointerOrigin = null;
     }
 
     document.addEventListener("dragover", onDragOver, true);
+    // dragend is the authoritative reset. No mouseup listener: neither engine fires it mid-drag.
     document.addEventListener("dragend", cleanup, true);
     document.addEventListener("drop", cleanup, true);
-    // mouseup fires immediately on release regardless of drop target. dragend
-    // is delayed up to ~1s by the browser's snap-back animation when a drop
-    // is rejected (e.g. dropped on the sheet, not on a queue), so without
-    // this the ghost lingers visibly. cleanup() is idempotent.
-    document.addEventListener("mouseup", cleanup, true);
     window.addEventListener("blur", cleanup);
     document.addEventListener("visibilitychange", function () {
       if (document.hidden) cleanup();
@@ -2828,7 +2237,8 @@
       if (isArtifactQueueLocked()) return;
       if (info.source === "reel-stash" || info.source === "artifact-stash") {
         for (var i = 0; i < info.items.length; i++)
-          addToQueue(state.artifactQueue, info.items[i], renderArtifactQueue);
+          addToQueue(state.artifactQueue, info.items[i], null);
+        renderArtifactQueue();
         return;
       }
       if (isIntakeSource(info.source)) {
@@ -2845,7 +2255,8 @@
       if (isReelQueueLocked()) return;
       if (info.source === "reel-stash" || info.source === "artifact-stash") {
         for (var i = 0; i < info.items.length; i++)
-          addToQueue(state.reelQueue, info.items[i], renderReelQueue);
+          addToQueue(state.reelQueue, info.items[i], null);
+        renderReelQueue();
         return;
       }
       if (isIntakeSource(info.source)) {
@@ -2871,8 +2282,7 @@
     target.addEventListener("dragover", function (ev) {
       ev.preventDefault();
       ev.dataTransfer.dropEffect = "copy";
-      // dragover fires ~60Hz; skip the no-op write when the class is already
-      // applied so we don't churn the attribute / invalidate style.
+      // dragover fires ~60Hz; skip the no-op class write.
       if (!target.classList.contains("drag-over")) target.classList.add("drag-over");
     });
     target.addEventListener("dragleave", function (ev) {
@@ -2896,17 +2306,7 @@
 
   function initWheelScroll() {
     ["#artifactsList", "#reelList"].forEach(function (sel) {
-      var el = qs(sel);
-      el.addEventListener(
-        "wheel",
-        function (e) {
-          if (el.scrollWidth > el.clientWidth) {
-            e.preventDefault();
-            el.scrollLeft += e.deltaY;
-          }
-        },
-        { passive: false },
-      );
+      clipgenWheelToHorizontal(qs(sel));
     });
   }
 
@@ -2941,8 +2341,7 @@
           segTotal: reelItem.segTotal,
           source: "reel",
         };
-        // Preserve intake identity for reel items that originated from an
-        // intake cluster, so a drop back into the queue keeps its linkage.
+        // Keep intake identity so a drop back into the queue keeps its linkage.
         if (reelItem.event_type) data.event_type = reelItem.event_type;
         if (reelItem.event_ids) data.event_ids = reelItem.event_ids;
         if (reelItem.mark_ids) data.mark_ids = reelItem.mark_ids;
@@ -2977,11 +2376,8 @@
     });
   }
 
-  // ---- Duration-badge trim pop-over — studio-trim.js --------------------
-  // The trim pop-over cluster (duration badge → drag/±30s/type-to-edit in-out
-  // points) plus buildCellOverrides() live in studio-trim.js. The hub reaches
-  // them via these same-named guarded delegators; the satellite reaches the
-  // hub's saveQueues/isIntakeSource through the STUDIO namespace (published below).
+  // ---- Trim pop-over — studio-trim.js ----
+  // Guarded delegators; the satellite reaches saveQueues/isIntakeSource via STUDIO.
   function appendDurationBadge() {
     return STUDIO.appendDurationBadge && STUDIO.appendDurationBadge.apply(null, arguments);
   }
@@ -3001,6 +2397,8 @@
     isReel: false,
     attachDragstart: true,
     durationSel: null,
+    countNoun: "artifact",
+    countNounPlural: "artifacts",
   };
   var REEL_QUEUE = {
     listSel: "#reelList",
@@ -3012,15 +2410,13 @@
     isReel: true,
     attachDragstart: false,
     durationSel: "#reelDuration",
+    countNoun: "clip",
+    countNounPlural: "clips",
   };
 
-  // Composer-trim key for a queue item, or null. Sheet items key on
-  // row/participant/segment (matching composer-markers.js's sheet marker
-  // keys — segIdx follows the same parseClipSegmentsForCell pair order);
-  // intake items key on their event/mark ids.
+  // Composer-trim key or null; sheet keys match composer-markers.js (row:participant:segIdx), intakes key on ids.
   function queueItemTrimKey(item) {
-    // Gate on the carded-key set (not raw trims) so the badge only appears
-    // when the deep-link has a Composer Intake card to land on.
+    // Gate on carded keys so the deep-link has a card to land on.
     var cardKeys = state.coTrimCardKeys || {};
     if (!isIntakeSource(item.source) && item.row) {
       var key = "sheet:" + item.row + ":" + item.participant + ":" + (item.segIdx || 0);
@@ -3047,38 +2443,13 @@
       "queue-card" + (cfg.isReel ? " reel-card" : "") + (isIntake ? " queue-card-intake" : ""),
     );
     if (cfg.isReel) card.setAttribute("data-reel-idx", idx);
+    card.setAttribute("data-queue-idx", idx);
     card.setAttribute("data-participant", item.participant);
     card.setAttribute("data-row", isIntake ? "" : item.row);
     if (isIntake) card.setAttribute("data-source", item.source);
     if (!isIntake && item.severity) card.setAttribute("data-severity", item.severity);
     card.setAttribute("data-seg-idx", segIdx);
     if (!ctx.locked) card.setAttribute("draggable", "true");
-
-    if (cfg.attachDragstart && !ctx.locked) {
-      card.addEventListener("dragstart", function (ev) {
-        var data = {
-          participant: item.participant,
-          desc: item.desc,
-          start: item.start,
-          end: item.end,
-          source: isIntake ? item.source : "artifact",
-        };
-        if (!isIntake) {
-          data.row = item.row;
-          data.timestamp = item.timestamp;
-          data.severity = item.severity;
-          data.segIdx = item.segIdx;
-          data.segTotal = item.segTotal;
-        } else {
-          data.event_type = item.event_type;
-          data.event_ids = item.event_ids;
-          data.mark_ids = item.mark_ids;
-        }
-        ev.dataTransfer.setData("application/json", JSON.stringify(data));
-        ev.dataTransfer.effectAllowed = "copyMove";
-        setCardDragImage(ev, this);
-      });
-    }
 
     var thumb = buildQueueCardThumb(card, {
       participant: item.participant,
@@ -3090,9 +2461,7 @@
     });
     if (isIntake) thumb.appendChild(buildSourceBadge(item.source));
 
-    // Asterisk badge: this item's underlying timestamp has a Composer trim —
-    // the user may want to swap this card for the trimmed version. Click jumps
-    // to the Composer Intake tab and highlights it.
+    // Trim badge: the timestamp has a Composer trim; click jumps to its Intake card.
     var trimKey = queueItemTrimKey(item);
     if (trimKey) {
       var trimBadge = el("button", "intake-trim-badge");
@@ -3125,43 +2494,44 @@
     var removeBtn = el("button", "queue-card-remove");
     removeBtn.innerHTML = iconHTML("x-mark");
     removeBtn.title = "Remove";
-    if (!ctx.locked) {
-      removeBtn.addEventListener("click", function (ev) {
-        ev.stopPropagation();
-        var card = this.closest(".queue-card");
-        var commit = function () {
-          // Resolve by identity, not the captured idx: while the exit animation
-          // plays, an earlier card's removal can re-render and shift indices.
-          var q = state[cfg.queueKey];
-          var ix = q.indexOf(item);
-          if (ix < 0) return;
-          var removed = q.splice(ix, 1)[0];
-          if (removed.row) delete state.cellResults[cellKey(removed.participant, removed.row)];
-          ctx.render();
-          if (removed.row) updateSingleCellClass(removed.participant, removed.row);
-        };
-        if (card && window.ClipgenMotion) ClipgenMotion.animateOut(card, "delete").then(commit);
-        else commit();
-      });
-    }
     card.appendChild(removeBtn);
-
-    if (!isIntake) {
-      card.addEventListener("mouseenter", function () {
-        highlightGridHeaders(item.participant, item.row);
-      });
-      card.addEventListener("mouseleave", clearGridHighlights);
-    }
 
     return card;
   }
 
   function renderQueue(cfg) {
+    return clipgenPerf.span("studio.renderQueue", function () {
+      renderQueueImpl(cfg);
+    });
+  }
+
+  // A card is one segment; spell out cells vs cards so the counts agree.
+  function queueCountTooltip(q, noun, nounPlural) {
+    var cellsSeen = {};
+    var cellCount = 0;
+    for (var i = 0; i < q.length; i++) {
+      if (isIntakeSource(q[i].source)) continue;
+      var key = q[i].participant + "." + q[i].row;
+      if (!cellsSeen[key]) { cellsSeen[key] = true; cellCount++; }
+    }
+    var phrase = clipgenPluralUnit(q.length, noun, nounPlural);
+    if (cellCount > 0 && cellCount !== q.length) {
+      return phrase + " from " + clipgenPluralUnit(cellCount, "cell", "cells");
+    }
+    return phrase + " queued";
+  }
+
+  function renderQueueImpl(cfg) {
     clearGridHighlights();
     var list = qs(cfg.listSel);
     var q = state[cfg.queueKey];
     var n = q.length;
-    qs(cfg.countSel).textContent = "(" + n + ")";
+    var countEl = qs(cfg.countSel);
+    countEl.textContent = "(" + n + ")";
+    countEl.setAttribute(
+      "data-tooltip",
+      queueCountTooltip(q, cfg.countNoun, cfg.countNounPlural)
+    );
     list.innerHTML = "";
     saveQueues();
     refreshIntakeCardStates();
@@ -3178,10 +2548,12 @@
       renderQueue(cfg);
     };
     var totalDur = 0;
+    var frag = document.createDocumentFragment();
     for (var i = 0; i < n; i++) {
       totalDur += q[i].end - q[i].start;
-      list.appendChild(buildQueueCard(q[i], i, cfg, { locked: locked, render: render }));
+      frag.appendChild(buildQueueCard(q[i], i, cfg, { locked: locked, render: render }));
     }
+    list.appendChild(frag);
     if (cfg.durationSel) qs(cfg.durationSel).textContent = formatDuration(totalDur);
     applyCardStates(list);
     attachQueueScrubbers(list);
@@ -3196,10 +2568,85 @@
     renderQueue(REEL_QUEUE);
   }
 
-  // ---- Stashes (carved into studio-stash.js) ----
-  // Same-named guarded delegators; implementations live in studio-stash.js,
-  // published onto window.ClipgenStudio. The stash drop-target callbacks reach
-  // the satellite late-bound (STUDIO.stashDropReel / .stashDropArtifacts).
+  // One listener set per list, bound once at boot, never from renderQueue (CODE-REVIEW.md).
+  function bindQueueList(cfg) {
+    var list = qs(cfg.listSel);
+    if (!list) return;
+
+    if (cfg.attachDragstart) {
+      list.addEventListener("dragstart", function (ev) {
+        if (cfg.isLocked()) {
+          ev.preventDefault();
+          return;
+        }
+        var card = ev.target.closest(".queue-card");
+        if (!card || !list.contains(card)) return;
+        var idx = parseInt(card.getAttribute("data-queue-idx"), 10);
+        var item = state[cfg.queueKey][idx];
+        if (!item) return;
+        var isIntake = isIntakeSource(item.source);
+        var data = {
+          participant: item.participant,
+          desc: item.desc,
+          start: item.start,
+          end: item.end,
+          source: isIntake ? item.source : "artifact",
+        };
+        if (!isIntake) {
+          data.row = item.row;
+          data.timestamp = item.timestamp;
+          data.severity = item.severity;
+          data.segIdx = item.segIdx;
+          data.segTotal = item.segTotal;
+        } else {
+          data.event_type = item.event_type;
+          data.event_ids = item.event_ids;
+          data.mark_ids = item.mark_ids;
+        }
+        ev.dataTransfer.setData("application/json", JSON.stringify(data));
+        ev.dataTransfer.effectAllowed = "copyMove";
+        setCardDragImage(ev, card);
+      });
+    }
+
+    list.addEventListener("click", function (ev) {
+      var btn = ev.target.closest(".queue-card-remove");
+      if (!btn || !list.contains(btn)) return;
+      if (cfg.isLocked()) return;
+      ev.stopPropagation();
+      var card = btn.closest(".queue-card");
+      if (!card) return;
+      var idx = parseInt(card.getAttribute("data-queue-idx"), 10);
+      var item = state[cfg.queueKey][idx];
+      if (!item) return;
+      var commit = function () {
+        // Resolve by identity: an earlier removal can shift indices during the exit animation.
+        var q = state[cfg.queueKey];
+        var ix = q.indexOf(item);
+        if (ix < 0) return;
+        var removed = q.splice(ix, 1)[0];
+        if (removed.row) delete state.cellResults[cellKey(removed.participant, removed.row)];
+        renderQueue(cfg);
+        if (removed.row) updateSingleCellClass(removed.participant, removed.row);
+      };
+      if (window.ClipgenMotion) ClipgenMotion.animateOut(card, "delete").then(commit);
+      else commit();
+    });
+
+    list.addEventListener("mouseover", function (ev) {
+      var card = ev.target.closest(".queue-card");
+      if (!card || !list.contains(card)) return;
+      if (card.classList.contains("queue-card-intake") || !card.getAttribute("data-row")) {
+        clearGridHighlights();
+        return;
+      }
+      highlightGridHeaders(card.getAttribute("data-participant"), parseInt(card.getAttribute("data-row"), 10));
+    });
+    list.addEventListener("mouseleave", clearGridHighlights);
+  }
+
+  // ---- Stashes — studio-stash.js ----
+  // Guarded delegators; drop targets reach STUDIO.stashDropReel/.stashDropArtifacts late-bound.
   function loadStashes() { return STUDIO.loadStashes && STUDIO.loadStashes.apply(null, arguments); }
   function loadArtifactStashes() { return STUDIO.loadArtifactStashes && STUDIO.loadArtifactStashes.apply(null, arguments); }
   function stashCurrentReel() { return STUDIO.stashCurrentReel && STUDIO.stashCurrentReel.apply(null, arguments); }
@@ -3209,8 +2656,7 @@
 
   // ---- Buttons ----
 
-  // Empty the artifact / reel queue (also used by the Clear hotkeys). Cards
-  // animate out before the state commit so the queue drains visually.
+  // Empty the queue (also the Clear hotkeys); cards animate out before the commit.
   function clearArtifacts() {
     if (isArtifactQueueLocked()) return;
     var cards = qsa("#artifactsList .queue-card");
@@ -3252,8 +2698,9 @@
 
     qs("#addToReelBtn").addEventListener("click", function () {
       for (var i = 0; i < state.artifactQueue.length; i++) {
-        addToQueue(state.reelQueue, state.artifactQueue[i], renderReelQueue);
+        addToQueue(state.reelQueue, state.artifactQueue[i], null);
       }
+      renderReelQueue();
     });
 
     qs("#clearReelBtn").addEventListener("click", clearReel);
@@ -3267,8 +2714,7 @@
     qs("#buildHighlightsBtn").addEventListener("click", onBuildHighlights);
     bindGalleryDialog();
 
-    // Page hotkeys (shared hotkeys.js registry). Gated on the corresponding
-    // toolbar button being enabled so the queue-lock logic stays in one place.
+    // Hotkeys gate on the toolbar button so queue-lock logic stays in one place.
     function hotkeyBtnEnabled(sel) {
       var b = qs(sel);
       return !!(b && !b.disabled);
@@ -3344,13 +2790,8 @@
       {
         id: "studio.selectTab",
         handler: function (e, combo) {
-          // 1…4 → the Nth preview tab by fixed position (Sheet, Screenspace
-          // Intake, Transcript Intake, Composer Intake). No-op if that tab is
-          // still hidden (its data source hasn't appeared). Fixed positions keep
-          // the Alt-hint chip (data-hotkey-combo) in sync with the action.
-          // Routing through .click() reuses initPreviewTabs' switch + persistence.
-          // (replace("Shift+", "") is now a no-op — kept harmless for clarity.)
-          var n = parseInt(combo.replace("Shift+", ""), 10);
+          // 1…4 → Nth preview tab; hidden tabs no-op. .click() reuses tab persistence.
+          var n = parseInt(combo, 10);
           if (isNaN(n)) return;
           var tab = qsa(".preview-tab")[n - 1];
           if (tab && !tab.classList.contains("hidden")) tab.click();
@@ -3358,8 +2799,7 @@
       },
     ]);
 
-    // Alt-hold hints for the keyboard cursor: labeled chips for the send
-    // actions, stacked to the right of the selected cell/card.
+    // Alt-hold hint chips for the send actions, beside the selected cell/card.
     window.ClipgenHotkeys.registerActionHints(function () {
       var cur = kbCursorEl();
       if (!cur) return null;
@@ -3387,22 +2827,18 @@
     qs("#titlecardDuration").addEventListener("change", persistTitlecardSettings);
 
     qs("#studioRefresh").addEventListener("click", refreshActiveTab);
-    qs("#settingsBtn").addEventListener("click", function () {
-      openSettingsModal({
+    if (window.wireSettingsButton) {
+      window.wireSettingsButton({
         initialTab: "General",
-        version: state.sheetData ? state.sheetData.version : "",
-        onSave: function (_applied, full) {
-          state.settingsData = full;
-          syncInlineControls();
-          _syncMarkCategoriesFromSettings(full);
-        },
-        onReset: function (_scope, full) {
+        // Click-time function: the sheet version loads after boot.
+        version: function () { return state.sheetData ? state.sheetData.version : ""; },
+        onApply: function (_applied, full) {
           state.settingsData = full;
           syncInlineControls();
           _syncMarkCategoriesFromSettings(full);
         },
       });
-    });
+    }
 
     qs("#logBtn").addEventListener("click", openLog);
     qs("#logClose").addEventListener("click", closeLog);
@@ -3484,7 +2920,11 @@
     var overlay = card.querySelector(".card-gen-overlay");
     if (overlay) overlay.remove();
     var thumb = card.querySelector(".queue-card-thumb");
-    if (thumb) thumb.appendChild(createResultBadge(success));
+    if (thumb) {
+      var badge = thumb.appendChild(createResultBadge(success));
+      // Only a live generation pops; restored results just appear.
+      if (overlay && window.ClipgenMotion) ClipgenMotion.animateIn(badge, "pop");
+    }
     var p = card.getAttribute("data-participant");
     var r = card.getAttribute("data-row");
     if (p && r) state.cellResults[cellKey(p, parseInt(r, 10))] = success ? "success" : "fail";
@@ -3505,18 +2945,11 @@
 
   // ---- API calls ----
 
-  // ---- API: artifact generation — studio-generate.js ----
-  // The streaming api/generate + api/generate-intake flow (onGenerate /
-  // onCancelGenerate / buildGenerateCardIndex) lives in studio-generate.js; the
-  // hub keeps onGenerate/onCancelGenerate delegators (below, for the button
-  // wiring) and publishes the card painters / ETA trackers / readNDJSONStream it
-  // shares with the reel/build path.
+  // ---- Artifact generation — studio-generate.js ----
+  // Delegators below; shared painters/trackers publish at the tail.
 
-  // ---- Elapsed-time tracking for long Studio jobs ----
-  // Reels (parallel/bursty clip generation), artifact generation, and viewer
-  // builds (no progress signal) all show elapsed only — no ETA. A single 1s ticker
-  // keeps the clocks live; trackers use idempotent start() so a job-status reattach
-  // never resets a live job's elapsed.
+  // ---- Elapsed-time tracking ----
+  // Elapsed only, no ETA; idempotent start() survives a job-status reattach.
   var _reelEtaTracker = createEtaTracker();
   var _generateEtaTracker = createEtaTracker();
   var _buildEtaTracker = createEtaTracker();
@@ -3552,16 +2985,22 @@
     var el = qs("#generateProgress");
     if (!el) return;
     var hasCount = _genLastTotal > 0;
-    // Intake-only jobs never populate the cell counter, so fall back to an
-    // elapsed-only readout while generating. Hide entirely once idle.
+    // No countable work: elapsed-only while generating, hidden once idle.
     if (!state.artifactGenerating && !hasCount) {
       el.classList.add("hidden");
       el.textContent = "";
       return;
     }
     el.classList.remove("hidden");
+    // Shimmer only while live; the final tally lingers and should not move.
+    el.classList.toggle("cg-shimmer", state.artifactGenerating);
     var parts = [];
-    if (hasCount) parts.push(_genLastDone + " / " + _genLastTotal + " cells");
+    // Artifacts, not cells, to agree with the card-count badge beside it.
+    if (hasCount) {
+      parts.push(
+        _genLastDone + " / " + clipgenPluralUnit(_genLastTotal, "artifact", "artifacts")
+      );
+    }
     if (state.artifactGenerating) {
       parts.push(formatDuration(_generateEtaTracker.update().elapsedSec));
     }
@@ -3569,8 +3008,7 @@
   }
 
   function _tickStudioEta() {
-    // The ticker's isActive guard (isAnyStudioJobRunning) self-stops it, so this
-    // only runs while a job is live.
+    // The ticker's isActive guard stops it once no job is live.
     _paintReelElapsed();
     _paintGenerateProgress();
     _paintBuildElapsed();
@@ -3590,538 +3028,27 @@
     apiPost("api/reel/cancel").catch(toastError("Cancel failed"));
   }
 
-  // ---- API: reel + standalone viewers (timeline / HTML viewer) ----
-
-  function onBuildReel() {
-    if (state.reelGenerating || state.reelQueue.length === 0) return;
-    setReelGenerating(true);
-    qs("#cancelReelBtn").classList.remove("hidden");
-    _reelEtaTracker.reset();
-    _reelEtaTracker.start();
-    _studioEtaTicker.ensure();
-    _paintReelElapsed();
-
-    // Determine if we have intake items — use direct endpoint for mixed/intake reels
-    var hasIntake = false;
-    for (var ci = 0; ci < state.reelQueue.length; ci++) {
-      if (isIntakeSource(state.reelQueue[ci].source)) { hasIntake = true; break; }
-    }
-
-    var reelBody;
-    var endpoint;
-
-    if (hasIntake) {
-      var segments = [];
-      for (var si = 0; si < state.reelQueue.length; si++) {
-        var item = state.reelQueue[si];
-        segments.push({
-          participant: item.participant,
-          start: item.start,
-          end: item.end,
-          source: item.source || "screenspace",
-        });
-      }
-      reelBody = { segments: segments };
-      endpoint = "api/reel-direct";
-    } else {
-      var cellsSeen = {};
-      var cells = [];
-      for (var ci2 = 0; ci2 < state.reelQueue.length; ci2++) {
-        var ck = state.reelQueue[ci2].participant + "." + state.reelQueue[ci2].row;
-        if (!cellsSeen[ck]) { cellsSeen[ck] = true; cells.push(ck); }
-      }
-      reelBody = { cells: cells };
-      var reelOverrides = buildCellOverrides(state.reelQueue);
-      if (Object.keys(reelOverrides).length > 0) reelBody.overrides = reelOverrides;
-      endpoint = "api/reel";
-    }
-
-    var tcCb = qs("#titlecardEnabled");
-    var tcDur = qs("#titlecardDuration");
-    if (tcCb) reelBody.titlecards_enabled = tcCb.checked;
-    if (tcDur) reelBody.titlecard_duration = parseInt(tcDur.value, 10) || 2;
-
-    var list = qs("#reelList");
-    var reelCards = list.querySelectorAll(".queue-card");
-    for (var i = 0; i < reelCards.length; i++) {
-      setCardQueued(reelCards[i]);
-    }
-
-    // Progress aggregator. Reel work has two phases: per-clip generation
-    // (weighted 0.7 — most of the wall time) followed by concatenation (0.3,
-    // the re-encode pass when resolutions/codecs differ). Weights are an
-    // estimate; the bar stays monotonic because clip progress reaches 1.0
-    // before concat starts.
-    var totalClips = 0;
-    var clipsDone = 0;
-    var concatFraction = 0;
-    var finalPayload = null;
-    var cancelled = false;
-    var finished = false;
-
-    function updateProgress() {
-      var clipFraction = totalClips > 0 ? Math.min(clipsDone / totalClips, 1) : 0;
-      var overall = clipFraction * 0.7 + concatFraction * 0.3;
-      setButtonProgress("buildReelBtn", overall);
-    }
-
-    function finish() {
-      if (finished) return;
-      finished = true;
-      setReelGenerating(false);
-      qs("#cancelReelBtn").classList.add("hidden");
-      setButtonProgress("buildReelBtn", null);
-      _reelEtaTracker.reset();
-      _paintReelElapsed();
-
-      var data = finalPayload || {};
-      var isCancelled = cancelled || !!data.cancelled;
-
-      var cards = list.querySelectorAll(".queue-card");
-      for (var j = 0; j < cards.length; j++) {
-        if (isCancelled) {
-          clearCardStatus(cards[j]);
-        } else {
-          setCardResult(cards[j], !!data.ok);
-        }
-      }
-
-      if (isCancelled) {
-        showResult(null, "Reel generation cancelled");
-      } else if (data.ok) {
-        showResult("Reel built successfully", null);
-      } else {
-        showResult(null, data.error || "Reel build failed");
-      }
-      revealStatusOverlay();
-    }
-
-    function handleLine(line) {
-      var data;
-      try { data = JSON.parse(line); } catch (e) { return; }
-      if (!data) return;
-      if (data.cancelled) cancelled = true;
-      if (data.phase === "start") {
-        totalClips = data.total_clips || 0;
-        updateProgress();
-      } else if (data.phase === "clip_done") {
-        clipsDone += 1;
-        updateProgress();
-      } else if (data.phase === "concat") {
-        concatFraction = typeof data.progress === "number" ? data.progress : 0;
-        updateProgress();
-      } else if (data.phase === "done") {
-        // Fill the concat segment to 100% — the stream-copy concat path emits
-        // no progress events, so without this the bar would be cleared by
-        // finish() while still showing ~70%. Final {"ok": ...} line follows.
-        concatFraction = 1;
-        updateProgress();
-      } else if (data.ok !== undefined || data.error !== undefined) {
-        finalPayload = data;
-        if (data.ok && Array.isArray(data.reels)) {
-          for (var ri = 0; ri < data.reels.length; ri++) {
-            state.generatedReels.push(stampLog(data.reels[ri]));
-          }
-        }
-      }
-    }
-
-    fetch(endpoint, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(reelBody),
-    })
-      .then(function (response) {
-        // Any 4xx/5xx (including 409 "reel already in progress") is a JSON
-        // error body, not an NDJSON stream — parse it as text/JSON.
-        if (!response.ok && response.status >= 400) {
-          return response.text().then(function (txt) {
-            try {
-              finalPayload = JSON.parse(txt);
-            } catch (_) {
-              finalPayload = {
-                ok: false,
-                error: txt || ("HTTP " + response.status),
-              };
-            }
-            finish();
-          });
-        }
-        return readNDJSONStream(response, handleLine).then(finish);
-      })
-      .catch(function (err) {
-        finalPayload = { ok: false, error: "Request failed: " + err };
-        finish();
-      });
-  }
-
-  function onBuildViewer() {
-    if (isAnyStudioJobRunning() || state.generatedArtifacts.length === 0) return;
-    state.overlayJobRunning = true;
-
-    showBuildStatus("Building timeline viewer…", null);
-
-    apiPost("api/viewer", {})
-      .then(function (data) {
-        state.overlayJobRunning = false;
-        if (data.ok) {
-          state.generatedViewers.push(stampLog({
-            type: "viewer",
-            subtype: "viewer",
-            file: pathBasename(data.file),
-            description: "Timeline viewer",
-          }));
-          showBuildResult("Viewer created: " + (data.file || ""), null, data.file);
-        } else {
-          showBuildResult(null, data.error || "Viewer build failed");
-        }
-      })
-      .catch(function (err) {
-        state.overlayJobRunning = false;
-        showBuildResult(null, "Request failed: " + err);
-      });
-  }
-
-  function onBuildTimelineViewer() {
-    if (isAnyStudioJobRunning()) return;
-
-    var ssCount = (state.intakeClusters || []).length;
-    var trCount = (state.trIntakeClusters || []).length;
-    if (ssCount === 0 && trCount === 0) {
-      startTimelineViewerBuild(false);
-      return;
-    }
-
-    var parts = [];
-    if (ssCount > 0) {
-      parts.push(ssCount + " Screenspace event group" + (ssCount === 1 ? "" : "s"));
-    }
-    if (trCount > 0) {
-      parts.push(trCount + " Transcript mark group" + (trCount === 1 ? "" : "s"));
-    }
-    var msg = parts.join(" and ") + " detected. Include them as clips in the timeline viewer?";
-
-    showConfirm(
-      "Include Intake Events?",
-      msg,
-      function () { startTimelineViewerBuild(true); },
-      function () { startTimelineViewerBuild(false); }
-    );
-  }
-
-  function startTimelineViewerBuild(includeIntake) {
-    state.overlayJobRunning = true;
-    state.timelineViewerCancelledByUser = false;
-    var body = {};
-
-    var ssClusters = state.intakeClusters || [];
-    var trClusters = state.trIntakeClusters || [];
-    var hasIntake = includeIntake && (ssClusters.length > 0 || trClusters.length > 0);
-
-    if (hasIntake) {
-      showBuildStatus(
-        "Building timeline viewer with intake events\u2026",
-        onCancelTimelineViewer
-      );
-      body.include_intake = true;
-      var items = ssClusters.map(function (c) {
-        return {
-          participant: c.participant,
-          start: c.start,
-          end: c.end,
-          event_type: c.event_type,
-          event_ids: c.events.map(function (e) { return e.id; }),
-        };
-      });
-      for (var i = 0; i < trClusters.length; i++) {
-        var c = trClusters[i];
-        items.push({
-          participant: c.participant,
-          start: c.start,
-          end: c.end,
-          event_type: c.category || "transcript",
-          source: "transcript",
-          mark_ids: c.marks.map(function (m) { return m.id; }),
-          text: c.text || "",
-          label: c.label || "",
-        });
-      }
-      body.intake_items = items;
-    } else {
-      showBuildStatus("Building timeline viewer\u2026", onCancelTimelineViewer);
-    }
-
-    apiPost("api/timeline-viewer", body)
-      .then(function (data) {
-        state.overlayJobRunning = false;
-        if (data.cancelled || state.timelineViewerCancelledByUser) {
-          state.timelineViewerCancelledByUser = false;
-          hideBuildStatus();
-          showToast("Build cancelled");
-          return;
-        }
-        if (data.ok) {
-          state.generatedViewers.push(stampLog({
-            type: "viewer",
-            subtype: "timeline-viewer",
-            file: pathBasename(data.file),
-            description: "Timeline viewer (full sheet)",
-          }));
-          var msg = "Timeline viewer created: " + (data.file || "");
-          if (data.generated) {
-            msg = "Generated " + clipgenPluralUnit(data.generated, "clip", "clips") + ". " + msg;
-          }
-          showBuildResult(msg, null, data.file);
-        } else {
-          showBuildResult(null, data.error || "Timeline viewer build failed");
-        }
-      })
-      .catch(function (err) {
-        state.overlayJobRunning = false;
-        if (state.timelineViewerCancelledByUser) {
-          state.timelineViewerCancelledByUser = false;
-          hideBuildStatus();
-          showToast("Build cancelled");
-          return;
-        }
-        showBuildResult(null, "Request failed: " + err);
-      });
-  }
-
-  function onCancelTimelineViewer() {
-    state.timelineViewerCancelledByUser = true;
-    apiPost("api/timeline-viewer/cancel").catch(toastError("Cancel failed"));
-  }
-
-  var _highlightsBtnOrigHTML = "";
-
-  // Collapse the highlights duration drawer without running the job (Escape,
-  // mirroring the confirm-button flow in onBuildHighlights). Returns whether
-  // there was an open drawer to cancel.
-  function cancelHighlightsDrawer() {
-    var drawer = qs("#highlightsDurationDrawer");
-    if (!drawer || !drawer.classList.contains("open")) return false;
-    if (document.activeElement && drawer.contains(document.activeElement)) {
-      document.activeElement.blur();
-    }
-    drawer.classList.remove("open");
-    var btn = qs("#buildHighlightsBtn");
-    if (btn) {
-      btn.style.minWidth = "";
-      if (_highlightsBtnOrigHTML) btn.innerHTML = _highlightsBtnOrigHTML;
-    }
-    return true;
-  }
-
-  function onBuildHighlights() {
-    if (isAnyStudioJobRunning()) return;
-
-    var drawer = qs("#highlightsDurationDrawer");
-    var btn = qs("#buildHighlightsBtn");
-    var isOpen = drawer.classList.contains("open");
-
-    var checkHTML = iconHTML("check", "cg-icon--confirm");
-
-    if (!isOpen) {
-      _highlightsBtnOrigHTML = btn.innerHTML;
-      drawer.classList.add("open");
-      var w = btn.offsetWidth;
-      btn.style.minWidth = w + "px";
-      btn.innerHTML = checkHTML + "Confirm";
-      return;
-    }
-
-    var duration = parseInt(qs("#highlightsDuration").value, 10);
-    if (!Number.isFinite(duration) || duration < 1) duration = 180;
-
-    drawer.classList.remove("open");
-    btn.style.minWidth = "";
-    btn.innerHTML = _highlightsBtnOrigHTML;
-
-    setReelGenerating(true);
-    showOverlay("Finding best clips (" + duration + "s budget)...");
-
-    apiPost("api/highlights-preview", { highlights_duration: duration })
-      .then(function (data) {
-        setReelGenerating(false);
-        if (data.ok && data.clips && data.clips.length > 0) {
-          var prev = state.reelQueue.slice();
-          state.reelQueue = [];
-          for (var i = 0; i < data.clips.length; i++) {
-            var entries = expandCellToSegments(data.clips[i]);
-            for (var ei = 0; ei < entries.length; ei++) {
-              state.reelQueue.push(entries[ei]);
-            }
-          }
-          renderReelQueue();
-          var touchedKeys = {};
-          for (var p = 0; p < prev.length; p++) {
-            if (prev[p].row) touchedKeys[cellKey(prev[p].participant, prev[p].row)] = prev[p];
-          }
-          for (var q = 0; q < state.reelQueue.length; q++) {
-            var rq = state.reelQueue[q];
-            if (rq.row) touchedKeys[cellKey(rq.participant, rq.row)] = rq;
-          }
-          for (var key in touchedKeys) {
-            updateSingleCellClass(touchedKeys[key].participant, touchedKeys[key].row);
-          }
-          showResult(
-            "Added " + clipgenPluralUnit(data.clips.length, "clip", "clips") + " to reel queue",
-            null
-          );
-        } else {
-          showResult(
-            null,
-            data.error || "No clips found for highlights selection"
-          );
-        }
-      })
-      .catch(function (err) {
-        setReelGenerating(false);
-        showResult(null, "Request failed: " + err);
-      });
-  }
-
-  function populateGalleryParticipants(participants) {
-    var sel = qs("#galleryParticipant");
-    if (!sel) return;
-    sel.innerHTML = "";
-    for (var i = 0; i < participants.length; i++) {
-      var opt = el("option");
-      opt.value = participants[i];
-      opt.textContent = participants[i];
-      sel.appendChild(opt);
-    }
-  }
-
-  function openGalleryDialog() {
-    if (isAnyStudioJobRunning()) return;
-    var overlay = qs("#galleryOverlay");
-    if (!overlay) return;
-    popModalIn(overlay, qs(".gallery-card"));
-    openModalTrap(overlay, closeGalleryDialog);
-    var sel = qs("#galleryParticipant");
-    if (sel) sel.focus();
-  }
-
-  function closeGalleryDialog() {
-    var overlay = qs("#galleryOverlay");
-    if (!overlay) return;
-    // Trap released now; the visual hide trails the fade.
-    closeModalTrap(overlay);
-    popModalOut(overlay, qs(".gallery-card"), function () {
-      overlay.classList.add("hidden");
-    });
-  }
-
-  function submitGalleryDialog() {
-    if (isAnyStudioJobRunning()) return;
-
-    var participant = qs("#galleryParticipant").value;
-    var format = qs("#galleryFormat").value;
-    var interval = parseInt(qs("#galleryInterval").value, 10);
-    if (!interval || interval < 1) interval = 10;
-    var bundle = qs("#galleryBundle").checked;
-
-    if (!participant) {
-      showToast("No participant selected for gallery");
-      return;
-    }
-
-    closeGalleryDialog();
-    state.overlayJobRunning = true;
-    state.galleryCancelledByUser = false;
-    showBuildStatus(
-      "Generating gallery viewer for " + participant + "…",
-      onCancelGallery
-    );
-
-    apiPost("api/gallery", { participant: participant, format: format, interval: interval, bundle: bundle })
-      .then(function (data) {
-        state.overlayJobRunning = false;
-        if (data.cancelled || state.galleryCancelledByUser) {
-          state.galleryCancelledByUser = false;
-          hideBuildStatus();
-          showToast("Build cancelled");
-          return;
-        }
-        if (data.ok) {
-          state.generatedViewers.push(stampLog({
-            type: "viewer",
-            subtype: "gallery",
-            file: pathBasename(data.file),
-            participant: participant,
-            description: "Gallery viewer (" + format + ", " + interval + "s)",
-          }));
-          showBuildResult("Gallery viewer created: " + (data.file || ""), null, data.file);
-        } else {
-          showBuildResult(null, data.error || "Gallery build failed");
-        }
-      })
-      .catch(function (err) {
-        state.overlayJobRunning = false;
-        if (state.galleryCancelledByUser) {
-          state.galleryCancelledByUser = false;
-          hideBuildStatus();
-          showToast("Build cancelled");
-          return;
-        }
-        showBuildResult(null, "Request failed: " + err);
-      });
-  }
-
-  function onCancelGallery() {
-    state.galleryCancelledByUser = true;
-    apiPost("api/gallery/cancel").catch(toastError("Cancel failed"));
-  }
-
-  function bindGalleryDialog() {
-    var overlay = qs("#galleryOverlay");
-    var cancel = qs("#galleryDialogCancel");
-    var confirm = qs("#galleryDialogConfirm");
-    if (overlay) {
-      overlay.addEventListener("click", function (ev) {
-        if (ev.target === overlay) closeGalleryDialog();
-      });
-    }
-    if (cancel) cancel.addEventListener("click", closeGalleryDialog);
-    if (confirm) confirm.addEventListener("click", submitGalleryDialog);
-    // Escape is handled by the modal focus trap opened in openGalleryDialog.
-  }
-
-  // ---- Modal focus trap (shared by the blocking overlays) ----
-  //
-  // Thin delegators onto utils.js's openBlockingModal — Studio's overlays all
-  // want the full lifecycle (Tab/Shift+Tab trap, Escape close, focus restore to
-  // the trigger). role=dialog + aria-modal live statically on each overlay's
-  // card in the HTML. Studio never stacks these overlays, so the helper's single
-  // active modal is enough. release() is idempotent cleanup-only, so any dismiss
-  // path (button, backdrop, Escape) can call closeModalTrap safely.
-  function openModalTrap(overlayEl, onEscape) {
-    return openBlockingModal(overlayEl, {
-      onEscape: onEscape,
-      trapFocus: true,
-      restoreFocus: true,
-    });
-  }
-
-  function closeModalTrap(overlayEl) {
-    closeBlockingModal(overlayEl);
-  }
-
+  // ---- Reel + standalone viewer builds (impl in studio-reel.js) ----
+  function bindGalleryDialog() { return STUDIO.bindGalleryDialog && STUDIO.bindGalleryDialog.apply(null, arguments); }
+  function cancelHighlightsDrawer() { return STUDIO.cancelHighlightsDrawer && STUDIO.cancelHighlightsDrawer.apply(null, arguments); }
+  function onBuildHighlights() { return STUDIO.onBuildHighlights && STUDIO.onBuildHighlights.apply(null, arguments); }
+  function onBuildReel() { return STUDIO.onBuildReel && STUDIO.onBuildReel.apply(null, arguments); }
+  function onBuildTimelineViewer() { return STUDIO.onBuildTimelineViewer && STUDIO.onBuildTimelineViewer.apply(null, arguments); }
+  function onBuildViewer() { return STUDIO.onBuildViewer && STUDIO.onBuildViewer.apply(null, arguments); }
+  function openGalleryDialog() { return STUDIO.openGalleryDialog && STUDIO.openGalleryDialog.apply(null, arguments); }
+  function populateGalleryParticipants() { return STUDIO.populateGalleryParticipants && STUDIO.populateGalleryParticipants.apply(null, arguments); }
 
   // ---- Status overlay ----
 
   var _lastViewerFile = "";
 
   function revealStatusOverlay() {
-    var overlay = qs("#statusOverlay");
-    popModalIn(overlay, qs(".status-card"));
-    openModalTrap(overlay, hideOverlay);
+    openPopModal(qs("#statusOverlay"), qs(".status-card"), { onEscape: hideOverlay });
   }
 
   function showOverlay(message) {
     qs("#statusSpinner").style.display = "";
+    qs("#statusTitle").classList.add("cg-shimmer");
     qs("#statusTitle").textContent = message;
     qs("#statusMessage").textContent = "";
     qs("#statusMessage").className = "";
@@ -4133,6 +3060,7 @@
 
   function showResult(successMsg, errorMsg, filePath) {
     qs("#statusSpinner").style.display = "none";
+    qs("#statusTitle").classList.remove("cg-shimmer"); // Error / Done are resting states
     if (errorMsg) {
       qs("#statusTitle").textContent = "Error";
       qs("#statusMessage").textContent = errorMsg;
@@ -4153,20 +3081,12 @@
   }
 
   function hideOverlay() {
-    var overlay = qs("#statusOverlay");
     // Release the trap immediately — only the visual hide waits for the fade.
-    closeModalTrap(overlay);
-    popModalOut(overlay, qs(".status-card"), function () {
-      overlay.classList.add("hidden");
-    });
+    closePopModal(qs("#statusOverlay"), qs(".status-card"), { releaseTrapNow: true });
   }
 
-  // ---- Build status (non-blocking corner card for viewer builds) ----
-  //
-  // Unlike #statusOverlay, this never blocks the page. showBuildStatus drives
-  // the in-progress state (spinner + optional Cancel); showBuildResult flips
-  // the same card to the success/error state (Open + Dismiss). The cleanup ref
-  // mirrors _confirmCleanup so repeated builds don't stack Cancel listeners.
+  // ---- Build status corner card ----
+  // Cleanup ref stops repeated builds stacking Cancel listeners.
 
   var _buildStatusFile = "";
   var _buildStatusCancelCleanup = null;
@@ -4175,7 +3095,8 @@
     if (_buildStatusCancelCleanup) _buildStatusCancelCleanup();
     qs("#buildStatusSpinner").style.display = "";
     qs("#buildStatusMessage").textContent = message;
-    qs("#buildStatusMessage").className = "build-status-msg";
+    // showBuildResult() rewrites className, so the shimmer clears itself.
+    qs("#buildStatusMessage").className = "build-status-msg cg-shimmer";
     // Elapsed clock — idempotent start so a multi-message build keeps one clock.
     _buildEtaTracker.start();
     _studioEtaTicker.ensure();
@@ -4229,11 +3150,9 @@
     if (_buildStatusCancelCleanup) _buildStatusCancelCleanup();
     _buildEtaTracker.reset();
     var buildEl = qs("#buildStatus");
-    // The elapsed clock is blanked with the hide, not before it, so it doesn't
-    // vanish out from under a card that is still on screen fading.
-    popModalOut(buildEl, qs(".build-status-card"), function () {
+    // Blank the clock with the hide, not before, so it doesn't vanish mid-fade.
+    closePopModal(buildEl, qs(".build-status-card"), {}, function () {
       qs("#buildElapsed").textContent = "";
-      buildEl.classList.add("hidden");
     });
   }
 
@@ -4251,17 +3170,12 @@
     var yesBtn = qs("#confirmYes");
     var noBtn = qs("#confirmNo");
 
-    // Everything logical unwinds synchronously, so handleYes' onYes() — which
-    // usually opens another overlay — sequences against a released trap and an
-    // unbound Yes/No pair. Only the visual hide trails the fade.
+    // Unwind synchronously so onYes() can open another overlay; only the hide trails.
     function cleanup() {
-      closeModalTrap(confirmEl);
       yesBtn.removeEventListener("click", handleYes);
       noBtn.removeEventListener("click", handleNo);
       _confirmCleanup = null;
-      popModalOut(confirmEl, qs(".confirm-card"), function () {
-        confirmEl.classList.add("hidden");
-      });
+      closePopModal(confirmEl, qs(".confirm-card"), { releaseTrapNow: true });
     }
 
     function handleYes() { cleanup(); onYes(); }
@@ -4271,7 +3185,7 @@
     noBtn.addEventListener("click", handleNo);
     _confirmCleanup = cleanup;
     // Escape cancels (same as No / backdrop click).
-    openModalTrap(qs("#confirmOverlay"), handleNo);
+    openBlockingModal(confirmEl, { onEscape: handleNo, trapFocus: true, restoreFocus: true });
   }
 
   function hideConfirm() {
@@ -4279,35 +3193,35 @@
       _confirmCleanup();
       return;
     }
-    var overlay = qs("#confirmOverlay");
-    popModalOut(overlay, qs(".confirm-card"), function () {
-      overlay.classList.add("hidden");
-    });
+    closePopModal(qs("#confirmOverlay"), qs(".confirm-card"), {});
   }
 
   // ---- Artifact log ----
 
-  // Same open/close path as the dialogs above — the log's veil is no longer
-  // hand-rolled here, it is the shared .cg-modal-veil that popModalIn/Out ramps.
+  // Same path as the dialogs; the veil is the shared .cg-modal-veil.
   function openLog() {
-    var overlay = qs("#logOverlay");
-    popModalIn(overlay, qs(".log-panel"));
-    document.body.classList.add("modal-open");
-    openModalTrap(overlay, closeLog);
+    openPopModal(qs("#logOverlay"), qs(".log-panel"), { modalOpen: true, onEscape: closeLog });
     renderLog();
   }
 
   function closeLog() {
-    var overlay = qs("#logOverlay");
-    // Unlike the dialogs, the trap and the topnav gate are released with the
-    // visual hide rather than immediately: this is a panel, and focus escaping
-    // to the trigger while the veil is still up reads as the modal already being
-    // gone. popModalOut's generation guard is what makes deferring them safe.
-    popModalOut(overlay, qs(".log-panel"), function () {
-      closeModalTrap(overlay);
-      overlay.classList.add("hidden");
-      document.body.classList.remove("modal-open");
+    // Release the trap with the hide, not before; popModalOut's generation guard makes it safe.
+    closePopModal(qs("#logOverlay"), qs(".log-panel"), { modalOpen: true });
+  }
+
+  // Desktop only: a native window has no other way to reach the file.
+  function buildRevealButton(file) {
+    var btn = el("button", "log-entry-reveal");
+    btn.type = "button";
+    btn.title = "Show on disk";
+    btn.setAttribute("aria-label", "Show on disk");
+    btn.innerHTML = iconHTML("folder-open");
+    btn.addEventListener("click", function () {
+      apiPost("api/reveal-artifact", { file: file }).catch(function (e) {
+        showToast((e && e.message) || "Could not open the folder");
+      });
     });
+    return btn;
   }
 
   function renderLog() {
@@ -4334,9 +3248,7 @@
       var a = items[k];
       var row = el("div", "log-entry");
 
-      // Reels persisted to the manifest have no "type" field \u2014 detect them by
-      // their components array or "id":"reel:..." shape. Viewers are tagged
-      // by the push sites in this file.
+      // Manifest reels carry no "type": detect via components or "reel:" id.
       var badgeType;
       if (a.type === "viewer") badgeType = "viewer";
       else if (a.components || (a.id || "").indexOf("reel:") === 0) badgeType = "reel";
@@ -4357,6 +3269,7 @@
       if (meta.length > 0) {
         row.appendChild(el("span", "log-entry-meta", meta.join(" \u00B7 ")));
       }
+      if (state.desktop && a.file) row.appendChild(buildRevealButton(a.file));
 
       frag.appendChild(row);
     }
@@ -4376,11 +3289,7 @@
     return null;
   }
 
-  // Rewrite the #artifactFormat option labels so the "(.ext)" suffix reflects
-  // the current output-format settings (FILEFORMAT/SCREENSHOT_FORMAT/GIF_FORMAT).
-  // Prefers state.settingsData (fresh after a save) and falls back to
-  // CLIPGEN_CONFIG (initial load, before the settings modal has been opened).
-  // The option `value`s (clip/screen/gif) are stable and untouched.
+  // Option "(.ext)" labels follow the output-format settings; settingsData first, CLIPGEN_CONFIG fallback.
   function _formatExt(name, fallback) {
     var s = _findSetting(name);
     return s && s.value ? s.value : fallback;
@@ -4441,7 +3350,16 @@
         renderIntake(false);
       }
     }
+    if (applyCrossRefSetting(null, state.settingsData)) rerenderCrossRefs();
   }
+
+  // Also used by the palette; a hovered tooltip survives the rebuild, so hide it.
+  function rerenderCrossRefs() {
+    var tooltip = qs("#trIntakeTooltip");
+    if (tooltip) tooltip.classList.add("hidden");
+    renderIntake(false);
+  }
+  window.clipgenRerenderCrossRefs = rerenderCrossRefs;
 
   function persistTitlecardSettings() {
     var cb = qs("#titlecardEnabled");
@@ -4468,8 +3386,11 @@
   // ---- Init ----
 
   function checkNavLinks() {
-    apiGet("../api/status")
+    // Shared memoized fetch (utils.js): one /api/status per page load.
+    clipgenStatus()
       .then(function (data) {
+        state.desktop = !!data.desktop;
+        if (state.desktop) renderLog();
         if (data.screenspace) {
           var intakeTab = qs('.preview-tab[data-tab="intake"]');
           if (intakeTab) intakeTab.classList.remove("hidden");
@@ -4482,8 +3403,7 @@
           var coIntakeTab = qs('.preview-tab[data-tab="composer-intake"]');
           if (coIntakeTab) coIntakeTab.classList.remove("hidden");
         }
-        // Unlike the other three surfaces (always mounted), this tab only
-        // means anything once a mind map has actually been opened.
+        // This tab only exists once a mind map has been opened.
         if (data.mindnode_loaded) {
           var mnIntakeTab = qs('.preview-tab[data-tab="mindnode-intake"]');
           if (mnIntakeTab) mnIntakeTab.classList.remove("hidden");
@@ -4498,31 +3418,13 @@
   var _ssThumbQueue = [];
   var _ssThumbActive = 0;
   var _SS_THUMB_MAX = 3;
-  var _ssThumbCache = {}; // url -> objectURL | "error"
-
-  // Cache keys are unique per participant+timestamp, so the same-key revoke in
-  // the fetch handler below almost never fires. Without this teardown every
-  // source frame lazily loaded during a session stays pinned for the document's
-  // lifetime — and Studio is the longest-lived, most thumbnail-heavy page.
-  // Mirrors viewer.js's _thumbCache/_filmstripCache handler.
-  window.addEventListener("pagehide", function () {
-    Object.keys(_ssThumbCache).forEach(function (key) {
-      var url = _ssThumbCache[key];
-      if (url && url !== "error" && url !== "loading") {
-        try {
-          URL.revokeObjectURL(url);
-        } catch (_) {}
-      }
-      delete _ssThumbCache[key];
-    });
-  });
+  var _ssThumbCache = createBlobCache(); // url -> objectURL | "error"
 
   function ssThumbUrl(participant, timestamp) {
     return "../screenspace/api/video/frame/" + encodeURIComponent(participant) + "/" + timestamp + "?w=200";
   }
 
-  // All cards (artifact / reel bottom-strip and Studio Intake) share the
-  // `.queue-card-thumb` element for lazy source-frame loading.
+  // Every card shares .queue-card-thumb for lazy source-frame loading.
   var SS_THUMB_SELECTOR = ".queue-card-thumb";
 
   function ssProcessQueue() {
@@ -4533,19 +3435,13 @@
       (function (entry) {
         apiGetBlob(entry.url)
           .then(function (blob) {
-            var objUrl = URL.createObjectURL(blob);
-            var prev = _ssThumbCache[entry.url];
-            if (prev && prev !== "error" && prev !== "loading") {
-              try { URL.revokeObjectURL(prev); } catch (_) {}
-            }
-            _ssThumbCache[entry.url] = objUrl;
+            var objUrl = _ssThumbCache.setBlob(entry.url, blob);
             if (entry.img.parentNode) entry.img.src = objUrl;
           })
           .catch(function () {
-            _ssThumbCache[entry.url] = "error";
+            _ssThumbCache.mark(entry.url, "error");
             if (!entry.img.parentNode) return;
-            // Entries may carry a custom error handler (e.g. the stash-folder
-            // icon just drops the img); otherwise fall back to the queue-card UI.
+            // Custom onError (e.g. stash-folder icon) beats the queue-card fallback.
             if (entry.onError) { entry.onError(entry); return; }
             entry.img.remove();
             entry.thumbEl.appendChild(el("span", "", "\u2715"));
@@ -4561,7 +3457,7 @@
 
   function ssEnqueueThumb(img, cardEl, thumbEl, participant, timestamp) {
     var url = ssThumbUrl(participant, timestamp);
-    var cached = _ssThumbCache[url];
+    var cached = _ssThumbCache.get(url);
     if (cached && cached !== "error") { img.src = cached; return; }
     if (cached === "error") {
       img.remove();
@@ -4573,13 +3469,10 @@
     ssProcessQueue();
   }
 
-  // Enqueue a thumbnail with a custom error handler, for surfaces where the
-  // default .queue-card error UI (✕ badge + error class) doesn't apply — e.g.
-  // the stacked stash-folder icon, which just removes the failed img. Shares
-  // the same throttle (_SS_THUMB_MAX) and object-URL cache as ssEnqueueThumb.
+  // Enqueue with a custom error handler; shares ssEnqueueThumb's throttle and cache.
   function ssEnqueueThumbCustom(img, participant, timestamp, onError) {
     var url = ssThumbUrl(participant, timestamp);
-    var cached = _ssThumbCache[url];
+    var cached = _ssThumbCache.get(url);
     if (cached && cached !== "error") { img.src = cached; return; }
     if (cached === "error") { if (onError) onError({ img: img }); return; }
     _ssThumbQueue.push({ img: img, url: url, onError: onError });
@@ -4616,9 +3509,8 @@
     _ssThumbQueue = [];
   }
 
-  // ---- Intake satellite delegators (studio-intake.js) ----
-  // Same-named guarded wrappers so bare hub call sites stay unchanged; the real
-  // implementations live in studio-intake.js, published onto window.ClipgenStudio.
+  // ---- Intake delegators — studio-intake.js ----
+  // Guarded wrappers; bare hub call sites stay unchanged.
   function initIntake() { return STUDIO.initIntake && STUDIO.initIntake.apply(null, arguments); }
   function pollScreenspaceIntake() { return STUDIO.pollScreenspaceIntake && STUDIO.pollScreenspaceIntake.apply(null, arguments); }
   function pollTranscriptIntake() { return STUDIO.pollTranscriptIntake && STUDIO.pollTranscriptIntake.apply(null, arguments); }
@@ -4629,59 +3521,51 @@
   function refreshComposerIntake() { return STUDIO.refreshComposerIntake && STUDIO.refreshComposerIntake.apply(null, arguments); }
   function refreshMindnodeIntake() { return STUDIO.refreshMindnodeIntake && STUDIO.refreshMindnodeIntake.apply(null, arguments); }
   function focusComposerIntakeItem() { return STUDIO.focusComposerIntakeItem && STUDIO.focusComposerIntakeItem.apply(null, arguments); }
-  function initTooltipToggle() { return STUDIO.initTooltipToggle && STUDIO.initTooltipToggle.apply(null, arguments); }
   function refreshIntakeCardStates() { return STUDIO.refreshIntakeCardStates && STUDIO.refreshIntakeCardStates.apply(null, arguments); }
   function renderIntake() { return STUDIO.renderIntake && STUDIO.renderIntake.apply(null, arguments); }
   function _syncMarkCategoriesFromSettings() { return STUDIO._syncMarkCategoriesFromSettings && STUDIO._syncMarkCategoriesFromSettings.apply(null, arguments); }
 
-  // buildXrefBadges / xrefBadgeIcon / XREF_ICON_BASE moved to utils.js \u2014 the
-  // Overview page (Convergence, Map drill-down) renders the same badge stacks.
-  // Bare references below resolve to the utils.js globals.
+  // buildXrefBadges / xrefBadgeIcon / XREF_ICON_BASE live in utils.js (shared with Overview).
 
   function initTopNavActions() {
     if (!window.ClipgenTopNav) return;
-    function rebuild() {
-      window.ClipgenTopNav.setQuickActions([
-        { icon: "eye",        label: "Build Viewer",  action: onBuildViewer },
-        { icon: "film",       label: "Open Timeline", action: onBuildTimelineViewer },
-        { icon: "photo",      label: "Open Gallery",  action: openGalleryDialog },
+    window.ClipgenTopNav.installQuickActions(function () {
+      return [
+        {
+          icon: "eye",
+          label: "Build Viewer",
+          action: onBuildViewer,
+          title: "Build a self-contained timeline viewer HTML from the clips generated in this session",
+        },
+        {
+          icon: "film",
+          label: "Build Timeline",
+          action: onBuildTimelineViewer,
+          title: "Cut every clip in the sheet, then build and open a full timeline viewer HTML in the output folder",
+        },
+        {
+          icon: "photo",
+          label: "Build Gallery",
+          action: openGalleryDialog,
+          title: "Build a gallery viewer of screenshots or GIFs sampled from one participant's source video",
+        },
         window.ClipgenExportActions.exportQuickAction(),
-      ]);
-    }
-    rebuild();
-    window.ClipgenExportActions.refreshExportStatus(rebuild);
-    window.ClipgenTopNav.onBeforeOpen(function () {
-      window.ClipgenExportActions.refreshExportStatus(rebuild);
+      ];
     });
   }
 
-  // Command palette (command-palette.js): additions beyond the auto-ingested
-  // quick actions — Generate, preview-tab switchers, the Artifact Log.
+  // Command palette additions beyond the auto-ingested quick actions.
   function initCommandPalette() {
     if (!window.ClipgenCommandPalette) return;
     window.ClipgenCommandPalette.setParticipants(function () {
       return (state.sheetData && state.sheetData.participants) || [];
     });
+    var palette = window.ClipgenCommandPalette;
     function tabCommand(tabKey, title, icon) {
-      function tabEl() {
-        return document.querySelector('.preview-tab[data-tab="' + tabKey + '"]');
-      }
-      return {
-        id: "studio:tab-" + tabKey,
-        title: title,
-        icon: icon,
-        keywords: "tab show switch",
-        section: "Studio",
-        visible: function () {
-          var tab = tabEl();
-          return !!tab && !tab.classList.contains("hidden");
-        },
-        run: function () { tabEl().click(); },
-      };
+      return palette.selectorCommand("Studio", "studio:tab-" + tabKey, title, icon,
+        "tab show switch", '.preview-tab[data-tab="' + tabKey + '"]');
     }
-    // Sidebar VIEWS (All / Highlights / Positive) drive state.filters.severities;
-    // replicate the sidebar row's mutate → persist → re-render sequence so the
-    // palette command has the exact same effect as clicking the row.
+    // Mirror the sidebar row's mutate → persist → re-render sequence.
     function applyFilterChange() {
       persistSidebarFilters();
       renderSidebar();
@@ -4702,31 +3586,14 @@
     }
     window.ClipgenCommandPalette.register("studio", function () {
       return [
-        {
-          id: "studio:generate",
-          title: "Generate clips",
-          icon: "play",
-          keywords: "render build artifacts",
-          section: "Studio",
-          enabled: function () {
-            var btn = document.getElementById("generateBtn");
-            return !!btn && !btn.disabled;
-          },
-          run: function () { document.getElementById("generateBtn").click(); },
-        },
+        palette.buttonCommand("Studio", "studio:generate", "Generate clips", "play",
+          "render build artifacts", "generateBtn"),
         tabCommand("sheet", "Show Sheet tab", "table-cells"),
         tabCommand("intake", "Show Screenspace Intake tab", "rectangle-stack"),
         tabCommand("transcript-intake", "Show Transcript Intake tab", "rectangle-stack"),
         tabCommand("composer-intake", "Show Composer Intake tab", "rectangle-stack"),
-        {
-          id: "studio:refresh",
-          title: "Refresh current tab",
-          icon: "arrow-path",
-          keywords: "reload fetch update sheet intake",
-          section: "Studio",
-          visible: function () { return !!document.getElementById("studioRefresh"); },
-          run: function () { document.getElementById("studioRefresh").click(); },
-        },
+        palette.buttonCommand("Studio", "studio:refresh", "Refresh current tab", "arrow-path",
+          "reload fetch update sheet intake", "studioRefresh", "visible"),
         {
           id: "studio:clear-filters",
           title: "Clear all filters",
@@ -4739,47 +3606,30 @@
         viewCommand("all", "Show all rows", "bars-3"),
         viewCommand("highlights", "Highlights only", "funnel"),
         viewCommand("positive", "Positive only", "funnel"),
-        {
-          id: "studio:toggle-sidebar",
-          title: "Toggle filters sidebar",
-          icon: "adjustments-horizontal",
-          keywords: "show hide panel drawer collapse",
-          section: "Studio",
-          visible: function () { return !!document.getElementById("studioSidebarToggle"); },
-          run: function () { document.getElementById("studioSidebarToggle").click(); },
-        },
-        {
-          id: "studio:artifact-log",
-          title: "Open Artifact Log",
-          icon: "list-bullet",
-          keywords: "history builds",
-          section: "Studio",
-          visible: function () { return !!document.getElementById("logBtn"); },
-          run: function () { document.getElementById("logBtn").click(); },
-        },
+        palette.buttonCommand("Studio", "studio:toggle-sidebar", "Toggle filters sidebar",
+          "adjustments-horizontal", "show hide panel drawer collapse", "studioSidebarToggle", "visible"),
+        palette.buttonCommand("Studio", "studio:artifact-log", "Open Artifact Log", "list-bullet",
+          "history builds", "logBtn", "visible"),
       ];
     });
   }
 
   document.addEventListener("DOMContentLoaded", function () {
-    // Apply mask-image to every static [data-icon] element (mirrors what
-    // createBtn does for primitives — needed for the bottom-strip toolbar
-    // buttons that are written as static HTML).
+    // Mask static [data-icon] elements (the bottom-strip toolbar is static HTML).
     applyIconMasksIn(document);
-    // /studio/#tab=intake style deep links (command palette): seed the stored
-    // active tab so restoreStoredPreviewTab applies it — including its retry
-    // once a hidden intake tab is revealed by the pollers.
+    // #tab= deep links seed the stored tab so restoreStoredPreviewTab (and its retry) applies it.
     var hashTab = clipgenHashTab();
     if (hashTab) setStoredUIStateField("studio", "activeTab", hashTab);
     setActiveTabAttr(state.activePreviewTab);
     bindSidebarToggle();
     initThemeToggle();
-    initTooltipToggle();
     initPreviewTabs();
     initDropTargets();
     initWheelScroll();
     bindDragGate();
     bindReelReorder();
+    bindQueueList(ARTIFACT_QUEUE);
+    bindQueueList(REEL_QUEUE);
     bindButtons();
     updateArtifactActions();
     updateReelActions();
@@ -4794,24 +3644,16 @@
     initTopNavActions();
     initCommandPalette();
     initIntake();
-    // Live counter polls — two combined per-domain endpoints, each carrying its
-    // status dot + curation payload, keep the start-overlay pills and sub-tab
-    // badges fresh regardless of which sub-tab is visible. createPoller handles
-    // visibility-pause and (via maxIntervalMs) idle backoff: 5s while work is
-    // active/changing, easing to 30s when everything is quiet. Handles live on
-    // `state` so on-demand user actions can wake() them back to the fast cadence.
-    state.ssIntakePoller = createPoller(pollScreenspaceIntake, 5000, { maxIntervalMs: 30000 });
-    state.trIntakePoller = createPoller(pollTranscriptIntake, 5000, { maxIntervalMs: 30000 });
-    state.coIntakePoller = createPoller(pollComposerIntake, 5000, { maxIntervalMs: 30000 });
-    state.mnIntakePoller = createPoller(pollMindnodeIntake, 5000, { maxIntervalMs: 30000 });
+    // Pollers back off 5s → 30s when quiet; handles live on state for wake().
+    state.ssIntakePoller = createPoller(pollScreenspaceIntake, 5000, { maxIntervalMs: 30000, label: "studio.ssIntake" });
+    state.trIntakePoller = createPoller(pollTranscriptIntake, 5000, { maxIntervalMs: 30000, label: "studio.trIntake" });
+    state.coIntakePoller = createPoller(pollComposerIntake, 5000, { maxIntervalMs: 30000, label: "studio.coIntake" });
+    state.mnIntakePoller = createPoller(pollMindnodeIntake, 5000, { maxIntervalMs: 30000, label: "studio.mnIntake" });
     state.ssIntakePoller.start();
     state.trIntakePoller.start();
     state.coIntakePoller.start();
     state.mnIntakePoller.start();
-    // One-shot job-status fetch on page load picks up any reel/generate
-    // build that's still running in the background after the user navigated
-    // away to a sibling frontend and back. The poll's own success handler
-    // starts the recurring timer if a job is still in flight.
+    // One-shot job-status fetch re-attaches to a background build; it self-schedules if busy.
     pollJobStatus();
     document.addEventListener("visibilitychange", function () {
       if (document.hidden) {
@@ -4831,15 +3673,31 @@
     });
   });
 
-  // Hub → studio-intake.js: state + the hub helpers the intake satellite calls.
-  // (Pure utils.js globals reach the satellite via the scope chain; only
-  // hub-local functions need publishing here.)
+  // Hub → studio-intake.js. utils.js globals reach it via scope; only hub-locals need publishing.
   STUDIO.state = state;
+  STUDIO._paintReelElapsed = _paintReelElapsed;
+  STUDIO._reelEtaTracker = _reelEtaTracker;
+  STUDIO.buildCellOverrides = buildCellOverrides;
+  STUDIO.expandCellToSegments = expandCellToSegments;
+  STUDIO.hideBuildStatus = hideBuildStatus;
+  STUDIO.iconHTML = iconHTML;
+  STUDIO.isAnyStudioJobRunning = isAnyStudioJobRunning;
+  STUDIO.pathBasename = pathBasename;
+  STUDIO.setButtonProgress = setButtonProgress;
+  STUDIO.setReelGenerating = setReelGenerating;
+  STUDIO.showBuildResult = showBuildResult;
+  STUDIO.showBuildStatus = showBuildStatus;
+  STUDIO.showConfirm = showConfirm;
+  STUDIO.showOverlay = showOverlay;
+  STUDIO.applyGridFilters = applyGridFilters;
+  STUDIO.hasSeverityData = hasSeverityData;
+  STUDIO.renderGrid = renderGrid;
   STUDIO.buildQueueCardThumb = buildQueueCardThumb;
   STUDIO.buildXrefBadges = buildXrefBadges;
   STUDIO.findIntakeInQueue = findIntakeInQueue;
   STUDIO.findOverlappingData = findOverlappingData;
   STUDIO.intakeAddItem = intakeAddItem;
+  STUDIO.intakeAddItems = intakeAddItems;
   STUDIO.intakeToggleItem = intakeToggleItem;
   STUDIO.isIntakeSource = isIntakeSource;
   STUDIO.isArtifactQueueLocked = isArtifactQueueLocked;
@@ -4854,9 +3712,7 @@
   STUDIO.ssClearPending = ssClearPending;
   STUDIO.kbPaintCursor = kbPaintCursor;
 
-  // Hub → studio-generate.js: the card painters (shared with the reel/build
-  // path), the artifact-status/result helpers, and the shared elapsed-time
-  // trackers the Generate flow drives.
+  // Hub → studio-generate.js: card painters, status/result helpers, elapsed trackers.
   STUDIO.setArtifactGenerating = setArtifactGenerating;
   STUDIO.showResult = showResult;
   STUDIO.revealStatusOverlay = revealStatusOverlay;

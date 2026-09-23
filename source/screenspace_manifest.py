@@ -1,22 +1,17 @@
-"""Screenspace task + manifest helpers.
-
-Task-status constants, task construction, manifest load/save, result-time
-offsetting for multi-video scans, and event generation from raw results.
-Imports the confidence extractor from screenspace_tools.
-"""
+"""Screenspace task + manifest helpers."""
 
 import uuid
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-import config
+import manifest
 import utils
 from screenspace_tools import _extract_confidence
 
 
 # ---------------------------------------------------------------------------
-# Task queue and worker
+# Task construction
 # ---------------------------------------------------------------------------
 
 TASK_STATUS_QUEUED = "queued"
@@ -26,12 +21,13 @@ TASK_STATUS_FAILED = "failed"
 TASK_STATUS_CANCELLED = "cancelled"
 TASK_STATUS_PAUSED = "paused"
 
-# Task parameter keys carrying binary payloads (base64 frames/templates) that
-# must never reach the manifest on disk or JSON API responses.
+# Binary (base64) parameter keys; never written to the manifest or JSON responses.
 TASK_BINARY_KEYS = (
     "reference_frame",
     "template_image",
     "template_mask",
+    "shape_image",
+    "shape_mask",
     "reference_scenes",
 )
 
@@ -39,10 +35,9 @@ _SENTINEL = object()
 
 
 def strip_task_param_binaries(params: dict[str, Any]) -> dict[str, Any]:
-    """Return a copy of task ``parameters`` without binary payloads
-    (``TASK_BINARY_KEYS``), also stripping binaries + internal ``region_coords``
-    from multitool ``steps``. Shared by manifest writes and API responses
-    (``screenspace_server._clean_task``)."""
+    """Copy of task ``parameters`` without ``TASK_BINARY_KEYS``, also stripping
+    binaries + internal ``region_coords`` from multitool ``steps``. Shared by
+    manifest writes and API responses (``screenspace_server._clean_task``)."""
     params = {k: v for k, v in params.items() if k not in TASK_BINARY_KEYS}
     if "steps" in params:
         step_strip_keys = TASK_BINARY_KEYS + ("region_coords",)
@@ -53,8 +48,7 @@ def strip_task_param_binaries(params: dict[str, Any]) -> dict[str, Any]:
     return params
 
 
-# OpenCV-style HSV hue buckets (h in 0-179, wraparound at 180) for color-task
-# names. Each entry is (upper_bound_exclusive, name); red owns both ends.
+# OpenCV hue buckets (0-179) as (upper_bound_exclusive, name); red owns both ends.
 _HUE_BUCKETS = [
     (10, "red"),
     (22, "orange"),
@@ -128,6 +122,12 @@ def _describe(task_type: str, params: dict[str, Any]) -> str:
         if params.get("reference_timestamp") is not None:
             ts = utils.seconds_to_timestamp(float(params["reference_timestamp"]))
             return f"{label} @ {ts}"
+    elif task_type == "shape":
+        if params.get("shape_name"):
+            return f"{label}: {params['shape_name']}"
+        if params.get("reference_timestamp") is not None:
+            ts = utils.seconds_to_timestamp(float(params["reference_timestamp"]))
+            return f"{label} @ {ts}"
     elif task_type == "flow":
         if "magnitude_threshold" in params:
             return f"{label} ≥{_fmt_num(params['magnitude_threshold'])}"
@@ -166,9 +166,9 @@ def _describe(task_type: str, params: dict[str, Any]) -> str:
 def describe_task(task_type: str, region_name: str, parameters: dict[str, Any]) -> str:
     """Build a descriptive display name from a task's distinguishing params.
 
-    e.g. 'Text "checkout" · header', 'Color: blue · HUD', 'Numbers > 100'.
-    Total: malformed params degrade to the capitalized tool label, never raise.
-    The user-supplied event_label still overrides this everywhere it is shown.
+    e.g. 'Text "checkout" · header', 'Color: blue · HUD', 'Numbers > 100'. Total:
+    malformed params degrade to the capitalized tool label rather than raising.
+    A user-supplied event_label still overrides this wherever it is shown.
     """
     try:
         name = _describe(task_type, parameters)
@@ -217,7 +217,7 @@ def create_task(
 
 
 # ---------------------------------------------------------------------------
-# Heatmap generation
+# Manifest persistence
 # ---------------------------------------------------------------------------
 
 
@@ -234,8 +234,8 @@ def _empty_screenspace_manifest() -> dict[str, Any]:
 
 def load_screenspace_manifest() -> dict[str, Any]:
     """Load the screenspace manifest from the output directory."""
-    return utils.load_json_manifest(
-        config.SCREENSPACE_MANIFEST_FILENAME, default=_empty_screenspace_manifest()
+    return manifest.load_manifest_section(
+        "screenspace", default=_empty_screenspace_manifest()
     )
 
 
@@ -296,13 +296,9 @@ def save_screenspace_manifest(
         }
     )
     if _is_empty_screenspace_manifest(payload):
-        utils.remove_json_manifest(config.SCREENSPACE_MANIFEST_FILENAME)
+        manifest.save_manifest_section("screenspace", None)
         return None
-    return utils.save_json_manifest(
-        config.SCREENSPACE_MANIFEST_FILENAME,
-        payload,
-        warn_label="screenspace manifest",
-    )
+    return manifest.save_manifest_section("screenspace", payload)
 
 
 def _offset_result_times(result: dict[str, Any], offset: int) -> None:
@@ -328,9 +324,7 @@ def generate_events_from_results(
     if task_type == "timelapse":
         return []
     if task_type == "attention":
-        # Events come from the shift-only on_result stream; this filter is
-        # defensive for regeneration paths (e.g. event backfill from
-        # task["result"]) that could hand us the full per-sample list.
+        # Guards regeneration paths that may pass the full per-sample list.
         raw_results = [r for r in raw_results if r.get("shift")]
     events: list[dict[str, Any]] = []
     for r in raw_results:
@@ -345,7 +339,7 @@ def generate_events_from_results(
             metadata["text_found"] = r.get("text_found", "")
         elif task_type == "numbers":
             metadata["value"] = r.get("number_found", 0)
-        elif task_type == "template":
+        elif task_type in ("template", "shape"):
             metadata["match_count"] = r.get("match_count", 0)
             metadata["best_score"] = r.get("best_score", 0.0)
         elif task_type == "flow":
@@ -369,9 +363,8 @@ def generate_events_from_results(
             metadata["peak_value"] = r.get("peak_value", 0.0)
         elif task_type == "boundary":
             metadata["distance"] = r.get("distance", 0.0)
-            # Scene/hybrid metrics emit the period each boundary opens; absent
-            # for the phash metric. Carried so Studio/Viewer can later render
-            # segments instead of bare ticks.
+            # Scene/hybrid boundaries carry a period (phash does not) so viewers
+            # render segments.
             if "period_start" in r:
                 metadata["period_start"] = r.get("period_start")
             if "period_end" in r:
@@ -386,8 +379,8 @@ def generate_events_from_results(
         if task_type == "inactivity" and "end" in r:
             ev["time_out"] = round(r["end"], 2)
         if task_type == "boundary":
-            # Boundaries are for orientation, not clip candidacy. The
-            # navigational flag lets Studio intake hide them by default.
+            # Orientation, not clip candidacy — the flag lets Studio intake hide
+            # boundaries by default.
             ev["navigational"] = True
         events.append(ev)
     return events

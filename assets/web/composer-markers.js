@@ -29,17 +29,11 @@
     return typeof off === "number" && isFinite(off) ? off : 0;
   }
 
-  function fetchJson(path) {
-    return fetch(path).then(function (r) { return r.json(); });
-  }
-
   function loadMarkers(pid) {
     var version = ++_loadVersion;
-    // Overview, not Studio: the convergence-offsets route is deliberately on the
-    // overview blueprint (see agents/ARCHITECTURE.md) so its own satellites can
-    // reach it page-relative. Pointing at ../studio/ 404s, and because the catch
-    // below degrades to {} every lane silently rendered at offset 0.
-    fetchJson("../overview/api/convergence/offsets")
+    // Overview owns the offsets route (agents/ARCHITECTURE.md); ../studio/ 404s
+    // and every lane renders at 0.
+    apiGet("../overview/api/convergence/offsets")
       .catch(function () { return {}; })
       .then(function (offData) {
         var offsets = (offData && offData.offsets) || {};
@@ -51,8 +45,7 @@
 
   function commitLane(pid, version, source, markers) {
     if (version !== _loadVersion || pid !== state.participant) return;
-    // Overlay persisted trims: the marker shows its trimmed span, keeping the
-    // source span on origStart/origEnd for the tooltip and reset.
+    // Apply persisted trims; origStart/origEnd keep the source span for tooltip and reset.
     markers.forEach(function (m) {
       var trim = state.trims[m.key];
       if (!trim) return;
@@ -68,13 +61,12 @@
     if (CO.renderSidebar) CO.renderSidebar();
   }
 
-  // Sheet: one marker per timestamp pair in the participant's column, converted
-  // through the baseline (wall-clock sheets) exactly like Studio/Convergence.
+  // Sheet: one marker per timestamp pair, baseline-converted like Studio/Convergence.
   function loadSheetMarkers(pid, version, offsets) {
     var off = offsetFor(offsets, pid, "sheet");
     Promise.all([
-      fetchJson("../studio/api/sheet"),
-      fetchJson("../studio/api/sheet/baseline"),
+      apiGet("../studio/api/sheet"),
+      apiGet("../studio/api/sheet/baseline"),
     ]).then(function (results) {
       var sheet = results[0] || {};
       var baselines = (results[1] && results[1].baselines) || {};
@@ -83,6 +75,8 @@
         return;
       }
       var baselineOffset = baselines[pid] || 0;
+      // Applies the Convergence sheet offset, unlike Studio's grid; saved trims
+      // bake it in deliberately.
       var markers = [];
       sheet.rows.forEach(function (row) {
         var cell = row.cells && row.cells[pid];
@@ -106,17 +100,13 @@
     });
   }
 
-  // Merge gap for Screenspace events, mirroring Studio's intake default
-  // (#intakeClusterThreshold). Clustering — via the shared
-  // ClipgenIntakeCluster — turns bursts of point events into one grabbable
-  // block (point clusters are padded ±5 s by the shared helper), so lane
-  // spans are wide enough to trim; raw single-frame events were impossible
-  // to grab by the edge.
+  // Merge gap mirroring Studio's #intakeClusterThreshold; clustering makes point
+  // events grabbable by the edge.
   var SS_CLUSTER_SECONDS = 10;
 
   function loadScreenspaceMarkers(pid, version, offsets) {
     var off = offsetFor(offsets, pid, "screenspace");
-    fetchJson("../screenspace/api/events?excluded=false&participant=" + encodeURIComponent(pid))
+    apiGet("../screenspace/api/events?excluded=false&participant=" + encodeURIComponent(pid))
       .then(function (data) {
         var events = ((data && data.events) || []).filter(function (ev) {
           // Boundaries are orientation scaffolding, not clip candidates —
@@ -129,8 +119,8 @@
           var n = cl.events.length;
           var type = cl.event_type || cl.detector || "";
           return {
-            // Keyed on the cluster's earliest event so trims survive reloads
-            // while the event set is stable (clusterIntakeEvents sorts by time).
+            // Keyed on the earliest event; a re-scan that adds an earlier one
+            // orphans the trim.
             key: "screenspace:" + cl.events[0].id,
             source: "screenspace",
             start: cl.start + off,
@@ -148,11 +138,10 @@
       });
   }
 
-  // Transcript: marked segments become labeled markers; unmarked segments are
-  // skipped (a full transcript would carpet the lane edge-to-edge).
+  // Transcript: only marked segments; a full transcript would carpet the lane.
   function loadTranscriptMarkers(pid, version, offsets) {
     var off = offsetFor(offsets, pid, "transcript");
-    fetchJson("../transcripts/api/transcript/" + encodeURIComponent(pid))
+    apiGet("../transcripts/api/transcript/" + encodeURIComponent(pid))
       .then(function (data) {
         var segments = (data && data.segments) || [];
         var markers = [];
@@ -161,6 +150,8 @@
           if (!marks.length) return;
           marks.forEach(function (mark) {
             markers.push({
+              // Defensive fallback only: server marks always carry an id, and
+              // trimBadgeKey matches only ids.
               key: "transcript-mark:" + (mark.id || pid + ":" + seg.id),
               source: "transcript",
               start: seg.start + off,
@@ -187,7 +178,7 @@
   }
 
   function persistUi() {
-    CO.apiSend("PUT", "api/ui", {
+    apiPut("api/ui", {
       markerSources: state.sourceToggles,
       laneFolds: state.laneFolds,
       markerThumbnails: state.markerThumbnails,
@@ -219,10 +210,8 @@
   }
 
   function initMarkerToggles() {
-    // change (not click on the label) — a label click already flips the
-    // checkbox natively; toggleSource then aligns state and re-syncs it.
-    // blur() because a focused checkbox is a hotkeys.js typing target and
-    // would swallow every shortcut until focus moved elsewhere.
+    // change, not click: label clicks already flip the box. blur(): a focused
+    // checkbox swallows hotkeys.
     SOURCES.forEach(function (src) {
       var box = qs('.co-lane-check[data-source="' + src + '"] input');
       if (box) {

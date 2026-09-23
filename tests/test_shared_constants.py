@@ -9,8 +9,12 @@ import json
 import re
 from pathlib import Path
 
+import cli_screenspace
 import config
+import screenspace_server
+import screenspace_tools
 import utils
+import workflows_catalog
 
 from _frontend_source import WEB
 
@@ -24,7 +28,10 @@ def _js_source() -> str:
 def _parse_js_object_literal(name: str) -> dict:
     """Extract a top-level JS object literal `var <name> = { ... };` as a dict.
 
-    Handles unquoted keys and trailing commas; values must be JSON-compatible.
+    Handles unquoted keys, trailing commas, and whole-line `//` comments (the
+    fallback block documents which Python constant each key mirrors); values
+    must be JSON-compatible. Only line-leading comments are stripped, so a
+    value containing `//` is never mangled.
     """
     match = re.search(
         r"var\s+" + re.escape(name) + r"\s*=\s*(\{.+?\n\});",
@@ -33,6 +40,7 @@ def _parse_js_object_literal(name: str) -> dict:
     )
     assert match, f"{name} not found in utils.js"
     raw = match.group(1)
+    raw = re.sub(r"^\s*//.*$", "", raw, flags=re.MULTILINE)
     raw = re.sub(r"(\b\w+)\s*:", r'"\1":', raw)
     raw = re.sub(r",\s*([}\]])", r"\1", raw)
     return json.loads(raw)
@@ -117,6 +125,10 @@ def test_clipgen_config_defaults_match_python():
     assert js_config["gifFormat"] == py_config["gifFormat"]
     assert js_config["composerAnnotationColor"] == py_config["composerAnnotationColor"]
     assert (
+        js_config["composerAnnotationColorSecondary"]
+        == py_config["composerAnnotationColorSecondary"]
+    )
+    assert (
         js_config["composerAnnotationStrokeWidth"]
         == py_config["composerAnnotationStrokeWidth"]
     )
@@ -137,7 +149,41 @@ def test_clipgen_config_defaults_match_python():
         == py_config["composerScrubMaxAudioSeconds"]
     )
     assert js_config["composerDoubleClickCuts"] == py_config["composerDoubleClickCuts"]
+    assert js_config["crossReferences"] == py_config["crossReferences"]
     assert js_config["mediaContainerWarning"] == py_config["mediaContainerWarning"]
+    assert js_config["transcribeSpeakers"] == py_config["transcribeSpeakers"]
+    assert js_config["speakerLabelMaxLen"] == py_config["speakerLabelMaxLen"]
+    # The Embed Subtitles dialog filters its target list against these, so JS
+    # drifting from video.SUBTITLE_CODEC_BY_CONTAINER means promising output
+    # ffmpeg will refuse to write (or hiding one it would have written).
+    assert js_config["subtitleContainers"] == py_config["subtitleContainers"]
+    # Profiling defaults off on both sides; live launches overlay --profile's
+    # True via clipgenApplyConfig, and exports strip the key entirely.
+    assert js_config["profiling"] is False
+    assert py_config["profiling"] == config.PROFILING
+
+
+def test_clipgen_apply_config_covers_frontend_config():
+    """clipgenApplyConfig must have a branch for every get_frontend_config key.
+
+    test_clipgen_config_defaults_match_python compares default *values*, so a
+    key the server ships but the applier silently drops stays green while the
+    live frontend runs the JS defaults forever (the six composerAnnotation*
+    keys shipped un-applied this way). Coverage is asserted as payload.<key>
+    access inside the function body.
+    """
+    match = re.search(
+        r"var\s+clipgenApplyConfig\s*=\s*function\s*\(payload\)\s*\{(.*?)\n\};",
+        _js_source(),
+        re.DOTALL,
+    )
+    assert match, "clipgenApplyConfig not found in utils.js"
+    handled = set(re.findall(r"payload\.(\w+)", match.group(1)))
+    missing = set(utils.get_frontend_config().keys()) - handled
+    assert not missing, (
+        f"clipgenApplyConfig drops config keys the server ships: "
+        f"{sorted(missing)}. Add a type-guarded branch for each in utils.js."
+    )
 
 
 def test_get_frontend_config_shape():
@@ -163,14 +209,20 @@ def test_get_frontend_config_shape():
         "screenshotFormat",
         "gifFormat",
         "composerAnnotationColor",
+        "composerAnnotationColorSecondary",
         "composerAnnotationStrokeWidth",
         "composerAnnotationStrokeStyle",
         "composerAnnotationFontSize",
         "composerAnnotationSpanSeconds",
         "composerScrubMaxAudioSeconds",
         "composerDoubleClickCuts",
+        "crossReferences",
         "mediaContainerWarning",
+        "transcribeSpeakers",
+        "speakerLabelMaxLen",
+        "subtitleContainers",
         "hotkeyOverrides",
+        "profiling",
     }
     assert isinstance(cfg["defaultDuration"], int)
     assert cfg["defaultDuration"] == config.DEFAULT_DURATION_SECONDS
@@ -216,6 +268,8 @@ def test_get_frontend_config_shape():
     assert cfg["clipFormat"] == config.FILEFORMAT
     assert cfg["screenshotFormat"] == config.SCREENSHOT_FORMAT
     assert cfg["gifFormat"] == config.GIF_FORMAT
+    assert cfg["transcribeSpeakers"] is config.TRANSCRIBE_SPEAKERS
+    assert cfg["speakerLabelMaxLen"] == config.SPEAKER_LABEL_MAX_LEN
 
 
 def test_severity_css_class_mapping():
@@ -263,6 +317,7 @@ def test_exported_viewer_payloads_include_config():
     import viewer
 
     assert "hotkeyOverrides" not in viewer._export_config()
+    assert "profiling" not in viewer._export_config()
 
 
 def _parse_js_string_array(name: str) -> list[str]:
@@ -313,4 +368,119 @@ def test_detector_palette_stays_aligned():
         f"Detectors missing a `--color-task-*` token in tokens.css: "
         f"{sorted(set(detector_types) - css_detector_keys)}. "
         f"Add the token (dark + light blocks) to assets/web/tokens.css."
+    )
+
+
+# CSS mask classes that are not engine tools (workflow toolbar chrome).
+_SS_TASK_ICON_NON_TOOLS = frozenset({"info", "play"})
+# CLI --ss-task has no create path for these (rerun-only / UI-only).
+_CLI_TASK_EXCLUDES = frozenset({"boundary", "multitool"})
+# Own NODE_TYPES entries, not generated ss_* detect nodes.
+_WORKFLOWS_SEPARATE_NODES = frozenset({"multitool", "timelapse"})
+# In TOOLS but not yet a workflows node. A 14th tool must join specs, a
+# separate NODE_TYPES entry, or this set — otherwise the equality below fails.
+_WORKFLOWS_UNWIRED: frozenset[str] = frozenset()
+# Timeline viewer has no per-event icon for timelapse (single output file).
+_VIEWER_ICON_SKIP = frozenset({"timelapse"})
+# Server rejects these as Multitool steps: no check_frame, or not yet wired.
+_SERVER_STEP_EXCLUDES = frozenset(
+    {"multitool", "timelapse", "boundary", "attention", "shape", "inactivity"}
+)
+
+
+def _js_object_body(source: str, name: str) -> str:
+    """Return the inside of `var <name> = { ... }` (brace-matched)."""
+    match = re.search(r"var\s+" + re.escape(name) + r"\s*=\s*\{", source)
+    assert match, f"{name} not found"
+    start = match.end() - 1
+    depth = 0
+    for i, ch in enumerate(source[start:]):
+        if ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                return source[start + 1 : start + i]
+    raise AssertionError(f"{name} object not closed")
+
+
+def _flat_js_object_keys(source: str, name: str) -> set[str]:
+    """Keys of a flat `var <name> = { a: ..., b: ... }` object."""
+    return set(re.findall(r"(\w+)\s*:", _js_object_body(source, name)))
+
+
+def test_detector_registries_stay_aligned():
+    """Engine TOOLS is the source of truth; parallel catalogues must match it.
+
+    test_detector_palette_stays_aligned already locks JS types ↔ fallback ↔
+    tokens.css colours. This catches Python↔Python and JS↔JS name drift the
+    palette test never sees (CODE-REVIEW.md "Parallel registries").
+    """
+    engine = set(screenspace_tools.TOOLS)
+    js_types = set(_parse_js_string_array("_DETECTOR_TYPES"))
+    assert engine == js_types, (
+        f"screenspace_tools.TOOLS and utils.js _DETECTOR_TYPES diverged: "
+        f"engine={sorted(engine)} vs js={sorted(js_types)}. "
+        f"Add the tool to both (and the other registries this test lists)."
+    )
+
+    assert (
+        set(screenspace_server._VALID_STEP_TYPES) == engine - _SERVER_STEP_EXCLUDES
+    ), (
+        f"screenspace_server._VALID_STEP_TYPES drifted from TOOLS minus "
+        f"{sorted(_SERVER_STEP_EXCLUDES)}: {sorted(screenspace_server._VALID_STEP_TYPES)}."
+    )
+
+    assert set(cli_screenspace._SS_VALID_TASK_TYPES) == engine - _CLI_TASK_EXCLUDES, (
+        f"cli_screenspace._SS_VALID_TASK_TYPES drifted from TOOLS minus {_CLI_TASK_EXCLUDES}. "
+        f"CLI={sorted(cli_screenspace._SS_VALID_TASK_TYPES)} vs expected="
+        f"{sorted(engine - _CLI_TASK_EXCLUDES)}."
+    )
+
+    specs = set(workflows_catalog._SS_DETECTOR_SPECS)
+    assert specs == engine - _WORKFLOWS_SEPARATE_NODES - _WORKFLOWS_UNWIRED, (
+        f"workflows_catalog._SS_DETECTOR_SPECS drifted from TOOLS. "
+        f"specs={sorted(specs)} vs expected="
+        f"{sorted(engine - _WORKFLOWS_SEPARATE_NODES - _WORKFLOWS_UNWIRED)}. "
+        f"Separate nodes={sorted(_WORKFLOWS_SEPARATE_NODES)}; "
+        f"unwired={sorted(_WORKFLOWS_UNWIRED)}."
+    )
+    assert _WORKFLOWS_SEPARATE_NODES <= set(workflows_catalog.NODE_TYPES), (
+        f"Workflows NODE_TYPES missing {_WORKFLOWS_SEPARATE_NODES - set(workflows_catalog.NODE_TYPES)}. "
+        f"multitool/timelapse live as their own nodes, not ss_* specs."
+    )
+
+    ss_js = (WEB / "screenspace.js").read_text(encoding="utf-8")
+    icon_types = _flat_js_object_keys(ss_js, "SS_TASK_ICON_TYPES")
+    icon_names = _flat_js_object_keys(ss_js, "TOOL_ICON_NAMES")
+    assert icon_types == engine, (
+        f"screenspace.js SS_TASK_ICON_TYPES drifted from TOOLS: "
+        f"{sorted(icon_types)} vs {sorted(engine)}."
+    )
+    assert icon_names == engine, (
+        f"screenspace.js TOOL_ICON_NAMES drifted from TOOLS: "
+        f"{sorted(icon_names)} vs {sorted(engine)}."
+    )
+
+    ss_css = (WEB / "screenspace.css").read_text(encoding="utf-8")
+    css_icons = set(re.findall(r"\.ss-task-icon--([\w-]+)", ss_css))
+    assert css_icons - _SS_TASK_ICON_NON_TOOLS == engine, (
+        f"screenspace.css .ss-task-icon--* drifted from TOOLS "
+        f"(ignoring {_SS_TASK_ICON_NON_TOOLS}): "
+        f"{sorted(css_icons - _SS_TASK_ICON_NON_TOOLS)} vs {sorted(engine)}."
+    )
+
+    viewer_js = (WEB / "viewer.js").read_text(encoding="utf-8")
+    viewer_icons = set(
+        re.findall(
+            r"^\s+(\w+):\s*\{\s*viewBox:",
+            _js_object_body(viewer_js, "SS_DETECTOR_ICON_PATHS"),
+            re.MULTILINE,
+        )
+    )
+    assert viewer_icons == engine - _VIEWER_ICON_SKIP, (
+        f"viewer.js SS_DETECTOR_ICON_PATHS drifted from TOOLS minus "
+        f"{_VIEWER_ICON_SKIP}: {sorted(viewer_icons)} vs "
+        f"{sorted(engine - _VIEWER_ICON_SKIP)}. Timelapse skips this map "
+        f"(single output file); every other tool needs an inline path."
     )

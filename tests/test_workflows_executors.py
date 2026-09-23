@@ -3,7 +3,7 @@ adapters (M3).
 
 The M4 ``WorkflowRunner`` does not exist yet, so each executor is exercised by
 calling ``NODE_TYPES[id]["execute"](ctx, inputs, params)`` directly. Whisper /
-ffmpeg paths run under ``config.DEBUGGING`` or with ffmpeg mocked; Ollama and
+ffmpeg paths run under ``config.DEBUGGING`` or with ffmpeg mocked; the AI server and
 Screenspace scans are monkeypatched so no model/subprocess/network is touched.
 """
 
@@ -19,6 +19,7 @@ import screenspace
 import utils
 import video
 import viewer
+import pytest
 import workflows
 
 
@@ -93,6 +94,279 @@ def test_video_source_resolves_participant(tmp_path, monkeypatch):
     assert out["video"]["video_paths"] == ["/v/study_P01.mp4"]
 
 
+def test_region_notes_missing_name(tmp_path, monkeypatch):
+    # A named-but-missing region degrades to a full-frame scan downstream; the
+    # node must say so instead of completing silently.
+    monkeypatch.setattr(
+        screenspace, "load_screenspace_manifest", lambda: {"regions": {}}
+    )
+    out = _run("region", _ctx(tmp_path), {}, {"name": "timer"})
+    assert out["region"] == {"name": "timer", "coords": None}
+    assert "not found" in out["__note__"]
+
+    monkeypatch.setattr(
+        screenspace,
+        "load_screenspace_manifest",
+        lambda: {"regions": {"timer": {"x": 1, "y": 2, "w": 3, "h": 4}}},
+    )
+    out = _run("region", _ctx(tmp_path), {}, {"name": "timer"})
+    assert out["region"]["coords"] == {"x": 1, "y": 2, "w": 3, "h": 4}
+    assert "__note__" not in out
+
+
+def test_region_forwards_polygon_points(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        screenspace,
+        "load_screenspace_manifest",
+        lambda: {
+            "regions": {
+                "btn": {
+                    "x": 0.1,
+                    "y": 0.1,
+                    "w": 0.2,
+                    "h": 0.2,
+                    "points": [[[0.0, 0.0], [1.0, 0.0], [0.5, 1.0]]],
+                    "shape": "polygon",
+                }
+            }
+        },
+    )
+    out = _run("region", _ctx(tmp_path), {}, {"name": "btn"})
+    coords = out["region"]["coords"]
+    assert coords["points"][0][0] == [0.0, 0.0]
+    assert coords["shape"] == "polygon"
+
+
+def test_attach_ss_reference_keeps_shaped_capture_mask(monkeypatch):
+    import numpy as np
+
+    frame = np.zeros((80, 80, 3), dtype=np.uint8)
+    monkeypatch.setattr(video, "extract_frame_at_timestamp", lambda *a, **k: frame)
+    coords = {
+        "x": 10,
+        "y": 10,
+        "w": 40,
+        "h": 40,
+        "mask_points": [[[0.0, 0.0], [1.0, 0.0], [0.5, 1.0]]],
+    }
+    params: dict[str, Any] = {}
+    assert workflows._attach_ss_reference(
+        "shape", params, {"reference_seconds": 0}, "v.mp4", coords
+    )
+    assert params["shape_mask"].shape == (40, 40)
+
+
+def test_workflow_resolve_videos_honours_filename_overrides(tmp_path, monkeypatch):
+    (tmp_path / "study_P01.mp4").write_text("pattern")
+    (tmp_path / "other.mp4").write_text("override")
+    monkeypatch.setattr(config, "INPUT_DIR", str(tmp_path), raising=False)
+    monkeypatch.setattr(
+        config, "FILENAME_OVERRIDES", {"P01": "other.mp4"}, raising=False
+    )
+    ctx = _ctx(tmp_path)
+    paths = ctx.resolve_videos("P01")
+    assert [Path(p).name for p in paths] == ["other.mp4"]
+
+
+def test_transcript_marks_resolves_categories_and_pads(tmp_path, monkeypatch):
+    import transcripts
+
+    manifest = {
+        "source_transcripts": {
+            "P01": {
+                "segments": [
+                    {"start": 10.0, "end": 12.0, "text": "a"},
+                    {"start": 30.0, "end": 33.0, "text": "b"},
+                ]
+            }
+        },
+        "marks": [
+            {"segment_id": "P01:0", "category": "pain_point"},
+            {"segment_id": "P01:1", "category": "quote"},
+            {"segment_id": "P02:0", "category": "pain_point"},  # other participant
+            {"segment_id": "P01:9", "category": "pain_point"},  # stale index
+        ],
+    }
+    monkeypatch.setattr(transcripts, "load_transcripts_manifest", lambda: manifest)
+    src = {"participant": "P01", "video_paths": ["v.mp4"]}
+
+    out = _run("transcript_marks", _ctx(tmp_path), {"video": src}, {"pad": 2})
+    assert out["timeRange"]["ranges"] == [(8.0, 14.0), (28.0, 35.0)]
+    assert out["timestamps"]["times"] == [10.0, 30.0]
+
+    out = _run(
+        "transcript_marks",
+        _ctx(tmp_path),
+        {"video": src},
+        {"pad": 0, "category": "quote"},
+    )
+    assert out["timeRange"]["ranges"] == [(30.0, 33.0)]
+
+    out = _run(
+        "transcript_marks",
+        _ctx(tmp_path),
+        {"video": src},
+        {"category": "bookmark"},
+    )
+    assert out["timeRange"]["ranges"] == []
+    assert "No marks" in out["__note__"]
+
+
+def test_report_builds_from_summary_and_sources(tmp_path, monkeypatch):
+    import llm_client
+    import thinking_agents
+
+    monkeypatch.setattr(llm_client, "ensure_server", lambda: True)
+    monkeypatch.setattr(
+        thinking_agents,
+        "report_source_lines",
+        lambda pid: ([f"- obs for {pid}"], ["[0:10] (Quote) hello"]),
+    )
+    seen = {}
+
+    def fake_build(summary, obs, marks, *, participant, model, cancel_event):
+        seen.update(
+            {"summary": summary, "obs": obs, "marks": marks, "pid": participant}
+        )
+        return "the report"
+
+    monkeypatch.setattr(thinking_agents, "build_report", fake_build)
+    src = {"participant": "P01", "video_paths": ["v.mp4"]}
+    out = _run("report", _ctx(tmp_path), {"summary": "the summary", "video": src}, {})
+    assert out["report"] == "the report"
+    assert "__note__" not in out
+    assert seen == {
+        "summary": "the summary",
+        "obs": "- obs for P01",
+        "marks": "[0:10] (Quote) hello",
+        "pid": "P01",
+    }
+    # No summary → skipped with a note, no model call.
+    out = _run("report", _ctx(tmp_path), {}, {})
+    assert out["report"] == ""
+    assert "No summary" in out["__note__"]
+
+
+def test_post_process_remux_skips_already_seekable(tmp_path, monkeypatch):
+    called = []
+    monkeypatch.setattr(
+        video, "probe_container_seekability", lambda p: {"browser_seekable": True}
+    )
+    monkeypatch.setattr(
+        video, "remux_to_faststart", lambda p, **kw: called.append(p) or (True, "ok")
+    )
+    src = {"participant": "P01", "study": "s", "video_paths": ["a.mp4", "b.mp4"]}
+    out = _run(
+        "post_process",
+        _ctx(tmp_path),
+        {"video": src},
+        {"operation": "remux_faststart"},
+    )
+    assert called == []
+    assert out["video"] is src
+    assert "Already browser-seekable" in out["__note__"]
+
+
+def test_post_process_embed_subtitles_muxes_a_copy(tmp_path, monkeypatch):
+    import transcripts
+
+    monkeypatch.setattr(transcripts, "write_transcript", lambda *a, **kw: True)
+    muxed = {}
+    monkeypatch.setattr(
+        video,
+        "mux_subtitles",
+        lambda vid, srt, out, **kw: muxed.update({"vid": vid, "out": out}) or True,
+    )
+    monkeypatch.setattr(
+        files,
+        "get_unique_filename",
+        lambda name, file_format=None: str(tmp_path / name),
+    )
+    src = {
+        "participant": "P01",
+        "study": "s",
+        "source_filename": "s_P01.mp4",
+        "video_paths": [str(tmp_path / "s_P01.mp4")],
+    }
+    transcript = {"segments": [{"start": 0, "end": 1, "text": "hi"}], "source": src}
+    out = _run(
+        "post_process",
+        _ctx(tmp_path),
+        {"video": src, "transcript": transcript},
+        {"operation": "embed_subtitles"},
+    )
+    assert muxed["out"].endswith("s_P01-subtitled.mp4")
+    assert out["video"]["video_paths"] == [muxed["out"]]
+    assert out["artifacts"]["count"] == 1
+    # No transcript wired → note, no mux.
+    out = _run(
+        "post_process", _ctx(tmp_path), {"video": src}, {"operation": "embed_subtitles"}
+    )
+    assert out["artifacts"]["count"] == 0
+    assert "transcript" in out["__note__"]
+
+
+def test_gallery_viewer_filters_stills(tmp_path, monkeypatch):
+    seen = {}
+    monkeypatch.setattr(
+        viewer,
+        "finalize_gallery_data",
+        lambda arts, **kw: seen.update({"arts": arts, **kw}) or {"artifacts": arts},
+    )
+    monkeypatch.setattr(
+        viewer,
+        "generate_gallery_viewer",
+        lambda data, output_basename="": tmp_path / output_basename,
+    )
+    arts = {
+        "artifacts": [
+            {"type": "screen", "file": "a.png"},
+            {"type": "clip", "file": "c.mp4"},
+            {"type": "gif", "file": "b.gif"},
+        ],
+        "study": "s",
+    }
+    out = _run("gallery_viewer", _ctx(tmp_path), {"artifacts": arts}, {})
+    assert [a["file"] for a in seen["arts"]] == ["a.png", "b.gif"]
+    assert seen["output_format"] == "gif"
+    assert out["viewer"]["path"].endswith("workflow_gallery.html")
+    # Clips only → note instead of an empty gallery.
+    out = _run(
+        "gallery_viewer",
+        _ctx(tmp_path),
+        {"artifacts": {"artifacts": [{"type": "clip", "file": "c.mp4"}]}},
+        {},
+    )
+    assert out["viewer"]["path"] is None
+    assert "Timeline Viewer" in out["__note__"]
+
+
+def test_video_source_coerces_single_element_list(tmp_path, monkeypatch):
+    # The canvas multi-select stores a list; a one-element list is a plain
+    # single-participant run and must not stringify to "['P01']".
+    monkeypatch.setattr(
+        workflows.utils,
+        "discover_participant_videos",
+        lambda *a, **k: [
+            {"id": "P01", "video_paths": ["/v/study_P01.mp4"], "has_video": True}
+        ],
+    )
+    out = _run("video_source", _ctx(tmp_path), {}, {"participant": ["P01"]})
+    assert out["participant"] == "P01"
+    assert out["video"]["video_paths"] == ["/v/study_P01.mp4"]
+
+
+def test_video_source_rejects_multi_selection_on_direct_run(tmp_path):
+    # A multi-selection (or the __all__ sentinel) only makes sense as a batch;
+    # a direct run must fail loudly instead of resolving zero videos.
+    import pytest
+
+    with pytest.raises(RuntimeError, match="batch"):
+        _run("video_source", _ctx(tmp_path), {}, {"participant": ["P01", "P02"]})
+    with pytest.raises(RuntimeError, match="batch"):
+        _run("video_source", _ctx(tmp_path), {}, {"participant": "__all__"})
+
+
 # ---- Transcript ----
 
 
@@ -111,13 +385,32 @@ def test_transcribe_returns_segments_and_carries_source(tmp_path, monkeypatch):
     assert out["segments"]["source"] is src
 
 
-# ---- Thinking (Ollama) ----
+def test_transcribe_notes_when_nothing_wired(tmp_path):
+    out = _run("transcribe", _ctx(tmp_path), {}, {})
+    assert out["transcript"]["segments"] == []
+    assert "wire" in out["__note__"].lower()
 
 
-def test_thinking_executors_empty_when_ollama_unavailable(tmp_path, monkeypatch):
-    import ollama_client
+def test_transcribe_raises_when_decode_fails(tmp_path, monkeypatch):
+    import transcripts
 
-    monkeypatch.setattr(ollama_client, "is_available", lambda: False)
+    monkeypatch.setattr(transcripts, "transcribe_video", lambda *a, **k: None)
+    src = {"participant": "P01", "video_paths": [str(tmp_path / "study_P01.mp4")]}
+    try:
+        _run("transcribe", _ctx(tmp_path), {"video": src}, {})
+    except RuntimeError as exc:
+        assert "transcribe" in str(exc).lower()
+    else:
+        raise AssertionError("decode failure must fail the node, not return empty")
+
+
+# ---- Thinking (local LLM) ----
+
+
+def test_thinking_executors_empty_when_llm_unavailable(tmp_path, monkeypatch):
+    import llm_client
+
+    monkeypatch.setattr(llm_client, "ensure_server", lambda: False)
     ctx = _ctx(tmp_path)
     segs = {"segments": [{"start": 0, "end": 1, "text": "hi"}], "source": {}}
     tr = {"segments": [{"start": 0, "end": 1, "text": "hi"}]}
@@ -127,10 +420,10 @@ def test_thinking_executors_empty_when_ollama_unavailable(tmp_path, monkeypatch)
     assert summarize["summary"] == ""
     assert citations["citations"] == []
     assert friction["friction"] == []
-    # Degraded-but-completed: a __note__ explains the empty output (Ollama down).
-    assert "Ollama" in summarize["__note__"]
-    assert "Ollama" in citations["__note__"]
-    assert "Ollama" in friction["__note__"]
+    # Work that could not run is __degraded__ (retried on resume), not a note.
+    assert "AI server" in summarize["__degraded__"]
+    assert "AI server" in citations["__degraded__"]
+    assert "AI server" in friction["__degraded__"]
 
 
 def test_make_clips_notes_when_nothing_wired(tmp_path):
@@ -165,10 +458,10 @@ def test_multitool_step_flag_matches_tool_capability():
 
 
 def test_summarize_wires_thinking_agent(tmp_path, monkeypatch):
-    import ollama_client
+    import llm_client
     import thinking_agents
 
-    monkeypatch.setattr(ollama_client, "is_available", lambda: True)
+    monkeypatch.setattr(llm_client, "ensure_server", lambda: True)
     monkeypatch.setattr(
         thinking_agents, "summarize_transcript", lambda segments, **kw: "the summary"
     )
@@ -180,10 +473,10 @@ def test_summarize_wires_thinking_agent(tmp_path, monkeypatch):
 
 def test_thinking_executors_thread_model_param(tmp_path, monkeypatch):
     """The ``model`` node param reaches each thinking agent; blank → None."""
-    import ollama_client
+    import llm_client
     import thinking_agents
 
-    monkeypatch.setattr(ollama_client, "is_available", lambda: True)
+    monkeypatch.setattr(llm_client, "ensure_server", lambda: True)
     seen: dict[str, Any] = {}
 
     monkeypatch.setattr(
@@ -412,6 +705,33 @@ def test_interval_captures_whole_video_uses_duration(tmp_path, monkeypatch):
     # No timeRange wired → sample the whole video: duration 25, interval 10 → 0,10,20.
     _run("interval_captures", _ctx(tmp_path), {"video": src}, {"interval": 10})
     assert seen["n"] == 3
+
+
+def test_interval_captures_keeps_fractional_interval(tmp_path, monkeypatch):
+    # The interval is seconds as a float; 0.5 must sample every half second,
+    # not silently truncate to 1 s.
+    import pipeline
+
+    seen: dict[str, Any] = {}
+    monkeypatch.setattr(
+        pipeline,
+        "process_clips",
+        lambda records, **kw: seen.__setitem__("n", len(records)) or (len(records), []),
+    )
+    src = {
+        "participant": "P01",
+        "study": "s",
+        "source_filename": "s_P01.mp4",
+        "video_paths": ["s_P01.mp4"],
+    }
+    tr = {"ranges": [(0.0, 2.0)], "source": src}
+    _run(
+        "interval_captures",
+        _ctx(tmp_path),
+        {"video": src, "timeRange": tr},
+        {"interval": 0.5, "output_format": "screen"},
+    )
+    assert seen["n"] == 4  # 0, 0.5, 1.0, 1.5
 
 
 def test_build_reel_honors_name_param(tmp_path, monkeypatch):
@@ -755,32 +1075,29 @@ def test_highlights_truncates_to_budget(tmp_path, monkeypatch):
     assert out["clips"]["study"] == "study"
 
 
-def test_measure_counts_events_and_durations(tmp_path):
+def test_gate_collection_covers_every_metric(tmp_path):
+    # gate_collection subsumed the standalone measure node; its three metrics
+    # must keep reducing correctly (thresholds chosen to pin exact values).
     ctx = _ctx(tmp_path)
     events = {
-        "events": [
-            {"time_in": 1.0, "time_out": 3.0, "confidence": 0.4},
-            {"time_in": 5.0, "time_out": 6.0, "confidence": 0.9},
-        ]
+        "events": {
+            "events": [
+                {"time_in": 1.0, "time_out": 3.0, "confidence": 0.4},
+                {"time_in": 5.0, "time_out": 6.0, "confidence": 0.9},
+            ]
+        }
     }
-    assert _run("measure", ctx, {"events": events}, {"metric": "count"})["value"] == 2.0
-    assert (
-        _run("measure", ctx, {"events": events}, {"metric": "max_confidence"})["value"]
-        == 0.9
-    )
-    assert (
-        _run("measure", ctx, {"events": events}, {"metric": "total_duration"})["value"]
-        == 3.0
-    )
-
-
-def test_measure_drives_gate(tmp_path):
-    ctx = _ctx(tmp_path)
-    events = {"events": [{"time_in": 0, "time_out": 1} for _ in range(5)]}
-    measured = _run("measure", ctx, {"events": events}, {"metric": "count"})
-    assert _run(
-        "gate", ctx, {"value": measured["value"]}, {"op": ">=", "threshold": 3}
-    )["pass"]
+    for metric, value in (
+        ("count", 2.0),
+        ("max_confidence", 0.9),
+        ("total_duration", 3.0),
+    ):
+        assert _run(
+            "gate_collection",
+            ctx,
+            events,
+            {"metric": metric, "op": "==", "threshold": value},
+        )["pass"]
 
 
 def test_ss_detector_reshapes_real_params(tmp_path, monkeypatch):
@@ -874,6 +1191,44 @@ def test_heatmap_consumes_raw_results(tmp_path, monkeypatch):
     assert called["results"] == [{"change_grid": []}]
     assert called["dims"] == (640, 480)
     assert out["artifacts"]["artifacts"][0]["type"] == "heatmap"
+
+
+def test_heatmap_auto_infers_style_from_payload_keys(tmp_path, monkeypatch):
+    # "auto" (the default) picks the style from the detector data actually
+    # present, so the user no longer mirrors the upstream detector by hand.
+    import screenspace_heatmap
+
+    monkeypatch.setattr(
+        video, "probe_video_properties", lambda p: {"width": 640, "height": 480}
+    )
+    monkeypatch.setattr(
+        files,
+        "get_unique_filename",
+        lambda name, file_format=None: str(tmp_path / "heatmap.png"),
+    )
+    styles = {
+        "attention": [{"saliency_grid": []}],
+        "flow": [{"flow_grid": []}],
+        "template": [{"matches": [{"x": 0, "y": 0, "w": 1, "h": 1}]}],
+    }
+    for style, raw in styles.items():
+        called = {}
+        monkeypatch.setattr(
+            screenspace_heatmap,
+            f"generate_{style}_heatmap",
+            lambda results, w, h, out_path, _c=called: _c.update(hit=True) or out_path,
+        )
+        src = {"participant": "P01", "study": "s", "video_paths": ["v.mp4"]}
+        events_in = {"events": [], "source": src, "raw_results": raw}
+        out = _run("heatmap", _ctx(tmp_path), {"events": events_in}, {"style": "auto"})
+        assert called.get("hit"), f"auto did not route to {style}"
+        assert out["artifacts"]["count"] == 1
+    # Events with no heatmap payload (e.g. a text detector) → note, not a wrong map.
+    src = {"participant": "P01", "study": "s", "video_paths": ["v.mp4"]}
+    events_in = {"events": [], "source": src, "raw_results": [{"text": "hi"}]}
+    out = _run("heatmap", _ctx(tmp_path), {"events": events_in}, {})
+    assert out["artifacts"]["count"] == 0
+    assert "no heatmap data" in out["__note__"]
 
 
 # ---- Full-frame fallback + time-range authoring ----
@@ -1161,7 +1516,49 @@ def test_data_export_partial_write_failure_rolls_back(tmp_path, monkeypatch):
     }
     out = _run("data_export", _ctx(tmp_path), {"events": events_in}, {"format": "both"})
     assert out["artifacts"]["artifacts"] == []
-    assert "__note__" in out
+    assert "__degraded__" in out
     # Neither the failed CSV nor the previously-written JSON remains.
     assert not (tmp_path / "export_events_P01.json").exists()
     assert not (tmp_path / "export_events_P01.csv").exists()
+
+
+@pytest.mark.parametrize(
+    ("param", "global_on", "expected"),
+    [
+        ({}, False, False),
+        ({}, True, True),
+        ({"speakers": "on"}, False, True),
+        ({"speakers": "off"}, True, False),
+    ],
+)
+def test_transcribe_runs_speaker_pass_per_param(
+    tmp_path, monkeypatch, param, global_on, expected
+):
+    import config
+    import transcripts
+
+    monkeypatch.setattr(config, "TRANSCRIBE_SPEAKERS", global_on)
+    segs = [{"start": 0.0, "end": 1.0, "text": "hi"}]
+    monkeypatch.setattr(
+        transcripts,
+        "transcribe_video",
+        lambda path, **kw: {
+            "segments": segs,
+            "language": "en",
+            "source_file": path,
+            "model": "base",
+        },
+    )
+    calls: list[list[str]] = []
+
+    def fake_label(paths, segments, audio_index, **kw):
+        calls.append(list(paths))
+        for s in segments:
+            s["speaker"] = "1"
+        return {"enabled": True, "labels": {}, "count": 1}
+
+    monkeypatch.setattr(transcripts, "label_speakers", fake_label)
+    src = {"participant": "P01", "video_paths": [str(tmp_path / "study_P01.mp4")]}
+    out = _run("transcribe", _ctx(tmp_path), {"video": src}, param)
+    assert (len(calls) == 1) is expected
+    assert (out["segments"]["segments"][0].get("speaker") == "1") is expected

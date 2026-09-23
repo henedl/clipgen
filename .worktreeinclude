@@ -1,17 +1,14 @@
-# Gitignored files Conductor copies from the repo root into every new worktree.
-# Takes precedence over `file_include_globs` in .conductor/settings.local.toml,
-# so the pre-existing patterns are re-listed here or they stop being copied.
+# Gitignored files that are copied into every new worktree for Conductor.
 # https://conductor.build/docs/reference/worktreeinclude
 
-# Conductor's built-in default. Nothing matches it today; kept so a future
-# .env just works.
+# Nothing matches it today; kept so a future .env just works.
 .env*
 
-# Scratch workbook for `scripts/run.sh` (-s clipgen-test). Copied per workspace
-# on purpose: a Studio run writes to it, and the main checkout's copy must stay
-# clean. The multi-GB clipgen-test_P*.mp4 sources are deliberately NOT copied —
-# run.sh points -i at the root checkout instead.
+# Scratch workbook for `scripts/run.sh` (-s clipgen-test). 
 clipgen-test.xlsx
+
+# Scratch mindmap.
+clipgen-test.mindnode
 
 # The PostToolUse ruff hook. Without this a worktree silently loses per-file
 # formatting, which is the single most common CI failure (see AGENTS.md).
