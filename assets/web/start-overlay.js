@@ -2053,7 +2053,8 @@
   function applyCurrentSessionPrefill() {
     var s = state.statusData || {};
     // A mind map is an independent source with no worksheet, so it is restored
-    // ahead of the spreadsheet branches and short-circuits them.
+    // ahead of the spreadsheet branches. The name and recents tail below still
+    // runs — returning here left the project name blank for a mind-map session.
     if (s.mindnode_loaded && s.mindnode_path) {
       setTab("mindnode");
       setSelection({
@@ -2065,11 +2066,7 @@
         return f.path === s.mindnode_path;
       });
       if (!known && els.mindnodePaste) els.mindnodePaste.value = s.mindnode_path;
-      state.baseline = baselineFromInputs();
-      applyFieldStates();
-      return;
-    }
-    if (s.sheet_loaded && s.spreadsheet_type && s.spreadsheet_id_or_path) {
+    } else if (s.sheet_loaded && s.spreadsheet_type && s.spreadsheet_id_or_path) {
       // Seed the picker so the current session shows as "loaded" without the
       // user needing to re-select. Activate the correct tab + selection, and
       // restore the loaded worksheet so re-confirming can't silently switch to

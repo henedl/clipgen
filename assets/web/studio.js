@@ -100,6 +100,7 @@
     // mnIntakeSkipped holds the notes with no timestamp, shown disabled.
     mnIntakeItems: [],
     mnIntakeSkipped: [],
+    mnIntakeError: "",
     mnIntakeFilterParticipants: [],
     mnIntakeFilterCategories: [],
     mnIntakeFilterText: "",

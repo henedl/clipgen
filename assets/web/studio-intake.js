@@ -1339,6 +1339,9 @@
       event_type: note.desc,
       category: note.category,
       study: note.study,
+      // Sheet clips carry cell annotations (!key) on the artifact. Each span
+      // of a note gets the note's list, the same way every segment of a cell does.
+      annotations: note.annotations || [],
       source: "mindnode",
       event_ids: [note.id],
     };
@@ -1360,20 +1363,32 @@
     intakeToggleItem(state.reelQueue, mindnodeNoteToItem(note), renderReelQueue);
   }
 
-  function filteredMindnodeNotes() {
-    var items = state.mnIntakeItems;
+  function mindnodeNoteMatchesFilters(n) {
     var parts = state.mnIntakeFilterParticipants;
     var cats = state.mnIntakeFilterCategories;
     var text = state.mnIntakeFilterText.toLowerCase();
-    if (!parts.length && !cats.length && !text) return items;
-    return items.filter(function (n) {
-      if (parts.length && parts.indexOf(n.participant) === -1) return false;
-      if (cats.length && cats.indexOf(n.category) === -1) return false;
-      if (text && (n.desc || "").toLowerCase().indexOf(text) === -1
-          && (n.category || "").toLowerCase().indexOf(text) === -1
-          && (n.participant || "").toLowerCase().indexOf(text) === -1) return false;
-      return true;
-    });
+    if (parts.length && parts.indexOf(n.participant) === -1) return false;
+    if (cats.length && cats.indexOf(n.category) === -1) return false;
+    if (text && (n.desc || "").toLowerCase().indexOf(text) === -1
+        && (n.category || "").toLowerCase().indexOf(text) === -1
+        && (n.participant || "").toLowerCase().indexOf(text) === -1) return false;
+    return true;
+  }
+
+  function filteredMindnodeNotes() {
+    var items = state.mnIntakeItems;
+    if (!state.mnIntakeFilterParticipants.length &&
+        !state.mnIntakeFilterCategories.length &&
+        !state.mnIntakeFilterText) return items;
+    return items.filter(mindnodeNoteMatchesFilters);
+  }
+
+  function filteredMindnodeSkipped() {
+    var items = state.mnIntakeSkipped || [];
+    if (!state.mnIntakeFilterParticipants.length &&
+        !state.mnIntakeFilterCategories.length &&
+        !state.mnIntakeFilterText) return items;
+    return items.filter(mindnodeNoteMatchesFilters);
   }
 
   // Category chips are the map's own question branches, so unlike the fixed
@@ -1469,10 +1484,26 @@
   // Poll the parsed document and fingerprint it — the server re-parses the
   // bundle on each call, so editing the map in MindNode shows up here without
   // reopening the workspace.
+  function clearMindnodeIntake() {
+    var dirty = state.mnIntakeItems.length || state.mnIntakeSkipped.length;
+    state.mnIntakeItems = [];
+    state.mnIntakeSkipped = [];
+    state._mnIntakeFp = null;
+    return !!dirty;
+  }
+
   function pollMindnodeIntake() {
     return apiGet("api/mindnode")
       .then(function (data) {
-        if (!data || !data.ok || !data.mindnode_loaded || !data.document) return false;
+        if (!data || !data.ok || !data.mindnode_loaded || !data.document) {
+          // Closed, or the server dropped a bundle it can no longer read.
+          // A previous "could not be read" message stays until a document loads.
+          if (clearMindnodeIntake()) {
+            renderMindnodeIntake();
+            return true;
+          }
+          return false;
+        }
         var items = [];
         var skipped = [];
         (data.document.notes || []).forEach(function (note) {
@@ -1492,23 +1523,46 @@
               study: note.study,
               start: span[0],
               end: span[1],
+              annotations: note.annotations || [],
             });
           });
         });
         var fp = JSON.stringify([
           items.map(function (n) {
-            return [n.id, n.participant, n.category, n.desc, n.start, n.end];
+            return [n.id, n.participant, n.category, n.desc, n.start, n.end, n.annotations];
           }),
           skipped.map(function (n) { return [n.id, n.participant, n.desc]; }),
         ]);
-        if (fp === state._mnIntakeFp) return false;
+        var failed = state.mnIntakeError;
+        state.mnIntakeError = "";
+        if (fp === state._mnIntakeFp && !failed) return false;
+        // A renamed branch must not keep filtering the grid down to nothing.
+        var live = {};
+        items.forEach(function (n) {
+          if (n.category) live[n.category] = true;
+        });
+        state.mnIntakeFilterCategories = state.mnIntakeFilterCategories.filter(function (cat) {
+          return live[cat];
+        });
         state._mnIntakeFp = fp;
         state.mnIntakeItems = items;
         state.mnIntakeSkipped = skipped;
         renderMindnodeIntake();
         return true;
       })
-      .catch(function () { return false; });
+      .catch(function (err) {
+        // 404 is the bundle disappearing. A timeout or a 500 leaves the cards
+        // up and stays on the fast poll so the next tick can recover.
+        if (!err || err.message !== "Server error 404") return true;
+        var already =
+          state.mnIntakeError &&
+          !state.mnIntakeItems.length &&
+          !state.mnIntakeSkipped.length;
+        state.mnIntakeError = "The mind map could not be read.";
+        clearMindnodeIntake();
+        if (!already) renderMindnodeIntake();
+        return false;
+      });
   }
 
   function refreshMindnodeIntake() {
@@ -1523,7 +1577,7 @@
     var host = qs("#mnIntakeSkipped");
     if (!host) return;
     host.innerHTML = "";
-    var skipped = state.mnIntakeSkipped || [];
+    var skipped = filteredMindnodeSkipped();
     if (!skipped.length) {
       host.classList.add("hidden");
       return;
@@ -1572,8 +1626,14 @@
     buildIntakeDensityTimeline(MN_INTAKE, filtered);
     renderMnIntakeSkipped();
 
+    if (state.mnIntakeError) {
+      container.innerHTML = '<div class="drop-target-empty">The mind map could not be read.</div>';
+      return;
+    }
     if (filtered.length === 0) {
-      container.innerHTML = '<div class="drop-target-empty">Timestamped notes from the mind map appear here. Open a .mindnode document from the Start overlay</div>';
+      container.innerHTML = state.mnIntakeItems.length
+        ? '<div class="drop-target-empty">No notes match the current filters</div>'
+        : '<div class="drop-target-empty">Timestamped notes from the mind map appear here. Open a .mindnode document from the Start overlay</div>';
       return;
     }
 

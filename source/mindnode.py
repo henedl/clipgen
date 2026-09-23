@@ -82,7 +82,7 @@ def node_text(node: dict[str, Any]) -> str:
 
 
 def _is_timestamp_token(token: str) -> bool:
-    """Whether a whitespace-split token is a timestamp rather than description.
+    """Whether one already-split token is a timestamp rather than description.
 
     Mirrors the accept rules of ``utils._parse_single_timestamp_token`` so the
     description is exactly the text that did *not* become a time. Kept separate
@@ -106,14 +106,38 @@ def _is_timestamp_token(token: str) -> bool:
     return utils.timestamp_to_seconds(cleaned) is not None
 
 
+def _drops_from_description(token: str, known_annotations: set[str]) -> bool:
+    """Whether *token* is a time, an annotation, or an ignored placeholder."""
+    key = token.strip().lower().rstrip(",").rstrip("-").replace(".", ":")
+    if key in known_annotations:
+        return True
+    return _is_timestamp_token(token)
+
+
 def _describe(text: str) -> str:
-    """Strip timestamp and annotation tokens, leaving the observation text."""
+    """Strip timestamp and annotation tokens, leaving the observation text.
+
+    A comma, semicolon, or plus splits a word only when it joins times or
+    annotations (``1:23,2:00``, ``0:01:00,!key``). A prose comma is not a
+    separator, so ``waited, then clicked 1:23`` keeps it. Case is kept.
+    """
     known_annotations = set(utils.get_known_annotation_map().keys())
-    kept = [
-        tok
-        for tok in text.split()
-        if tok.lower() not in known_annotations and not _is_timestamp_token(tok)
-    ]
+    kept: list[str] = []
+    for tok in text.split():
+        if not any(sep in tok for sep in ",;+"):
+            if not _drops_from_description(tok, known_annotations):
+                kept.append(tok)
+            continue
+        parts = [part for part in re.split(r"[,;+]", tok) if part.strip()]
+        # No time or annotation in this word: the comma belongs to the prose.
+        if not any(_drops_from_description(part, known_annotations) for part in parts):
+            kept.append(tok)
+            continue
+        kept.extend(
+            part
+            for part in parts
+            if not _drops_from_description(part, known_annotations)
+        )
     return " ".join(kept).strip()
 
 

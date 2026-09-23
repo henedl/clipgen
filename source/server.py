@@ -862,7 +862,7 @@ def api_sheet() -> FlaskResponse:
         # on their own keys rather than `participants`, which every consumer
         # (Studio's grid, Overview's tabs) reads as *sheet columns* paired with
         # `rows` — filling it here would invent a cohort that has no rows.
-        mn = _mindnode_doc or {}
+        mn = _current_mindnode_doc() or {}
         return jsonify(
             {
                 "ok": True,
@@ -915,21 +915,34 @@ def api_mindnode() -> FlaskResponse:
     so editing the map in MindNode and hitting Refresh shows the new notes.
     """
     global _mindnode_doc
-    with _mindnode_lock:
-        doc = _mindnode_doc
-    if doc is None:
-        return jsonify({"ok": True, "mindnode_loaded": False, "document": None})
-
     import mindnode
 
+    doc = _current_mindnode_doc()
+    if doc is None:
+        return jsonify({"ok": True, "mindnode_loaded": False, "document": None})
+    path = str(doc.get("path") or "")
+
     try:
-        fresh = mindnode.parse_document(doc["path"])
+        fresh = mindnode.parse_document(path)
     except ValueError as exc:
-        # The bundle moved or was corrupted since it was opened. Report it
-        # rather than serving a stale tree the researcher can no longer see.
+        # The bundle moved or was corrupted since it was opened. Drop it only
+        # if this path is still the open one — a close or a newer open that
+        # landed during the parse must not be undone by this failure.
+        with _mindnode_lock:
+            current = _mindnode_doc
+            if current is not None and str(current.get("path") or "") == path:
+                _mindnode_doc = None
         return err(str(exc), 404)
     with _mindnode_lock:
-        _mindnode_doc = fresh
+        current = _mindnode_doc
+        if current is None or str(current.get("path") or "") != path:
+            # Superseded while we were reading. Serve whatever is open now
+            # instead of writing the stale parse back over it.
+            fresh = current
+        else:
+            _mindnode_doc = fresh
+    if fresh is None:
+        return jsonify({"ok": True, "mindnode_loaded": False, "document": None})
     return jsonify({"ok": True, "mindnode_loaded": True, "document": fresh})
 
 
@@ -1041,7 +1054,7 @@ def _effective_study() -> str:
     """
     if _sheet_context is not None:
         return _sheet_context.study_name
-    return str((_mindnode_doc or {}).get("study") or "")
+    return str((_current_mindnode_doc() or {}).get("study") or "")
 
 
 def _process_intake_item(
@@ -1171,7 +1184,13 @@ def _process_intake_item(
         "cellRow": None,
         "cellCol": None,
         "cellA1": "",
-        "annotations": [],
+        # Sheet clips copy cell annotations here. Intake sources omit the
+        # field and stay empty; a mind-map note sends its !key list.
+        "annotations": (
+            [str(a) for a in item["annotations"] if a]
+            if isinstance(item.get("annotations"), list)
+            else []
+        ),
         "source": source,
         "event_ids": event_ids,
         "mark_ids": mark_ids,
@@ -3367,14 +3386,27 @@ def _open_worksheet_for(
     return new_ws, label
 
 
+def _current_mindnode_doc() -> dict[str, Any] | None:
+    """The open mind map, or None.
+
+    The document is replaced wholesale under ``_mindnode_lock``, so the
+    reference taken here stays consistent for the caller. Reads of
+    ``_mindnode_doc`` go through this so a re-parse cannot be observed
+    half-swapped with a close or a newer open.
+    """
+    with _mindnode_lock:
+        return _mindnode_doc
+
+
 def _mindnode_source() -> dict[str, str] | None:
     """The open mind map as a recent-projects source descriptor, if any."""
-    if _mindnode_doc is None:
+    doc = _current_mindnode_doc()
+    if doc is None:
         return None
     return {
         "type": "mindnode",
-        "id_or_path": str(_mindnode_doc.get("path", "")),
-        "label": str(_mindnode_doc.get("name", "")),
+        "id_or_path": str(doc.get("path", "")),
+        "label": str(doc.get("name", "")),
         "worksheet": "",
     }
 
@@ -3563,6 +3595,7 @@ def build_combined_app(
     @combined.route("/api/status")
     def status() -> Response:
         meta = _active_sheet_meta if _worksheet is not None else None
+        mn = _current_mindnode_doc()
         return jsonify(
             {
                 "studio": True,
@@ -3575,9 +3608,9 @@ def build_combined_app(
                 # What record_project_session last stored, so the overlay's
                 # current-session key matches its recent-projects key.
                 "active_source": _active_project_source,
-                "mindnode_loaded": _mindnode_doc is not None,
-                "mindnode_label": (_mindnode_doc or {}).get("name", ""),
-                "mindnode_path": (_mindnode_doc or {}).get("path", ""),
+                "mindnode_loaded": mn is not None,
+                "mindnode_label": (mn or {}).get("name", ""),
+                "mindnode_path": (mn or {}).get("path", ""),
                 "spreadsheet_label": _spreadsheet_label(),
                 "spreadsheet_type": (meta or {}).get("type", ""),
                 "spreadsheet_id_or_path": (meta or {}).get("id_or_path", ""),
@@ -4027,7 +4060,10 @@ def build_combined_app(
         _swap_worksheet(None)
         _active_sheet_meta = None
         _active_project_source = _mindnode_source()
-        return ok(sheet_loaded=False, mindnode_loaded=_mindnode_doc is not None)
+        return ok(
+            sheet_loaded=False,
+            mindnode_loaded=_current_mindnode_doc() is not None,
+        )
 
     @combined.route("/api/folder-picker", methods=["POST"])
     def api_folder_picker() -> Response:
