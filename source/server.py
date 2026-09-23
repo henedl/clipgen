@@ -786,7 +786,7 @@ def api_sheet() -> FlaskResponse:
     if _sheet_context is None:
         # Consumers pair `participants` with `rows` as sheet columns; a mind-map-only
         # session leaves both empty.
-        mn = _mindnode_doc or {}
+        mn = _current_mindnode_doc() or {}
         return ok(
             sheet_loaded=False,
             study=str(mn.get("study", "")),
@@ -836,10 +836,14 @@ def api_mindnode() -> FlaskResponse:
 
     import mindnode
 
+    path = str(doc.get("path") or "")
     try:
-        fresh = mindnode.parse_document(doc["path"])
+        fresh = mindnode.parse_document(path)
     except ValueError as exc:
-        # Bundle moved or corrupted since open; report rather than serve a stale tree.
+        # Drop this map only if it is still the open one.
+        with _mindnode_lock:
+            if _mindnode_doc is doc:
+                _mindnode_doc = None
         return err(str(exc), 404)
     with _mindnode_lock:
         # Re-check under the lock: a close during the unlocked parse must not be undone here.
@@ -946,7 +950,7 @@ def _effective_study() -> str:
     """
     if _sheet_context is not None:
         return _sheet_context.study_name
-    return str((_mindnode_doc or {}).get("study") or "")
+    return str((_current_mindnode_doc() or {}).get("study") or "")
 
 
 def _process_intake_item(
@@ -1066,7 +1070,12 @@ def _process_intake_item(
         "cellRow": None,
         "cellCol": None,
         "cellA1": "",
-        "annotations": [],
+        # Mind-map notes pass !key here. Other intake sources stay empty.
+        "annotations": (
+            [str(a) for a in item["annotations"] if a]
+            if isinstance(item.get("annotations"), list)
+            else []
+        ),
         "source": source,
         "event_ids": event_ids,
         "mark_ids": mark_ids,
@@ -3344,6 +3353,18 @@ def _open_worksheet_for(
     return new_ws, label
 
 
+def _current_mindnode_doc() -> dict[str, Any] | None:
+    """The open mind map, or None.
+
+    The document is replaced wholesale under ``_mindnode_lock``, so the
+    reference taken here stays consistent for the caller. Reads of
+    ``_mindnode_doc`` go through this so a re-parse cannot be observed
+    half-swapped with a close or a newer open.
+    """
+    with _mindnode_lock:
+        return _mindnode_doc
+
+
 def _invalidate_participant_caches() -> None:
     """Force the Transcripts / Screenspace participant caches to rebuild.
 
@@ -3441,12 +3462,13 @@ def _preview_source_rows(
 
 def _mindnode_source() -> dict[str, str] | None:
     """The open mind map as a recent-projects source descriptor, if any."""
-    if _mindnode_doc is None:
+    doc = _current_mindnode_doc()
+    if doc is None:
         return None
     return {
         "type": "mindnode",
-        "id_or_path": str(_mindnode_doc.get("path", "")),
-        "label": str(_mindnode_doc.get("name", "")),
+        "id_or_path": str(doc.get("path", "")),
+        "label": str(doc.get("name", "")),
         "worksheet": "",
     }
 
@@ -3685,6 +3707,7 @@ def api_profile_deep_file() -> FlaskResponse:
 
 def status() -> Response:
     meta = _active_sheet_meta if _worksheet is not None else None
+    mn = _current_mindnode_doc()
     return ok(
         studio=True,
         screenspace=True,
@@ -3698,9 +3721,9 @@ def status() -> Response:
         # What record_project_session last stored, so the overlay's
         # current-session key matches its recent-projects key.
         active_source=_active_project_source,
-        mindnode_loaded=_mindnode_doc is not None,
-        mindnode_label=(_mindnode_doc or {}).get("name", ""),
-        mindnode_path=(_mindnode_doc or {}).get("path", ""),
+        mindnode_loaded=mn is not None,
+        mindnode_label=(mn or {}).get("name", ""),
+        mindnode_path=(mn or {}).get("path", ""),
         spreadsheet_label=_spreadsheet_label(),
         spreadsheet_type=(meta or {}).get("type", ""),
         spreadsheet_id_or_path=(meta or {}).get("id_or_path", ""),
@@ -4232,7 +4255,7 @@ def api_spreadsheets_close() -> FlaskResponse:
     _active_sheet_meta = None
     _active_project_source = _mindnode_source()
     _seed_filename_overrides(_active_project_source)
-    return ok(sheet_loaded=False, mindnode_loaded=_mindnode_doc is not None)
+    return ok(sheet_loaded=False, mindnode_loaded=_current_mindnode_doc() is not None)
 
 
 def api_folder_picker() -> Response:

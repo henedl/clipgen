@@ -246,6 +246,32 @@ def test_annotations_survive(make_bundle):
     assert note["desc"] == "marked"
 
 
+@pytest.mark.parametrize(
+    ("title", "desc"),
+    [
+        ("note 1:23,2:00", "note"),
+        ("note 1:23;2:00", "note"),
+        ("note 1:23+2:00", "note"),
+        ("marked 0:01:00,!key", "marked"),
+        ("waited, then clicked 1:23", "waited, then clicked"),
+        ("She said, no 0:01:00", "She said, no"),
+    ],
+)
+def test_description_strips_separator_joined_timestamps(make_bundle, title, desc):
+    """Separators between times are stripped; a prose comma stays.
+
+    A whitespace-only split left ``1:23,2:00`` in the card title even though
+    both halves were cut as clips. Folding every comma also ate
+    ``waited, then``.
+    """
+    bundle = make_bundle(_node("study", [_node("Q", [_node("P01", [_node(title)])])]))
+    (note,) = mindnode.parse_document(bundle)["notes"]
+    assert note["desc"] == desc
+    assert note["times"]
+    if "!key" in title:
+        assert note["annotations"] == ["key"]
+
+
 def test_ignored_token_is_not_description_text(make_bundle):
     bundle = make_bundle(
         _node("study", [_node("Q", [_node("P01", [_node("skip x")])])])
@@ -754,12 +780,86 @@ def test_document_refresh_does_not_resurrect_a_closed_map(mn_client, monkeypatch
 def test_document_route_404s_when_the_bundle_disappears(mn_client):
     import shutil
 
-    client, bundle, _ = mn_client
+    client, bundle, server = mn_client
     client.post(
         "/api/spreadsheets/open", json={"type": "mindnode", "id_or_path": str(bundle)}
     )
     shutil.rmtree(bundle)
     assert client.get("/studio/api/mindnode").status_code == 404
+    # A gone bundle must not stay "loaded" — status and the next poll agree.
+    assert server._mindnode_doc is None
+    assert client.get("/api/status").get_json()["mindnode_loaded"] is False
+
+
+def test_document_route_does_not_restore_a_replaced_map(
+    mn_client, make_bundle, monkeypatch
+):
+    """A parse that started before an open must not write the old tree back."""
+    client, bundle, server = mn_client
+    other = make_bundle(
+        _node("Other", [_node("P02", [_node("other note 0:02:00")])]),
+        name="other.mindnode",
+    )
+    client.post(
+        "/api/spreadsheets/open", json={"type": "mindnode", "id_or_path": str(bundle)}
+    )
+    real_parse = mindnode.parse_document
+
+    def parse_then_replace(path):
+        parsed = real_parse(path)
+        with server._mindnode_lock:
+            server._mindnode_doc = real_parse(other)
+        return parsed
+
+    monkeypatch.setattr(mindnode, "parse_document", parse_then_replace)
+    body = client.get("/studio/api/mindnode").get_json()
+    assert body["mindnode_loaded"] is True
+    assert body["document"]["path"] == str(other)
+    assert server._mindnode_doc["path"] == str(other)
+
+
+def test_document_route_does_not_revive_a_closed_map(mn_client, monkeypatch):
+    client, bundle, server = mn_client
+    client.post(
+        "/api/spreadsheets/open", json={"type": "mindnode", "id_or_path": str(bundle)}
+    )
+    real_parse = mindnode.parse_document
+
+    def parse_then_close(path):
+        parsed = real_parse(path)
+        with server._mindnode_lock:
+            server._mindnode_doc = None
+        return parsed
+
+    monkeypatch.setattr(mindnode, "parse_document", parse_then_close)
+    body = client.get("/studio/api/mindnode").get_json()
+    assert body["mindnode_loaded"] is False
+    assert body["document"] is None
+    assert server._mindnode_doc is None
+
+
+def test_document_route_failure_does_not_clear_a_replacement(
+    mn_client, make_bundle, monkeypatch
+):
+    client, bundle, server = mn_client
+    other = make_bundle(
+        _node("Other", [_node("P02", [_node("other note 0:02:00")])]),
+        name="other.mindnode",
+    )
+    client.post(
+        "/api/spreadsheets/open", json={"type": "mindnode", "id_or_path": str(bundle)}
+    )
+    real_parse = mindnode.parse_document
+
+    def fail_after_replace(path):
+        with server._mindnode_lock:
+            server._mindnode_doc = real_parse(other)
+        raise ValueError(f"Could not read {path}")
+
+    monkeypatch.setattr(mindnode, "parse_document", fail_after_replace)
+    assert client.get("/studio/api/mindnode").status_code == 404
+    assert server._mindnode_doc is not None
+    assert server._mindnode_doc["path"] == str(other)
 
 
 # ---- Generation plumbing -----------------------------------------------------
@@ -825,6 +925,7 @@ def test_intake_item_carries_category_and_study(monkeypatch, tmp_path):
             "source": "mindnode",
             "category": "Question 1",
             "study": "per_item_study",
+            "annotations": ["key"],
         },
         "clip",
         "batch_study",
@@ -832,6 +933,7 @@ def test_intake_item_carries_category_and_study(monkeypatch, tmp_path):
     assert result["_ok"] is True
     assert result["category"] == "Question 1"
     assert result["description"] == "Note 3"
+    assert result["annotations"] == ["key"]
     # The item's own study wins — one document can hold several roots.
     assert result["study"] == "per_item_study"
     assert result["source"] == "mindnode"
@@ -878,6 +980,7 @@ def test_other_sources_keep_their_empty_category(monkeypatch, tmp_path):
     )
     assert result["category"] == ""
     assert result["description"] == "blur"
+    assert result["annotations"] == []
 
 
 def test_generate_intake_accepts_mindnode_items(monkeypatch, tmp_path, make_bundle):
@@ -908,6 +1011,7 @@ def test_generate_intake_accepts_mindnode_items(monkeypatch, tmp_path, make_bund
                         "event_ids": ["uuid#0"],
                         "source": "mindnode",
                         "category": "Question 1",
+                        "annotations": ["key"],
                     }
                 ],
                 "format": "clip",
@@ -919,3 +1023,4 @@ def test_generate_intake_accepts_mindnode_items(monkeypatch, tmp_path, make_bund
     assert line["ok"] is True
     assert line["artifact"]["category"] == "Question 1"
     assert line["artifact"]["study"] == "map_study"
+    assert line["artifact"]["annotations"] == ["key"]

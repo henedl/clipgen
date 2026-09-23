@@ -92,6 +92,7 @@
     // MindNode intake: one item per timestamp pair; skipped holds timestamp-less notes.
     mnIntakeItems: [],
     mnIntakeSkipped: [],
+    mnIntakeError: "",
     mnIntakeFilterParticipants: [],
     mnIntakeFilterCategories: [],
     mnIntakeFilterText: "",

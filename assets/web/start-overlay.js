@@ -2430,7 +2430,7 @@
 
   function applyCurrentSessionPrefill() {
     var s = state.statusData || {};
-    // Gate on active_source, not mindnode_loaded: the two coexist, and currentSessionKey() must agree.
+    // Follow active_source so a later sheet is not hidden by the map.
     var activeType = (s.active_source && s.active_source.type) || "";
     var mindnodeIsActive = activeType === "mindnode" || !activeType;
     if (mindnodeIsActive && s.mindnode_loaded && s.mindnode_path) {
@@ -2444,11 +2444,7 @@
         return f.path === s.mindnode_path;
       });
       if (!known && els.mindnodePaste) els.mindnodePaste.value = s.mindnode_path;
-      state.baseline = baselineFromInputs();
-      applyFieldStates();
-      return;
-    }
-    if (s.sheet_loaded && s.spreadsheet_type && s.spreadsheet_id_or_path) {
+    } else if (s.sheet_loaded && s.spreadsheet_type && s.spreadsheet_id_or_path) {
       // Seed the picker as "loaded"; restoring the worksheet stops re-confirm switching tabs.
       setTab(s.spreadsheet_type);
       selectSpreadsheet({
