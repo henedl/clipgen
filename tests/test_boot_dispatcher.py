@@ -19,6 +19,8 @@ import utils
 @pytest.fixture(autouse=True)
 def _fast_server_poll(monkeypatch):
     monkeypatch.setattr(server, "_SERVER_POLL_INTERVAL", 0.01)
+    # The boot thread sets this global; restore it so later tests start clean.
+    monkeypatch.setattr(server, "_startup_notice", None)
 
 
 def _boot_state(**overrides: Any) -> dict[str, Any]:

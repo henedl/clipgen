@@ -1395,8 +1395,8 @@ def build_artifact_record(
     and the timeline viewer. Callers may add or override fields after the call
     (e.g. transcripts append ``transcriptFormat``).
 
-    The artifact id is built from ``cell.row`` / ``cell.col`` and is the manifest
-    dedup key. Callers must therefore provide either a real spreadsheet cell
+    The artifact id is built from ``cell.row`` / ``cell.col`` (plus the type for
+    non-clips) and is the manifest dedup key. Callers must therefore provide either a real spreadsheet cell
     (positive row/col) or a synthetic cell with a unique ``(row, col)`` pair —
     see ``_make_synthetic_clip_record`` in ``cli.py``, which mints negative
     rows namespaced per-mode by ``cell_col``. Passing ``cell=None`` or a stub
@@ -1414,8 +1414,10 @@ def build_artifact_record(
             "_make_synthetic_clip_record in cli.py for the negative-row "
             "convention."
         )
+    # A cell's clip, screenshot and GIF must not share an id.
+    type_suffix = "" if artifact_type == "clip" else f"-{artifact_type}"
     return {
-        "id": f"a{cell_row}c{cell_col}s{seg_idx}",
+        "id": f"a{cell_row}c{cell_col}s{seg_idx}{type_suffix}",
         "type": artifact_type,
         "file": Path(out_path).name,
         "thumbnail": "",

@@ -61,6 +61,18 @@
     return map;
   }
 
+  // A 4xx/5xx (e.g. 409 while a build runs) carries its JSON error in bodyText.
+  function requestFailReason(err) {
+    if (err && err.status >= 400) {
+      try {
+        var body = JSON.parse(err.bodyText);
+        if (body && body.error) return body.error;
+      } catch (_) {}
+      return err.bodyText || ("HTTP " + err.status);
+    }
+    return "Request failed: " + err;
+  }
+
   function isGenerateFetchAborted(err) {
     if (state.generateCancelledByUser) return true;
     return !!(err && err.name === "AbortError");
@@ -257,9 +269,11 @@
             return;
           }
           // Fail every captured sheet card; finishBranch reports the tally.
+          var sheetReason = requestFailReason(err);
           for (var j = 0; j < sheetCardEls.length; j++) {
-            if (sheetCardEls[j]) setCardResult(sheetCardEls[j], false);
+            if (sheetCardEls[j]) setCardResult(sheetCardEls[j], false, sheetReason);
           }
+          failReasons.push(sheetReason);
           totalFail += sheetItems.length;
           finishBranch();
         });
@@ -278,6 +292,9 @@
           mark_ids: itm.mark_ids || [],
           text: itm.text || "",
           label: itm.label || "",
+          // MindNode notes name their own study and question branch.
+          category: itm.category || "",
+          study: itm.study || "",
         };
       });
 
@@ -331,9 +348,11 @@
             finishBranch();
             return;
           }
+          var intakeReason = requestFailReason(err);
           for (var j = 0; j < intakeCardEls.length; j++) {
-            if (intakeCardEls[j]) setCardResult(intakeCardEls[j], false);
+            if (intakeCardEls[j]) setCardResult(intakeCardEls[j], false, intakeReason);
           }
+          failReasons.push(intakeReason);
           totalFail += intakeItems.length;
           finishBranch();
         });

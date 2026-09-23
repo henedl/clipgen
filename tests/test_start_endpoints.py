@@ -177,6 +177,23 @@ def test_dirs_post_rejects_output_under_file(client, tmp_path):
     assert "output" in body["errors"]
 
 
+def test_dirs_post_rejected_during_generation(client, monkeypatch, tmp_path):
+    """A folder switch mid-build would send the build's output to the new folder."""
+    monkeypatch.setitem(server._busy_slots, "generate", True)
+    resp = client.post("/api/dirs", json={"output": str(tmp_path / "alt_out")})
+    assert resp.status_code == 409
+    assert config.OUTPUT_DIR == str(tmp_path / "out")
+
+
+def test_dirs_post_output_change_reloads_artifacts(client, monkeypatch, tmp_path):
+    """The old folder's artifacts must not merge into the new folder's manifest."""
+    monkeypatch.setattr(server, "_generated_artifacts", [{"id": "old", "file": "x"}])
+    monkeypatch.setattr(server, "_generated_reels", [])
+    resp = client.post("/api/dirs", json={"output": str(tmp_path / "alt_out")})
+    assert resp.status_code == 200
+    assert server._generated_artifacts == []
+
+
 # ---------- /api/folder-picker ---------------------------------------------
 
 
@@ -1125,6 +1142,25 @@ def test_spreadsheets_open_rejected_during_generation(client, monkeypatch):
     data = resp.get_json()
     assert data["ok"] is False
     assert "in progress" in data["error"]
+
+
+def test_spreadsheets_open_unparseable_sheet_rolls_back(client, monkeypatch):
+    """A sheet that fails to parse returns 500 and keeps the previous sheet."""
+    import spreadsheet
+
+    prev_ws = object()
+    monkeypatch.setattr(server, "_worksheet", prev_ws)
+    monkeypatch.setattr(
+        server, "_open_worksheet_for", lambda *a, **k: (object(), "Broken")
+    )
+    monkeypatch.setattr(spreadsheet, "build_sheet_context", lambda ws: None)
+    resp = client.post(
+        "/api/spreadsheets/open",
+        json={"type": "excel", "id_or_path": "/tmp/broken.xlsx"},
+    )
+    assert resp.status_code == 500
+    assert resp.get_json()["error"] == "Could not parse the spreadsheet"
+    assert server._worksheet is prev_ws
 
 
 def test_spreadsheets_open_rejected_during_intake(client, monkeypatch):

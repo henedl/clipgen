@@ -1,7 +1,6 @@
 """Tests for multiple source videos per participant (one continuous timeline)."""
 
 import threading
-import time
 from typing import cast
 from unittest.mock import Mock
 
@@ -93,14 +92,18 @@ def test_build_source_timeline_none_when_unprobeable(monkeypatch):
 def test_build_source_timeline_order_survives_parallel_probes(monkeypatch):
     """Probes complete in reverse order; the timeline still follows input order."""
     durations = {"a.mp4": 80, "b.mp4": 120, "c.mp4": 30}
-    delays = {"a.mp4": 0.06, "b.mp4": 0.03, "c.mp4": 0.0}
+    done = {p: threading.Event() for p in durations}
+    # Each probe waits for the next one to finish, so completion order is fixed.
+    waits_for = {"a.mp4": "b.mp4", "b.mp4": "c.mp4"}
     completed: list[str] = []
     lock = threading.Lock()
 
     def slow_duration(path):
-        time.sleep(delays[path])
+        if path in waits_for:
+            assert done[waits_for[path]].wait(5.0)
         with lock:
             completed.append(path)
+        done[path].set()
         return durations[path]
 
     monkeypatch.setattr(video, "get_file_duration", slow_duration)

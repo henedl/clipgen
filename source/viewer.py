@@ -518,6 +518,7 @@ def save_manifest(
     new_artifacts: list[dict[str, Any]],
     *,
     new_reels: list[dict[str, Any]] | None = None,
+    removed_ids: set[str] | None = None,
     study: str = "",
     participant: str = "",
     worksheet_title: str = "",
@@ -526,18 +527,20 @@ def save_manifest(
 ) -> Path | None:
     """Merge new artifacts and reels into the manifest file and write it back.
 
-    Deduplicates by ``id``; newer entries win.
+    Deduplicates by ``id``; newer entries win. On-disk artifacts and reels
+    whose id is in *removed_ids* are dropped before the merge.
     Returns the manifest path on success, or None on failure.
     """
+    removed = removed_ids or set()
     # Hold the lock across load-merge-write, or a concurrent writer drops this one's records.
     with _MANIFEST_WRITE_LOCK:
         existing, existing_reels = load_manifest_both()
-        merged = {a["id"]: a for a in existing}
+        merged = {a["id"]: a for a in existing if a["id"] not in removed}
         for a in new_artifacts:
             merged[a["id"]] = a
         all_artifacts = list(merged.values())
 
-        reel_merged = {r["id"]: r for r in existing_reels}
+        reel_merged = {r["id"]: r for r in existing_reels if r["id"] not in removed}
         for r in new_reels or []:
             reel_merged[r["id"]] = r
         all_reels = list(reel_merged.values())

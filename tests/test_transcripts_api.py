@@ -1116,10 +1116,12 @@ def test_unload_fires_after_delay(_agent_state_clean, monkeypatch):
 
     transcripts_server._schedule_model_unload("test-model")
 
-    # Wait a bit longer than the delay
     import time
 
-    time.sleep(0.2)
+    # Poll rather than sleep: a busy runner can start the timer thread late.
+    deadline = time.monotonic() + 5.0
+    while not calls and time.monotonic() < deadline:
+        time.sleep(0.01)
     assert calls == ["test-model"]
 
 

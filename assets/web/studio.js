@@ -99,6 +99,7 @@
     mnIntakeHoveredIdx: -1,
     _mnIntakeFp: null,
     convergenceBaselines: {},
+    queuesSeeded: false,
     convergenceDataVersion: 0,
     convergenceStale: false,
     sidebarOpen: true,
@@ -646,7 +647,7 @@
         renderSidebar();
         renderGrid();
         // Baselines put durations in the video-relative frame (matches prepare_clip); re-render on arrival.
-        apiGet("api/sheet/baseline")
+        var baselineReady = apiGet("api/sheet/baseline")
           .then(function (bdata) {
             state.convergenceBaselines = (bdata.ok && bdata.baselines) ? bdata.baselines : {};
             if (Object.keys(state.convergenceBaselines).length > 0) renderGrid();
@@ -677,16 +678,27 @@
         if (tcGroup && qs("#artifactFormat").value === "clip") {
           tcGroup.classList.remove("hidden");
         }
-        restoreQueues();
+        // Seed queues once per page: on Refresh the live queues are the truth.
+        var firstLoad = !state.queuesSeeded;
+        state.queuesSeeded = true;
+        if (firstLoad) restoreQueues();
         if (state.artifactQueue.length > 0 || state.reelQueue.length > 0) {
           renderArtifactQueue();
           renderReelQueue();
           updateCellClasses();
         }
-        loadManifestState();
+        // Wait for baselines: expanding a clock-time cell without one misreads it.
+        baselineReady.then(function () {
+          loadManifestState(firstLoad);
+        });
       })
       .catch(function (err) {
-        qs("#sheetLoading").textContent = "Failed to load sheet: " + err;
+        var loading = qs("#sheetLoading");
+        if (loading) loading.textContent = "Failed to load sheet: " + err;
+        else {
+          showResult(null, "Failed to load sheet: " + err);
+          revealStatusOverlay();
+        }
       });
   }
 
@@ -695,12 +707,14 @@
       .then(function (data) {
         if (!data.ok) {
           showResult(null, "Refresh failed: " + (data.error || "Unknown error"));
+          revealStatusOverlay();
           return;
         }
         loadSheetData();
       })
       .catch(function (err) {
         showResult(null, "Refresh failed: " + err);
+        revealStatusOverlay();
       });
   }
 
@@ -732,8 +746,8 @@
     });
   }
 
-  // Reconcile manifest against the sheet: mark cells green, re-enqueue valid ones; `seen` dedupes cells.
-  function loadManifestState() {
+  // Mark generated cells green; seedQueue (first load only) also re-queues them.
+  function loadManifestState(seedQueue) {
     apiGet("api/manifest")
       .then(function (data) {
         if (!data.ok || !state.sheetData) return;
@@ -762,6 +776,7 @@
           if (!cellData || !cellData.valid) continue;
 
           state.cellResults[key] = "success";
+          if (!seedQueue || isArtifactQueueLocked()) continue;
           if (findInQueue(state.artifactQueue, a.participant, a.cellRow) >= 0) continue;
 
           var info = {
@@ -848,16 +863,22 @@
     if (genActive) {
       if (!state.artifactGenerating) setArtifactGenerating(true);
       qs("#cancelGenerateBtn").classList.remove("hidden");
-      var combinedTotal = (gen.total || 0) + (intake.total || 0);
-      var combinedDone = (gen.done || 0) + (intake.done || 0);
+      // A finished side keeps its last counts on the server, so sum running sides only.
+      var sides = [gen, intake].filter(function (side) { return side.in_progress; });
+      var combinedTotal = 0;
+      var combinedDone = 0;
+      var genStartedAt = 0;
+      sides.forEach(function (side) {
+        combinedTotal += side.total || 0;
+        combinedDone += side.done || 0;
+        if (side.started_at && (!genStartedAt || side.started_at < genStartedAt)) {
+          genStartedAt = side.started_at;
+        }
+      });
       if (combinedTotal > 0) {
         setButtonProgress("generateBtn", Math.min(combinedDone / combinedTotal, 1));
       }
       // Seed elapsed from the earlier start; idempotent start() leaves a live clock alone.
-      var genStartedAt =
-        gen.started_at && intake.started_at
-          ? Math.min(gen.started_at, intake.started_at)
-          : gen.started_at || intake.started_at;
       _generateEtaTracker.start(genStartedAt ? genStartedAt * 1000 : undefined);
       // Both sides count artifacts, so the totals sum and intake-only runs keep a readout.
       updateGenerateProgress(combinedDone, combinedTotal);
@@ -1288,7 +1309,7 @@
     if (!cells.length) return false;
     var cur = kbCursorEl();
     if (!cur) return kbStep(dir);
-    var curRow = parseInt(cur.getAttribute("data-row"), 10);
+    var curTr = cur.parentNode;
     var curP = cur.getAttribute("data-participant");
     var idx = -1;
     for (var i = 0; i < cells.length; i++) {
@@ -1296,9 +1317,9 @@
     }
     var fallback = null;
     var target = null;
+    // Step by <tr>: DOM order is visual order, even on a sorted grid.
     for (var j = idx + dir; j >= 0 && j < cells.length; j += dir) {
-      var rowNum = parseInt(cells[j].getAttribute("data-row"), 10);
-      if (dir > 0 ? rowNum <= curRow : rowNum >= curRow) continue;
+      if (cells[j].parentNode === curTr) continue;
       if (!fallback) fallback = cells[j];
       if (cells[j].getAttribute("data-participant") === curP) { target = cells[j]; break; }
     }
@@ -2232,6 +2253,29 @@
     }
   }
 
+  // Intake items travel whole, tagged with their queue, so the drop can move them.
+  function intakeDragData(item, from, idx) {
+    var data = JSON.parse(JSON.stringify(item));
+    data.dragFrom = from;
+    data.dragIdx = idx;
+    return data;
+  }
+
+  // Queue-to-queue drops move, like sheet cards; drags from an intake panel copy.
+  function takeDragOrigin(info, from) {
+    var dragFrom = info.dragFrom;
+    var idx = info.dragIdx;
+    delete info.dragFrom;
+    delete info.dragIdx;
+    if (dragFrom !== from) return;
+    var queue = from === "reel" ? state.reelQueue : state.artifactQueue;
+    if (!intakeItemsOverlap(queue[idx], info)) idx = findIntakeInQueue(queue, info);
+    if (idx < 0) return;
+    queue.splice(idx, 1);
+    if (from === "reel") renderReelQueue();
+    else renderArtifactQueue();
+  }
+
   function initDropTargets() {
     setupDropTarget(qs("#artifactsList"), function (info) {
       if (isArtifactQueueLocked()) return;
@@ -2242,6 +2286,7 @@
         return;
       }
       if (isIntakeSource(info.source)) {
+        takeDragOrigin(info, "reel");
         addToQueue(state.artifactQueue, info, renderArtifactQueue);
         return;
       }
@@ -2260,6 +2305,7 @@
         return;
       }
       if (isIntakeSource(info.source)) {
+        takeDragOrigin(info, "artifact");
         addToQueue(state.reelQueue, info, renderReelQueue);
         return;
       }
@@ -2329,7 +2375,7 @@
       ev.dataTransfer.setData("text/plain", String(_reelDragIdx));
       var reelItem = state.reelQueue[_reelDragIdx];
       if (reelItem) {
-        var data = {
+        var data = isIntakeSource(reelItem.source) ? intakeDragData(reelItem, "reel", _reelDragIdx) : {
           participant: reelItem.participant,
           row: reelItem.row,
           desc: reelItem.desc,
@@ -2341,10 +2387,6 @@
           segTotal: reelItem.segTotal,
           source: "reel",
         };
-        // Keep intake identity so a drop back into the queue keeps its linkage.
-        if (reelItem.event_type) data.event_type = reelItem.event_type;
-        if (reelItem.event_ids) data.event_ids = reelItem.event_ids;
-        if (reelItem.mark_ids) data.mark_ids = reelItem.mark_ids;
         ev.dataTransfer.setData("application/json", JSON.stringify(data));
       }
     });
@@ -2584,25 +2626,18 @@
         var idx = parseInt(card.getAttribute("data-queue-idx"), 10);
         var item = state[cfg.queueKey][idx];
         if (!item) return;
-        var isIntake = isIntakeSource(item.source);
-        var data = {
+        var data = isIntakeSource(item.source) ? intakeDragData(item, "artifact", idx) : {
           participant: item.participant,
           desc: item.desc,
           start: item.start,
           end: item.end,
-          source: isIntake ? item.source : "artifact",
+          source: "artifact",
+          row: item.row,
+          timestamp: item.timestamp,
+          severity: item.severity,
+          segIdx: item.segIdx,
+          segTotal: item.segTotal,
         };
-        if (!isIntake) {
-          data.row = item.row;
-          data.timestamp = item.timestamp;
-          data.severity = item.severity;
-          data.segIdx = item.segIdx;
-          data.segTotal = item.segTotal;
-        } else {
-          data.event_type = item.event_type;
-          data.event_ids = item.event_ids;
-          data.mark_ids = item.mark_ids;
-        }
         ev.dataTransfer.setData("application/json", JSON.stringify(data));
         ev.dataTransfer.effectAllowed = "copyMove";
         setCardDragImage(ev, card);
@@ -2698,7 +2733,8 @@
 
     qs("#addToReelBtn").addEventListener("click", function () {
       for (var i = 0; i < state.artifactQueue.length; i++) {
-        addToQueue(state.reelQueue, state.artifactQueue[i], null);
+        // Copy: the trim pop-over edits items in place, and the queues must not share them.
+        addToQueue(state.reelQueue, JSON.parse(JSON.stringify(state.artifactQueue[i])), null);
       }
       renderReelQueue();
     });
@@ -3704,6 +3740,7 @@
   STUDIO.isReelQueueLocked = isReelQueueLocked;
   STUDIO.cellKey = cellKey;
   STUDIO.updateSingleCellClass = updateSingleCellClass;
+  STUDIO.updateCellClasses = updateCellClasses;
   STUDIO.ssEnqueueThumbCustom = ssEnqueueThumbCustom;
   STUDIO.renderArtifactQueue = renderArtifactQueue;
   STUDIO.renderReelQueue = renderReelQueue;
