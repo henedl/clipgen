@@ -1688,8 +1688,21 @@ def test_transcript_markers_mtime_gate_skips_reparse(wf_client, monkeypatch):
     monkeypatch.setattr(manifest_io, "load_manifest_section", counting_load)
     workflows_server._watch_poll_once()
     assert parses["n"] >= 1
-    # The fired trigger persisted a run, so one more poll may re-read the file;
-    # after that, an unchanged manifest is never re-parsed.
+
+    # The fired run rewrites clipgen.json from its own thread when it ends; wait for that.
+    def run_persisted_terminal():
+        with workflows_server._manifest_lock:
+            runs = list(workflows_server._manifest.get("runs", []))
+        return bool(runs) and all(
+            r.get("status") in ("completed", "degraded", "failed", "cancelled")
+            for r in runs
+        )
+
+    deadline = time.monotonic() + 5.0
+    while not run_persisted_terminal():
+        assert time.monotonic() < deadline, "triggered run never persisted"
+        time.sleep(0.02)
+    # One poll absorbs that write; after it, an unchanged manifest is never re-parsed.
     workflows_server._watch_poll_once()
     settled = parses["n"]
     workflows_server._watch_poll_once()
