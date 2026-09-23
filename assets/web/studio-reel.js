@@ -66,6 +66,8 @@
           start: item.start,
           end: item.end,
           source: item.source || "screenspace",
+          // Titlecard text; the server draws a blank card without it.
+          desc: item.label || item.desc || item.event_type || "",
         });
       }
       reelBody = { segments: segments };

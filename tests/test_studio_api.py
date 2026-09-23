@@ -212,6 +212,12 @@ def test_process_intake_item_enforces_size_cap_for_clip_only(tmp_path, monkeypat
         lambda *a, **k: {"sourceVideo": "v.mp4", "localStart": 0.0, "localEnd": 5.0},
     )
 
+    monkeypatch.setattr(
+        server.pipeline,
+        "extract_global_still",
+        lambda *a, **k: {"sourceVideo": "v.mp4", "localStart": 0.0, "localEnd": 0.0},
+    )
+
     enforce = Mock()
     monkeypatch.setattr(server.video, "enforce_filesize_limit", enforce)
 
@@ -223,6 +229,52 @@ def test_process_intake_item_enforces_size_cap_for_clip_only(tmp_path, monkeypat
     server._process_intake_item(item, "screen", "study")
     server._process_intake_item(item, "gif", "study")
     assert enforce.call_count == 1  # unchanged — only the clip was compressed
+
+
+def test_process_intake_item_writes_stills_for_screen_and_gif(tmp_path, monkeypatch):
+    """Screenshot and GIF intake items must not come back as .mp4 clips."""
+    monkeypatch.setattr(server.config, "OUTPUT_DIR", str(tmp_path))
+    monkeypatch.setattr(
+        server, "_resolve_intake_video_paths", lambda *a, **k: ["v.mp4"]
+    )
+    monkeypatch.setattr(server.video, "timeline_or_none", lambda *a, **k: None)
+    cut = Mock(return_value=None)
+    monkeypatch.setattr(server.pipeline, "cut_global_range", cut)
+    stills = []
+
+    def fake_still(timeline, base, start, end, out_path, output_format, **k):
+        stills.append((out_path, output_format))
+        return {"sourceVideo": "v.mp4", "localStart": start, "localEnd": start}
+
+    monkeypatch.setattr(server.pipeline, "extract_global_still", fake_still)
+    item = {"participant": "P01", "start": 3.0, "end": 8.0}
+
+    screen = server._process_intake_item(item, "screen", "study")
+    gif = server._process_intake_item(item, "gif", "study")
+    assert screen["file"].endswith(server.config.SCREENSHOT_FORMAT)
+    assert gif["file"].endswith(server.config.GIF_FORMAT)
+    assert [fmt for _path, fmt in stills] == ["screen", "gif"]
+    cut.assert_not_called()
+
+
+def test_extract_global_still_maps_into_owning_part(monkeypatch):
+    """A multi-part participant's still is taken from the part owning the start."""
+    import pipeline
+
+    calls = []
+    monkeypatch.setattr(
+        pipeline.video,
+        "extract_gif",
+        lambda **kw: calls.append(kw) or True,
+    )
+    timeline = [("a.mp4", 80, 0), ("b.mp4", 120, 80)]
+    fields = pipeline.extract_global_still(
+        timeline, "a.mp4", 124.0, 127.0, "out.gif", "gif"
+    )
+    assert calls[0]["input_file"] == "b.mp4"
+    assert calls[0]["timestamp"] == "0:00:44"
+    assert calls[0]["duration_seconds"] == 3  # capped by the 3 s span
+    assert fields == {"sourceVideo": "b.mp4", "localStart": 44.0, "localEnd": 47.0}
 
 
 def test_settings_records_include_card_pickers(client):
@@ -868,14 +920,22 @@ def test_api_generate_skips_existing_artifacts(client, monkeypatch, tmp_path):
     (tmp_path / "clip.mp4").write_bytes(b"video")
 
     existing = [
-        {"id": "a5c2s0", "type": "clip", "file": "clip.mp4", "cellRow": 5, "cellCol": 2}
+        {
+            "id": "a5c2s0",
+            "type": "clip",
+            "file": "clip.mp4",
+            "cellRow": 5,
+            "cellCol": 2,
+            "start": 60.0,
+            "end": 65.0,
+        }
     ]
     _set_artifacts(monkeypatch, list(existing))
 
     cell = types.SimpleNamespace(row=5, col=2, value="1:00")
 
     def fake_generate_list(ws, mode, *, ctx=None, cell_specs, skip_prompts):
-        return [{"participant": "P01", "cell": cell}]
+        return [{"participant": "P01", "cell": cell, "times": [("1:00", "1:05")]}]
 
     def fake_parse_cell_specs(text):
         return [("P01", 5)]
@@ -1021,6 +1081,8 @@ def test_api_generate_skips_when_titlecards_match(client, monkeypatch, tmp_path)
             "cellCol": 2,
             "titlecards": True,
             "titlecardDuration": 2,
+            "start": 60.0,
+            "end": 65.0,
         }
     ]
     _set_artifacts(monkeypatch, list(existing))
@@ -1029,7 +1091,7 @@ def test_api_generate_skips_when_titlecards_match(client, monkeypatch, tmp_path)
     monkeypatch.setattr(
         "spreadsheet.generate_list",
         lambda ws, mode, *, ctx=None, cell_specs, skip_prompts: [
-            {"participant": "P01", "cell": cell}
+            {"participant": "P01", "cell": cell, "times": [("1:00", "1:05")]}
         ],
     )
     monkeypatch.setattr("spreadsheet.parse_cell_specifications", lambda t: [("P01", 5)])
@@ -4902,3 +4964,164 @@ def test_release_busy_ignores_a_stale_token():
 
     server._release_busy("generate", second)
     assert server._busy_slots["generate"] is False
+
+
+# ---- Studio bug-hunt regressions ----
+
+
+def _fake_intake_item(item, output_format, study, index=0, *, cancel_flag=None):
+    if item.get("boom"):
+        raise RuntimeError("cut exploded")
+    return {
+        "id": f"intake_{index}",
+        "type": output_format,
+        "file": f"clip_{index}.mp4",
+        "participant": item["participant"],
+        "_ok": True,
+        "_error": "",
+    }
+
+
+def test_generate_intake_exception_keeps_streaming(client, monkeypatch):
+    """One raising item reports an error line; later items still run."""
+    monkeypatch.setattr(server, "_save_manifest_quiet", lambda: None)
+    monkeypatch.setattr(server, "_process_intake_item", _fake_intake_item)
+    monkeypatch.setattr("pipeline._resolve_clip_workers", lambda: 1)
+    items = [{"participant": "P01", "boom": True}, {"participant": "P01"}]
+    lines = _drain_ndjson(
+        client.post("/studio/api/generate-intake", json={"items": items})
+    )
+    assert lines[0] == {"index": 0, "ok": False, "error": "cut exploded"}
+    assert lines[1]["ok"] is True
+    assert server._intake_job_state["done"] == 2
+
+
+def test_generate_intake_rejects_second_stream(client, monkeypatch):
+    """A second stream would clear the first one's cancel event."""
+    monkeypatch.setattr(server, "_intake_active", 1)
+    resp = client.post(
+        "/studio/api/generate-intake", json={"items": [{"participant": "P01"}]}
+    )
+    assert resp.status_code == 409
+    assert server._intake_active == 1
+
+
+def test_generate_intake_records_artifacts_after_disconnect(client, monkeypatch):
+    """Items finishing after the client leaves still reach the artifact list."""
+    monkeypatch.setattr(server, "_save_manifest_quiet", lambda: None)
+    monkeypatch.setattr(server, "_process_intake_item", _fake_intake_item)
+    monkeypatch.setattr("pipeline._resolve_clip_workers", lambda: 2)
+    items = [{"participant": "P01"} for _ in range(4)]
+    with client.post(
+        "/studio/api/generate-intake", json={"items": items}, buffered=False
+    ) as resp:
+        next(resp.iter_encoded())  # read one line, then disconnect
+    assert _poll_until(lambda: server._intake_active == 0)
+    ids = sorted(a["id"] for a in server._generated_artifacts)
+    assert ids == ["intake_0", "intake_1", "intake_2", "intake_3"]
+
+
+def test_reel_direct_aborts_on_segment_without_video(client, monkeypatch, tmp_path):
+    """A segment with no source video fails the reel instead of vanishing."""
+    monkeypatch.setattr(
+        server,
+        "_resolve_intake_video_paths",
+        lambda p, s="": ["/fake/video.mp4"] if p == "P01" else [],
+    )
+    monkeypatch.setattr("config.OUTPUT_DIR", str(tmp_path))
+    monkeypatch.setattr(server, "_save_manifest_quiet", lambda: None)
+    monkeypatch.setattr("video.run_ffmpeg", lambda *a, **kw: True)
+    concat = Mock(return_value=True)
+    monkeypatch.setattr("video.concatenate_clips", concat)
+    server._reel_cancel_event.clear()
+
+    lines = _drain_ndjson(
+        client.post(
+            "/studio/api/reel-direct",
+            json={
+                "segments": [
+                    {"participant": "P01", "start": 0, "end": 5},
+                    {"participant": "P09", "start": 0, "end": 5, "desc": "gone"},
+                ],
+                "titlecards_enabled": False,
+            },
+        )
+    )
+    assert _poll_until(lambda: server._busy_slots["reel"] is False)
+    final = lines[-1]
+    assert final["ok"] is False
+    assert final["failedSegments"] == ["gone — no video for P09"]
+    concat.assert_not_called()
+
+
+def test_api_generate_regenerates_when_cached_span_differs(
+    client, monkeypatch, tmp_path
+):
+    """A cached trim must not answer a request for the untrimmed cell."""
+    import types
+
+    monkeypatch.setattr(server, "_worksheet", object())
+    monkeypatch.setattr("config.OUTPUT_DIR", str(tmp_path))
+    monkeypatch.setattr(server, "_save_manifest_quiet", lambda: None)
+    (tmp_path / "clip.mp4").write_bytes(b"video")
+    trimmed = {
+        "id": "a5c2s0",
+        "type": "clip",
+        "file": "clip.mp4",
+        "cellRow": 5,
+        "cellCol": 2,
+        "start": 62.0,
+        "end": 64.0,
+    }
+    _set_artifacts(monkeypatch, [trimmed])
+    cell = types.SimpleNamespace(row=5, col=2, value="1:00")
+    monkeypatch.setattr(
+        "spreadsheet.generate_list",
+        lambda ws, mode, **kw: [
+            {"participant": "P01", "cell": cell, "times": [("1:00", "1:05")]}
+        ],
+    )
+    process = Mock(return_value=(1, [dict(trimmed, start=60.0, end=65.0)]))
+    monkeypatch.setattr("pipeline.process_clips", process)
+
+    lines = _drain_ndjson(
+        client.post("/studio/api/generate", json={"cells": ["P01.5"]})
+    )
+    assert process.call_count == 1
+    assert "skipped" not in lines[0]
+
+
+def test_api_generate_cancel_during_sheet_fetch_counts(client, monkeypatch):
+    """A Cancel that lands while the sheet is fetched still stops the build."""
+    import types
+
+    monkeypatch.setattr(server, "_worksheet", object())
+    monkeypatch.setattr(server, "_save_manifest_quiet", lambda: None)
+    cell = types.SimpleNamespace(row=5, col=2)
+
+    def fetch_then_cancel(ws, mode, **kw):
+        server._generate_cancel_event.set()
+        return [{"participant": "P01", "cell": cell, "times": [("0:00", "0:05")]}]
+
+    monkeypatch.setattr("spreadsheet.generate_list", fetch_then_cancel)
+    process = Mock(return_value=(1, []))
+    monkeypatch.setattr("pipeline.process_clips", process)
+
+    lines = _drain_ndjson(
+        client.post("/studio/api/generate", json={"cells": ["P01.5"]})
+    )
+    server._generate_cancel_event.clear()
+    process.assert_not_called()
+    assert lines[-1] == {"cancelled": True}
+
+
+def test_settings_put_invalid_key_applies_nothing(client, monkeypatch):
+    """One bad value must not leave the valid keys before it applied."""
+    monkeypatch.setattr(server, "_save_studio_settings", lambda merged: None)
+    monkeypatch.setattr(config, "TITLECARD_COLOR", "#000000")
+    resp = client.put(
+        "/studio/api/settings",
+        json={"settings": {"TITLECARD_COLOR": "#ff0000", "ENDCARD_COLOR": "red"}},
+    )
+    assert resp.status_code == 400
+    assert config.TITLECARD_COLOR == "#000000"

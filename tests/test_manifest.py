@@ -54,6 +54,14 @@ def test_save_and_load_roundtrip(tmp_path, monkeypatch):
     assert ids == {"a4c2s0", "a5c2s0"}
 
 
+def test_save_manifest_drops_removed_ids_from_disk(tmp_path, monkeypatch):
+    """A stale record removed in memory must leave the file too."""
+    monkeypatch.setattr(config, "OUTPUT_DIR", str(tmp_path))
+    viewer.save_manifest([_make_artifact("a4c2s0"), _make_artifact("a5c2s0")])
+    viewer.save_manifest([], removed_ids={"a4c2s0"})
+    assert [a["id"] for a in viewer.load_manifest_artifacts()] == ["a5c2s0"]
+
+
 def test_save_manifest_merges_cumulatively(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "OUTPUT_DIR", str(tmp_path))
 

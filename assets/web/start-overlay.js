@@ -2191,7 +2191,7 @@
         if (errors.input) markFieldError(els.inputField, errors.input);
         if (errors.output) markFieldError(els.outputField, errors.output);
         if (!errors.input && !errors.output && typeof showToast === "function") {
-          showToast("Folder error");
+          showToast((res.body && res.body.error) || "Folder error");
         }
         releaseConfirm();
         return;

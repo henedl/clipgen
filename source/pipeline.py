@@ -466,6 +466,61 @@ def cut_global_range(
     }
 
 
+def extract_global_still(
+    timeline: list[tuple[str, int, int]] | None,
+    base_video: str,
+    start_seconds: float,
+    end_seconds: float,
+    out_path: str,
+    output_format: str,
+    *,
+    cancel_flag: Callable[[], bool] | None = None,
+) -> dict[str, Any] | None:
+    """Write a screenshot or GIF for a GLOBAL span, keyed off its start.
+
+    The still counterpart of :func:`cut_global_range`: same source fields,
+    ``None`` on failure. A GIF runs ``DEFAULT_GIF_DURATION_SECONDS``, capped by
+    the span and by what is left of the owning sub-video.
+    """
+    src_path: str | None = base_video
+    local_start = start_seconds
+    remaining: float | None = None
+    if timeline is not None:
+        mapped = utils.map_global_to_segment(timeline, start_seconds)
+        if mapped is None:
+            return None
+        index, local_start = mapped
+        src_path = timeline[index][0]
+        remaining = timeline[index][1] - local_start
+    if output_format == "screen":
+        duration = 0.0
+        ok = video.extract_screenshot(
+            input_file=src_path,
+            output_file=out_path,
+            timestamp=_local_timestamp(local_start),
+            cancel_flag=cancel_flag,
+        )
+    else:
+        cap = end_seconds - start_seconds
+        if remaining is not None:
+            cap = min(cap, remaining)
+        duration = max(1, min(config.DEFAULT_GIF_DURATION_SECONDS, int(cap)))
+        ok = video.extract_gif(
+            input_file=src_path,
+            output_file=out_path,
+            timestamp=_local_timestamp(local_start),
+            duration_seconds=duration,
+            cancel_flag=cancel_flag,
+        )
+    if not ok:
+        return None
+    return {
+        "sourceVideo": Path(src_path).name,
+        "localStart": local_start,
+        "localEnd": local_start + duration,
+    }
+
+
 def _process_single_clip_segments(
     clip: ClipRecord,
     base_video: str,
@@ -1427,6 +1482,18 @@ def _process_reel(
         not the requested flag, or the generate cache skips retrying a reel whose
         parts are missing their cards.
         """
+        try:
+            return cut_reel_clip(clip, missing_videos)
+        except Exception as exc:
+            # The reel unpacks four values per clip, so a raise must still fit that shape.
+            label = (
+                f"[{clip.get('participant', '')}] {(clip.get('desc') or '').strip()}"
+            )
+            return ([], [], [f"{label} — {exc}"], False)
+
+    def cut_reel_clip(
+        clip: Any, missing_videos: set[str]
+    ) -> tuple[list[tuple[str, int]], list[dict[str, Any]], list[str], bool]:
         clip, base_video = _prepare_and_check_clip(clip, missing_videos, fuzzy_matches)
         # prepare_clip fills `times`, so the segment count is known only now.
         expected = len(clip.get("times") or [])
@@ -1637,9 +1704,10 @@ def _process_reel(
         "endcardImage": end_img,
     }
 
+    # Offset by the cards that landed, not the ones requested.
     reel_transcript = _build_reel_transcript(
         components,
-        titlecards_enabled=titlecards_enabled,
+        titlecards_enabled=reel_carded,
         titlecard_duration_seconds=titlecard_duration_seconds,
     )
     if reel_transcript:

@@ -62,6 +62,7 @@ import traceback
 import uuid
 import webbrowser
 from urllib.parse import urlsplit
+from collections import Counter
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, field
@@ -160,12 +161,14 @@ _busy_slots: dict[str, bool] = {
 }
 # Claim token per slot; a stale release must not drop a successor's claim.
 _busy_owners: dict[str, str | None] = dict.fromkeys(_busy_slots)
-# Intake has no busy slot (it runs alongside generate); sheet swaps still check this.
+# Intake runs alongside generate, so it has its own claim, not a busy slot.
 _intake_active = 0
 # Serializes stash load → mutate → save across concurrent CRUD requests.
 _stash_lock = threading.Lock()
 # Serializes mutations to in-memory generated lists and quiet manifest saves.
 _generated_output_lock = threading.Lock()
+# Stale record ids the next quiet save drops from disk; guarded by the lock above.
+_manifest_removals: set[str] = set()
 # Latest per-job progress for /api/job-status, so Studio can re-attach after navigating away.
 _job_state_lock = threading.Lock()
 # started_at is a wall-clock epoch so a reattach shows accurate elapsed time.
@@ -895,6 +898,8 @@ def api_sheet_refresh() -> FlaskResponse:
 def _save_manifest_quiet() -> None:
     """Save manifest after generate/reel.
 
+    Also drops the stale records queued in ``_manifest_removals`` from disk.
+
     Narrow exception handling: filesystem and serialization errors are logged
     (the manifest writer already handles atomicity), but other exceptions
     bubble up so they aren't lost silently — those are real bugs we want to
@@ -904,7 +909,9 @@ def _save_manifest_quiet() -> None:
     with _generated_output_lock:
         artifacts = list(_generated_artifacts)
         reels = list(_generated_reels)
-    if not artifacts and not reels:
+        removed_ids = set(_manifest_removals)
+        _manifest_removals.clear()
+    if not artifacts and not reels and not removed_ids:
         return
     try:
         study = ""
@@ -915,6 +922,7 @@ def _save_manifest_quiet() -> None:
         viewer.save_manifest(
             artifacts,
             new_reels=reels or None,
+            removed_ids=removed_ids,
             study=study,
             worksheet_title=getattr(_worksheet, "title", ""),
             is_excel=pipeline.is_excel_worksheet(_worksheet) if _worksheet else False,
@@ -1001,12 +1009,16 @@ def _process_intake_item(
     id_hash = hashlib.md5(id_basis.encode()).hexdigest()[:8]
     safe_event_type = utils.sanitize_filename(event_type) if event_type else ""
     desc_part = f"{safe_event_type} " if safe_event_type else ""
+    extension = {
+        "screen": config.SCREENSHOT_FORMAT,
+        "gif": config.GIF_FORMAT,
+    }.get(output_format, config.FILEFORMAT)
     out_name = (
-        f"{study} {participant} {desc_part}intake {span_hash}{config.FILEFORMAT}"
+        f"{study} {participant} {desc_part}intake {span_hash}{extension}"
         if study
-        else f"intake_{span_hash}{config.FILEFORMAT}"
+        else f"intake_{span_hash}{extension}"
     )
-    out_path = files.get_unique_filename(out_name)
+    out_path = files.get_unique_filename(out_name, file_format=extension)
 
     if cancel_flag and cancel_flag():
         files.release_reservation(out_path)
@@ -1014,15 +1026,26 @@ def _process_intake_item(
 
     # Cut the global span (stitched when multi-video); release the placeholder on any failure.
     try:
-        source_fields = pipeline.cut_global_range(
-            timeline,
-            video_paths[0],
-            start,
-            end,
-            out_path,
-            reencode=config.REENCODING,
-            cancel_flag=cancel_flag,
-        )
+        if output_format == "clip":
+            source_fields = pipeline.cut_global_range(
+                timeline,
+                video_paths[0],
+                start,
+                end,
+                out_path,
+                reencode=config.REENCODING,
+                cancel_flag=cancel_flag,
+            )
+        else:
+            source_fields = pipeline.extract_global_still(
+                timeline,
+                video_paths[0],
+                start,
+                end,
+                out_path,
+                output_format,
+                cancel_flag=cancel_flag,
+            )
     except Exception:
         files.release_reservation(out_path)
         raise
@@ -1535,6 +1558,8 @@ def api_generate() -> FlaskResponse:
     token = _try_claim_busy("generate")
     if token is None:
         return err("A clip generation is already in progress", 409)
+    # Clear before the sheet fetch, so a Cancel during it still counts.
+    _generate_cancel_event.clear()
 
     try:
         cell_input = ", ".join(cell_strings)
@@ -1565,7 +1590,6 @@ def api_generate() -> FlaskResponse:
     total_artifacts = sum(len(clip.get("times") or []) for clip in clips)
 
     def stream() -> Any:
-        _generate_cancel_event.clear()
         # Fall back to the cell count so the readout still shows a denominator.
         _reset_generate_job_state(total_artifacts or len(cell_strings))
         cancel_flag = _generate_cancel_event.is_set
@@ -1610,6 +1634,14 @@ def api_generate() -> FlaskResponse:
                     )
                 )
                 (fresh if matches else stale).append(a)
+            # A trim or a failed segment leaves cached spans that differ from this request.
+            wanted = Counter(
+                (utils.timestamp_to_seconds(s), utils.timestamp_to_seconds(e))
+                for s, e in clip.get("times") or []
+            )
+            if Counter((a.get("start"), a.get("end")) for a in fresh) != wanted:
+                stale.extend(fresh)
+                fresh = []
 
             if fresh:
                 # Advance by segment count, not len(fresh), to stay in step with the
@@ -1638,6 +1670,7 @@ def api_generate() -> FlaskResponse:
                             if a.get("id") not in stale_ids
                         ]
                         _rebuild_artifact_index()
+                        _manifest_removals.update(str(i) for i in stale_ids if i)
                     for a in stale:
                         resolved = str(utils.resolve_output_path(a["file"]))
                         existence_cache[resolved] = False
@@ -1852,6 +1885,8 @@ def api_reel() -> FlaskResponse:
     token = _try_claim_busy("reel")
     if token is None:
         return err("A reel build is already in progress", 409)
+    # Clear before the sheet fetch, so a Cancel during it still counts.
+    _reel_cancel_event.clear()
 
     # The worker owns the busy slot once started; until then every exit path
     # releases it.
@@ -1935,12 +1970,14 @@ def api_reel() -> FlaskResponse:
                             _generated_reels[:] = [
                                 r for r in _generated_reels if r.get("id") != stale_id
                             ]
+                            _manifest_removals.add(str(stale_id))
                         try:
                             reel_path.unlink(missing_ok=True)
                         except OSError:
                             pass
+                        # Save now: a cancelled rebuild never saves.
+                        _save_manifest_quiet()
 
-                _reel_cancel_event.clear()
                 _reset_reel_job_state("reel")
                 cancel_flag = _reel_cancel_event.is_set
                 started["worker"] = True
@@ -2442,18 +2479,20 @@ def _apply_settings_payload(data: dict[str, Any]) -> tuple[dict[str, Any], str |
                 "(requires libfreetype). Install an ffmpeg build with libfreetype to enable titlecards."
             )
 
+    # Coerce every key before applying any, so one bad value changes nothing.
     applied: dict[str, Any] = {}
+    for name, value in settings_data.items():
+        if name not in config.STUDIO_SETTINGS:
+            continue
+        ok, coerced, error = _coerce_studio_setting(name, value)
+        if not ok:
+            if error is not None:
+                return {}, error
+            continue
+        applied[name] = coerced
     with config.SETTINGS_LOCK:
-        for name, value in settings_data.items():
-            if name not in config.STUDIO_SETTINGS:
-                continue
-            ok, coerced, error = _coerce_studio_setting(name, value)
-            if not ok:
-                if error is not None:
-                    return {}, error
-                continue
+        for name, coerced in applied.items():
             setattr(config, name, coerced)
-            applied[name] = coerced
 
     # Snapshot every setting, not just submitted keys, so a partial PUT keeps other
     # overrides.
@@ -2694,111 +2733,103 @@ def api_generate_intake() -> FlaskResponse:
         return err("No intake items specified")
 
     output_format = data.get("format", "clip")
+    if output_format not in ("clip", "screen", "gif"):
+        return err(f"Invalid format: {output_format}")
     study = _effective_study()
 
-    def stream() -> Iterator[str]:
-        _intake_cancel_event.clear()
-        cancel_flag = _intake_cancel_event.is_set
+    # One intake stream at a time: a second would clear the shared cancel event.
+    global _intake_active
+    with _busy_lock:
+        if _intake_active > 0:
+            return err("An intake generation is already in progress", 409)
+        _intake_active += 1
+    started = {"stream": False}
+    _intake_cancel_event.clear()
+    cancel_flag = _intake_cancel_event.is_set
 
-        def _emit(idx: int, result: dict[str, Any]) -> str:
-            ok = result.pop("_ok", False)
-            error = result.pop("_error", "")
-            result.pop("_cancelled", None)
-            # Results finishing after cancel are dropped and unlinked so no orphan
-            # media remains.
-            if ok and cancel_flag():
-                try:
-                    Path(utils.resolve_output_path(result.get("file", ""))).unlink(
-                        missing_ok=True
-                    )
-                except OSError:
-                    pass
-                return (
-                    json.dumps({"index": idx, "ok": False, "error": "cancelled"}) + "\n"
+    def _run_item(idx: int, item: dict[str, Any]) -> str:
+        # Record in the worker, so a client disconnect never discards finished work.
+        result: dict[str, Any]
+        try:
+            result = _process_intake_item(
+                item, output_format, study, index=idx, cancel_flag=cancel_flag
+            )
+        except Exception as exc:
+            result = {"_ok": False, "_error": str(exc)}
+        _increment_intake_done()
+        ok = result.pop("_ok", False)
+        error = result.pop("_error", "")
+        result.pop("_cancelled", None)
+        # Results finishing after cancel are dropped and unlinked so no orphan
+        # media remains.
+        if ok and cancel_flag():
+            try:
+                Path(utils.resolve_output_path(result.get("file", ""))).unlink(
+                    missing_ok=True
                 )
-            if ok:
-                _append_generated_artifact(result)
-                return json.dumps({"index": idx, "ok": True, "artifact": result}) + "\n"
-            return json.dumps({"index": idx, "ok": False, "error": error}) + "\n"
+            except OSError:
+                pass
+            return json.dumps({"index": idx, "ok": False, "error": "cancelled"}) + "\n"
+        if ok:
+            _append_generated_artifact(result)
+            return json.dumps({"index": idx, "ok": True, "artifact": result}) + "\n"
+        return json.dumps({"index": idx, "ok": False, "error": error}) + "\n"
 
-        _mark_intake_active(True)
+    def stream() -> Iterator[str]:
+        started["stream"] = True
         _reset_intake_job_state(len(items))
         try:
             workers = pipeline._resolve_clip_workers()
             # Same labels as pipeline._parallel_map_ordered: CLIP_PARALLEL_WORKERS
             # drives this pool too.
-            _worker = profiling.bind(
-                profiling.timed("pipeline.clip")(_process_intake_item)
-            )
+            _worker = profiling.bind(profiling.timed("pipeline.clip")(_run_item))
             if workers >= 2 and len(items) >= 2:
                 with (
                     profiling.span("pipeline.pool_wall"),
                     concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool,
                 ):
-                    future_to_idx = {
-                        pool.submit(
-                            _worker,
-                            item,
-                            output_format,
-                            study,
-                            index=idx,
-                            cancel_flag=cancel_flag,
-                        ): idx
+                    futures = [
+                        pool.submit(_worker, idx, item)
                         for idx, item in enumerate(items)
-                    }
-                    for future in concurrent.futures.as_completed(future_to_idx):
-                        idx = future_to_idx[future]
-                        try:
-                            result = future.result()
-                        except Exception as exc:
-                            yield (
-                                json.dumps(
-                                    {"index": idx, "ok": False, "error": str(exc)}
-                                )
-                                + "\n"
-                            )
-                            continue
-                        _increment_intake_done()
-                        yield _emit(idx, result)
+                    ]
+                    for future in concurrent.futures.as_completed(futures):
+                        yield future.result()
                         if cancel_flag():
                             # Cancel pending futures so workers see cancel_flag; stop
                             # yielding once set.
-                            for f in future_to_idx:
+                            for f in futures:
                                 f.cancel()
                             break
             else:
                 for idx, item in enumerate(items):
                     if cancel_flag():
                         break
-                    result = _process_intake_item(
-                        item,
-                        output_format,
-                        study,
-                        index=idx,
-                        cancel_flag=cancel_flag,
-                    )
-                    _increment_intake_done()
-                    yield _emit(idx, result)
+                    yield _run_item(idx, item)
             if cancel_flag():
                 yield json.dumps({"cancelled": True}) + "\n"
         finally:
-            # Persist whatever completed even if the client disconnects or a
-            # later item raises mid-stream.
+            # Persist whatever completed even if the client disconnects mid-stream.
             _save_manifest_quiet()
             _mark_intake_active(False)
 
-    return ndjson_response(
+    response = ndjson_response(
         profiling.op_stream(stream(), kind="intake", work=len(items))
     )
+    # An unstarted generator never runs its finally, so release the claim here.
+    response.call_on_close(
+        lambda: None if started["stream"] else _mark_intake_active(False)
+    )
+    return response
 
 
 @studio_bp.route("/api/reel-direct", methods=["POST"])
 def api_reel_direct() -> FlaskResponse:
     """Build a reel from direct timestamp segments (for intake / mixed queues).
 
-    Concatenates in panel order from explicit start/end pairs. Titlecards and
-    highlights are not applied on this path; spreadsheet-only queues use
-    ``/api/reel``, which resolves cells from the sheet instead.
+    Concatenates in panel order from explicit start/end pairs. Titlecards take
+    each segment's ``desc``; highlights are not applied on this path.
+    Spreadsheet-only queues use ``/api/reel``, which resolves cells from the
+    sheet instead.
     """
     import tempfile
 
@@ -2861,7 +2892,11 @@ def api_reel_direct() -> FlaskResponse:
                 participant = seg.get("participant", "")
                 start = float(seg.get("start", 0))
                 end = float(seg.get("end", 0))
+                seg_label = (
+                    seg.get("event_type") or seg.get("desc") or ""
+                ).strip() or f"segment {completed + 1}"
                 if end <= start:
+                    failed_segments.append(f"{seg_label} — empty time span")
                     completed += 1
                     emit_event(
                         {
@@ -2875,6 +2910,7 @@ def api_reel_direct() -> FlaskResponse:
                 video_paths = _resolve_intake_video_paths(participant)
 
                 if not video_paths:
+                    failed_segments.append(f"{seg_label} — no video for {participant}")
                     completed += 1
                     emit_event(
                         {
@@ -2927,10 +2963,7 @@ def api_reel_direct() -> FlaskResponse:
                 if ok:
                     clip_paths.append(tmp_path)
                 else:
-                    failed_segments.append(
-                        (seg.get("event_type") or seg.get("desc") or "").strip()
-                        or f"segment {completed + 1}"
-                    )
+                    failed_segments.append(seg_label)
                 completed += 1
                 emit_event(
                     {
@@ -2950,10 +2983,6 @@ def api_reel_direct() -> FlaskResponse:
                 )
                 return
 
-            if not clip_paths:
-                emit_event({"ok": False, "error": "No clips could be generated"})
-                return
-
             if failed_segments:
                 # Abort rather than ship a reel missing marked moments; cleanup()
                 # drops the temp cuts.
@@ -2967,6 +2996,10 @@ def api_reel_direct() -> FlaskResponse:
                         "failedSegments": failed_segments,
                     }
                 )
+                return
+
+            if not clip_paths:
+                emit_event({"ok": False, "error": "No clips could be generated"})
                 return
 
             reel_study = _effective_study()
@@ -3109,6 +3142,17 @@ def api_gallery_cancel() -> FlaskResponse:
 # ---- State initialization ----
 
 
+def _load_generated_output() -> None:
+    """Reload the generated artifact and reel lists from the output dir's manifest."""
+    global _generated_artifacts, _generated_reels
+    # Rebind under the lock so a streaming append never sees a half-swapped reference.
+    with _generated_output_lock:
+        _generated_artifacts, _generated_reels = viewer.load_manifest_both()
+        _rebuild_artifact_index()
+        # Pending removals name the old folder's records.
+        _manifest_removals.clear()
+
+
 def _init_studio_state(worksheet: Any) -> None:
     """Initialize module-level state for Studio routes.
 
@@ -3116,7 +3160,7 @@ def _init_studio_state(worksheet: Any) -> None:
     the HTML, but spreadsheet-dependent routes report ``sheet_loaded: false``
     until a sheet is opened via ``POST /api/spreadsheets/open``.
     """
-    global _worksheet, _generated_artifacts, _generated_reels
+    global _worksheet
 
     _load_studio_settings()
     _revert_unsupported_formats()
@@ -3126,12 +3170,10 @@ def _init_studio_state(worksheet: Any) -> None:
         new_context = spreadsheet.build_sheet_context(worksheet)
         if new_context is None:
             utils.error_print("Could not load spreadsheet data for Studio.")
-            sys.exit(1)
+            # Raise, not exit: a runtime swap must reach its rollback.
+            raise ValueError("Could not parse the spreadsheet")
     _set_sheet_context(new_context)
-    # Rebind under the lock so a streaming append never sees a half-swapped reference.
-    with _generated_output_lock:
-        _generated_artifacts, _generated_reels = viewer.load_manifest_both()
-        _rebuild_artifact_index()
+    _load_generated_output()
     _thumbnail_cache.clear()
     _sprite_cache.clear()
     _audio_cache.clear()
@@ -3591,7 +3633,10 @@ def _init_combined_state(
     import transcripts_server
     import workflows_server
 
-    _init_studio_state(worksheet)
+    try:
+        _init_studio_state(worksheet)
+    except ValueError:
+        sys.exit(1)
     # CLI launches seed the meta and recents here; /api/spreadsheets/open does it itself.
     global _active_sheet_meta
     _active_sheet_meta = _derive_sheet_meta(worksheet)
@@ -3786,6 +3831,9 @@ def api_dirs_post() -> FlaskResponse:
     new_output = data.get("output")
     errors: dict[str, str] = {}
 
+    if _generation_busy():
+        return err("Wait for generation to finish first.", 409)
+
     if new_input is not None:
         p = Path(str(new_input)).expanduser()
         if not p.is_dir():
@@ -3802,9 +3850,13 @@ def api_dirs_post() -> FlaskResponse:
         except OSError as exc:
             errors["output"] = f"Could not create output directory: {exc}"
         else:
+            changed = str(utils.get_effective_output_dir()) != str(p)
             with config.SETTINGS_LOCK:
                 config.OUTPUT_DIR = str(p)
             start_settings.record_recent_output(str(p))
+            # Studio's lists belong to the old folder; the next save would merge them in.
+            if changed:
+                _load_generated_output()
 
     if errors:
         return err("Folder error", 400, errors=errors)
@@ -4192,12 +4244,12 @@ def api_spreadsheets_open() -> FlaskResponse:
     _seed_filename_overrides(source)
     try:
         _swap_worksheet(new_ws)
-    except Exception:
+    except Exception as exc:
         with config.SETTINGS_LOCK:
             config.FILENAME_OVERRIDES = prev_overrides
+        if isinstance(exc, ValueError):
+            return err(str(exc), 500)
         raise
-    if _sheet_context is None:
-        return err("Could not parse the spreadsheet", 500)
     start_settings.record_recent_spreadsheet(type_, id_or_path, label, loaded_worksheet)
     start_settings.record_project_session(
         str(utils.get_effective_input_dir()),

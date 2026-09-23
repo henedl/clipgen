@@ -1391,6 +1391,53 @@ def test_process_reel_records_cards_that_actually_landed(monkeypatch, make_clip)
     assert records[0]["titlecards"] is True
 
 
+def test_process_reel_aborts_cleanly_when_a_clip_raises(monkeypatch, make_clip):
+    """A raising clip becomes a reel failure, not an unpack crash."""
+    raw_clip = make_clip()
+    monkeypatch.setattr(
+        pipeline.files,
+        "prepare_clip",
+        lambda clip: _prepared_clip(clip, [("00:10", "00:20")]),
+    )
+    monkeypatch.setattr(pipeline.Path, "is_file", lambda self: True)
+    monkeypatch.setattr(pipeline.utils, "create_progress_bar", lambda: None)
+    concat = Mock(return_value=True)
+    monkeypatch.setattr(pipeline.video, "concatenate_clips", concat)
+
+    def boom(*_a, **_k):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(pipeline, "_process_single_clip_segments", boom)
+    assert pipeline.process_reel([raw_clip], output_file="reel.mp4") == (0, [])
+    concat.assert_not_called()
+
+
+def test_process_reel_transcript_skips_cards_that_did_not_land(monkeypatch, make_clip):
+    """Soft-failed cards must not shift the reel transcript."""
+    raw_clip = make_clip()
+    monkeypatch.setattr(
+        pipeline.files,
+        "prepare_clip",
+        lambda clip: _prepared_clip(clip, [("00:10", "00:20")]),
+    )
+    monkeypatch.setattr(pipeline.Path, "is_file", lambda self: True)
+    monkeypatch.setattr(pipeline.utils, "create_progress_bar", lambda: None)
+    monkeypatch.setattr(pipeline.video, "concatenate_clips", lambda *_a, **_k: True)
+    monkeypatch.setattr(
+        pipeline,
+        "_process_single_clip_segments",
+        lambda *_a, **_k: (1, [("_reel_part_1.mp4", 0)], False),
+    )
+    seen = []
+    monkeypatch.setattr(
+        pipeline,
+        "_build_reel_transcript",
+        lambda _c, **kw: seen.append(kw["titlecards_enabled"]) or [],
+    )
+    pipeline.process_reel([raw_clip], output_file="reel.mp4", titlecards_enabled=True)
+    assert seen == [False]
+
+
 def test_completion_message_reports_aborted_reel(monkeypatch, capsys):
     import app
 

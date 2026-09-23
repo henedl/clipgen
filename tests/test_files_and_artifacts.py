@@ -316,6 +316,26 @@ def test_build_artifact_records_for_clip_stores_card_image_fields(
     assert "titlecardImage" not in screens[0]
 
 
+def test_build_artifact_record_ids_differ_by_type():
+    """A cell's clip, screenshot and GIF must not collapse in manifest dedup."""
+    clip: ClipRecord = {
+        "cell": SimpleNamespace(row=5, col=2),
+        "study": "study",
+        "participant": "P01",
+        "category": "CatA",
+        "desc": "Obs",
+        "cell_annotations": [],
+        "times": [("00:10", "00:20")],
+    }
+    ids = [
+        utils.build_artifact_record(
+            clip, "study_P01.mp4", "out", "00:10", "00:20", artifact_type=t, seg_idx=0
+        )["id"]
+        for t in ("clip", "screen", "gif")
+    ]
+    assert ids == ["a5c2s0", "a5c2s0-screen", "a5c2s0-gif"]
+
+
 def test_build_artifact_record_raises_when_cell_missing():
     """Refuse cells without row/col so future callers cannot silently mint
     colliding ids of the form ``a0c0s{seg_idx}``. Two such records would
