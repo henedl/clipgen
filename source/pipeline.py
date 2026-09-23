@@ -536,6 +536,7 @@ def _process_single_clip_segments(
     pad_pre: float = 0.0,
     pad_post: float = 0.0,
     max_duration: float = 0.0,
+    uncarded_paths: set[str] | None = None,
 ) -> tuple[int, list[tuple[str, int]], bool]:
     """Process one clip's segments: run ffmpeg for each (start, end), optionally collect output paths.
 
@@ -558,6 +559,7 @@ def _process_single_clip_segments(
             that get concatenated/re-encoded downstream, so the size cap is applied once
             to the final artifact rather than wasted on throwaway pieces.
         include_severity: If True and clip has severity, include [Severity] in filename
+        uncarded_paths: If given, collects the outputs whose card wrap soft-failed
         cancel_flag: Optional callable; checked before each segment and forwarded to
             ffmpeg helpers so an in-flight encode can be terminated. Already-finished
             segments are kept; the partial output of the killed segment is unlinked.
@@ -692,6 +694,8 @@ def _process_single_clip_segments(
                 # the cache retries.
                 if ok and not cards_applied:
                     all_cards_applied = False
+                    if uncarded_paths is not None:
+                        uncarded_paths.add(out_name)
             # Cap size after any wrap re-encode; reel parts pass enforce_size=False.
             if ok and enforce_size:
                 video.enforce_filesize_limit(out_name, cancel_flag=cancel_flag)
@@ -1353,6 +1357,10 @@ def _build_reel_transcript(
         comp_start = comp.get("start", 0.0)
         comp_end = comp.get("end", 0.0)
         comp_duration = comp_end - comp_start
+        # A part whose wrap soft-failed carries no cards, so it adds no card time.
+        carded = comp.get("carded", True)
+        title_offset = titlecard_duration if carded else 0
+        end_offset = endcard_duration if carded else 0
 
         full_transcript = None
         if participant and participant in source_transcripts:
@@ -1374,14 +1382,14 @@ def _build_reel_transcript(
                 merged_segments.append(
                     {
                         "id": f"reel:{seg_counter}",
-                        "start": seg["start"] + cumulative_offset + titlecard_duration,
-                        "end": seg["end"] + cumulative_offset + titlecard_duration,
+                        "start": seg["start"] + cumulative_offset + title_offset,
+                        "end": seg["end"] + cumulative_offset + title_offset,
                         "text": seg["text"],
                     }
                 )
                 seg_counter += 1
 
-        cumulative_offset += comp_duration + titlecard_duration + endcard_duration
+        cumulative_offset += comp_duration + title_offset + end_offset
 
     return merged_segments
 
@@ -1515,6 +1523,7 @@ def _process_reel(
             if not expected:
                 return ([], [], [], True)
             return ([], [], [f"{label} — source video not found"], False)
+        uncarded: set[str] = set()
         _, segment_paths, cards_applied = _process_single_clip_segments(
             clip,
             base_video,
@@ -1527,12 +1536,18 @@ def _process_reel(
             pad_pre=pad_pre,
             pad_post=pad_post,
             max_duration=max_duration,
+            uncarded_paths=uncarded,
         )
         times = clip.get("times", [])
         clip_components = [
             utils.build_reel_component(clip, base_video, *times[time_idx])
             for _out_path, time_idx in segment_paths
         ]
+        # Per part, so the reel transcript offsets only cards that landed.
+        for component, (out_path, _time_idx) in zip(
+            clip_components, segment_paths, strict=True
+        ):
+            component["carded"] = out_path not in uncarded
         failures: list[str] = []
         if len(segment_paths) < expected:
             failures.append(
@@ -1704,10 +1719,9 @@ def _process_reel(
         "endcardImage": end_img,
     }
 
-    # Offset by the cards that landed, not the ones requested.
     reel_transcript = _build_reel_transcript(
         components,
-        titlecards_enabled=reel_carded,
+        titlecards_enabled=titlecards_enabled,
         titlecard_duration_seconds=titlecard_duration_seconds,
     )
     if reel_transcript:

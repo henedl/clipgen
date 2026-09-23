@@ -1412,9 +1412,9 @@ def test_process_reel_aborts_cleanly_when_a_clip_raises(monkeypatch, make_clip):
     concat.assert_not_called()
 
 
-def test_process_reel_transcript_skips_cards_that_did_not_land(monkeypatch, make_clip):
-    """Soft-failed cards must not shift the reel transcript."""
-    raw_clip = make_clip()
+def test_process_reel_marks_parts_whose_cards_soft_failed(monkeypatch, make_clip):
+    """Each reel component records whether its own part got cards."""
+    clips = [make_clip(row=3, col=2), make_clip(row=4, col=2)]
     monkeypatch.setattr(
         pipeline.files,
         "prepare_clip",
@@ -1423,19 +1423,47 @@ def test_process_reel_transcript_skips_cards_that_did_not_land(monkeypatch, make
     monkeypatch.setattr(pipeline.Path, "is_file", lambda self: True)
     monkeypatch.setattr(pipeline.utils, "create_progress_bar", lambda: None)
     monkeypatch.setattr(pipeline.video, "concatenate_clips", lambda *_a, **_k: True)
-    monkeypatch.setattr(
-        pipeline,
-        "_process_single_clip_segments",
-        lambda *_a, **_k: (1, [("_reel_part_1.mp4", 0)], False),
-    )
+    monkeypatch.setattr(config, "CLIP_PARALLEL_WORKERS", 1)
+
+    def fake_segments(clip, _base, *, uncarded_paths=None, **_k):
+        path = f"_reel_part_{clip['cell'].row}.mp4"
+        if clip["cell"].row == 4 and uncarded_paths is not None:
+            uncarded_paths.add(path)  # this part's wrap soft-failed
+            return (1, [(path, 0)], False)
+        return (1, [(path, 0)], True)
+
+    monkeypatch.setattr(pipeline, "_process_single_clip_segments", fake_segments)
     seen = []
     monkeypatch.setattr(
         pipeline,
         "_build_reel_transcript",
-        lambda _c, **kw: seen.append(kw["titlecards_enabled"]) or [],
+        lambda comps, **_kw: seen.extend(c["carded"] for c in comps) or [],
     )
-    pipeline.process_reel([raw_clip], output_file="reel.mp4", titlecards_enabled=True)
-    assert seen == [False]
+    pipeline.process_reel(clips, output_file="reel.mp4", titlecards_enabled=True)
+    assert seen == [True, False]
+
+
+def test_build_reel_transcript_skips_cards_on_uncarded_part(monkeypatch):
+    """An uncarded part adds no card time, before or after itself."""
+    _mock_two_component_transcript(monkeypatch)
+    monkeypatch.setattr(
+        pipeline.titlecards,
+        "resolve_card_background",
+        lambda kind: (None, True, False, "black"),
+    )
+    components = [
+        {"participant": "P01", "start": 0.0, "end": 10.0, "carded": False},
+        {"participant": "P02", "start": 0.0, "end": 8.0, "carded": True},
+    ]
+
+    merged = pipeline._build_reel_transcript(
+        components, titlecards_enabled=True, titlecard_duration_seconds=7
+    )
+
+    # comp1 has no titlecard: 1.0 + offset(0)
+    assert merged[0]["start"] == 1.0
+    # offset after comp1 = clip(10) only; comp2 = 1.0 + 10 + titlecard(7)
+    assert merged[1]["start"] == 18.0
 
 
 def test_completion_message_reports_aborted_reel(monkeypatch, capsys):

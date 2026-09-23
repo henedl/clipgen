@@ -39,6 +39,7 @@ def client(studio_app, monkeypatch):
     monkeypatch.setattr(server, "_sheet_payload_cache", None)
     _set_artifacts(monkeypatch, [])
     monkeypatch.setattr(server, "_generated_reels", [])
+    monkeypatch.setattr(server, "_manifest_removals", set())
     server._release_busy("generate")
     server._release_busy("reel")
 
@@ -5091,12 +5092,24 @@ def test_api_generate_regenerates_when_cached_span_differs(
     assert "skipped" not in lines[0]
 
 
-def test_api_generate_cancel_during_sheet_fetch_counts(client, monkeypatch):
-    """A Cancel that lands while the sheet is fetched still stops the build."""
+def test_api_generate_cancel_during_sheet_fetch_counts(client, monkeypatch, tmp_path):
+    """A Cancel during the sheet fetch stops the build and keeps the old cache."""
     import types
 
     monkeypatch.setattr(server, "_worksheet", object())
     monkeypatch.setattr(server, "_save_manifest_quiet", lambda: None)
+    monkeypatch.setattr("config.OUTPUT_DIR", str(tmp_path))
+    (tmp_path / "trimmed.mp4").write_bytes(b"video")
+    trimmed = {
+        "id": "a5c2s0",
+        "type": "clip",
+        "file": "trimmed.mp4",
+        "cellRow": 5,
+        "cellCol": 2,
+        "start": 1.0,
+        "end": 3.0,
+    }
+    _set_artifacts(monkeypatch, [trimmed])
     cell = types.SimpleNamespace(row=5, col=2)
 
     def fetch_then_cancel(ws, mode, **kw):
@@ -5113,6 +5126,55 @@ def test_api_generate_cancel_during_sheet_fetch_counts(client, monkeypatch):
     server._generate_cancel_event.clear()
     process.assert_not_called()
     assert lines[-1] == {"cancelled": True}
+    # The stale trim was never replaced, so it must survive.
+    assert (tmp_path / "trimmed.mp4").exists()
+    assert server._generated_artifacts == [trimmed]
+    assert "a5c2s0" not in server._manifest_removals
+
+
+def test_api_reel_cancel_during_sheet_fetch_stops_early(client, monkeypatch):
+    """A Cancel during the reel's sheet fetch ends the build before any work."""
+    import types
+
+    monkeypatch.setattr(server, "_worksheet", object())
+    cell = types.SimpleNamespace(row=5, col=2)
+
+    def fetch_then_cancel(ws, mode, **kw):
+        server._reel_cancel_event.set()
+        return [{"participant": "P01", "cell": cell, "times": [("0:00", "0:05")]}]
+
+    monkeypatch.setattr("spreadsheet.generate_list", fetch_then_cancel)
+    process = Mock(return_value=(1, []))
+    monkeypatch.setattr("pipeline.process_reel", process)
+
+    lines = _drain_ndjson(client.post("/studio/api/reel", json={"cells": ["P01.5"]}))
+    server._reel_cancel_event.clear()
+    process.assert_not_called()
+    assert lines[-1]["cancelled"] is True
+    assert server._busy_slots["reel"] is False
+
+
+def test_save_manifest_quiet_keeps_removals_when_save_fails(monkeypatch):
+    """A failed write must retry the stale removals on the next save."""
+    monkeypatch.setattr(server, "_generated_artifacts", [])
+    monkeypatch.setattr(server, "_generated_reels", [])
+    monkeypatch.setattr(server, "_manifest_removals", {"a5c2s0"})
+
+    def fail(*_a, **_k):
+        raise OSError("disk full")
+
+    monkeypatch.setattr("viewer.save_manifest", fail)
+    server._save_manifest_quiet()
+    assert server._manifest_removals == {"a5c2s0"}
+
+    seen = []
+    monkeypatch.setattr(
+        "viewer.save_manifest",
+        lambda *_a, removed_ids=None, **_k: seen.append(removed_ids) or "path",
+    )
+    server._save_manifest_quiet()
+    assert seen == [{"a5c2s0"}]
+    assert server._manifest_removals == set()
 
 
 def test_settings_put_invalid_key_applies_nothing(client, monkeypatch):

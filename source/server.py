@@ -167,7 +167,7 @@ _intake_active = 0
 _stash_lock = threading.Lock()
 # Serializes mutations to in-memory generated lists and quiet manifest saves.
 _generated_output_lock = threading.Lock()
-# Stale record ids the next quiet save drops from disk; guarded by the lock above.
+# Stale record ids to drop from disk until a save succeeds; lock above guards it.
 _manifest_removals: set[str] = set()
 # Latest per-job progress for /api/job-status, so Studio can re-attach after navigating away.
 _job_state_lock = threading.Lock()
@@ -910,7 +910,6 @@ def _save_manifest_quiet() -> None:
         artifacts = list(_generated_artifacts)
         reels = list(_generated_reels)
         removed_ids = set(_manifest_removals)
-        _manifest_removals.clear()
     if not artifacts and not reels and not removed_ids:
         return
     try:
@@ -919,7 +918,7 @@ def _save_manifest_quiet() -> None:
             study = artifacts[0].get("study", "")
         elif reels:
             study = reels[0].get("study", "")
-        viewer.save_manifest(
+        saved = viewer.save_manifest(
             artifacts,
             new_reels=reels or None,
             removed_ids=removed_ids,
@@ -930,6 +929,11 @@ def _save_manifest_quiet() -> None:
         )
     except (OSError, TypeError, ValueError) as e:
         utils.warning_print(f"Failed to save manifest: {e}")
+        return
+    # Forget removals only once written; a failed save retries them next time.
+    if saved is not None:
+        with _generated_output_lock:
+            _manifest_removals.difference_update(removed_ids)
 
 
 def _resolve_intake_video_paths(participant: str) -> list[str]:
@@ -1600,7 +1604,7 @@ def api_generate() -> FlaskResponse:
         req_title_img, req_end_img = pipeline._resolve_titlecard_images(req_cards)
 
         # Pass 1: yield already-existing artifacts, collect clips that need generation
-        to_generate: list[tuple[Any, str]] = []
+        to_generate: list[tuple[Any, str, list[dict[str, Any]]]] = []
         existence_cache: dict[str, bool] = {}
         for clip in clips:
             cell_str = clip["participant"] + "." + str(clip["cell"].row)
@@ -1660,31 +1664,32 @@ def api_generate() -> FlaskResponse:
                     + "\n"
                 )
             else:
-                # Drop stale records and files so regeneration reuses the same filename/id.
-                if stale:
-                    stale_ids = {a.get("id") for a in stale}
-                    with _generated_output_lock:
-                        _generated_artifacts[:] = [
-                            a
-                            for a in _generated_artifacts
-                            if a.get("id") not in stale_ids
-                        ]
-                        _rebuild_artifact_index()
-                        _manifest_removals.update(str(i) for i in stale_ids if i)
-                    for a in stale:
-                        resolved = str(utils.resolve_output_path(a["file"]))
-                        existence_cache[resolved] = False
-                        try:
-                            Path(resolved).unlink(missing_ok=True)
-                        except OSError:
-                            pass
-                to_generate.append((clip, cell_str))
+                to_generate.append((clip, cell_str, stale))
 
         # Pass 2: parallel generate. Each worker self-persists, so results survive a
         # client disconnect.
         def _generate_and_persist(
-            clip: Any,
+            clip: Any, stale: list[dict[str, Any]]
         ) -> tuple[int, list[dict[str, Any]]]:
+            # A cancelled build keeps its old cache; nothing would replace it.
+            if cancel_flag():
+                return 0, []
+            # Drop stale records and files so regeneration reuses the same filename/id.
+            if stale:
+                stale_ids = {a.get("id") for a in stale}
+                with _generated_output_lock:
+                    _generated_artifacts[:] = [
+                        a for a in _generated_artifacts if a.get("id") not in stale_ids
+                    ]
+                    _rebuild_artifact_index()
+                    _manifest_removals.update(str(i) for i in stale_ids if i)
+                for a in stale:
+                    try:
+                        Path(utils.resolve_output_path(a["file"])).unlink(
+                            missing_ok=True
+                        )
+                    except OSError:
+                        pass
             generated, artifacts = pipeline.process_clips(
                 [clip],
                 output_format=output_format,
@@ -1721,8 +1726,8 @@ def api_generate() -> FlaskResponse:
                     concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool,
                 ):
                     future_to_cell: dict[concurrent.futures.Future, tuple[Any, str]] = {
-                        pool.submit(_worker, clip): (clip, cell_str)
-                        for clip, cell_str in to_generate
+                        pool.submit(_worker, clip, stale): (clip, cell_str)
+                        for clip, cell_str, stale in to_generate
                     }
                     for future in concurrent.futures.as_completed(future_to_cell):
                         if cancel_flag():
@@ -1752,12 +1757,12 @@ def api_generate() -> FlaskResponse:
                                 + "\n"
                             )
             else:
-                for clip, cell_str in to_generate:
+                for clip, cell_str, stale in to_generate:
                     if cancel_flag():
                         break
                     _increment_generate_done(len(clip.get("times") or []))
                     try:
-                        generated, artifacts = _generate_and_persist(clip)
+                        generated, artifacts = _generate_and_persist(clip, stale)
                         yield (
                             json.dumps(
                                 {
@@ -1905,6 +1910,20 @@ def api_reel() -> FlaskResponse:
                     skip_prompts=True,
                 )
                 _apply_time_overrides(clips, reel_overrides)
+
+                # Cancelled during the sheet fetch: stop before a stale reel is deleted.
+                if _reel_cancel_event.is_set():
+                    yield (
+                        json.dumps(
+                            {
+                                "ok": False,
+                                "cancelled": True,
+                                "error": "Reel generation cancelled",
+                            }
+                        )
+                        + "\n"
+                    )
+                    return
 
                 if not clips:
                     yield (
