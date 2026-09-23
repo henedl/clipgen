@@ -103,8 +103,35 @@
     if (stored.activeFunction) state.activeFunction = stored.activeFunction;
     if (stored.fnMin != null) state.filters.fnMin = stored.fnMin;
     if (stored.fnMax != null) state.filters.fnMax = stored.fnMax;
+    pruneSidebarFilters();
     applySidebarCategories();
     applySidebarKeywords();
+  }
+
+  // Saved filters are not per sheet; one this sheet cannot list would hide rows unseen.
+  function pruneSidebarFilters() {
+    var d = state.sheetData;
+    if (!d) return;
+    var cats = {};
+    var kws = {};
+    for (var i = 0; i < d.rows.length; i++) {
+      var row = d.rows[i];
+      if (row.category) cats[row.category] = true;
+      var rowKws = row.keywords || [];
+      for (var k = 0; k < rowKws.length; k++) kws[rowKws[k]] = true;
+    }
+    var parts = {};
+    (d.participants || []).forEach(function (pid) { parts[pid] = true; });
+    function keep(map, present) {
+      var out = {};
+      for (var key in map) {
+        if (Object.prototype.hasOwnProperty.call(map, key) && map[key] && present[key]) out[key] = true;
+      }
+      return out;
+    }
+    state.sidebarCategories = keep(state.sidebarCategories, cats);
+    state.sidebarKeywords = keep(state.sidebarKeywords, kws);
+    state.sidebarParticipants = keep(state.sidebarParticipants, parts);
   }
 
   function keywordLabel(annotationId) {

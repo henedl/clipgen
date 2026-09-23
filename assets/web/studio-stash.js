@@ -9,7 +9,7 @@
  * Cross-file contract: the satellite reaches hub state and helpers through the
  * window.ClipgenStudio (STUDIO) namespace — state, renderReelQueue /
  * renderArtifactQueue, isReelQueueLocked / isArtifactQueueLocked, cellKey,
- * updateSingleCellClass, and the hub-retained lazy-thumb queue's
+ * updateSingleCellClass / updateCellClasses, and the hub-retained lazy-thumb queue's
  * ssEnqueueThumbCustom; all destructured at load time, which is safe because
  * this file loads after the hub IIFE has published them. apiGet / apiPost /
  * toastError / qs / qsa / el / truncate / formatDuration / categoryHue are
@@ -32,6 +32,7 @@
     isArtifactQueueLocked = STUDIO.isArtifactQueueLocked,
     cellKey = STUDIO.cellKey,
     updateSingleCellClass = STUDIO.updateSingleCellClass,
+    updateCellClasses = STUDIO.updateCellClasses,
     ssEnqueueThumbCustom = STUDIO.ssEnqueueThumbCustom;
 
   // ---- Stashed reels ----
@@ -203,12 +204,16 @@
       var commit = function () {
         state[cfg.stateKey].push(stash);
         _justStashedId = stash.id;
-        var q = state[cfg.queueKey];
-        for (var i = 0; i < q.length; i++) {
-          var item = q[i];
-          delete state.cellResults[cellKey(item.participant, item.row)];
+        // A build may have locked the queue meanwhile; keep it intact then.
+        if (!cfg.isLocked()) {
+          for (var i = 0; i < items.length; i++) {
+            delete state.cellResults[cellKey(items[i].participant, items[i].row)];
+          }
+          // Drop only what was stashed; cards added during the request stay.
+          state[cfg.queueKey] = state[cfg.queueKey].filter(function (q) {
+            return items.indexOf(q) < 0;
+          });
         }
-        state[cfg.queueKey] = [];
         cfg.renderQueue();
         renderStashes(cfg);
         for (var u = 0; u < items.length; u++) {
@@ -230,11 +235,8 @@
     // Deep copy: the trim pop-over edits queue items in place.
     state[cfg.queueKey] = JSON.parse(JSON.stringify(stash.items));
     cfg.renderQueue();
-    var q = state[cfg.queueKey];
-    for (var i = 0; i < q.length; i++) {
-      var it = q[i];
-      if (it.row) updateSingleCellClass(it.participant, it.row);
-    }
+    // Full pass: the replaced queue's cells must lose their highlight too.
+    updateCellClasses();
   }
 
   function deleteStash(stashId, endpoint, stateArray, renderFn) {

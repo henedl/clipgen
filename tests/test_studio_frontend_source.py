@@ -123,7 +123,7 @@ def test_sheet_branch_catch_marks_failures():
     failed (not leave them visually queued) and tally totalFail."""
     src = _studio_js()
     assert "var sheetCardEls = [];" in src
-    assert "setCardResult(sheetCardEls[j], false)" in src
+    assert "setCardResult(sheetCardEls[j], false, sheetReason)" in src
     assert "totalFail += sheetItems.length;" in src
 
 
@@ -217,7 +217,7 @@ def test_cancel_cleanup_uses_queue_card_queued_selector():
 def test_load_manifest_state_hydrates_reels_without_artifacts():
     """Reel-only manifests must still populate generatedReels and renderLog."""
     src = _studio_js()
-    start = src.index("function loadManifestState()")
+    start = src.index("function loadManifestState(seedQueue)")
     end = src.index("function applyJobStatus(", start)
     body = src[start:end]
     assert "var reels = data.reels || [];" in body

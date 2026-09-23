@@ -378,7 +378,7 @@
     rerender: renderTranscriptIntake,
     getDensityEl: function () { return _trIntakeDensityEl; },
     setDensityEl: function (dt) { _trIntakeDensityEl = dt; },
-    barCount: function (c) { return c.marks ? c.marks.length : 1; },
+    barCount: function (c) { return c.marks && c.marks.length ? c.marks.length : 1; },
     barColor: function (c) {
       return { hue: categoryHue(c.category || "bookmark") };
     },
@@ -804,30 +804,36 @@
           return apiGet("../transcripts/api/transcript/" + p.id);
         });
         Promise.all(promises).then(function (results) {
+          // The toggle may have flipped off while the fetches ran.
+          if (!state.trIntakeShowAll) return;
           var markedIds = {};
           for (var i = 0; i < state.trIntakeMarks.length; i++) markedIds[state.trIntakeMarks[i].segment_id] = true;
-          var allItems = state.trIntakeMarks.slice();
+          // Speech segments sit closer than any merge gap; keep unmarked ones apart.
+          var clusters = clusterTranscriptMarks(state.trIntakeMarks, threshold);
           for (var j = 0; j < results.length; j++) {
             if (!results[j].ok) continue;
             var pid = results[j].participant;
             var segs = results[j].segments;
             for (var k = 0; k < segs.length; k++) {
               if (!markedIds[segs[k].id]) {
-                allItems.push({
-                  id: null,
-                  segment_id: segs[k].id,
-                  category: null,
-                  label: null,
-                  valid: true,
+                clusters.push({
                   participant: pid,
                   start: segs[k].start,
                   end: segs[k].end,
-                  text: segs[k].text,
+                  marks: [],
+                  category: "",
+                  label: "",
+                  text: segs[k].text || "",
+                  severity: "",
                 });
               }
             }
           }
-          state.trIntakeClusters = clusterTranscriptMarks(allItems, threshold);
+          clusters.sort(function (a, b) {
+            if (a.participant !== b.participant) return a.participant < b.participant ? -1 : 1;
+            return a.start - b.start;
+          });
+          state.trIntakeClusters = clusters;
           renderTranscriptIntake();
         });
       })
