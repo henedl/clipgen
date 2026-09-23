@@ -2430,9 +2430,7 @@
 
   function applyCurrentSessionPrefill() {
     var s = state.statusData || {};
-    // Gate on active_source, not mindnode_loaded: the two coexist, and
-    // currentSessionKey() must agree. Don't return before the name tail —
-    // that left the project name blank for a mind-map session.
+    // Follow active_source so a later sheet is not hidden by the map.
     var activeType = (s.active_source && s.active_source.type) || "";
     var mindnodeIsActive = activeType === "mindnode" || !activeType;
     if (mindnodeIsActive && s.mindnode_loaded && s.mindnode_path) {

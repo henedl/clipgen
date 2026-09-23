@@ -1288,8 +1288,7 @@
       event_type: note.desc,
       category: note.category,
       study: note.study,
-      // Sheet clips carry cell annotations (!key) on the artifact. Each span
-      // of a note gets the note's list, the same way every segment of a cell does.
+      // Copy the note's !key marks onto this span's artifact.
       annotations: note.annotations || [],
       source: "mindnode",
       event_ids: [note.id],
@@ -1442,8 +1441,7 @@
     return apiGet("api/mindnode")
       .then(function (data) {
         if (!data || !data.ok || !data.mindnode_loaded || !data.document) {
-          // Closed, or the server dropped a bundle it can no longer read.
-          // A previous "could not be read" message stays until a document loads.
+          // Unreadable maps clear the cards. Keep the error until the next document.
           if (clearMindnodeIntake()) {
             renderMindnodeIntake();
             return true;
@@ -1496,9 +1494,7 @@
         return true;
       })
       .catch(function (err) {
-        // 404 is the bundle disappearing. apiGet puts the HTTP status on the
-        // error and the server's message in err.message, so a timeout or a 500
-        // must not match on the text. Those leave the cards up.
+        // Clear the cards only when err.status is 404.
         if (!err || err.status !== 404) return true;
         var already =
           state.mnIntakeError &&

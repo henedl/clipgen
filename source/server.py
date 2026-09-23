@@ -840,9 +840,7 @@ def api_mindnode() -> FlaskResponse:
     try:
         fresh = mindnode.parse_document(path)
     except ValueError as exc:
-        # The bundle moved or was corrupted since it was opened. Drop it only
-        # if this same object is still open — a close or a newer open that
-        # landed during the parse must not be undone by this failure.
+        # Drop this map only if it is still the open one.
         with _mindnode_lock:
             if _mindnode_doc is doc:
                 _mindnode_doc = None
@@ -1072,8 +1070,7 @@ def _process_intake_item(
         "cellRow": None,
         "cellCol": None,
         "cellA1": "",
-        # Sheet clips copy cell annotations here. Intake sources omit the
-        # field and stay empty; a mind-map note sends its !key list.
+        # Mind-map notes pass !key here. Other intake sources stay empty.
         "annotations": (
             [str(a) for a in item["annotations"] if a]
             if isinstance(item.get("annotations"), list)
