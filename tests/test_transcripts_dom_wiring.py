@@ -136,12 +136,14 @@ def test_boot_placeholders_are_skeletons_not_empty_states():
 
 
 def test_segment_rebuild_keeps_the_reader_in_place():
-    """The rebuild wipes #segmentList, but scroll lives on #trMain — restoring
+    """The rebuild wipes #segmentList, but scroll lives on #transcriptSection — restoring
     the wrong element is a silent no-op, and restoring without marking the write
     as programmatic pauses playhead auto-follow for three seconds."""
     start = _JS.index("function renderSegmentsImpl(")
     body = _JS[start : _JS.index("\n  }\n", start)]
-    assert 'qs("#trMain")' in body, "scroll lives on #trMain, not #segmentList"
+    assert 'qs("#transcriptSection")' in body, (
+        "scroll lives on #transcriptSection, not #segmentList"
+    )
     assert "_renderedSegmentsPid" in body, (
         "restore must be gated on the participant being unchanged"
     )
@@ -186,8 +188,8 @@ def test_isolate_mode_hides_rows_without_breaking_the_index_cache():
 
 def test_scroll_to_segment_bails_on_an_isolated_row():
     """A display:none row reports an all-zero getBoundingClientRect(), so the
-    scroll math lands ~188px above the reader. With PiP forcing auto-follow, that
-    fires on every playhead transition — a continuous upward yank."""
+    scroll math lands far above the reader. With auto-follow on, that fires on
+    every playhead transition — a continuous upward yank."""
     start = _JS.index("function scrollToSegment(")
     body = _JS[start : _JS.index("\n  }", start)]
     assert 'classList.contains("segment-hidden")' in body, (
@@ -1361,8 +1363,8 @@ def test_pill_pane_refresh_patches_in_place_when_shape_is_unchanged():
     assert "_syncPaneRows(" in body
 
 
-def test_pip_controls_have_no_range_buttons():
-    """Set In / Set Out / Clear Markers crowded the PiP bar until the time
+def test_player_controls_have_no_range_buttons():
+    """Set In / Set Out / Clear Markers crowded the player bar until the time
     readout wrapped; the I/O hotkeys and the pill's Range row cover them."""
     for old in ("setInBtn", "setOutBtn", "clearMarkersBtn"):
         assert old not in _HTML, old
@@ -1374,6 +1376,34 @@ def test_pip_controls_have_no_range_buttons():
             _CSS.index(".player-time {") : _CSS.index("}", _CSS.index(".player-time {"))
         ]
     )
+
+
+def test_two_column_layout_replaces_pip():
+    """Video sits in its own column, so the PiP scroll machinery is gone and the
+    transcript column owns the scroll the follow logic reads."""
+    for gone in (
+        "videoPipBtn",
+        "initPipScroll",
+        "pipActive",
+        "pipEnabled",
+        "TR_CHROME_TOP",
+    ):
+        assert gone not in _HTML and gone not in _JS, gone
+    assert "#videoSection.pip" not in _CSS
+    main = _HTML[_HTML.index('<main id="trMain">') : _HTML.index("</main>")]
+    order = [
+        main.index(i)
+        for i in ('id="trLeft"', 'id="trDivider"', 'id="transcriptSection"')
+    ]
+    assert order == sorted(order), "left column, divider, then transcript"
+    left = main[main.index('id="trLeft"') : main.index('id="trDivider"')]
+    assert 'id="videoSection"' in left and 'id="summarySection"' in left
+    body = _fn_body(_JS, "function initPaneDivider(")
+    assert 'initDragHandle(qs("#trDivider"), "x"' in body
+    assert '"leftPanePct"' in body, "the split must persist"
+    assert "--tr-left-width" in body and "var(--tr-left-width" in _CSS
+    for fn in ("function initAutoFollowScrollPause(", "function scrollToSegment("):
+        assert 'qs("#transcriptSection")' in _fn_body(_JS, fn), fn
 
 
 def test_pill_pickers_share_one_width():

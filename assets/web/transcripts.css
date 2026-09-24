@@ -229,24 +229,55 @@ body {
 /* Main content */
 
 #trMain {
-  max-width: var(--layout-max-width);
   width: 100%;
-  margin: 0 auto;
   background: var(--color-panel-bg);
-  border-left: 1px solid var(--color-panel-border);
-  border-right: 1px solid var(--color-panel-border);
   display: flex;
-  flex-direction: column;
+  flex-direction: row;
   flex: 1;
   min-height: 0;
-  /* Floating-nav scroll-under: TopNav (48) + subheader (44) + pill bar (56)
-   * are all `position: fixed`. #trMain itself is the scroll container so
-   * scrolled video / summary / transcript content slides *under* the chrome
-   * strip; the 148px top inset keeps the first child below it on load.
-   * The PiP-active branch in `setPipActive` adds the videoSection's natural
-   * height on top of this so layout doesn't jump when the player detaches. */
+  /* Clears the fixed chrome: TopNav (48) + subheader (44) + pill bar (56). */
   padding-top: 148px;
+  overflow: hidden;
+}
+
+/* Left column: video + analysis panel. #trDivider drags --tr-left-width. */
+#trLeft {
+  flex: 0 0 var(--tr-left-width, 50%);
+  min-width: 0;
   overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+}
+
+#trDivider {
+  flex: 0 0 auto;
+  width: var(--space-3);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-left: 1px solid var(--color-border);
+  cursor: col-resize;
+  user-select: none;
+  transition: background-color var(--duration-fast);
+}
+
+#trDivider:hover,
+#trDivider.active {
+  background-color: var(--color-surface-alt);
+}
+
+#trDivider .divider-handle {
+  width: var(--space-1);
+  height: var(--space-6);
+  border-radius: var(--radius-sm);
+  background: var(--color-border);
+  transition: background-color var(--duration-fast), height var(--duration-fast);
+}
+
+#trDivider:hover .divider-handle,
+#trDivider.active .divider-handle {
+  background: var(--color-text-dim);
+  height: var(--space-8);
 }
 
 /* Video player */
@@ -265,7 +296,7 @@ body {
 
 #videoPlayer {
   width: 100%;
-  max-height: 35vh;
+  max-height: 50vh;
   display: block;
   background: var(--color-surface-alt);
 }
@@ -361,11 +392,6 @@ body {
   -webkit-mask-image: url(icons/chat-bubble-bottom-center-text.svg);
 }
 
-.player-icon-pip {
-  mask-image: url(icons/tv.svg);
-  -webkit-mask-image: url(icons/tv.svg);
-}
-
 .player-icon-collapse {
   mask-image: url(icons/chevron-up.svg);
   -webkit-mask-image: url(icons/chevron-up.svg);
@@ -458,46 +484,8 @@ body {
   margin-right: var(--space-1);
 }
 
-/* Picture-in-Picture */
-
-#videoSection.pip {
-  position: fixed;
-  right: var(--space-4);
-  bottom: var(--space-4);
-  width: 380px;
-  max-width: calc(100vw - var(--space-4) * 2);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius);
-  box-shadow: var(--shadow-xl);
-  overflow: hidden;
-  z-index: var(--z-overlay);
-  cursor: zoom-in;
-  transition: opacity var(--duration-normal) ease, transform var(--duration-normal) ease;
-}
-
-#videoSection.pip #videoPlayer {
-  max-height: 200px;
-}
-
-#videoSection.pip #timelineCanvas,
-#videoSection.pip #playheadCanvas {
-  height: 28px;
-}
-
-#videoSection.pip #timelineRow {
-  padding: 0 var(--space-2) var(--space-2) var(--space-2);
-}
-
-#videoSection.pip #videoControls {
-  padding: var(--space-1) var(--space-2);
-}
-
 #videoSection.video-collapsed #videoFrame,
 #videoSection.video-collapsed #timelineRow {
-  display: none;
-}
-
-#videoSection.pip #videoCollapseBtn {
   display: none;
 }
 
@@ -866,16 +854,7 @@ body {
   flex-shrink: 0;
 }
 
-/* ── Control surface ────────────────────────────────────────
- *
- * Everything in .friction-controls acts on #segmentList below — it filters,
- * tints and navigates the transcript rather than holding results of its own.
- * The block is deliberately fixed-height (one control row, a 2rem histogram, a
- * chip row that wraps to at most two lines): before the redesign an unbounded
- * stack of moment cards pushed #transcriptSection off-screen entirely. Do NOT
- * give .panel-pane a max-height/overflow to bound it instead — a nested
- * scroller fights initPipScroll, which reads #trMain's scrollTop.
- */
+/* Control surface: filters, tints and navigates #segmentList. Fixed height keeps the column compact. */
 .friction-controls {
   display: flex;
   flex-direction: column;
@@ -1312,11 +1291,12 @@ body {
 /* Transcript segments */
 
 #transcriptSection {
-  /* Scroll lives on #trMain so transcript content slides under the chrome
-   * strip. flex: 1 keeps the empty-state placeholder filling the remaining
-   * viewport space when the segment list is empty. */
+  /* Right column and the transcript scroll host. */
   flex: 1;
-  min-height: 0;
+  min-width: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
 }
 
 #segmentList {
@@ -1324,6 +1304,7 @@ body {
 }
 
 .transcript-empty {
+  flex: 1;
   display: flex;
   flex-direction: column;
   align-items: center;
