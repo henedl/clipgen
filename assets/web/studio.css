@@ -1378,7 +1378,7 @@ body.dragging #sheetMain {
   opacity: 0.35;
 }
 
-/* Shift held over the other queue: the card stays, so it reads solid. */
+/* Option held over the other queue: the card stays, so it reads solid. */
 .queue-card.queue-card-drag-copy {
   opacity: 1;
   border-color: var(--color-accent);
