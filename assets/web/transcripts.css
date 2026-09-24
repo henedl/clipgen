@@ -235,15 +235,17 @@ body {
   flex-direction: row;
   flex: 1;
   min-height: 0;
-  /* Clears the fixed chrome: TopNav (48) + subheader (44) + pill bar (56). */
-  padding-top: 148px;
+  /* Fixed glass chrome: TopNav (48) + subheader (44) + pill bar (56). */
+  --tr-chrome-top: 148px;
   overflow: hidden;
 }
 
-/* Left column: video + analysis panel. #trDivider drags --tr-left-width. */
+/* Columns scroll under the chrome; the inset keeps their first child below it. */
 #trLeft {
   flex: 0 0 var(--tr-left-width, 50%);
   min-width: 0;
+  padding-top: var(--tr-chrome-top);
+  scroll-padding-top: var(--tr-chrome-top);
   overflow-y: auto;
   display: flex;
   flex-direction: column;
@@ -252,6 +254,7 @@ body {
 #trDivider {
   flex: 0 0 auto;
   width: var(--space-3);
+  padding-top: var(--tr-chrome-top);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -1294,6 +1297,8 @@ body {
   /* Right column and the transcript scroll host. */
   flex: 1;
   min-width: 0;
+  padding-top: var(--tr-chrome-top);
+  scroll-padding-top: var(--tr-chrome-top);
   overflow-y: auto;
   display: flex;
   flex-direction: column;

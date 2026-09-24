@@ -1359,12 +1359,14 @@
     var scRect = scroller.getBoundingClientRect();
     var rowTopInScroll = rowRect.top - scRect.top + scroller.scrollTop;
     var rowBottomInScroll = rowTopInScroll + rowRect.height;
-    var visibleTop = scroller.scrollTop;
+    // The padding-top band sits under the glass chrome, so it is not visible.
+    var chromeTop = parseFloat(getComputedStyle(scroller).paddingTop) || 0;
+    var visibleTop = scroller.scrollTop + chromeTop;
     var visibleBottom = scroller.scrollTop + scroller.clientHeight;
 
     if (rowTopInScroll < visibleTop + 40) {
       _ignoreScrollUntil = Date.now() + 120;
-      scroller.scrollTop = rowTopInScroll - 40;
+      scroller.scrollTop = rowTopInScroll - chromeTop - 40;
     } else if (rowBottomInScroll > visibleBottom - 40) {
       _ignoreScrollUntil = Date.now() + 120;
       scroller.scrollTop = rowBottomInScroll - scroller.clientHeight + 40;

@@ -1386,7 +1386,6 @@ def test_two_column_layout_replaces_pip():
         "initPipScroll",
         "pipActive",
         "pipEnabled",
-        "TR_CHROME_TOP",
     ):
         assert gone not in _HTML and gone not in _JS, gone
     assert "#videoSection.pip" not in _CSS
@@ -1404,6 +1403,21 @@ def test_two_column_layout_replaces_pip():
     assert "--tr-left-width" in body and "var(--tr-left-width" in _CSS
     for fn in ("function initAutoFollowScrollPause(", "function scrollToSegment("):
         assert 'qs("#transcriptSection")' in _fn_body(_JS, fn), fn
+
+
+def test_columns_scroll_under_the_glass_chrome():
+    """Like the other pages, content slides under the fixed chrome: each column
+    carries the inset, and follow-scroll reads it rather than a JS copy."""
+    main = _CSS[_CSS.index("#trMain {") :]
+    main = main[: main.index("}")]
+    assert "padding-top" not in main, "an inset on #trMain stops scroll-under"
+    for sel in ("#trLeft {", "#transcriptSection {"):
+        block = _CSS[_CSS.index(sel) :]
+        block = block[: block.index("}")]
+        assert "padding-top: var(--tr-chrome-top)" in block, sel
+    assert "getComputedStyle(scroller).paddingTop" in _fn_body(
+        _JS, "function scrollToSegment("
+    )
 
 
 def test_pill_pickers_share_one_width():
