@@ -61,6 +61,9 @@ _DOWNLOAD_TIMEOUT = 120  # seconds; per-socket-read stall, HF is normally fast
 # Whole-download backstop; _DOWNLOAD_TIMEOUT is per read. 6 GB at 15 Mbit ≈ 55 min.
 _DOWNLOAD_DEADLINE = 5400  # seconds
 _HF_API_TIMEOUT = 30  # seconds; the tree listing is a small JSON response
+# llama-server's own output, rewritten per start; its tail explains a failed start.
+_SERVER_LOG = "llama-server.log"
+_SERVER_LOG_TAIL = 12  # lines shown in the terminal when a start fails
 # Resident models before LRU eviction: friction on its own model while summary
 # stays warm.
 _MODELS_MAX = "2"
@@ -714,35 +717,45 @@ def start_server() -> bool:
             return False
 
         host, port = _base_host_port()
+        command = [
+            binary,
+            "--models-dir",
+            str(directory),
+            "--host",
+            host,
+            "--port",
+            port,
+            "--no-webui",
+            "--models-max",
+            _MODELS_MAX,
+        ]
+        log_path = start_settings.config_json_path(_SERVER_LOG)
         utils.info_print("Starting AI server...")
+        utils.verbose_print(f"AI server command: {' '.join(command)}")
+        utils.verbose_print(f"AI server log: {log_path}")
+        started_at = time.monotonic()
         try:
-            proc = subprocess.Popen(
-                [
-                    binary,
-                    "--models-dir",
-                    str(directory),
-                    "--host",
-                    host,
-                    "--port",
-                    port,
-                    "--no-webui",
-                    "--models-max",
-                    _MODELS_MAX,
-                ],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-            )
+            with open(log_path, "wb") as log:
+                proc = subprocess.Popen(
+                    command,
+                    stdin=subprocess.DEVNULL,
+                    stdout=log,
+                    stderr=subprocess.STDOUT,
+                    creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+                )
         except OSError as exc:
             _fail(f"Failed to start AI server: {exc}")
             return False
 
         _server_proc = proc
 
-        deadline = time.monotonic() + _START_TIMEOUT
-        while time.monotonic() < deadline:
+        deadline = started_at + _START_TIMEOUT
+        while True:
             if is_available():
                 utils.info_print("AI server started.")
+                utils.verbose_print(
+                    f"AI server answered after {time.monotonic() - started_at:.1f}s"
+                )
                 return True
             # An instantly dying router (port held, broken install) must not burn
             # the whole timeout.
@@ -750,15 +763,30 @@ def start_server() -> bool:
             if code is not None:
                 _server_proc = None
                 _fail(
-                    f"AI server exited immediately (code {code}) — "
-                    "is the port already in use?"
+                    f"AI server exited immediately (code {code}).",
+                    _server_log_tail(log_path),
                 )
                 return False
+            # Checked after a poll, so a stalled thread still gets one last look.
+            if time.monotonic() >= deadline:
+                break
             time.sleep(_START_POLL_INTERVAL)
 
         _terminate_server()
-        _fail("AI server did not start within timeout.")
+        _fail("AI server did not start within timeout.", _server_log_tail(log_path))
         return False
+
+
+def _server_log_tail(path: Path) -> list[str]:
+    """Last lines of llama-server's log plus its path, for the terminal warning."""
+    try:
+        lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        lines = []
+    tail = [line for line in lines if line.strip()][-_SERVER_LOG_TAIL:]
+    if not tail:
+        tail = ["llama-server printed nothing."]
+    return [*tail, f"Full log: {path}"]
 
 
 def _shutdown_response_socket(resp: Any) -> None:
