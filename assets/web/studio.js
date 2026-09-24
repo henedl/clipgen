@@ -290,6 +290,12 @@
     // Some Chromium builds ignore class-driven rounding in the drag bitmap; pin it inline.
     clone.style.borderRadius = getCardDragImageRadius();
     clone.style.overflow = "hidden";
+    // A lazy image this far offscreen never loads, leaving a blank thumb.
+    var imgs = clone.querySelectorAll("img");
+    for (var i = 0; i < imgs.length; i++) {
+      imgs[i].removeAttribute("loading");
+      imgs[i].decoding = "sync";
+    }
     document.body.appendChild(clone);
     ev.dataTransfer.setDragImage(clone, ev.clientX - rect.left, ev.clientY - rect.top);
     requestAnimationFrame(function () {
@@ -309,6 +315,58 @@
     function clear() { document.body.classList.remove("dragging"); }
     document.addEventListener("dragstart", function () {
       document.body.classList.add("dragging");
+    }, true);
+    document.addEventListener("dragend", clear, true);
+    document.addEventListener("drop", clear, true);
+    window.addEventListener("blur", clear);
+    document.addEventListener("visibilitychange", function () {
+      if (document.hidden) clear();
+    });
+  }
+
+  // Queue card being dragged, its list, and whether a drop would copy.
+  var _cardDrag = null;
+
+  // Option (Ctrl off Mac) copies. WebKit freezes key flags mid-drag, so read the OS-narrowed effectAllowed.
+  var _COPY_DRAG_MAC = /Mac|iPhone|iPad/.test(navigator.platform || "");
+  function hasCopyModifier(ev) {
+    if (ev.dataTransfer && ev.dataTransfer.effectAllowed === "copy") return true;
+    return _COPY_DRAG_MAC ? ev.altKey : ev.ctrlKey;
+  }
+
+  // Is this dragover a copy onto the other queue?
+  function isCardDragCopy(ev) {
+    if (!_cardDrag || !hasCopyModifier(ev)) return false;
+    var list = ev.target.closest && ev.target.closest("#artifactsList, #reelList");
+    return !!list && list !== _cardDrag.list;
+  }
+
+  // Source card fades while a move candidate and stays solid in copy mode.
+  function bindCardDragState() {
+    function clear() {
+      if (!_cardDrag) return;
+      _cardDrag.card.classList.remove("queue-card-drag-source", "queue-card-drag-copy");
+      _cardDrag = null;
+    }
+    // Bubble phase: the list handlers' locked-queue preventDefault runs first.
+    document.addEventListener("dragstart", function (ev) {
+      if (ev.defaultPrevented || !ev.target.closest) return;
+      var card = ev.target.closest(".queue-card");
+      var list = card && card.closest("#artifactsList, #reelList");
+      if (!list) return;
+      var drag = { card: card, list: list, copy: false };
+      _cardDrag = drag;
+      // Defer past the drag-image snapshot, which reel cards take from the live card.
+      requestAnimationFrame(function () {
+        if (_cardDrag === drag) card.classList.add("queue-card-drag-source");
+      });
+    });
+    document.addEventListener("dragover", function (ev) {
+      if (!_cardDrag) return;
+      var copy = isCardDragCopy(ev);
+      if (copy === _cardDrag.copy) return;
+      _cardDrag.copy = copy;
+      _cardDrag.card.classList.toggle("queue-card-drag-copy", copy);
     }, true);
     document.addEventListener("dragend", clear, true);
     document.addEventListener("drop", clear, true);
@@ -2261,13 +2319,13 @@
     return data;
   }
 
-  // Queue-to-queue drops move, like sheet cards; drags from an intake panel copy.
-  function takeDragOrigin(info, from) {
+  // Queue-to-queue drops move unless Option copies; drags from an intake panel copy.
+  function takeDragOrigin(info, from, copy) {
     var dragFrom = info.dragFrom;
     var idx = info.dragIdx;
     delete info.dragFrom;
     delete info.dragIdx;
-    if (dragFrom !== from) return;
+    if (copy || dragFrom !== from) return;
     var queue = from === "reel" ? state.reelQueue : state.artifactQueue;
     if (!intakeItemsOverlap(queue[idx], info)) idx = findIntakeInQueue(queue, info);
     if (idx < 0) return;
@@ -2277,7 +2335,7 @@
   }
 
   function initDropTargets() {
-    setupDropTarget(qs("#artifactsList"), function (info) {
+    setupDropTarget(qs("#artifactsList"), function (info, copy) {
       if (isArtifactQueueLocked()) return;
       if (info.source === "reel-stash" || info.source === "artifact-stash") {
         for (var i = 0; i < info.items.length; i++)
@@ -2286,17 +2344,17 @@
         return;
       }
       if (isIntakeSource(info.source)) {
-        takeDragOrigin(info, "reel");
+        takeDragOrigin(info, "reel", copy);
         addToQueue(state.artifactQueue, info, renderArtifactQueue);
         return;
       }
-      if (info.source === "reel") {
+      if (info.source === "reel" && !copy) {
         removeFromQueue(state.reelQueue, info);
         renderReelQueue();
       }
       addToQueue(state.artifactQueue, info, renderArtifactQueue);
     });
-    setupDropTarget(qs("#reelList"), function (info) {
+    setupDropTarget(qs("#reelList"), function (info, copy) {
       if (isReelQueueLocked()) return;
       if (info.source === "reel-stash" || info.source === "artifact-stash") {
         for (var i = 0; i < info.items.length; i++)
@@ -2305,11 +2363,11 @@
         return;
       }
       if (isIntakeSource(info.source)) {
-        takeDragOrigin(info, "artifact");
+        takeDragOrigin(info, "artifact", copy);
         addToQueue(state.reelQueue, info, renderReelQueue);
         return;
       }
-      if (info.source === "artifact") {
+      if (info.source === "artifact" && !copy) {
         removeFromQueue(state.artifactQueue, info);
         renderArtifactQueue();
       }
@@ -2327,7 +2385,8 @@
   function setupDropTarget(target, onDrop) {
     target.addEventListener("dragover", function (ev) {
       ev.preventDefault();
-      ev.dataTransfer.dropEffect = "copy";
+      // Must fit the OS-narrowed effectAllowed, or the browser refuses the drop.
+      ev.dataTransfer.dropEffect = _cardDrag && !hasCopyModifier(ev) ? "move" : "copy";
       // dragover fires ~60Hz; skip the no-op class write.
       if (!target.classList.contains("drag-over")) target.classList.add("drag-over");
     });
@@ -2342,7 +2401,7 @@
       try {
         var info = JSON.parse(ev.dataTransfer.getData("application/json"));
         if (info && (info.participant || info.items)) {
-          onDrop(info);
+          onDrop(info, hasCopyModifier(ev));
         }
       } catch (_) {}
     });
@@ -2833,6 +2892,7 @@
           if (tab && !tab.classList.contains("hidden")) tab.click();
         },
       },
+      { id: "studio.note.copyCard" },
     ]);
 
     // Alt-hold hint chips for the send actions, beside the selected cell/card.
@@ -3663,6 +3723,7 @@
     initDropTargets();
     initWheelScroll();
     bindDragGate();
+    bindCardDragState();
     bindReelReorder();
     bindQueueList(ARTIFACT_QUEUE);
     bindQueueList(REEL_QUEUE);

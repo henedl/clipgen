@@ -1373,6 +1373,17 @@ body.dragging #sheetMain {
   box-shadow: var(--shadow-md);
 }
 
+/* Move candidate: the card leaves its queue on drop (bindCardDragState). */
+.queue-card.queue-card-drag-source {
+  opacity: 0.35;
+}
+
+/* Shift held over the other queue: the card stays, so it reads solid. */
+.queue-card.queue-card-drag-copy {
+  opacity: 1;
+  border-color: var(--color-accent);
+}
+
 .queue-card-thumb {
   position: relative;
   width: 100%;
