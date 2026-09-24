@@ -1425,3 +1425,16 @@ def test_pill_pickers_share_one_width():
     block = block[: block.index("}")]
     assert "width: 132px" in block and "text-overflow: ellipsis" in block
     assert "min-width: 110px" not in block
+
+
+def test_analysis_tabs_always_show():
+    """The tabs stay up without a transcript; a note stands in for the panes,
+    and the panel sits flush under the player instead of in a card."""
+    assert 'id="summarySection" class="no-transcript"' in _HTML
+    assert 'id="analysisNoTranscript" class="panel-note"' in _HTML
+    body = _fn_body(_JS, "function _setAnalysisReady(")
+    assert '"no-transcript"' in body and '"hidden"' not in body
+    block = _CSS[_CSS.index("#summarySection {") :]
+    block = block[: block.index("}")]
+    assert "border" not in block and "border-radius" not in block
+    assert "#summarySection.no-transcript .panel-pane" in _CSS

@@ -861,7 +861,7 @@
     // Load transcript
     if (p.has_transcript) {
       state.streamingParticipant = null;
-      _setAnalysisPanelVisible(true);
+      _setAnalysisReady(true);
       _restoreActiveTab(pid);
       loadTranscript(pid);
       loadSummary(pid);
@@ -963,7 +963,7 @@
   function loadSummary() { return TS.loadSummary && TS.loadSummary.apply(null, arguments); }
   function loadFriction() { return TS.loadFriction && TS.loadFriction.apply(null, arguments); }
   function clearAnalysisPanel() { return TS.clearAnalysisPanel && TS.clearAnalysisPanel(); }
-  function _setAnalysisPanelVisible() { return TS._setAnalysisPanelVisible && TS._setAnalysisPanelVisible.apply(null, arguments); }
+  function _setAnalysisReady() { return TS._setAnalysisReady && TS._setAnalysisReady.apply(null, arguments); }
   function _restoreActiveTab() { return TS._restoreActiveTab && TS._restoreActiveTab.apply(null, arguments); }
   function initPanelTabs() { return TS.initPanelTabs && TS.initPanelTabs(); }
   function initSummaryActions() { return TS.initSummaryActions && TS.initSummaryActions(); }
@@ -2244,7 +2244,7 @@
       state.activeSegmentIndex = -1;
       renderSegments();
       renderTimeline();
-      _setAnalysisPanelVisible(true);
+      _setAnalysisReady(true);
       _restoreActiveTab(pid);
       loadSummary(pid);
       loadFriction(pid);
@@ -2320,7 +2320,7 @@
               newlyCompleted.indexOf(state.selectedParticipant) >= 0 &&
               !wasStreamingSelected) {
             // Completed while not streaming; the streaming case belongs to _finalizeStreamingIfComplete.
-            _setAnalysisPanelVisible(true);
+            _setAnalysisReady(true);
             _restoreActiveTab(state.selectedParticipant);
             loadTranscript(state.selectedParticipant);
             loadSummary(state.selectedParticipant);

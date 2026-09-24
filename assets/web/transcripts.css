@@ -494,12 +494,26 @@ body {
 
 /* ── Analysis panel (tabbed: Summary + Friction) ─────────────── */
 
+/* Flush under the player; no card, just the side inset. */
 #summarySection {
   flex-shrink: 0;
-  background: var(--bg-elevated);
-  border: 1px solid var(--color-border);
-  border-radius: 6px;
-  margin: var(--space-3) var(--space-4);
+  margin: 0 var(--space-4);
+}
+
+#summarySection.no-transcript .panel-pane {
+  display: none;
+}
+
+.panel-note {
+  display: none;
+  padding: var(--space-3);
+  color: var(--color-text-dim);
+  font-size: var(--text-sm);
+  text-wrap: balance;
+}
+
+#summarySection.no-transcript .panel-note {
+  display: block;
 }
 
 .panel-tabbar {

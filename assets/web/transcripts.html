@@ -112,7 +112,7 @@
         </div>
       </section>
 
-      <section id="summarySection" class="hidden">
+      <section id="summarySection" class="no-transcript">
         <div class="panel-tabbar" role="tablist" aria-label="Analysis">
           <button id="tabBtnSummary" type="button" class="panel-tab active" role="tab" aria-selected="true" data-tab="summary">
             <span class="panel-tab-icon summary-icon"></span><span class="panel-tab-label">Summary</span>
@@ -123,6 +123,9 @@
             <span id="frictionStaleDot" class="panel-tab-dot hidden" data-tooltip="Stale. Re-run friction"></span>
           </button>
         </div>
+
+        <!-- Stands in for both panes until the participant has a transcript. -->
+        <p id="analysisNoTranscript" class="panel-note">Summary and friction appear once the transcript is ready.</p>
 
         <div id="summaryTab" class="panel-pane" role="tabpanel" aria-labelledby="tabBtnSummary">
           <div id="summaryActions" class="summary-actions hidden">
