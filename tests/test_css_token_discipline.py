@@ -29,7 +29,7 @@ _BASELINE = {
     "start-overlay.css": (165, 9, 34, 10),
     "studio.css": (51, 5, 9, 28),
     "topnav.css": (25, 0, 0, 7),
-    "transcripts.css": (35, 2, 6, 0),
+    "transcripts.css": (33, 2, 6, 0),
     "viewer.css": (26, 0, 2, 16),
     "workflows.css": (6, 2, 3, 1),
 }

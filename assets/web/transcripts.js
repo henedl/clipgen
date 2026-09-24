@@ -90,8 +90,6 @@
     audioPanel: null, // ClipgenVideoControls audio-popover controller
     videoPlaybackRate: 1,
     ccEnabled: false,
-    pipActive: false,
-    pipEnabled: true,
     videoCollapsed: false,
     // Lazy .segment-row cache, invalidated on re-render. frictionTooltipShown arbitrates #trTooltip.
     cachedSegmentRows: null,
@@ -863,7 +861,7 @@
     // Load transcript
     if (p.has_transcript) {
       state.streamingParticipant = null;
-      _setAnalysisPanelVisible(true);
+      _setAnalysisReady(true);
       _restoreActiveTab(pid);
       loadTranscript(pid);
       loadSummary(pid);
@@ -965,7 +963,7 @@
   function loadSummary() { return TS.loadSummary && TS.loadSummary.apply(null, arguments); }
   function loadFriction() { return TS.loadFriction && TS.loadFriction.apply(null, arguments); }
   function clearAnalysisPanel() { return TS.clearAnalysisPanel && TS.clearAnalysisPanel(); }
-  function _setAnalysisPanelVisible() { return TS._setAnalysisPanelVisible && TS._setAnalysisPanelVisible.apply(null, arguments); }
+  function _setAnalysisReady() { return TS._setAnalysisReady && TS._setAnalysisReady.apply(null, arguments); }
   function _restoreActiveTab() { return TS._restoreActiveTab && TS._restoreActiveTab.apply(null, arguments); }
   function initPanelTabs() { return TS.initPanelTabs && TS.initPanelTabs(); }
   function initSummaryActions() { return TS.initSummaryActions && TS.initSummaryActions(); }
@@ -996,8 +994,8 @@
     // Drop any queued streaming indicator before the final render.
     _cancelStreamingIndicator();
 
-    // Scroll lives on #trMain. Same-participant rebuilds keep the offset; switches reset.
-    var scrollHost = qs("#trMain") || container;
+    // Scroll lives on #transcriptSection. Same-participant rebuilds keep the offset; switches reset.
+    var scrollHost = qs("#transcriptSection") || container;
     var samePid = _renderedSegmentsPid === state.selectedParticipant;
     var restoreTop = samePid ? scrollHost.scrollTop : 0;
     _renderedSegmentsPid = state.selectedParticipant;
@@ -1303,9 +1301,8 @@
     // Row list changes shape on both append and rebuild paths.
     state.cachedSegmentRows = null;
 
-    // Scroll lives on #trMain, not #segmentList.
-    var trMain = qs("#trMain");
-    var scrollHost = trMain || container;
+    // Scroll lives on #transcriptSection, not #segmentList.
+    var scrollHost = qs("#transcriptSection") || container;
     var nearBottom = scrollHost.scrollHeight - scrollHost.scrollTop - scrollHost.clientHeight < 100;
 
     var canAppend =
@@ -1522,7 +1519,6 @@
   // ---- Video player + timeline delegators; implementation in transcripts-video.js ----
   function initVideoPlayer() { return TS.initVideoPlayer && TS.initVideoPlayer(); }
   function initTimelineCanvas() { return TS.initTimelineCanvas && TS.initTimelineCanvas(); }
-  function initPipScroll() { return TS.initPipScroll && TS.initPipScroll(); }
   function initVideoSync() { return TS.initVideoSync && TS.initVideoSync(); }
   function initPlayerKeyboard() { return TS.initPlayerKeyboard && TS.initPlayerKeyboard(); }
   function renderTimeline() { return TS.renderTimeline && TS.renderTimeline(); }
@@ -2248,7 +2244,7 @@
       state.activeSegmentIndex = -1;
       renderSegments();
       renderTimeline();
-      _setAnalysisPanelVisible(true);
+      _setAnalysisReady(true);
       _restoreActiveTab(pid);
       loadSummary(pid);
       loadFriction(pid);
@@ -2324,7 +2320,7 @@
               newlyCompleted.indexOf(state.selectedParticipant) >= 0 &&
               !wasStreamingSelected) {
             // Completed while not streaming; the streaming case belongs to _finalizeStreamingIfComplete.
-            _setAnalysisPanelVisible(true);
+            _setAnalysisReady(true);
             _restoreActiveTab(state.selectedParticipant);
             loadTranscript(state.selectedParticipant);
             loadSummary(state.selectedParticipant);
@@ -2939,6 +2935,47 @@
     });
   }
 
+  // ---- Pane divider ----
+  // Drags the video/transcript split; the percent persists, dblclick resets.
+  var PANE_LEFT_MIN_PX = 320;
+  var PANE_RIGHT_MIN_PX = 360;
+  var PANE_DEFAULT_PCT = 50;
+
+  function initPaneDivider() {
+    var main = qs("#trMain");
+    var left = qs("#trLeft");
+    if (!main || !left) return;
+    var startWidth = 0;
+    var mainWidth = 0;
+    var pct = getStoredUIState("transcripts").leftPanePct;
+
+    function apply(value) {
+      pct = value;
+      main.style.setProperty("--tr-left-width", value + "%");
+    }
+    if (typeof pct === "number" && isFinite(pct)) apply(pct);
+
+    initDragHandle(qs("#trDivider"), "x", {
+      onStart: function () {
+        startWidth = left.getBoundingClientRect().width;
+        mainWidth = main.clientWidth;
+        return mainWidth > 0;
+      },
+      onDelta: function (delta) {
+        var max = Math.max(PANE_LEFT_MIN_PX, mainWidth - PANE_RIGHT_MIN_PX);
+        var px = Math.max(PANE_LEFT_MIN_PX, Math.min(max, startWidth + delta));
+        apply(Math.round((px / mainWidth) * 1000) / 10);
+      },
+      onEnd: function () {
+        setStoredUIStateField("transcripts", "leftPanePct", pct);
+      },
+      onToggle: function () {
+        apply(PANE_DEFAULT_PCT);
+        setStoredUIStateField("transcripts", "leftPanePct", pct);
+      },
+    });
+  }
+
   document.addEventListener("DOMContentLoaded", function () {
     initThemeToggle();
     initStatusIndicatorTooltip();
@@ -2952,7 +2989,7 @@
     initVideoPlayer();
     initVideoSync();
     initTimelineCanvas();
-    initPipScroll();
+    initPaneDivider();
     initPlayerKeyboard();
     initPanelTabs();
     // #tab=friction deep links; the #P07 form is handled in loadParticipants.

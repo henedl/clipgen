@@ -181,9 +181,9 @@
       _summaryPaintedPid = pid;
     }
 
-    // Reveal the panel here: render* never toggles #summarySection, so post-finalize runs would paint hidden.
+    // Ready the panel here: render* never does, so post-finalize runs would stay behind the note.
     if (pid === state.selectedParticipant && _currentParticipantHasTranscript()) {
-      _setAnalysisPanelVisible(true);
+      _setAnalysisReady(true);
     }
 
     apiGet(AGENT_DESCRIPTORS.summary.urlBase + "/" + pid).then(function (data) {
@@ -445,12 +445,13 @@
 
   // ---- Analysis panel (tabbed shell: Summary + Friction) ----
 
-  function _setAnalysisPanelVisible(show) {
-    qs("#summarySection").classList.toggle("hidden", !show);
+  // The tabs always show; without a transcript a note replaces both panes.
+  function _setAnalysisReady(ready) {
+    qs("#summarySection").classList.toggle("no-transcript", !ready);
   }
 
   function clearAnalysisPanel() {
-    _setAnalysisPanelVisible(false);
+    _setAnalysisReady(false);
     clearSummary();
     clearFriction();
   }
@@ -770,9 +771,9 @@
 
   function loadFriction(pid) {
     var ver = state.participantReqVer;
-    // Reveal the panel (see loadSummary) so a post-finalize friction run is visible.
+    // Ready the panel (see loadSummary) so a post-finalize friction run is visible.
     if (pid === state.selectedParticipant && _currentParticipantHasTranscript()) {
-      _setAnalysisPanelVisible(true);
+      _setAnalysisReady(true);
     }
     // Blank DOM and state only on a real switch: same-participant refetches must keep programmatic scores.
     if (state.frictionPid !== pid) {
@@ -1910,7 +1911,7 @@
   TS.loadSummary = loadSummary;
   TS.loadFriction = loadFriction;
   TS.clearAnalysisPanel = clearAnalysisPanel;
-  TS._setAnalysisPanelVisible = _setAnalysisPanelVisible;
+  TS._setAnalysisReady = _setAnalysisReady;
   TS._restoreActiveTab = _restoreActiveTab;
   TS.initPanelTabs = initPanelTabs;
   TS.initSummaryActions = initSummaryActions;

@@ -865,7 +865,48 @@ class TestAutoStartServer:
         llm_client.take_last_error()
 
         assert llm_client.start_server() is False
-        assert "port already in use" in llm_client.take_last_error()
+        assert "exited immediately" in llm_client.take_last_error()
+
+    @patch("llm_client.utils.warning_print")
+    @patch("llm_client.subprocess.Popen")
+    @patch("llm_client.is_available")
+    @patch("llm_client.shutil.which")
+    def test_a_failed_start_prints_the_server_log(
+        self, mock_which, mock_available, mock_popen, mock_warn, monkeypatch
+    ):
+        """llama-server's own output is the only record of why it never answered."""
+        mock_which.return_value = "/usr/local/bin/llama-server"
+        mock_available.return_value = False
+
+        def spawn(cmd, stdout, **kwargs):
+            stdout.write(b"bind: Address already in use\n")
+            return mock_popen.return_value
+
+        mock_popen.side_effect = spawn
+        mock_popen.return_value.poll.return_value = None
+        monkeypatch.setattr(llm_client, "_START_POLL_INTERVAL", 0.01)
+        monkeypatch.setattr(llm_client, "_START_TIMEOUT", 0.05)
+
+        assert llm_client.start_server() is False
+        details = mock_warn.call_args.kwargs["details"]
+        assert "bind: Address already in use" in details
+        assert details[-1].startswith("Full log: ")
+
+    @patch("llm_client.subprocess.Popen")
+    @patch("llm_client.is_available")
+    @patch("llm_client.shutil.which")
+    def test_start_checks_once_more_after_a_stalled_poll(
+        self, mock_which, mock_available, mock_popen, monkeypatch
+    ):
+        """A thread starved past the deadline must still see a server that came up."""
+        mock_which.return_value = "/usr/local/bin/llama-server"
+        # Pre-spawn check, first poll, then the poll after a sleep past the deadline.
+        mock_available.side_effect = [False, False, True]
+        mock_popen.return_value.poll.return_value = None
+        monkeypatch.setattr(llm_client, "_START_TIMEOUT", 0.02)
+        monkeypatch.setattr(llm_client, "_START_POLL_INTERVAL", 0.05)
+
+        assert llm_client.start_server() is True
 
     @patch("llm_client._generate_with_load_retry")
     def test_a_successful_generate_leaves_no_stale_reason(self, mock_run):

@@ -1,6 +1,6 @@
 /* clipgen Transcripts video satellite — transcripts-video.js
  *
- * The custom <video> player (play/pause/mute/speed/CC/PiP/collapse), the
+ * The custom <video> player (play/pause/mute/speed/CC/collapse), the
  * multi-video client-side source switching, the timeline canvas (ruler, mark
  * markers, friction heatmap band, playhead, hover hit-testing), seeking, and
  * playhead↔segment-list sync. Loaded after transcripts.js; reads the hub's
@@ -48,7 +48,6 @@
     var muteBtn = qs("#videoMuteBtn");
     var speedBtn = qs("#videoSpeedBtn");
     var ccBtn = qs("#videoCcBtn");
-    var pipBtn = qs("#videoPipBtn");
     if (playBtn) {
       var pIcon = playBtn.querySelector(".player-btn-icon");
       setIconClass(pIcon, state.videoPlaying ? "player-icon-pause" : "player-icon-play");
@@ -70,10 +69,6 @@
     if (ccBtn) {
       ccBtn.classList.toggle("active", state.ccEnabled);
       ccBtn.setAttribute("aria-pressed", state.ccEnabled ? "true" : "false");
-    }
-    if (pipBtn) {
-      pipBtn.classList.toggle("active", state.pipEnabled);
-      pipBtn.setAttribute("aria-pressed", state.pipEnabled ? "true" : "false");
     }
     var collapseBtn = qs("#videoCollapseBtn");
     if (collapseBtn) {
@@ -761,15 +756,6 @@
       setStoredUIStateField("transcripts", "ccEnabled", state.ccEnabled);
       updatePlayerButtons();
     });
-    qs("#videoPipBtn").addEventListener("click", function () {
-      state.pipEnabled = !state.pipEnabled;
-      // Disabling PiP while detached re-flows the player; _setPipActive is null before
-      // initPipScroll.
-      if (!state.pipEnabled && state.pipActive && typeof _setPipActive === "function") {
-        _setPipActive(false);
-      }
-      updatePlayerButtons();
-    });
     qs("#videoCollapseBtn").addEventListener("click", function () {
       state.videoCollapsed = !state.videoCollapsed;
       var sec = qs("#videoSection");
@@ -910,81 +896,6 @@
       _lastTimelineHit = null;
       hideFrictionBandTooltip();
       hideTimelineTooltip();
-    });
-  }
-
-  // ---- PiP scroll behaviour ----
-
-  // Assigned in initPipScroll; initVideoPlayer's PiP toggle calls it.
-  var _setPipActive = null;
-
-  // Chrome strip height (topnav + subheader + pill bar); mirrors transcripts.css
-  // #trMain padding-top.
-  var TR_CHROME_TOP = 148;
-
-  function initPipScroll() {
-    var section = qs("#videoSection");
-    // #trMain is the scroll container; asymmetric enter/release thresholds avoid
-    // position:fixed bounce.
-    var scroller = qs("#trMain");
-    if (!section || !scroller) return;
-
-    var ENTER_THRESHOLD = 140;
-    var scrollRaf = 0;
-
-    function setPipActive(active) {
-      if (active === state.pipActive) return;
-      if (active) {
-        // Reserve the section's height so content doesn't jump; padding changes can
-        // rebase scrollTop.
-        var h = Math.round(section.getBoundingClientRect().height);
-        if (h > 0) scroller.style.paddingTop = TR_CHROME_TOP + h + "px";
-        var keepTop = scroller.scrollTop;
-        state.pipActive = true;
-        section.classList.add("pip");
-        requestAnimationFrame(function () {
-          scroller.scrollTop = keepTop;
-          sizeTimelineCanvas();
-          renderTimeline();
-        });
-      } else {
-        var keepTop2 = scroller.scrollTop;
-        state.pipActive = false;
-        section.classList.remove("pip");
-        // Empty inline override falls back to the CSS default (148px).
-        scroller.style.paddingTop = "";
-        requestAnimationFrame(function () {
-          scroller.scrollTop = keepTop2;
-          sizeTimelineCanvas();
-          renderTimeline();
-        });
-      }
-    }
-    _setPipActive = setPipActive;
-
-    function evaluatePip() {
-      if (!state.pipEnabled) return;
-      var top = scroller.scrollTop;
-      if (state.pipActive) {
-        // Release only at the very top so easing back up doesn't drop the player.
-        if (top <= 0) setPipActive(false);
-      } else {
-        if (top > ENTER_THRESHOLD) setPipActive(true);
-      }
-    }
-
-    scroller.addEventListener("scroll", function () {
-      if (scrollRaf) return;
-      scrollRaf = requestAnimationFrame(function () {
-        scrollRaf = 0;
-        evaluatePip();
-      });
-    }, { passive: true });
-
-    section.addEventListener("click", function (e) {
-      if (!state.pipActive) return;
-      if (e.target.closest(".player-btn") || e.target.closest("#timelineCanvasWrapper")) return;
-      scroller.scrollTo({ top: 0, behavior: "smooth" });
     });
   }
 
@@ -1341,8 +1252,8 @@
 
     if (newIndex === state.activeSegmentIndex) return;
 
-    // Follow when auto-follow or PiP is on, unless a manual scroll paused it.
-    var follow = (state.autoFollow || state.pipActive) && !_autoFollowPaused();
+    // Follow when auto-follow is on, unless a manual scroll paused it.
+    var follow = state.autoFollow && !_autoFollowPaused();
     setActiveSegment(newIndex, { follow: follow });
   }
 
@@ -1415,7 +1326,7 @@
   }
 
   // ---- Auto-follow scroll-pause ----
-  // A user scroll on #trMain pauses following; programmatic scrolls flag themselves.
+  // Reader scrolls pause following; programmatic scrolls flag themselves.
   var AUTO_FOLLOW_PAUSE_MS = 3000;
   var _autoFollowPausedUntil = 0;
   var _ignoreScrollUntil = 0;
@@ -1431,7 +1342,7 @@
   }
 
   function initAutoFollowScrollPause() {
-    var scroller = qs("#trMain");
+    var scroller = qs("#transcriptSection");
     if (!scroller) return;
     scroller.addEventListener("scroll", function () {
       if (Date.now() < _ignoreScrollUntil) return; // our own scrollToSegment
@@ -1442,19 +1353,20 @@
   function scrollToSegment(row) {
     // A display:none row (Isolate) has a zero rect and would yank the scroll upward.
     if (!row || !row.isConnected || row.classList.contains("segment-hidden")) return;
-    // The top TR_CHROME_TOP px of #trMain sit under the fixed chrome strip.
-    var scroller = qs("#trMain");
+    var scroller = qs("#transcriptSection");
     if (!scroller) return;
     var rowRect = row.getBoundingClientRect();
     var scRect = scroller.getBoundingClientRect();
     var rowTopInScroll = rowRect.top - scRect.top + scroller.scrollTop;
     var rowBottomInScroll = rowTopInScroll + rowRect.height;
-    var visibleTop = scroller.scrollTop + TR_CHROME_TOP;
+    // The padding-top band sits under the glass chrome, so it is not visible.
+    var chromeTop = parseFloat(getComputedStyle(scroller).paddingTop) || 0;
+    var visibleTop = scroller.scrollTop + chromeTop;
     var visibleBottom = scroller.scrollTop + scroller.clientHeight;
 
     if (rowTopInScroll < visibleTop + 40) {
       _ignoreScrollUntil = Date.now() + 120;
-      scroller.scrollTop = rowTopInScroll - TR_CHROME_TOP - 40;
+      scroller.scrollTop = rowTopInScroll - chromeTop - 40;
     } else if (rowBottomInScroll > visibleBottom - 40) {
       _ignoreScrollUntil = Date.now() + 120;
       scroller.scrollTop = rowBottomInScroll - scroller.clientHeight + 40;
@@ -1465,7 +1377,6 @@
   // tests/test_frontend_satellite_wiring.py guards the callers.
   TS.initVideoPlayer = initVideoPlayer;
   TS.initTimelineCanvas = initTimelineCanvas;
-  TS.initPipScroll = initPipScroll;
   TS.initVideoSync = initVideoSync;
   TS.initPlayerKeyboard = initPlayerKeyboard;
   TS.renderTimeline = renderTimeline;
