@@ -271,6 +271,31 @@ def test_intake_drop_targets_route_through_add_to_queue():
     assert body.count("addToQueue(state.reelQueue, info, renderReelQueue)") >= 2
 
 
+def test_card_drag_image_loads_thumbnail_eagerly():
+    """The offscreen drag-image clone must not keep loading=lazy, or its thumb stays blank."""
+    src = _studio_js()
+    start = src.index("function setCardDragImage(")
+    end = src.index("\n  }\n", start)
+    body = src[start:end]
+    assert 'removeAttribute("loading")' in body
+    assert body.index('removeAttribute("loading")') < body.index(
+        "document.body.appendChild(clone)"
+    )
+
+
+def test_queue_drops_copy_on_option():
+    """Option at release copies a card between queues instead of moving it."""
+    src = _studio_js()
+    assert "onDrop(info, hasCopyModifier(ev))" in src
+    start = src.index("function initDropTargets()")
+    end = src.index("\n  function setupDropTarget(", start)
+    body = src[start:end]
+    assert 'takeDragOrigin(info, "reel", copy)' in body
+    assert 'takeDragOrigin(info, "artifact", copy)' in body
+    assert 'if (info.source === "reel" && !copy)' in body
+    assert 'if (info.source === "artifact" && !copy)' in body
+
+
 def test_studio_card_scrubber_wiring():
     """Opt-in card scrubber: state flag, attach hook, settings re-read, assets."""
     src = _studio_js()

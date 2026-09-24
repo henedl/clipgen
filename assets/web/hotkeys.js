@@ -91,6 +91,7 @@
     { id: "studio.stashReel",       section: "studio", group: "Queue", label: "Stash reel", combos: ["Shift+A"] },
     { id: "studio.clearArtifacts",  section: "studio", group: "Queue", label: "Clear artifacts", combos: ["C"] },
     { id: "studio.clearReel",       section: "studio", group: "Queue", label: "Clear reel", combos: ["Shift+C"] },
+    { id: "studio.note.copyCard",   section: "studio", group: "Queue", label: "Copy card to the other queue", note: "⌥ / Ctrl-drag" },
     { id: "studio.focusFilter",        section: "studio", group: "Selection", label: "Select filter list", combos: ["Shift+1"] },
     { id: "studio.focusArtifacts",     section: "studio", group: "Selection", label: "Select artifact queue", combos: ["Shift+2"] },
     { id: "studio.focusReel",          section: "studio", group: "Selection", label: "Select reel queue", combos: ["Shift+3"] },
