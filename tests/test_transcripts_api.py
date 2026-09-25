@@ -11,6 +11,7 @@ import pytest
 Flask = pytest.importorskip("flask").Flask
 
 import config
+import redact
 import start_settings
 import thinking_agents
 import transcripts
@@ -4980,3 +4981,38 @@ def test_redact_exclusions_survive_off_on_and_merge(tr_client, monkeypatch, tmp_
         },
     )
     assert entry["redaction"]["excluded"] == [{"label": "EMAIL", "key": "anna@ex.se"}]
+
+
+def test_intake_transcript_is_corrected_and_redacted(tr_client, monkeypatch):
+    """Studio intake clips carry the text the Transcripts page shows."""
+    monkeypatch.setattr(config, "TRANSCRIBE_REDACT", True)
+    text = "Hi Anna, see the dashbord"
+    transcripts_server._manifest["source_transcripts"]["P01"] = {
+        "transcribed_at": "t0",
+        "segments": [
+            {
+                "id": "P01:0",
+                "start": 0.0,
+                "end": 2.0,
+                "text": text,
+                "pii": [
+                    {
+                        "label": "GIVEN_NAME",
+                        "start": 3,
+                        "end": 7,
+                        "score": 0.9,
+                        "text": "Anna",
+                    }
+                ],
+                "pii_crc": redact.text_crc(text),
+            }
+        ],
+    }
+    transcripts_server._manifest["corrections"] = [
+        {"id": "c1", "from": "dashbord", "to": "dashboard"}
+    ]
+    transcripts_server._manifest["marks"] = [{"id": "m1", "segment_id": "P01:0"}]
+    assert transcripts_server.intake_transcript("P01", ["m1"]) == (
+        "t0",
+        "Hi [GIVEN_NAME_1], see the dashboard",
+    )

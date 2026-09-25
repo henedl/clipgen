@@ -254,10 +254,8 @@ def build_transcript_segments(manifest: dict[str, Any]) -> list[dict[str, Any]]:
         transcribed_at = entry.get("transcribed_at", "")
         speaker_labels = (entry.get("speakers") or {}).get("labels") or {}
         segments = [s for s in (entry.get("segments", []) or []) if isinstance(s, dict)]
-        # Placeholders replace the surface only while the participant's toggle is on.
-        redacted = (entry.get("redaction") or {}).get("enabled") and any(
-            s.get("pii") for s in segments
-        )
+        # Placeholders replace the text whenever redaction applies to the participant.
+        redacted = redact.entry_wanted(entry) and any(s.get("pii") for s in segments)
         pii_view = (
             redact.entry_spans(
                 segments,

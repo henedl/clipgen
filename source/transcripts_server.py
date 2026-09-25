@@ -327,14 +327,6 @@ def _redact_excluded(entry: dict[str, Any]) -> list[dict[str, Any]]:
     return list((entry.get("redaction") or {}).get("excluded") or [])
 
 
-def _redact_wanted(entry: dict[str, Any]) -> bool:
-    """Per-participant choice when set, else ``config.TRANSCRIBE_REDACT``."""
-    block = entry.get("redaction")
-    if isinstance(block, dict) and "enabled" in block:
-        return bool(block["enabled"])
-    return bool(config.TRANSCRIBE_REDACT)
-
-
 def _redact_off(entry: dict[str, Any] | None) -> bool:
     """True once the participant switched redaction off; late results must not undo it."""
     block = (entry or {}).get("redaction")
@@ -377,7 +369,7 @@ def _redacted_view(
     pid: str, raw_segments: list[Any], corrected: list[Any], entry: dict[str, Any]
 ) -> list[list[dict[str, Any]]] | None:
     """Numbered spans per segment when redaction is on and detected; else None."""
-    if not _redact_wanted(entry) or not any(s.get("pii") for s in raw_segments):
+    if not redact.entry_wanted(entry) or not any(s.get("pii") for s in raw_segments):
         return None
     return redact.entry_spans(
         raw_segments, [seg["text"] for seg in corrected], _redact_excluded(entry)
@@ -398,7 +390,7 @@ def _requeue_stale_redactions() -> None:
             segs = entry.get("segments") or []
             if (
                 not segs
-                or not _redact_wanted(entry)
+                or not redact.entry_wanted(entry)
                 or not any(s.get("pii") for s in segs)
             ):
                 continue
@@ -712,7 +704,7 @@ def api_transcript(participant: str) -> FlaskResponse:
         transcribed_at = entry.get("transcribed_at", "")
         speakers_summary = _speakers_summary(entry)
         redaction_summary = _redaction_summary(entry)
-        redact_on = _redact_wanted(entry)
+        redact_on = redact.entry_wanted(entry)
         excluded = _redact_excluded(entry)
         version_snapshot = _corrections_version
 
@@ -826,7 +818,7 @@ def _formatted_result(participant: str) -> transcripts.TranscriptResult | None:
         source_file = entry.get("source_file", "")
         model = entry.get("model", "")
         speaker_labels = dict((entry.get("speakers") or {}).get("labels") or {})
-        redact_on = _redact_wanted(entry)
+        redact_on = redact.entry_wanted(entry)
         excluded = _redact_excluded(entry)
         version_snapshot = _corrections_version
 
@@ -2069,7 +2061,7 @@ def marks_for_participant(pid: str) -> list[dict[str, Any]]:
 
 
 def intake_transcript(pid: str, mark_ids: list[str]) -> tuple[str, str]:
-    """Return (transcribed_at, joined text of the segments *mark_ids* name)."""
+    """Return (transcribed_at, reader text of the segments *mark_ids* name)."""
     mark_set = set(mark_ids)
     with _manifest_lock:
         entry = _manifest.get("source_transcripts", {}).get(pid, {})
@@ -2078,12 +2070,14 @@ def intake_transcript(pid: str, mark_ids: list[str]) -> tuple[str, str]:
             for m in _manifest.get("marks", []) or []
             if isinstance(m, dict) and m.get("id") in mark_set
         }
-        parts: list[str] = []
-        for seg in entry.get("segments", []) or []:
-            if seg.get("id") in wanted:
-                t = (seg.get("text") or "").strip()
-                if t:
-                    parts.append(t)
+        segments = list(entry.get("segments", []) or [])
+        corrected = _corrected_segments(pid, segments, _manifest.get("corrections", []))
+        texts = redact.entry_texts(entry, [seg["text"] for seg in corrected])
+        parts = [
+            text.strip()
+            for seg, text in zip(segments, texts, strict=True)
+            if seg.get("id") in wanted and text.strip()
+        ]
         return entry.get("transcribed_at", ""), " ".join(parts)
 
 
@@ -2879,7 +2873,7 @@ def _on_task_complete() -> None:
             for agent in thinking_agents.AGENTS:
                 entry.pop(agent["manifest_field"], None)
             # Fresh text carries no spans; queue the pass when wanted.
-            if _redact_wanted(entry) and _redact_model_ready():
+            if redact.entry_wanted(entry) and _redact_model_ready():
                 _enqueue_redact_task(pid, entry)
 
     # run_chain re-acquires the non-reentrant _manifest_lock, so it runs outside

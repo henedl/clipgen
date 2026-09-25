@@ -14,6 +14,7 @@ from typing import Any
 
 import config
 import files
+import redact
 import transcripts
 import utils
 import viewer
@@ -104,18 +105,18 @@ def _filter_transcript_segments(
         if participants and pid not in participants:
             continue
         raw_segments = entry.get("segments") or []
-        # Match and label on corrected text, like the Transcripts UI.
+        # Match and label on the text the Transcripts UI shows: corrected, redacted.
         corrected = transcripts.apply_corrections(raw_segments, corrections)
-        for idx, (raw, seg) in enumerate(zip(raw_segments, corrected, strict=True)):
+        texts = redact.entry_texts(entry, [seg["text"] for seg in corrected])
+        for idx, (raw, text) in enumerate(zip(raw_segments, texts, strict=True)):
             seg_id = raw.get("id") or f"{pid}:{idx}"
             attached = marks_by_segment.get(seg_id, [])
             if mark_categories and not attached:
                 continue
-            if needle is not None and needle not in str(seg.get("text", "")).lower():
+            if needle is not None and needle not in text.lower():
                 continue
-            # apply_corrections drops every key but start/end/text; keep the id.
-            row = dict(raw)
-            row["text"] = seg.get("text", "")
+            row = {k: v for k, v in raw.items() if k not in ("words", "pii", "pii_crc")}
+            row["text"] = text
             rows.append((pid, row, attached))
     return rows
 

@@ -507,7 +507,7 @@ Done 2026-09-25: all items, no behavior change.
 
 ## Wave 4: Extract repeated shapes (186 items, −4515 lines)
 
-Python slices done 2026-09-25 (−1,345 net). Behavior notes: CLI `--ss-task` now shares server media extraction (polygon masks, multitool shape steps); single-video cuts pass `H:MM:SS` to ffmpeg; failed copy concat falls back to re-encode; thumbnail past end-of-recording returns the missing-source 404. Found, not fixed: embedded/reel transcripts skip PII redaction (`_embed_transcript_on_artifacts`, `_build_reel_transcript`).
+Python slices done 2026-09-25 (−1,345 net). Behavior notes: CLI `--ss-task` now shares server media extraction (polygon masks, multitool shape steps); single-video cuts pass `H:MM:SS` to ffmpeg; failed copy concat falls back to re-encode; thumbnail past end-of-recording returns the missing-source 404. Found and fixed in a follow-up `fix:` commit: clip, reel and per-clip transcripts, Studio intake text, `--transcript-clips` rows and export now honour PII redaction and the `TRANSCRIBE_REDACT` default.
 
 Frontend slices done 2026-09-25 (−2,800 net incl. CSS). `studio-shared-js-25` partial: `updateArtifactActions`/`updateReelActions` stay separate (different buttons). `css-6` landed via `screenspace-js-7`; multitool task cards now use `wrench-screwdriver`. Shape tab gains its hover/active hue (`css-4`). New shared helpers: `pollDownloadStatus`, `rafThrottle`, `findById`, `positionTooltipAtCursor`, `togglePanelCollapse`, `toggleInArray` (utils.js); `export-chrome.css` for exported viewers.
 

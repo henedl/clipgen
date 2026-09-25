@@ -13,11 +13,12 @@ import threading
 import time
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import config
 import files
 import titlecards
+import redact
 import transcripts
 import profiling
 import utils
@@ -871,16 +872,33 @@ def _run_clip_pipeline(
 def _manifest_transcript(
     entry: dict[str, Any], corrections: list[Any], fallback_source: str
 ) -> transcripts.TranscriptResult:
-    """Build a corrected TranscriptResult from a transcripts-manifest entry."""
-    redaction = entry.get("redaction") or {}
+    """Corrected TranscriptResult with PII placeholders baked in over the whole entry.
+
+    Rendering before any clip filter keeps placeholder numbering per participant.
+    """
+    corrected = transcripts.apply_corrections(entry.get("segments", []), corrections)
+    raw_texts = [seg["text"] for seg in corrected]
+    texts = redact.entry_texts(entry, raw_texts)
+    segments = corrected
+    if texts != raw_texts:
+        # Word timings and span offsets describe the raw text; drop them with it.
+        segments = [
+            cast(
+                transcripts.TranscriptSegment,
+                {
+                    k: v
+                    for k, v in {**seg, "text": text}.items()
+                    if k not in ("words", "pii", "pii_crc")
+                },
+            )
+            for seg, text in zip(corrected, texts, strict=True)
+        ]
     return transcripts.TranscriptResult(
-        segments=transcripts.apply_corrections(entry.get("segments", []), corrections),
+        segments=segments,
         language=entry.get("language", ""),
         source_file=entry.get("source_file", fallback_source),
         model=entry.get("model", ""),
         speaker_labels=dict((entry.get("speakers") or {}).get("labels") or {}),
-        redact=bool(redaction.get("enabled")),
-        redact_excluded=list(redaction.get("excluded") or []),
     )
 
 

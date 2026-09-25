@@ -740,6 +740,24 @@ def number_spans(per_segment: list[list[dict[str, Any]]]) -> list[list[dict[str,
     return per_segment
 
 
+def entry_wanted(entry: dict[str, Any]) -> bool:
+    """Per-participant choice when set, else ``config.TRANSCRIBE_REDACT``."""
+    block = entry.get("redaction")
+    if isinstance(block, dict) and "enabled" in block:
+        return bool(block["enabled"])
+    return bool(config.TRANSCRIBE_REDACT)
+
+
+def entry_texts(entry: dict[str, Any], texts: list[str]) -> list[str]:
+    """*texts* for the entry's segments with placeholders when redaction applies."""
+    segments = list(entry.get("segments") or [])
+    if not entry_wanted(entry) or not any(s.get("pii") for s in segments):
+        return texts
+    excluded = (entry.get("redaction") or {}).get("excluded")
+    spans = entry_spans(segments, texts, excluded)
+    return [render_text(t, s) for t, s in zip(texts, spans, strict=True)]
+
+
 def render_text(text: str, spans: list[dict[str, Any]]) -> str:
     """Replace each span with its placeholder, right to left; restored ones stay."""
     out = text
