@@ -539,13 +539,10 @@
   font-size: var(--text-xs);
   font-weight: 600;
   color: var(--accent-fg);
+  background: var(--sev, var(--sev-unknown));
   min-width: 2px;
   transition: flex-basis var(--duration-fast);
 }
-
-/* Severity segment colors */
-/* tokens.css severity indirection */
-.md-stacked-segment { background: var(--sev, var(--sev-unknown)); }
 
 /* Severity legend */
 .md-severity-legend {
@@ -567,10 +564,8 @@
   width: 8px;
   height: 8px;
   border-radius: var(--radius-full);
+  background: var(--sev, var(--sev-unknown));
 }
-
-/* tokens.css severity indirection */
-.md-sev-dot { background: var(--sev, var(--sev-unknown)); }
 
 /* ---- Category breakdown bars ---- */
 

@@ -7,9 +7,8 @@
  *   - Transcription warmup: a single `tryPostTranscriptionWarmup()` post that
  *     asks the backend to preload the Whisper model. `_transcriptionWarmupPosted`
  *     guards it so we never double-post per page load.
- *   - Summary / citations: LLM-generated; `_summaryPoller` and
- *     `_citationsPoller` (createPoller handles) poll the backend until the
- *     result lands or the user navigates away.
+ *   - Summary / citations: LLM-generated; the agents satellite polls the
+ *     backend until the result lands or the user navigates away.
  */
 
 (function () {
@@ -564,13 +563,8 @@
         .then(function (data) {
           if (!data.ok) return;
           applyTranscriptionModelHint(data);
-          if (data.loaded) {
-            stopModelHintPoll();
-            _forgetWhisperDownloadAgreements();
-            return;
-          }
-          if (!data.warming) {
-            // Warmup ended without loading; the next attempt re-confirms.
+          // Loaded, or warmup ended without loading; the next attempt re-confirms.
+          if (data.loaded || !data.warming) {
             stopModelHintPoll();
             _forgetWhisperDownloadAgreements();
           }
@@ -595,11 +589,7 @@
     _transcriptionWarmupPosted = true;
     apiPost("api/transcribe/warmup", {})
       .then(function (data) {
-        if (!data.ok) {
-          _transcriptionWarmupPosted = false;
-          return;
-        }
-        if (data.skipped) {
+        if (data.ok && data.skipped) {
           if (data.reason === "model_not_cached") {
             _confirmPrewarmDownload(data);
             return;
@@ -608,19 +598,22 @@
           refreshTranscriptionModelHintOnce();
           return;
         }
-        if (data.already_loaded) {
-          refreshTranscriptionModelHintOnce();
-          return;
-        }
-        if (data.started || data.already_warming) {
-          startModelHintPoll();
-          return;
-        }
-        _transcriptionWarmupPosted = false;
+        _handleWarmupReply(data);
       })
       .catch(function () {
         _transcriptionWarmupPosted = false;
       });
+  }
+
+  // Poll a running warmup, repaint when loaded, else allow a retry.
+  function _handleWarmupReply(d) {
+    if (d.ok && (d.started || d.already_warming)) {
+      startModelHintPoll();
+    } else if (d.ok && d.already_loaded) {
+      refreshTranscriptionModelHintOnce();
+    } else {
+      _transcriptionWarmupPosted = false;
+    }
   }
 
   // Confirm before downloading; confirm re-posts with force=true, decline stops re-asking.
@@ -646,21 +639,7 @@
         return;
       }
       apiPost("api/transcribe/warmup", { force: true })
-        .then(function (d) {
-          if (!d.ok) {
-            _transcriptionWarmupPosted = false;
-            return;
-          }
-          if (d.started || d.already_warming) {
-            startModelHintPoll();
-            return;
-          }
-          if (d.already_loaded) {
-            refreshTranscriptionModelHintOnce();
-            return;
-          }
-          _transcriptionWarmupPosted = false;
-        })
+        .then(_handleWarmupReply)
         .catch(function () {
           _transcriptionWarmupPosted = false;
         });
@@ -842,7 +821,7 @@
       var savedTime =
         storedMap && typeof storedMap[pid] === "number" ? storedMap[pid] : 0.001;
       if (state.videoTimeline) {
-        var pi = _partForGlobal(state.videoTimeline, savedTime);
+        var pi = clipgenPartForGlobal(state.videoTimeline, savedTime);
         state.videoActivePart = pi;
         state.videoOffset = state.videoTimeline[pi].cumulativeStart;
         var localStart = savedTime - state.videoOffset;
@@ -1577,7 +1556,6 @@
   function scrollToSegment() { return TS.scrollToSegment && TS.scrollToSegment.apply(null, arguments); }
   function ignoreNextScroll() { return TS.ignoreNextScroll && TS.ignoreNextScroll(); }
   function applyCaptionMode() { return TS.applyCaptionMode && TS.applyCaptionMode(); }
-  function _partForGlobal() { return TS._partForGlobal && TS._partForGlobal.apply(null, arguments); }
   function _partMediaUrl() { return TS._partMediaUrl && TS._partMediaUrl.apply(null, arguments); }
   function cancelPendingSeek() { return TS.cancelPendingSeek && TS.cancelPendingSeek(); }
   function clearTimelineMarkers() { return TS.clearTimelineMarkers && TS.clearTimelineMarkers(); }
@@ -2243,7 +2221,7 @@
     if (!pid) return;
     var p = _currentParticipant();
     var summaryRunning = !!(p && p.agents && p.agents.summary === "running");
-    // _summaryPoller lives in the agents satellite; ask via TS.isSummaryPolling.
+    // The agents satellite owns the summary poll; ask it via TS.isSummaryPolling.
     if (summaryRunning && !(TS.isSummaryPolling && TS.isSummaryPolling()) && !state.summaryText) loadSummary(pid);
     // Also reload when only deterministic scores show and the agent has since run.
     var frictionActive = !!(p && p.agents && (p.agents.friction === "running" || p.agents.friction === "done"));

@@ -595,9 +595,13 @@ def _build_ss_scan_params(tool_name: str, params: dict[str, Any]) -> dict[str, A
     the caller (it needs the video path + region).
     """
 
-    def _num(key: str, default: float = 0.0) -> float:
+    defaults = {
+        spec["name"]: spec["default"] for spec in _SS_DETECTOR_SPECS.get(tool_name, [])
+    }
+
+    def _num(key: str) -> float:
         val = params.get(key)
-        return float(val) if val not in (None, "") else float(default)
+        return float(val) if val not in (None, "") else float(defaults.get(key, 0.0))
 
     if tool_name == "color":
         return {
@@ -607,9 +611,9 @@ def _build_ss_scan_params(tool_name: str, params: dict[str, Any]) -> dict[str, A
                 "v": _num("color_v"),
             },
             "tolerance": {
-                "h": _num("tol_h", 10),
-                "s": _num("tol_s", 50),
-                "v": _num("tol_v", 50),
+                "h": _num("tol_h"),
+                "s": _num("tol_s"),
+                "v": _num("tol_v"),
             },
             "color_mode": str(params.get("color_mode", "average") or "average"),
             "min_coverage": _num("min_coverage"),
@@ -619,41 +623,39 @@ def _build_ss_scan_params(tool_name: str, params: dict[str, Any]) -> dict[str, A
         return {
             "threshold": _num("threshold"),
             "noise_threshold": _num("noise_threshold"),
-            "require_consecutive": int(_num("require_consecutive", 1)),
+            "require_consecutive": int(_num("require_consecutive")),
             "interval": _num("interval"),
         }
     if tool_name == "flow":
         return {
             "magnitude_threshold": _num("magnitude_threshold"),
-            "require_consecutive": int(_num("require_consecutive", 1)),
+            "require_consecutive": int(_num("require_consecutive")),
             "interval": _num("interval"),
         }
     if tool_name == "text":
         return {
             "search_string": str(params.get("search_string", "") or ""),
-            "fuzzy_threshold": _num("fuzzy_threshold", 80),
-            "interval": _num("interval", 2.0),
+            "fuzzy_threshold": _num("fuzzy_threshold"),
+            "interval": _num("interval"),
         }
     if tool_name == "numbers":
         out: dict[str, Any] = {
             "operator": str(params.get("operator", "gt") or "gt"),
             "target_value": _num("target_value"),
             "integers_only": bool(params.get("integers_only", False)),
-            "interval": _num("interval", 2.0),
+            "interval": _num("interval"),
         }
         if params.get("range_min") not in (None, ""):
             out["range_min"] = _num("range_min")
         if params.get("range_max") not in (None, ""):
             out["range_max"] = _num("range_max")
         return out
-    if tool_name == "similarity":
-        return {"threshold": _num("threshold"), "interval": _num("interval")}
-    if tool_name == "scene":
+    if tool_name in ("similarity", "scene"):
         return {"threshold": _num("threshold"), "interval": _num("interval")}
     if tool_name == "template":
         return {
             "threshold": _num("threshold"),
-            "template_scale": _num("template_scale", 1.0),
+            "template_scale": _num("template_scale"),
             "interval": _num("interval"),
         }
     if tool_name == "shape":
@@ -827,7 +829,7 @@ def _run_ss_detector(
 def _make_ss_executor(
     tool_name: str,
 ) -> Callable[[NodeContext, dict[str, Any], dict[str, Any]], dict[str, Any]]:
-    """Bind ``_run_ss_detector`` to one tool so all ten nodes share one body."""
+    """Bind ``_run_ss_detector`` to one tool so every ss_ detector shares one body."""
 
     def _exec(
         ctx: NodeContext, inputs: dict[str, Any], params: dict[str, Any]
@@ -1584,7 +1586,7 @@ def _exec_data_export(
             (
                 f"export_segments{suffix}",
                 data_export.build_transcript_segments(manifest),
-                data_export._TRANSCRIPT_SEGMENT_BASE_COLS,
+                data_export.TRANSCRIPT_SEGMENT_COLUMNS,
                 "Segments export",
             )
         )
@@ -1615,7 +1617,7 @@ def _exec_data_export(
                 (
                     "export_friction_moments",
                     moments,
-                    data_export._FRICTION_MOMENT_COLS,
+                    data_export.FRICTION_MOMENT_COLUMNS,
                     "Friction moments export",
                 )
             )
@@ -1625,7 +1627,7 @@ def _exec_data_export(
                 (
                     "export_friction_segments",
                     scored,
-                    data_export._FRICTION_SEGMENT_COLS,
+                    data_export.FRICTION_SEGMENT_COLUMNS,
                     "Friction segments export",
                 )
             )
@@ -2233,7 +2235,7 @@ _TEXT_FIELDS = frozenset(
 
 
 def _predicate_params(kind: str) -> list[ParamSpec]:
-    """The shared ``{field, op, value}`` clause for filter / partition nodes."""
+    """The ``{field, op, value}`` clause params a filter node renders."""
     meta = _COLLECTION_KINDS[kind]
     numeric = [f for f in meta["fields"] if f not in _TEXT_FIELDS]
     # A ``>=`` default on a text field (segments: ``text``) would drop every item.

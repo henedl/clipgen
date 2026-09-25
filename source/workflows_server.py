@@ -930,7 +930,7 @@ def _run_batch(batch_id: str, blueprint: dict[str, Any]) -> None:
 
 @workflows_bp.route("/api/batches", methods=["POST"])
 def api_batch_create() -> Any:
-    """Fan a blueprint out across participants, one sequential run each."""
+    """Fan a blueprint out across participants, one run each."""
     data = request.get_json(silent=True) or {}
     bp_id = data.get("blueprintId")
     with _manifest_lock:
@@ -1026,7 +1026,7 @@ def api_batch_cancel(batch_id: str) -> Any:
     record["cancel_event"].set()
     with _runs_lock:
         for runner in _runs.values():
-            if getattr(runner, "batch_id", "") == batch_id:
+            if runner.batch_id == batch_id:
                 runner.cancel()
     return ok()
 
@@ -1239,8 +1239,13 @@ def _watch_poll_once() -> None:
     (``api_blueprint_trigger``), not by maintaining baselines here.
     """
     with _manifest_lock:
+        blueprints = _manifest.get("blueprints", [])
+        # Count without copying; exactly one armed blueprint fires, like _armed_blueprint_locked.
         armed = {
-            t["id"]: _armed_blueprint_locked(t["id"]) is not None
+            t["id"]: sum(
+                _trigger_enabled(b.get("trigger"), t["id"]) for b in blueprints
+            )
+            == 1
             for t in workflows.TRIGGER_TYPES
         }
     if armed.get("new_video"):

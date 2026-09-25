@@ -1,7 +1,8 @@
-"""Combined Flask server for clipgen Studio, Screenspace, Transcripts, and Workflows.
+"""Combined Flask server for every clipgen web tool.
 
-Entry point: start_combined_server(worksheet, port, default_page) registers
-Studio, Screenspace, Transcripts, and Workflows blueprints on one app at config.SERVER_PORT (8089).
+Entry point: start_combined_server(worksheet, port, default_page) registers the
+Studio, Screenspace, Transcripts, Workflows, Composer, and Overview blueprints on
+one app at config.SERVER_PORT (8089).
 Module-level state: _worksheet, _sheet_context, _generated_artifacts, _generated_reels
 (initialized by _init_studio_state()).
 
@@ -12,7 +13,7 @@ Studio API endpoints (studio_bp, mounted under /studio/):
   Sheet  GET  /api/sheet               – spreadsheet grid data (rows, participants, timestamps)
          POST /api/sheet/refresh       – re-fetch spreadsheet data from source (Google/Excel)
          GET  /api/sheet/baseline      – per-participant baseline timestamps for convergence
-         GET/PUT /api/convergence/offsets – read/persist per-participant convergence offsets
+         GET  /api/mindnode            – active MindNode document for the intake tab
   Build  POST /api/generate            – generate clip/screen/gif artifacts for cells
          POST /api/generate/cancel     – cancel an in-progress clip generation
          POST /api/generate-intake     – generate artifacts from an intake/screenspace manifest
@@ -24,21 +25,22 @@ Studio API endpoints (studio_bp, mounted under /studio/):
          GET  /api/job-status          – poll the status of a background build job
   Export POST /api/viewer              – generate timeline viewer from session artifacts
          POST /api/open-viewer         – open an already-generated viewer HTML
+         POST /api/reveal-artifact     – show an artifact in the OS file browser
          POST /api/timeline-viewer     – batch-export all clips and generate timeline viewer
          POST /api/timeline-viewer/cancel – cancel a batch timeline-viewer export
          POST /api/gallery             – generate gallery from a video file
          POST /api/gallery/cancel      – cancel a gallery build
-  State  GET/POST /api/manifest        – read or write the cumulative artifact manifest
-         POST /api/regenerate          – regenerate all media from saved manifest
+  State  GET  /api/manifest            – read the cumulative artifact manifest
          GET/POST /api/stashes         – reel stash CRUD
          GET/POST /api/artifact-stashes – artifact stash CRUD
-  Cards  GET  /api/titlecards          – list title/end card background options
-         GET  /api/titlecards/default/<kind> – default title/end card image
-         GET/DELETE /api/titlecards/image/<path:name> – fetch or remove an uploaded card
-         POST /api/titlecards/upload   – upload a title/end card background
   Config GET/PUT /api/settings         – read or update config settings
 
 Combined app-level routes (registered by start_combined_server, not under /studio/):
+  GET/PUT /api/settings         – settings, re-mounted for every page
+  GET  /api/titlecards          – list title/end card background options
+  GET  /api/titlecards/default/<kind> – default title/end card image
+  GET/DELETE /api/titlecards/image/<path:name> – fetch or remove an uploaded card
+  POST /api/titlecards/upload   – upload a title/end card background
   GET  /                        – Start overlay / active-tool landing page
   GET  /api/status              – sheet, directories, and version for every page
   GET  /api/export/status, POST /api/export – analysis-ready JSON/CSV export
@@ -109,7 +111,7 @@ from server_utils import (
     parse_number_arg,
     remove_by_id,
 )
-from datetime import UTC
+from datetime import UTC, datetime
 
 FlaskResponse = Response | tuple[Response, int]
 _SERVER_POLL_INTERVAL = 0.5
@@ -995,8 +997,6 @@ def _process_intake_item(
         return {"_ok": False, "_error": f"No video for {participant}"}
     timeline = video.timeline_or_none(video_paths)
 
-    out_path: str | None = None
-
     span_hash = hashlib.md5(f"{participant}_{start}_{end}".encode()).hexdigest()[:8]
     # Fold source metadata and batch index into the id: distinct events can share a span.
     id_basis = "|".join(
@@ -1075,8 +1075,6 @@ def _process_intake_item(
             description = item_label
         elif item_text:
             description = item_text if len(item_text) <= 80 else item_text[:77] + "…"
-        else:
-            description = event_type or default_desc
     artifact: dict[str, Any] = {
         "id": f"intake_{id_hash}_s0",
         "type": output_format,
@@ -2296,9 +2294,6 @@ def api_manifest() -> FlaskResponse:
 
 def _handle_stash_crud(load_fn: Any, save_fn: Any, id_prefix: str) -> FlaskResponse:
     """Shared create/update/delete logic for stash endpoints."""
-    import uuid
-    from datetime import datetime
-
     data = request.get_json(silent=True) or {}
     action = data.get("action", "create")
 
@@ -2853,9 +2848,7 @@ def api_reel_direct() -> FlaskResponse:
             concat_last_emit = [0.0]
 
             def on_concat_progress(fraction: float) -> None:
-                import time as _time
-
-                now = _time.monotonic()
+                now = time.monotonic()
                 if (
                     concat_last_emit[0] != 0.0
                     and fraction < 0.99
@@ -3338,6 +3331,7 @@ def _open_worksheet_for(
     with it — ``/api/spreadsheets/open`` swaps it in via :func:`_swap_worksheet`,
     ``/api/spreadsheets/preview`` only reads from it. Returns ``(None, "")`` when
     the spreadsheet can't be resolved; raises whatever the backing library does.
+    Callers verify Google auth first.
     """
     if type_ == "excel":
         import excel_io
@@ -3347,10 +3341,6 @@ def _open_worksheet_for(
             Path(id_or_path).name,
         )
 
-    if _google_auth.client is None:
-        raise RuntimeError(
-            "Not authenticated with Google — click 'Connect Google' first."
-        )
     import app as _app
 
     if id_or_path.startswith(("http://", "https://")):
@@ -3747,8 +3737,8 @@ def status() -> Response:
         version=utils.get_version(),
         # Native window: pages may offer "show on disk" actions.
         desktop=utils.GUI_LAUNCH,
-        author="Henrik Edlund",
-        license="MIT",
+        author=config.AUTHOR,
+        license=config.LICENSE,
         repo_url=config.REPO_URL,
     )
 

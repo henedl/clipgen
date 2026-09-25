@@ -226,13 +226,13 @@ body {
 }
 
 .ss-info-collapse-icon {
-  mask-image: url("/screenspace/icons/chevron-double-left.svg");
-  -webkit-mask-image: url("/screenspace/icons/chevron-double-left.svg");
+  mask-image: url("icons/chevron-double-left.svg");
+  -webkit-mask-image: url("icons/chevron-double-left.svg");
 }
 
 .ss-info-expand-icon {
-  mask-image: url("/screenspace/icons/chevron-double-right.svg");
-  -webkit-mask-image: url("/screenspace/icons/chevron-double-right.svg");
+  mask-image: url("icons/chevron-double-right.svg");
+  -webkit-mask-image: url("icons/chevron-double-right.svg");
 }
 
 /* Expand button: when the panel is collapsed, anchor the button to the
@@ -286,8 +286,8 @@ body {
   width: 12px;
   height: 12px;
   background: currentColor;
-  mask-image: url("/screenspace/icons/chevron-down.svg");
-  -webkit-mask-image: url("/screenspace/icons/chevron-down.svg");
+  mask-image: url("icons/chevron-down.svg");
+  -webkit-mask-image: url("icons/chevron-down.svg");
   mask-repeat: no-repeat;
   -webkit-mask-repeat: no-repeat;
   mask-size: contain;
@@ -1180,11 +1180,11 @@ body[data-frontend="screenspace"] {
   width: var(--icon-size-sm);
   height: var(--icon-size-sm);
   background-color: currentColor;
-  mask-image: url("/screenspace/icons/signal.svg");
+  mask-image: url("icons/signal.svg");
   mask-size: contain;
   mask-repeat: no-repeat;
   mask-position: center;
-  -webkit-mask-image: url("/screenspace/icons/signal.svg");
+  -webkit-mask-image: url("icons/signal.svg");
   -webkit-mask-size: contain;
   -webkit-mask-repeat: no-repeat;
   -webkit-mask-position: center;
@@ -1487,8 +1487,8 @@ body[data-frontend="screenspace"] {
   flex-shrink: 0;
   margin-left: auto; /* push the caret to the chip's right edge (dropdown look) */
   background: currentColor;
-  mask-image: url("/screenspace/icons/chevron-down.svg");
-  -webkit-mask-image: url("/screenspace/icons/chevron-down.svg");
+  mask-image: url("icons/chevron-down.svg");
+  -webkit-mask-image: url("icons/chevron-down.svg");
   mask-size: contain;
   -webkit-mask-size: contain;
   mask-repeat: no-repeat;
@@ -1629,9 +1629,6 @@ html[data-theme="light"] .ss-cat-chip.active[data-active-type="numbers"] {
 
 #runBtn {
   flex-shrink: 0;
-}
-
-#runBtn {
   margin-left: auto;
   height: var(--ss-run-h);
   padding: 0 var(--space-4);
@@ -1942,13 +1939,13 @@ html[data-theme="light"] .ss-cat-chip.active[data-active-type="numbers"] {
 }
 
 .preview-icon-model {
-  mask-image: url("/screenspace/icons/eye.svg");
-  -webkit-mask-image: url("/screenspace/icons/eye.svg");
+  mask-image: url("icons/eye.svg");
+  -webkit-mask-image: url("icons/eye.svg");
 }
 
 .preview-icon-cal {
-  mask-image: url("/screenspace/icons/adjustments-horizontal.svg");
-  -webkit-mask-image: url("/screenspace/icons/adjustments-horizontal.svg");
+  mask-image: url("icons/adjustments-horizontal.svg");
+  -webkit-mask-image: url("icons/adjustments-horizontal.svg");
 }
 
 /* Which tool (and multitool step) the model view shows. */
@@ -2489,8 +2486,8 @@ html[data-theme="light"] .ss-cat-chip.active[data-active-type="numbers"] {
   width: var(--icon-size-xs);
   height: var(--icon-size-xs);
   background-color: currentColor;
-  -webkit-mask-image: url("/screenspace/icons/plus.svg");
-          mask-image: url("/screenspace/icons/plus.svg");
+  -webkit-mask-image: url("icons/plus.svg");
+          mask-image: url("icons/plus.svg");
   -webkit-mask-repeat: no-repeat;
           mask-repeat: no-repeat;
   -webkit-mask-size: contain;
@@ -2500,8 +2497,8 @@ html[data-theme="light"] .ss-cat-chip.active[data-active-type="numbers"] {
 }
 
 .multitool-operator-btn.is-not .multitool-operator-icon {
-  -webkit-mask-image: url("/screenspace/icons/no-symbol.svg");
-          mask-image: url("/screenspace/icons/no-symbol.svg");
+  -webkit-mask-image: url("icons/no-symbol.svg");
+          mask-image: url("icons/no-symbol.svg");
 }
 
 /* Offset window control: a clock pill that reveals min/max second inputs,
@@ -2546,8 +2543,8 @@ html[data-theme="light"] .ss-cat-chip.active[data-active-type="numbers"] {
   width: var(--icon-size-xs);
   height: var(--icon-size-xs);
   background-color: currentColor;
-  -webkit-mask-image: url("/screenspace/icons/clock.svg");
-          mask-image: url("/screenspace/icons/clock.svg");
+  -webkit-mask-image: url("icons/clock.svg");
+          mask-image: url("icons/clock.svg");
   -webkit-mask-repeat: no-repeat;
           mask-repeat: no-repeat;
   -webkit-mask-size: contain;
@@ -2575,8 +2572,8 @@ html[data-theme="light"] .ss-cat-chip.active[data-active-type="numbers"] {
   width: var(--icon-size-xs);
   height: var(--icon-size-xs);
   background-color: var(--color-text-dim);
-  -webkit-mask-image: url("/screenspace/icons/arrows-right-left.svg");
-          mask-image: url("/screenspace/icons/arrows-right-left.svg");
+  -webkit-mask-image: url("icons/arrows-right-left.svg");
+          mask-image: url("icons/arrows-right-left.svg");
   -webkit-mask-repeat: no-repeat;
           mask-repeat: no-repeat;
   -webkit-mask-size: contain;
@@ -3066,18 +3063,18 @@ html[data-theme="light"] .ss-cat-chip.active[data-active-type="numbers"] {
 }
 
 .ss-template-icon-btn--capture .ss-template-icon-btn__glyph {
-  mask-image: url("/screenspace/icons/viewfinder-circle.svg");
-  -webkit-mask-image: url("/screenspace/icons/viewfinder-circle.svg");
+  mask-image: url("icons/viewfinder-circle.svg");
+  -webkit-mask-image: url("icons/viewfinder-circle.svg");
 }
 
 .ss-template-icon-btn--upload .ss-template-icon-btn__glyph {
-  mask-image: url("/screenspace/icons/arrow-up-tray.svg");
-  -webkit-mask-image: url("/screenspace/icons/arrow-up-tray.svg");
+  mask-image: url("icons/arrow-up-tray.svg");
+  -webkit-mask-image: url("icons/arrow-up-tray.svg");
 }
 
 .ss-template-icon-btn--draw .ss-template-icon-btn__glyph {
-  mask-image: url("/screenspace/icons/paint-brush.svg");
-  -webkit-mask-image: url("/screenspace/icons/paint-brush.svg");
+  mask-image: url("icons/paint-brush.svg");
+  -webkit-mask-image: url("icons/paint-brush.svg");
 }
 
 .ss-template-icon-btn--draw.active {
@@ -3231,26 +3228,26 @@ body.panel-dragging #bottomPanel {
 }
 
 .rp-tab-icon-preview {
-  mask-image: url("/screenspace/icons/eye.svg");
-  -webkit-mask-image: url("/screenspace/icons/eye.svg");
+  mask-image: url("icons/eye.svg");
+  -webkit-mask-image: url("icons/eye.svg");
 }
 
 .rp-tab-icon-queue {
-  mask-image: url("/screenspace/icons/queue-list.svg");
-  -webkit-mask-image: url("/screenspace/icons/queue-list.svg");
+  mask-image: url("icons/queue-list.svg");
+  -webkit-mask-image: url("icons/queue-list.svg");
 }
 
 .rp-tab-icon-results {
-  mask-image: url("/screenspace/icons/chart-bar.svg");
-  -webkit-mask-image: url("/screenspace/icons/chart-bar.svg");
+  mask-image: url("icons/chart-bar.svg");
+  -webkit-mask-image: url("icons/chart-bar.svg");
 }
 
 .rp-tab-chevron {
   width: var(--icon-size-xs);
   height: var(--icon-size-xs);
   background: currentColor;
-  mask-image: url("/screenspace/icons/chevron-down.svg");
-  -webkit-mask-image: url("/screenspace/icons/chevron-down.svg");
+  mask-image: url("icons/chevron-down.svg");
+  -webkit-mask-image: url("icons/chevron-down.svg");
   mask-size: contain;
   -webkit-mask-size: contain;
   mask-repeat: no-repeat;
@@ -3796,23 +3793,23 @@ body.panel-dragging #bottomPanel {
 }
 
 .rp-icon-eye {
-  mask-image: url("/screenspace/icons/eye.svg");
-  -webkit-mask-image: url("/screenspace/icons/eye.svg");
+  mask-image: url("icons/eye.svg");
+  -webkit-mask-image: url("icons/eye.svg");
 }
 
 .rp-icon-eye-slash {
-  mask-image: url("/screenspace/icons/eye-slash.svg");
-  -webkit-mask-image: url("/screenspace/icons/eye-slash.svg");
+  mask-image: url("icons/eye-slash.svg");
+  -webkit-mask-image: url("icons/eye-slash.svg");
 }
 
 .rp-icon-scissors {
-  mask-image: url("/screenspace/icons/scissors.svg");
-  -webkit-mask-image: url("/screenspace/icons/scissors.svg");
+  mask-image: url("icons/scissors.svg");
+  -webkit-mask-image: url("icons/scissors.svg");
 }
 
 .rp-icon-download {
-  mask-image: url("/screenspace/icons/arrow-down-tray.svg");
-  -webkit-mask-image: url("/screenspace/icons/arrow-down-tray.svg");
+  mask-image: url("icons/arrow-down-tray.svg");
+  -webkit-mask-image: url("icons/arrow-down-tray.svg");
 }
 
 .rp-export-wrap {

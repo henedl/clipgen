@@ -136,23 +136,12 @@
     row1.appendChild(ctrl1);
     body.appendChild(row1);
     hexIn.addEventListener("input", function () {
-      var hex = hexIn.value.replace("#", "");
-      if (hex.length === 6) {
-        var r = parseInt(hex.substring(0, 2), 16) || 0;
-        var g = parseInt(hex.substring(2, 4), 16) || 0;
-        var b = parseInt(hex.substring(4, 6), 16) || 0;
-        // OpenCV HSV: H 0-180, S 0-255, V 0-255
-        var rr = r / 255, gg = g / 255, bb = b / 255;
-        var mx = Math.max(rr, gg, bb), mn = Math.min(rr, gg, bb);
-        var d = mx - mn, h = 0, s = mx === 0 ? 0 : d / mx, v = mx;
-        if (d !== 0) {
-          if (mx === rr) h = ((gg - bb) / d + (gg < bb ? 6 : 0)) / 6;
-          else if (mx === gg) h = ((bb - rr) / d + 2) / 6;
-          else h = ((rr - gg) / d + 4) / 6;
-        }
-        hH.value = Math.round(h * 180);
-        hS.value = Math.round(s * 255);
-        hV.value = Math.round(v * 255);
+      var rgb = hexToRgb(hexIn.value);
+      if (rgb) {
+        var hsv = rgbToHsv(rgb.r, rgb.g, rgb.b);
+        hH.value = hsv.h;
+        hS.value = hsv.s;
+        hV.value = hsv.v;
       }
     });
     _mtAddNumberRow(body, "Tolerance", "paramColorTol" + sfx, 0, 100, initTol, 1);

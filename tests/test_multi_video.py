@@ -563,8 +563,8 @@ def test_regenerate_single_artifact_uses_local_times(monkeypatch, tmp_path):
     assert pipeline._regenerate_single_artifact(artifact, set()) is True
     _, kwargs = run_ffmpeg.call_args
     assert kwargs["input_file"] == str(tmp_path / "video2.mp4")
-    assert kwargs["start_pos"] == "0:44"  # local, not global
-    assert kwargs["end_pos"] == "0:50"
+    assert kwargs["start_pos"] == "0:00:44"  # local, not global
+    assert kwargs["end_pos"] == "0:00:50"
 
 
 # ---- Transcribe all parts (merged global timeline) ----

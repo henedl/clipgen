@@ -1,4 +1,4 @@
-/* Unified top navigation — shared chrome across Studio, Screenspace, Transcripts.
+/* Unified top navigation — shared chrome across the six app pages.
  *
  * Mounts on DOMContentLoaded into a <topnav-mount data-frontend="..."> element.
  * Pages fill Quick Actions via ClipgenTopNav.setQuickActions or installQuickActions, before or after mount.

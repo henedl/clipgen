@@ -44,10 +44,8 @@ class Agent(TypedDict):
 
     Keys:
       key:                Stable identifier (e.g. "summary", "citations").
-      enabled_config_key: Name of a ``config`` attribute (bool) that gates
-                          this agent. None of the attributes currently
-                          differ per-agent, but keeping them separate means
-                          future agents can have their own toggle.
+      enabled_config_key: Name of the ``config`` bool that toggles this
+                          agent; each agent has its own.
       model_config_key:   Name of the ``config`` attribute (str) holding the
                           Model value (HF ref or stem) this agent runs against. Read by
                           the orchestrator for cancel-after-stop unload
@@ -468,7 +466,7 @@ def _extract_json_objects(text: str) -> list[dict[str, Any]]:
     return objects
 
 
-def _extract_json_array(text: str) -> list[Any]:
+def _extract_json_array(text: str) -> list[dict[str, Any]]:
     """Best-effort extraction of a model response's JSON array of objects.
 
     Qwen sometimes wraps JSON in prose, ``<think>`` blocks, or markdown fences
@@ -519,7 +517,7 @@ def _extract_json_array(text: str) -> list[Any]:
     if saw_empty_array:
         # The model answered with an empty array; salvaging prose objects would fabricate entries.
         return []
-    return list(_extract_json_objects(cleaned))
+    return _extract_json_objects(cleaned)
 
 
 def _format_friction_candidates(
@@ -562,8 +560,6 @@ def _parse_friction_response(response: str) -> list[dict[str, Any]]:
     """
     moments: list[dict[str, Any]] = []
     for item in _extract_json_array(response):
-        if not isinstance(item, dict):
-            continue
         seg_ids = item.get("segment_ids")
         if isinstance(seg_ids, str):
             seg_ids = [seg_ids]
@@ -597,9 +593,7 @@ def _parse_friction_response(response: str) -> list[dict[str, Any]]:
 def friction_model() -> str:
     """Resolve the model the friction agent should use.
 
-    Blank ``LLM_FRICTION_MODEL`` means "follow the summary model", so a single
-    AI-model setting drives all three thinking agents. Set the override to pin
-    friction to a different (e.g. smaller/faster) model.
+    Blank ``LLM_FRICTION_MODEL`` follows the summary model; set it to pin another.
     """
     return config.LLM_FRICTION_MODEL or config.LLM_SUMMARY_MODEL
 

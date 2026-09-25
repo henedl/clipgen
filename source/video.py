@@ -1651,14 +1651,6 @@ def get_file_duration(filepath: str) -> int | None:
     if config.PROFILING:
         profiling.count("video.duration_cache.miss")
 
-    cached_props = _video_properties_cache.get(key)
-    if cached_props is not None:
-        dur_f = float(cached_props.get("duration") or 0)
-        if dur_f > 0:
-            rounded = round(dur_f)
-            _file_duration_cache[key] = rounded
-            return rounded
-
     probed = probe_video_properties(filepath)
     if probed is not None:
         dur_f = float(probed.get("duration") or 0)

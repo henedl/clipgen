@@ -741,8 +741,7 @@
   function _buildParamResetButton(row) {
     var btn = el("button", "param-reset hidden");
     btn.type = "button";
-    var icon = el("span", "param-reset-icon");
-    applyIconMask(icon, "arrow-path", "/screenspace/icons/");
+    var icon = iconMaskSpan("arrow-path", { className: "param-reset-icon" });
     btn.appendChild(icon);
     btn.addEventListener("click", function () {
       var map = {};
@@ -949,8 +948,7 @@
     btn.type = "button";
     btn.setAttribute("data-tooltip", "Jump to this frame");
     btn.setAttribute("aria-label", "Jump to this frame");
-    var icon = el("span", "ref-seek-icon");
-    applyIconMask(icon, "arrow-up-right", "/screenspace/icons/");
+    var icon = iconMaskSpan("arrow-up-right", { className: "ref-seek-icon" });
     btn.appendChild(icon);
     btn.addEventListener("click", function () {
       loadFrame(seconds);

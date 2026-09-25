@@ -975,7 +975,7 @@
             updateRunButton();
             showToast("Region '" + name + "' deleted");
           };
-          if (chip && window.ClipgenMotion) ClipgenMotion.animateOut(chip, "delete").then(commit);
+          if (chip) ClipgenMotion.animateOut(chip, "delete").then(commit);
           else commit();
         })
         .catch(function () { showToast("Failed to delete region"); });
@@ -998,7 +998,7 @@
             updateRunButton();
             showToast("All regions deleted");
           };
-          if (chips.length && window.ClipgenMotion) ClipgenMotion.animateOutAll(chips, "delete").then(commit);
+          if (chips.length) ClipgenMotion.animateOutAll(chips, "delete").then(commit);
           else commit();
         })
         .catch(function () { showToast("Failed to delete regions"); });
@@ -1012,7 +1012,6 @@
         { value: "lasso", icon: "pencil", title: "Lasso: draw a freehand shape", hotkey: "screenspace.regionLasso" },
         { value: "wand", icon: "sparkles", title: "Magic wand: click a similar-colored area", hotkey: "screenspace.regionWand" },
       ],
-      basePath: "/screenspace/icons/",
       onChange: setRegionTool,
     });
     qs("#regionActions").insertBefore(regionToolTrack, qs("#wandToleranceWrap"));
@@ -1279,7 +1278,7 @@
       });
       container.appendChild(chip);
       // Animate in only pills new since the last render; reuses the stash-card landing animation.
-      if (_prevRegionNames && !_prevRegionNames[name] && window.ClipgenMotion) {
+      if (_prevRegionNames && !_prevRegionNames[name]) {
         ClipgenMotion.animateIn(chip, "stashLand");
       }
       newPrev[name] = true;

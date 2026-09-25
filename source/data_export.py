@@ -5,14 +5,17 @@ records suitable for direct loading into pandas / spreadsheets / BI tools.
 
 Exposed builders:
     build_screenspace_events(manifest, *, include_excluded, participants, detectors)
+    build_screenspace_pins(manifest)
     build_transcript_segments(manifest)
+    build_friction_moments(manifest)
+    build_friction_segments(manifest)
 
 Serialization:
     to_csv(records, *, preferred_column_order)
     to_json(records)
 
 Bundle writer (used by the --export CLI flag):
-    write_export_bundle(output_dir) -> list[Path]
+    write_export_bundle() -> list[Path]
     run_cli_export() -> int
 """
 
@@ -60,7 +63,7 @@ SCREENSPACE_PIN_COLUMNS: tuple[str, ...] = (
     "created_at",
 )
 
-_TRANSCRIPT_SEGMENT_BASE_COLS = (
+TRANSCRIPT_SEGMENT_COLUMNS: tuple[str, ...] = (
     "participant",
     "segment_id",
     "start",
@@ -76,7 +79,7 @@ _TRANSCRIPT_SEGMENT_BASE_COLS = (
     "mark_severities",
 )
 
-_FRICTION_MOMENT_COLS = (
+FRICTION_MOMENT_COLUMNS: tuple[str, ...] = (
     "participant",
     "segment_ids",
     "category",
@@ -86,7 +89,7 @@ _FRICTION_MOMENT_COLS = (
     "computed_at",
 )
 
-_FRICTION_SEGMENT_COLS = (
+FRICTION_SEGMENT_COLUMNS: tuple[str, ...] = (
     "participant",
     "segment_id",
     "score",
@@ -426,19 +429,19 @@ _SURFACES: tuple[tuple[str, _SurfaceBuilder, str, tuple[str, ...]], ...] = (
         "transcripts",
         build_transcript_segments,
         "transcripts",
-        _TRANSCRIPT_SEGMENT_BASE_COLS,
+        TRANSCRIPT_SEGMENT_COLUMNS,
     ),
     (
         "friction_moments",
         build_friction_moments,
         "transcripts",
-        _FRICTION_MOMENT_COLS,
+        FRICTION_MOMENT_COLUMNS,
     ),
     (
         "friction_segments",
         build_friction_segments,
         "transcripts",
-        _FRICTION_SEGMENT_COLS,
+        FRICTION_SEGMENT_COLUMNS,
     ),
 )
 
@@ -519,8 +522,11 @@ def run_cli_export() -> int:
 
 
 __all__ = [
+    "FRICTION_MOMENT_COLUMNS",
+    "FRICTION_SEGMENT_COLUMNS",
     "SCREENSPACE_EVENT_COLUMNS",
     "SCREENSPACE_PIN_COLUMNS",
+    "TRANSCRIPT_SEGMENT_COLUMNS",
     "build_friction_moments",
     "build_friction_segments",
     "build_screenspace_events",

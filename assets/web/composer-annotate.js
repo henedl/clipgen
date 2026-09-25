@@ -438,7 +438,7 @@
 
   function defaultSpan() {
     // New annotations inside a cut adopt its span (selected cut wins); later edits are free-form.
-    var cuts = (CO.participantCuts ? CO.participantCuts() : []).filter(function (c) {
+    var cuts = CO.participantCuts().filter(function (c) {
       return c.start <= state.playhead && state.playhead <= c.end;
     });
     if (cuts.length) {
@@ -488,7 +488,7 @@
   var _chipGate = "";
 
   function syncPaletteChips() {
-    var selected = CO.selectedAnnotations ? CO.selectedAnnotations() : [];
+    var selected = CO.selectedAnnotations();
     var hasText = selected.some(function (a) { return a.type === "text"; });
     var hasStroke = selected.some(function (a) {
       return a.type === "shape" || a.type === "freehand";

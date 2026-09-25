@@ -46,7 +46,7 @@
   var _etaTicker = createIntervalTicker(tickEtas, {
     gateHidden: true,
     isActive: function () {
-      return state.tasks.some(taskIsActive);
+      return state.tasks.some(taskIsRunning);
     },
   });
 
@@ -78,12 +78,6 @@
         return (a.priority || 100) - (b.priority || 100);
       }
       return (a.created_at || "").localeCompare(b.created_at || "");
-    });
-  }
-
-  function selectableTasks() {
-    return state.tasks.filter(function (t) {
-      return isTaskRestorable(t);
     });
   }
 
@@ -139,7 +133,7 @@
     var panel = qs("#resultsSwitcherPanel");
     if (!panel) return;
     panel.innerHTML = "";
-    var tasks = selectableTasks();
+    var tasks = state.tasks.filter(isTaskRestorable);
     if (tasks.length === 0) {
       var empty = el("div", "rp-switcher-empty", "No completed tasks yet.");
       panel.appendChild(empty);
@@ -880,17 +874,15 @@
       var badge = el("span", "task-card-type");
       badge.style.color = taskTypeColor(task.type);
       badge.title = task.type;
-      var typeIconEl = el("span", "task-card-type-icon");
       var iconFile = TASK_TYPE_ICON_FILES[task.type] || "squares-2x2";
-      applyIconMask(typeIconEl, iconFile, "/screenspace/icons/");
+      var typeIconEl = iconMaskSpan(iconFile, { className: "task-card-type-icon" });
       badge.appendChild(typeIconEl);
       card.appendChild(badge);
 
       // Fast scan badge
       if ((task.parameters || {}).scan_mode === "fast") {
         var fb = el("span", "task-fast-badge");
-        var bi = el("span", "task-fast-badge-icon");
-        applyIconMask(bi, "chevron-double-right", "/screenspace/icons/");
+        var bi = iconMaskSpan("chevron-double-right", { className: "task-fast-badge-icon" });
         fb.appendChild(bi);
         fb.appendChild(document.createTextNode("Fast"));
         card.appendChild(fb);
@@ -976,7 +968,8 @@
 
   // ---- Elapsed / ETA ticker ----
 
-  function taskIsActive(task) {
+  // Running or paused; utils isTaskActive also counts queued.
+  function taskIsRunning(task) {
     return task.status === "running" || task.status === "paused";
   }
 
@@ -1013,14 +1006,14 @@
     var fills = document.querySelectorAll("#taskList [data-task-progress]");
     for (var i = 0; i < fills.length; i++) {
       var t = findTask(fills[i].dataset.taskProgress);
-      if (t && taskIsActive(t)) {
+      if (t && taskIsRunning(t)) {
         fills[i].style.width = Math.round((t.progress || 0) * 100) + "%";
       }
     }
     var spans = document.querySelectorAll("#taskList [data-task-status]");
     for (var j = 0; j < spans.length; j++) {
       var st = findTask(spans[j].dataset.taskStatus);
-      if (st && taskIsActive(st)) spans[j].textContent = taskStatusText(st);
+      if (st && taskIsRunning(st)) spans[j].textContent = taskStatusText(st);
     }
   }
 
@@ -1057,13 +1050,13 @@
     var spans = document.querySelectorAll("#taskList [data-task-eta]");
     for (var i = 0; i < spans.length; i++) {
       var task = findTask(spans[i].dataset.taskEta);
-      if (task && taskIsActive(task)) spans[i].textContent = taskEtaLabel(task);
+      if (task && taskIsRunning(task)) spans[i].textContent = taskEtaLabel(task);
     }
   }
 
   function ensureEtaTicker() {
     // Start only while a task is active and the tab is visible; otherwise stop.
-    if (state.tasks.some(taskIsActive) && !document.hidden) _etaTicker.ensure();
+    if (state.tasks.some(taskIsRunning) && !document.hidden) _etaTicker.ensure();
     else _etaTicker.stop();
   }
 
@@ -1085,8 +1078,7 @@
     tasks.forEach(function (t) {
       seenNow[t.id] = t.status;
       var prev = _taskStatusSeen[t.id];
-      var terminal = t.status === "completed" || t.status === "failed" || t.status === "cancelled";
-      if (prev && prev !== t.status && terminal) {
+      if (prev && prev !== t.status && taskIsTerminal(t)) {
         delete state.taskResults[t.id];
       }
       var cached = state.taskResults[t.id];
@@ -1224,10 +1216,7 @@
   }
 
   function pollTasks() {
-    var hasActive = state.tasks.some(function (t) {
-      return isTaskActive(t);
-    });
-    if (!hasActive) {
+    if (!state.tasks.some(isTaskActive)) {
       stopPolling();
       return;
     }
@@ -1264,10 +1253,7 @@
       _etaTicker.stop();
       return;
     }
-    var hasActive = state.tasks.some(function (t) {
-      return isTaskActive(t);
-    });
-    if (hasActive) startSSE();
+    if (state.tasks.some(isTaskActive)) startSSE();
     ensureEtaTicker();
   });
 

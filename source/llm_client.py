@@ -611,10 +611,7 @@ def _fail(message: str, details: list[str] | None = None) -> str:
     multi-line install guidance, not toast material.
     """
     _thread_state.last_error = message
-    if details:
-        utils.warning_print(message, details=details)
-    else:
-        utils.warning_print(message)
+    utils.warning_print(message, details=details)
     return message
 
 
@@ -1186,8 +1183,8 @@ def download_model(
     if not stream_download(
         url,
         target,
-        sha256=resolved["sha256"] or "",
-        size=int(resolved["size"] or 0),
+        sha256=resolved["sha256"],
+        size=resolved["size"],
         on_progress=on_progress,
     ):
         return False

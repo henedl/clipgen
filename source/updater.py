@@ -314,11 +314,7 @@ def finish_check(*, force: bool = False) -> None:
             else:
                 _status["phase"] = "idle"
             return
-        if not is_newer(release["tag"], current):
-            _latest = None
-            _status.update(phase="idle", version=None, release_url=release["url"])
-            return
-        if skipped == release["tag"]:
+        if not is_newer(release["tag"], current) or skipped == release["tag"]:
             _latest = None
             _status.update(phase="idle", version=None, release_url=release["url"])
             return
@@ -349,17 +345,11 @@ def finish_check(*, force: bool = False) -> None:
             _status.update(phase="error", error="Release publishes no checksum")
             return
         _status["asset"] = asset["name"]
-        if same_file:
+        ready = already if same_file else existing
+        if ready:
             _status.update(
                 phase="ready",
-                path=already,
-                total=asset["size"],
-                completed=asset["size"],
-            )
-        elif existing is not None:
-            _status.update(
-                phase="ready",
-                path=str(existing),
+                path=str(ready),
                 total=asset["size"],
                 completed=asset["size"],
             )

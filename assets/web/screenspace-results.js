@@ -674,8 +674,7 @@
     if ((task.parameters || {}).scan_mode === "fast") {
       fastLabel.classList.remove("hidden");
       fastLabel.innerHTML = "";
-      var fIcon = el("span", "fast-scan-label-icon");
-      applyIconMask(fIcon, "chevron-double-right", "/screenspace/icons/");
+      var fIcon = iconMaskSpan("chevron-double-right", { className: "fast-scan-label-icon" });
       fastLabel.appendChild(fIcon);
       fastLabel.appendChild(document.createTextNode("Fast scan results"));
       var rerunBtn = el("button", "btn btn-small fast-scan-rerun-btn", "Re-Run Normal");

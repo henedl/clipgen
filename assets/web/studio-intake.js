@@ -21,7 +21,7 @@
   var state = STUDIO.state;
   var attachQueueScrubbers = STUDIO.attachQueueScrubbers,
     buildQueueCardThumb = STUDIO.buildQueueCardThumb,
-    buildXrefBadges = STUDIO.buildXrefBadges,
+    buildTrimBadge = STUDIO.buildTrimBadge,
     findIntakeInQueue = STUDIO.findIntakeInQueue,
     findOverlappingData = STUDIO.findOverlappingData,
     intakeAddItems = STUDIO.intakeAddItems,
@@ -347,7 +347,9 @@
       return categoryColor(c.category || "bookmark");
     },
     typeText: function (c) {
-      return (TR_INTAKE_CATEGORIES[c.category || "bookmark"] || TR_INTAKE_CATEGORIES.bookmark).label;
+      var key = c.category || "bookmark";
+      var cat = MARK_CATEGORIES[key] || MARK_CATEGORIES.bookmark;
+      return cat ? cat.label : key;
     },
     selfBadge: function (c) {
       return {
@@ -439,19 +441,7 @@
       // Badge for a trimmed counterpart; click jumps to the Composer Intake tab.
       if (cfg.trimBadgeKey) {
         var trimKey = cfg.trimBadgeKey(c);
-        if (trimKey) {
-          // The hub's iconHTML is not reachable here; inline the mask-icon span.
-          var trimBadge = el("button", "intake-trim-badge");
-          trimBadge.innerHTML = '<span class="cg-icon cg-icon--scissors"></span>';
-          trimBadge.type = "button";
-          trimBadge.title = "Trimmed in Composer. Click to view the trimmed version";
-          trimBadge.setAttribute("aria-label", "Show trimmed version in Composer Intake");
-          trimBadge.addEventListener("click", function (ev) {
-            ev.stopPropagation();
-            focusComposerIntakeItem(trimKey);
-          });
-          thumb.appendChild(trimBadge);
-        }
+        if (trimKey) thumb.appendChild(buildTrimBadge(trimKey));
       }
 
       var meta = el("div", "queue-card-meta");
@@ -728,16 +718,6 @@
 
   // ---- Transcript Intake ----
 
-  // Colors resolve to CSS tokens (see tokens.css `--cat-*`) so dark mode tracks the theme.
-  var TR_INTAKE_CATEGORIES = {
-    pain_point: { label: "Pain Point", token: "--cat-pain-point" },
-    delight:    { label: "Delight",    token: "--cat-delight" },
-    quote:      { label: "Quote",      token: "--cat-quote" },
-    insight:    { label: "Insight",    token: "--cat-insight" },
-    task:       { label: "Task Issue", token: "--cat-task" },
-    bookmark:   { label: "Bookmark",   token: "--cat-bookmark" },
-  };
-
   function _syncMarkCategoriesFromSettings(settings) {
     if (!settings) return;
     for (var i = 0; i < settings.length; i++) {
@@ -874,7 +854,7 @@
   function buildTrIntakeCategoryPills() {
     var container = qs("#trIntakeCategoryPills");
     if (!container) return;
-    var cats = Object.keys(TR_INTAKE_CATEGORIES);
+    var cats = Object.keys(MARK_CATEGORIES);
     var counts = {};
     state.trIntakeClusters.forEach(function (c) {
       var k = c.category || "bookmark";
@@ -882,7 +862,7 @@
     });
     container.innerHTML = "";
     cats.forEach(function (key) {
-      var cat = TR_INTAKE_CATEGORIES[key];
+      var cat = MARK_CATEGORIES[key];
       var chip = ClipgenPrimitives.createFilterChip({
         label: cat.label,
         active: state.trIntakeFilterCategory === key,
@@ -1480,7 +1460,7 @@
     host.appendChild(el(
       "div",
       "mn-skipped-head",
-      skipped.length + (skipped.length === 1 ? " note has" : " notes have") +
+      clipgenPluralUnit(skipped.length, "note has", "notes have") +
         " no timestamp — add one in MindNode to make them clippable"
     ));
     var list = el("div", "mn-skipped-list");

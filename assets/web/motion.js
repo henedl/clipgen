@@ -16,8 +16,8 @@
  *     size, so ONE definition reads right on both small pills and large cards (the
  *     same tilt/travel looks far more dramatic on a big object).
  *
- * Shared by Screenspace region pills and Studio queue/stash cards; loaded right
- * after utils.js on both pages. Extensible to any surface — load motion.js and call
+ * Every page loads it right after utils.js and hotkeys.js; Screenspace pills,
+ * Studio cards, and shared modals call it. Extensible to any surface — load motion.js and call
  * the same API. All functions ALWAYS resolve (never reject) so the caller's commit
  * logic runs on every path (no WAAPI, reduced motion, detached node, thrown animate).
  *

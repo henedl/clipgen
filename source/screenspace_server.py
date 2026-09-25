@@ -95,7 +95,6 @@ from server_utils import (
 )
 
 
-# Per-tool optional float overrides api_preview reads straight into params.
 def _preview_ref_rect(
     region_coords: dict[str, Any] | None, frame_w: int, frame_h: int
 ) -> dict[str, Any] | None:
@@ -694,15 +693,6 @@ def _calibration_interval(task_type: str, parameters: dict[str, Any]) -> float:
     return val if val > 0 else float(config.SCREENSPACE_DEFAULT_INTERVAL)
 
 
-def _calibratable_tool(tool: str) -> bool:
-    """A tool is calibratable when it exposes a per-frame scalar (or is multitool)."""
-    if tool == "timelapse" or tool not in _VALID_TASK_TYPES:
-        return False
-    if tool == "multitool":
-        return True
-    return bool(screenspace.TOOLS[tool].score_key)
-
-
 @screenspace_bp.route("/api/calibrate", methods=["POST"])
 @json_endpoint
 def api_calibrate() -> FlaskResponse:
@@ -716,7 +706,11 @@ def api_calibrate() -> FlaskResponse:
     data = require_json_body()
 
     tool = (data.get("tool") or "").strip()
-    if not _calibratable_tool(tool):
+    # Calibratable tools expose a per-frame score; multitool chains them.
+    calibratable = tool in _VALID_TASK_TYPES and (
+        tool == "multitool" or bool(screenspace.TOOLS[tool].score_key)
+    )
+    if not calibratable:
         return err(f"Tool '{tool}' is not calibratable")
 
     # Reuse task-creation validation by reshaping the body into a task request.
@@ -1925,7 +1919,7 @@ def _coerce_tool_spec(spec: dict[str, Any], tool_type: str, context: str = "") -
     elif tool_type == "color":
         _coerce_color_controls(spec, context=context)
     if tool_type == "template":
-        _coerce_template_controls(spec)
+        _coerce_template_controls(spec, context=context)
     elif tool_type == "shape":
         _coerce_shape_controls(spec, context=context)
 
@@ -2389,12 +2383,7 @@ def api_export_events() -> FlaskResponse:
     participant = request.args.get("participant")
     detector = request.args.get("detector")
 
-    if excluded_filter == "false":
-        include_excluded = False
-    elif excluded_filter == "true":
-        include_excluded = True
-    else:
-        include_excluded = True
+    include_excluded = excluded_filter != "false"
 
     with _manifest_lock:
         manifest_snapshot = copy.deepcopy(_manifest)
@@ -2534,8 +2523,6 @@ def _coerce_offset(step: dict[str, Any], *, context: str = "") -> None:
 
 def _coerce_template_controls(params: dict[str, Any], *, context: str = "") -> None:
     """Validate template-tool controls: template_scale."""
-    import config
-
     if "template_scale" in params and params["template_scale"] is not None:
         scale = _coerce_float(
             params["template_scale"], "template_scale", context=context
@@ -2560,7 +2547,10 @@ def _coerce_shape_controls(params: dict[str, Any], *, context: str = "") -> None
             val = _coerce_float(params[key], key, context=context)
             if val is None or val <= 0:
                 raise ValueError(f"{context}{key} must be a positive number")
-            params[key] = max(0.1, min(4.0, val))
+            params[key] = max(
+                config.SCREENSPACE_SHAPE_SCALE_LIMIT_MIN,
+                min(config.SCREENSPACE_SHAPE_SCALE_LIMIT_MAX, val),
+            )
         if (
             min_key in params
             and max_key in params
@@ -2574,7 +2564,7 @@ def _coerce_shape_controls(params: dict[str, Any], *, context: str = "") -> None
             steps = int(params[steps_key])
         except (TypeError, ValueError) as exc:
             raise ValueError(f"{context}{steps_key} must be an integer") from exc
-        params[steps_key] = max(1, min(12, steps))
+        params[steps_key] = max(1, min(config.SCREENSPACE_SHAPE_SCALE_STEPS_MAX, steps))
 
 
 def _coerce_ocr_controls(params: dict[str, Any], *, context: str = "") -> None:
@@ -2611,11 +2601,7 @@ def _coerce_ocr_controls(params: dict[str, Any], *, context: str = "") -> None:
 
 
 def _coerce_consecutive(params: dict[str, Any], *, context: str = "") -> None:
-    """Validate the optional require_consecutive control (Text/Numbers/Change/Flow).
-
-    Clamps to [1, 10]; drops the key when it resolves to 1 (the default) so the
-    manifest stays clean.
-    """
+    """Clamp require_consecutive to its limit; drop the default of 1."""
     raw = params.get("require_consecutive")
     if raw is None:
         params.pop("require_consecutive", None)
@@ -2624,7 +2610,7 @@ def _coerce_consecutive(params: dict[str, Any], *, context: str = "") -> None:
         count = int(raw)
     except (TypeError, ValueError) as exc:
         raise ValueError(f"{context}require_consecutive must be an integer") from exc
-    count = max(1, min(10, count))
+    count = max(1, min(config.SCREENSPACE_REQUIRE_CONSECUTIVE_MAX, count))
     if count == 1:
         params.pop("require_consecutive", None)
     else:
@@ -2640,11 +2626,7 @@ def _coerce_color_controls(params: dict[str, Any], *, context: str = "") -> None
     mode or when it resolves to 0 (the default).
     """
     mode = params.get("color_mode")
-    if mode not in ("average", "presence"):
-        params.pop("color_mode", None)
-        params.pop("min_coverage", None)
-        return
-    if mode == "average":
+    if mode != "presence":
         params.pop("color_mode", None)
         params.pop("min_coverage", None)
         return
@@ -2724,8 +2706,6 @@ def _init_screenspace_state(sheet_context: Any = None) -> None:
     ``server._swap_worksheet`` re-inits this blueprint on every sheet swap, so
     the stored reference is replaced rather than going stale.
     """
-    import screenspace
-
     global _manifest, _worker, _participant_source
 
     # Old worker callbacks resolve globals late and would pollute the new manifest; retire it first.
@@ -2754,8 +2734,6 @@ def _init_screenspace_state(sheet_context: Any = None) -> None:
 
 def _do_persist(*, drain_events: bool = True) -> None:
     """Persist manifest to disk — caller must hold _manifest_lock."""
-    import screenspace
-
     if _worker and drain_events:
         new_events = _worker.drain_new_events()
         if new_events:

@@ -1,7 +1,8 @@
-/* Shared Export quick-action wiring for Studio / Screenspace / Transcripts.
+/* Shared Export quick-action wiring for Studio, Screenspace, Transcripts,
+ * Composer, and Workflows.
  *
  * Endpoints /api/export and /api/export/status are registered on the combined
- * Flask app (server.py), so the same client logic drives all three surfaces.
+ * Flask app (server.py), so the same client logic drives all five pages.
  *
  * This is *not* a download: the server writes clipgen_export_<surface>.json and
  * .csv straight into the output directory (data_export.write_export_bundle),
@@ -9,7 +10,7 @@
  * never generated clips. The label and tooltips have to say all of that, since
  * the item also shows up verbatim in the command palette.
  *
- * Depends on globals from utils.js: apiGet, showToast, clipgenPluralUnit.
+ * Depends on globals from utils.js: apiGet, apiPost, showToast, clipgenPluralUnit.
  *
  * Public API on window.ClipgenExportActions:
  *   exportQuickAction()           — TopNav quick-action item with current enabled state

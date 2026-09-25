@@ -20,7 +20,7 @@
 (function () {
   "use strict";
 
-  var P = window.ClipgenPrimitives || {};
+  var P = window.ClipgenPrimitives;
 
   var cvState = {
     active: false,
@@ -1521,9 +1521,6 @@
   function deactivate() {
     cvState.active = false;
     closeDetailInline();
-    // The preview hangs off document.body and survives panel hiding; cancel the debounce too.
-    clearTimeout(_cvHoverDebounce);
-    _cvHoverDebounce = null;
     cvHideFramePreview();
     cvFlushOffsets();
   }

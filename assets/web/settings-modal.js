@@ -20,9 +20,6 @@
     "CLI",
   ];
 
-  // EXIT_MS must match --duration-veil (tokens.css) so veil and overlay finish together.
-  var EXIT_MS = 360;
-
   var _root = null;
   var _tabsEl = null;
   var _panelsEl = null;
@@ -48,10 +45,8 @@
   var _revealBtn = null;
   var _SAMPLE_TITLE_TEXT = "Sample description";
 
-  function _getApiRoot() {
-    // Settings and models live at the combined-app root, not under a page prefix.
-    return "/api";
-  }
+  // Settings and models live at the combined-app root, not a page prefix.
+  var API_ROOT = "/api";
 
   function _formatSize(mb) {
     if (mb >= 1024) return (mb / 1024).toFixed(1) + " GB";
@@ -93,7 +88,7 @@
   function _fetchModels() {
     if (_modelsCache) return Promise.resolve(_modelsCache);
     if (_modelsCachePromise) return _modelsCachePromise;
-    _modelsCachePromise = apiGet(_getApiRoot() + "/models")
+    _modelsCachePromise = apiGet(API_ROOT + "/models")
       .then(function (data) {
         // Cache only when the AI server answered; otherwise retry on the next open.
         if (data && data.ok && !(data.llm && data.llm.available === false)) {
@@ -149,14 +144,14 @@
       if (st.succeeded) _refreshLlmViews();
     }
 
-    apiPost(_getApiRoot() + "/models/llm/download", { model: model }).then(function (data) {
+    apiPost(API_ROOT + "/models/llm/download", { model: model }).then(function (data) {
       if (!data || !data.ok) {
         finish({ done: true, succeeded: false, error: (data && data.error) || "Download failed" });
         return;
       }
       var misses = 0;
       var poller = createPoller(function () {
-        return apiGet(_getApiRoot() + "/models/llm/download-status?model=" + encodeURIComponent(model))
+        return apiGet(API_ROOT + "/models/llm/download-status?model=" + encodeURIComponent(model))
           .then(function (st) {
             if (!st || !st.ok || !st.found) {
               if (++misses >= 20) {
@@ -242,7 +237,7 @@
         delBtn.type = "button";
         delBtn.addEventListener("click", function () {
           delBtn.disabled = true;
-          apiDelete(_getApiRoot() + "/models/redact").then(function (r) {
+          apiDelete(API_ROOT + "/models/redact").then(function (r) {
             if (!r || !r.ok) {
               delBtn.disabled = false;
               _setStatus((r && r.error) || "Remove failed");
@@ -290,7 +285,7 @@
         _watchRedactDownload(onProgress);
       }
       dlBtn.addEventListener("click", startWatching);
-      apiGet(_getApiRoot() + "/models/redact/download-status")
+      apiGet(API_ROOT + "/models/redact/download-status")
         .then(function (st) {
           if (st && st.ok && st.found && !st.done) startWatching();
         })
@@ -319,7 +314,7 @@
       if (st.succeeded) _refreshLlmViews();
     }
 
-    apiPost(_getApiRoot() + "/models/redact/download", {}).then(function (data) {
+    apiPost(API_ROOT + "/models/redact/download", {}).then(function (data) {
       if (!data || !data.ok) {
         finish({ done: true, succeeded: false, error: (data && data.error) || "Download failed" });
         return;
@@ -327,7 +322,7 @@
       if (data.installed) { finish({ done: true, succeeded: true }); return; }
       var misses = 0;
       var poller = createPoller(function () {
-        return apiGet(_getApiRoot() + "/models/redact/download-status")
+        return apiGet(API_ROOT + "/models/redact/download-status")
           .then(function (st) {
             if (!st || !st.ok || !st.found) {
               if (++misses >= 20) {
@@ -548,7 +543,7 @@
       }
       dlBtn.addEventListener("click", startWatching);
       // A download started before the modal was closed is still running.
-      apiGet(_getApiRoot() + "/models/llm/download-status?model=" + encodeURIComponent(model.name))
+      apiGet(API_ROOT + "/models/llm/download-status?model=" + encodeURIComponent(model.name))
         .then(function (st) {
           if (st && st.ok && st.found && !st.done) startWatching();
         })
@@ -578,7 +573,7 @@
         el("span", "settings-llm-model-icon settings-llm-model-icon--reveal")
       );
       showBtn.addEventListener("click", function () {
-        apiPost(_getApiRoot() + "/models/llm/reveal", { model: model.name })
+        apiPost(API_ROOT + "/models/llm/reveal", { model: model.name })
           .catch(function (e) {
             _setStatus((e && e.message) || "Could not open the folder");
           });
@@ -603,7 +598,7 @@
       delBtn.appendChild(document.createTextNode("Delete"));
       delBtn.addEventListener("click", function () {
         delBtn.disabled = true;
-        apiDelete(_getApiRoot() + "/models/llm/" + encodeURIComponent(model.name))
+        apiDelete(API_ROOT + "/models/llm/" + encodeURIComponent(model.name))
           .then(function () { _refreshLlmViews(); })
           .catch(function (e) {
             delBtn.disabled = false;
@@ -807,7 +802,7 @@
     _navRow = null;
     if (_panelsEl) _panelsEl.focus();
     // Set the active-modal root ourselves: this modal bypasses openBlockingModal (own Escape/focus).
-    if (typeof setActiveModalRoot === "function") setActiveModalRoot(_root);
+    setActiveModalRoot(_root);
 
     // Next frame: build in the backdrop blur and slide/scale the panel.
     requestAnimationFrame(function () {
@@ -819,11 +814,11 @@
   function _close() {
     if (!_root || _root.classList.contains("hidden")) return;
     // Release the root now; showHints() keeps hints suppressed through the fade-out.
-    if (typeof setActiveModalRoot === "function") setActiveModalRoot(null);
+    setActiveModalRoot(null);
     // A hotkey recording capture-listener must never outlive the modal.
     _hkStopRecording();
     // The color popover lives on document.body and would outlive the modal.
-    if (window.ClipgenColorPicker) window.ClipgenColorPicker.close();
+    window.ClipgenColorPicker.close();
     // Drop the keyboard cursor so a re-open starts in mouse mode again.
     _navVisible = false;
     _selectNavRow(null, false);
@@ -836,7 +831,7 @@
       // Keep the topnav covered until the veil has faded.
       document.body.classList.remove("modal-open");
       _closeTimer = null;
-    }, EXIT_MS);
+    }, _cgVeilMs(_root));
   }
 
   function _load() {
@@ -844,10 +839,10 @@
     _panelsEl.textContent = "";
     _panelsEl.appendChild(el("span", "cg-shimmer", "Loading settings\u2026"));
     // Refetch the card list on every open so external uploads show up.
-    if (window.ClipgenColorPicker) window.ClipgenColorPicker.close();
+    window.ClipgenColorPicker.close();
     _cardsCache = null;
     _cardsCachePromise = null;
-    apiGet(_getApiRoot() + "/settings")
+    apiGet(API_ROOT + "/settings")
       .then(function (data) {
         if (!data.ok) {
           _panelsEl.textContent = "Failed to load settings.";
@@ -876,7 +871,7 @@
   }
 
   function _reveal() {
-    apiPost(_getApiRoot() + "/settings/reveal", {})
+    apiPost(API_ROOT + "/settings/reveal", {})
       .catch(function (err) {
         _setStatus((err && err.message) || "Could not open the folder");
       });
@@ -921,7 +916,7 @@
     }
     _setStatus("Saving\u2026", true);
 
-    apiPut(_getApiRoot() + "/settings", { settings: payload })
+    apiPut(API_ROOT + "/settings", { settings: payload })
       .then(function (data) {
         if (!data || !data.ok) {
           _setStatus(data && data.error ? "Save failed: " + data.error : "Save failed");
@@ -946,7 +941,7 @@
   }
 
   function _resetTab(tabName) {
-    apiPut(_getApiRoot() + "/settings", { reset: "tab:" + tabName })
+    apiPut(API_ROOT + "/settings", { reset: "tab:" + tabName })
       .then(function (data) {
         if (!data.ok) {
           _setStatus("Reset failed");
@@ -962,7 +957,7 @@
   }
 
   function _resetAll() {
-    apiPut(_getApiRoot() + "/settings", { reset: "all" })
+    apiPut(API_ROOT + "/settings", { reset: "all" })
       .then(function (data) {
         if (!data.ok) {
           _setStatus("Reset failed");
@@ -978,7 +973,7 @@
   }
 
   function _reloadAfterReset(scope) {
-    apiGet(_getApiRoot() + "/settings")
+    apiGet(API_ROOT + "/settings")
       .then(function (data) {
         if (!data.ok) return;
         _settings = data.settings;
@@ -1273,12 +1268,6 @@
     container.innerHTML = "";
     var setting = _findSetting(settingName);
     if (!setting) return;
-    if (!window.ClipgenHotkeys) {
-      container.appendChild(
-        el("div", "settings-label-desc", "Hotkey catalog unavailable on this page."),
-      );
-      return;
-    }
     if (!setting.value || typeof setting.value !== "object") setting.value = {};
     // Keep the live registry in sync with the editor (also after resets).
     window.ClipgenHotkeys.applyOverrides(setting.value);
@@ -1473,7 +1462,7 @@
     }
     if (_cardsCache) return Promise.resolve(_cardsCache);
     if (_cardsCachePromise) return _cardsCachePromise;
-    _cardsCachePromise = apiGet(_getApiRoot() + "/titlecards")
+    _cardsCachePromise = apiGet(API_ROOT + "/titlecards")
       .then(function (data) {
         _cardsCachePromise = null;
         if (data && data.ok) _cardsCache = data;
@@ -1579,7 +1568,6 @@
   }
 
   function _openCardColorPicker(box, preview, kind) {
-    if (!window.ClipgenColorPicker) return;
     var colorSettingName = _cardColorSettingName(kind);
     window.ClipgenColorPicker.open({
       anchor: box,
@@ -1649,7 +1637,7 @@
     var form = new FormData();
     form.append("file", file);
     // Manual fetch, not apiPost: FormData upload; keep data.error from non-2xx and r.ok.
-    fetch(_getApiRoot() + "/titlecards/upload", { method: "POST", body: form })
+    fetch(API_ROOT + "/titlecards/upload", { method: "POST", body: form })
       .then(function (r) {
         return r.json().then(
           function (j) { return { ok: r.ok, body: j }; },
@@ -1679,20 +1667,10 @@
 
   function _deleteCard(name) {
     _setStatus("Deleting…", true);
-    // Manual fetch, not apiDelete: keep data.error from non-2xx responses and r.ok.
-    fetch(_getApiRoot() + "/titlecards/image/" + encodeURIComponent(name), {
-      method: "DELETE",
-    })
-      .then(function (r) {
-        return r.json().then(
-          function (j) { return { ok: r.ok, body: j }; },
-          function () { return { ok: r.ok, body: null }; }
-        );
-      })
-      .then(function (res) {
-        var data = res.body;
-        if (!res.ok || !data || !data.ok) {
-          _setStatus(data && data.error ? data.error : "Delete failed");
+    apiDelete(API_ROOT + "/titlecards/image/" + encodeURIComponent(name))
+      .then(function (data) {
+        if (!data || !data.ok) {
+          _setStatus((data && data.error) || "Delete failed");
           return;
         }
         _setStatus("Deleted");
@@ -1708,8 +1686,8 @@
         }
         _refreshAllCardPickers();
       })
-      .catch(function () {
-        _setStatus("Delete failed");
+      .catch(function (err) {
+        _setStatus(err.serverMessage || "Delete failed");
       });
   }
 
@@ -1950,7 +1928,7 @@
 
   function _navActive() {
     return _isModalOpen() && !_hkRecordCleanup &&
-      !(window.ClipgenColorPicker && window.ClipgenColorPicker.isOpen && window.ClipgenColorPicker.isOpen());
+      !window.ClipgenColorPicker.isOpen();
   }
 
   document.addEventListener("keydown", function (e) {
@@ -1999,7 +1977,7 @@
   document.addEventListener("keydown", function (e) {
     if (e.key !== "Escape") return;
     if (!_root || _root.classList.contains("hidden")) return;
-    if (window.ClipgenColorPicker && window.ClipgenColorPicker.isOpen && window.ClipgenColorPicker.isOpen()) return;
+    if (window.ClipgenColorPicker.isOpen()) return;
     e.preventDefault();
     _close();
   });
@@ -2021,27 +1999,25 @@
   }
 
   // Modal-only tab hotkeys: digits 1–9 jump, Z/X cycle like Screenspace's tool tabs.
-  if (window.ClipgenHotkeys) {
-    window.ClipgenHotkeys.register([
-      {
-        id: "settings.tab",
-        inModal: true,
-        when: _isModalOpen,
-        handler: function (e, combo) {
-          var n = parseInt(combo, 10);
-          if (!_tabsEl || isNaN(n)) return;
-          var btns = _tabsEl.querySelectorAll(".settings-tab");
-          var btn = btns[n - 1];
-          if (btn) btn.click();
-        }
-      },
-      { id: "settings.cyclePrev", inModal: true, when: _isModalOpen, handler: function () { _cycleTab(-1); } },
-      { id: "settings.cycleNext", inModal: true, when: _isModalOpen, handler: function () { _cycleTab(1); } },
-      // Reset hotkeys reuse the buttons' unconfirmed handlers; Shift+R resets everything.
-      { id: "settings.resetTab", inModal: true, when: _isModalOpen, handler: function () { _resetTab(_activeTab); } },
-      { id: "settings.resetAll", inModal: true, when: _isModalOpen, handler: function () { _resetAll(); } }
-    ]);
-  }
+  window.ClipgenHotkeys.register([
+    {
+      id: "settings.tab",
+      inModal: true,
+      when: _isModalOpen,
+      handler: function (e, combo) {
+        var n = parseInt(combo, 10);
+        if (!_tabsEl || isNaN(n)) return;
+        var btns = _tabsEl.querySelectorAll(".settings-tab");
+        var btn = btns[n - 1];
+        if (btn) btn.click();
+      }
+    },
+    { id: "settings.cyclePrev", inModal: true, when: _isModalOpen, handler: function () { _cycleTab(-1); } },
+    { id: "settings.cycleNext", inModal: true, when: _isModalOpen, handler: function () { _cycleTab(1); } },
+    // Reset hotkeys reuse the buttons' unconfirmed handlers; Shift+R resets everything.
+    { id: "settings.resetTab", inModal: true, when: _isModalOpen, handler: function () { _resetTab(_activeTab); } },
+    { id: "settings.resetAll", inModal: true, when: _isModalOpen, handler: function () { _resetAll(); } }
+  ]);
 
   window.openSettingsModal = function (options) {
     _opts = options || {};

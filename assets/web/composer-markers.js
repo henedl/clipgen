@@ -58,7 +58,7 @@
     state.markers[source] = markers;
     if (CO.updateTimelineHeight) CO.updateTimelineHeight();
     if (CO.renderTimeline) CO.renderTimeline();
-    if (CO.renderSidebar) CO.renderSidebar();
+    CO.renderSidebar();
   }
 
   // Sheet: one marker per timestamp pair, baseline-converted like Studio/Convergence.

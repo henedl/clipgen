@@ -165,7 +165,7 @@ def _schedule_model_unload(model: str) -> None:
     Replaces any pending unload timer for the same model so the delay always
     measures from the most recent Stop.
     """
-    delay = float(getattr(config, "LLM_UNLOAD_DELAY_SECONDS", 15.0))
+    delay = float(config.LLM_UNLOAD_DELAY_SECONDS)
     if delay <= 0:
         llm_client.unload_model(model)
         return
@@ -456,7 +456,7 @@ def _invalidate_dependents(entry: dict[str, Any], agent: thinking_agents.Agent) 
 
 def _transcribe_prewarm_setting() -> str:
     """Return a validated TRANSCRIBE_PREWARM value for API clients."""
-    v = getattr(config, "TRANSCRIBE_PREWARM", "queue_open")
+    v = config.TRANSCRIBE_PREWARM
     if v in ("off", "queue_open", "page_load"):
         return v
     return "queue_open"
@@ -2281,9 +2281,7 @@ def api_marks_delete(mark_id: str) -> FlaskResponse:
     """Remove a mark by ID, or bulk-delete with JSON body {ids: [...]}."""
     # Bulk delete: DELETE /api/marks with {ids: [...]} — mark_id may be a placeholder
     data = request.get_json(silent=True)
-    ids_to_remove: list[str] = []
-
-    ids_to_remove = data["ids"] if data and data.get("ids") else [mark_id]
+    ids_to_remove: list[str] = data["ids"] if data and data.get("ids") else [mark_id]
 
     with _manifest_lock:
         marks = _manifest.get("marks", [])
@@ -2843,7 +2841,7 @@ def _merge_completed_results_locked() -> list[str]:
     if not _worker:
         return []
     merged_pids: list[str] = []
-    speakers_changed = False
+    entries_changed = False
     # include_partials=False: the merge needs only status/result, and this runs
     # under _manifest_lock.
     for task in _worker.get_all_tasks(include_partials=False):
@@ -2859,14 +2857,14 @@ def _merge_completed_results_locked() -> list[str]:
                 live = src.get(pid)
                 if live and live.get("segments") and not _speakers_off(live):
                     _apply_speaker_result(live, task["result"])
-                    speakers_changed = True
+                    entries_changed = True
                 _merged_task_ids.add(task["id"])
                 continue
             if task.get("kind") == "redact":
                 live = src.get(pid)
                 if live and live.get("segments") and not _redact_off(live):
                     _apply_redact_result(live, task["result"])
-                    speakers_changed = True
+                    entries_changed = True
                 _merged_task_ids.add(task["id"])
                 continue
             existing = src.get(pid, {})
@@ -2892,7 +2890,7 @@ def _merge_completed_results_locked() -> list[str]:
     # Queue completion side effects whichever caller merged (a debounced
     # _do_persist can win).
     _pending_chain_pids.extend(merged_pids)
-    if merged_pids or speakers_changed:
+    if merged_pids or entries_changed:
         # Segments were just replaced; invalidate the corrected-segments cache.
         _bump_corrections_version()
     return merged_pids
@@ -3025,7 +3023,7 @@ def _on_task_complete() -> None:
 
 def _agent_enabled(agent: thinking_agents.Agent) -> bool:
     """Return True if *agent* is enabled in the current config."""
-    return bool(getattr(config, agent["enabled_config_key"], False))
+    return bool(getattr(config, agent["enabled_config_key"]))
 
 
 def _agent_dependencies_met(

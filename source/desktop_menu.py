@@ -48,7 +48,7 @@ _SURFACES: tuple[tuple[str, str], ...] = (
     ("Overview", "/overview/"),
 )
 
-_HELP_URL = "https://github.com/henedl/clipgen#readme"
+_HELP_URL = config.REPO_URL + "#readme"
 
 # Each snippet guards its global: the boot page has none, and a click must no-op.
 _JS_OPEN_SETTINGS = "if (window.openSettingsModal) window.openSettingsModal({});"

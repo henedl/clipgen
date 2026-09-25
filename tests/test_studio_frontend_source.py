@@ -367,9 +367,9 @@ def test_queue_cards_do_not_bind_per_card_listeners() -> None:
     start = src.index("function buildQueueCard(")
     end = src.index("function renderQueue(", start)
     body = src[start:end]
-    # The only per-card listener left is the rare Composer-trim badge.
-    assert body.count("addEventListener") == 1
-    assert "intake-trim-badge" in body
+    # The rare Composer-trim badge binds its own listener inside buildTrimBadge.
+    assert "addEventListener" not in body
+    assert "buildTrimBadge(" in body
     assert "data-queue-idx" in body
     assert "function bindQueueList(cfg)" in src
     impl = src[

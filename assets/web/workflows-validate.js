@@ -26,14 +26,14 @@
   }
 
   function inputWired(nodeId, portName) {
-    return (state.edges || []).some(function (e) {
+    return state.edges.some(function (e) {
       return e.to === nodeId && e.toPort === portName;
     });
   }
 
   // The node type wired into `nodeId`'s `portName` input, or null.
   function upstreamType(nodeId, portName) {
-    var edges = state.edges || [];
+    var edges = state.edges;
     for (var i = 0; i < edges.length; i++) {
       var e = edges[i];
       if (e.to === nodeId && e.toPort === portName) {
@@ -81,7 +81,7 @@
       }
     }
     // error — launch context can't satisfy `requires` (sheet/videoDir).
-    if (WF.nodeContextMet && !WF.nodeContextMet(type)) {
+    if (!WF.nodeContextMet(type)) {
       errors.push("Requires " + ((type.requires || []).join(", ") || "context"));
     }
     // error — a required input port is unwired.
@@ -97,7 +97,7 @@
     // error — the Detect node's active detector params live on the hidden ss_<detector> spec.
     if (node.type === "detect") {
       var det = (node.params || {}).detector;
-      var specNode = det && state.catalogById && state.catalogById["ss_" + det];
+      var specNode = det && state.catalogById["ss_" + det];
       ((specNode && specNode.params) || []).forEach(function (spec) {
         if (spec.required && paramEmpty((node.params || {})[spec.name])) {
           errors.push("Set “" + (spec.label || spec.name) + "”");
@@ -157,10 +157,10 @@
         if (paramEmpty(fpParams.value2)) errors.push("Set “Value 2”");
       }
     }
-    var connected = (state.edges || []).some(function (e) {
+    var connected = state.edges.some(function (e) {
       return e.from === node.id || e.to === node.id;
     });
-    var willShowOrphan = !connected && (state.nodes || []).length > 1;
+    var willShowOrphan = !connected && state.nodes.length > 1;
     // warning — a merge with fewer than two wired inputs is a no-op passthrough.
     if (node.type.indexOf("merge_") === 0) {
       var wired = ["in1", "in2", "in3"].filter(function (p) {
@@ -189,7 +189,7 @@
 
   // Kahn's algorithm, ported from workflows.topo_order; returns the ids it could not place.
   function cycleNodeIds() {
-    var nodes = state.nodes || [];
+    var nodes = state.nodes;
     var ids = {};
     nodes.forEach(function (n) {
       ids[n.id] = true;
@@ -200,7 +200,7 @@
       indeg[n.id] = 0;
       adj[n.id] = [];
     });
-    (state.edges || []).forEach(function (e) {
+    state.edges.forEach(function (e) {
       if (ids[e.from] && ids[e.to]) {
         adj[e.from].push(e.to);
         indeg[e.to] += 1;
@@ -232,7 +232,7 @@
 
   // Nodes a Run (or "Run to here") would execute; mirrors the runner's _should_skip minus gates.
   function computeWouldRun(targetNodeId) {
-    var nodes = (state.nodes || []).filter(function (n) {
+    var nodes = state.nodes.filter(function (n) {
       return n.type !== "note";
     });
     var ids = {};
@@ -243,7 +243,7 @@
     nodes.forEach(function (n) {
       if (n.disabled) skip[n.id] = true;
     });
-    var edges = state.edges || [];
+    var edges = state.edges;
     for (var iter = 0; iter < nodes.length; iter++) {
       var changed = false;
       for (var i = 0; i < nodes.length; i++) {
@@ -315,7 +315,7 @@
           : plan.count + " of " + plan.total + " steps";
       // Count of video-duration-bound steps; a cost hint, not an ETA.
       var heavy = 0;
-      (state.nodes || []).forEach(function (n) {
+      state.nodes.forEach(function (n) {
         if (plan.ids[n.id] && isHeavyNodeType(n.type)) heavy += 1;
       });
       if (heavy) text += " · " + heavy + " heavy";
@@ -372,7 +372,7 @@
         label: cycLabels.join(", "),
       });
     }
-    (state.nodes || []).forEach(function (node) {
+    state.nodes.forEach(function (node) {
       var issues = nodeIssues(node);
       var label = nodeLabel(node);
       issues.errors.forEach(function (m) {

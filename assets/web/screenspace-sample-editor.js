@@ -201,19 +201,13 @@
       undoBtn.type = "button";
       undoBtn.title = "Undo";
       undoBtn.setAttribute("aria-label", "Undo");
-      undoBtn.appendChild(iconMaskSpan("arrow-uturn-left", {
-        className: "ss-sample-modal__hist-icon",
-        basePath: "/screenspace/icons/",
-      }));
+      undoBtn.appendChild(iconMaskSpan("arrow-uturn-left", { className: "ss-sample-modal__hist-icon" }));
       undoBtn.addEventListener("click", undo);
       redoBtn = el("button", "btn btn-small ss-sample-modal__hist");
       redoBtn.type = "button";
       redoBtn.title = "Redo";
       redoBtn.setAttribute("aria-label", "Redo");
-      redoBtn.appendChild(iconMaskSpan("arrow-uturn-right", {
-        className: "ss-sample-modal__hist-icon",
-        basePath: "/screenspace/icons/",
-      }));
+      redoBtn.appendChild(iconMaskSpan("arrow-uturn-right", { className: "ss-sample-modal__hist-icon" }));
       redoBtn.addEventListener("click", redo);
       syncHistButtons();
       controls.appendChild(undoBtn);

@@ -1610,8 +1610,6 @@ BUILTIN_STASHES: list[dict[str, Any]] = [
 # Source descriptors: embedded in every domain value; keeps the adapters pure
 # ---------------------------------------------------------------------------
 
-_DEFAULT_EVENT_CLUSTER_GAP = 5.0  # seconds; matches the CLI --cluster-gap default
-
 
 def _study_from_filename(filename: str) -> str:
     """Derive the study name from a patterned source basename ('' when absent)."""
@@ -1760,7 +1758,7 @@ def _adapt_events_to_cliprecords(value: dict[str, Any]) -> dict[str, Any]:
         description="event",
         category="workflow",
         study=str(source.get("study", "") or ""),
-        cluster_gap=_DEFAULT_EVENT_CLUSTER_GAP,
+        cluster_gap=config.EVENT_CLUSTER_GAP_SECONDS,
     )
     return {"records": records, "study": str(source.get("study", "") or "")}
 

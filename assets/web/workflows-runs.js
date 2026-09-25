@@ -28,7 +28,7 @@
 
   // "All participants" or a subset of ≥2 ids launches a batch; else one run.
   function blueprintWantsBatch() {
-    var nodes = state.nodes || [];
+    var nodes = state.nodes;
     for (var i = 0; i < nodes.length; i++) {
       var n = nodes[i];
       if (n.type !== "video_source" || !n.params) continue;
@@ -181,7 +181,7 @@
     }
     setRunningUI(true);
     // Flush pending canvas edits so the server runs the latest blueprint.
-    Promise.resolve(WF.flushSave ? WF.flushSave() : null)
+    Promise.resolve(WF.flushSave())
       .then(function () {
         var body = { blueprintId: state.activeBlueprintId };
         if (targetNodeId) body.targetNodeId = targetNodeId;
@@ -226,7 +226,7 @@
 
   // Explicit subset from the first Video Source, or null for "all" (field omitted).
   function batchParticipants() {
-    var nodes = state.nodes || [];
+    var nodes = state.nodes;
     for (var i = 0; i < nodes.length; i++) {
       var n = nodes[i];
       if (n.type !== "video_source" || !n.params) continue;
@@ -245,7 +245,7 @@
       return;
     }
     setRunningUI(true);
-    Promise.resolve(WF.flushSave ? WF.flushSave() : null)
+    Promise.resolve(WF.flushSave())
       .then(function () {
         var body = { blueprintId: state.activeBlueprintId };
         var subset = batchParticipants();
@@ -516,7 +516,7 @@
 
   // Rename, else catalog label, else the id; renames disambiguate duplicate node types.
   function nodeLabel(nodeId) {
-    var nodes = state.nodes || [];
+    var nodes = state.nodes;
     for (var i = 0; i < nodes.length; i++) {
       if (nodes[i].id === nodeId) {
         if (nodes[i].name) return nodes[i].name;
@@ -977,7 +977,7 @@
       row.addEventListener("click", function () {
         state.pendingFocusRunId = run.id;
         setRunScope("blueprint");
-        if (WF.openBlueprint) WF.openBlueprint(bp);
+        WF.openBlueprint(bp);
       });
     } else {
       row.title = "This run's blueprint no longer exists";

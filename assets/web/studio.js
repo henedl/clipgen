@@ -1176,7 +1176,7 @@
         var sepTd = el(
           "td",
           "",
-          emptyCount === 1 ? "1 empty row" : emptyCount + " empty rows"
+          clipgenPluralUnit(emptyCount, "empty row", "empty rows")
         );
         sepTd.setAttribute("colspan", String(totalCols));
         sepTr.appendChild(sepTd);
@@ -1246,9 +1246,7 @@
       return false;
     }
     // Drop stray native focus so only one focus indicator shows.
-    if (window.ClipgenHotkeys && window.ClipgenHotkeys.blurStrayFocus) {
-      window.ClipgenHotkeys.blurStrayFocus();
-    }
+    window.ClipgenHotkeys.blurStrayFocus();
     _kbRegion = region;
     _kbCursor = { surface: region, idx: 0 };
     kbPaintCursor();
@@ -1741,11 +1739,6 @@
     return state.reelGenerating;
   }
 
-  // "3 clip" -> "3 clips" ("GIF" -> "GIFs"). Presentation copy for tooltips.
-  function plural(n, word) {
-    return n + " " + word + (n === 1 ? "" : "s");
-  }
-
   // Singular noun for the currently selected artifact output format.
   function artifactNoun() {
     var sel = qs("#artifactFormat");
@@ -1762,6 +1755,7 @@
     var reelLocked = isReelQueueLocked();
     var genBtn = qs("#generateBtn");
     if (genBtn) {
+      var noun = artifactNoun();
       genBtn.disabled = artLocked || n === 0;
       genBtn.setAttribute(
         "data-tooltip",
@@ -1769,7 +1763,7 @@
           ? "Generating…"
           : n === 0
             ? "Add cells to the work area first"
-            : "Generate " + plural(n, artifactNoun()),
+            : "Generate " + clipgenPluralUnit(n, noun, noun + "s"),
       );
     }
     var clearBtn = qs("#clearArtifactsBtn");
@@ -1783,7 +1777,7 @@
           ? "Finish generating first"
           : n === 0
             ? "Add cells to the work area first"
-            : "Stash " + plural(n, "artifact") + " to reuse later",
+            : "Stash " + clipgenPluralUnit(n, "artifact", "artifacts") + " to reuse later",
       );
     }
     var addToReelBtn = qs("#addToReelBtn");
@@ -1795,7 +1789,7 @@
           ? "Finish generating first"
           : n === 0
             ? "Add cells to the work area first"
-            : "Add " + plural(n, "clip") + " to the reel",
+            : "Add " + clipgenPluralUnit(n, "clip", "clips") + " to the reel",
       );
     }
   }
@@ -1812,7 +1806,7 @@
           ? "Building…"
           : n === 0
             ? "Add clips to the reel first"
-            : "Build a reel from " + plural(n, "clip"),
+            : "Build a reel from " + clipgenPluralUnit(n, "clip", "clips"),
       );
     }
     var clearBtn = qs("#clearReelBtn");
@@ -2525,6 +2519,20 @@
     return null;
   }
 
+  // Composer-trim badge; click jumps to the trimmed Intake card.
+  function buildTrimBadge(trimKey) {
+    var badge = el("button", "intake-trim-badge");
+    badge.innerHTML = iconHTML("scissors");
+    badge.type = "button";
+    badge.title = "Trimmed in Composer. Click to view the trimmed version";
+    badge.setAttribute("aria-label", "Show trimmed version in Composer Intake");
+    badge.addEventListener("click", function (ev) {
+      ev.stopPropagation();
+      focusComposerIntakeItem(trimKey);
+    });
+    return badge;
+  }
+
   function buildQueueCard(item, idx, cfg, ctx) {
     var isIntake = isIntakeSource(item.source);
     var segTotal = item.segTotal || 1;
@@ -2553,20 +2561,8 @@
     });
     if (isIntake) thumb.appendChild(buildSourceBadge(item.source));
 
-    // Trim badge: the timestamp has a Composer trim; click jumps to its Intake card.
     var trimKey = queueItemTrimKey(item);
-    if (trimKey) {
-      var trimBadge = el("button", "intake-trim-badge");
-      trimBadge.innerHTML = iconHTML("scissors");
-      trimBadge.type = "button";
-      trimBadge.title = "Trimmed in Composer. Click to view the trimmed version";
-      trimBadge.setAttribute("aria-label", "Show trimmed version in Composer Intake");
-      trimBadge.addEventListener("click", function (ev) {
-        ev.stopPropagation();
-        focusComposerIntakeItem(trimKey);
-      });
-      thumb.appendChild(trimBadge);
-    }
+    if (trimKey) thumb.appendChild(buildTrimBadge(trimKey));
 
     var meta = el("div", "queue-card-meta");
     var refText;
@@ -2714,8 +2710,7 @@
         renderQueue(cfg);
         if (removed.row) updateSingleCellClass(removed.participant, removed.row);
       };
-      if (window.ClipgenMotion) ClipgenMotion.animateOut(card, "delete").then(commit);
-      else commit();
+      ClipgenMotion.animateOut(card, "delete").then(commit);
     });
 
     list.addEventListener("mouseover", function (ev) {
@@ -2756,7 +2751,7 @@
         if (cleared[u].row) updateSingleCellClass(cleared[u].participant, cleared[u].row);
       }
     };
-    if (cards.length && window.ClipgenMotion) ClipgenMotion.animateOutAll(cards, "delete").then(commit);
+    if (cards.length) ClipgenMotion.animateOutAll(cards, "delete").then(commit);
     else commit();
   }
 
@@ -2774,7 +2769,7 @@
         if (cleared[u].row) updateSingleCellClass(cleared[u].participant, cleared[u].row);
       }
     };
-    if (cards.length && window.ClipgenMotion) ClipgenMotion.animateOutAll(cards, "delete").then(commit);
+    if (cards.length) ClipgenMotion.animateOutAll(cards, "delete").then(commit);
     else commit();
   }
 
@@ -3010,7 +3005,7 @@
     if (thumb) {
       var badge = thumb.appendChild(createResultBadge(success));
       // Only a live generation pops; restored results just appear.
-      if (overlay && window.ClipgenMotion) ClipgenMotion.animateIn(badge, "pop");
+      if (overlay) ClipgenMotion.animateIn(badge, "pop");
     }
     var p = card.getAttribute("data-participant");
     var r = card.getAttribute("data-row");
@@ -3363,7 +3358,7 @@
     container.appendChild(frag);
 
     var n = items.length;
-    countEl.textContent = n + " item" + (n !== 1 ? "s" : "");
+    countEl.textContent = clipgenPluralUnit(n, "item", "items");
   }
 
   // ---- Settings (shared modal lives in settings-modal.js) ----
@@ -3637,7 +3632,6 @@
 
   // Command palette additions beyond the auto-ingested quick actions.
   function initCommandPalette() {
-    if (!window.ClipgenCommandPalette) return;
     window.ClipgenCommandPalette.setParticipants(function () {
       return (state.sheetData && state.sheetData.participants) || [];
     });
@@ -3764,7 +3758,6 @@
   STUDIO.iconHTML = iconHTML;
   STUDIO.isAnyStudioJobRunning = isAnyStudioJobRunning;
   STUDIO.pathBasename = pathBasename;
-  STUDIO.setButtonProgress = setButtonProgress;
   STUDIO.setReelGenerating = setReelGenerating;
   STUDIO.showBuildResult = showBuildResult;
   STUDIO.showBuildStatus = showBuildStatus;
@@ -3774,7 +3767,7 @@
   STUDIO.hasSeverityData = hasSeverityData;
   STUDIO.renderGrid = renderGrid;
   STUDIO.buildQueueCardThumb = buildQueueCardThumb;
-  STUDIO.buildXrefBadges = buildXrefBadges;
+  STUDIO.buildTrimBadge = buildTrimBadge;
   STUDIO.findIntakeInQueue = findIntakeInQueue;
   STUDIO.findOverlappingData = findOverlappingData;
   STUDIO.intakeAddItems = intakeAddItems;

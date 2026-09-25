@@ -19,7 +19,7 @@
   // ---- Data -----------------------------------------------------------------
 
   function findStash(id) {
-    var arr = state.stashes || [];
+    var arr = state.stashes;
     for (var i = 0; i < arr.length; i++) {
       if (arr[i].id === id) return arr[i];
     }
@@ -40,7 +40,7 @@
     var host = qs("#wfEmptyRecipes");
     if (!host) return;
     host.innerHTML = "";
-    var builtins = (state.stashes || []).filter(function (s) {
+    var builtins = state.stashes.filter(function (s) {
       return s.builtin;
     });
     if (!builtins.length) return;
@@ -65,7 +65,7 @@
     if (!list) return;
     list.removeAttribute("aria-busy"); // boot skeletons are about to go
     list.innerHTML = "";
-    var stashes = state.stashes || [];
+    var stashes = state.stashes;
     if (!stashes.length) {
       list.appendChild(
         el("div", "wf-stash-empty", "No stashes yet. Select nodes, then Stash them.")
@@ -158,14 +158,14 @@
   // ---- Save / instantiate ---------------------------------------------------
 
   function saveSelectionAsStash() {
-    var sel = state.selection || [];
+    var sel = state.selection;
     if (!sel.length) return;
     var selSet = {};
     sel.forEach(function (id) {
       selSet[id] = true;
     });
 
-    var nodes = (state.nodes || [])
+    var nodes = state.nodes
       .filter(function (n) {
         return selSet[n.id];
       })
@@ -176,7 +176,7 @@
 
     // Induced edges only — both endpoints selected, so a stash never carries a
     // dangling half-edge.
-    var edges = (state.edges || [])
+    var edges = state.edges
       .filter(function (e) {
         return selSet[e.from] && selSet[e.to];
       })
@@ -195,7 +195,7 @@
             if (!res || !res.stash) return;
             // Insert after the leading built-ins so user stashes stay grouped
             // below.
-            var arr = state.stashes || (state.stashes = []);
+            var arr = state.stashes;
             var idx = 0;
             while (idx < arr.length && arr[idx].builtin) idx++;
             arr.splice(idx, 0, res.stash);
@@ -309,7 +309,7 @@
   function deleteStash(id) {
     return apiDelete("api/stashes/" + encodeURIComponent(id))
       .then(function () {
-        state.stashes = (state.stashes || []).filter(function (s) {
+        state.stashes = state.stashes.filter(function (s) {
           return s.id !== id;
         });
         renderStashPalette();

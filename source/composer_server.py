@@ -44,8 +44,10 @@ Mutations hold ``_manifest_lock`` and persist via :func:`_persist_locked`.
 from __future__ import annotations
 
 import copy
+import itertools
 import math
 import os
+import sys
 import threading
 import uuid
 from datetime import UTC, datetime
@@ -74,8 +76,6 @@ from server_utils import (
     parse_number_arg,
     remove_by_id,
 )
-import itertools
-import sys
 
 # ---- Module state (initialized by _init_composer_state) ----
 
@@ -1366,15 +1366,7 @@ def api_export_gif() -> Any:
 
 
 def _init_composer_state(sheet_context: Any = None) -> None:
-    """Initialize module-level state for Composer routes.
-
-    Participants are resolved from ``_sheet_context`` + the input dir through
-    the mtime-guarded cache (``server_utils.make_participant_cache``), reset here.
-
-    Called once, from ``build_combined_app``. A worksheet swap goes through
-    :func:`repin_sheet_state` instead — re-running this would reload the
-    manifest and could drop a write still sitting in the persist debounce.
-    """
+    """Load the manifest and reset participant state; worksheet swaps use repin_sheet_state."""
     global _sheet_context, _manifest, _participant_source
 
     _sheet_context = sheet_context

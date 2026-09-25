@@ -164,11 +164,7 @@ def _open_worksheet(
         with profiling.span("sheets.open"):
             ss = open_callable()
         return google_api.get_worksheet(ss, preferred_name=worksheet_name)
-    except (
-        gspread.SpreadsheetNotFound,
-        gspread.exceptions.APIError,
-        gspread.exceptions.GSpreadException,
-    ) as e:
+    except gspread.exceptions.GSpreadException as e:
         utils.error_print(f"Could not open spreadsheet {error_context}: {e}")
         return None
 
@@ -285,11 +281,7 @@ def list_worksheet_titles(
                 ss = gspread_client.open(doc_list[chosen_index].strip())
         with profiling.span("sheets.worksheets"):
             titles = [ws.title for ws in ss.worksheets()]
-    except (
-        gspread.SpreadsheetNotFound,
-        gspread.exceptions.APIError,
-        gspread.exceptions.GSpreadException,
-    ) as e:
+    except gspread.exceptions.GSpreadException as e:
         utils.error_print(f"Could not list worksheets for '{id_or_path}': {e}")
         return [], ""
     return titles, utils.pick_worksheet_title(titles) or ""
@@ -366,9 +358,6 @@ def select_spreadsheet(gspread_client: Any, doc_list: list[str]) -> Any:
                 f"('{config.COMMAND_LIST_ALL}' for list, '{config.COMMAND_LIST_NEW}' for list of newest, "
                 f"'{config.COMMAND_OPEN_LAST}' to immediately open latest, '{config.COMMAND_SETTINGS}' to change settings):\n>> "
             )
-        except utils.TopToSpreadsheet:
-            # Already at spreadsheet selection; bubble up so main can restart selection loop.
-            raise
         except utils.BackToModeSelection:
             # From this context, going "back" is equivalent to going to spreadsheet selection.
             raise utils.TopToSpreadsheet()
@@ -378,11 +367,7 @@ def select_spreadsheet(gspread_client: Any, doc_list: list[str]) -> Any:
             )
             if worksheet is not None:
                 return worksheet
-        except (
-            gspread.SpreadsheetNotFound,
-            gspread.exceptions.APIError,
-            gspread.exceptions.GSpreadException,
-        ) as e:
+        except gspread.exceptions.GSpreadException as e:
             consecutive_open_failures += 1
             if consecutive_open_failures == 1:
                 utils.error_print(
@@ -530,8 +515,6 @@ def _print_run_summary(message: str) -> None:
     utils.info_print(message)
     utils.info_print("")
 
-
-# ---- Clip processing pipeline (moved to pipeline.py) ----
 
 # ---- Interactive mode flows ----
 
@@ -1098,30 +1081,12 @@ def _dispatch_interactive_mode(
     if mode == "gallery":
         _run_gallery_mode_interactive()
         return None
-    if mode == "studio":
+    if mode in ("studio", "screenspace", "transcripts"):
         import server
 
         server.start_combined_server(
             worksheet=worksheet,
-            default_page="studio",
-            gspread_client=gspread_client,
-        )
-        return None
-    if mode == "screenspace":
-        import server
-
-        server.start_combined_server(
-            worksheet=worksheet,
-            default_page="screenspace",
-            gspread_client=gspread_client,
-        )
-        return None
-    if mode == "transcripts":
-        import server
-
-        server.start_combined_server(
-            worksheet=worksheet,
-            default_page="transcripts",
+            default_page=mode,
             gspread_client=gspread_client,
         )
         return None

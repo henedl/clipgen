@@ -418,7 +418,7 @@
     state.selection.forEach(function (id) {
       selSet[id] = true;
     });
-    var nodes = state.nodes || [];
+    var nodes = state.nodes;
     var bestDx = tol;
     var bestDy = tol;
     for (var i = 0; i < nodes.length; i++) {
@@ -528,7 +528,7 @@
   // ---- Select all / keyboard nudge ----
 
   function selectAllNodes() {
-    var nodes = state.nodes || [];
+    var nodes = state.nodes;
     if (!nodes.length) return false;
     state.selectedEdge = null;
     state.selection = nodes.map(function (n) {
@@ -646,13 +646,13 @@
 
   // Deep-clone the selection plus edges with both endpoints selected. False when nothing is selected.
   function copySelection() {
-    var sel = state.selection || [];
+    var sel = state.selection;
     if (!sel.length) return false;
     var selSet = {};
     sel.forEach(function (id) {
       selSet[id] = true;
     });
-    var nodes = (state.nodes || [])
+    var nodes = state.nodes
       .filter(function (n) {
         return selSet[n.id];
       })
@@ -660,7 +660,7 @@
         return JSON.parse(JSON.stringify(n));
       });
     if (!nodes.length) return false;
-    var edges = (state.edges || [])
+    var edges = state.edges
       .filter(function (ed) {
         return selSet[ed.from] && selSet[ed.to];
       })
@@ -716,7 +716,7 @@
       { id: "workflows.copy", when: _canvasReady, handler: function () { return copySelection(); } },
       { id: "workflows.paste", when: _canvasReady, handler: function () { return pasteClipboard(); } },
       { id: "workflows.duplicate", when: _canvasReady, handler: function () { return duplicateSelection(); } },
-      { id: "edit.undo", when: _canvasReady, handler: function () { return !!(WF.undo && WF.undo()); } },
+      { id: "edit.undo", when: _canvasReady, handler: function () { return !!WF.undo(); } },
       { id: "edit.redo", when: _canvasReady, handler: function () { return !!(WF.redo && WF.redo()); } },
       { id: "workflows.fitView", when: _canvasReady, handler: function () { fitToView(); } },
       { id: "workflows.selectAll", when: _canvasReady, handler: function () { return selectAllNodes(); } },
@@ -770,13 +770,13 @@
   function autoArrange() {
     if (!state.ready) return;
     // Notes are free-floating; lay out only the executable cards.
-    var nodes = (state.nodes || []).filter(function (n) {
+    var nodes = state.nodes.filter(function (n) {
       return n.type !== "note";
     });
     if (!nodes.length) return;
     // Re-layout rebuilds every card; cancel any in-flight wire gesture first.
     if (WF.cancelConnect) WF.cancelConnect();
-    var edges = state.edges || [];
+    var edges = state.edges;
 
     var layer = {};
     nodes.forEach(function (n) {
@@ -851,7 +851,7 @@
 
   // World-space bounding box of all cards (unrendered cards count as 200×120). Null when empty.
   function nodesBoundingBox() {
-    var nodes = state.nodes || [];
+    var nodes = state.nodes;
     if (!nodes.length) return null;
     var minX = Infinity,
       minY = Infinity,
@@ -918,7 +918,7 @@
       // The wrap (minimap + zoom controls) owns visibility; fall back to the canvas alone.
       var hideEl = qs("#wfMinimapWrap") || mm;
       var canvas = qs("#wfCanvas");
-      var nodes = state.nodes || [];
+      var nodes = state.nodes;
       var box = nodesBoundingBox();
       if (!canvas || !box || document.hidden) {
         hideEl.classList.add("hidden");
@@ -1071,7 +1071,7 @@
   WF.initCanvas = initCanvas;
   WF.applyViewport = applyViewport;
   WF.autoArrange = autoArrange;
-  // Consumed by the hub toolbar ("F" shortcut) and the nodes satellite's minimap sync.
+  // Consumed by the hub's #wfMinimapFit button.
   WF.fitToView = fitToView;
   // Consumed by the hub's minimap zoom +/- buttons.
   WF.zoomAtCenter = zoomAtCenter;

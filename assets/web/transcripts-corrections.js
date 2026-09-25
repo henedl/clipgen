@@ -90,7 +90,7 @@
   function renderCorrections() {
     var container = qs("#correctionsList");
     if (state.corrections.length === 0) {
-      container.innerHTML = '<div style="color:var(--color-text-dim);font-size:var(--text-sm);padding:var(--space-2) 0">No corrections yet</div>';
+      container.innerHTML = '<div class="dict-empty">No corrections yet</div>';
       return;
     }
 

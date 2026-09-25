@@ -43,10 +43,7 @@
   // Mask-image icon span; `name` is an assets/icons basename, `sizeClass` an .ss-icon
   // modifier.
   function iconSpan(name, sizeClass) {
-    return iconMaskSpan(name, {
-      className: "ss-icon" + (sizeClass ? " " + sizeClass : ""),
-      basePath: "/screenspace/icons/",
-    });
+    return iconMaskSpan(name, { className: "ss-icon" + (sizeClass ? " " + sizeClass : "") });
   }
 
   // OCR normalize direction; folds confusable glyphs before fuzzy compare (see
@@ -67,7 +64,6 @@
       value: _normalizeMode(mode),
       options: NORMALIZE_MODES,
       size: small ? "sm" : null,
-      basePath: "/screenspace/icons/",
     });
   }
 
@@ -107,7 +103,6 @@
       value: _colorMode(mode),
       options: COLOR_MODES,
       size: small ? "sm" : null,
-      basePath: "/screenspace/icons/",
       onChange: onChange,
     });
   }
@@ -623,9 +618,7 @@
   }
 
   function buildFullFrameIcon() {
-    var icon = el("span", "run-picker-fullframe-icon");
-    applyIconMask(icon, "arrows-pointing-out", "/screenspace/icons/");
-    return icon;
+    return iconMaskSpan("arrows-pointing-out", { className: "run-picker-fullframe-icon" });
   }
 
   function availableRegionRefByKey(key) {
@@ -844,6 +837,7 @@
       "Event label":      "Tag added to each detected event for filtering",
       "Detect first":     "Stop after the first match is found",
       "Region":           "Which screen region this step analyzes",
+      "Consecutive":      "Require this many consecutive sampled frames to match before an event fires (suppresses single-frame flicker; reports the run's median time)",
     },
     color: {
       "Tolerance":        "How far from the target color still counts. Widen to catch more shades, tighten to be stricter",
@@ -855,7 +849,6 @@
       "Threshold":        "How much of the region must change to trigger. Raise it to ignore minor flicker",
       "Noise Thr.":       "Ignore changes below this pixel intensity",
       "Noise":            "Ignore changes below this pixel intensity",
-      "Consecutive":      "Require this many consecutive sampled frames to match before an event fires (suppresses single-frame flicker; reports the run's median time)",
     },
     similarity: {
       "Reference":        "Capture the frame you want later frames to match against",
@@ -871,7 +864,6 @@
       "Enhance ROI":      "Upscale small/low-contrast crops and apply CLAHE before OCR (slower; helps tiny HUD text)",
       "Normalize":        "Fold easily-confused glyphs before matching: digits to letters, off, or letters to digits. Pick the side that matches your search target (letters vs digits).",
       "Language":         "OCR language for text recognition",
-      "Consecutive":      "Require this many consecutive sampled frames to match before an event fires (suppresses single-frame flicker; reports the run's median time)",
     },
     numbers: {
       "Operator":         "Comparison operator for the detected number",
@@ -883,7 +875,6 @@
       "Enhance ROI":      "Upscale small/low-contrast crops and apply CLAHE before OCR (slower; helps tiny HUD numbers)",
       "Integers only":    "Accept only whole-number readings: any extracted value carrying a decimal point or sign is rejected. For whole-number HUD targets.",
       "Integers":         "Accept only whole-number readings: any extracted value carrying a decimal point or sign is rejected. For whole-number HUD targets.",
-      "Consecutive":      "Require this many consecutive sampled frames to match before an event fires (suppresses single-frame flicker; reports the run's median time)",
     },
     timelapse: {
       "Speed":            "Playback speed multiplier for the output",
@@ -910,7 +901,6 @@
     },
     flow: {
       "Magnitude":        "Minimum movement strength to count. Raise it to ignore small or slow motion",
-      "Consecutive":      "Require this many consecutive sampled frames to match before an event fires (suppresses single-frame flicker; reports the run's median time)",
     },
     scene: {
       "Add Scene":        "Capture and name each screen you want to recognize",
@@ -943,8 +933,7 @@
     btn.type = "button";
     btn.className = "scan-toggle-btn";
 
-    var icon = el("span", "scan-toggle-icon");
-    applyIconMask(icon, "chevron-double-right", "/screenspace/icons/");
+    var icon = iconMaskSpan("chevron-double-right", { className: "scan-toggle-icon" });
     btn.appendChild(icon);
 
     function updateState() {
@@ -2025,10 +2014,7 @@
   // Category glyph; mask set inline since no .ss-task-icon--<type> class exists.
   function buildCatIcon(name) {
     if (!name) return null;
-    return iconMaskSpan(name, {
-      className: "ss-task-icon",
-      basePath: "/screenspace/icons/",
-    });
+    return iconMaskSpan(name, { className: "ss-task-icon" });
   }
 
   // Alt-hold chip hints; while a dropdown is open its items carry the digits (see
@@ -2240,8 +2226,7 @@
     slot.innerHTML = "";
     slot.setAttribute("data-tooltip", "Interval (seconds)");
     var iconWrap = el("div", "interval-icon");
-    var iconMask = el("span", "interval-icon-mask");
-    applyIconMask(iconMask, "clock", "/screenspace/icons/");
+    var iconMask = iconMaskSpan("clock", { className: "interval-icon-mask" });
     iconWrap.appendChild(iconMask);
     slot.appendChild(iconWrap);
     var ctrl = el("div", "param-control");
@@ -2564,9 +2549,7 @@
     }
     if (!ssNavItems(region).length) return;
     // Drop lingering native focus so only one focus indicator shows.
-    if (window.ClipgenHotkeys && window.ClipgenHotkeys.blurStrayFocus) {
-      window.ClipgenHotkeys.blurStrayFocus();
-    }
+    window.ClipgenHotkeys.blurStrayFocus();
     ssSetFocusRegion(region);
   }
 
@@ -3060,7 +3043,6 @@
   // Command palette additions: Run plus per-participant jumps; the provider re-runs on
   // every open.
   function initCommandPalette() {
-    if (!window.ClipgenCommandPalette) return;
     window.ClipgenCommandPalette.setParticipants(function () {
       return (state.participants || []).map(function (p) { return p.id; });
     });

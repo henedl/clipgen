@@ -56,7 +56,7 @@ def build_preview(
     if tool == "flow":
         return _preview_flow(frame, prev_frame, region, params)
     if tool == "scene":
-        return _preview_scene(frame, region, params)
+        return _preview_scene(frame, region)
     if tool in ("inactivity", "boundary"):
         # Boundary compares consecutive pHashes; show the same bit grid.
         return _preview_inactivity(frame, region)
@@ -111,8 +111,6 @@ OVERLAY_LAYERS: dict[str, list[tuple[str, str, str]]] = {
 
 def overlay_layer_scope(tool: str, layer: str) -> str | None:
     """Return the scope ("region" or "frame") for a given tool/layer, or None."""
-    if tool == "multitool":
-        return None
     for layer_id, _label, scope in OVERLAY_LAYERS.get(tool, []):
         if layer_id == layer:
             return scope
@@ -188,7 +186,7 @@ def build_overlay_layer(
         return _gray_to_bgr(edges)
 
     if tool == "flow" and layer == "flow_vectors":
-        return _overlay_flow(pixels, prev_frame, region, params)
+        return _overlay_flow(pixels, prev_frame, region)
 
     if tool == "template" and layer == "match_heatmap":
         return _overlay_template_heatmap(frame, region, params)
@@ -340,7 +338,6 @@ def _overlay_flow(
     pixels: "np.ndarray",
     prev_frame: "np.ndarray | None",
     region: dict[str, Any] | None,
-    params: dict[str, Any],  # magnitude param affects threshold display only
 ) -> "np.ndarray | None":
     if prev_frame is None:
         return None
@@ -862,17 +859,12 @@ def _preview_template(
 
     template = params.get("template_image")
     if isinstance(template, np.ndarray) and template.size > 0:
-        tmpl_gray = cv2.cvtColor(
-            cv2.GaussianBlur(template, (k, k), 0), cv2.COLOR_BGR2GRAY
-        )
-        panels.append(_label_panel(_fit_width(tmpl_gray, 120), "template"))
-
-        # Reuse the scan's prepared-template pipeline; a blurred mask would
-        # inflate TM_CCOEFF_NORMED.
+        # Reuse the scan's template prep; a blurred mask inflates TM_CCOEFF_NORMED.
         mask = params.get("template_mask")
         if not (isinstance(mask, np.ndarray) and mask.size > 0):
             mask = None
         prepared = screenspace_primitives._prepare_template(template, mask)
+        panels.append(_label_panel(_fit_width(prepared[0], 120), "template"))
         result = screenspace_primitives._template_correlation_map(frame, prepared)
         window = screenspace_primitives.region_search_window(region or {})
         if result is not None and window is not None:
@@ -1001,7 +993,6 @@ def _preview_flow(
 def _preview_scene(
     frame: "np.ndarray",
     region: dict[str, Any] | None,
-    params: dict[str, Any],  # reserved for future scene-ref overlays
 ) -> "np.ndarray":
     pixels = _clip_region_pixels(frame, region)
     if pixels is None:

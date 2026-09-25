@@ -544,7 +544,7 @@ def _log_titlebar_inventory(container: Any, buttons: list[Any]) -> None:
             f"{' hidden' if view.isHidden() else ''}]"
         )
 
-    if getattr(config, "VERBOSITY", config.STANDARD) < config.VERBOSE:
+    if config.VERBOSITY < config.VERBOSE:
         return
     try:
         states = ",".join(
@@ -740,7 +740,7 @@ def _rekey_if_forgotten(AppKit: Any, native: Any) -> bool:
 def _log_focus_state(AppKit: Any, native: Any, phase: str) -> None:
     """Print the app/window focus state at ``-v``, once per change."""
     global _last_focus
-    if getattr(config, "VERBOSITY", config.STANDARD) < config.VERBOSE:
+    if config.VERBOSITY < config.VERBOSE:
         return
     try:
         app = AppKit.NSApplication.sharedApplication()

@@ -14,7 +14,6 @@
   if (data) clipgenApplyConfig(data.config);
   var state = { artifacts: [], lightboxIndex: -1 };
   var _galleryVideoObserver = null;
-  var _galleryVideoObserverBound = false;
 
   function _ensureGalleryVideoObserver() {
     if (_galleryVideoObserver || typeof IntersectionObserver === "undefined") return;
@@ -100,6 +99,10 @@
 
   // ---- Grid ----
 
+  function stampLabel(a) {
+    return a.timestamp_formatted || formatTime(a.timestamp);
+  }
+
   function renderGrid() {
     return clipgenPerf.span("gallery.renderGrid", renderGridImpl);
   }
@@ -116,7 +119,7 @@
       card.setAttribute("data-index", i);
 
       var src = a.data || a.file;
-      var altText = a.timestamp_formatted || formatTime(a.timestamp);
+      var altText = stampLabel(a);
       if (isVideoLoop(a.file)) {
         card.appendChild(createGalleryLoopVideo(src, altText));
       } else {
@@ -130,23 +133,18 @@
 
       var overlay = document.createElement("span");
       overlay.className = "timestamp-overlay";
-      overlay.textContent = a.timestamp_formatted || formatTime(a.timestamp);
+      overlay.textContent = stampLabel(a);
       card.appendChild(overlay);
 
       frag.appendChild(card);
     }
     grid.appendChild(frag);
 
-    if (!_galleryVideoObserverBound) {
-      _galleryVideoObserverBound = true;
-      document.addEventListener("visibilitychange", function () {
-        if (!_galleryVideoObserver) return;
-        var videos = grid.querySelectorAll("video");
-        for (var vi = 0; vi < videos.length; vi++) {
-          if (document.hidden) videos[vi].pause();
-        }
-      });
-    }
+    document.addEventListener("visibilitychange", function () {
+      if (!_galleryVideoObserver || !document.hidden) return;
+      var videos = grid.querySelectorAll("video");
+      for (var vi = 0; vi < videos.length; vi++) videos[vi].pause();
+    });
 
     grid.addEventListener("click", function (e) {
       var card = e.target.closest(".gallery-card");
@@ -190,7 +188,7 @@
     var content = qs("#lightboxContent");
     content.innerHTML = "";
     var src = a.data || a.file;
-    var altText = a.timestamp_formatted || formatTime(a.timestamp);
+    var altText = stampLabel(a);
     if (isVideoLoop(a.file)) {
       content.appendChild(createLoopVideo(src, altText));
     } else {
@@ -203,7 +201,7 @@
 
     var caption = qs("#lightboxCaption");
     if (caption) {
-      var parts = [a.timestamp_formatted || formatTime(a.timestamp)];
+      var parts = [stampLabel(a)];
       if (a.file) parts.push(a.file);
       caption.textContent = parts.join("  \u00b7  ");
     }

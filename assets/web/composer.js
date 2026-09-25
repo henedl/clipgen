@@ -73,6 +73,7 @@
   function renderAnnotations() { return CO.renderAnnotations && CO.renderAnnotations.apply(null, arguments); }
   function setAnnotateTool() { return CO.setAnnotateTool && CO.setAnnotateTool.apply(null, arguments); }
   function initMarkerScrub() { return CO.initMarkerScrub && CO.initMarkerScrub.apply(null, arguments); }
+  function updateTimelineHeight() { return CO.updateTimelineHeight && CO.updateTimelineHeight(); }
 
   // ---- Multi-part video ----
   // Global-seconds timeline over per-part playback; manifest part-start key is "offset".
@@ -361,7 +362,7 @@
     updateVideoInfo();
     updateGenerateButton();
     renderSidebar();
-    if (CO.updateTimelineHeight) CO.updateTimelineHeight();
+    updateTimelineHeight();
     renderTimeline();
     renderAnnotations();
     loadMarkers(pid);
@@ -489,7 +490,7 @@
   }
 
   function refreshMarkerViews() {
-    if (CO.updateTimelineHeight) CO.updateTimelineHeight();
+    updateTimelineHeight();
     renderTimeline();
     renderSidebar();
   }
@@ -718,7 +719,7 @@
   }
 
   function refreshAnnotationViews() {
-    if (CO.updateTimelineHeight) CO.updateTimelineHeight();
+    updateTimelineHeight();
     renderTimeline();
     renderAnnotations();
     renderCutList(); // cut items badge overlapping annotations
@@ -1711,7 +1712,7 @@
       if (CO.syncScrubToggles) CO.syncScrubToggles();
       updateGenerateButton();
       renderCutList();
-      if (CO.updateTimelineHeight) CO.updateTimelineHeight();
+      updateTimelineHeight();
       renderTimeline();
       renderAnnotations();
     }).catch(function () {});

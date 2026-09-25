@@ -143,7 +143,7 @@
     var card = el("div", "stash-card");
     card.setAttribute("data-stash-id", stash.id);
     if (stash.id === _justStashedId) {
-      if (window.ClipgenMotion) ClipgenMotion.animateIn(card, "stashLand");
+      ClipgenMotion.animateIn(card, "stashLand");
       _justStashedId = null;
     }
     card.setAttribute("draggable", "true");
@@ -221,7 +221,7 @@
         }
       };
       // Queue cards stash out, then the new stash card lands (renderStashes).
-      if (cards.length && window.ClipgenMotion) ClipgenMotion.animateOutAll(cards, "stash").then(commit);
+      if (cards.length) ClipgenMotion.animateOutAll(cards, "stash").then(commit);
       else commit();
     });
   }

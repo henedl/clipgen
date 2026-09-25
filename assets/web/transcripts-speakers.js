@@ -236,14 +236,12 @@
   }
 
   function initSpeakers() {
-    if (window.ClipgenHotkeys && window.ClipgenHotkeys.registerEscape) {
-      window.ClipgenHotkeys.registerEscape(function () {
-        if (!_spkOpen) return false;
-        _spkCancelled = true;
-        hideSpeakerPopover();
-        return true;
-      });
-    }
+    window.ClipgenHotkeys.registerEscape(function () {
+      if (!_spkOpen) return false;
+      _spkCancelled = true;
+      hideSpeakerPopover();
+      return true;
+    });
   }
 
   TS.speakersOn = speakersOn;

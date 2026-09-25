@@ -29,6 +29,8 @@
     pollTaskStatus = TS.pollTaskStatus,
     refreshTranscribeWording = TS.refreshTranscribeWording,
     updateTranscribeFill = TS.updateTranscribeFill, // video satellite (loads before this one)
+    getStoredMarkersFor = TS.getStoredMarkersFor,
+    clearMarkersFor = TS.clearMarkersFor,
     startPolling = TS.startPolling,
     _refreshAgentStateNow = TS._refreshAgentStateNow,
     _trFetchModels = TS._trFetchModels,
@@ -584,7 +586,7 @@
     }
 
     // Range row only with in/out markers; the poll keeps it tracking edits.
-    var mk = TS.getStoredMarkersFor ? TS.getStoredMarkersFor(p.id) : null;
+    var mk = getStoredMarkersFor(p.id);
     if (mk && (mk.in !== null || mk.out !== null)) {
       var rangeRow = document.createElement("div");
       rangeRow.className = "pill-options-row";
@@ -601,7 +603,7 @@
       rangeClear.setAttribute("data-nav-id", "range-clear");
       rangeClear.textContent = "Clear";
       rangeClear.addEventListener("click", function () {
-        if (TS.clearMarkersFor) TS.clearMarkersFor(p.id);
+        clearMarkersFor(p.id);
         // Full re-render, not a pane refresh: it drops the Range row immediately.
         renderPills();
       });
@@ -1058,7 +1060,7 @@
         if (ov.audioTrack) overrides[pid].audio_index = parseInt(ov.audioTrack, 10);
       }
       // Per-participant range markers from sessionStorage; omitted when unset.
-      var mk = TS.getStoredMarkersFor ? TS.getStoredMarkersFor(pid) : null;
+      var mk = getStoredMarkersFor(pid);
       if (mk && (mk.in !== null || mk.out !== null)) {
         overrides[pid] = overrides[pid] || {};
         if (mk.in !== null) overrides[pid].start_seconds = mk.in;
@@ -1221,5 +1223,5 @@
   TS.pillNavMove = pillNavMove; // video (Up/Down while dropdown open)
   TS.pillNavAdjust = pillNavAdjust; // video (Left/Right while dropdown open)
   TS.pillNavActivate = pillNavActivate; // video (Enter while dropdown open)
-  TS.trackOptionLabel = _trackOptionLabel; // hub (Normalize Audio track checkboxes)
+  TS.trackOptionLabel = _trackOptionLabel; // batch (Normalize Audio track checkboxes)
 })();

@@ -26,6 +26,9 @@ from typing import Any
 # ── Core Runtime ─────────────────────────────────────────────────────
 # Project home, shown in /api/status and credited in every exported viewer.
 REPO_URL: str = "https://github.com/henedl/clipgen"
+# About-tab credits, shipped in /api/status.
+AUTHOR: str = "Henrik Edlund"
+LICENSE: str = "MIT"
 REENCODING: bool = False
 AUDIO_NORMALIZE: bool = False
 FILEFORMAT: str = ".mp4"
@@ -113,13 +116,7 @@ SEVERITY_NUMERIC_TO_LABEL: dict[str, str] = {
     "2": "Very Positive",
 }
 SEVERITY_LABEL_TO_NUMERIC: dict[str, int] = {
-    "critical": -4,
-    "high": -3,
-    "medium": -2,
-    "low": -1,
-    "n/a": 0,
-    "positive": 1,
-    "very positive": 2,
+    label.lower(): int(num) for num, label in SEVERITY_NUMERIC_TO_LABEL.items()
 }
 ANNOTATION_KEYPHRASES: dict[
     str, str
@@ -136,6 +133,7 @@ MAX_CLIP_DURATION_SECONDS: int = (
     600  # 10 min; prompts user for confirmation before generating longer clips
 )
 DEFAULT_DURATION_SECONDS: int = 60  # clip length when only a start time is given
+EVENT_CLUSTER_GAP_SECONDS: float = 5.0  # events this close merge into one clip
 DEFAULT_GIF_DURATION_SECONDS: int = (
     5  # GIF extraction length when only a start time is given
 )
@@ -246,6 +244,11 @@ SCREENSPACE_SHAPE_MATCH_THRESHOLD: float = (
 SCREENSPACE_SHAPE_SCALE_MIN: float = 0.5
 SCREENSPACE_SHAPE_SCALE_MAX: float = 2.0
 SCREENSPACE_SHAPE_SCALE_STEPS: int = 7
+# Server clamps for user-supplied shape ladders and consecutive-frame counts.
+SCREENSPACE_SHAPE_SCALE_LIMIT_MIN: float = 0.1
+SCREENSPACE_SHAPE_SCALE_LIMIT_MAX: float = 4.0
+SCREENSPACE_SHAPE_SCALE_STEPS_MAX: int = 12
+SCREENSPACE_REQUIRE_CONSECUTIVE_MAX: int = 10
 SCREENSPACE_EDGE_CANNY_LOW: int = 100
 SCREENSPACE_EDGE_CANNY_HIGH: int = 200
 SCREENSPACE_FLOW_MAGNITUDE_THRESHOLD: float = 2.0

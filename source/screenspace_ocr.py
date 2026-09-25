@@ -370,8 +370,6 @@ def _score_text_readings(
         params.get("ocr_confidence_threshold")
     )
     ocr_normalize = params.get("ocr_normalize") or "off"
-    if ocr_normalize not in ("digits", "letters"):
-        ocr_normalize = "off"
     search_cmp = _normalize_ocr_text(search_string, ocr_normalize)
     best_ratio = 0.0
     best_text = ""

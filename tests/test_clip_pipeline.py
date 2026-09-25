@@ -1550,5 +1550,5 @@ def test_regenerate_artifact_rounds_fractional_local_times(monkeypatch, tmp_path
     }
     assert pipeline._regenerate_single_artifact(artifact, set()) is True
     _, kwargs = run_ffmpeg.call_args
-    assert kwargs["start_pos"] == "0:11"
-    assert kwargs["end_pos"] == "0:20"
+    assert kwargs["start_pos"] == "0:00:11"
+    assert kwargs["end_pos"] == "0:00:20"

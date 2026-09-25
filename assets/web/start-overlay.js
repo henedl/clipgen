@@ -1,6 +1,6 @@
 /* Start overlay — Direction B redesign.
  *
- * Two-column launcher mounted by Studio / Screenspace / Transcripts. Drives:
+ * Two-column launcher mounted by all six app pages. Drives:
  *   • brand-mark + wordmark intro (reuses window.clipgenInitBrandMark; cascade
  *     plays once per browser session, gated by the existing sessionStorage flag)
  *   • section cascade-in (220ms base, 80ms stagger)
@@ -168,9 +168,7 @@
         applyIcons();
         bind();
         // Page-level clipgenInitBrandMark ran before the overlay existed; re-run to hydrate the rail mark.
-        if (typeof window.clipgenInitBrandMark === "function") {
-          window.clipgenInitBrandMark();
-        }
+        clipgenInitBrandMark();
         state.mounted = true;
         // A snapshot may have arrived before the tabs existed.
         syncUpdateBadges();
@@ -1440,7 +1438,7 @@
       input.classList.remove("is-loaded", "is-dirty");
       input.classList.add("is-error");
     }
-    if (message && typeof showToast === "function") showToast(message);
+    if (message) showToast(message);
   }
 
   function clearFieldError(node) {
@@ -1456,7 +1454,7 @@
     if (!card) return;
     card.classList.add("has-error", "is-error");
     card.classList.remove("is-loaded", "is-dirty");
-    if (message && typeof showToast === "function") showToast(message);
+    if (message) showToast(message);
   }
 
   function clearSheetError() {
@@ -1926,10 +1924,10 @@
       aboutRow("Update", function (val) { buildUpdateRow(val, u); });
     }
     aboutRow("Author", function (val) {
-      val.textContent = s.author || "Henrik Edlund";
+      val.textContent = s.author || "";
     });
     aboutRow("Repository", function (val) {
-      var repo = s.repo_url || "https://github.com/henedl/clipgen";
+      var repo = s.repo_url || "";
       var label = repo.replace(/^https?:\/\//, "");
       var link = document.createElement("a");
       link.className = "about__link mono";
@@ -1945,8 +1943,8 @@
       val.appendChild(link);
     });
     aboutRow("License", function (val) {
-      val.appendChild(el("span", "about__pill", s.license || "MIT"));
-      val.appendChild(el("span", "about__sub", "© 2017–2026 " + (s.author || "Henrik Edlund")));
+      val.appendChild(el("span", "about__pill", s.license || ""));
+      val.appendChild(el("span", "about__sub", "© 2017–2026 " + (s.author || "")));
     });
   }
 
@@ -2185,7 +2183,7 @@
         var errors = (res.body && res.body.errors) || {};
         if (errors.input) markFieldError(els.inputField, errors.input);
         if (errors.output) markFieldError(els.outputField, errors.output);
-        if (!errors.input && !errors.output && typeof showToast === "function") {
+        if (!errors.input && !errors.output) {
           showToast((res.body && res.body.error) || "Folder error");
         }
         releaseConfirm();
@@ -2307,25 +2305,23 @@
     state.open = true;
     show(root, true);
     // Blocking modal. initialFocus is the non-typing panel so letter hotkeys work at once.
-    if (typeof openBlockingModal === "function") {
-      openBlockingModal(root, {
-        // Escape: cancel an inline edit, then fold the recents, then dismiss.
-        onEscape: function () {
-          if (state.cancelPreviewEdit) {
-            state.cancelPreviewEdit();
-            return;
-          }
-          if (state.recentsExpanded) {
-            setRecentsExpanded(false);
-            return;
-          }
-          close();
-        },
-        trapFocus: true,
-        initialFocus: els.panel,
-        restoreFocus: true
-      });
-    }
+    openBlockingModal(root, {
+      // Escape: cancel an inline edit, then fold the recents, then dismiss.
+      onEscape: function () {
+        if (state.cancelPreviewEdit) {
+          state.cancelPreviewEdit();
+          return;
+        }
+        if (state.recentsExpanded) {
+          setRecentsExpanded(false);
+          return;
+        }
+        close();
+      },
+      trapFocus: true,
+      initialFocus: els.panel,
+      restoreFocus: true
+    });
     // Default to the form; the desktop Help menu's "What's New…" passes "updates".
     setStartTab(tab || "open");
     runIntro();
@@ -2351,7 +2347,7 @@
       if (state.open) return;
       show(root, false);
       // Release only once hidden: an early release re-arms page hotkeys during the fade-out.
-      if (typeof closeBlockingModal === "function") closeBlockingModal(root);
+      closeBlockingModal(root);
     }, 460);
   }
 

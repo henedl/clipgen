@@ -221,7 +221,7 @@
 
     document.body.appendChild(root);
     renderFromState(true);
-    if (typeof positionPopoverAnchored === "function" && opts.anchor) {
+    if (opts.anchor) {
       positionPopoverAnchored(root, opts.anchor.getBoundingClientRect());
     }
 

@@ -362,7 +362,8 @@ def score_frame_for_tool(
         else:
             passed, detail = _score_numbers_readings(readings, params)
         return _score_result(tool.score_key, passed, detail)
-    return tool.score_frame(frame, prev_frame, region, params)
+    passed, detail = tool.check_frame(frame, prev_frame, region, params)
+    return _score_result(tool.score_key, passed, detail)
 
 
 class AnalysisTool:
@@ -423,22 +424,6 @@ class AnalysisTool:
         Default: tool not supported as a multitool step.
         """
         return False, None
-
-    def score_frame(
-        self,
-        frame: np.ndarray,
-        prev_frame: np.ndarray | None,
-        region: dict[str, int],
-        params: dict[str, Any],
-    ) -> dict[str, Any]:
-        """Return the threshold-independent calibration score for one frame.
-
-        Reads the scalar ``check_frame`` now populates on both branches (keyed by
-        ``score_key``). Returns ``{"status": "not_evaluable"}`` when the frame
-        cannot be scored (missing companion/reference, degenerate input, etc.).
-        """
-        passed, detail = self.check_frame(frame, prev_frame, region, params)
-        return _score_result(self.score_key, passed, detail)
 
     def _scan_kwargs(self, params: dict[str, Any]) -> dict[str, Any]:
         """Tool-specific kwargs for the scan function, from ``scan_defaults``.
@@ -511,12 +496,12 @@ class ColorTool(AnalysisTool):
     ):
         pixels = _cached_crop(cache, frame, region)
         mask = _cached_mask(cache, frame, region)
-        target = params.get("target_color", {"h": 0, "s": 0, "v": 0})
-        tol = params.get("tolerance", {"h": 10, "s": 50, "v": 50})
+        defaults = self.scan_defaults
+        target = params.get("target_color", defaults["target_color"])
+        tol = params.get("tolerance", defaults["tolerance"])
         if params.get("color_mode") == "presence":
-            matched, conf = color_present(
-                pixels, target, tol, params.get("min_coverage", 0.0), mask=mask
-            )
+            coverage = params.get("min_coverage", defaults["min_coverage"])
+            matched, conf = color_present(pixels, target, tol, coverage, mask=mask)
         else:
             matched, conf = color_matches(pixels, target, tol, mask=mask)
         return matched, {"_confidence": conf}
@@ -725,21 +710,16 @@ class TemplateTool(AnalysisTool):
         if template_img is None:
             return False, None
         threshold = params.get("threshold", config.SCREENSPACE_TEMPLATE_MATCH_THRESHOLD)
-        # Cache the scaled template prep on params so multitool amortizes it; template_scale mirrors scan_template.
-        cached = params.get("_prepared_template")
-        if cached is None:
+        # Cache the scaled prep on params so multitool reuses it across frames.
+        prepared = params.get("_prepared_template")
+        if prepared is None:
             scaled_img, scaled_mask = _scale_template(
                 template_img,
                 params.get("template_mask"),
                 float(params.get("template_scale", 1.0)),
             )
-            cached = (
-                scaled_img,
-                scaled_mask,
-                _prepare_template(scaled_img, scaled_mask),
-            )
-            params["_prepared_template"] = cached
-        _scaled_img, _scaled_mask, prepared = cached
+            prepared = _prepare_template(scaled_img, scaled_mask)
+            params["_prepared_template"] = prepared
         # Peak correlation scores even a miss; the run region (zero-size = anywhere) scopes it.
         window = region_search_window(region)
         origin = (0, 0)
@@ -1187,7 +1167,7 @@ class MultitoolTool(AnalysisTool):
             raise ValueError("Multitool requires at least 2 steps")
         # Fast scan: multiply the interval used by scan_multitool
         # (reads from steps[0]["interval"] with fallback to default).
-        if scan_mode == "fast" and steps:
+        if scan_mode == "fast":
             mt_interval = steps[0].get("interval", config.SCREENSPACE_DEFAULT_INTERVAL)
             steps[0]["interval"] = (
                 mt_interval * config.SCREENSPACE_FAST_SCAN_INTERVAL_MULTIPLIER

@@ -38,7 +38,7 @@
         showToast("Regions stashed");
       };
       // Pills stash out (jump + wiggle + dissolve), then the stash card lands.
-      if (chips.length && window.ClipgenMotion) ClipgenMotion.animateOutAll(chips, "stash").then(commit);
+      if (chips.length) ClipgenMotion.animateOutAll(chips, "stash").then(commit);
       else commit();
     }).catch(toastError("Could not create stash"));
   }
@@ -117,7 +117,7 @@
     state.stashes.forEach(function (stash) {
       var card = el("div", "stash-card");
       card.dataset.stashId = stash.id;
-      if (stash.id === _justStashedStashId && window.ClipgenMotion) {
+      if (stash.id === _justStashedStashId) {
         ClipgenMotion.animateIn(card, "stashLand");
         _justStashedStashId = null;
       }

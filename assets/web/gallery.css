@@ -246,10 +246,6 @@ body {
   text-wrap: balance;
 }
 
-.hidden {
-  display: none !important;
-}
-
 /* Lightbox */
 
 #lightbox {

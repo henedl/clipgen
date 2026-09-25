@@ -168,7 +168,7 @@
         html += '<div class="search-result-row" data-participant="' + escapeHtml(r.participant) + '" data-start="' + r.start + '">';
         html += '<span class="search-result-time">' + formatTime(r.start) + '</span>';
         // Labels are only loaded for the selected participant; others show the server name.
-        if (r.speaker && TS.speakerChipHtml) {
+        if (r.speaker) {
           html += TS.speakerChipHtml(r.speaker, { inert: true, name: r.speaker_name || null });
         }
         html += '<span class="search-result-text">' + clipgenHighlightMatches(r.text, state.searchQuery, "search-highlight") + '</span>';

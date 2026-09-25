@@ -19,8 +19,7 @@
   var STEP_TRACK_H = 8; // minor/major tick strip just under the timestamps
   var LANE_GAP = 3;
   var ROW_H = 15;       // one marker sub-row (14px bar + 1px gap)
-  var THUMB_ROW_H = 42; // marker sub-row with thumbnail strips (41px bar + 1px gap)
-  var THUMB_CUT_H = 42; // cuts track height with thumbnail strips
+  var THUMB_ROW_H = 42; // lane row and cuts track; thumb-sized even with Thumbs off
   var MAX_LANE_ROWS = 8; // unfold ceiling; denser overlaps collapse onto the last row
   var EDGE_SLOP = 5;    // px hit zone around a cut edge
   var MIN_CUT_SECONDS = 0.2;
@@ -79,14 +78,9 @@
     return neededRows(state.markers[source]);
   }
 
-  // Always thumb-sized so bars fit a frame; the Thumbs toggle only gates drawing.
-  function laneRowH() { return THUMB_ROW_H; }
-  function cutTrackH() { return THUMB_CUT_H; }
-
   // Annotation spans as packable {start, end, ann} entries for the lane.
   function annotationSpans() {
-    var annotations = CO.participantAnnotations ? CO.participantAnnotations() : [];
-    return annotations.map(function (ann) {
+    return CO.participantAnnotations().map(function (ann) {
       return { start: ann.span.start, end: ann.span.end, ann: ann };
     });
   }
@@ -94,7 +88,7 @@
   // Ruler → cuts → annotations (when any) → visible source lanes; strip height follows (updateTimelineHeight).
   function layout() {
     var cutY = RULER_H + STEP_TRACK_H + 2;
-    var y = cutY + cutTrackH() + 4;
+    var y = cutY + THUMB_ROW_H + 4;
     var spans = annotationSpans();
     var annRows = !spans.length
       ? 0
@@ -106,12 +100,12 @@
     var lanes = {};
     SOURCES.forEach(function (source) {
       var rows = laneRows(source);
-      lanes[source] = { y: y, rows: rows, h: rows * laneRowH() };
-      if (rows) y += rows * laneRowH() + LANE_GAP;
+      lanes[source] = { y: y, rows: rows, h: rows * THUMB_ROW_H };
+      if (rows) y += rows * THUMB_ROW_H + LANE_GAP;
     });
     return {
       cutY: cutY,
-      cutH: cutTrackH(),
+      cutH: THUMB_ROW_H,
       lanes: lanes,
       annotationsLane: annotationsLane,
       canvasH: y + 2,
@@ -311,9 +305,7 @@
 
     // Cuts track, directly under the ruler; numbering matches the cut list's index badges.
     var cutIndexById = {};
-    if (CO.sortedCuts) {
-      CO.sortedCuts().forEach(function (c, i) { cutIndexById[c.id] = i + 1; });
-    }
+    CO.sortedCuts().forEach(function (c, i) { cutIndexById[c.id] = i + 1; });
     CO.participantCuts().forEach(function (cut) {
       if (cut.end < vis.start || cut.start > vis.end) return;
       var x1 = tx(cut.start);
@@ -360,7 +352,7 @@
       var markers = state.markers[source] || [];
       if (!markers.length) return;
       var color = colors[source];
-      var rowH = laneRowH();
+      var rowH = THUMB_ROW_H;
       assignRows(markers, lane.rows).forEach(function (m) {
         if (m.end < vis.start || m.start > vis.end) return;
         var x1 = tx(m.start);
@@ -957,10 +949,10 @@
       }
       var ts = xToTime(e.clientX);
       if (ts === null) return;
-      if (CO.seekVideo) CO.seekVideo(ts);
+      CO.seekVideo(ts);
       if (state.pendingIn === null) {
-        if (CO.setInPoint) CO.setInPoint();
-      } else if (CO.setOutPoint) {
+        CO.setInPoint();
+      } else {
         CO.setOutPoint();
       }
     });

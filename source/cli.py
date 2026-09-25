@@ -448,35 +448,16 @@ def _generate_cli_clips(
         any(getattr(args, a, None) for a in _SELECTION_ATTRS) or args.highlights
     )
 
-    def _parse_cli_categories(raw: str | None) -> list[str]:
-        """Parse CLI category string into a list of category names."""
-        if not raw:
-            return []
-        seen = set()
-        result: list[str] = []
-        for name in utils.split_selector_tokens(raw):
-            if name not in seen:
-                seen.add(name)
-                result.append(name)
-        return result
-
-    cli_categories = _parse_cli_categories(getattr(args, "category", None))
-
-    def _parse_cli_severities(raw: str | None) -> list[str]:
-        if not raw:
-            return []
-        seen = set()
-        result: list[str] = []
-        for token in utils.split_selector_tokens(raw):
-            name = utils.normalize_severity(token)
-            if not name:
-                continue
-            if name not in seen:
-                seen.add(name)
-                result.append(name)
-        return result
-
-    cli_severities = _parse_cli_severities(getattr(args, "severity", None))
+    cli_categories = list(
+        dict.fromkeys(
+            utils.split_selector_tokens(getattr(args, "category", None) or "")
+        )
+    )
+    severities = (
+        utils.normalize_severity(t)
+        for t in utils.split_selector_tokens(getattr(args, "severity", None) or "")
+    )
+    cli_severities = list(dict.fromkeys(s for s in severities if s))
 
     cli_annotation_ids = None
     if isinstance(args.keyword, str):
@@ -489,16 +470,13 @@ def _generate_cli_clips(
         try:
             duration = int(args.highlights)
         except ValueError:
+            duration = 0
+        if duration > 0:
+            config.HIGHLIGHTS_REEL_DURATION_SECONDS = duration
+        else:
             utils.warning_print(
                 f"Invalid highlights duration '{args.highlights}', using default ({config.HIGHLIGHTS_REEL_DURATION_SECONDS}s)."
             )
-        else:
-            if duration <= 0:
-                utils.warning_print(
-                    f"Invalid highlights duration '{args.highlights}', using default ({config.HIGHLIGHTS_REEL_DURATION_SECONDS}s)."
-                )
-            else:
-                config.HIGHLIGHTS_REEL_DURATION_SECONDS = duration
 
     mode_dispatch: list[tuple] = [
         (

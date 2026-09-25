@@ -544,12 +544,11 @@ def _process_single_clip_segments(
     the generate-cache (``server.py`` Phase 1) skip it forever, so the card could never
     be applied. See ``titlecards.wrap_clip_with_cards``.
 
-    Caller must have already called prepare_clip(clip). Does not add to missing_videos; caller handles that.
+    Caller must have already called prepare_clip(clip).
 
     Args:
         clip: Prepared clip dict with 'times', 'category', 'study', 'participant', 'desc'
         base_video: Path to source video file
-        missing_videos: Set of already-reported missing paths (read-only here)
         filename_prefix: Prefix for output filename (e.g. '_reel_part_' for reel)
         collect_paths: If True, return list of (output_path, time_index) pairs; otherwise return empty list
         enforce_size: If True (default), compress each final clip to config.MAX_FILESIZE_MB
@@ -1287,9 +1286,6 @@ def process_clips(
         "screen": "screenshot(s)",
         "gif": "GIF(s)",
     }.get(output_format, "file(s)")
-    cards_enabled, _card_duration = _resolve_titlecard_options(
-        titlecards_enabled, titlecard_duration_seconds
-    )
     if cards_enabled and clear_titlecard_cache:
         titlecards.clear_endcard_cache()
 
@@ -1905,8 +1901,8 @@ def _regenerate_single_artifact(
             if video.run_ffmpeg(
                 input_file=part_path,
                 output_file=tmp,
-                start_pos=utils.seconds_to_timestamp(round(part.get("localStart", 0))),
-                end_pos=utils.seconds_to_timestamp(round(part.get("localEnd", 0))),
+                start_pos=_local_timestamp(part.get("localStart", 0)),
+                end_pos=_local_timestamp(part.get("localEnd", 0)),
                 reencode=config.REENCODING,
             ):
                 temp_paths.append(tmp)
@@ -1940,9 +1936,8 @@ def _regenerate_single_artifact(
 
     local_start = artifact.get("localStart", artifact.get("start", 0))
     local_end = artifact.get("localEnd", artifact.get("end", 0))
-    # Round like _local_timestamp so regeneration reproduces the original cut.
-    start_ts = utils.seconds_to_timestamp(round(local_start))
-    end_ts = utils.seconds_to_timestamp(round(local_end))
+    start_ts = _local_timestamp(local_start)
+    end_ts = _local_timestamp(local_end)
 
     if artifact_type == "clip":
         ok = video.run_ffmpeg(
@@ -2019,14 +2014,8 @@ def _regenerate_reel(
                 {
                     "idx": len(tasks),
                     "source_path": source_path,
-                    # Match _local_timestamp's rounding and force_hours so
-                    # regeneration reproduces the original cut.
-                    "start_ts": utils.seconds_to_timestamp(
-                        round(local_start), force_hours=True
-                    ),
-                    "end_ts": utils.seconds_to_timestamp(
-                        round(local_end), force_hours=True
-                    ),
+                    "start_ts": _local_timestamp(local_start),
+                    "end_ts": _local_timestamp(local_end),
                 }
             )
 

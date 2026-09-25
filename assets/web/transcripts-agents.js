@@ -4,8 +4,8 @@
  * friction pass (mode switch, score histogram, category chips, moment jump strip,
  * and the decorations they drive on the transcript below), plus the panel tab
  * switching. These are the local-LLM "thinking agent" results
- * surfaced per participant. Loaded LAST (after transcripts.js + the other
- * satellites); reads the hub's shared state + helpers through
+ * surfaced per participant. Loads after the hub and every satellite except
+ * batch; reads the hub's shared state + helpers through
  * window.ClipgenTranscripts (TS) and publishes its load/clear/stop/init entry
  * points back so selectParticipant, the task poller, the visibility/focus
  * handlers, boot, and the segment-list hover can reach them. The pills satellite
@@ -214,10 +214,8 @@
     renderSummary(data.summary);
     if (data.citations && data.citations.length > 0) {
       state.summaryCitations = data.citations;
-      state.citationsGenerating = false;
       renderCitations();
     } else if (data.citations_generating) {
-      state.summaryCitations = null;
       state.citationsGenerating = true;
       renderCitationsStatus(
         data.citations_started_at ? data.citations_started_at * 1000 : undefined
@@ -328,17 +326,9 @@
   }
 
   function renderSummaryEmpty() {
-    _stopSummaryPoll();
-    _stopCitationsPoll();
+    clearSummary();
     _summaryEtaTracker.reset();
-    qs("#summaryContent").innerHTML = "";
-    qs("#summaryBody").classList.add("hidden");
-    qs("#summaryActions").classList.add("hidden");
     qs("#summaryEmpty").classList.remove("hidden");
-    state.summaryEditing = false;
-    state.summaryText = "";
-    state.summaryCitations = null;
-    state.citationsGenerating = false;
     _updateSummaryEmptyHint();
   }
 
@@ -485,9 +475,9 @@
   }
 
   function initPanelTabs() {
-    qs("#tabBtnSummary").addEventListener("click", function () { selectTab("summary"); });
-    qs("#tabBtnFriction").addEventListener("click", function () { selectTab("friction"); });
-    qs("#tabBtnRedact").addEventListener("click", function () { selectTab("redact"); });
+    PANEL_TABS.forEach(function (t) {
+      qs(t.btn).addEventListener("click", function () { selectTab(t.name); });
+    });
     qs("#summaryRunCta").addEventListener("click", function () { _startSummaryRun(); });
   }
 
@@ -1103,7 +1093,7 @@
 
   function _frictionQuote(seg, maxChars) {
     // Through the redact satellite, so a quote never leaks a redacted name.
-    var text = (TS.displayText ? TS.displayText(seg) : (seg && seg.text) || "").trim();
+    var text = TS.displayText(seg).trim();
     if (!text) return "";
     if (text.length > maxChars) text = text.slice(0, maxChars - 1).replace(/\s+\S*$/, "") + "…";
     return "“" + text + "”";
@@ -1795,7 +1785,7 @@
     { value: "highlight", icon: "fire", title: "Highlight matching segments in the transcript" },
     { value: "isolate", icon: "funnel", title: "Show only matching segments" },
   ];
-  var FRICTION_MODE_ORDER = ["off", "highlight", "isolate"];
+  var FRICTION_MODE_ORDER = FRICTION_MODES.map(function (m) { return m.value; });
 
   function _frictionMode(v) {
     return v === "highlight" || v === "isolate" ? v : "off";

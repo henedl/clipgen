@@ -1,6 +1,6 @@
 # Code quality plan
 
-> **Status: Wave 1 done (2026-09-25); Wave 2 next.** 363 verified findings from an 11-slice review with adversarial verification (22 agents). About 7,500 lines are removable if every item lands. Each item carries its change and the verifier's note below it. Check items off as each batch lands.
+> **Status: Waves 1–2 done (2026-09-25); Wave 3 next.** 363 verified findings from an 11-slice review with adversarial verification (22 agents). About 7,500 lines are removable if every item lands. Each item carries its change and the verifier's note below it. Check items off as each batch lands.
 
 ## How to work a batch
 
@@ -212,239 +212,241 @@ Lowest risk. Unused functions, routes, selectors, publishes, params, and dead br
 
 ## Wave 2: Sloppiness (75 items, −505 lines)
 
+Done 2026-09-25: all items. `server-23` leaves the About tab empty until `/api/status` answers; `wf-6` gives server-run blueprints the catalog's config defaults; `studio-shared-js-37` shows every configured mark category in Transcript Intake.
+
 Stale docstrings, debug leftovers, redundant guards, misplaced magic numbers.
 
 ### Python
 
-- [ ] `server-4` server.py:1 Module docstring lists routes that moved or never existed (−0, low)
+- [x] `server-4` server.py:1 Module docstring lists routes that moved or never existed (−0, low)
   - Change: Delete the 'GET/PUT /api/convergence/offsets' line (it lives on overview_bp) and the 'POST /api/regenerate' line (no such route). Add /api/mindnode and /api/reveal-artifact, or trim the list and point at the route decorators.
   - Verifier: convergence/offsets is defined only in overview.py:57,74. /api/regenerate exists nowhere in source/ or assets/web. The studio_bp route list includes /api/mindnode and /api/reveal-artifact, which the docstring omits. The header lines (1-4) also list only four blueprints while composer and overview are mounted too.
-- [ ] `server-18` server.py:1002 _process_intake_item has a dead init and a redundant branch (−4, low)
+- [x] `server-18` server.py:1002 _process_intake_item has a dead init and a redundant branch (−4, low)
   - Change: Drop `out_path: str | None = None` (1002), since out_path is assigned unconditionally at 1029. Drop the final else branch (1082-1083), which reassigns description to the value set at 1075.
   - Verifier: out_path is initialized to None at 1002 and assigned unconditionally at 1029 with no read in between. The final else at 1082-1083 reassigns description = event_type or default_desc, the value already set at 1075.
-- [ ] `server-19` server.py:2900 Function-local imports shadow module-level imports (−3, low)
+- [x] `server-19` server.py:2900 Function-local imports shadow module-level imports (−3, low)
   - Change: Remove `import time as _time` in on_concat_progress (2900) and use time.monotonic(). Remove `import uuid` in _handle_stash_crud (2338) and move `datetime` into the module-level `from datetime import UTC` line.
   - Verifier: time and uuid are imported at module top (lines 60, 62), and `from datetime import UTC` is at 112. They are re-imported locally at 2338-2339 (uuid, datetime) and 2900 (time as _time).
-- [ ] `server-23` server.py:3801 About-tab author/license literals in route, mirrored in JS (−0, low)
+- [x] `server-23` server.py:3801 About-tab author/license literals in route, mirrored in JS (−0, low)
   - Change: Move author and license into config.py beside REPO_URL, or ship them via utils.get_frontend_config(). Drop the JS fallbacks in start-overlay.js:1934/1937/1953.
   - Verifier: status() hardcodes author/license. start-overlay.js:1934/1937/1953 repeats them plus the repo URL, which already sits in config.REPO_URL. loadStatus re-renders About once status resolves (guarded by test_start_overlay_source.py:168), so the fallbacks only cover a brief pre-status frame. start-overlay.html:38 also hardcodes the copyright line.
-- [ ] `server-22` server.py:4102 Google auth checked twice before _open_worksheet_for (−4, low) (revised)
+- [x] `server-22` server.py:4102 Google auth checked twice before _open_worksheet_for (−4, low) (revised)
   - Change: Keep the route pre-checks, which return a 400 with a user-facing message. Remove the unreachable RuntimeError guard in _open_worksheet_for (3395-3398) and state in its docstring that callers verify Google auth.
   - Verifier: Both production callers (4106, 4267) check the client before calling, so the helper's RuntimeError guard is unreachable from routes. The main proposal would not work: both routes wrap the call in `except Exception as exc: return err(str(exc), 500)`, so an ApiError raised inside the helper becomes a 500, never a 400. The route checks also carry distinct messages.
-- [ ] `server-26` server_utils.py:29 Docstring claims no config/utils imports; module imports both (−2, low)
+- [x] `server-26` server_utils.py:29 Docstring claims no config/utils imports; module imports both (−2, low)
   - Change: Rewrite the closing paragraph (29-31): the module imports config, profiling and utils (49-51), so 'no config/utils imports' is false. State the real rule, which is that Flask helpers stay out of utils.
   - Verifier: The docstring (29-31) says 'no config/utils imports', but lines 49-51 import config, profiling and utils. utils.get_bundled_assets_root and config are used in the module.
-- [ ] `transcripts-py-17` friction.py:15 Module docstring score formula contradicts the word-count floor (−2, low)
+- [x] `transcripts-py-17` friction.py:15 Module docstring score formula contradicts the word-count floor (−2, low)
   - Change: Change the docstring formula to `/ max(word_count, 8)` to match _segment_score. In compute_stats, drop the second `minutes > 0` check and the `.get(category, 0)` on the pre-seeded dict.
   - Verifier: The docstring says '/ max(word_count, 1)' while _segment_score uses max(len(text.split()), 8). compute_stats seeds by_category from CATEGORY_ORDER, and counts keys always come from CATEGORY_ORDER, so .get(category, 0) is redundant. The minutes computation checks duration > 0 and then minutes > 0.
-- [ ] `transcripts-py-30` llm_client.py:614 Redundant branches and re-coercion around warnings and downloads (−5, low)
+- [x] `transcripts-py-30` llm_client.py:614 Redundant branches and re-coercion around warnings and downloads (−5, low)
   - Change: In _fail, call `utils.warning_print(message, details=details)` unconditionally, since warning_print already defaults details=None. In download_model, pass resolved['sha256'] and resolved['size'] directly, because _resolve_hf_file already returns str and int.
   - Verifier: utils.warning_print takes details=None, and _styled_print guards with `if details:`, so calling it with details unconditionally behaves the same. The tests read call_args.kwargs.get('details') or [], which also tolerates it. _resolve_hf_file already returns int size and str sha256, and its one test reference doesn't patch it.
-- [ ] `transcripts-py-16` thinking_agents.py:47 Agent docstrings contradict the registry (−2, low)
+- [x] `transcripts-py-16` thinking_agents.py:47 Agent docstrings contradict the registry (−2, low)
   - Change: Rewrite the enabled_config_key note, which says none of the attributes differ per agent although every agent has its own LLM_*_ENABLED. Fix friction_model's docstring ('all three thinking agents' when there are four), or delete the function per transcripts-py-14.
   - Verifier: Lines 47-50 say none of the enabled_config_key attributes differ per agent, but the registry uses four distinct LLM_*_ENABLED keys. friction_model's docstring says 'all three thinking agents' while AGENTS has four. Both are wrong in the current code.
-- [ ] `transcripts-py-29` thinking_agents.py:567 Friction parser re-checks types _extract_json_array guarantees (−3, low)
+- [x] `transcripts-py-29` thinking_agents.py:567 Friction parser re-checks types _extract_json_array guarantees (−3, low)
   - Change: Drop `if not isinstance(item, dict): continue` in _parse_friction_response and the redundant list() around _extract_json_objects (525). Tighten _extract_json_array's return type to list[dict[str, Any]].
   - Verifier: _extract_json_array returns only object arrays (_is_object_array checks every item is a dict), [] or _extract_json_objects, which appends only dicts. Its sole production caller is _parse_friction_response, so the isinstance(item, dict) skip can never fire. list() around a returned list is redundant. The tests only assert on return values.
-- [ ] `transcripts-py-19` transcripts_server.py:168 getattr(config, ...) defaults duplicate existing config values (−0, low)
+- [x] `transcripts-py-19` transcripts_server.py:168 getattr(config, ...) defaults duplicate existing config values (−0, low)
   - Change: Read config.LLM_UNLOAD_DELAY_SECONDS and config.TRANSCRIBE_PREWARM directly, and drop the getattr default in _agent_enabled (config keys are asserted by tests/test_thinking_agents.py:67). The hardcoded 15.0 and 'queue_open' fallbacks can drift from config.py.
   - Verifier: config.py:523 defines LLM_UNLOAD_DELAY_SECONDS = 15.0 and config.py:476 defines TRANSCRIBE_PREWARM = 'queue_open'. Tests monkeypatch.setattr both, never delattr. _agent_enabled still needs getattr for the dynamic key but can drop the False default. The 'queue_open' fallback after validation in _transcribe_prewarm_setting must stay, because test 152 sets a bogus value.
-- [ ] `transcripts-py-22` transcripts_server.py:2285 Dead initial assignment in api_marks_delete (−2, low)
+- [x] `transcripts-py-22` transcripts_server.py:2285 Dead initial assignment in api_marks_delete (−2, low)
   - Change: Delete `ids_to_remove: list[str] = []`. The next line reassigns it unconditionally.
   - Verifier: Line 2285 assigns ids_to_remove = [], and 2287 reassigns it unconditionally. There is no read in between.
-- [ ] `transcripts-py-23` transcripts_server.py:2847 speakers_changed flag also set by redact merges (−0, low)
+- [x] `transcripts-py-23` transcripts_server.py:2847 speakers_changed flag also set by redact merges (−0, low)
   - Change: Rename speakers_changed to entries_changed (or text_view_changed). The redact branch at 2870 sets it too.
   - Verifier: speakers_changed is set in the speakers branch (2863) and the redact branch (2870). It is read at 2896 only to bump the corrections version, so the name misleads.
-- [ ] `pipeline-py-32` data_export.py:63 Private column constants imported across modules; stale module docstring (−0, low)
+- [x] `pipeline-py-32` data_export.py:63 Private column constants imported across modules; stale module docstring (−0, low)
   - Change: Rename _TRANSCRIPT_SEGMENT_BASE_COLS, _FRICTION_MOMENT_COLS and _FRICTION_SEGMENT_COLS to public names matching SCREENSPACE_EVENT_COLUMNS and add them to __all__. Fix the module docstring, which shows write_export_bundle(output_dir) (the function takes no arguments) and leaves out the pins/friction builders.
   - Verifier: workflows.py:1588, 1619 and 1629 read the three underscore-prefixed column tuples across modules. The docstring shows write_export_bundle(output_dir), but line 446 is def write_export_bundle() -> list[Path].
-- [ ] `pipeline-py-30` files.py:364 derive_sheet_meta guards against a missing excel_io that always exists (−3, low)
+- [x] `pipeline-py-30` files.py:364 derive_sheet_meta guards against a missing excel_io that always exists (−3, low)
   - Change: Drop the try/except ImportError around `import excel_io` and its 'no excel_io in this build' comment. openpyxl is a core dependency and excel_io is a first-party module, and the other five import sites (server.py, cli.py, app.py) import it unguarded.
   - Verifier: openpyxl is a core dependency, excel_io is listed in py-modules, and the other import sites import it unguarded. Keep the import lazy inside the function, since files.py is CLI-hot, and drop only the try/except ImportError.
-- [ ] `pipeline-py-9` pipeline.py:554 Docstring lists a missing_videos argument the function lacks (−2, low)
+- [x] `pipeline-py-9` pipeline.py:554 Docstring lists a missing_videos argument the function lacks (−2, low)
   - Change: Delete the 'missing_videos: Set of already-reported missing paths (read-only here)' Args line and the 'Does not add to missing_videos' sentence from the _process_single_clip_segments docstring.
   - Verifier: The signature at 524-540 has no missing_videos parameter, but the docstring still lists it under Args and says 'Does not add to missing_videos; caller handles that.'
-- [ ] `pipeline-py-5` pipeline.py:1307 process_clips resolves titlecard options a second time (−3, low)
+- [x] `pipeline-py-5` pipeline.py:1307 process_clips resolves titlecard options a second time (−3, low)
   - Change: Delete the second _resolve_titlecard_options call (1307-1309) and reuse cards_enabled from line 1245 for the clear_endcard_cache check.
   - Verifier: Line 1245 and line 1307 call _resolve_titlecard_options with the same unmodified parameters, and nothing in between reassigns them. The second call only feeds the clear_endcard_cache check.
-- [ ] `pipeline-py-6` pipeline.py:1927 Regeneration hand-rolls _local_timestamp in three places, inconsistently (−6, low)
+- [x] `pipeline-py-6` pipeline.py:1927 Regeneration hand-rolls _local_timestamp in three places, inconsistently (−6, low)
   - Change: Use _local_timestamp(x) at 1927-1928, 1963-1964 and 2043-2048 instead of utils.seconds_to_timestamp(round(x)[, force_hours=True]). The comments at 1962 and 2041 already say they mirror _local_timestamp, but two of the three sites leave out force_hours.
   - Verifier: 1927-1928 and 1963-1964 call seconds_to_timestamp(round(x)) without force_hours, and 2043-2048 add force_hours by hand. _local_timestamp is the same thing, and its docstring says mixed formats do not matter. Two test assertions need updating: tests/test_multi_video.py:566-567 ('0:44'/'0:50') and tests/test_clip_pipeline.py:1555-1556 ('0:11'/'0:20') become '0:00:44' etc.
-- [ ] `pipeline-py-20` video.py:1676 get_file_duration checks the props cache twice (−7, low)
+- [x] `pipeline-py-20` video.py:1676 get_file_duration checks the props cache twice (−7, low)
   - Change: Delete the cached_props block (1676-1682). probe_video_properties returns the cached entry itself (1852-1855), and the next block (1684-1690) runs the same round-and-store.
   - Verifier: probe_video_properties returns _video_properties_cache[key] on a hit before any ffprobe. The following block then does the same round-and-store. The one difference is DEBUGGING mode, where probe returns synthetic props before checking the cache, and that is dev-only. test_get_file_duration_returns_rounded_probe_duration still passes.
-- [ ] `screenspace-py-34` screenspace_ocr.py:372 ocr_normalize mode validated twice (−2, low)
+- [x] `screenspace-py-34` screenspace_ocr.py:372 ocr_normalize mode validated twice (−2, low)
   - Change: Delete lines 373-374; _normalize_ocr_text already treats any value other than digits/letters as 'off' (its docstring says so, 236-238).
   - Verifier: _normalize_ocr_text returns the lowercased string for any mode other than digits or letters, as its docstring says. ocr_normalize is used only at 375 and 382 and never reported back, so the coercion at 373-374 is redundant.
-- [ ] `screenspace-py-33` screenspace_preview.py:343 Preview helpers take unused params and recompute prepared values (−8, low)
+- [x] `screenspace-py-33` screenspace_preview.py:343 Preview helpers take unused params and recompute prepared values (−8, low)
   - Change: Drop the unused params argument of _overlay_flow (the comment claims it affects the threshold display, but the body never reads it) and of _preview_scene ('reserved for future'). In _preview_template use prepared[0] instead of recomputing tmpl_gray (865-867). Remove the redundant multitool check in overlay_layer_scope (114-115); OVERLAY_LAYERS has no multitool key.
   - Verifier: The _overlay_flow body (339-393) never reads params, even though its comment claims it does. _preview_scene's params is marked 'reserved' and never read. In _preview_template, prepared[0] from _prepare_template holds the same blur-gray as tmpl_gray, so the prep can move before the panel append. OVERLAY_LAYERS has no multitool key, so the multitool check in overlay_layer_scope is redundant. The dispatcher calls at 59 and 191 need updating.
-- [ ] `screenspace-py-29` screenspace_server.py:2538 Redundant imports, dead branches and duplicate guards in server helpers (−16, low) (revised)
+- [x] `screenspace-py-29` screenspace_server.py:2538 Redundant imports, dead branches and duplicate guards in server helpers (−16, low) (revised)
   - Change: Drop the local `import config` (2538) and `import screenspace` (2725, 2764, 2795). Pass context=context from _coerce_tool_spec to _coerce_template_controls (line 1929). Set include_excluded = excluded_filter != 'false'. Merge _coerce_color_controls' two early returns into `if mode != 'presence'`. Drop `tool == 'timelapse'` from _calibratable_tool and inline it at its single caller. Move or delete the stray comment at line 98.
   - Verifier: Most items check out: the local imports duplicate the module-level config/screenspace imports (70/74); include_excluded is True unless the value is 'false'; both _coerce_color_controls early returns do the same pops; TimelapseTool has no score_key, so the timelapse check is redundant and _calibratable_tool has one caller (720); the comment at 98 describes preview_float_args, not _preview_ref_rect. _coerce_template_controls does use context internally, but its caller at 1929 omits it, so the fix is to pass context, not drop it.
-- [ ] `screenspace-py-30` screenspace_server.py:2564 Shape and consecutive clamp limits are magic numbers (−0, low) (revised)
+- [x] `screenspace-py-30` screenspace_server.py:2564 Shape and consecutive clamp limits are magic numbers (−0, low) (revised)
   - Change: Add config SCREENSPACE_SHAPE_SCALE_LIMIT_MIN = 0.1, SCREENSPACE_SHAPE_SCALE_LIMIT_MAX = 4.0, SCREENSPACE_SHAPE_SCALE_STEPS_MAX = 12 and SCREENSPACE_REQUIRE_CONSECUTIVE_MAX = 10, and read them in _coerce_shape_controls and _coerce_consecutive. Keep the literal 1 lower bounds.
   - Verifier: The literals are there, and the template coercer does read config bounds. The existing SCREENSPACE_SHAPE_SCALE_MIN/MAX (0.5/2.0) are the default ladder, not clamp limits, so putting the clamps 'beside' them needs new names to avoid confusion. The lower bound of 1 for steps and consecutive counts is structural. The frontend hardcodes none of these values.
-- [ ] `screenspace-py-32` screenspace_tools.py:729 Tool classes cache unused values and re-check guaranteed state (−14, low) (revised)
+- [x] `screenspace-py-32` screenspace_tools.py:729 Tool classes cache unused values and re-check guaranteed state (−14, low) (revised)
   - Change: Cache only the prepared template in TemplateTool.check_frame. Read ColorTool.check_frame defaults from self.scan_defaults. Inline AnalysisTool.score_frame into score_frame_for_tool. In MultitoolTool.scan, drop only the redundant `and steps` (keeping the raise), or drop the raise and keep `and steps`, not both.
   - Verifier: The TemplateTool cache holds unused scaled images (only tools.py 729/741 touch _prepared_template). The ColorTool defaults duplicate scan_defaults. score_frame is defined only on the base class and called only at 365. The MultitoolTool fix cannot drop both the len<2 raise and `and steps`. Without the raise, an empty steps list in fast mode relies on `and steps` to avoid an IndexError on steps[0] before scan_multitool raises.
-- [ ] `comp-6` composer_server.py:640 Hex fallback hardcodes config colour; stale debounce docstring (−1, low) (revised)
+- [x] `comp-6` composer_server.py:640 Hex fallback hardcodes config colour; stale debounce docstring (−1, low) (revised)
   - Change: Rewrite _init_composer_state's docstring to drop the persist-debounce claim, and move `import itertools` / `import sys` into the top stdlib import block. Leave the _parse_hex_color literal fallback and the function-local hashlib/tempfile imports as they are.
   - Verifier: COMPOSER_ANNOTATION_COLOR is not user-editable: it has no settings description entry and is only exposed through get_frontend_config. Annotations store it at creation (514), so the literal fallback runs only for malformed stored colors. Parsing config in that except would also recurse on a bad config value. The debounce docstring is stale: _persist_locked saves synchronously and the module has no make_debounced_persist. `import itertools` / `import sys` sit after the server_utils from-import, out of order.
-- [ ] `wf-6` workflows.py:590 Scan-param defaults duplicated from the catalog and drifting (−8, med)
+- [x] `wf-6` workflows.py:590 Scan-param defaults duplicated from the catalog and drifting (−8, med)
   - Change: Seed _build_ss_scan_params' `_num(key)` default from `{p['name']: p['default'] for p in _SS_DETECTOR_SPECS[tool_name]}` (already imported) instead of hand-typed literals, and merge the identical similarity/scene branches. Missing params then fall back to the same config thresholds the palette shows.
   - Verifier: The frontend seeds spec defaults only when it renders a node (workflows-nodes.js:117). A blueprint run server-side without rendering (builtin stash 'builtin_top_detections' sends only detector:text, batch or trigger runs) hits _build_ss_scan_params' hand-typed defaults. Those use 0.0 for every threshold and for shape scale_* where the catalog uses config.SCREENSPACE_*_THRESHOLD. The similarity and scene branches (650-653) return identical dicts. _SS_DETECTOR_SPECS is already imported (workflows.py:54).
-- [ ] `wf-8` workflows.py:831 Stale comments: 'ten nodes', 'partition nodes' (−0, low)
+- [x] `wf-8` workflows.py:831 Stale comments: 'ten nodes', 'partition nodes' (−0, low)
   - Change: Rewrite the _make_ss_executor docstring (there are 12 ss_ detectors) and the _predicate_params docstring ('filter / partition nodes'; partition was folded into filter per _make_filter_executor's docstring).
   - Verifier: _SS_DETECTOR_SPECS has 12 keys, but the _make_ss_executor docstring (831) says 'all ten nodes'. The _predicate_params docstring (2237) says 'filter / partition nodes', while no partition node type exists and _make_filter_executor (2037) says filter subsumed partition.
-- [ ] `cat-3` workflows_catalog.py:1613 Event cluster gap 5.0 hardcoded twice, CLI and workflows (−1, low)
+- [x] `cat-3` workflows_catalog.py:1613 Event cluster gap 5.0 hardcoded twice, CLI and workflows (−1, low)
   - Change: Add config.EVENT_CLUSTER_GAP_SECONDS = 5.0; use it as the --cluster-gap default in cli_args.py:683 and in _adapt_events_to_cliprecords, dropping _DEFAULT_EVENT_CLUSTER_GAP.
   - Verifier: workflows_catalog.py:1613 hardcodes 5.0 with a 'matches the CLI' comment, and cli_args.py:683 hardcodes default=5.0. cli_args already imports config and builds help from config constants (e.g. GALLERY_INTERVAL_SECONDS), so the help string's '(default: 5.0' should become an f-string too.
-- [ ] `srv-3` workflows_server.py:1032 Defensive getattr, stale docstring, per-tick deepcopy in watcher (−2, low) (revised)
+- [x] `srv-3` workflows_server.py:1032 Defensive getattr, stale docstring, per-tick deepcopy in watcher (−2, low) (revised)
   - Change: Use runner.batch_id at 1032 and fix api_batch_create's docstring. In _watch_poll_once, replace `_armed_blueprint_locked(t['id']) is not None` with a non-copying count, `sum(_trigger_enabled(b.get('trigger'), t['id']) for b in blueprints) == 1`, so ambiguity semantics stay the same. Leave the worker clamp in place.
   - Verifier: getattr(runner, 'batch_id', '') at 1032 is defensive: WorkflowRunner always sets batch_id and no test injects fake runners. api_batch_create's docstring 'one sequential run each' is stale given the ThreadPoolExecutor path. The watcher change as proposed alters semantics: _armed_blueprint_locked returns None when two or more are armed, and any() would start polling in that case. Moving the min(4) clamp into config adds a constant for little gain.
-- [ ] `cli-core-27` app.py:1103 Three identical start_combined_server branches; redundant except clauses (−25, low)
+- [x] `cli-core-27` app.py:1103 Three identical start_combined_server branches; redundant except clauses (−25, low)
   - Change: Collapse the studio/screenspace/transcripts branches (1103-1129) into 'if mode in ("studio", "screenspace", "transcripts"): server.start_combined_server(worksheet=..., default_page=mode, ...)'. In select_spreadsheet delete the no-op 'except utils.TopToSpreadsheet: raise' (369-371). Replace the (SpreadsheetNotFound, APIError, GSpreadException) tuples at 167, 288, 381 with GSpreadException alone. Delete the stale '# ---- Clip processing pipeline (moved to pipeline.py) ----' marker (534).
   - Verifier: The studio, screenspace and transcripts branches differ only in default_page. TopToSpreadsheet and BackToModeSelection are independent Exception subclasses (utils.py:2024/2028), so 'except TopToSpreadsheet: raise' does nothing. gspread's MRO shows SpreadsheetNotFound and APIError both subclass GSpreadException. No test fakes gspread exceptions. Line 534 is a leftover section marker.
-- [ ] `cli-core-29` cli.py:452 _generate_cli_clips: two nested dedupe closures and a doubled warning (−18, low)
+- [x] `cli-core-29` cli.py:452 _generate_cli_clips: two nested dedupe closures and a doubled warning (−18, low)
   - Change: Replace _parse_cli_categories and _parse_cli_severities with list(dict.fromkeys(tokens)) inline (severities filtered through normalize_severity). Merge the two identical 'Invalid highlights duration' warnings (493-500) into one path that checks the ValueError or duration <= 0 case.
   - Verifier: _parse_cli_categories and _parse_cli_severities are single-use closures with the same seen/result loop, so list(dict.fromkeys(...)) covers both (filter severities through normalize_severity first). The two highlights-duration warnings at 493-500 print the same f-string.
-- [ ] `cli-core-40` cli_args.py:325 Help text and docstring describe features that do not exist (−0, low)
+- [x] `cli-core-40` cli_args.py:325 Help text and docstring describe features that do not exist (−0, low)
   - Change: Fix the --overview help, which names 'the 3D similarity Map' (the tabs are Metadata, Convergence, Reports). Remove 'yes' from parse_arguments' returned-attributes docstring (807); there is no --yes flag.
   - Verifier: overview.html has only the Metadata, Convergence and Reports tabs, and no test or doc references 'similarity Map'. No --yes flag or args.yes exists in source.
-- [ ] `cli-core-37` config.py:115 SEVERITY_LABEL_TO_NUMERIC hand-duplicates SEVERITY_NUMERIC_TO_LABEL (−8, low)
+- [x] `cli-core-37` config.py:115 SEVERITY_LABEL_TO_NUMERIC hand-duplicates SEVERITY_NUMERIC_TO_LABEL (−8, low)
   - Change: Derive it: SEVERITY_LABEL_TO_NUMERIC = {label.lower(): int(num) for num, label in SEVERITY_NUMERIC_TO_LABEL.items()}.
   - Verifier: SEVERITY_LABEL_TO_NUMERIC is the lowercased inverse of SEVERITY_NUMERIC_TO_LABEL, entry for entry. Consumers only use .get, in and .values(), and no test parses the literal.
-- [ ] `cli-core-41` desktop_menu.py:51 _HELP_URL hardcodes the repo URL config.REPO_URL already holds (−0, low)
+- [x] `cli-core-41` desktop_menu.py:51 _HELP_URL hardcodes the repo URL config.REPO_URL already holds (−0, low)
   - Change: _HELP_URL = config.REPO_URL + '#readme'.
   - Verifier: desktop_menu already imports config. config.REPO_URL equals the hardcoded prefix, and no test asserts _HELP_URL.
-- [ ] `cli-core-42` native_dialogs.py:19 Redundant local 'import subprocess' in open_native_folder_picker (−6, low)
+- [x] `cli-core-42` native_dialogs.py:19 Redundant local 'import subprocess' in open_native_folder_picker (−6, low)
   - Change: Delete the function-local import at line 19 (subprocess is imported at module level, line 6). The two AppleScript branches (35-43) also differ only in the 'default location' clause and can build one string.
   - Verifier: subprocess is imported at native_dialogs.py:6, and no test patches a function-local subprocess. The two AppleScript branches differ only in the default-location clause.
-- [ ] `cli-core-19` spreadsheet.py:395 parse_reel_input: five copy-paste keyword branches plus dead checks (−20, low) (revised)
+- [x] `cli-core-19` spreadsheet.py:395 parse_reel_input: five copy-paste keyword branches plus dead checks (−20, low) (revised)
   - Change: Define _FLAG_TOKENS: tuple[Literal['batch','keyword','severity','highlights','chronologic'], ...] and loop over it (for key in _FLAG_TOKENS: if lower == key: result[key] = True) so ty sees literal keys, or use an equivalent typed approach. Drop the redundant strip and empty check, and the unreachable len(parts) != 2 check in parse_cell_specifications.
   - Verifier: The five branches are copies, parts are already stripped and filtered at 385, and '.' in spec guarantees split('.', 1) gives two parts. However, result is the ReelInput TypedDict, so result[token.lower()] = True with a plain str key will fail ty.
-- [ ] `cli-core-18` spreadsheet.py:659 Leftover step-trace debug prints in sheet parsing (−55, low)
+- [x] `cli-core-18` spreadsheet.py:659 Leftover step-trace debug prints in sheet parsing (−55, low)
   - Change: Strip the narration debug_print/debug_ic lines in get_line_timestamps (659-727: 'Running method...', 'Item N being processed', 'Skipping item', four per-cell prints, debug_print(str(clips))), generate_line_timestamps 1086-1094, generate_*_timestamps 'Starting method' lines, and google_api.find_spreadsheet_by_name (158-201), which can collapse to a two-target lookup over a lowered name list.
   - Verifier: No test asserts any of these debug strings. get_line_timestamps and find_spreadsheet_by_name are mostly step narration. In parse_timestamps, `pair` is always a 2-tuple from _parse_single_timestamp_token, so the len check is dead.
-- [ ] `cli-core-17` spreadsheet.py:1200 generate_cell_timestamps recomputes participant _make_clip_record already set (−10, low)
+- [x] `cli-core-17` spreadsheet.py:1200 generate_cell_timestamps recomputes participant _make_clip_record already set (−10, low)
   - Change: Delete lines 1200-1209; _make_clip_record (598-604) already sets participant to normalize_participant_id(header[col_idx]) under the same bounds check, so the override writes the identical value.
   - Verifier: _make_clip_record already sets participant = normalize_participant_id(str(sheet_data[id_row][col] or '')) under the same bounds check. The override at 1200-1209 fires only when that header is truthy and writes the same normalized string, since sheet_data holds strings.
-- [ ] `cli-core-32` updater.py:323 finish_check has duplicate idle and ready branches (−12, low)
+- [x] `cli-core-32` updater.py:323 finish_check has duplicate idle and ready branches (−12, low)
   - Change: Merge 'if not is_newer(...)' and 'if skipped == release["tag"]' (323-330) into one condition. Merge the same_file/existing ready branches (358-371) by computing the ready path once.
   - Verifier: updater.py:323-326 and 327-330 run identical bodies and can be merged with 'or'. The ready branches at 359-371 differ only in path (already vs str(existing)).
-- [ ] `cli-core-21` utils.py:218 Defensive getattr on config keys that are always defined (−6, low)
+- [x] `cli-core-21` utils.py:218 Defensive getattr on config keys that are always defined (−6, low)
   - Change: Replace getattr(config, 'VERBOSITY'|'RICH_COLORS'|'RICH_PANELS'|'RICH_PROGRESS'|'INPUT_DIR'|'OUTPUT_DIR'|'ANNOTATION_KEYPHRASES'|'IGNORED_TIMESTAMP_TOKENS', default) with plain attribute access in utils.py (218, 224, 232, 252, 261, 514, 532, 540, 1003, 1481, 1692, 1909) and desktop_chrome.py (547, 743). Also drop the redundant RICH_AVAILABLE/console re-checks in run_with_spinner (497), which use_progress() already covers.
   - Verifier: config.py defines VERBOSITY, INPUT_DIR, OUTPUT_DIR, ANNOTATION_KEYPHRASES, IGNORED_TIMESTAMP_TOKENS and RICH_* unconditionally. No test delattrs config or swaps utils.config for a stub. use_progress() already checks RICH_AVAILABLE and console, so the re-check in run_with_spinner is redundant. Keep the `or ''` on INPUT_DIR and OUTPUT_DIR.
-- [ ] `cli-core-23` utils.py:1290 _resolve_segment_source_fields builds the same fallback dict three times (−10, low)
+- [x] `cli-core-23` utils.py:1290 _resolve_segment_source_fields builds the same fallback dict three times (−10, low)
   - Change: Compute fallback = {'sourceVideo': Path(base_video).name, 'localStart': global_start, 'localEnd': global_end} once and return it from the three fallback sites (1290, 1316, 1324).
   - Verifier: utils.py:1290-1294, 1316-1320 and 1324-1328 are identical dict literals built from locals set at the top of the function. Each call builds a fresh dict, so sharing one local cannot alias across calls.
-- [ ] `cli-core-22` utils.py:1402 Stale pointers: _make_synthetic_clip_record lives in files.py; orphan manifest comment (−2, low)
+- [x] `cli-core-22` utils.py:1402 Stale pointers: _make_synthetic_clip_record lives in files.py; orphan manifest comment (−2, low)
   - Change: Point build_artifact_record's docstring and ValueError text at files._make_synthetic_clip_record (not cli.py). Delete the orphan comment at utils.py:769-770 ('One manifest file, one key per tool section...'), which describes manifest.py and sits above _lock_fd.
   - Verifier: _make_synthetic_clip_record is defined at files.py:512, but utils.py:1402 and 1415 say cli.py, and no test matches that message text. The comment at utils.py:769-770 describes manifest caching and sits above _lock_fd.
 
 ### JS
 
-- [ ] `studio-shared-js-6` hotkeys.js:471 Defensive guards for modules every page always loads first (−25, low)
+- [x] `studio-shared-js-6` hotkeys.js:471 Defensive guards for modules every page always loads first (−25, low)
   - Change: Drop the typeof/window guards around utils.js, hotkeys.js, motion.js, color-picker.js, topnav.js and command-palette.js globals in files that always load after them. Keep the ClipgenMotion guards inside utils.js, which test_motion_wiring requires for exports.
   - Verifier: Every html page loads utils, hotkeys, motion, then topnav, start-overlay, color-picker, settings-modal, command-palette in that order. viewer.html and gallery.html load only utils, hotkeys, motion (plus card-scrubber or gallery.js), and every hotkeys.js guard listed targets a utils.js function (isBlockingModalOpen, getActiveModalRoot, popModalIn/Out, open/closeBlockingModal), which viewer.py always prepends. clipgenInitBrandMark, positionPopoverAnchored, setCrossReferences and showToast are all utils globals. Studio pages always load motion.js and are never exported. The ClipgenMotion guard in utils.js must stay, as test_motion_wiring.py:205-210 requires, and the proposal already keeps it.
-- [ ] `studio-shared-js-43` intake-cluster.js:6 Module header comments contradict current load sites (−0, low) (revised)
+- [x] `studio-shared-js-43` intake-cluster.js:6 Module header comments contradict current load sites (−0, low) (revised)
   - Change: Rewrite the headers: intake-cluster.js:6-7 consumers = Studio intake, Overview Convergence/Metadata, Composer, Transcripts batch; primitives.js:1-2 = Studio and Overview; motion.js:19-20 = every page; topnav.js:1 and start-overlay.js:3 = the six app pages; export-actions.js:12 add apiPost to the dependency list and name its five host pages.
   - Verifier: The headers are stale, but two details in the finding are off. intake-cluster is still used by Studio (studio.js:27, studio-intake.js:35) as well as overview-convergence/metadata, Composer and Transcripts; only the 'sub-tabs convergence.js / metadata.js' part is stale. export-actions loads on five pages (composer, screenspace, studio, transcripts, workflows), not four. The rest holds: primitives loads on Studio and Overview only, motion on all 8 pages, topnav and start-overlay on 6, and export-actions calls apiPost without listing it.
-- [ ] `studio-shared-js-19` media-banner.js:82 render() re-inits the global tooltip singleton each time (−5, low)
+- [x] `studio-shared-js-19` media-banner.js:82 render() re-inits the global tooltip singleton each time (−5, low)
   - Change: Delete the line `if (window.clipgenInitDataTooltips) window.clipgenInitDataTooltips();`. The delegated [data-tooltip] handler already covers new nodes. Replace iconSpan's hand-set maskImage/webkitMaskImage with applyIconMask(span, name).
   - Verifier: clipgenInitDataTooltips (utils.js:590-632) adds document mouseover/mouseout and window scroll/resize listeners, each with its own tooltip instance, and it already runs once at load (634-638). media-banner.js:82 calls it on every render, so listeners and tooltip nodes pile up. That is a real bug, and the delegated handler already covers new [data-tooltip] nodes. iconSpan duplicates utils iconMaskSpan/applyIconMask.
-- [ ] `studio-shared-js-12` settings-modal.js:51 _getApiRoot() returns a constant; EXIT_MS hand-mirrors a CSS token (−4, low)
+- [x] `studio-shared-js-12` settings-modal.js:51 _getApiRoot() returns a constant; EXIT_MS hand-mirrors a CSS token (−4, low)
   - Change: Replace _getApiRoot() with `var API_ROOT = "/api"` and update the literals pinned in test_settings_modal_source.py:50-51 and 135-136. Replace EXIT_MS=360 with utils' _cgVeilMs(_root), which already reads --duration-veil. start-overlay.js:2360 has a similar hard-coded 460 ms fade.
   - Verifier: _getApiRoot() always returns "/api" and has 23 call sites. test_settings_modal_source.py pins `_getApiRoot() + ...` literals in about 5 places, which must be updated. EXIT_MS=360 hand-mirrors --duration-veil (per its own comment), and utils' _cgVeilMs(overlayEl) already reads that token with 360 as fallback. The start-overlay 460 ms fade is a separate constant; check which token it should read before changing it.
-- [ ] `studio-shared-js-11` settings-modal.js:1680 Manual fetch justified by a claim apiDelete disproves (−10, low) (revised)
+- [x] `studio-shared-js-11` settings-modal.js:1680 Manual fetch justified by a claim apiDelete disproves (−10, low) (revised)
   - Change: Switch _deleteCard to apiDelete(_getApiRoot() + "/titlecards/image/" + encodeURIComponent(name)).then(function (data) { if (!data || !data.ok) { _setStatus((data && data.error) || "Delete failed"); return; } ...existing reset/refresh... }).catch(function (err) { _setStatus(err.serverMessage || "Delete failed"); }); and delete the false comment. Keep _uploadCard's manual FormData fetch; it then holds the only {ok, body} wrapper.
   - Verifier: The comment at 1682 is wrong: _apiJson (utils.js:1199-1218) rejects non-2xx responses with e.serverMessage = data.error, and settings-modal already reads err.serverMessage at 944. The proposal uses an arrow function, though, which test_js_is_es5 forbids. The 200 + {ok:false} case also still needs handling in .then.
-- [ ] `studio-shared-js-36` studio-intake.js:455 Trim badge duplicated behind a false comment (−12, low)
+- [x] `studio-shared-js-36` studio-intake.js:455 Trim badge duplicated behind a false comment (−12, low)
   - Change: Add buildTrimBadge(key) to the hub (studio.js:2566-2578), publish it, and use it in renderIntakeCardsImpl. Delete the comment claiming iconHTML is unreachable.
   - Verifier: studio.js:3780 publishes STUDIO.iconHTML and studio-reel.js:23 destructures it, so the comment at studio-intake.js:455 is false, and 456-465 duplicate the hub's trim badge (2566-2578). test_queue_cards_do_not_bind_per_card_listeners asserts buildQueueCard's body has exactly 1 addEventListener and contains 'intake-trim-badge'. Extracting buildTrimBadge breaks that, so update the test.
-- [ ] `studio-shared-js-37` studio-intake.js:752 TR_INTAKE_CATEGORIES hardcodes config.MARK_CATEGORIES (−8, med)
+- [x] `studio-shared-js-37` studio-intake.js:752 TR_INTAKE_CATEGORIES hardcodes config.MARK_CATEGORIES (−8, med)
   - Change: Delete TR_INTAKE_CATEGORIES and read labels and keys from utils MARK_CATEGORIES, which setMarkCategories keeps in sync from the transcripts poll (applyTranscriptMarks:786). The unused `token` field goes with it.
   - Verifier: TR_INTAKE_CATEGORIES hardcodes six labels from config.MARK_CATEGORIES, but config (and utils MARK_CATEGORIES) also has 'friction'. Friction marks currently get no pill and fall back to the 'Bookmark' label in typeText (line 360), and user-edited categories never show up. Reading MARK_CATEGORIES, which setMarkCategories keeps live from the poll, fixes both. The pill row will then include friction and any user categories. No code reads `.token`.
-- [ ] `studio-shared-js-42` studio.js:1754 Hand-rolled pluralization bypasses utils clipgenPluralUnit (−5, low)
+- [x] `studio-shared-js-42` studio.js:1754 Hand-rolled pluralization bypasses utils clipgenPluralUnit (−5, low)
   - Change: Replace studio.js plural() and the inline `n === 1 ? ... : ...` sites with clipgenPluralUnit(n, singular, plural).
   - Verifier: utils clipgenPluralUnit(n, singular, plural) covers studio.js plural() (clipgenPluralUnit(n, noun, noun + 's') keeps the dynamic artifactNoun), and the inline ternaries at studio.js:3375, studio-reel.js:231/234, studio-intake.js:1535 and start-overlay.js:1741/1818/1825. Sites with a verb pass the full phrase, e.g. 'note has' / 'notes have'.
-- [ ] `studio-shared-js-30` studio.js:3793 Hub republishes ambient globals through STUDIO inconsistently (−4, low)
+- [x] `studio-shared-js-30` studio.js:3793 Hub republishes ambient globals through STUDIO inconsistently (−4, low)
   - Change: Stop publishing STUDIO.buildXrefBadges and STUDIO.setButtonProgress. Satellites reach the utils/primitives globals directly, as studio-generate.js:29 already does.
   - Verifier: studio-intake.js:13-14 says buildXrefBadges is a utils.js ambient global, but line 24 destructures STUDIO.buildXrefBadges (published at studio.js:3793). studio-reel.js:29 reads STUDIO.setButtonProgress (studio.js:3783, itself ClipgenPrimitives.setButtonProgress), while studio-generate.js:29 reads ClipgenPrimitives directly. No test requires these publishes.
-- [ ] `screenspace-js-11` screenspace-multitool-params.js:138 Hand-rolled hex-to-HSV duplicates hexToRgb and rgbToHsv (−14, low)
+- [x] `screenspace-js-11` screenspace-multitool-params.js:138 Hand-rolled hex-to-HSV duplicates hexToRgb and rgbToHsv (−14, low)
   - Change: Replace the 18-line body of the step hex input handler with `var rgb = hexToRgb(hexIn.value); if (rgb) { var hsv = rgbToHsv(rgb.r, rgb.g, rgb.b); hH.value = hsv.h; hS.value = hsv.s; hV.value = hsv.v; }`, the same code params.js:141-151 uses.
   - Verifier: The multitool hex handler (139-156) reimplements OpenCV-range RGB to HSV. rgbToHsv (screenspace-utils.js:13) and hexToRgb (utils.js:1074) are globals that params.js:141-151 already uses for the same job. Two small behaviour changes, both benign: 3-digit hex now works, and invalid input no longer resets the channels to 0.
-- [ ] `screenspace-js-8` screenspace-tasks.js:979 taskIsActive and isTaskActive coexist with different meanings (−8, low)
+- [x] `screenspace-js-8` screenspace-tasks.js:979 taskIsActive and isTaskActive coexist with different meanings (−8, low)
   - Change: Rename local taskIsActive (running|paused) to taskIsRunning or similar. Use taskIsTerminal at 1088 instead of the inline completed/failed/cancelled test. Replace `some(function(t){return isTaskActive(t);})` at 1227 and 1267 with some(isTaskActive). Inline selectableTasks (84-88) into its single caller at 142.
   - Verifier: utils isTaskActive covers queued, running and paused. The tasks.js local taskIsActive (979) covers only running and paused, and both names are used in tasks.js. Line 1088 repeats taskIsTerminal. The some() callbacks at 1227 and 1267 only wrap isTaskActive. selectableTasks is called once (142).
-- [ ] `screenspace-js-28` screenspace.js:48 Redundant '/screenspace/icons/' basePath passed in 15 places (−15, low)
+- [x] `screenspace-js-28` screenspace.js:48 Redundant '/screenspace/icons/' basePath passed in 15 places (−15, low)
   - Change: Drop the basePath argument or option. utils.iconMaskUrl defaults to the relative 'icons/', which resolves to /screenspace/icons/ from the page, and every other page relies on that default. Where the code does el('span', cls) + applyIconMask(x, name, base), switch to iconMaskSpan(name, {className: cls}).
   - Verifier: iconMaskUrl defaults to the relative 'icons/'. screenspace.html already loads all its CSS and JS through relative hrefs, so the page already depends on being served at /screenspace/, where 'icons/' resolves to /screenspace/icons/. No other page loads screenspace*.js. git log shows the absolute path is a leftover from #388, where hardcoded URLs were converted mechanically.
-- [ ] `screenspace-js-29` screenspace.js:854 PARAM_DESCRIPTIONS keeps duplicate entries for mismatched labels (−10, low) (revised)
+- [x] `screenspace-js-29` screenspace.js:854 PARAM_DESCRIPTIONS keeps duplicate entries for mismatched labels (−10, low) (revised)
   - Change: Move the 'Consecutive' description into PARAM_DESCRIPTIONS._shared and delete its four per-tool copies. Keep the multitool short-label alias entries unless the step-card labels are renamed on purpose after a visual check.
   - Verifier: 'Consecutive' has byte-identical text under change, text, numbers and flow, and getDescription falls back to _shared, so moving it there is safe. The alias entries exist because multitool step cards use shorter labels ('Noise', 'Min OCR', 'Fuzzy', ...) in a narrow xs-font card. Renaming those labels is a visible UI change that may overflow the cards, not a cleanup.
-- [ ] `transcripts-js-23` transcripts-agents.js:210 Redundant resets in _onSummaryResult; renderSummaryEmpty duplicates clearSummary (−10, low)
+- [x] `transcripts-js-23` transcripts-agents.js:210 Redundant resets in _onSummaryResult; renderSummaryEmpty duplicates clearSummary (−10, low)
   - Change: Drop the repeated `state.citationsGenerating = false` (217) and `state.summaryCitations = null` (220), which lines 212-213 already set. Have renderSummaryEmpty (330-343) call clearSummary() and then add only the tracker reset, un-hiding #summaryEmpty and the hint.
   - Verifier: _onSummaryResult sets summaryCitations=null and citationsGenerating=false at 212-213. It then repeats citationsGenerating=false at 217 and summaryCitations=null at 220 in branches that do not change them. Keep the resets at 212-213, which the comment says renderSummary depends on. renderSummaryEmpty (330-342) equals clearSummary (434-443) plus _summaryEtaTracker.reset(), un-hiding #summaryEmpty and _updateSummaryEmptyHint().
-- [ ] `transcripts-js-25` transcripts-agents.js:1799 Duplicated tab/mode tables: FRICTION_MODE_ORDER and hardcoded tab listeners (−3, low)
+- [x] `transcripts-js-25` transcripts-agents.js:1799 Duplicated tab/mode tables: FRICTION_MODE_ORDER and hardcoded tab listeners (−3, low)
   - Change: Derive FRICTION_MODE_ORDER from FRICTION_MODES.map(m => m.value). In initPanelTabs (489-491), loop over PANEL_TABS instead of wiring three literal listeners.
   - Verifier: FRICTION_MODE_ORDER (1799) repeats FRICTION_MODES' values in the same order. initPanelTabs 489-491 hand-wires the three buttons already listed in PANEL_TABS. tests/test_transcripts_dom_wiring.py checks REQUIRED_IDS by substring against the concatenated JS, and PANEL_TABS keeps '#tabBtnSummary' etc. as literals, so the test still passes. Keep the #summaryRunCta listener.
-- [ ] `transcripts-js-26` transcripts-corrections.js:93 Corrections empty state uses inline styles; terms use .dict-empty (−0, low)
+- [x] `transcripts-js-26` transcripts-corrections.js:93 Corrections empty state uses inline styles; terms use .dict-empty (−0, low)
   - Change: Render `<div class="dict-empty">No corrections yet</div>` the same way renderKnownTerms (164) does.
   - Verifier: corrections.js 93 inlines color:var(--color-text-dim);font-size:var(--text-sm);padding:var(--space-2) 0, which .dict-empty (transcripts.css 2765) already defines, plus text-wrap. The sibling renderKnownTerms (164) uses the class.
-- [ ] `transcripts-js-20` transcripts-pills.js:587 Inconsistent guards on always-loaded TS exports; stale load-order comments (−8, low)
+- [x] `transcripts-js-20` transcripts-pills.js:587 Inconsistent guards on always-loaded TS exports; stale load-order comments (−8, low)
   - Change: Destructure or call directly the exports from earlier-loading files. In pills, drop the guards on TS.getStoredMarkersFor (587, 1061) and TS.clearMarkersFor (604); the header already destructures updateTranscribeFill from the same video satellite. In video, drop the guards on TS.displayText (651), TS.speakersOn (654) and TS.cycleParticipant (1058, 1063). Also drop agents' TS.displayText guard (1107), search's TS.speakerChipHtml guard (171) and batch's TS.trackOptionLabel fallback (607-609). Fix the comments: batch 606 says 'Late-bound' although pills loads first; pills 1224 says the reader is the hub but it is batch; agents' header says 'Loaded LAST' but batch loads after it; the hub header (10-11) and 2258 name _summaryPoller/_citationsPoller, which no longer exist.
   - Verifier: transcripts.html 473-481 confirms the load order: hub, speakers, redact, corrections, search, video, pills, agents, batch. getStoredMarkersFor and clearMarkersFor come from video (1398-1399), which loads before pills. displayText comes from redact (412) and speakersOn/speakerChipHtml from speakers (249/252), all before their guarded readers. cycleParticipant comes from the hub (3146). trackOptionLabel comes from pills (1224), which loads before batch, and its only reader is batch 607. Every stale comment is real: pills 1224 says 'hub', batch 606 and batch header line 12 say 'late-bound', the agents header says 'Loaded LAST', and hub 10-11 and 2258 name the removed pollers. Also fix batch.js:12.
-- [ ] `transcripts-js-22` transcripts-video.js:152 Dead ternary, unused var, and scroll-ignore stamp copied instead of called (−3, low)
+- [x] `transcripts-js-22` transcripts-video.js:152 Dead ternary, unused var, and scroll-ignore stamp copied instead of called (−3, low)
   - Change: Replace `c === c2 ? c.offsetHeight || 48 : c.offsetHeight || 48` with `c.offsetHeight || 48`. Delete the unused `var v` in renderTimeline (329). In scrollToSegment (1370, 1373), call ignoreNextScroll() instead of repeating `_ignoreScrollUntil = Date.now() + 120`.
   - Verifier: Line 152's ternary has identical branches. The `var v = qs("#videoPlayer")` at 329 is never referenced again in renderTimeline. scrollToSegment (1370, 1373) repeats ignoreNextScroll's body, and ignoreNextScroll is defined just above in the same file (1342).
-- [ ] `transcripts-js-21` transcripts-video.js:1390 utils.js clipgenPartForGlobal routed through the satellite and a hub delegator (−8, med) (revised)
+- [x] `transcripts-js-21` transcripts-video.js:1390 utils.js clipgenPartForGlobal routed through the satellite and a hub delegator (−8, med) (revised)
   - Change: Delete TS._partForGlobal (video.js 1390) and the hub delegator _partForGlobal (transcripts.js 1590), and call clipgenPartForGlobal directly at 855. Keep the hub's multi-part restore as written because it carries the selected-participant guard that _switchToPart lacks.
   - Verifier: The first half holds. TS._partForGlobal (video 1390) republishes the utils global clipgenPartForGlobal, and its only reader is the hub delegator (1590) used at 855. The second half would cause a regression. The hub's restoreTime checks `state.selectedParticipant !== pid` before seeking. That check stops a stale loadedmetadata listener from applying one participant's time to the next participant's video after a quick switch. _switchToPart has no such check.
-- [ ] `transcripts-js-24` transcripts.js:575 Warmup response handling duplicated; model-hint poll has identical branches (−12, low)
+- [x] `transcripts-js-24` transcripts.js:575 Warmup response handling duplicated; model-hint poll has identical branches (−12, low)
   - Change: In startModelHintPoll, merge `if (data.loaded) {stop; forget; return}` and `if (!data.warming) {stop; forget}` into one `if (data.loaded || !data.warming)`. Add _handleWarmupReply(d) for the started/already_warming/already_loaded/else branch shared by tryPostTranscriptionWarmup (619-627) and _confirmPrewarmDownload (660-672).
   - Verifier: startModelHintPoll 575-584 runs stop and forget in both the loaded and !warming branches, so they merge. tryPostTranscriptionWarmup 619-627 and _confirmPrewarmDownload 660-672 share the !ok/started-or-warming/already_loaded/else dispatch on independent flags, so the order swap is harmless. The hub keeps its skipped branch ahead of the shared call.
-- [ ] `cwo-22` composer-timeline.js:83 laneRowH/cutTrackH are constant functions left over from a toggle (−4, low)
+- [x] `cwo-22` composer-timeline.js:83 laneRowH/cutTrackH are constant functions left over from a toggle (−4, low)
   - Change: Replace laneRowH() and cutTrackH() with a single constant (THUMB_ROW_H), delete THUMB_CUT_H since it has the same value, and inline the constant at the call sites (97, 109-110, 114, 363).
   - Verifier: laneRowH() returns THUMB_ROW_H and cutTrackH() returns THUMB_CUT_H. Both are 42, neither reads state, and the comment at 82 says the size is fixed. Call sites are 97, 109, 110, 114 and 363.
-- [ ] `cwo-23` composer-timeline.js:88 Defensive guards on hub-published CO functions in composer satellites (−10, low)
+- [x] `cwo-23` composer-timeline.js:88 Defensive guards on hub-published CO functions in composer satellites (−10, low)
   - Change: Call CO.participantAnnotations, CO.sortedCuts, CO.participantCuts, CO.selectedAnnotations, CO.seekVideo, CO.setInPoint, CO.setOutPoint and CO.renderSidebar directly (timeline 88, 314, 960-964; annotate 441, 491; markers 61). Add a guarded updateTimelineHeight delegator to the hub's delegator block to replace the five inline `if (CO.updateTimelineHeight)` checks in composer.js (365, 494, 725, 1724).
   - Verifier: participantAnnotations, sortedCuts, participantCuts, selectedAnnotations, seekVideo, setInPoint, setOutPoint and renderSidebar are all assigned at composer.js IIFE top level. composer.js loads first (composer.html:294), and the same satellites already call CO.participantCuts, CO.selectedAnnotations, CO.participantAnnotations and CO.seekVideo unguarded. updateTimelineHeight comes from the timeline satellite, so a hub delegator fits the existing guarded-delegator block. The hub guards it at four sites (365, 494, 725, 1724), and composer-markers.js 59/191 has two more.
-- [ ] `cwo-55` gallery.js:17 Redundant bind-once flag and repeated timestamp label in gallery (−6, low)
+- [x] `cwo-55` gallery.js:17 Redundant bind-once flag and repeated timestamp label in gallery (−6, low)
   - Change: Drop _galleryVideoObserverBound, since renderGrid runs once from DOMContentLoaded (the unguarded grid click listener at 151 already assumes this). Hoist the `if (document.hidden)` check out of the loop, and add stampLabel(a) for the four `a.timestamp_formatted || formatTime(a.timestamp)` copies (119, 133, 193, 206).
   - Verifier: renderGrid has one caller (line 64, DOMContentLoaded), and the unguarded grid click listener at 151 already assumes a single run, so the bound flag is redundant. The visibilitychange loop tests document.hidden once per video. `a.timestamp_formatted || formatTime(a.timestamp)` appears at 119, 133, 193 and 206.
-- [ ] `cwo-52` overview-convergence.js:1532 deactivate clears the hover debounce that cvHideFramePreview clears anyway (−3, low)
+- [x] `cwo-52` overview-convergence.js:1532 deactivate clears the hover debounce that cvHideFramePreview clears anyway (−3, low)
   - Change: Delete lines 1531-1533 (the comment, clearTimeout and null reset). cvHideFramePreview(), called on the next line, does both.
   - Verifier: cvHideFramePreview (150-154) starts with clearTimeout(_cvHoverDebounce) and sets it to null. deactivate repeats both lines right before calling it.
-- [ ] `cwo-42` overview-metadata.js:950 Per-function ClipgenPrimitives aliases with a masking {} fallback (−3, low)
+- [x] `cwo-42` overview-metadata.js:950 Per-function ClipgenPrimitives aliases with a masking {} fallback (−3, low)
   - Change: Declare a single module-level alias, `var P = window.ClipgenPrimitives;`, which primitives.js loads first in overview.html, and delete the four in-function copies (950, 1044, 1106, 1178). Also drop the `|| {}` in overview-convergence.js:23, which only turns a missing script into a later 'not a function' error.
   - Verifier: primitives.js sets global.ClipgenPrimitives synchronously and loads (deferred) before the overview scripts (overview.html:73-84), so a module-level alias in overview-metadata.js resolves. overview-reports.js already reads it without a fallback, and the `|| {}` only turns a missing script into a later 'not a function' error.
-- [ ] `cwo-13` overview-metadata.js:1942 mdState.baselines stored only to act as a first-run flag (−2, low)
+- [x] `cwo-13` overview-metadata.js:1942 mdState.baselines stored only to act as a first-run flag (−2, low)
   - Change: Drop the baselines field, which no metadata code reads. Gate the first ensureData() on an explicit flag, or always chain refresh() off ensureData(), which is memoized.
   - Verifier: mdState.baselines appears only in the literal (28), the null check (1942) and the write (1945). No stats code reads it, and the baselines reach parseClipTimestamps through the hub's createSheetXrefHelpers. It serves only as a first-activation flag.
-- [ ] `cwo-56` workflows-canvas.js:1077 Stale consumer comment on WF.fitToView (−0, low)
+- [x] `cwo-56` workflows-canvas.js:1077 Stale consumer comment on WF.fitToView (−0, low)
   - Change: Change the comment to name the actual consumer (the hub's #wfMinimapFit button, workflows.js:1157). The nodes satellite never calls fitToView.
   - Verifier: The comment at workflows-canvas.js:1077 names the hub 'F' shortcut and the nodes satellite. The F hotkey (workflows.fitView) is registered in workflows-canvas.js:721 and calls the local fitToView, and nothing in workflows-nodes.js calls it. The only WF.fitToView read is workflows.js:1157 (#wfMinimapFit).
-- [ ] `cwo-33` workflows-nodes.js:188 Dead store fallbacks in param editors (−5, low)
+- [x] `cwo-33` workflows-nodes.js:188 Dead store fallbacks in param editors (−5, low)
   - Change: Drop `store = store || node.params` in buildParamControl (188) and buildParamRow (271), the `store ? … : spec.default` at 189 and 381, and the `if (store)` at 432. Also drop the duplicate `if (!node.params) node.params = {}` at 594, since renderNode sets it at 750.
   - Verifier: buildParamRow's only caller, buildParamsInto, always gets node.params (121, set at 91; 596) or step (587). buildParamControl is called only from buildParamRow (275, 302), and buildParticipantSelect gets the same store. buildParamEditors has one caller (751), which already sets node.params at 750.
-- [ ] `cwo-36` workflows-validate.js:29 || [] fallbacks on WF.state arrays that are always initialized (−20, low)
+- [x] `cwo-36` workflows-validate.js:29 || [] fallbacks on WF.state arrays that are always initialized (−20, low)
   - Change: Drop the `state.nodes || []`, `state.edges || []`, `state.selection || []`, `state.stashes || []`, `state.catalogById &&` and `state.adapters &&` fallbacks throughout the workflows satellites. Also drop the `WF.flushSave ?`, `WF.nodeContextMet &&`, `WF.bindMenuToggle`, `WF.undo &&` and `WF.openBlueprint` guards on functions the hub publishes synchronously.
   - Verifier: workflows.js:15-44 initializes nodes, edges, selection, stashes, runs and batches as arrays, catalogById as {} and adapters as a Set. Every reassignment keeps an array (openBlueprint uses bp.nodes || (bp.nodes = [])). flushSave, nodeContextMet, bindMenuToggle, undo and openBlueprint are assigned at hub top level (1219-1229) before any satellite runs.
-- [ ] `cwo-31` workflows-wires.js:432 Edge id generation bypasses WF.randomId (−0, low)
+- [x] `cwo-31` workflows-wires.js:432 Edge id generation bypasses WF.randomId (−0, low)
   - Change: Use "e_" + WF.randomId() in connectPorts, as instantiateSubgraph already does (stashes:256).
   - Verifier: wires:432 inlines Math.random().toString(36).slice(2, 10), which is the body of canvas randomId. That function is published as WF.randomId, and stashes:219/256 already use it for n_ and e_ ids.
 
 ### CSS
 
-- [ ] `css-23` screenspace.css:268 Mixed absolute /screenspace/icons and relative icons/ URLs (−0, low)
+- [x] `css-23` screenspace.css:268 Mixed absolute /screenspace/icons and relative icons/ URLs (−0, low)
   - Change: Rewrite the 44 `url("/screenspace/icons/...")` references (e.g. 268-274, 328, 1222, 1529, 2575-2576, 2624-2625) to the relative `url("icons/...")` form the other 24 references in this file and every other stylesheet use. That removes the mount-prefix coupling.
   - Verifier: screenspace.html links screenspace.css relatively from /screenspace/, so url("icons/x.svg") resolves to /screenspace/icons/x.svg, the route register_static_routes(icons=True) serves. The file has 44 absolute and 24 relative references. No other stylesheet uses absolute URLs, and no test pins the absolute form.
-- [ ] `css-22` studio.css:782 Split duplicate rules; first .sev-pill color/background are dead (−12, low)
+- [x] `css-22` studio.css:782 Split duplicate rules; first .sev-pill color/background are dead (−12, low)
   - Change: Drop `background` and `color` from the first .sev-pill block (studio.css:787-788); the second .sev-pill block at 804-807 overrides both. Merge the back-to-back #runBtn rules (screenspace.css:1671 and 1675). Fold the post-sweep second rules into their first block: .md-stacked-segment (overview-metadata.css:555), .md-sev-dot (580) and .rp-clip-sev (overview-reports.css:365).
   - Verifier: The second studio.css .sev-pill block (804-807) sets color and background, both of which override the first block (788-789) at equal specificity, since the var(--sev, var(--fg-muted)) fallback covers the no-severity case. screenspace.css #runBtn at 1671 and 1675 are back-to-back. .md-stacked-segment (542/555), .md-sev-dot (572/580) and .rp-clip-sev (358/365) are single-property follow-up rules that fold into their first blocks.
-- [ ] `css-2` tokens.css:296 tokens.css comments claim exports strip tokens.css; viewer.py prepends it (−4, low)
+- [x] `css-2` tokens.css:296 tokens.css comments claim exports strip tokens.css; viewer.py prepends it (−4, low)
   - Change: Rewrite the caveats at tokens.css:894-895 (sev indirection), 906-908 (.hidden), 915-916 (.cg-modal-card) and 943-944 (.cg-modal-overlay). viewer.py prepends tokens.css to every export, so these utilities are available to viewer.css/gallery.css. Then delete gallery.css:249-251 (its own `.hidden { display:none !important }` copy). The same file says the right thing at lines 1022-1023 and 1080-1081.
   - Verifier: viewer.py:281-287 prepends tokens.css to css_text inside _generate_viewer_html, which both viewer.css (viewer.py:422) and gallery.css (viewer.py:490) go through. So tokens.css:894-895, 906-908, 915-916 and 943-944 contradict the code and the file's own lines 1022/1080. gallery.css:249-251 `.hidden { display:none !important }` matches tokens.css:909 declaration for declaration.
 

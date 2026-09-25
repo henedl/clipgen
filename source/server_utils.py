@@ -26,9 +26,7 @@ same numeric-arg parse-and-validate block dozens of times. Collapsed here:
   + :func:`mtime_or_zero` back the hover-scrubber media routes (sprite sheets /
   audio snippets).
 
-Deliberately tiny and Flask-only (no ``config``/``utils`` imports) so it stays
-import-clean: ``utils`` is Flask-free on purpose and imported by non-server
-modules, so these helpers must not live there.
+Flask helpers live here because ``utils`` stays Flask-free for non-server modules.
 """
 
 from __future__ import annotations

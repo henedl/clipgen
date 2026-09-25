@@ -361,21 +361,18 @@ def derive_sheet_meta(worksheet: Any) -> dict[str, str] | None:
     """
     if worksheet is None:
         return None
-    try:
-        import excel_io
+    import excel_io
 
-        if isinstance(worksheet, excel_io.ExcelSheetAdapter):
-            path = getattr(worksheet, "_workbook_path", "") or ""
-            if not path:
-                return None
-            return {
-                "type": "excel",
-                "id_or_path": path,
-                "label": Path(path).name,
-                "worksheet": getattr(worksheet, "title", ""),
-            }
-    except ImportError:
-        pass  # no excel_io in this build; fall through to the gspread branch
+    if isinstance(worksheet, excel_io.ExcelSheetAdapter):
+        path = getattr(worksheet, "_workbook_path", "") or ""
+        if not path:
+            return None
+        return {
+            "type": "excel",
+            "id_or_path": path,
+            "label": Path(path).name,
+            "worksheet": getattr(worksheet, "title", ""),
+        }
     # gspread Worksheet: the parent spreadsheet title is both identifier and label.
     parent = getattr(worksheet, "spreadsheet", None)
     title = getattr(parent, "title", "") if parent is not None else ""

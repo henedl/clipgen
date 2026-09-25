@@ -867,13 +867,7 @@ audio.cg-audiotrack { display: none; }
   box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent) 25%, transparent);
 }
 
-/* Per-severity color indirection. Elements carrying a severityClass() class
-   (utils.js: sev-critical … sev-very-positive, sev-na, sev-unknown — kept in
-   sync with Python via tests/test_shared_constants.py) get --sev bound to
-   their severity color; a component then paints whichever property it colors
-   from `var(--sev, <fallback>)` instead of repeating an eight-line ladder.
-   NOT for viewer.css/gallery.css — exported HTML strips tokens.css, so those
-   keep their local ladders. */
+/* Binds --sev per severity class; components paint from var(--sev, fallback). */
 .sev-critical      { --sev: var(--sev-critical); }
 .sev-high          { --sev: var(--sev-high); }
 .sev-medium        { --sev: var(--sev-medium); }
@@ -883,18 +877,12 @@ audio.cg-audiotrack { display: none; }
 .sev-very-positive { --sev: var(--sev-very-positive); }
 .sev-unknown       { --sev: var(--sev-unknown); }
 
-/* The page-wide hide utility. !important on purpose: it must out-cascade
-   .cg-modal-overlay's `display: flex` (and any display an adopter sets)
-   regardless of specificity or source order. gallery.css keeps its own copy —
-   exported HTML strips tokens.css. */
+/* Page-wide hide; !important out-cascades .cg-modal-overlay's display: flex. */
 .hidden {
   display: none !important;
 }
 
-/* Modal dialog card shell — the surface inside a .cg-modal-overlay. Add
-   ALONGSIDE a page-local class that owns width and padding (and any deliberate
-   deviations), e.g. class="wf-dialog cg-modal-card". Same export caveat as
-   .cg-modal-overlay. */
+/* Modal card shell; pair with a page class that owns width and padding. */
 .cg-modal-card {
   background: var(--color-surface);
   border: 1px solid var(--color-panel-border);
@@ -915,14 +903,7 @@ audio.cg-audiotrack { display: none; }
   color: var(--color-text-dim);
 }
 
-/* Centered blocking-modal overlay shell — shared across pages. Add ALONGSIDE a
-   page-local class that owns the backdrop color and the show/hide toggle, e.g.
-   class="wf-dialog-overlay cg-modal-overlay". Unlike .cg-menu this DOES set
-   `display: flex`, so each adopter's hide mechanism must out-cascade it: a
-   compound rule (.modal.hidden) or an !important .hidden utility both do; a
-   bare later-loading .hidden also works (equal specificity, page CSS loads
-   after tokens.css). NOT for hotkeys.css/gallery/viewer overlays — those ship
-   in exported HTML where tokens.css is stripped, and stay self-contained. */
+/* Modal backdrop shell; sets display: flex, so adopters hide it with .hidden. */
 .cg-modal-overlay {
   position: fixed;
   inset: 0;

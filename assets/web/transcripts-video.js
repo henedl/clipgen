@@ -149,7 +149,7 @@
     if (rect.width === 0) return;
     var dpr = window.devicePixelRatio || 1;
     [c1, c2].forEach(function (c) {
-      var cssH = c === c2 ? c.offsetHeight || 48 : c.offsetHeight || 48;
+      var cssH = c.offsetHeight || 48;
       var cssW = rect.width;
       c.width = Math.round(cssW * dpr);
       c.height = Math.round(cssH * dpr);
@@ -326,7 +326,6 @@
     var canvas = qs("#timelineCanvas");
     if (!canvas) return;
     var ctx = canvas.getContext("2d");
-    var v = qs("#videoPlayer");
     var cssW = canvas.offsetWidth;
     var cssH = canvas.offsetHeight;
     ctx.clearRect(0, 0, cssW, cssH);
@@ -648,10 +647,10 @@
     var mark = getMarkForSegment(seg);
     var cat = (mark && MARK_CATEGORIES[mark.category]) || MARK_CATEGORIES.bookmark || { label: "Mark", color: "#888" };
     // Placeholders, not the surface, while redaction is applied.
-    var shown = (TS.displayText ? TS.displayText(seg) : seg.text || "").trim();
+    var shown = TS.displayText(seg).trim();
     var snippet = shown.slice(0, 80);
     if (shown.length > 80) snippet += "…";
-    if (seg.speaker && TS.speakersOn && TS.speakersOn()) {
+    if (seg.speaker && TS.speakersOn()) {
       snippet = TS.speakerName(seg.speaker) + ": " + snippet;
     }
     var extraCount = (seg.marks && seg.marks.length > 1) ? (seg.marks.length - 1) : 0;
@@ -1055,12 +1054,12 @@
       {
         id: "transcripts.cyclePartPrev",
         when: _hotkeysActive,
-        handler: function () { if (TS.cycleParticipant) TS.cycleParticipant(-1); },
+        handler: function () { TS.cycleParticipant(-1); },
       },
       {
         id: "transcripts.cyclePartNext",
         when: _hotkeysActive,
-        handler: function () { if (TS.cycleParticipant) TS.cycleParticipant(1); },
+        handler: function () { TS.cycleParticipant(1); },
       },
       {
         id: "transcripts.pillMenu",
@@ -1367,10 +1366,10 @@
     var visibleBottom = scroller.scrollTop + scroller.clientHeight;
 
     if (rowTopInScroll < visibleTop + 40) {
-      _ignoreScrollUntil = Date.now() + 120;
+      ignoreNextScroll();
       scroller.scrollTop = rowTopInScroll - chromeTop - 40;
     } else if (rowBottomInScroll > visibleBottom - 40) {
-      _ignoreScrollUntil = Date.now() + 120;
+      ignoreNextScroll();
       scroller.scrollTop = rowBottomInScroll - scroller.clientHeight + 40;
     }
   }
@@ -1387,7 +1386,6 @@
   TS.scrollToSegment = scrollToSegment;
   TS.ignoreNextScroll = ignoreNextScroll;
   TS.applyCaptionMode = applyCaptionMode;
-  TS._partForGlobal = clipgenPartForGlobal;
   TS._partMediaUrl = _partMediaUrl;
   TS.cancelPendingSeek = cancelPendingSeek;
   TS.clearTimelineMarkers = clearTimelineMarkers;

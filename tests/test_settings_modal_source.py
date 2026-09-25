@@ -1,7 +1,7 @@
 """Source-level wiring assertions for the settings modal's model rows.
 
 The modal opens from every page, so every request it makes is absolute
-(``_getApiRoot()`` returns ``/api``) and must hit a rule registered on the
+(``API_ROOT`` is ``/api``) and must hit a rule registered on the
 combined app itself, not on a blueprint. A page-relative path would resolve
 under whichever prefix happened to serve the page; a leading slash on a
 blueprint-only rule 404s from everywhere. Both mistakes are invisible to the
@@ -47,8 +47,8 @@ def test_model_icons_are_css_masks_with_an_accessible_name():
 
 def test_model_routes_go_through_the_api_root():
     """No hardcoded prefix and no page-relative path for either model action."""
-    assert '_getApiRoot() + "/models/llm/reveal"' in _JS
-    assert '_getApiRoot() + "/models/llm/"' in _JS
+    assert 'API_ROOT + "/models/llm/reveal"' in _JS
+    assert 'API_ROOT + "/models/llm/"' in _JS
     assert 'apiPost("api/models' not in _JS
     assert '"/transcripts/api/models' not in _JS
 
@@ -132,8 +132,8 @@ def test_model_rows_name_and_link_the_model():
 
 
 def test_download_routes_go_through_the_api_root():
-    assert '_getApiRoot() + "/models/llm/download"' in _JS
-    assert '_getApiRoot() + "/models/llm/download-status?model="' in _JS
+    assert 'API_ROOT + "/models/llm/download"' in _JS
+    assert 'API_ROOT + "/models/llm/download-status?model="' in _JS
 
 
 def test_download_completion_refreshes_block_and_selects():

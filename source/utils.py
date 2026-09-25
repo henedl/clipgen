@@ -214,23 +214,17 @@ console = Console(theme=_CLIPGEN_THEME, highlight=False) if RICH_AVAILABLE else 
 
 def _use_rich() -> bool:
     """Check if Rich output should be used."""
-    return (
-        RICH_AVAILABLE and console is not None and getattr(config, "RICH_COLORS", True)
-    )
+    return RICH_AVAILABLE and console is not None and config.RICH_COLORS
 
 
 def _use_panels() -> bool:
     """Check if Rich panels should be used for errors/warnings/success."""
-    return getattr(config, "RICH_PANELS", True)
+    return config.RICH_PANELS
 
 
 def use_progress() -> bool:
     """Check if Rich progress bars should be used."""
-    return (
-        RICH_AVAILABLE
-        and console is not None
-        and getattr(config, "RICH_PROGRESS", True)
-    )
+    return RICH_AVAILABLE and console is not None and config.RICH_PROGRESS
 
 
 # ---- Print functions ----
@@ -249,7 +243,7 @@ def debug_print(message: str) -> None:
 
 def verbose_print(message: str) -> None:
     """Print informational messages when VERBOSITY is set to the highest level."""
-    if getattr(config, "VERBOSITY", config.STANDARD) >= config.VERBOSE:
+    if config.VERBOSITY >= config.VERBOSE:
         if _use_rich() and console is not None:
             console.print(message, style="verbose")
         else:
@@ -258,7 +252,7 @@ def verbose_print(message: str) -> None:
 
 def standard_print(message: str) -> None:
     """Print informational messages for standard verbosity and above."""
-    if getattr(config, "VERBOSITY", config.STANDARD) >= config.STANDARD:
+    if config.VERBOSITY >= config.STANDARD:
         if _use_rich() and console is not None:
             console.print(message, style="verbose")
         else:
@@ -489,7 +483,7 @@ T = TypeVar("T")
 
 def run_with_spinner(message: str, callback: Callable[[], T]) -> T:
     """Run callback with an indeterminate Rich spinner; if progress disabled, run callback only."""
-    if not use_progress() or not RICH_AVAILABLE or console is None:
+    if not use_progress():
         return callback()
     with Progress(
         SpinnerColumn(),
@@ -506,7 +500,7 @@ def print_mode_heading(label: str, style: str | None = None) -> None:
     style should be a theme key (e.g. 'mode.spreadsheet') so colors render correctly.
     No-op when VERBOSITY is below STANDARD (e.g. CLI mode without -v).
     """
-    if getattr(config, "VERBOSITY", config.STANDARD) < config.STANDARD:
+    if config.VERBOSITY < config.STANDARD:
         return
     if _use_rich() and console is not None and style:
         console.print()
@@ -524,7 +518,7 @@ def print_mode_heading(label: str, style: str | None = None) -> None:
 
 def get_effective_input_dir() -> Path:
     """Return the effective input directory for source videos."""
-    configured = getattr(config, "INPUT_DIR", "") or ""
+    configured = config.INPUT_DIR or ""
     if configured:
         return Path(configured).expanduser()
     return Path.cwd()
@@ -532,7 +526,7 @@ def get_effective_input_dir() -> Path:
 
 def get_effective_output_dir() -> Path:
     """Return the effective output directory for generated artifacts."""
-    configured = getattr(config, "OUTPUT_DIR", "") or ""
+    configured = config.OUTPUT_DIR or ""
     if configured:
         return Path(configured).expanduser()
     return Path.cwd()
@@ -759,10 +753,6 @@ def require_optional(module_name: str, feature_label: str) -> None:
         raise ImportError(
             f"{module_name} is required for {feature_label}. Install with: uv add {module_name}"
         ) from None
-
-
-# One manifest file, one key per tool section; per-section JSON text cached by
-# (mtime_ns, size).
 
 
 def _lock_fd(fd: int) -> None:
@@ -995,7 +985,7 @@ def sanitize_filename(text: str) -> str:
 @functools.cache
 def get_known_annotation_map() -> dict[str, str]:
     """Return configured annotation tokens mapped to normalized annotation IDs."""
-    configured_map = getattr(config, "ANNOTATION_KEYPHRASES", {"!key": "key"})
+    configured_map = config.ANNOTATION_KEYPHRASES
     normalized_map: dict[str, str] = {}
     for token, annotation_id in configured_map.items():
         normalized_map[str(token).strip().lower()] = str(annotation_id).strip().lower()
@@ -1280,13 +1270,14 @@ def _resolve_segment_source_fields(
     """
     global_start = timestamp_to_seconds(start_str) or 0.0
     global_end = timestamp_to_seconds(end_str) or 0.0
+    fallback: dict[str, Any] = {
+        "sourceVideo": Path(base_video).name,
+        "localStart": global_start,
+        "localEnd": global_end,
+    }
     timeline = clip.get("source_timeline")
     if not timeline or len(timeline) < 2:
-        return {
-            "sourceVideo": Path(base_video).name,
-            "localStart": global_start,
-            "localEnd": global_end,
-        }
+        return fallback
 
     if allow_split:
         pieces = map_global_range_to_segments(timeline, global_start, global_end)
@@ -1308,19 +1299,11 @@ def _resolve_segment_source_fields(
             if len(parts) > 1:
                 fields["parts"] = parts
             return fields
-        return {
-            "sourceVideo": Path(base_video).name,
-            "localStart": global_start,
-            "localEnd": global_end,
-        }
+        return fallback
 
     mapped = map_global_to_segment(timeline, global_start)
     if mapped is None:
-        return {
-            "sourceVideo": Path(base_video).name,
-            "localStart": global_start,
-            "localEnd": global_end,
-        }
+        return fallback
     index, local_start = mapped
     seg_duration = timeline[index][1]
     local_end = min(float(seg_duration), local_start + (global_end - global_start))
@@ -1385,20 +1368,9 @@ def build_artifact_record(
     artifact_type: str,
     seg_idx: int,
 ) -> dict[str, Any]:
-    """Build one artifact dict from a clip record + one segment.
+    """Build one artifact dict; its id needs a unique cell (row, col).
 
-    Single source of truth for the artifact record shape used by clipgen_manifest
-    and the timeline viewer. Callers may add or override fields after the call
-    (e.g. transcripts append ``transcriptFormat``).
-
-    The artifact id is built from ``cell.row`` / ``cell.col`` (plus the type for
-    non-clips) and is the manifest dedup key. Callers must therefore provide either a real spreadsheet cell
-    (positive row/col) or a synthetic cell with a unique ``(row, col)`` pair —
-    see ``_make_synthetic_clip_record`` in ``cli.py``, which mints negative
-    rows namespaced per-mode by ``cell_col``. Passing ``cell=None`` or a stub
-    without ``.row``/``.col`` raises ``ValueError`` to prevent silent id
-    collisions (two such records with the same ``seg_idx`` would dedup against
-    each other in ``viewer.save_manifest``).
+    Synthetic records mint negative rows via ``files._make_synthetic_clip_record``.
     """
     cell = clip.get("cell")
     cell_row = getattr(cell, "row", None)
@@ -1407,7 +1379,7 @@ def build_artifact_record(
         raise ValueError(
             "build_artifact_record requires a cell with row and col; "
             "synthetic records must use a unique (row, col) pair — see "
-            "_make_synthetic_clip_record in cli.py for the negative-row "
+            "files._make_synthetic_clip_record for the negative-row "
             "convention."
         )
     # A cell's clip, screenshot and GIF must not share an id.
@@ -1473,7 +1445,7 @@ def _clean_timestamp_token(token: str) -> str:
 @functools.cache
 def get_ignored_timestamp_tokens() -> set[str]:
     """Return configured ignored non-timestamp tokens in normalized form."""
-    configured_tokens = getattr(config, "IGNORED_TIMESTAMP_TOKENS", set())
+    configured_tokens = config.IGNORED_TIMESTAMP_TOKENS
     normalized_tokens: set[str] = set()
     for token in configured_tokens:
         cleaned = _clean_timestamp_token(str(token).strip().lower())
@@ -1684,7 +1656,7 @@ def parse_timestamps(
         if config.DEBUGGING:
             config.debug_ic(skipped_timestamps)
         # Only show detailed skipped-timestamp warnings at verbose verbosity.
-        if getattr(config, "VERBOSITY", config.STANDARD) >= config.VERBOSE:
+        if config.VERBOSITY >= config.VERBOSE:
             cell_info = f" in cell {cell_ref}" if cell_ref else ""
             details = []
             for ts in skipped_timestamps[: config.MAX_SKIPPED_TIMESTAMPS_TO_SHOW]:
@@ -1901,7 +1873,7 @@ def convert_clock_pairs_to_relative(
         cell_info = f" in cell {cell_ref}" if cell_ref else ""
         # Standard verbosity: short summary so users notice silent drops.
         # Verbose: full list and explanation.
-        verbosity = getattr(config, "VERBOSITY", config.STANDARD)
+        verbosity = config.VERBOSITY
         if verbosity >= config.VERBOSE:
             details = [f"    '{s}'" for s in skipped]
             details.append(

@@ -12,6 +12,8 @@
 (function () {
   "use strict";
 
+  var P = window.ClipgenPrimitives;
+
   // --- Aliases (set in init) ---
   var state;
   var parseClipTimestamps;
@@ -25,7 +27,6 @@
     initialized: false,
     cache: null,
     _snapshot: null,
-    baselines: null,
     filterParticipants: [],
     collapsedSections: {},
     collisionWindow: 5,
@@ -947,7 +948,6 @@
   // --- Header bar ---
 
   function renderHeaderBar(cache) {
-    var P = window.ClipgenPrimitives || {};
     var bar = el("div", "md-header-bar");
 
     bar.appendChild(renderSearchBox());
@@ -1031,7 +1031,6 @@
   }
 
   function renderKpiStrip(cache) {
-    var P = window.ClipgenPrimitives || {};
     var strip = el("div", "md-kpi-strip");
 
     var sheetSeries = _coverageSeries(cache, "sheet");
@@ -1093,7 +1092,6 @@
   }
 
   function renderActivityBlock(cache) {
-    var P = window.ClipgenPrimitives || {};
     var block = el("div", "md-activity-block");
 
     var head = el("div", "md-activity-head");
@@ -1165,7 +1163,6 @@
   // --- Section 1: Coverage Matrix ---
 
   function renderCoverageBody(body, cache) {
-    var P = window.ClipgenPrimitives || {};
     var participants = cache.participants;
     var rows = [];
     for (var i = 0; i < participants.length; i++) {
@@ -1911,10 +1908,10 @@
     if (mdState._snapshot) {
       checkStaleness();
     }
-    if (mdState.baselines === null) {
-      // First activation: ensureData() supplies streams plus clock-correction baselines.
+    if (!mdState.initialized) {
+      // First activation waits for the hub's streams and baselines.
       window.ClipgenOverview.ensureData().then(function () {
-        mdState.baselines = state.convergenceBaselines || {};
+        mdState.initialized = true;
         refresh();
       });
     } else {

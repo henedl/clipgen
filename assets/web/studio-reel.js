@@ -26,7 +26,6 @@
     pathBasename = STUDIO.pathBasename,
     renderReelQueue = STUDIO.renderReelQueue,
     revealStatusOverlay = STUDIO.revealStatusOverlay,
-    setButtonProgress = STUDIO.setButtonProgress,
     setCardQueued = STUDIO.setCardQueued,
     setCardResult = STUDIO.setCardResult,
     setReelGenerating = STUDIO.setReelGenerating,
@@ -37,6 +36,7 @@
     showResult = STUDIO.showResult,
     stampLog = STUDIO.stampLog,
     updateSingleCellClass = STUDIO.updateSingleCellClass;
+  var setButtonProgress = ClipgenPrimitives.setButtonProgress;
 
 
   function onBuildReel() {
@@ -228,10 +228,10 @@
 
     var parts = [];
     if (ssCount > 0) {
-      parts.push(ssCount + " Screenspace event group" + (ssCount === 1 ? "" : "s"));
+      parts.push(clipgenPluralUnit(ssCount, "Screenspace event group", "Screenspace event groups"));
     }
     if (trCount > 0) {
-      parts.push(trCount + " Transcript mark group" + (trCount === 1 ? "" : "s"));
+      parts.push(clipgenPluralUnit(trCount, "Transcript mark group", "Transcript mark groups"));
     }
     var msg = parts.join(" and ") + " detected. Include them as clips in the timeline viewer?";
 
