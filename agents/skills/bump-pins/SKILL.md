@@ -21,6 +21,7 @@ URL has vanished.
 | RapidOCR models | only together with a `rapidocr` bump in `pyproject.toml`; re-derive URLs + hashes from the new wheel's `default_models.yaml` | on their own |
 | Speaker model (`SPEAKER_MODEL_PINS`) | only if `speakers.py`'s feature contract changes (any 16 kHz wespeaker/3d-speaker sherpa-onnx export fits) | on its own |
 | PyInstaller | with the regular dependency refresh, as its own PR | — |
+| Redact model (`redact.ASSETS`, an opt-in download, not bundled) | the vendor tags a release worth having | the parity script below disagrees |
 
 One pin per `build(deps):` PR. No `build/VERSION` bump.
 
@@ -55,6 +56,22 @@ Bump `rapidocr` in `pyproject.toml`, `uv lock`, then open the installed wheel's
 `OCR_MODEL_PINS`. `--repin` works here too once the URL is known. Keep the PP-OCR version
 rule in step with `screenspace_ocr._build_ocr_reader` (v4 for japan, v5 otherwise; the
 test enforces it).
+
+## Procedure (Redact model)
+
+clipgen runs the model on its own numpy evaluator (`source/tflite_numpy.py`), so a new
+model is only safe once it matches LiteRT, the vendor's runtime.
+
+1. Point `MODEL_TAG` and each `ASSETS` entry (size + LFS sha256) at the new tag.
+2. `uv run build/redact_parity.py --fetch <dir>` downloads the assets and checks their hashes.
+3. `uv run --with ai-edge-litert==2.2.0 build/redact_parity.py --model-dir <dir> --write`
+   compares the op graph, every window's tags and the final spans against LiteRT. It
+   writes `tests/fixtures/redact_reference.json` only if all three agree.
+4. Commit the fixture with the pin. Until then `test_reference_fixture_matches_pinned_assets`
+   fails, and CI replays the fixture against the real model on every PR.
+
+A new op makes `load_graph` raise. Add it to `tflite_numpy._OPS` with a unit test, then
+re-run step 3.
 
 ## Procedure (PyInstaller / opencv / ruff)
 
