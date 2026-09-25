@@ -441,7 +441,6 @@ def _generate_cli_clips(
     cli_mode_args: CliModeArgs,
 ) -> list[ClipRecord]:
     """Resolve CLI arguments into a list of clip records."""
-    skip_prompts = args.no_input
     mixed_selectors = getattr(args, "mixed", None)
     output_format = "screen" if args.screen else "gif" if args.gif else "clip"
 
@@ -529,9 +528,7 @@ def _generate_cli_clips(
 
     for condition, mode, kwargs in mode_dispatch:
         if condition:
-            return spreadsheet.generate_list(
-                worksheet, mode, skip_prompts=skip_prompts, **kwargs
-            )
+            return spreadsheet.generate_list(worksheet, mode, **kwargs)
     return []
 
 
@@ -905,7 +902,7 @@ def _run_friction_agent(args: argparse.Namespace) -> None:
 
 def _run_timeline_viewer_mode(worksheet: Any, args: Any) -> None:
     """Export all clips via batch mode and generate a per-participant timeline viewer."""
-    clips_list = spreadsheet.generate_list(worksheet, "batch", skip_prompts=True)
+    clips_list = spreadsheet.generate_list(worksheet, "batch")
     outputs_generated, artifacts = app.process_clips(clips_list, output_format="clip")
 
     if not config.REENCODING:
@@ -1773,11 +1770,3 @@ def main() -> None:
         except utils.QuitProgram:
             # Keyword-aware input requested exit; helper already printed context message.
             sys.exit(0)
-
-
-if __name__ == "__main__":
-    try:
-        main()
-    except KeyboardInterrupt:
-        utils.info_print("Interrupted by user")
-        sys.exit(0)

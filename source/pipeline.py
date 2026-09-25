@@ -374,9 +374,7 @@ def _stitch_clip_pieces(
             for p in temp_paths:
                 Path(p).unlink(missing_ok=True)
             return False
-    ok = video.concatenate_clips(
-        temp_paths, out_name, reencode_on_fail=True, cancel_flag=cancel_flag
-    )
+    ok = video.concatenate_clips(temp_paths, out_name, cancel_flag=cancel_flag)
     for p in temp_paths:
         try:
             Path(p).unlink(missing_ok=True)
@@ -804,12 +802,9 @@ def _clip_progress_label(clip: ClipRecord) -> str:
 def _run_clip_pipeline(
     clips_list: list[Any],
     *,
-    empty_warning: str,
     intro_message: str,
     task_label: str,
     per_clip_fn: Callable[[Any, set[str]], Any],
-    show_fallback_counter: bool = False,
-    secondary_task_label: str | None = None,
     parallel: bool = False,
     cancel_flag: Callable[[], bool] | None = None,
     on_clip_complete: Callable[[int, int], None] | None = None,
@@ -824,10 +819,6 @@ def _run_clip_pipeline(
     the returned list — callers receive only successful results and can iterate
     them without defensive ``None`` checks.
     """
-    if not clips_list:
-        utils.warning_print(empty_warning)
-        return ([], set())
-
     utils.standard_print(intro_message)
     missing_videos: set[str] = set()
 
@@ -901,19 +892,11 @@ def _run_clip_pipeline(
         results = []
         with utils.progress_scope(task_label, total_clips) as ps:
             _active_progress = ps.progress
-            if secondary_task_label:
-                ps.add_task(secondary_task_label, total_clips)
-            for index, clip in enumerate(clips_list, start=1):
+            for clip in clips_list:
                 if cancel_flag and cancel_flag():
                     break
                 if ps.live:
                     ps.update(description=_clip_progress_label(clip))
-                elif (
-                    show_fallback_counter
-                    and getattr(config, "VERBOSITY", config.STANDARD) >= config.VERBOSE
-                    and total_clips > 1
-                ):
-                    utils.verbose_print(f"Processing clip {index} of {total_clips}...")
                 results.append(wrapped_process(clip))
                 ps.update(advance=1)
                 _notify_clip_done()
@@ -1567,7 +1550,6 @@ def _process_reel(
 
     all_results, _ = _run_clip_pipeline(
         clips_list,
-        empty_warning="No clips to process for reel. No timestamps were found or selected.",
         intro_message="* Reel mode: generating individual clips, then concatenating into one file.",
         task_label="Generating reel clips",
         per_clip_fn=process_reel_clip,
@@ -1662,7 +1644,6 @@ def _process_reel(
         return video.concatenate_clips(
             clip_paths,
             output_file,
-            reencode_on_fail=True,
             cancel_flag=cancel_flag,
             on_progress=_on_concat_progress if progress_cb is not None else None,
         )
@@ -1934,7 +1915,7 @@ def _regenerate_single_artifact(
                 for p in temp_paths:
                     Path(p).unlink(missing_ok=True)
                 return False
-        ok = video.concatenate_clips(temp_paths, output_path, reencode_on_fail=True)
+        ok = video.concatenate_clips(temp_paths, output_path)
         for p in temp_paths:
             Path(p).unlink(missing_ok=True)
         if ok and artifact.get("titlecards"):
@@ -2101,7 +2082,7 @@ def _regenerate_reel(
         return False
 
     output_file = str(utils.resolve_output_path(reel.get("file", "reel.mp4")))
-    ok = video.concatenate_clips(all_names, output_file, reencode_on_fail=True)
+    ok = video.concatenate_clips(all_names, output_file)
 
     _cleanup()
     return ok

@@ -465,7 +465,3 @@ def launch(
             gspread_client_factory=gspread_client_factory,
             worksheet_factory=worksheet_factory,
         )
-
-
-if __name__ == "__main__":
-    sys.exit(launch())

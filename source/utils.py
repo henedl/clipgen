@@ -448,11 +448,6 @@ class ProgressScope:
         if self.progress is not None:
             self.progress.update(self.task, **kwargs)
 
-    def add_task(self, label: str, total: int) -> Any:
-        if self.progress is None:
-            return None
-        return self.progress.add_task(label, total=total)
-
 
 @contextlib.contextmanager
 def progress_scope(label: str, total: int) -> Iterator[ProgressScope]:
@@ -2445,16 +2440,6 @@ def parse_source_video_name(name: str) -> tuple[str, str, int | None] | None:
     return (groups.get("study") or "", pid, int(part) if part else None)
 
 
-def participant_id_from_source_name(name: str) -> str | None:
-    """Extract the participant id from a source-video filename, or None.
-
-    Thin wrapper over :func:`parse_source_video_name`; a numbered ``-N`` part
-    groups under its base participant id.
-    """
-    parsed = parse_source_video_name(name)
-    return parsed[1] if parsed else None
-
-
 # Keyed dir -> (mtime_ns, pattern, fileformat, result); settings PUTs change
 # pattern/fileformat without touching the dir.
 _discover_videos_cache: dict[
@@ -2463,7 +2448,7 @@ _discover_videos_cache: dict[
 _discover_videos_lock = threading.Lock()
 
 
-def discover_participant_videos(study_name: str = "") -> list[dict[str, Any]]:
+def discover_participant_videos() -> list[dict[str, Any]]:
     """Scan the input directory and return one entry per participant.
 
     A participant's session may span several files (a recording that broke off,

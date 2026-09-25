@@ -1044,9 +1044,6 @@ def match_template(
     threshold: float = 0.0,
     nms_overlap: float = 0.0,
     mask: np.ndarray | None = None,
-    *,
-    prepared: _PreparedTemplate | None = None,
-    corr: np.ndarray | None = None,
 ) -> list[dict[str, Any]]:
     """Find all locations where template appears in frame.
 
@@ -1054,11 +1051,6 @@ def match_template(
     to drop overlapping detections. An optional *mask* (template-sized,
     single-channel) restricts matching to non-transparent regions — for uploaded
     PNGs with alpha.
-
-    Across many frames with one template, build *prepared* once via
-    :func:`_prepare_template` to skip the per-call blur and grayscale conversion.
-    A caller that already holds this frame's correlation map (from
-    :func:`_template_correlation_map`) passes it as *corr* to skip recomputing it.
 
     Returns:
         ``{x, y, w, h, score}`` dicts for each match above *threshold*.
@@ -1068,9 +1060,8 @@ def match_template(
     if nms_overlap <= 0.0:
         nms_overlap = config.SCREENSPACE_TEMPLATE_NMS_OVERLAP
 
-    if prepared is None:
-        prepared = _prepare_template(template, mask)
-    return _match_template_prepared(frame, prepared, threshold, nms_overlap, corr)
+    prepared = _prepare_template(template, mask)
+    return _match_template_prepared(frame, prepared, threshold, nms_overlap)
 
 
 def canny_edges(gray: np.ndarray) -> np.ndarray:

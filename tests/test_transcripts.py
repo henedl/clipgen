@@ -285,7 +285,7 @@ class TestEnergySnap:
 
 
 # ---------------------------------------------------------------------------
-# Markdown format / roundtrip
+# Markdown format
 # ---------------------------------------------------------------------------
 
 
@@ -305,24 +305,19 @@ class TestMarkdownFormat:
         assert "# Transcript:" in text
         assert "**[" not in text
 
-    def test_write_and_read_roundtrip(self, tmp_path):
+    def test_write_matches_formatter(self, tmp_path):
         result = _sample_result()
-        path = str(tmp_path / "transcript.md")
-        assert transcripts.write_transcript(result, path, fmt="md")
+        path = tmp_path / "transcript.md"
+        assert transcripts.write_transcript(result, str(path), fmt="md")
 
-        loaded = transcripts.read_transcript(path)
-        assert loaded is not None
-        assert loaded["language"] == "en"
-        assert loaded["model"] == "base"
-        assert len(loaded["segments"]) == len(result["segments"])
-        for orig, parsed in zip(result["segments"], loaded["segments"]):
-            assert parsed["text"] == orig["text"]
-            assert parsed["start"] == int(orig["start"])  # md loses sub-second
-            assert parsed["end"] == int(orig["end"])
+        content = path.read_text(encoding="utf-8")
+        assert content == transcripts._format_markdown(result)
+        assert "**[0:12 - 0:25]**\nSecond segment." in content
+        assert "**[0:30 - 0:45]**\nThird segment." in content
 
 
 # ---------------------------------------------------------------------------
-# SRT format / roundtrip
+# SRT format
 # ---------------------------------------------------------------------------
 
 
@@ -335,22 +330,19 @@ class TestSrtFormat:
     def test_empty_segments(self):
         assert transcripts._format_srt(_empty_result()) == ""
 
-    def test_write_and_read_roundtrip(self, tmp_path):
+    def test_write_matches_formatter(self, tmp_path):
         result = _sample_result()
-        path = str(tmp_path / "transcript.srt")
-        assert transcripts.write_transcript(result, path, fmt="srt")
+        path = tmp_path / "transcript.srt"
+        assert transcripts.write_transcript(result, str(path), fmt="srt")
 
-        loaded = transcripts.read_transcript(path)
-        assert loaded is not None
-        assert len(loaded["segments"]) == len(result["segments"])
-        for orig, parsed in zip(result["segments"], loaded["segments"]):
-            assert parsed["text"] == orig["text"]
-            assert abs(parsed["start"] - orig["start"]) < 0.01
-            assert abs(parsed["end"] - orig["end"]) < 0.01
+        content = path.read_text(encoding="utf-8")
+        assert content == transcripts._format_srt(result)
+        assert "2\n00:00:12,500 --> 00:00:25,000\nSecond segment." in content
+        assert "4\n01:01:01,500 --> 01:01:15,000\nOver one hour in." in content
 
 
 # ---------------------------------------------------------------------------
-# VTT format / roundtrip
+# VTT format
 # ---------------------------------------------------------------------------
 
 
@@ -369,18 +361,15 @@ class TestVttFormat:
         assert text.startswith("WEBVTT")
         assert "-->" not in text
 
-    def test_write_and_read_roundtrip(self, tmp_path):
+    def test_write_matches_formatter(self, tmp_path):
         result = _sample_result()
-        path = str(tmp_path / "transcript.vtt")
-        assert transcripts.write_transcript(result, path, fmt="vtt")
+        path = tmp_path / "transcript.vtt"
+        assert transcripts.write_transcript(result, str(path), fmt="vtt")
 
-        loaded = transcripts.read_transcript(path)
-        assert loaded is not None
-        assert len(loaded["segments"]) == len(result["segments"])
-        for orig, parsed in zip(result["segments"], loaded["segments"]):
-            assert parsed["text"] == orig["text"]
-            assert abs(parsed["start"] - orig["start"]) < 0.01
-            assert abs(parsed["end"] - orig["end"]) < 0.01
+        content = path.read_text(encoding="utf-8")
+        assert content == transcripts._format_vtt(result)
+        assert "00:30.000 --> 00:45.000\nThird segment." in content
+        assert "01:01:01.500 --> 01:01:15.000\nOver one hour in." in content
 
 
 # ---------------------------------------------------------------------------
@@ -403,20 +392,17 @@ class TestGetTranscriptExtension:
 
 
 # ---------------------------------------------------------------------------
-# write_transcript / read_transcript edge cases
+# write_transcript edge cases
 # ---------------------------------------------------------------------------
 
 
-class TestWriteRead:
+class TestWriteTranscript:
     def test_write_uses_config_format(self, tmp_path, monkeypatch):
         monkeypatch.setattr(config, "TRANSCRIBE_FORMAT", "srt")
         path = str(tmp_path / "out.srt")
         assert transcripts.write_transcript(_sample_result(), path)
         content = Path(path).read_text()
         assert content.startswith("1\n")
-
-    def test_read_nonexistent_returns_none(self):
-        assert transcripts.read_transcript("/no/such/file.md") is None
 
     def test_write_bad_path_returns_false(self):
         assert not transcripts.write_transcript(_sample_result(), "/no/such/dir/out.md")

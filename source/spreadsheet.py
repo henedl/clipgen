@@ -826,7 +826,6 @@ def generate_list(
     line_numbers: list[int] | None = None,
     range_start: int | None = None,
     range_end: int | None = None,
-    skip_prompts: bool = False,
     cell_specs: list[tuple[str, int]] | None = None,
     participant_id: str | None = None,
     reel_input: str | None = None,
@@ -843,8 +842,7 @@ def generate_list(
     ``(participant_id, row_number)`` tuples, *participant_id* as a comma/plus
     separated string, *reel_input*, *categories*).
 
-    Passing a pre-built *ctx* skips the sheet API call. *skip_prompts* (the CLI
-    ``--no-input`` flag) drops the batch/keyword confirmations.
+    Passing a pre-built *ctx* skips the sheet API call.
     """
     if config.DEBUGGING:
         config.debug_ic(mode, line_numbers, range_start, range_end)

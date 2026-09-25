@@ -195,22 +195,6 @@ def _resolved_path_and_mtime(filepath: str) -> tuple[str, int] | None:
     return str(path.resolve()), st.st_mtime_ns
 
 
-def accurate_seek_args(timestamp_seconds: float) -> list[str]:
-    """Return the pre-input ``-ss`` args for a frame-accurate seek on t=0 media.
-
-    A single pre-input ``-ss`` is frame-accurate on MP4/MOV (container
-    ``start_time`` 0) whenever the output is decoded (rawvideo/MJPEG — every
-    caller here): ffmpeg seeks the demuxer to the nearest keyframe at or before
-    the target, then decodes and discards up to the exact frame internally.
-    MPEG-TS and similar containers with a non-zero ``start_time`` need
-    :func:`accurate_seek_pre_post` instead — pre-input ``-ss`` is in stream
-    time there and lands on the wrong frame (or none).
-    Never valid for stream copy, which cannot decode-and-discard.
-    """
-    pre, _post = accurate_seek_pre_post(timestamp_seconds)
-    return pre
-
-
 def accurate_seek_pre_post(
     timestamp_seconds: float, *, container_start: float = 0.0
 ) -> tuple[list[str], list[str]]:
@@ -1041,8 +1025,8 @@ def run_ffmpeg(
         # Error already printed by get_file_duration
         return False
 
-    start_seconds = utils.timestamp_to_seconds(start_pos)
-    if start_seconds is not None and start_seconds >= duration_seconds:
+    start_seconds = utils.timestamp_to_seconds(start_pos) or 0.0
+    if start_seconds >= duration_seconds:
         utils.error_print(
             f"Start timestamp ({start_pos}) is beyond video duration ({duration_seconds}s). Skipping.",
             [f"Video file: '{input_file}'"],
@@ -1059,7 +1043,7 @@ def run_ffmpeg(
         return False
     # Shorten, never drop, a span past EOF; tests/test_video_commands.py covers the end-
     # of-session case.
-    if start_seconds is not None and start_seconds + duration > duration_seconds:
+    if start_seconds + duration > duration_seconds:
         clamped = int(duration_seconds - start_seconds)
         if clamped <= 0:
             utils.error_print(
@@ -1074,12 +1058,6 @@ def run_ffmpeg(
             [f"Video file: '{input_file}'"],
         )
         duration = clamped
-    if duration > duration_seconds:
-        utils.error_print(
-            f"Timestamp duration ({duration}s) exceeds video file length ({duration_seconds}s). Skipping.",
-            [f"Start: {start_pos}, End: {end_pos}", f"Video file: '{input_file}'"],
-        )
-        return False
     if config.DEBUGGING:
         config.debug_ic(duration, duration_seconds)
     if duration > config.MAX_CLIP_DURATION_SECONDS:
@@ -3224,7 +3202,6 @@ def _build_filter_complex_concat(
 def concatenate_clips(
     clip_paths: list[str],
     output_file: str,
-    reencode_on_fail: bool = True,
     cancel_flag: Callable[[], bool] | None = None,
     on_progress: Callable[[float], None] | None = None,
 ) -> bool:
@@ -3238,7 +3215,6 @@ def concatenate_clips(
     Args:
         clip_paths: List of paths to clip files (order preserved)
         output_file: Path for the concatenated output file
-        reencode_on_fail: If True, retry with re-encoding when stream copy fails
 
     Returns:
         True if concatenation succeeded, False otherwise.
@@ -3281,7 +3257,6 @@ def concatenate_clips(
     return _concatenate_demuxer(
         clip_paths,
         output_file,
-        reencode_on_fail,
         cancel_flag=cancel_flag,
         on_progress=on_progress,
         expected_duration_sec=total_duration,
@@ -3354,7 +3329,6 @@ def _concatenate_filter_complex(
 def _concatenate_demuxer(
     clip_paths: list[str],
     output_file: str,
-    reencode_on_fail: bool,
     cancel_flag: Callable[[], bool] | None = None,
     on_progress: Callable[[float], None] | None = None,
     expected_duration_sec: float | None = None,
@@ -3386,7 +3360,7 @@ def _concatenate_demuxer(
             if ffmpeg_result is None:
                 return False
 
-            if ffmpeg_result.returncode != 0 and reencode_on_fail:
+            if ffmpeg_result.returncode != 0:
                 utils.warning_print(
                     "Stream copy concat failed (e.g. codec mismatch), retrying with re-encoding."
                 )

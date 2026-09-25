@@ -116,7 +116,6 @@ server_utils.register_static_routes(
     # Per request: POST /api/dirs moves config.INPUT_DIR mid-session. See transcripts_bp.
     media_dir_getter=lambda: str(utils.get_effective_input_dir()),
     media_error="Input directory not configured",
-    icons=True,
 )
 
 remux_server.register_remux_routes(composer_bp, lambda: _sheet_context)

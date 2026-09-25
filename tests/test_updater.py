@@ -34,6 +34,11 @@ def _isolated_state(monkeypatch, tmp_path):
     updater.reset_for_tests()
 
 
+def _run_check(*, force: bool) -> None:
+    if updater.start_check(force=force):
+        updater.finish_check(force=force)
+
+
 # ---- versions and assets -----------------------------------------------------
 
 
@@ -353,7 +358,7 @@ def test_launch_check_forgets_a_skip_once_installed(monkeypatch, tmp_path):
         "check_latest",
         lambda *, force: updater._normalize_release(_release_payload()),
     )
-    updater.run_check(force=False)
+    _run_check(force=False)
     snap = updater.status()
     assert snap["phase"] == "idle" and snap["skipped"] is None
     assert start_settings.load_config_json(updater.STATE_FILENAME)["skipped"] is None
@@ -367,7 +372,7 @@ def test_check_refuses_a_release_without_checksum(monkeypatch):
     monkeypatch.setattr(
         updater, "check_latest", lambda *, force: updater._normalize_release(payload)
     )
-    updater.run_check(force=True)
+    _run_check(force=True)
     snap = updater.status()
     assert snap["phase"] == "error" and "checksum" in snap["error"]
 
@@ -380,7 +385,7 @@ def test_run_check_moves_to_available_or_idle(monkeypatch):
         "check_latest",
         lambda *, force: updater._normalize_release(_release_payload()),
     )
-    updater.run_check(force=True)
+    _run_check(force=True)
     snap = updater.status()
     assert snap["phase"] == "available"
     assert snap["version"] == "v9.9.9"
@@ -388,7 +393,7 @@ def test_run_check_moves_to_available_or_idle(monkeypatch):
     assert snap["total"] == 10
 
     monkeypatch.setattr(utils, "get_version", lambda: "9.9.9")
-    updater.run_check(force=True)
+    _run_check(force=True)
     snap = updater.status()
     assert (
         snap["phase"] == "idle" and snap["checked"] is True and snap["version"] is None
@@ -398,9 +403,9 @@ def test_run_check_moves_to_available_or_idle(monkeypatch):
 def test_offline_check_is_never_up_to_date(monkeypatch):
     monkeypatch.setattr(updater, "install_shape", lambda: "mac-app")
     monkeypatch.setattr(updater, "check_latest", lambda *, force: None)
-    updater.run_check(force=False)
+    _run_check(force=False)
     assert updater.status()["checked"] is False
-    updater.run_check(force=True)
+    _run_check(force=True)
     snap = updater.status()
     assert snap["phase"] == "error"
     assert snap["checked"] is True and snap["error"] == "Could not reach GitHub"
@@ -414,7 +419,7 @@ def test_run_check_reports_a_missing_asset(monkeypatch):
         "check_latest",
         lambda *, force: updater._normalize_release(_release_payload()),
     )
-    updater.run_check(force=True)
+    _run_check(force=True)
     snap = updater.status()
     assert snap["phase"] == "error" and snap["error"] == "No download for this platform"
 
@@ -427,7 +432,7 @@ def test_skip_hides_the_release_until_a_manual_check(monkeypatch):
         "check_latest",
         lambda *, force: updater._normalize_release(_release_payload()),
     )
-    updater.run_check(force=True)
+    _run_check(force=True)
     assert updater.status()["phase"] == "available"
     assert updater.skip_version() is True
     snap = updater.status()
@@ -436,9 +441,9 @@ def test_skip_hides_the_release_until_a_manual_check(monkeypatch):
         start_settings.load_config_json(updater.STATE_FILENAME)["skipped"] == "v9.9.9"
     )
     # A launch check keeps it hidden; a manual check forgets the skip.
-    updater.run_check(force=False)
+    _run_check(force=False)
     assert updater.status()["phase"] == "idle"
-    updater.run_check(force=True)
+    _run_check(force=True)
     snap = updater.status()
     assert snap["phase"] == "available" and snap["skipped"] is None
     assert start_settings.load_config_json(updater.STATE_FILENAME)["skipped"] is None
@@ -456,7 +461,7 @@ def test_launch_check_leaves_an_offered_update_alone(monkeypatch):
         "check_latest",
         lambda *, force: updater._normalize_release(_release_payload()),
     )
-    updater.run_check(force=True)
+    _run_check(force=True)
     assert updater.status()["phase"] == "available"
     assert updater.start_check(force=False) is False
     assert updater.status()["phase"] == "available"
@@ -476,7 +481,7 @@ def test_recheck_keeps_a_verified_download_without_rehashing(monkeypatch, tmp_pa
     updates = tmp_path / "cfg" / "updates"
     updates.mkdir(parents=True)
     (updates / "clipgen-v9.9.9-macos.dmg").write_bytes(payload)
-    updater.run_check(force=True)
+    _run_check(force=True)
     snap = updater.status()
     assert snap["phase"] == "ready" and snap["path"].endswith(
         "clipgen-v9.9.9-macos.dmg"
@@ -486,7 +491,7 @@ def test_recheck_keeps_a_verified_download_without_rehashing(monkeypatch, tmp_pa
         raise AssertionError("re-hashed a verified download")
 
     monkeypatch.setattr(updater, "_verify_file", no_rehash)
-    updater.run_check(force=True)
+    _run_check(force=True)
     snap = updater.status()
     assert snap["phase"] == "ready" and snap["completed"] == 10
 
@@ -501,11 +506,11 @@ def test_recheck_reverifies_when_the_release_digest_changes(monkeypatch, tmp_pat
     updates = tmp_path / "cfg" / "updates"
     updates.mkdir(parents=True)
     (updates / "clipgen-v9.9.9-macos.dmg").write_bytes(payload)
-    updater.run_check(force=True)
+    _run_check(force=True)
     assert updater.status()["phase"] == "ready"
     # The asset was re-published with different bytes: the stale file is dropped.
     release["assets"][0]["sha256"] = "f" * 64
-    updater.run_check(force=True)
+    _run_check(force=True)
     assert updater.status()["phase"] == "available"
     assert not (updates / "clipgen-v9.9.9-macos.dmg").exists()
 
@@ -523,7 +528,7 @@ def test_crashing_worker_lands_in_error(monkeypatch):
         raise RuntimeError("disk on fire")
 
     monkeypatch.setattr(updater, "check_latest", boom)
-    updater.run_check(force=True)
+    _run_check(force=True)
     snap = updater.status()
     assert snap["phase"] == "error" and "disk on fire" in snap["error"]
 

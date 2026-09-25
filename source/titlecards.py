@@ -568,7 +568,6 @@ def _build_wrap_filter_and_inputs(
 def wrap_clip_with_cards(
     clip: ClipRecord,
     clip_path: str,
-    resolution: str | None = None,
     *,
     cancel_flag: Callable[[], bool] | None = None,
     on_progress: Callable[[float], None] | None = None,
@@ -625,14 +624,13 @@ def wrap_clip_with_cards(
 
     # One probe: audio presence and resolution
     probed = video.probe_video_properties(clip_path)
-    if not resolution and probed:
-        resolution = f"{probed['width']}x{probed['height']}"
-    if not resolution:
+    if not probed:
         utils.warning_print(
             f"Could not determine video resolution for '{clip_path}'. "
             "Skipping title/endcard for this clip."
         )
         return (True, False)
+    resolution = f"{probed['width']}x{probed['height']}"
 
     clip_track = video.first_audio_track(probed)
     has_clip_audio = clip_track is not None

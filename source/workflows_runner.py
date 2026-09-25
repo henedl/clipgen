@@ -464,7 +464,6 @@ class WorkflowRunner:
         on_update: Callable[[], None] | None = None,
         participant: str = "",
         batch_id: str = "",
-        triggered: bool = False,
         trigger_type: str = "",
         target_node_id: str = "",
         seed_results: dict[str, dict[str, Any]] | None = None,
@@ -486,8 +485,8 @@ class WorkflowRunner:
         # Batch identity; empty for a single run, set on child runs for grouping.
         self.participant = participant
         self.batch_id = batch_id
-        # Set when the watcher launched this run; ``trigger_type`` names the trigger.
-        self.triggered = triggered
+        # The watcher sets trigger_type when it launches a run.
+        self.triggered = bool(trigger_type)
         self.trigger_type = trigger_type
         # Drop sticky notes before node_states exists; they must never run or pad
         # counts.
@@ -869,7 +868,7 @@ class WorkflowRunner:
         with self._lock:
             node_states = {
                 nid: {
-                    **{k: v for k, v in st.items() if not k.startswith("_")},
+                    **st,
                     "hasResult": nid in self._sidecars,
                 }
                 for nid, st in self.node_states.items()

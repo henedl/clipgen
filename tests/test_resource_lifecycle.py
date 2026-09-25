@@ -106,7 +106,7 @@ def _cache_definitions():
                 # (_FRAME_CACHE_MAX, _MANIFEST_CACHE_LOCK), not containers.
                 if name.isupper() or name.endswith("_lock"):
                     continue
-                # Plain aliases (`_MediaCache = MediaCache`) hold no entries.
+                # Bare name aliases hold no entries.
                 if isinstance(value, ast.Name):
                     continue
                 yield mod, name, ast.unparse(value), src

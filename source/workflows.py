@@ -209,7 +209,6 @@ def _exec_sheet_selection(
         "reel",
         ctx=ctx.sheet_context,
         reel_input=selector,
-        skip_prompts=True,
     )
     study = str(getattr(ctx.sheet_context, "study_name", "") or "")
     return {"clips": {"records": records, "study": study}}

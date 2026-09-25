@@ -182,14 +182,7 @@ def test_excel_sheet_adapter_basic_access(tmp_path, monkeypatch):
     # Data access helpers.
     all_values = adapter.get_all_values()
     assert all_values[0][0] == "Study"
-
-    id_cell = adapter.find("ID")
-    assert id_cell is not None
-    assert id_cell.row == 2
-
-    row2 = adapter.row_values(2)
-    assert "P01" in row2
-    assert adapter.col_count >= 5
+    assert "P01" in all_values[1]
 
 
 def _make_multi_tab_workbook(path):

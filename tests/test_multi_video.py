@@ -837,7 +837,7 @@ def test_discover_participant_videos_groups_numbered_parts(monkeypatch, tmp_path
     monkeypatch.setattr(config, "INPUT_DIR", str(tmp_path), raising=False)
     (tmp_path / "study_P01-1.mp4").write_text("v1")
     (tmp_path / "study_P01-2.mp4").write_text("v2")
-    found = utils.discover_participant_videos("study")
+    found = utils.discover_participant_videos()
     # Regression: numbered parts must group under base id P01, never "P01-1".
     ids = [p["id"] for p in found]
     assert ids == ["P01"]
@@ -852,7 +852,7 @@ def test_discover_participant_videos_plain_wins(monkeypatch, tmp_path):
     monkeypatch.setattr(config, "INPUT_DIR", str(tmp_path), raising=False)
     (tmp_path / "study_P01.mp4").write_text("v")
     (tmp_path / "study_P01-1.mp4").write_text("v1")
-    found = utils.discover_participant_videos("study")
+    found = utils.discover_participant_videos()
     assert len(found) == 1
     assert [_basename(p) for p in found[0]["video_paths"]] == ["study_P01.mp4"]
 
@@ -862,7 +862,7 @@ def test_discover_participant_videos_skips_non_contiguous(monkeypatch, tmp_path)
     (tmp_path / "study_P01-1.mp4").write_text("v1")
     (tmp_path / "study_P01-3.mp4").write_text("v3")  # gap → skipped
     (tmp_path / "study_P02.mp4").write_text("v")  # normal participant kept
-    ids = [p["id"] for p in utils.discover_participant_videos("study")]
+    ids = [p["id"] for p in utils.discover_participant_videos()]
     assert ids == ["P02"]
 
 
@@ -870,18 +870,6 @@ def _basename(path_str):
     from pathlib import Path
 
     return Path(path_str).name
-
-
-def test_participant_id_from_source_name():
-    assert utils.participant_id_from_source_name("study_P01.mp4") == "P01"
-    assert utils.participant_id_from_source_name("study_P01-2.mp4") == "P01"
-    assert utils.participant_id_from_source_name("my-study_G02-10.mp4") == "G02"
-    assert utils.participant_id_from_source_name("random.mp4") is None
-    # A Finder/Explorer duplicate ("… copy.mp4") yields a whitespace id, which is
-    # never a real participant — reject it so it can't become a phantom
-    # participant or auto-launch a watch-dir-triggered run for a bogus id.
-    assert utils.participant_id_from_source_name("study_P03 copy.mp4") is None
-    assert utils.participant_id_from_source_name("study_P03 copy 2.mp4") is None
 
 
 def test_parse_source_video_name():
@@ -902,6 +890,7 @@ def test_parse_source_video_name():
     assert utils.parse_source_video_name("_P01.mp4") == ("", "P01", None)
     assert utils.parse_source_video_name("random.mp4") is None
     assert utils.parse_source_video_name("study_P03 copy.mp4") is None
+    assert utils.parse_source_video_name("study_P03 copy 2.mp4") is None
     # A lowercase prefix groups under the configured casing.
     assert utils.parse_source_video_name("study_p01.mp4") == ("study", "P01", None)
 

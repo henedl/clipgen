@@ -22,7 +22,6 @@ Key functions:
     → TranscriptResult for a clip's time range; offset_to_zero=True shifts to clip-relative times
   write_transcript(result, output_path, *, fmt)
     → writes .md (Markdown), .srt (SRT), or .vtt (WebVTT)
-  read_transcript(filepath) → TranscriptResult (parses any supported format)
   get_transcript_extension(fmt) → file extension string for a format
 
 Manifest I/O:
@@ -1425,7 +1424,7 @@ def _format_vtt(result: TranscriptResult) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Write / read transcript files
+# Write transcript files
 # ---------------------------------------------------------------------------
 
 
@@ -1457,131 +1456,11 @@ def write_transcript(
         return False
 
 
-def read_transcript(filepath: str) -> TranscriptResult | None:
-    """Parse a transcript file back into a TranscriptResult.
-
-    Detects format from file extension (.md, .srt, .vtt).
-    Returns None if the file cannot be read or parsed. Lossy on purpose:
-    speaker prefixes stay inside ``text`` and word timings are gone.
-    """
-    path = Path(filepath)
-    if not path.is_file():
-        return None
-
-    try:
-        text = path.read_text(encoding="utf-8")
-    except OSError:
-        return None
-
-    ext = path.suffix.lower()
-    parser = next((p for e, _, p in _FORMATS.values() if e == ext), _parse_markdown)
-    return parser(text, filepath)
-
-
-# ---------------------------------------------------------------------------
-# Parsers for read-back
-# ---------------------------------------------------------------------------
-
-_SRT_BLOCK = re.compile(
-    r"(\d+)\s*\n"
-    r"(\d{2}:\d{2}:\d{2},\d{3})\s*-->\s*(\d{2}:\d{2}:\d{2},\d{3})\s*\n"
-    r"(.+?)(?=\n\n|\n\d+\s*\n|\Z)",
-    re.DOTALL,
-)
-
-_VTT_CUE = re.compile(
-    r"(\d{2}:\d{2}[:\.]?\d{0,2}\.?\d{0,3})\s*-->\s*(\d{2}:\d{2}[:\.]?\d{0,2}\.?\d{0,3})\s*\n"
-    r"(.+?)(?=\n\n|\Z)",
-    re.DOTALL,
-)
-
-_MD_SEGMENT = re.compile(
-    r"\*\*\[(.+?)\s*-\s*(.+?)\]\*\*\s*\n(.+?)(?=\n\*\*\[|\n---|\Z)",
-    re.DOTALL,
-)
-
-
-def _cue_time_to_seconds(ts: str) -> float:
-    """SRT (``,`` before ms) or VTT (``.``) cue time; hours optional."""
-    parts = ts.replace(",", ":").replace(".", ":").split(":")
-    if len(parts) == 3:
-        m, s, ms = parts
-        return int(m) * 60 + int(s) + int(ms) / 1000
-    if len(parts) == 4:
-        h, m, s, ms = parts
-        return int(h) * 3600 + int(m) * 60 + int(s) + int(ms) / 1000
-    return 0.0
-
-
-def _parse_cues(
-    pattern: re.Pattern[str],
-    to_seconds: Callable[[str], float],
-    first_group: int,
-    text: str,
-    filepath: str,
-) -> TranscriptResult:
-    """Cue blocks matched by *pattern*: start, end, text in consecutive groups."""
-    segments = [
-        TranscriptSegment(
-            start=to_seconds(match.group(first_group)),
-            end=to_seconds(match.group(first_group + 1)),
-            text=match.group(first_group + 2).strip(),
-        )
-        for match in pattern.finditer(text)
-    ]
-    return TranscriptResult(
-        segments=segments, language="", source_file=filepath, model=""
-    )
-
-
-def _parse_srt(text: str, filepath: str) -> TranscriptResult:
-    return _parse_cues(_SRT_BLOCK, _cue_time_to_seconds, 2, text, filepath)
-
-
-def _parse_vtt(text: str, filepath: str) -> TranscriptResult:
-    return _parse_cues(_VTT_CUE, _cue_time_to_seconds, 1, text, filepath)
-
-
-def _parse_markdown(text: str, filepath: str) -> TranscriptResult:
-    segments: list[TranscriptSegment] = []
-    # Extract metadata
-    language = ""
-    model = ""
-    lang_match = re.search(r"\*\*Language:\*\*\s*(\S+)", text)
-    if lang_match:
-        language = lang_match.group(1)
-    model_match = re.search(r"\*\*Model:\*\*\s*(\S+)", text)
-    if model_match:
-        model = model_match.group(1)
-
-    for match in _MD_SEGMENT.finditer(text):
-        # None on failure, never a fabricated 0.0 (a valid start).
-        start = utils.timestamp_to_seconds(match.group(1))
-        end = utils.timestamp_to_seconds(match.group(2))
-        if start is None or end is None:
-            # Unparseable stamp (e.g. "0:00.5"): skip loudly rather than fabricate 0:00.
-            utils.warning_print(
-                f"Skipping transcript line with unparseable timestamp: "
-                f"{match.group(1)} - {match.group(2)}"
-            )
-            continue
-        segments.append(
-            TranscriptSegment(
-                start=start,
-                end=end,
-                text=match.group(3).strip(),
-            )
-        )
-    return TranscriptResult(
-        segments=segments, language=language, source_file=filepath, model=model
-    )
-
-
-# Transcript format → (file extension, writer, reader). ``md`` is the default.
-_FORMATS: dict[str, tuple[str, Callable[..., str], Callable[..., TranscriptResult]]] = {
-    "md": (".md", _format_markdown, _parse_markdown),
-    "srt": (".srt", _format_srt, _parse_srt),
-    "vtt": (".vtt", _format_vtt, _parse_vtt),
+# Transcript format to (file extension, writer); md is the default.
+_FORMATS: dict[str, tuple[str, Callable[..., str]]] = {
+    "md": (".md", _format_markdown),
+    "srt": (".srt", _format_srt),
+    "vtt": (".vtt", _format_vtt),
 }
 
 

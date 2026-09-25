@@ -473,7 +473,6 @@ server_utils.register_static_routes(
     # a snapshot 404'd every video.
     media_dir_getter=lambda: str(utils.get_effective_input_dir()),
     media_error="Input directory not configured",
-    icons=True,
 )
 
 remux_server.register_remux_routes(
@@ -3366,7 +3365,7 @@ class AgentOrchestrator:
                 "agent", meta={"agent": agent_key, "participant": participant}
             )(_run),
             daemon=True,
-            name=f"{agent['thread_name_prefix']}-{participant}",
+            name=f"{agent['key']}-{participant}",
         )
         with self._lock:
             self._threads[agent_key].add(t)

@@ -275,12 +275,6 @@ def start_check(*, force: bool = False) -> bool:
     return True
 
 
-def run_check(*, force: bool = False) -> None:
-    """start_check plus finish_check in one call (tests, CLI)."""
-    if start_check(force=force):
-        finish_check(force=force)
-
-
 def _recover(fn: Callable[..., None]) -> Callable[..., None]:
     """A crashing thread body lands in ``error`` instead of a stuck phase."""
 
@@ -510,12 +504,6 @@ def start_download() -> bool:
             return False
         _status.update(phase="downloading", completed=0, error=None)
     return True
-
-
-def run_download() -> None:
-    """start_download plus finish_download in one call."""
-    if start_download():
-        finish_download()
 
 
 @_recover
@@ -821,12 +809,6 @@ def start_apply() -> bool:
             return False
         _status.update(phase="applying", error=None)
     return True
-
-
-def run_apply() -> None:
-    """start_apply plus finish_apply in one call."""
-    if start_apply():
-        finish_apply()
 
 
 @_recover

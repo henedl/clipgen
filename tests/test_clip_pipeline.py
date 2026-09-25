@@ -345,7 +345,6 @@ def test_run_clip_pipeline_cancel_flag(monkeypatch):
 
     results, _ = pipeline._run_clip_pipeline(
         clips,
-        empty_warning="",
         intro_message="",
         task_label="test",
         per_clip_fn=per_clip_fn,
@@ -1280,7 +1279,6 @@ def test_run_clip_pipeline_cancel_captures_started_clip_results(monkeypatch):
     clips = [{"id": i, "desc": f"c{i}", "participant": "P01"} for i in range(6)]
     results, _missing = pipeline._run_clip_pipeline(
         clips,
-        empty_warning="",
         intro_message="",
         task_label="t",
         per_clip_fn=per_clip,

@@ -45,13 +45,6 @@ def _cell_to_str(v: Any) -> str:
     return str(v)
 
 
-class _CellLike(NamedTuple):
-    """Minimal cell-like object with .row and .col (1-based) for header lookup."""
-
-    row: int
-    col: int
-
-
 class _SpreadsheetLike(NamedTuple):
     """Minimal spreadsheet-like object with .title and .url = None for Excel."""
 
@@ -84,31 +77,9 @@ class ExcelSheetAdapter:
                 row.append("")
         self._data = rows
 
-    def find(self, text: str) -> _CellLike | None:
-        """Find first cell with exact match. Returns cell-like with .row, .col (1-based)."""
-        for row_idx, row in enumerate(self._data):
-            for col_idx, cell_value in enumerate(row):
-                if cell_value == text:
-                    return _CellLike(row=row_idx + 1, col=col_idx + 1)
-        return None
-
     def get_all_values(self) -> list[list[str]]:
         """Return all sheet data as list of rows (list of strings)."""
         return self._data
-
-    def row_values(self, row_1based: int) -> list[str]:
-        """Return one row as list of strings. row_1based is 1-based."""
-        idx = row_1based - 1
-        if 0 <= idx < len(self._data):
-            return self._data[idx]
-        return []
-
-    @property
-    def col_count(self) -> int:
-        """Number of columns (max length of any row)."""
-        if not self._data:
-            return 0
-        return max(len(row) for row in self._data)
 
 
 def _get_worksheet_from_workbook(wb: Any, preferred_name: str | None = None) -> Any:

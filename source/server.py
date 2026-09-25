@@ -40,7 +40,7 @@ Studio API endpoints (studio_bp, mounted under /studio/):
 
 Combined app-level routes (registered by start_combined_server, not under /studio/):
   GET  /                        – Start overlay / active-tool landing page
-  GET  /api/status              – which interfaces are active (studio/screenspace/transcripts)
+  GET  /api/status              – sheet, directories, and version for every page
   GET  /api/export/status, POST /api/export – analysis-ready JSON/CSV export
   GET/POST /api/dirs            – input/output directory picker
   GET  /api/spreadsheets/excel|google – spreadsheet discovery
@@ -273,12 +273,9 @@ def _coerce_mark_categories(value: Any) -> dict[str, dict[str, str]] | None:
     return cleaned
 
 
-# Alias keeps the `server._MediaCache` name for tests.
-_MediaCache = MediaCache
-
-_thumbnail_cache = _MediaCache(_THUMBNAIL_CACHE_MAX)
-_sprite_cache = _MediaCache(_SPRITE_CACHE_MAX)
-_audio_cache = _MediaCache(_AUDIO_CACHE_MAX)
+_thumbnail_cache = MediaCache(_THUMBNAIL_CACHE_MAX)
+_sprite_cache = MediaCache(_SPRITE_CACHE_MAX)
+_audio_cache = MediaCache(_AUDIO_CACHE_MAX)
 
 
 def _try_claim_busy(slot: str) -> str | None:
@@ -487,7 +484,6 @@ studio_bp = Blueprint("studio", __name__)
 server_utils.register_static_routes(
     studio_bp,
     "studio.html",
-    icons=True,
     media_dir_getter=lambda: str(utils.get_effective_output_dir()),
 )
 
@@ -1586,7 +1582,6 @@ def api_generate() -> FlaskResponse:
             "cell",
             ctx=_sheet_context,
             cell_specs=cell_specs,
-            skip_prompts=True,
         )
         _apply_time_overrides(clips, overrides)
     except Exception as e:
@@ -1845,7 +1840,6 @@ def api_highlights_preview() -> FlaskResponse:
             "reel",
             ctx=_sheet_context,
             reel_input="highlights, batch",
-            skip_prompts=True,
         )
 
     if not clips:
@@ -1916,7 +1910,6 @@ def api_reel() -> FlaskResponse:
                     "reel",
                     ctx=_sheet_context,
                     reel_input=reel_input,
-                    skip_prompts=True,
                 )
                 _apply_time_overrides(clips, reel_overrides)
 
@@ -2085,9 +2078,7 @@ def api_timeline_viewer() -> FlaskResponse:
         include_intake = req.get("include_intake", False)
         intake_items = req.get("intake_items", [])
 
-        clips_list = spreadsheet.generate_list(
-            _worksheet, "batch", ctx=_sheet_context, skip_prompts=True
-        )
+        clips_list = spreadsheet.generate_list(_worksheet, "batch", ctx=_sheet_context)
         if not clips_list:
             return err("No clips found in sheet")
 
@@ -2297,40 +2288,10 @@ def api_reveal_artifact() -> FlaskResponse:
     return ok(path=str(p))
 
 
-@studio_bp.route("/api/manifest", methods=["GET", "POST"])
+@studio_bp.route("/api/manifest")
 def api_manifest() -> FlaskResponse:
-    if request.method == "GET":
-        artifacts, reels = viewer.load_manifest_both()
-        return ok(artifacts=artifacts, reels=reels)
-
-    # Snapshot under the lock so a concurrent extend can't produce a partial export.
-    with _generated_output_lock:
-        artifacts = list(_generated_artifacts)
-        reels = list(_generated_reels)
-    if not artifacts and not reels:
-        return err("No artifacts to export. Generate artifacts first.")
-
-    try:
-        study = ""
-        if artifacts:
-            study = artifacts[0].get("study", "")
-        elif reels:
-            study = reels[0].get("study", "")
-
-        manifest_path = viewer.save_manifest(
-            artifacts,
-            new_reels=reels or None,
-            study=study,
-            worksheet_title=getattr(_worksheet, "title", ""),
-            is_excel=pipeline.is_excel_worksheet(_worksheet) if _worksheet else False,
-            mode="studio",
-        )
-        if manifest_path:
-            return ok(file=str(manifest_path))
-        return err("Failed to write manifest", 500)
-
-    except Exception as e:
-        return err(str(e), 500)
+    artifacts, reels = viewer.load_manifest_both()
+    return ok(artifacts=artifacts, reels=reels)
 
 
 def _handle_stash_crud(load_fn: Any, save_fn: Any, id_prefix: str) -> FlaskResponse:
@@ -2643,7 +2604,6 @@ def _card_picker_payload(kind: str) -> dict[str, Any]:
     return {"selected": selected, "items": items}
 
 
-@studio_bp.route("/api/titlecards", methods=["GET"])
 def api_titlecards_list() -> FlaskResponse:
     """List background choices (default, color, none, uploads) for both cards."""
     return ok(
@@ -2652,7 +2612,6 @@ def api_titlecards_list() -> FlaskResponse:
     )
 
 
-@studio_bp.route("/api/titlecards/default/<kind>", methods=["GET"])
 def api_titlecard_default(kind: str) -> FlaskResponse:
     """Serve the bundled default titlecard/endcard image for previews."""
     if kind not in ("title", "end"):
@@ -2664,7 +2623,6 @@ def api_titlecard_default(kind: str) -> FlaskResponse:
     return send_file(str(path))
 
 
-@studio_bp.route("/api/titlecards/image/<path:name>", methods=["GET"])
 def api_titlecard_image(name: str) -> FlaskResponse:
     """Serve an uploaded card background by filename (used for previews)."""
     safe = Path(name).name
@@ -2675,7 +2633,6 @@ def api_titlecard_image(name: str) -> FlaskResponse:
     return send_from_directory(str(_titlecard_images_dir()), safe)
 
 
-@studio_bp.route("/api/titlecards/upload", methods=["POST"])
 def api_titlecard_upload() -> FlaskResponse:
     """Accept a card background image upload (PNG/JPG/WebP) into the upload pool."""
     file = request.files.get("file")
@@ -2719,7 +2676,6 @@ def api_titlecard_upload() -> FlaskResponse:
     )
 
 
-@studio_bp.route("/api/titlecards/image/<path:name>", methods=["DELETE"])
 def api_titlecard_delete(name: str) -> FlaskResponse:
     """Delete an uploaded card background; reset any selection that used it."""
     safe = Path(name).name
@@ -3038,7 +2994,6 @@ def api_reel_direct() -> FlaskResponse:
                 concat_ok = video.concatenate_clips(
                     clip_paths,
                     reel_name,
-                    reencode_on_fail=True,
                     cancel_flag=_reel_cancel_event.is_set,
                     on_progress=on_concat_progress,
                 )
@@ -3773,12 +3728,6 @@ def status() -> Response:
     meta = _active_sheet_meta if _worksheet is not None else None
     mn = _current_mindnode_doc()
     return ok(
-        studio=True,
-        screenspace=True,
-        transcripts=True,
-        workflows=True,
-        composer=True,
-        overview=True,
         sheet_loaded=_worksheet is not None,
         startup_notice=(_startup_notice or {}).get("message", ""),
         startup_notice_source=(_startup_notice or {}).get("source_type", ""),

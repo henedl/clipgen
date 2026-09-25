@@ -930,6 +930,3 @@ def _run_ss_rerun_task(args: argparse.Namespace) -> None:
     )
 
     _ss_run_and_persist_task(task, manifest)
-
-
-# ---- Event-driven clip cutting (--ss-clips, --transcript-clips) ----

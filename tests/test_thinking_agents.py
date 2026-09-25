@@ -20,7 +20,6 @@ class TestRegistry:
             "enabled_config_key",
             "manifest_field",
             "depends_on",
-            "thread_name_prefix",
             "run",
         }
         for agent in thinking_agents.AGENTS:

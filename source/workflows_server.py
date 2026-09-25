@@ -97,7 +97,6 @@ server_utils.register_static_routes(
     # Per request: POST /api/dirs moves config.INPUT_DIR mid-session. See transcripts_bp.
     media_dir_getter=lambda: str(utils.get_effective_input_dir()),
     media_error="Input directory not configured",
-    icons=True,
 )
 
 
@@ -483,7 +482,6 @@ def _sse_run_payload(run_id: str) -> str:
 def _launch_run(
     blueprint: dict[str, Any],
     participant: str = "",
-    triggered: bool = False,
     trigger_type: str = "",
     target_node_id: str = "",
     seed_results: dict[str, dict[str, Any]] | None = None,
@@ -507,7 +505,6 @@ def _launch_run(
         ctx,
         on_update=lambda: _notify_run_clients(run_id),
         participant=participant,
-        triggered=triggered,
         trigger_type=trigger_type,
         target_node_id=target_node_id,
         seed_results=seed_results,
@@ -1162,9 +1159,7 @@ def _maybe_fire_trigger(participant: str, trigger_type: str) -> None:
             f"auto-run trigger: armed blueprint has a cycle; skipping {participant}"
         )
         return
-    _launch_run(
-        bound, participant=participant, triggered=True, trigger_type=trigger_type
-    )
+    _launch_run(bound, participant=participant, trigger_type=trigger_type)
 
 
 def _poll_new_videos() -> None:

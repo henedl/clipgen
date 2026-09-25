@@ -284,7 +284,7 @@ class JobRegistry:
         return token
 
     def seed(self, key: str, token: dict[str, Any]) -> None:
-        """Register *token* under *key* without a thread (tests, resumed state)."""
+        """Register *token* under *key* without a thread; tests only."""
         with self._lock:
             self._jobs[key] = token
 
@@ -794,29 +794,12 @@ def register_static_routes(
     *,
     media_dir_getter: Any = None,
     media_error: str = "Media directory not configured",
-    icons: bool = False,
-    logos: bool = True,
 ) -> None:
-    """Register standard static-file serving routes on a Flask Blueprint.
-
-    Always registers ``/`` (index) and ``/<path:filename>`` (static assets).
-    Optionally registers ``/icons/<path:filename>``, ``/logos/<path:filename>``,
-    and ``/media/<path:filename>``.
-
-    Args:
-        bp: Flask Blueprint to register routes on.
-        index_html: Filename of the HTML page served at ``/``.
-        media_dir_getter: Callable returning the current media directory path.
-            When provided, a ``/media/<path:filename>`` route is registered.
-        media_error: Error message returned (500) when the media dir is falsy.
-        icons: When True, registers ``/icons/<path:filename>`` from ``assets/icons/``.
-        logos: When True (default), registers ``/logos/<path:filename>`` from
-            ``assets/logos/`` so favicons and the brand mark are available to
-            every served page.
-    """
-    from flask import Response, jsonify
-
-    assets_dir = utils.get_bundled_assets_root() / "assets" / "web"
+    """Register index, static, icons, and logos routes, plus media when given a getter."""
+    assets_root = utils.get_bundled_assets_root() / "assets"
+    assets_dir = assets_root / "web"
+    icons_dir = assets_root / "icons"
+    logos_dir = assets_root / "logos"
 
     @bp.route("/")
     def serve_index() -> Response:
@@ -826,19 +809,13 @@ def register_static_routes(
     def serve_static(filename: str) -> Response:
         return send_from_directory(assets_dir, filename)
 
-    if icons:
-        icons_dir = utils.get_bundled_assets_root() / "assets" / "icons"
+    @bp.route("/icons/<path:filename>")
+    def serve_icons(filename: str) -> Response:
+        return send_from_directory(icons_dir, filename)
 
-        @bp.route("/icons/<path:filename>")
-        def serve_icons(filename: str) -> Response:
-            return send_from_directory(icons_dir, filename)
-
-    if logos:
-        logos_dir = utils.get_bundled_assets_root() / "assets" / "logos"
-
-        @bp.route("/logos/<path:filename>")
-        def serve_logos(filename: str) -> Response:
-            return send_from_directory(logos_dir, filename)
+    @bp.route("/logos/<path:filename>")
+    def serve_logos(filename: str) -> Response:
+        return send_from_directory(logos_dir, filename)
 
     if media_dir_getter is not None:
 
@@ -846,5 +823,5 @@ def register_static_routes(
         def serve_media(filename: str) -> Response | tuple[Response, int]:
             d = media_dir_getter()
             if not d:
-                return jsonify({"ok": False, "error": media_error}), 500
+                return err(media_error, 500)
             return send_from_directory(d, filename)

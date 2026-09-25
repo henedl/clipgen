@@ -3487,18 +3487,12 @@
       .then(function (data) {
         state.desktop = !!data.desktop;
         if (state.desktop) renderLog();
-        if (data.screenspace) {
-          var intakeTab = qs('.preview-tab[data-tab="intake"]');
-          if (intakeTab) intakeTab.classList.remove("hidden");
-        }
-        if (data.transcripts) {
-          var trIntakeTab = qs('.preview-tab[data-tab="transcript-intake"]');
-          if (trIntakeTab) trIntakeTab.classList.remove("hidden");
-        }
-        if (data.composer) {
-          var coIntakeTab = qs('.preview-tab[data-tab="composer-intake"]');
-          if (coIntakeTab) coIntakeTab.classList.remove("hidden");
-        }
+        var intakeTab = qs('.preview-tab[data-tab="intake"]');
+        if (intakeTab) intakeTab.classList.remove("hidden");
+        var trIntakeTab = qs('.preview-tab[data-tab="transcript-intake"]');
+        if (trIntakeTab) trIntakeTab.classList.remove("hidden");
+        var coIntakeTab = qs('.preview-tab[data-tab="composer-intake"]');
+        if (coIntakeTab) coIntakeTab.classList.remove("hidden");
         // This tab only exists once a mind map has been opened.
         if (data.mindnode_loaded) {
           var mnIntakeTab = qs('.preview-tab[data-tab="mindnode-intake"]');

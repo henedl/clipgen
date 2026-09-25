@@ -7,6 +7,7 @@ import pytest
 Flask = pytest.importorskip("flask").Flask
 import config
 import server
+import server_utils
 import itertools
 
 
@@ -28,6 +29,7 @@ def studio_app():
     """
     app = Flask(__name__)
     app.register_blueprint(server.studio_bp, url_prefix="/studio")
+    server._register_settings_routes(app)
     return app
 
 
@@ -95,7 +97,7 @@ def test_api_sheet_returns_empty_placeholder_when_no_sheet(client):
 
 def test_api_titlecards_list_synthetic_items(client, tmp_path, monkeypatch):
     monkeypatch.setattr(server.config, "OUTPUT_DIR", str(tmp_path))
-    data = client.get("/studio/api/titlecards").get_json()
+    data = client.get("/api/titlecards").get_json()
     assert data["ok"] is True
     title_kinds = [it["kind"] for it in data["title"]["items"]]
     assert "default" in title_kinds
@@ -110,7 +112,7 @@ def test_api_titlecards_list_synthetic_items(client, tmp_path, monkeypatch):
 def test_api_titlecard_upload_rejects_bad_extension(client, tmp_path, monkeypatch):
     monkeypatch.setattr(server.config, "OUTPUT_DIR", str(tmp_path))
     resp = client.post(
-        "/studio/api/titlecards/upload",
+        "/api/titlecards/upload",
         data={"file": (io.BytesIO(b"hello"), "notes.txt")},
         content_type="multipart/form-data",
     )
@@ -121,7 +123,7 @@ def test_api_titlecard_upload_rejects_bad_extension(client, tmp_path, monkeypatc
 def test_api_titlecard_upload_list_and_serve(client, tmp_path, monkeypatch):
     monkeypatch.setattr(server.config, "OUTPUT_DIR", str(tmp_path))
     resp = client.post(
-        "/studio/api/titlecards/upload",
+        "/api/titlecards/upload",
         data={"file": (io.BytesIO(b"\x89PNG fake"), "card.png")},
         content_type="multipart/form-data",
     )
@@ -131,13 +133,13 @@ def test_api_titlecard_upload_list_and_serve(client, tmp_path, monkeypatch):
     name = item["id"]
     assert name == "card.png"
 
-    listing = client.get("/studio/api/titlecards").get_json()
+    listing = client.get("/api/titlecards").get_json()
     upload_ids = [
         it["id"] for it in listing["title"]["items"] if it["kind"] == "upload"
     ]
     assert name in upload_ids
 
-    served = client.get("/studio/api/titlecards/image/" + name)
+    served = client.get("/api/titlecards/image/" + name)
     assert served.status_code == 200
     assert served.data == b"\x89PNG fake"
 
@@ -146,7 +148,7 @@ def test_api_titlecard_upload_makes_filename_url_safe(client, tmp_path, monkeypa
     """A filename with URL-reserved chars is sanitized so its served URL works."""
     monkeypatch.setattr(server.config, "OUTPUT_DIR", str(tmp_path))
     resp = client.post(
-        "/studio/api/titlecards/upload",
+        "/api/titlecards/upload",
         data={"file": (io.BytesIO(b"\x89PNG fake"), "my #1.png")},
         content_type="multipart/form-data",
     )
@@ -159,7 +161,7 @@ def test_api_titlecard_upload_makes_filename_url_safe(client, tmp_path, monkeypa
         assert bad not in item["url"]
     assert item["url"] == "/api/titlecards/image/" + name
 
-    served = client.get("/studio/api/titlecards/image/" + name)
+    served = client.get("/api/titlecards/image/" + name)
     assert served.status_code == 200
     assert served.data == b"\x89PNG fake"
 
@@ -171,7 +173,7 @@ def test_api_titlecard_delete_resets_selection(client, tmp_path, monkeypatch):
     (images / "card.png").write_bytes(b"data")
     monkeypatch.setattr(server.config, "TITLECARD_IMAGE", "card.png")
 
-    body = client.delete("/studio/api/titlecards/image/card.png").get_json()
+    body = client.delete("/api/titlecards/image/card.png").get_json()
     assert body["ok"] is True
     assert body["reset"].get("TITLECARD_IMAGE") == ""
     assert not (images / "card.png").exists()
@@ -761,7 +763,7 @@ def test_api_reel_highlights_duration_override(client, monkeypatch):
     original = config.HIGHLIGHTS_REEL_DURATION_SECONDS
     captured = {}
 
-    def fake_generate_list(ws, mode, *, ctx=None, reel_input, skip_prompts):
+    def fake_generate_list(ws, mode, *, ctx=None, reel_input):
         captured["duration"] = config.HIGHLIGHTS_REEL_DURATION_SECONDS
         return []
 
@@ -787,7 +789,7 @@ def test_api_reel_highlights_duration_restored_on_error(client, monkeypatch):
     monkeypatch.setattr(server, "_worksheet", object())
     original = config.HIGHLIGHTS_REEL_DURATION_SECONDS
 
-    def raise_generate_list(ws, mode, *, ctx=None, reel_input, skip_prompts):
+    def raise_generate_list(ws, mode, *, ctx=None, reel_input):
         raise RuntimeError("boom")
 
     monkeypatch.setattr("spreadsheet.generate_list", raise_generate_list)
@@ -824,7 +826,7 @@ def test_api_thumbnail_returns_jpeg(client, monkeypatch, tmp_path):
     )
     monkeypatch.setattr(server, "_sheet_context", ctx)
     monkeypatch.setattr(
-        server, "_thumbnail_cache", server._MediaCache(server._THUMBNAIL_CACHE_MAX)
+        server, "_thumbnail_cache", server_utils.MediaCache(server._THUMBNAIL_CACHE_MAX)
     )
     monkeypatch.setattr("config.INPUT_DIR", str(tmp_path))
     monkeypatch.setattr(video, "extract_thumbnail_bytes", lambda *a, **kw: fake_jpeg)
@@ -855,7 +857,7 @@ def test_api_thumbnail_caches(client, monkeypatch, tmp_path):
     )
     monkeypatch.setattr(server, "_sheet_context", ctx)
     monkeypatch.setattr(
-        server, "_thumbnail_cache", server._MediaCache(server._THUMBNAIL_CACHE_MAX)
+        server, "_thumbnail_cache", server_utils.MediaCache(server._THUMBNAIL_CACHE_MAX)
     )
     monkeypatch.setattr("config.INPUT_DIR", str(tmp_path))
 
@@ -900,16 +902,6 @@ def test_api_manifest_get_empty(client, monkeypatch):
     assert data["reels"] == []
 
 
-def test_api_manifest_post_still_works(client, monkeypatch):
-    _set_artifacts(monkeypatch, [])
-    monkeypatch.setattr(server, "_generated_reels", [])
-    resp = client.post("/studio/api/manifest")
-    assert resp.status_code == 400
-    data = resp.get_json()
-    assert data["ok"] is False
-    assert "No artifacts" in data["error"]
-
-
 def test_api_generate_skips_existing_artifacts(client, monkeypatch, tmp_path):
     """Already-generated artifacts are returned without re-running process_clips."""
     import types
@@ -935,7 +927,7 @@ def test_api_generate_skips_existing_artifacts(client, monkeypatch, tmp_path):
 
     cell = types.SimpleNamespace(row=5, col=2, value="1:00")
 
-    def fake_generate_list(ws, mode, *, ctx=None, cell_specs, skip_prompts):
+    def fake_generate_list(ws, mode, *, ctx=None, cell_specs):
         return [{"participant": "P01", "cell": cell, "times": [("1:00", "1:05")]}]
 
     def fake_parse_cell_specs(text):
@@ -976,7 +968,7 @@ def test_api_generate_regenerates_when_file_missing(client, monkeypatch, tmp_pat
 
     cell = types.SimpleNamespace(row=5, col=2, value="1:00")
 
-    def fake_generate_list(ws, mode, *, ctx=None, cell_specs, skip_prompts):
+    def fake_generate_list(ws, mode, *, ctx=None, cell_specs):
         return [{"participant": "P01", "cell": cell}]
 
     monkeypatch.setattr("spreadsheet.generate_list", fake_generate_list)
@@ -1031,7 +1023,7 @@ def test_api_generate_regenerates_when_titlecards_toggled(
     cell = types.SimpleNamespace(row=5, col=2, value="1:00")
     monkeypatch.setattr(
         "spreadsheet.generate_list",
-        lambda ws, mode, *, ctx=None, cell_specs, skip_prompts: [
+        lambda ws, mode, *, ctx=None, cell_specs: [
             {"participant": "P01", "cell": cell}
         ],
     )
@@ -1091,7 +1083,7 @@ def test_api_generate_skips_when_titlecards_match(client, monkeypatch, tmp_path)
     cell = types.SimpleNamespace(row=5, col=2, value="1:00")
     monkeypatch.setattr(
         "spreadsheet.generate_list",
-        lambda ws, mode, *, ctx=None, cell_specs, skip_prompts: [
+        lambda ws, mode, *, ctx=None, cell_specs: [
             {"participant": "P01", "cell": cell, "times": [("1:00", "1:05")]}
         ],
     )
@@ -1139,7 +1131,7 @@ def test_api_reel_regenerates_when_titlecards_toggled(client, monkeypatch, tmp_p
     }
     monkeypatch.setattr(server, "_generated_reels", [existing_reel])
 
-    def fake_generate_list(ws, mode, *, ctx=None, reel_input, skip_prompts):
+    def fake_generate_list(ws, mode, *, ctx=None, reel_input):
         return [
             {
                 "participant": "P01",
@@ -1207,7 +1199,7 @@ def test_api_reel_skips_existing_reel(client, monkeypatch, tmp_path):
     }
     monkeypatch.setattr(server, "_generated_reels", [existing_reel])
 
-    def fake_generate_list(ws, mode, *, ctx=None, reel_input, skip_prompts):
+    def fake_generate_list(ws, mode, *, ctx=None, reel_input):
         return [
             {
                 "participant": "P01",
@@ -1320,7 +1312,7 @@ def test_api_generate_applies_time_overrides_and_forces_regen(
     cell = types.SimpleNamespace(row=5, col=2, value="1:00")
     monkeypatch.setattr(
         "spreadsheet.generate_list",
-        lambda ws, mode, *, ctx=None, cell_specs, skip_prompts: [
+        lambda ws, mode, *, ctx=None, cell_specs: [
             {"participant": "P01", "cell": cell}
         ],
     )
@@ -1360,7 +1352,7 @@ def test_api_reel_applies_time_overrides(client, monkeypatch, tmp_path):
     cell = types.SimpleNamespace(row=5, col=2, value="1:00-1:30")
     monkeypatch.setattr(
         "spreadsheet.generate_list",
-        lambda ws, mode, *, ctx=None, reel_input, skip_prompts: [
+        lambda ws, mode, *, ctx=None, reel_input: [
             {
                 "participant": "P01",
                 "cell": cell,
@@ -2679,7 +2671,7 @@ def test_api_generate_passes_titlecard_options_to_pipeline(client, monkeypatch):
 
     cell = types.SimpleNamespace(row=5, col=2, value="1:00")
 
-    def fake_generate_list(ws, mode, *, ctx=None, cell_specs, skip_prompts):
+    def fake_generate_list(ws, mode, *, ctx=None, cell_specs):
         return [{"participant": "P01", "cell": cell}]
 
     def fake_process_clips(
@@ -2733,7 +2725,7 @@ def test_api_generate_titlecard_options_on_pipeline_error(client, monkeypatch):
 
     cell = types.SimpleNamespace(row=5, col=2, value="1:00")
 
-    def fake_generate_list(ws, mode, *, ctx=None, cell_specs, skip_prompts):
+    def fake_generate_list(ws, mode, *, ctx=None, cell_specs):
         return [{"participant": "P01", "cell": cell}]
 
     def fake_process_clips(clips, *, output_format, cancel_flag=None, **kwargs):
@@ -2772,7 +2764,7 @@ def test_api_reel_passes_titlecard_options_to_pipeline(client, monkeypatch):
 
     cell = types.SimpleNamespace(row=5, col=2, value="1:00-1:30")
 
-    def fake_generate_list(ws, mode, *, ctx=None, reel_input, skip_prompts):
+    def fake_generate_list(ws, mode, *, ctx=None, reel_input):
         return [
             {
                 "participant": "P01",
@@ -3362,7 +3354,7 @@ def test_api_reel_streams_progress_events(client, monkeypatch, tmp_path):
 
     cell = types.SimpleNamespace(row=5, col=2, value="1:00-1:30")
 
-    def fake_generate_list(ws, mode, *, ctx=None, reel_input, skip_prompts):
+    def fake_generate_list(ws, mode, *, ctx=None, reel_input):
         return [
             {
                 "participant": "P01",
@@ -3518,7 +3510,7 @@ def test_media_cache_lru_is_threadsafe(monkeypatch):
     the OrderedDict mid-eviction."""
     import concurrent.futures
 
-    cache = server._MediaCache(server._THUMBNAIL_CACHE_MAX)
+    cache = server_utils.MediaCache(server._THUMBNAIL_CACHE_MAX)
     monkeypatch.setattr(server, "_thumbnail_cache", cache)
 
     def put(i: int) -> None:
@@ -3539,7 +3531,7 @@ def test_media_cache_single_flight():
     import threading
     import time
 
-    cache = server._MediaCache(server._THUMBNAIL_CACHE_MAX)
+    cache = server_utils.MediaCache(server._THUMBNAIL_CACHE_MAX)
     workers = 8
     barrier = threading.Barrier(workers)
     call_count = [0]
@@ -3600,7 +3592,7 @@ def _setup_api_reel(monkeypatch, tmp_path, *, clips=None):
     payload = [_fake_reel_clip()] if clips is None else clips
     monkeypatch.setattr(
         "spreadsheet.generate_list",
-        lambda ws, mode, *, ctx=None, reel_input, skip_prompts: payload,
+        lambda ws, mode, *, ctx=None, reel_input: payload,
     )
     monkeypatch.setattr("files.prepare_clip", lambda clip: clip)
     server._reel_cancel_event.clear()
@@ -3978,7 +3970,7 @@ def test_api_generate_persists_artifacts_after_disconnect(
     )
     monkeypatch.setattr(
         "spreadsheet.generate_list",
-        lambda ws, mode, *, ctx=None, cell_specs, skip_prompts: [
+        lambda ws, mode, *, ctx=None, cell_specs: [
             {"participant": "P01", "cell": c} for c in cells
         ],
     )
@@ -4124,7 +4116,7 @@ def test_api_job_status_reflects_generate_progress(client, monkeypatch, tmp_path
     )
     monkeypatch.setattr(
         "spreadsheet.generate_list",
-        lambda ws, mode, *, ctx=None, cell_specs, skip_prompts: [
+        lambda ws, mode, *, ctx=None, cell_specs: [
             {"participant": "P01", "cell": c} for c in cells
         ],
     )
@@ -4191,7 +4183,7 @@ def _setup_single_cell_generate(monkeypatch, tmp_path, cell_value, *, generated=
     monkeypatch.setattr("spreadsheet.parse_cell_specifications", lambda t: [("P01", 5)])
     monkeypatch.setattr(
         "spreadsheet.generate_list",
-        lambda ws, mode, *, ctx=None, cell_specs, skip_prompts: [
+        lambda ws, mode, *, ctx=None, cell_specs: [
             {"participant": "P01", "cell": cell, "desc": "obs", "category": "nav"}
         ],
     )
@@ -4343,7 +4335,7 @@ def test_api_generate_explicit_cancel_still_works(client, monkeypatch, tmp_path)
     )
     monkeypatch.setattr(
         "spreadsheet.generate_list",
-        lambda ws, mode, *, ctx=None, cell_specs, skip_prompts: [
+        lambda ws, mode, *, ctx=None, cell_specs: [
             {"participant": "P01", "cell": c} for c in cells
         ],
     )

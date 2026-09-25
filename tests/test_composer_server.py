@@ -1,11 +1,4 @@
-"""Smoke tests for the Composer Flask blueprint.
-
-Verifies the page serves, participant/part discovery, the composer manifest
-round-trip (cuts CRUD + UI toggles persisted to the ``composer`` section),
-and span clamping — mirroring tests/test_workflows_api.py's bare-blueprint
-setup. Combined-app registration (topnav-visible ``/composer/`` + the
-``/api/status`` flag) is exercised against ``server.build_combined_app``.
-"""
+"""Composer blueprint smoke tests: discovery, manifest round-trip, clamping, combined-app mount."""
 
 import json
 from pathlib import Path
@@ -1208,8 +1201,7 @@ def test_combined_app_registers_composer(tmp_path, monkeypatch):
     app = server.build_combined_app(worksheet=None, default_page="composer")
     with app.test_client() as client:
         assert client.get("/").location.endswith("/composer/")
-        status = client.get("/api/status").get_json()
-        assert status["composer"] is True
+        assert client.get("/api/status").get_json()["ok"] is True
         assert client.get("/composer/").status_code == 200
 
 

@@ -272,7 +272,6 @@ server_utils.register_static_routes(
     # snapshot served dead links.
     media_dir_getter=lambda: str(utils.get_effective_output_dir()),
     media_error="Output directory not configured",
-    icons=True,
 )
 
 remux_server.register_remux_routes(
@@ -2714,42 +2713,6 @@ def _clean_task(task: dict[str, Any]) -> dict[str, Any]:
 # ---- State initialization ----
 
 
-def _backfill_missing_events(manifest: dict[str, Any]) -> None:
-    """Heal manifests where completed tasks have results but no events.
-
-    Why: events are generated only at task completion. Tasks completed before
-    the events system existed (or whose events were lost) leave the frontend
-    unable to render exclude toggles. Backfill so older results behave like
-    new ones.
-    """
-    import screenspace
-
-    events = manifest.setdefault("events", [])
-    task_ids_with_events = {e.get("task_id") for e in events if e.get("task_id")}
-    added = 0
-    for task in manifest.get("tasks", []):
-        if task.get("status") != screenspace.TASK_STATUS_COMPLETED:
-            continue
-        if task.get("id") in task_ids_with_events:
-            continue
-        result = task.get("result")
-        if not isinstance(result, list) or not result:
-            continue
-        new_events = screenspace.generate_events_from_results(task, result)
-        if new_events:
-            events.extend(new_events)
-            added += len(new_events)
-    if added:
-        screenspace.save_screenspace_manifest(
-            manifest.get("regions", {}),
-            manifest.get("tasks", []),
-            events,
-            stashes=manifest.get("stashes", []),
-            per_participant=manifest.get("per_participant", {}),
-            pins=manifest.get("pins") or {},
-        )
-
-
 def _init_screenspace_state(sheet_context: Any = None) -> None:
     """Initialize module-level state for Screenspace routes.
 
@@ -2773,7 +2736,6 @@ def _init_screenspace_state(sheet_context: Any = None) -> None:
         _worker.stop(join_timeout=2.0)
 
     _manifest = screenspace.load_screenspace_manifest()
-    _backfill_missing_events(_manifest)
 
     # mtime None forces the first _refresh_participants() call to build.
     _participant_source = {"sheet_context": sheet_context, "dir": "", "mtime": None}

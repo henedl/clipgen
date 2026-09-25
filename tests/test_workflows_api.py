@@ -1254,8 +1254,8 @@ def _record_launches(monkeypatch):
     """Replace _launch_run with a recorder so no real runner threads spawn."""
     calls = []
 
-    def _fake(blueprint, participant="", triggered=False, **kwargs):
-        calls.append((blueprint, participant, triggered))
+    def _fake(blueprint, participant="", trigger_type="", **kwargs):
+        calls.append((blueprint, participant, trigger_type))
         return {}
 
     monkeypatch.setattr(workflows_server, "_launch_run", _fake)
@@ -1358,7 +1358,7 @@ def test_watch_fires_after_two_stable_polls(wf_client, monkeypatch):
     assert calls == []
     workflows_server._watch_poll_once()  # stable -> fires once
     assert len(calls) == 1
-    assert calls[0][1] == "P01" and calls[0][2] is True
+    assert calls[0][1] == "P01" and calls[0][2] == "new_video"
     workflows_server._watch_poll_once()  # already seen -> no refire
     assert len(calls) == 1
 
@@ -1616,7 +1616,7 @@ def test_transcript_trigger_fires_once_per_completion(wf_client, monkeypatch):
 
     _write_transcripts_manifest({"P05": "2026-07-19T10:00:00+00:00"})
     workflows_server._watch_poll_once()
-    assert [(c[1], c[2]) for c in calls] == [("P05", True)]
+    assert [(c[1], c[2]) for c in calls] == [("P05", "transcript_complete")]
     # Same stamp again → no double fire.
     workflows_server._watch_poll_once()
     assert len(calls) == 1
@@ -1643,13 +1643,16 @@ def test_scan_trigger_fires_per_completed_task(wf_client, monkeypatch):
 
     _write_screenspace_manifest([("t1", "P02", "completed"), ("t2", "P03", "running")])
     workflows_server._watch_poll_once()
-    assert [(c[1], c[2]) for c in calls] == [("P02", True)]
+    assert [(c[1], c[2]) for c in calls] == [("P02", "scan_event")]
     # t2 completing later fires for its participant; t1 never re-fires.
     _write_screenspace_manifest(
         [("t1", "P02", "completed"), ("t2", "P03", "completed")]
     )
     workflows_server._watch_poll_once()
-    assert [(c[1], c[2]) for c in calls] == [("P02", True), ("P03", True)]
+    assert [(c[1], c[2]) for c in calls] == [
+        ("P02", "scan_event"),
+        ("P03", "scan_event"),
+    ]
 
 
 def test_per_type_arming_is_independent(wf_client):

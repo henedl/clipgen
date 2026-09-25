@@ -65,8 +65,9 @@ class TestCorrelationMapReuse:
         frame, template = self._frame_and_template()
         prepared = screenspace_primitives._prepare_template(template, None)
         corr = screenspace_primitives._template_correlation_map(frame, prepared)
-        assert screenspace.match_template(
-            frame, template, threshold=0.9, prepared=prepared, corr=corr
+        nms = config.SCREENSPACE_TEMPLATE_NMS_OVERLAP
+        assert screenspace_primitives._match_template_prepared(
+            frame, prepared, 0.9, nms, corr=corr
         ) == screenspace.match_template(frame, template, threshold=0.9)
 
     def test_tool_check_frame_computes_the_map_once(self, monkeypatch):

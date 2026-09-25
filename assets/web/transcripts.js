@@ -124,11 +124,9 @@
   // ---- Nav links ----
 
   function checkNavLinks() {
-    apiGet("../api/status").then(function (data) {
-      if (data.screenspace || data.studio) {
-        state.xrefEligible = true;
-        startXrefPolling();
-      }
+    apiGet("../api/status").then(function () {
+      state.xrefEligible = true;
+      startXrefPolling();
     }).catch(function () {});
   }
 

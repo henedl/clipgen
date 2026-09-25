@@ -58,8 +58,6 @@ class Agent(TypedDict):
       depends_on:         Other agent keys whose ``manifest_field`` must be
                           present on the transcript entry before this agent
                           can run. Also used to skip Pass 2 when Pass 1 failed.
-      thread_name_prefix: Prefix for the daemon thread name (useful for
-                          debugging).
       on_upstream_change: How this agent's result reacts when an upstream
                           dependency is regenerated: ``"clear"`` drops the
                           field (the default), ``"stale"`` keeps it but flags
@@ -85,7 +83,6 @@ class Agent(TypedDict):
     model_config_key: str
     manifest_field: str
     depends_on: list[str]
-    thread_name_prefix: str
     on_upstream_change: str
     run: Callable[..., Any]
 
@@ -956,7 +953,6 @@ AGENTS: list[Agent] = [
         model_config_key="LLM_SUMMARY_MODEL",
         manifest_field="summary",
         depends_on=[],
-        thread_name_prefix="summary",
         on_upstream_change="clear",
         run=_run_summary,
     ),
@@ -966,7 +962,6 @@ AGENTS: list[Agent] = [
         model_config_key="LLM_SUMMARY_MODEL",
         manifest_field="citations",
         depends_on=["summary"],
-        thread_name_prefix="citations",
         on_upstream_change="clear",
         run=_run_citations,
     ),
@@ -976,7 +971,6 @@ AGENTS: list[Agent] = [
         model_config_key="LLM_FRICTION_MODEL",
         manifest_field="friction",
         depends_on=["summary"],
-        thread_name_prefix="friction",
         on_upstream_change="stale",
         run=_run_friction,
     ),
@@ -986,7 +980,6 @@ AGENTS: list[Agent] = [
         model_config_key="LLM_REPORT_MODEL",
         manifest_field="report",
         depends_on=["summary"],
-        thread_name_prefix="report",
         on_upstream_change="clear",
         run=_run_report,
     ),

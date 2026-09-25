@@ -138,7 +138,7 @@ def test_runner_snapshot_carries_triggered_flag(tmp_path):
         {"id": "bp", "nodes": [], "edges": []},
         _ctx(tmp_path),
         participant="P01",
-        triggered=True,
+        trigger_type="new_video",
     )
     assert runner.snapshot()["triggered"] is True
 

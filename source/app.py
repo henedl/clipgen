@@ -842,9 +842,7 @@ def _run_reellate_mode_interactive() -> tuple[bool, str | None]:
     resolved_clips = [str(utils.resolve_output_path(name)) for name in selected_clips]
 
     def _concat_reellate() -> bool:
-        return video.concatenate_clips(
-            resolved_clips, output_file, reencode_on_fail=True
-        )
+        return video.concatenate_clips(resolved_clips, output_file)
 
     ok = False
     try:
@@ -1133,7 +1131,7 @@ def _dispatch_interactive_mode(
         data_export.run_cli_export()
         return ([], False, None)
     if mode == "timeline-viewer":
-        clips_list = spreadsheet.generate_list(worksheet, "batch", skip_prompts=True)
+        clips_list = spreadsheet.generate_list(worksheet, "batch")
         outputs_generated, artifacts = process_clips(clips_list, output_format="clip")
         if not config.REENCODING:
             _print_reencoding_warning(utils.info_print)
@@ -1184,8 +1182,6 @@ def _dispatch_interactive_mode(
     if mode in _STANDARD_MODES:
         clips = _run_standard_mode(mode, worksheet)
         return (clips or [], False, None)
-    if mode:
-        return (spreadsheet.generate_list(worksheet, mode), False, None)
 
     # No alias match -- try auto-detection and mixed selectors
     clips = _resolve_unrecognized_input(worksheet, raw_input, help_lines=_ALL_MODE_HELP)

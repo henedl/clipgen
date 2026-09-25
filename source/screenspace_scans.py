@@ -1904,8 +1904,3 @@ def scan_attention(
     if on_progress:
         on_progress(1.0)
     return results
-
-
-# ---------------------------------------------------------------------------
-# Multitool: per-frame evaluation and multi-factor scan
-# ---------------------------------------------------------------------------
