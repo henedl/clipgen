@@ -443,7 +443,17 @@
     state.citationsGenerating = false;
   }
 
-  // ---- Analysis panel (tabbed shell: Summary + Friction) ----
+  // ---- Analysis panel (tabbed shell: Summary + Friction + Redact) ----
+
+  // Literal ids: tests/test_transcripts_dom_wiring.py greps for them.
+  var PANEL_TABS = [
+    { name: "summary", btn: "#tabBtnSummary", pane: "#summaryTab" },
+    { name: "friction", btn: "#tabBtnFriction", pane: "#frictionTab" },
+    { name: "redact", btn: "#tabBtnRedact", pane: "#redactTab" },
+  ];
+  function _tabNames() {
+    return PANEL_TABS.map(function (t) { return t.name; });
+  }
 
   // The tabs always show; without a transcript a note replaces both panes.
   function _setAnalysisReady(ready) {
@@ -460,26 +470,25 @@
     state.activeTab = name;
     var pid = state.selectedParticipant;
     if (pid) setStoredUIMapEntry("transcripts", "tabByParticipant", pid, name);
-    var isSummary = name === "summary";
-    qs("#tabBtnSummary").classList.toggle("active", isSummary);
-    qs("#tabBtnSummary").setAttribute("aria-selected", isSummary ? "true" : "false");
-    qs("#tabBtnFriction").classList.toggle("active", !isSummary);
-    qs("#tabBtnFriction").setAttribute("aria-selected", !isSummary ? "true" : "false");
-    qs("#summaryTab").classList.toggle("hidden", !isSummary);
-    qs("#frictionTab").classList.toggle("hidden", isSummary);
+    if (_tabNames().indexOf(name) < 0) name = "summary";
+    for (var i = 0; i < PANEL_TABS.length; i++) {
+      var on = PANEL_TABS[i].name === name;
+      qs(PANEL_TABS[i].btn).classList.toggle("active", on);
+      qs(PANEL_TABS[i].btn).setAttribute("aria-selected", on ? "true" : "false");
+      qs(PANEL_TABS[i].pane).classList.toggle("hidden", !on);
+    }
+    if (name === "redact" && TS.renderRedactPanel) TS.renderRedactPanel();
   }
 
   function _restoreActiveTab(pid) {
-    var saved =
-      getStoredUIMapEntry("transcripts", "tabByParticipant", pid) === "friction"
-        ? "friction"
-        : "summary";
-    selectTab(saved);
+    var saved = getStoredUIMapEntry("transcripts", "tabByParticipant", pid);
+    selectTab(_tabNames().indexOf(saved) >= 0 ? saved : "summary");
   }
 
   function initPanelTabs() {
     qs("#tabBtnSummary").addEventListener("click", function () { selectTab("summary"); });
     qs("#tabBtnFriction").addEventListener("click", function () { selectTab("friction"); });
+    qs("#tabBtnRedact").addEventListener("click", function () { selectTab("redact"); });
     qs("#summaryRunCta").addEventListener("click", function () { _startSummaryRun(); });
   }
 
@@ -1094,7 +1103,8 @@
   var _FRICTION_TOOLTIP_SEGMENTS = 4; // per histogram bin, before "+N more"
 
   function _frictionQuote(seg, maxChars) {
-    var text = (seg && seg.text ? seg.text : "").trim();
+    // Through the redact satellite, so a quote never leaks a redacted name.
+    var text = (TS.displayText ? TS.displayText(seg) : (seg && seg.text) || "").trim();
     if (!text) return "";
     if (text.length > maxChars) text = text.slice(0, maxChars - 1).replace(/\s+\S*$/, "") + "…";
     return "“" + text + "”";
@@ -1913,6 +1923,7 @@
   TS.clearAnalysisPanel = clearAnalysisPanel;
   TS._setAnalysisReady = _setAnalysisReady;
   TS._restoreActiveTab = _restoreActiveTab;
+  TS.selectTab = selectTab; // redact chips
   TS.initPanelTabs = initPanelTabs;
   TS.initSummaryActions = initSummaryActions;
   TS.initFriction = initFriction;

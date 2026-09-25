@@ -74,6 +74,7 @@ from typing import Any, Literal, NotRequired, TypedDict
 
 import config
 import profiling
+import redact
 import speakers
 import manifest as manifest_io
 import utils
@@ -97,6 +98,9 @@ class TranscriptSegment(TypedDict):
     words: NotRequired[list[TranscriptWord]]
     # Cluster id "1".."N" from speakers.py; absent until a speaker pass ran.
     speaker: NotRequired[str]
+    # PII spans from redact.py, offsets into the text ``pii_crc`` hashes.
+    pii: NotRequired[list[dict[str, Any]]]
+    pii_crc: NotRequired[int]
 
 
 class TranscriptResult(TypedDict):
@@ -106,6 +110,9 @@ class TranscriptResult(TypedDict):
     model: str
     # User renames by speaker id; formatters fall back to "Speaker N".
     speaker_labels: NotRequired[dict[str, str]]
+    # Formatters substitute PII placeholders when set; the restore list exempts spans.
+    redact: NotRequired[bool]
+    redact_excluded: NotRequired[list[dict[str, Any]]]
 
 
 class ManifestSegment(TypedDict):
@@ -117,6 +124,8 @@ class ManifestSegment(TypedDict):
     text: str
     words: NotRequired[list[TranscriptWord]]
     speaker: NotRequired[str]
+    pii: NotRequired[list[dict[str, Any]]]
+    pii_crc: NotRequired[int]
 
 
 # Known faster-whisper model variants with approximate download sizes.
@@ -892,6 +901,10 @@ def _shift_segment(segment: TranscriptSegment, offset: float) -> TranscriptSegme
         ]
     if "speaker" in segment:
         shifted["speaker"] = segment["speaker"]
+    if "pii" in segment:
+        shifted["pii"] = segment["pii"]
+    if "pii_crc" in segment:
+        shifted["pii_crc"] = segment["pii_crc"]
     return shifted
 
 
@@ -1003,6 +1016,24 @@ def label_speakers(
         resolved,
         timeline,
         max_speakers=config.TRANSCRIBE_SPEAKER_MAX,
+        cancel_flag=cancel_flag,
+        on_progress=on_progress,
+    )
+
+
+def redact_entry(
+    segments: list[Any],
+    *,
+    cancel_flag: Callable[[], bool] | None = None,
+    on_progress: Callable[[float], None] | None = None,
+) -> dict[str, Any] | None:
+    """Tag PII on *segments* in place; returns the ``redaction`` block or None."""
+    if not segments:
+        return None
+    return redact.redact_entry(
+        segments,
+        min_score=config.TRANSCRIBE_REDACT_MIN_SCORE,
+        org=config.TRANSCRIBE_REDACT_ORG,
         cancel_flag=cancel_flag,
         on_progress=on_progress,
     )
@@ -1142,6 +1173,10 @@ def apply_corrections(
             new_seg["words"] = seg["words"]
         if "speaker" in seg:
             new_seg["speaker"] = seg["speaker"]
+        if "pii" in seg:
+            new_seg["pii"] = seg["pii"]
+        if "pii_crc" in seg:
+            new_seg["pii_crc"] = seg["pii_crc"]
         corrected.append(new_seg)
 
     if total_applied > 0:
@@ -1288,6 +1323,10 @@ def filter_segments(
     )
     if "speaker_labels" in result:
         out["speaker_labels"] = result["speaker_labels"]
+    if "redact" in result:
+        out["redact"] = result["redact"]
+    if "redact_excluded" in result:
+        out["redact_excluded"] = result["redact_excluded"]
     return out
 
 
@@ -1317,13 +1356,24 @@ def _format_timestamp(seconds: float, fmt: Literal["srt", "vtt"]) -> str:
 # ---------------------------------------------------------------------------
 
 
-def _spoken_text(seg: TranscriptSegment, result: TranscriptResult) -> str:
-    """Segment text with a ``Name: `` prefix when a speaker id is present."""
+def _display_texts(result: TranscriptResult) -> list[str]:
+    """Segment texts as a reader should see them: placeholders when ``redact``."""
+    texts = [seg["text"] for seg in result["segments"]]
+    if not result.get("redact"):
+        return texts
+    spans = redact.entry_spans(
+        list(result["segments"]), texts, result.get("redact_excluded")
+    )
+    return [redact.render_text(t, s) for t, s in zip(texts, spans, strict=True)]
+
+
+def _spoken_text(seg: TranscriptSegment, text: str, result: TranscriptResult) -> str:
+    """*text* with a ``Name: `` prefix when a speaker id is present."""
     speaker = seg.get("speaker")
     if not speaker:
-        return seg["text"]
+        return text
     name = speakers.speaker_display_name(speaker, result.get("speaker_labels"))
-    return f"{name}: {seg['text']}"
+    return f"{name}: {text}"
 
 
 def _format_markdown(result: TranscriptResult) -> str:
@@ -1339,36 +1389,37 @@ def _format_markdown(result: TranscriptResult) -> str:
         "---",
         "",
     ]
-    for seg in result["segments"]:
+    for seg, text in zip(result["segments"], _display_texts(result), strict=True):
         start = utils.seconds_to_timestamp(seg["start"])
         end = utils.seconds_to_timestamp(seg["end"])
         lines.append(f"**[{start} - {end}]**")
-        lines.append(_spoken_text(seg, result))
+        lines.append(_spoken_text(seg, text, result))
         lines.append("")
     return "\n".join(lines)
 
 
 def _format_srt(result: TranscriptResult) -> str:
     blocks: list[str] = []
-    for i, seg in enumerate(result["segments"], start=1):
+    texts = _display_texts(result)
+    for i, (seg, text) in enumerate(zip(result["segments"], texts, strict=True), 1):
         start = _format_timestamp(seg["start"], "srt")
         end = _format_timestamp(seg["end"], "srt")
-        blocks.append(f"{i}\n{start} --> {end}\n{_spoken_text(seg, result)}")
+        blocks.append(f"{i}\n{start} --> {end}\n{_spoken_text(seg, text, result)}")
     return "\n\n".join(blocks) + "\n" if blocks else ""
 
 
 def _format_vtt(result: TranscriptResult) -> str:
     lines = ["WEBVTT", ""]
-    for seg in result["segments"]:
+    for seg, text in zip(result["segments"], _display_texts(result), strict=True):
         start = _format_timestamp(seg["start"], "vtt")
         end = _format_timestamp(seg["end"], "vtt")
         lines.append(f"{start} --> {end}")
         speaker = seg.get("speaker")
         if speaker:
             name = speakers.speaker_display_name(speaker, result.get("speaker_labels"))
-            lines.append(f"<v {name}>{seg['text']}")
+            lines.append(f"<v {name}>{text}")
         else:
-            lines.append(seg["text"])
+            lines.append(text)
         lines.append("")
     return "\n".join(lines)
 
@@ -1617,6 +1668,37 @@ def create_speakers_task(
         "video_paths": video_paths,
         "segments": copy.deepcopy(segments),
         "audio_index": audio_index,
+        "model": None,
+        "language": None,
+        "start_seconds": None,
+        "end_seconds": None,
+        "status": TASK_STATUS_QUEUED,
+        "phase": "queued",
+        "progress": 0.0,
+        "partial_segments": [],
+        "result": None,
+        "error": None,
+        "created_at": datetime.now(UTC).isoformat(),
+        "completed_at": None,
+        "_cancelled": False,
+    }
+
+
+def create_redact_task(
+    participant: str, segments: list[dict[str, Any]]
+) -> dict[str, Any]:
+    """Task that tags PII on an existing transcript; text only, no audio.
+
+    *segments* is the corrected snapshot the readers show; the server merges
+    the spans back by segment id.
+    """
+    return {
+        "id": f"rd_{uuid.uuid4().hex[:8]}",
+        "kind": "redact",
+        "participant": participant,
+        "video_paths": [],
+        "segments": copy.deepcopy(segments),
+        "audio_index": None,
         "model": None,
         "language": None,
         "start_seconds": None,
@@ -1907,12 +1989,68 @@ class TranscriptWorker:
         except Exception as exc:
             self._fail(task, str(exc))
 
+    def _execute_redact_task(self, task: dict[str, Any]) -> None:
+        """Tag PII on a private copy of the task's segment snapshot."""
+        segments = copy.deepcopy(task.get("segments") or [])
+        if not segments:
+            self._fail(task, "No transcript to redact.")
+            return
+        if not config.DEBUGGING and not redact.is_redact_model_available():
+            self._fail(task, "Redact model is not installed.")
+            return
+        with self._lock:
+            task["phase"] = "redacting"
+            task["progress"] = 0.0
+            task["transcribe_started_at"] = datetime.now(UTC).isoformat()
+
+        def _progress(frac: float) -> None:
+            with self._lock:
+                task["progress"] = min(frac, 0.99)
+
+        try:
+            block = redact_entry(
+                segments,
+                cancel_flag=lambda: bool(task.get("_cancelled")),
+                on_progress=_progress,
+            )
+            if task.get("_cancelled"):
+                raise redact.RedactCancelled
+            if block is None:
+                self._fail(task, "Redaction failed.")
+                return
+            with self._lock:
+                task["status"] = TASK_STATUS_COMPLETED
+                task["progress"] = 1.0
+                task["partial_segments"] = []
+                task["result"] = {
+                    "segments": [
+                        {
+                            "id": s.get("id"),
+                            "pii": s.get("pii", []),
+                            "pii_crc": s.get("pii_crc"),
+                        }
+                        for s in segments
+                    ],
+                    "redaction": block,
+                }
+                task["completed_at"] = datetime.now(UTC).isoformat()
+        except redact.RedactCancelled:
+            with self._lock:
+                task["status"] = TASK_STATUS_CANCELLED
+                task["partial_segments"] = []
+                task["completed_at"] = datetime.now(UTC).isoformat()
+        except Exception as exc:
+            self._fail(task, str(exc))
+
     def _execute_task(self, task: dict[str, Any]) -> None:
         """Run a single transcription task."""
         import video as video_mod
 
         if task.get("kind") == "speakers":
             self._execute_speakers_task(task)
+            return
+        if task.get("kind") == "redact":
+            self._execute_redact_task(task)
             return
 
         video_paths = task["video_paths"]

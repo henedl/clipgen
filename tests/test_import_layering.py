@@ -77,6 +77,14 @@ def test_speakers_stays_import_light() -> None:
     assert not re.search(r"^import (numpy|onnxruntime)", text, re.MULTILINE)
 
 
+def test_redact_stays_import_light() -> None:
+    """data_export and the server import it for read-time helpers; LiteRT loads lazily."""
+    project = _module_level_imports("redact") & _PROJECT_MODULES
+    assert project <= {"config", "utils", "profiling"}, project
+    text = (SOURCE / "redact.py").read_text(encoding="utf-8")
+    assert not re.search(r"^(import numpy|from ai_edge_litert)", text, re.MULTILINE)
+
+
 # Whole-tree layers; module-level imports point strictly downhill.
 _TREE_LAYERS = {
     "config": 0,
@@ -93,6 +101,7 @@ _TREE_LAYERS = {
     "licenses": 3,
     "mindnode": 3,
     "speakers": 3,
+    "redact": 3,
     "workflows_catalog": 3,
     "server_utils": 3,
     "manifest": 3,

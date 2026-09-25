@@ -2273,6 +2273,165 @@ class TestSpeakerCarry:
         assert out["segments"][0]["speaker"] == "1"
 
 
+class TestRedactCarry:
+    def _seg(self):
+        seg = TranscriptSegment(start=0.0, end=1.0, text="mail anna@ex.se")
+        seg["pii"] = [
+            {
+                "label": "EMAIL",
+                "start": 5,
+                "end": 15,
+                "score": 1.0,
+                "text": "anna@ex.se",
+            }
+        ]
+        seg["pii_crc"] = 7
+        return seg
+
+    def test_shift_segment_keeps_pii(self):
+        shifted = transcripts._shift_segment(self._seg(), 10.0)
+        assert shifted["pii"][0]["label"] == "EMAIL"
+        assert shifted["pii_crc"] == 7
+
+    def test_apply_corrections_keeps_pii(self):
+        out = transcripts.apply_corrections(
+            [self._seg()], [{"from": "mail", "to": "email"}]
+        )
+        assert out[0]["text"] == "email anna@ex.se"
+        assert out[0]["pii_crc"] == 7
+
+    def test_filter_segments_keeps_redact_flag(self):
+        result = TranscriptResult(
+            segments=[self._seg()], language="en", source_file="v.mp4", model="base"
+        )
+        result["redact"] = True
+        out = transcripts.filter_segments(result, 0.0, 5.0)
+        assert out["redact"] is True
+        assert out["segments"][0]["pii_crc"] == 7
+
+
+class TestRedactFormatting:
+    def _result(self, redact_on):
+        import redact
+
+        text = "Anna wrote to anna@ex.se"
+        a = TranscriptSegment(start=0.0, end=1.0, text=text)
+        a["pii"] = [
+            {"label": "GIVEN_NAME", "start": 0, "end": 4, "score": 0.9, "text": "Anna"},
+            {
+                "label": "EMAIL",
+                "start": 14,
+                "end": 24,
+                "score": 1.0,
+                "text": "anna@ex.se",
+            },
+        ]
+        a["pii_crc"] = redact.text_crc(text)
+        a["speaker"] = "1"
+        b = TranscriptSegment(start=1.0, end=2.0, text="Plain line")
+        result = TranscriptResult(
+            segments=[a, b], language="en", source_file="v.mp4", model="base"
+        )
+        if redact_on:
+            result["redact"] = True
+        return result
+
+    def test_formats_substitute_placeholders_when_on(self):
+        for fmt in (
+            transcripts._format_markdown,
+            transcripts._format_srt,
+            transcripts._format_vtt,
+        ):
+            text = fmt(self._result(True))
+            assert "[GIVEN_NAME_1] wrote to [EMAIL_1]" in text
+            assert "Anna" not in text
+            assert "Plain line" in text
+
+    def test_formats_keep_surface_when_off(self):
+        text = transcripts._format_vtt(self._result(False))
+        assert "Anna wrote to anna@ex.se" in text
+
+
+class TestRedactWorkerTasks:
+    def test_redact_task_shape_and_slim_status(self):
+        task = transcripts.create_redact_task(
+            "P01", [{"id": "P01:0", "start": 0, "end": 1, "text": "x"}]
+        )
+        assert task["id"].startswith("rd_")
+        assert task["kind"] == "redact"
+        assert task["video_paths"] == []
+        worker = transcripts.TranscriptWorker()
+        worker.enqueue(task)
+        slim = worker.get_all_tasks(include_partials=False)[0]
+        assert "segments" not in slim
+        assert slim["kind"] == "redact"
+
+    def test_redact_task_executes_under_debugging(self, monkeypatch):
+        monkeypatch.setattr(config, "DEBUGGING", True)
+        worker = transcripts.TranscriptWorker()
+        segs = [
+            {"id": "P01:0", "start": 0, "end": 1, "text": "mail a@b.se now"},
+            {"id": "P01:1", "start": 1, "end": 2, "text": "nothing"},
+        ]
+        task = transcripts.create_redact_task("P01", segs)
+        worker._execute_task(task)
+        assert task["status"] == transcripts.TASK_STATUS_COMPLETED
+        assert task["progress"] == 1.0
+        result = task["result"]
+        assert result["redaction"]["count"] == 1
+        assert [s["id"] for s in result["segments"]] == ["P01:0", "P01:1"]
+        assert result["segments"][0]["pii"][0]["text"] == "a@b.se"
+        assert result["segments"][1]["pii"] == []
+        assert "text" not in result["segments"][0]
+
+    def test_redact_task_without_segments_fails(self):
+        worker = transcripts.TranscriptWorker()
+        task = transcripts.create_redact_task("P01", [])
+        worker._execute_task(task)
+        assert task["status"] == transcripts.TASK_STATUS_FAILED
+        assert "No transcript" in task["error"]
+
+    def test_redact_task_without_model_fails(self, monkeypatch, tmp_path):
+        import redact
+
+        monkeypatch.setattr(config, "DEBUGGING", False)
+        monkeypatch.setattr(redact, "models_dir", lambda: tmp_path / "none")
+        worker = transcripts.TranscriptWorker()
+        task = transcripts.create_redact_task("P01", [{"id": "P01:0", "text": "x"}])
+        worker._execute_task(task)
+        assert task["status"] == transcripts.TASK_STATUS_FAILED
+        assert "not installed" in task["error"]
+
+    def test_redact_task_cancel_marks_cancelled(self, monkeypatch):
+        import redact
+
+        monkeypatch.setattr(config, "DEBUGGING", True)
+        worker = transcripts.TranscriptWorker()
+        task = transcripts.create_redact_task("P01", [{"id": "P01:0", "text": "x"}])
+
+        def cancel_late(segments, **kwargs):
+            task["_cancelled"] = True
+            return redact.redaction_block(0, min_score=0.6, org=False)
+
+        monkeypatch.setattr(transcripts, "redact_entry", cancel_late)
+        worker._execute_task(task)
+        assert task["status"] == transcripts.TASK_STATUS_CANCELLED
+        assert task["result"] is None
+
+    def test_redact_task_crash_fails(self, monkeypatch):
+        monkeypatch.setattr(config, "DEBUGGING", True)
+
+        def boom(*a, **k):
+            raise RuntimeError("tflite exploded")
+
+        monkeypatch.setattr(transcripts, "redact_entry", boom)
+        worker = transcripts.TranscriptWorker()
+        task = transcripts.create_redact_task("P01", [{"id": "P01:0", "text": "x"}])
+        worker._execute_task(task)
+        assert task["status"] == transcripts.TASK_STATUS_FAILED
+        assert "exploded" in task["error"]
+
+
 class TestSpeakerFormatting:
     def _result(self):
         a = TranscriptSegment(start=0.0, end=1.0, text="Hello")

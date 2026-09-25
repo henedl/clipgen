@@ -122,10 +122,13 @@
             <span class="cg-wip-badge" data-tooltip="Friction scoring and the keyword/AI split are still settling">WIP</span>
             <span id="frictionStaleDot" class="panel-tab-dot hidden" data-tooltip="Stale. Re-run friction"></span>
           </button>
+          <button id="tabBtnRedact" type="button" class="panel-tab" role="tab" aria-selected="false" data-tab="redact">
+            <span class="panel-tab-icon redact-icon"></span><span class="panel-tab-label">Redact</span>
+          </button>
         </div>
 
-        <!-- Stands in for both panes until the participant has a transcript. -->
-        <p id="analysisNoTranscript" class="panel-note">Summary and friction appear once the transcript is ready.</p>
+        <!-- Stands in for every pane until the participant has a transcript. -->
+        <p id="analysisNoTranscript" class="panel-note">Summary, friction and redaction appear once the transcript is ready.</p>
 
         <div id="summaryTab" class="panel-pane" role="tabpanel" aria-labelledby="tabBtnSummary">
           <div id="summaryActions" class="summary-actions hidden">
@@ -210,6 +213,37 @@
               </button>
             </div>
           </div>
+        </div>
+
+        <!-- Rendered by transcripts-redact.js from state.redaction + state.segments. -->
+        <div id="redactTab" class="panel-pane hidden" role="tabpanel" aria-labelledby="tabBtnRedact">
+          <div class="friction-header">
+            <span id="redactStatus" class="friction-status"></span>
+            <div class="friction-header-actions">
+              <label class="redact-switch" data-tooltip="Show placeholders instead of the detected text">
+                <input id="redactSwitch" type="checkbox" tabindex="-1">
+                <span>Apply</span>
+              </label>
+              <button id="redactRerun" type="button" class="btn btn-small hidden"><span class="agent-run-label">Re-run</span></button>
+              <button id="redactCancel" type="button" class="btn btn-small hidden">Cancel</button>
+            </div>
+          </div>
+          <div id="redactModel" class="redact-model hidden">
+            <p class="panel-empty-text">The Redact model is not downloaded.</p>
+            <p class="panel-empty-hint">Finds names, contacts, addresses and ids in 27 languages, on this machine. Powered by <a id="redactVendorLink" href="#" target="_blank" rel="noopener">Desert Ant Labs</a>. Downloading accepts the <a id="redactLicenseLink" href="#" target="_blank" rel="noopener">model license</a>. Also available in Settings → Transcription.</p>
+            <div class="redact-model-row">
+              <button id="redactDownload" type="button" class="btn btn-small">Download <span id="redactModelSize"></span></button>
+              <div id="redactModelBar" class="settings-llm-model-bar hidden"><div id="redactModelFill" class="settings-llm-model-bar-fill"></div></div>
+              <span id="redactModelNote" class="panel-empty-hint"></span>
+            </div>
+          </div>
+          <div id="redactEmpty" class="panel-empty hidden">
+            <p id="redactEmptyText" class="panel-empty-text"></p>
+            <button id="redactRunCta" type="button" class="btn btn-small" data-tooltip="Finds names, contacts, addresses and ids on this machine">
+              <span class="agent-run-label">Run redaction</span>
+            </button>
+          </div>
+          <div id="redactList" class="redact-list hidden"></div>
         </div>
       </section>
     </div>
@@ -438,6 +472,7 @@
   <script src="media-banner.js" defer></script>
   <script src="transcripts.js" defer></script>
   <script src="transcripts-speakers.js" defer></script>
+  <script src="transcripts-redact.js" defer></script>
   <script src="transcripts-corrections.js" defer></script>
   <script src="transcripts-search.js" defer></script>
   <script src="transcripts-video.js" defer></script>

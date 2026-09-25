@@ -4,7 +4,7 @@ import json
 import threading
 import time
 from pathlib import Path
-from typing import cast
+from typing import Any, cast
 
 import pytest
 
@@ -4500,3 +4500,489 @@ def test_edit_segment_matches_already_corrected_text(tr_client, monkeypatch):
     assert resp.get_json()["correction"]["from"] == "I like the cat"
     seg = tr_client.get("/transcripts/api/transcript/P01").get_json()["segments"][0]
     assert seg["text"] == "I really like the cat"
+
+
+# ---- PII redaction ---------------------------------------------------------
+
+
+def _redacted_entry():
+    import redact
+
+    text = "Hi Anna, mail anna@ex.se"
+    return {
+        "segments": [
+            {
+                "id": "P01:0",
+                "start": 0,
+                "end": 1,
+                "text": text,
+                "pii": [
+                    {
+                        "label": "GIVEN_NAME",
+                        "start": 3,
+                        "end": 7,
+                        "score": 0.9,
+                        "text": "Anna",
+                    },
+                    {
+                        "label": "EMAIL",
+                        "start": 14,
+                        "end": 24,
+                        "score": 1.0,
+                        "text": "anna@ex.se",
+                    },
+                ],
+                "pii_crc": redact.text_crc(text),
+            },
+            {"id": "P01:1", "start": 1, "end": 2, "text": "plain line"},
+        ],
+        "redaction": {"enabled": True, "count": 2, "min_score": 0.6},
+        "transcribed_at": "2026-01-01T00:00:00+00:00",
+    }
+
+
+def test_redact_enable_enqueues_task_with_corrected_snapshot(
+    tr_client, monkeypatch, tmp_path
+):
+    entry: dict[str, Any] = {
+        "segments": [{"id": "P01:0", "start": 0, "end": 1, "text": "teh mail"}]
+    }
+    worker = _seed_speakers(monkeypatch, tmp_path, entry)
+    transcripts_server._manifest["corrections"] = [{"from": "teh", "to": "the"}]
+    resp = tr_client.put("/transcripts/api/redact/P01", json={"enabled": True})
+    assert resp.status_code == 200
+    body = resp.get_json()
+    assert body["redaction"]["enabled"] is True
+    assert body["task"]["kind"] == "redact"
+    task = worker.enqueued[0]
+    assert task["kind"] == "redact"
+    assert task["segments"][0]["id"] == "P01:0"
+    assert task["segments"][0]["text"] == "the mail"
+    assert entry["redaction"]["enabled"] is True
+
+
+def test_redact_enable_already_tagged_does_not_requeue(
+    tr_client, monkeypatch, tmp_path
+):
+    worker = _seed_speakers(monkeypatch, tmp_path, _redacted_entry())
+    resp = tr_client.put("/transcripts/api/redact/P01", json={"enabled": True})
+    assert resp.status_code == 200
+    assert worker.enqueued == []
+
+
+def test_redact_enable_without_model_is_409(tr_client, monkeypatch, tmp_path):
+    import redact
+
+    _seed_speakers(monkeypatch, tmp_path, _redacted_entry())
+    monkeypatch.setattr(config, "DEBUGGING", False)
+    monkeypatch.setattr(redact, "is_redact_model_available", lambda: False)
+    resp = tr_client.put("/transcripts/api/redact/P01", json={"enabled": True})
+    assert resp.status_code == 409
+    assert resp.get_json()["reason"] == "model_missing"
+    resp = tr_client.post("/transcripts/api/redact/P01/regenerate")
+    assert resp.status_code == 409
+
+
+def test_redact_disable_strips_spans_and_cancels(tr_client, monkeypatch, tmp_path):
+    entry = _redacted_entry()
+    worker = _seed_speakers(monkeypatch, tmp_path, entry)
+    worker.tasks.append(
+        {
+            "id": "rd_live",
+            "kind": "redact",
+            "participant": "P01",
+            "status": transcripts.TASK_STATUS_RUNNING,
+        }
+    )
+    before = transcripts_server._corrections_version
+    resp = tr_client.put("/transcripts/api/redact/P01", json={"enabled": False})
+    assert resp.status_code == 200
+    assert resp.get_json()["redaction"]["enabled"] is False
+    assert worker.cancelled == ["rd_live"]
+    assert all("pii" not in s and "pii_crc" not in s for s in entry["segments"])
+    assert entry["redaction"] == {"enabled": False, "count": 0, "excluded": []}
+    assert transcripts_server._corrections_version > before
+
+
+def test_redact_regenerate_and_stop(tr_client, monkeypatch, tmp_path):
+    worker = _seed_speakers(monkeypatch, tmp_path, _redacted_entry())
+    resp = tr_client.post("/transcripts/api/redact/P01/regenerate")
+    assert resp.status_code == 200
+    assert resp.get_json()["task"]["kind"] == "redact"
+    assert worker.enqueued[0]["kind"] == "redact"
+    worker.tasks.append(
+        {
+            "id": "rd_live",
+            "kind": "redact",
+            "participant": "P01",
+            "status": transcripts.TASK_STATUS_QUEUED,
+        }
+    )
+    resp = tr_client.post("/transcripts/api/redact/P01/stop")
+    assert resp.get_json()["stopped"] is True
+    assert "rd_live" in worker.cancelled
+
+
+def test_transcript_payload_carries_numbered_utf16_spans(
+    tr_client, monkeypatch, tmp_path
+):
+    _seed_speakers(monkeypatch, tmp_path, _redacted_entry())
+    body = tr_client.get("/transcripts/api/transcript/P01").get_json()
+    assert body["redaction"]["enabled"] is True
+    assert body["redaction"]["detected"] is True
+    seg = body["segments"][0]
+    assert seg["text"] == "Hi Anna, mail anna@ex.se"
+    assert [(s["placeholder"], s["start"], s["end"]) for s in seg["pii"]] == [
+        ("[GIVEN_NAME_1]", 3, 7),
+        ("[EMAIL_1]", 14, 24),
+    ]
+    assert body["segments"][1]["pii"] == []
+
+
+def test_transcript_payload_reanchors_after_correction(
+    tr_client, monkeypatch, tmp_path
+):
+    _seed_speakers(monkeypatch, tmp_path, _redacted_entry())
+    transcripts_server._manifest["corrections"] = [{"from": "Hi", "to": "Hello there"}]
+    transcripts_server._bump_corrections_version()
+    seg = tr_client.get("/transcripts/api/transcript/P01").get_json()["segments"][0]
+    assert seg["text"] == "Hello there Anna, mail anna@ex.se"
+    assert [
+        (s["placeholder"], seg["text"][s["start"] : s["end"]]) for s in seg["pii"]
+    ] == [
+        ("[GIVEN_NAME_1]", "Anna"),
+        ("[EMAIL_1]", "anna@ex.se"),
+    ]
+
+
+def test_transcript_payload_hides_spans_when_off(tr_client, monkeypatch, tmp_path):
+    entry = _redacted_entry()
+    entry["redaction"] = {"enabled": False, "count": 0}
+    _seed_speakers(monkeypatch, tmp_path, entry)
+    body = tr_client.get("/transcripts/api/transcript/P01").get_json()
+    assert body["segments"][0]["pii"] == []
+    assert body["redaction"]["enabled"] is False
+
+
+def test_participants_payload_reports_redaction_and_model(
+    tr_client, monkeypatch, tmp_path
+):
+    _seed_speakers(monkeypatch, tmp_path, _redacted_entry())
+    body = tr_client.get("/transcripts/api/participants").get_json()
+    assert body["redact_model"] is True
+    row = body["participants"][0]
+    assert row["redaction"]["enabled"] is True
+    assert row["redaction"]["detected"] is True
+
+
+def test_vtt_search_and_marks_emit_placeholders(tr_client, monkeypatch, tmp_path):
+    _seed_speakers(monkeypatch, tmp_path, _redacted_entry())
+    monkeypatch.setattr(transcripts_server, "_schedule_persist", lambda: None)
+    vtt = tr_client.get("/transcripts/api/vtt/P01").get_data(as_text=True)
+    assert "Hi [GIVEN_NAME_1], mail [EMAIL_1]" in vtt
+    assert "Anna" not in vtt
+    hit = tr_client.get("/transcripts/api/search?q=anna").get_json()["results"][0]
+    assert hit["text"] == "Hi [GIVEN_NAME_1], mail [EMAIL_1]"
+    tr_client.post(
+        "/transcripts/api/marks",
+        json={"segment_ids": ["P01:0"], "category": "friction"},
+    )
+    marks = tr_client.get("/transcripts/api/marks").get_json()["marks"]
+    assert marks and marks[0]["text"] == "Hi [GIVEN_NAME_1], mail [EMAIL_1]"
+
+
+def test_merge_redact_task_copies_spans_by_id(monkeypatch):
+    entry: dict[str, Any] = {
+        "segments": [
+            {"id": "P01:0", "text": "a@b.se"},
+            {"id": "P01:1", "text": "b"},
+        ],
+        "redaction": {"enabled": True, "count": 0},
+        "summary": {"paragraph": "keep"},
+    }
+    monkeypatch.setattr(
+        transcripts_server,
+        "_manifest",
+        {"source_transcripts": {"P01": entry}, "marks": []},
+        raising=False,
+    )
+    task = {
+        "id": "rd_done",
+        "kind": "redact",
+        "participant": "P01",
+        "status": transcripts.TASK_STATUS_COMPLETED,
+        "created_at": "9999",
+        "result": {
+            "segments": [
+                {
+                    "id": "P01:0",
+                    "pii": [
+                        {
+                            "label": "EMAIL",
+                            "start": 0,
+                            "end": 6,
+                            "score": 1.0,
+                            "text": "a@b.se",
+                        }
+                    ],
+                    "pii_crc": 1,
+                },
+                {"id": "P01:9", "pii": [{"label": "CITY"}], "pii_crc": 2},
+            ],
+            "redaction": {"enabled": True, "count": 2, "min_score": 0.6, "org": False},
+        },
+    }
+    monkeypatch.setattr(
+        transcripts_server,
+        "_worker",
+        cast("transcripts.TranscriptWorker", _CompletedTasksWorker([task])),
+        raising=False,
+    )
+    transcripts_server._merged_task_ids.clear()
+    monkeypatch.setattr(transcripts_server, "_pending_chain_pids", [])
+    chained: list[str] = []
+    monkeypatch.setattr(
+        transcripts_server._orchestrator, "run_chain", lambda p: chained.append(p)
+    )
+    monkeypatch.setattr(transcripts, "save_transcripts_manifest", lambda *a, **k: None)
+    before = transcripts_server._corrections_version
+
+    transcripts_server._on_task_complete()
+
+    first: dict[str, Any] = entry["segments"][0]
+    assert first["pii"][0]["label"] == "EMAIL"
+    assert first["pii_crc"] == 1
+    assert "pii" not in entry["segments"][1]
+    assert entry["redaction"]["count"] == 1
+    assert entry["summary"] == {"paragraph": "keep"}
+    assert chained == []
+    assert transcripts_server._corrections_version > before
+
+
+def test_merge_redact_result_ignored_after_disable(monkeypatch):
+    entry = {
+        "segments": [{"id": "P01:0", "text": "a@b.se"}],
+        "redaction": {"enabled": False, "count": 0},
+    }
+    monkeypatch.setattr(
+        transcripts_server,
+        "_manifest",
+        {"source_transcripts": {"P01": entry}, "marks": []},
+        raising=False,
+    )
+    task = {
+        "id": "rd_late",
+        "kind": "redact",
+        "participant": "P01",
+        "status": transcripts.TASK_STATUS_COMPLETED,
+        "created_at": "9999",
+        "result": {
+            "segments": [{"id": "P01:0", "pii": [{"label": "EMAIL"}], "pii_crc": 1}],
+            "redaction": {"enabled": True, "count": 1},
+        },
+    }
+    monkeypatch.setattr(
+        transcripts_server,
+        "_worker",
+        cast("transcripts.TranscriptWorker", _CompletedTasksWorker([task])),
+        raising=False,
+    )
+    transcripts_server._merged_task_ids.clear()
+    with transcripts_server._manifest_lock:
+        transcripts_server._merge_completed_results_locked()
+    assert "pii" not in entry["segments"][0]
+    assert entry["redaction"]["enabled"] is False
+    assert "rd_late" in transcripts_server._merged_task_ids
+
+
+def test_transcription_completion_enqueues_redact_when_wanted(monkeypatch):
+    monkeypatch.setattr(config, "DEBUGGING", True)
+    monkeypatch.setattr(config, "TRANSCRIBE_REDACT", True)
+    entry: dict = {}
+    monkeypatch.setattr(
+        transcripts_server,
+        "_manifest",
+        {"source_transcripts": {"P01": entry}, "marks": [], "corrections": []},
+        raising=False,
+    )
+    task = {
+        "id": "tx_done",
+        "kind": "transcribe",
+        "participant": "P01",
+        "status": transcripts.TASK_STATUS_COMPLETED,
+        "created_at": "9999",
+        "result": {
+            "segments": [{"id": "P01:0", "start": 0, "end": 1, "text": "a@b.se"}],
+            "transcribed_at": "now",
+        },
+    }
+
+    class _Worker(_CompletedTasksWorker):
+        enqueued: list = []
+
+        def enqueue(self, t):
+            self.enqueued.append(t)
+
+    worker = _Worker([task])
+    monkeypatch.setattr(
+        transcripts_server,
+        "_worker",
+        cast("transcripts.TranscriptWorker", worker),
+        raising=False,
+    )
+    transcripts_server._merged_task_ids.clear()
+    monkeypatch.setattr(transcripts_server, "_pending_chain_pids", [])
+    monkeypatch.setattr(transcripts_server._orchestrator, "run_chain", lambda p: None)
+    monkeypatch.setattr(transcripts, "save_transcripts_manifest", lambda *a, **k: None)
+
+    transcripts_server._on_task_complete()
+
+    assert [t["kind"] for t in worker.enqueued] == ["redact"]
+    assert worker.enqueued[0]["segments"][0]["id"] == "P01:0"
+
+
+def test_edit_segment_requeues_when_span_text_drifts(tr_client, monkeypatch, tmp_path):
+    entry = _redacted_entry()
+    worker = _seed_speakers(monkeypatch, tmp_path, entry)
+    monkeypatch.setattr(transcripts_server, "_schedule_persist", lambda: None)
+    # A whole-line edit moves the text under the spans; crc drifts, so a pass requeues.
+    resp = tr_client.put(
+        "/transcripts/api/transcript/P01/segment",
+        json={"segment_id": "P01:0", "text": "Hey Anna, mail anna@ex.se"},
+    )
+    assert resp.status_code == 200
+    assert [t["kind"] for t in worker.enqueued] == ["redact"]
+    assert worker.enqueued[0]["segments"][0]["text"] == "Hey Anna, mail anna@ex.se"
+
+
+def test_agent_snapshot_reads_placeholders(tr_client, monkeypatch, tmp_path):
+    entry = _redacted_entry()
+    _seed_speakers(monkeypatch, tmp_path, entry)
+    monkeypatch.setattr(transcripts_server, "_corrected_cache", {})
+    with transcripts_server._manifest_lock:
+        segs = transcripts_server._corrected_segments_with_ids(
+            "P01", list(entry["segments"]), []
+        )
+        view = transcripts_server._redacted_view("P01", entry["segments"], segs, entry)
+    assert view is not None
+    import redact
+
+    assert (
+        redact.render_text(segs[0]["text"], view[0])
+        == "Hi [GIVEN_NAME_1], mail [EMAIL_1]"
+    )
+    assert redact.render_text(segs[1]["text"], view[1]) == "plain line"
+
+
+def test_redact_download_routes(tr_client, monkeypatch, tmp_path):
+    import time
+
+    import redact
+
+    calls: list[int] = []
+
+    def _fake_download(on_progress=None):
+        calls.append(1)
+        if on_progress:
+            on_progress({"status": "downloading model", "total": 10, "completed": 5})
+        return True
+
+    monkeypatch.setattr(redact, "download", _fake_download)
+    monkeypatch.setattr(redact, "is_redact_model_available", lambda: False)
+    transcripts_server._redact_downloads.clear()
+
+    status = tr_client.get("/transcripts/api/models/redact/download-status").get_json()
+    assert status["found"] is False and status["installed"] is False
+
+    resp = tr_client.post("/transcripts/api/models/redact/download")
+    assert resp.get_json()["started"] is True
+    for _ in range(100):
+        status = tr_client.get(
+            "/transcripts/api/models/redact/download-status"
+        ).get_json()
+        if status.get("found") and status.get("done"):
+            break
+        time.sleep(0.02)
+    assert status["succeeded"] is True
+    assert calls == [1]
+
+    monkeypatch.setattr(redact, "is_redact_model_available", lambda: True)
+    assert tr_client.post("/transcripts/api/models/redact/download").get_json()[
+        "installed"
+    ]
+
+
+def test_redact_delete_route(tr_client, monkeypatch, tmp_path):
+    import redact
+
+    monkeypatch.setattr(redact, "is_redact_model_available", lambda: False)
+    assert tr_client.delete("/transcripts/api/models/redact").status_code == 404
+    monkeypatch.setattr(redact, "is_redact_model_available", lambda: True)
+    removed: list[int] = []
+    monkeypatch.setattr(redact, "remove", lambda: removed.append(1))
+    worker = _seed_speakers(monkeypatch, tmp_path, _redacted_entry())
+    worker.tasks.append(
+        {
+            "id": "rd_live",
+            "kind": "redact",
+            "participant": "P01",
+            "status": transcripts.TASK_STATUS_RUNNING,
+        }
+    )
+    assert tr_client.delete("/transcripts/api/models/redact").status_code == 400
+    worker.tasks.clear()
+    assert (
+        tr_client.delete("/transcripts/api/models/redact").get_json()["deleted"] is True
+    )
+    assert removed == [1]
+
+
+def test_redact_exclude_restores_one_surface_everywhere(
+    tr_client, monkeypatch, tmp_path
+):
+    entry = _redacted_entry()
+    _seed_speakers(monkeypatch, tmp_path, entry)
+    monkeypatch.setattr(transcripts_server, "_schedule_persist", lambda: None)
+    resp = tr_client.put(
+        "/transcripts/api/redact/P01/exclude",
+        json={"label": "GIVEN_NAME", "text": "anna", "excluded": True},
+    )
+    assert resp.status_code == 200
+    assert resp.get_json()["redaction"]["excluded"] == [
+        {"label": "GIVEN_NAME", "key": "anna"}
+    ]
+    seg = tr_client.get("/transcripts/api/transcript/P01").get_json()["segments"][0]
+    assert [(s["placeholder"], s.get("excluded", False)) for s in seg["pii"]] == [
+        ("[GIVEN_NAME_1]", True),
+        ("[EMAIL_1]", False),
+    ]
+    vtt = tr_client.get("/transcripts/api/vtt/P01").get_data(as_text=True)
+    assert "Hi Anna, mail [EMAIL_1]" in vtt
+    hit = tr_client.get("/transcripts/api/search?q=anna").get_json()["results"][0]
+    assert hit["text"] == "Hi Anna, mail [EMAIL_1]"
+    # Redact it again; the list empties and the placeholder returns.
+    tr_client.put(
+        "/transcripts/api/redact/P01/exclude",
+        json={"label": "GIVEN_NAME", "text": "Anna", "excluded": False},
+    )
+    assert entry["redaction"]["excluded"] == []
+    vtt = tr_client.get("/transcripts/api/vtt/P01").get_data(as_text=True)
+    assert "Hi [GIVEN_NAME_1], mail [EMAIL_1]" in vtt
+
+
+def test_redact_exclusions_survive_off_on_and_merge(tr_client, monkeypatch, tmp_path):
+    entry = _redacted_entry()
+    entry["redaction"]["excluded"] = [{"label": "EMAIL", "key": "anna@ex.se"}]
+    _seed_speakers(monkeypatch, tmp_path, entry)
+    tr_client.put("/transcripts/api/redact/P01", json={"enabled": False})
+    assert entry["redaction"]["excluded"] == [{"label": "EMAIL", "key": "anna@ex.se"}]
+    tr_client.put("/transcripts/api/redact/P01", json={"enabled": True})
+    assert entry["redaction"]["excluded"] == [{"label": "EMAIL", "key": "anna@ex.se"}]
+    transcripts_server._apply_redact_result(
+        entry,
+        {
+            "segments": [{"id": "P01:0", "pii": [], "pii_crc": 1}],
+            "redaction": {"enabled": True, "count": 0, "min_score": 0.6, "org": False},
+        },
+    )
+    assert entry["redaction"]["excluded"] == [{"label": "EMAIL", "key": "anna@ex.se"}]

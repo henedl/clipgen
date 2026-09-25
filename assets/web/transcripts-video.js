@@ -647,8 +647,10 @@
     if (!seg) return;
     var mark = getMarkForSegment(seg);
     var cat = (mark && MARK_CATEGORIES[mark.category]) || MARK_CATEGORIES.bookmark || { label: "Mark", color: "#888" };
-    var snippet = (seg.text || "").trim().slice(0, 80);
-    if ((seg.text || "").length > 80) snippet += "…";
+    // Placeholders, not the surface, while redaction is applied.
+    var shown = (TS.displayText ? TS.displayText(seg) : seg.text || "").trim();
+    var snippet = shown.slice(0, 80);
+    if (shown.length > 80) snippet += "…";
     if (seg.speaker && TS.speakersOn && TS.speakersOn()) {
       snippet = TS.speakerName(seg.speaker) + ": " + snippet;
     }

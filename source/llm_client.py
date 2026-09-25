@@ -1183,7 +1183,34 @@ def download_model(
         f"{urllib.parse.quote(resolved['path'])}"
     )
 
-    directory = models_dir()
+    if not stream_download(
+        url,
+        target,
+        sha256=resolved["sha256"] or "",
+        size=int(resolved["size"] or 0),
+        on_progress=on_progress,
+    ):
+        return False
+    utils.info_print(f"Downloaded model {ref}.")
+    return True
+
+
+def stream_download(
+    url: str,
+    target: Path,
+    *,
+    sha256: str,
+    size: int,
+    on_progress: Callable[[dict[str, Any]], None] | None = None,
+) -> bool:
+    """Stream *url* into *target* through a ``.part`` file beside it.
+
+    Verifies *sha256* incrementally (size-only when it is empty), then renames
+    into place. Progress dicts carry ``status``/``completed``/``total``. Never
+    raises; returns False on any failure and leaves no partial file behind.
+    Shared by the GGUF downloader and ``redact.download``.
+    """
+    directory = target.parent
     try:
         directory.mkdir(parents=True, exist_ok=True)
     except OSError as exc:
@@ -1205,7 +1232,7 @@ def download_model(
             urllib.request.urlopen(request, timeout=_DOWNLOAD_TIMEOUT) as response,
             download_path.open("wb") as out,
         ):
-            total = int(response.headers.get("Content-Length") or resolved["size"])
+            total = int(response.headers.get("Content-Length") or size)
             while chunk := response.read(_DOWNLOAD_CHUNK):
                 if time.monotonic() > deadline:
                     raise TimeoutError(
@@ -1229,13 +1256,12 @@ def download_model(
             download_path.unlink(missing_ok=True)
         return False
 
-    expected = resolved["sha256"]
-    if expected and digest.hexdigest() != expected:
-        utils.warning_print(f"Model download corrupt (SHA256 mismatch): {ref}")
+    if sha256 and digest.hexdigest() != sha256:
+        utils.warning_print(f"Model download corrupt (SHA256 mismatch): {target.name}")
         download_path.unlink(missing_ok=True)
         return False
-    if not expected and resolved["size"] and received != resolved["size"]:
-        utils.warning_print(f"Model download incomplete: {ref}")
+    if not sha256 and size and received != size:
+        utils.warning_print(f"Model download incomplete: {target.name}")
         download_path.unlink(missing_ok=True)
         return False
 
@@ -1245,7 +1271,6 @@ def download_model(
         utils.warning_print(f"Model download failed (rename): {exc}")
         download_path.unlink(missing_ok=True)
         return False
-    utils.info_print(f"Downloaded model {ref}.")
     return True
 
 

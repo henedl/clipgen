@@ -44,6 +44,13 @@ API endpoints (all under /transcripts/):
   DELETE /api/transcribe/<task_id>                 - cancel or dismiss a transcription task
   POST /api/transcribe/warmup                     - background-load Whisper when prewarm is enabled (confirms before downloading a non-cached model; force=true to proceed)
   GET  /api/transcribe/model-status               - whether the Whisper model is loaded or warming
+  PUT  /api/redact/<participant>                  - switch PII redaction on/off for one participant
+  POST /api/redact/<participant>/regenerate       - re-run PII detection
+  POST /api/redact/<participant>/stop             - cancel a running redact task
+  PUT  /api/redact/<participant>/exclude          - restore one detection, or redact it again
+  POST /api/models/redact/download                - download the Redact model in the background
+  GET  /api/models/redact/download-status         - poll progress of that download
+  DELETE /api/models/redact                       - delete the downloaded Redact model
   POST /api/models/llm/download                 - download a GGUF model in the background
   GET  /api/models/llm/download-status          - poll progress of an in-flight model download
   DELETE /api/models/llm/<name>                   - delete a downloaded GGUF (or unlink an external model)
@@ -71,6 +78,7 @@ import files
 import friction
 import llm_client
 import profiling
+import redact
 import remux_server
 import speakers
 import start_settings
@@ -123,6 +131,19 @@ _orchestrator: "AgentOrchestrator"
 _pending_model_unloads: dict[str, threading.Timer] = {}
 _pending_model_unloads_lock = threading.Lock()
 
+# The one Redact model download; the UI polls /api/models/redact/download-status.
+_REDACT_JOB = "redact"
+_redact_downloads = JobRegistry(
+    fresh=lambda: {
+        "status": "starting",
+        "completed": 0,
+        "total": 0,
+        "done": False,
+        "succeeded": False,
+        "error": None,
+    },
+    running=lambda token: not token["done"],
+)
 # In-flight GGUF downloads by model value; the UI polls
 # /api/models/llm/download-status.
 _llm_downloads = JobRegistry(
@@ -275,6 +296,121 @@ def _enqueue_speakers_task(pid: str, entry: dict[str, Any]) -> dict[str, Any] | 
     return _task_info(task)
 
 
+# ---- PII redaction ----
+
+
+def _redaction_summary(entry: dict[str, Any]) -> dict[str, Any]:
+    """Pill/transcript payload; ``enabled`` is None until the participant chose."""
+    block = entry.get("redaction") or {}
+    segs = entry.get("segments") or []
+    return {
+        "enabled": block.get("enabled") if "enabled" in block else None,
+        "count": int(block.get("count") or 0),
+        "min_score": block.get("min_score"),
+        "detected": any(s.get("pii") for s in segs),
+        "excluded": list(block.get("excluded") or []),
+        "error": block.get("error"),
+    }
+
+
+def _redact_excluded(entry: dict[str, Any]) -> list[dict[str, Any]]:
+    return list((entry.get("redaction") or {}).get("excluded") or [])
+
+
+def _redact_wanted(entry: dict[str, Any]) -> bool:
+    """Per-participant choice when set, else ``config.TRANSCRIBE_REDACT``."""
+    block = entry.get("redaction")
+    if isinstance(block, dict) and "enabled" in block:
+        return bool(block["enabled"])
+    return bool(config.TRANSCRIBE_REDACT)
+
+
+def _redact_off(entry: dict[str, Any] | None) -> bool:
+    """True once the participant switched redaction off; late results must not undo it."""
+    block = (entry or {}).get("redaction")
+    return isinstance(block, dict) and block.get("enabled") is False
+
+
+def _redact_model_ready() -> bool:
+    return config.DEBUGGING or redact.is_redact_model_available()
+
+
+def _active_redact_tasks(pid: str | None = None) -> list[dict[str, Any]]:
+    """Queued or running redact-kind tasks, for *pid* or for everyone."""
+    if not _worker:
+        return []
+    live = (transcripts.TASK_STATUS_QUEUED, transcripts.TASK_STATUS_RUNNING)
+    return [
+        t
+        for t in _worker.get_all_tasks(include_partials=False)
+        if t.get("kind") == "redact"
+        and (pid is None or t["participant"] == pid)
+        and t["status"] in live
+    ]
+
+
+def _cancel_redact_tasks(pid: str) -> bool:
+    cancelled = False
+    for t in _active_redact_tasks(pid):
+        cancelled = bool(_worker and _worker.cancel(t["id"])) or cancelled
+    return cancelled
+
+
+def _enqueue_redact_task(pid: str, entry: dict[str, Any]) -> dict[str, Any] | None:
+    """Replace any live redact run for *pid*; caller holds _manifest_lock.
+
+    The snapshot is the corrected text readers see, so the spans it yields
+    index that text.
+    """
+    _cancel_redact_tasks(pid)
+    if not _worker or not entry.get("segments"):
+        return None
+    transcripts.assign_segment_ids(pid, entry["segments"])
+    snapshot = _corrected_segments_with_ids(
+        pid, list(entry["segments"]), list(_manifest.get("corrections", []))
+    )
+    task = transcripts.create_redact_task(pid, snapshot)
+    _worker.enqueue(task)
+    return _task_info(task)
+
+
+def _redacted_view(
+    pid: str, raw_segments: list[Any], corrected: list[Any], entry: dict[str, Any]
+) -> list[list[dict[str, Any]]] | None:
+    """Numbered spans per segment when redaction is on and detected; else None."""
+    if not _redact_wanted(entry) or not any(s.get("pii") for s in raw_segments):
+        return None
+    return redact.entry_spans(
+        raw_segments, [seg["text"] for seg in corrected], _redact_excluded(entry)
+    )
+
+
+def _requeue_stale_redactions() -> None:
+    """After a text-changing correction, re-detect where the spans' text moved.
+
+    Takes _manifest_lock itself; call it after the route's own lock block.
+    """
+    with _manifest_lock:
+        if not _worker or not _redact_model_ready():
+            return
+        src = _manifest.get("source_transcripts", {})
+        corrections = list(_manifest.get("corrections", []))
+        for pid, entry in src.items():
+            segs = entry.get("segments") or []
+            if (
+                not segs
+                or not _redact_wanted(entry)
+                or not any(s.get("pii") for s in segs)
+            ):
+                continue
+            corrected = _corrected_segments(pid, segs, corrections)
+            if any(
+                raw.get("pii") and raw.get("pii_crc") != redact.text_crc(cor["text"])
+                for raw, cor in zip(segs, corrected, strict=True)
+            ):
+                _enqueue_redact_task(pid, entry)
+
+
 def _step_state_agent(pid: str, entry: dict[str, Any], agent_key: str) -> str:
     field_name = next(
         (a["manifest_field"] for a in thinking_agents.AGENTS if a["key"] == agent_key),
@@ -394,6 +530,7 @@ def api_participants() -> FlaskResponse:
                     "report": _step_state_agent(pid, entry, "report"),
                 },
                 "speakers": _speakers_summary(entry),
+                "redaction": _redaction_summary(entry),
             }
             if has_transcript:
                 info["language"] = entry.get("language", "")
@@ -467,6 +604,7 @@ def api_participants() -> FlaskResponse:
         has_sheet=bool(_participant_source and _participant_source["sheet_context"]),
         transcribe_prewarm=_transcribe_prewarm_setting(),
         speaker_model=_speaker_model_ready(),
+        redact_model=_redact_model_ready(),
         config=utils.get_frontend_config(),
     )
 
@@ -566,11 +704,21 @@ def api_transcript(participant: str) -> FlaskResponse:
         model = entry.get("model", "")
         transcribed_at = entry.get("transcribed_at", "")
         speakers_summary = _speakers_summary(entry)
+        redaction_summary = _redaction_summary(entry)
+        redact_on = _redact_wanted(entry)
+        excluded = _redact_excluded(entry)
         version_snapshot = _corrections_version
 
     # Apply corrections to get corrected text (memoized per participant)
     corrected_segments = _corrected_segments(
         participant, raw_segments, corrections, version=version_snapshot
+    )
+    pii_view = (
+        redact.entry_spans(
+            raw_segments, [c["text"] for c in corrected_segments], excluded
+        )
+        if redact_on
+        else None
     )
 
     # Build marks-by-segment-id lookup
@@ -581,7 +729,9 @@ def api_transcript(participant: str) -> FlaskResponse:
 
     # Build response segments with corrected flag and marks
     segments = []
-    for raw, corrected in zip(raw_segments, corrected_segments, strict=True):
+    for i, (raw, corrected) in enumerate(
+        zip(raw_segments, corrected_segments, strict=True)
+    ):
         seg_id = raw.get("id", "")
         seg: dict[str, Any] = {
             "id": seg_id,
@@ -592,6 +742,10 @@ def api_transcript(participant: str) -> FlaskResponse:
             "marks": marks_by_seg.get(seg_id, []),
             "words": corrected.get("words", []),
             "speaker": corrected.get("speaker", ""),
+            # UTF-16 offsets so the page can slice; numbered per participant.
+            "pii": redact.utf16_spans(corrected["text"], pii_view[i])
+            if pii_view
+            else [],
         }
         segments.append(seg)
 
@@ -602,6 +756,7 @@ def api_transcript(participant: str) -> FlaskResponse:
         model=model,
         transcribed_at=transcribed_at,
         speakers=speakers_summary,
+        redaction=redaction_summary,
     )
 
 
@@ -649,6 +804,7 @@ def api_edit_segment(participant: str) -> FlaskResponse:
         _bump_corrections_version()  # new correction invalidates corrected cache
         _mark_friction_stale(entry)  # edited segment text invalidates friction scores
 
+    _requeue_stale_redactions()
     _schedule_persist()
     return ok(correction=correction)
 
@@ -671,6 +827,8 @@ def api_vtt(participant: str) -> FlaskResponse:
         source_file = entry.get("source_file", "")
         model = entry.get("model", "")
         speaker_labels = dict((entry.get("speakers") or {}).get("labels") or {})
+        redact_on = _redact_wanted(entry)
+        excluded = _redact_excluded(entry)
         version_snapshot = _corrections_version
 
     corrected = _corrected_segments(
@@ -685,6 +843,8 @@ def api_vtt(participant: str) -> FlaskResponse:
         source_file=source_file,
         model=model,
         speaker_labels=speaker_labels,
+        redact=redact_on,
+        redact_excluded=excluded,
     )
     vtt_text = transcripts._format_vtt(result)
     return Response(vtt_text, content_type="text/vtt")
@@ -788,6 +948,114 @@ def api_speakers_regenerate(participant: str) -> FlaskResponse:
 @json_endpoint
 def api_speakers_stop(participant: str) -> FlaskResponse:
     return ok(stopped=_cancel_speakers_tasks(participant))
+
+
+@transcripts_bp.route("/api/redact/<participant>", methods=["PUT"])
+@json_endpoint
+def api_redact_set(participant: str) -> FlaskResponse:
+    """Switch PII redaction on or off for one participant.
+
+    Enabling a transcribed participant enqueues a ``redact`` task unless spans
+    already exist; disabling strips every span. The choice persists on the
+    entry and beats ``TRANSCRIBE_REDACT``.
+    """
+    data = require_json_body("Missing JSON body")
+    enabled = data.get("enabled")
+    if not isinstance(enabled, bool):
+        raise ApiError("enabled must be true or false")
+    if enabled and not _redact_model_ready():
+        return err("Redact model is not installed", 409, reason="model_missing")
+    with _manifest_lock:
+        src = _manifest.setdefault("source_transcripts", {})
+        if participant not in src and not _video_paths_for_participant(participant):
+            raise ApiError("Unknown participant", 404)
+        entry = src.setdefault(participant, {})
+        task = None
+        block = entry.get("redaction") or {}
+        excluded = list(block.get("excluded") or [])
+        if enabled:
+            entry["redaction"] = {
+                "enabled": True,
+                "count": int(block.get("count") or 0),
+                "min_score": block.get("min_score"),
+                "excluded": excluded,
+            }
+            segs = entry.get("segments") or []
+            if segs and not any(s.get("pii") for s in segs):
+                task = _enqueue_redact_task(participant, entry)
+        else:
+            _cancel_redact_tasks(participant)
+            redact.strip_entry(entry.get("segments") or [])
+            entry["redaction"] = {"enabled": False, "count": 0, "excluded": excluded}
+        _bump_corrections_version()
+        summary = _redaction_summary(entry)
+    _persist_manifest()
+    return ok(redaction=summary, task=task)
+
+
+@transcripts_bp.route("/api/redact/<participant>/regenerate", methods=["POST"])
+@json_endpoint
+def api_redact_regenerate(participant: str) -> FlaskResponse:
+    """Re-run PII detection with the current settings."""
+    if not _redact_model_ready():
+        return err("Redact model is not installed", 409, reason="model_missing")
+    with _manifest_lock:
+        entry = _manifest.get("source_transcripts", {}).get(participant)
+        if not entry or not entry.get("segments"):
+            raise ApiError("No transcript for participant", 404)
+        block = entry.get("redaction") or {}
+        entry["redaction"] = {
+            "enabled": True,
+            "count": int(block.get("count") or 0),
+            "min_score": block.get("min_score"),
+            "excluded": list(block.get("excluded") or []),
+        }
+        task = _enqueue_redact_task(participant, entry)
+        if task is None:
+            raise ApiError("No transcript for participant", 404)
+    _persist_manifest()
+    return ok(task=task)
+
+
+@transcripts_bp.route("/api/redact/<participant>/stop", methods=["POST"])
+@json_endpoint
+def api_redact_stop(participant: str) -> FlaskResponse:
+    return ok(stopped=_cancel_redact_tasks(participant))
+
+
+@transcripts_bp.route("/api/redact/<participant>/exclude", methods=["PUT"])
+@json_endpoint
+def api_redact_exclude(participant: str) -> FlaskResponse:
+    """Restore one detection (or redact it again): ``{label, text, excluded}``.
+
+    Keyed on the label plus the normalised surface, so every mention of that
+    name flips together and the choice survives a re-run.
+    """
+    data = require_json_body("Missing JSON body")
+    label = str(data.get("label") or "").strip()
+    key = redact.surface_key(str(data.get("text") or ""))
+    excluded = data.get("excluded")
+    if not label or not key:
+        raise ApiError("label and text are required")
+    if not isinstance(excluded, bool):
+        raise ApiError("excluded must be true or false")
+    with _manifest_lock:
+        entry = _manifest.get("source_transcripts", {}).get(participant)
+        if not entry or not entry.get("segments"):
+            raise ApiError("No transcript for participant", 404)
+        block = entry.setdefault("redaction", {"enabled": True, "count": 0})
+        rest = [
+            e
+            for e in block.get("excluded") or []
+            if (e.get("label"), e.get("key")) != (label, key)
+        ]
+        if excluded:
+            rest.append({"label": label, "key": key})
+        block["excluded"] = rest
+        _bump_corrections_version()
+        summary = _redaction_summary(entry)
+    _persist_manifest()
+    return ok(redaction=summary)
 
 
 @transcripts_bp.route("/api/speakers/<participant>/segment", methods=["PUT"])
@@ -933,6 +1201,8 @@ def _embed_subtitle_for_participant(
         language = entry.get("language", "")
         source_file = entry.get("source_file", "")
         model = entry.get("model", "")
+        redact_on = _redact_wanted(entry)
+        excluded = _redact_excluded(entry)
         version_snapshot = _corrections_version
 
     video_paths = _video_paths_for_participant(participant)
@@ -963,6 +1233,8 @@ def _embed_subtitle_for_participant(
         language=language,
         source_file=source_file,
         model=model,
+        redact=redact_on,
+        redact_excluded=excluded,
     )
     srt_text = transcripts._format_srt(result)
     if not srt_text:
@@ -1563,6 +1835,7 @@ def api_corrections_add() -> FlaskResponse:
 
         _bump_corrections_version()  # add/update/remove invalidates corrected cache
     # Schedule outside _manifest_lock so it never nests with the debounce timer lock.
+    _requeue_stale_redactions()
     _schedule_persist()
     return ok(correction=correction, removed=removed, updated=updated)
 
@@ -1583,6 +1856,7 @@ def api_corrections_delete(correction_id: str) -> FlaskResponse:
     if removed == 0:
         return err("Correction not found", 404)
 
+    _requeue_stale_redactions()
     _schedule_persist()
     return ok()
 
@@ -1810,13 +2084,17 @@ def _resolve_mark(
         # Correct the whole list once (memoized) instead of per mark.
         corrected = _corrected_segments(pid, segments, corrections)
         seg = corrected[idx]
+        text = seg["text"]
+        pii_view = _redacted_view(pid, segments, corrected, entry)
+        if pii_view is not None:
+            text = redact.render_text(text, pii_view[idx])
         return {
             **mark,
             "valid": True,
             "participant": pid,
             "start": seg["start"],
             "end": seg["end"],
-            "text": seg["text"],
+            "text": text,
         }
 
     # Running-task partials carry no ids, so their suffix is a positional index.
@@ -2056,25 +2334,32 @@ def api_search() -> FlaskResponse:
             pid: dict((entry.get("speakers") or {}).get("labels") or {})
             for pid, entry in src.items()
         }
+        entries_by_pid = {pid: dict(entry) for pid, entry in src.items()}
 
     for pid, raw_segments in segment_snapshots.items():
         corrected = _corrected_segments(
             pid, raw_segments, corrections, version=version_snapshot
         )
         participant_count = 0
-        for raw, seg in zip(raw_segments, corrected, strict=True):
+        pii_view = _redacted_view(pid, raw_segments, corrected, entries_by_pid[pid])
+        for i, (raw, seg) in enumerate(zip(raw_segments, corrected, strict=True)):
             text_lower = seg["text"].lower()
             n = text_lower.count(query_lower)
             if n > 0:
                 participant_count += n
                 speaker = seg.get("speaker", "")
+                shown = (
+                    redact.render_text(seg["text"], pii_view[i])
+                    if pii_view is not None
+                    else seg["text"]
+                )
                 results.append(
                     {
                         "participant": pid,
                         "segment_id": raw.get("id", ""),
                         "start": seg["start"],
                         "end": seg["end"],
-                        "text": seg["text"],
+                        "text": shown,
                         "count": n,
                         "speaker": speaker,
                         "speaker_name": (
@@ -2251,6 +2536,65 @@ def api_llm_delete(name: str) -> FlaskResponse:
     llm_client.unload_model(name)
     try:
         target.unlink()
+    except OSError as exc:
+        return err(f"Delete failed: {exc}")
+    return ok(deleted=True)
+
+
+@transcripts_bp.route("/api/models/redact/download", methods=["POST"])
+def api_redact_download() -> FlaskResponse:
+    """Download the Redact model in the background; poll download-status."""
+    if redact.is_redact_model_available():
+        return ok(installed=True)
+
+    def _run_download(token: dict[str, Any]) -> None:
+        def _on_progress(chunk: dict[str, Any]) -> None:
+            fields: dict[str, Any] = {}
+            if chunk.get("status"):
+                fields["status"] = chunk["status"]
+            for key in ("total", "completed"):
+                if isinstance(chunk.get(key), (int, float)):
+                    fields[key] = int(chunk[key])
+            _redact_downloads.publish(_REDACT_JOB, token, **fields)
+
+        succeeded = False
+        try:
+            succeeded = redact.download(on_progress=_on_progress)
+        finally:
+            fields = {"done": True, "succeeded": succeeded}
+            if succeeded:
+                fields["status"] = "success"
+            elif not token.get("error"):
+                fields["error"] = "Download failed"
+            _redact_downloads.publish(_REDACT_JOB, token, **fields)
+
+    if (
+        _redact_downloads.start(_REDACT_JOB, _run_download, name="redact-download")
+        is None
+    ):
+        return ok(already_downloading=True)
+    return ok(started=True)
+
+
+@transcripts_bp.route("/api/models/redact/download-status")
+def api_redact_download_status() -> FlaskResponse:
+    """Progress of the Redact model download, plus whether it is installed."""
+    snapshot = _redact_downloads.get(_REDACT_JOB)
+    installed = redact.is_redact_model_available()
+    if snapshot is None:
+        return ok(found=False, installed=installed)
+    return ok(found=True, installed=installed, **snapshot)
+
+
+@transcripts_bp.route("/api/models/redact", methods=["DELETE"])
+def api_redact_delete() -> FlaskResponse:
+    """Delete the downloaded Redact model; refused while a redact task runs."""
+    if not redact.is_redact_model_available():
+        return err("Model not found", 404)
+    if _active_redact_tasks():
+        return err("Model is in use")
+    try:
+        redact.remove()
     except OSError as exc:
         return err(f"Delete failed: {exc}")
     return ok(deleted=True)
@@ -2519,6 +2863,13 @@ def _merge_completed_results_locked() -> list[str]:
                     speakers_changed = True
                 _merged_task_ids.add(task["id"])
                 continue
+            if task.get("kind") == "redact":
+                live = src.get(pid)
+                if live and live.get("segments") and not _redact_off(live):
+                    _apply_redact_result(live, task["result"])
+                    speakers_changed = True
+                _merged_task_ids.add(task["id"])
+                continue
             existing = src.get(pid, {})
             if "speakers" in task["result"] and _speakers_off(existing):
                 # Switched off mid-transcription: the labels arrive unwanted.
@@ -2589,6 +2940,25 @@ def _apply_speaker_result(live: dict[str, Any], result: dict[str, Any]) -> None:
     live["speakers"] = block
 
 
+def _apply_redact_result(live: dict[str, Any], result: dict[str, Any]) -> None:
+    """Write a redact pass onto the live entry by segment id; the text is untouched."""
+    fresh = {s.get("id"): s for s in result["segments"] if s.get("id")}
+    count = 0
+    for seg in live["segments"]:
+        hit = fresh.get(seg.get("id"))
+        if hit and hit.get("pii"):
+            seg["pii"] = list(hit["pii"])
+            seg["pii_crc"] = hit.get("pii_crc")
+            count += len(hit["pii"])
+        else:
+            seg.pop("pii", None)
+            seg.pop("pii_crc", None)
+    block = dict(result["redaction"])
+    block["count"] = count
+    block["excluded"] = list((live.get("redaction") or {}).get("excluded") or [])
+    live["redaction"] = block
+
+
 def _do_persist() -> None:
     """Persist manifest to disk - caller must hold _manifest_lock."""
     _merge_completed_results_locked()
@@ -2642,6 +3012,9 @@ def _on_task_complete() -> None:
             # A fresh transcript invalidates every agent's prior output.
             for agent in thinking_agents.AGENTS:
                 entry.pop(agent["manifest_field"], None)
+            # Fresh text carries no spans; queue the pass when wanted.
+            if _redact_wanted(entry) and _redact_model_ready():
+                _enqueue_redact_task(pid, entry)
 
     # run_chain re-acquires the non-reentrant _manifest_lock, so it runs outside
     # the block.
@@ -2915,6 +3288,18 @@ class AgentOrchestrator:
                         list(entry["segments"]),
                         list(_manifest.get("corrections", [])),
                     )
+                    # Agents never see the surface behind a placeholder.
+                    pii_view = _redacted_view(
+                        participant,
+                        list(entry["segments"]),
+                        snapshot["segments"],
+                        entry,
+                    )
+                    if pii_view is not None:
+                        for seg, spans in zip(
+                            snapshot["segments"], pii_view, strict=True
+                        ):
+                            seg["text"] = redact.render_text(seg["text"], spans)
 
                 def _sink(tok: str) -> None:
                     with self._partial_lock:

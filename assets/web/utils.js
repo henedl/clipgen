@@ -64,6 +64,7 @@ var CLIPGEN_CONFIG = {
   mediaContainerWarning: true,
   transcribeSpeakers: false,
   speakerLabelMaxLen: 40,
+  transcribeRedact: false,
   // Mirrors video.SUBTITLE_CODEC_BY_CONTAINER / SUBTITLE_ALWAYS_DEFAULT_CONTAINERS;
   // the mp4 muxer ignores -disposition:s:0.
   subtitleContainers: {
@@ -165,6 +166,9 @@ var clipgenApplyConfig = function (payload) {
   }
   if (typeof payload.speakerLabelMaxLen === "number") {
     CLIPGEN_CONFIG.speakerLabelMaxLen = payload.speakerLabelMaxLen;
+  }
+  if (typeof payload.transcribeRedact === "boolean") {
+    CLIPGEN_CONFIG.transcribeRedact = payload.transcribeRedact;
   }
   if (payload.subtitleContainers && typeof payload.subtitleContainers === "object") {
     CLIPGEN_CONFIG.subtitleContainers = payload.subtitleContainers;

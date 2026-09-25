@@ -27,6 +27,7 @@ from pathlib import Path
 from typing import Any
 
 import config
+import redact
 import speakers
 import manifest as manifest_io
 import utils
@@ -249,10 +250,28 @@ def build_transcript_segments(manifest: dict[str, Any]) -> list[dict[str, Any]]:
         source_file = entry.get("source_file", "")
         transcribed_at = entry.get("transcribed_at", "")
         speaker_labels = (entry.get("speakers") or {}).get("labels") or {}
-        for idx, seg in enumerate(entry.get("segments", []) or []):
-            if not isinstance(seg, dict):
-                continue
+        segments = [s for s in (entry.get("segments", []) or []) if isinstance(s, dict)]
+        # Placeholders replace the surface only while the participant's toggle is on.
+        redacted = (entry.get("redaction") or {}).get("enabled") and any(
+            s.get("pii") for s in segments
+        )
+        pii_view = (
+            redact.entry_spans(
+                segments,
+                [str(s.get("text", "")) for s in segments],
+                (entry.get("redaction") or {}).get("excluded"),
+            )
+            if redacted
+            else None
+        )
+        for idx, seg in enumerate(segments):
             seg_id = seg.get("id") or f"{participant_id}:{idx}"
+            spans = [
+                sp
+                for sp in (pii_view[idx] if pii_view is not None else [])
+                if not sp.get("excluded")
+            ]
+            text = str(seg.get("text", ""))
             try:
                 start = float(seg.get("start", 0.0))
                 end = float(seg.get("end", 0.0))
@@ -267,7 +286,8 @@ def build_transcript_segments(manifest: dict[str, Any]) -> list[dict[str, Any]]:
                     "start": utils.sanitize_floats(start),
                     "end": utils.sanitize_floats(end),
                     "duration": utils.sanitize_floats(round(end - start, 4)),
-                    "text": seg.get("text", ""),
+                    "text": redact.render_text(text, spans) if spans else text,
+                    "pii_labels": [sp["label"] for sp in spans],
                     "speaker": seg.get("speaker", ""),
                     "speaker_name": (
                         speakers.speaker_display_name(seg["speaker"], speaker_labels)
