@@ -78,11 +78,11 @@ def test_speakers_stays_import_light() -> None:
 
 
 def test_redact_stays_import_light() -> None:
-    """data_export and the server import it for read-time helpers; LiteRT loads lazily."""
+    """data_export and the server import it for read-time helpers; the model runtime loads lazily."""
     project = _module_level_imports("redact") & _PROJECT_MODULES
     assert project <= {"config", "utils", "profiling"}, project
     text = (SOURCE / "redact.py").read_text(encoding="utf-8")
-    assert not re.search(r"^(import numpy|from ai_edge_litert)", text, re.MULTILINE)
+    assert not re.search(r"^(import numpy|import tflite_numpy)", text, re.MULTILINE)
 
 
 # Whole-tree layers; module-level imports point strictly downhill.
@@ -90,6 +90,7 @@ _TREE_LAYERS = {
     "config": 0,
     "profiling": 1,
     "friction": 1,
+    "tflite_numpy": 1,
     "utils": 2,
     "hardware": 2,
     "files": 3,

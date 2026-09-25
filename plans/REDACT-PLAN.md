@@ -4,7 +4,7 @@
 
 Add an opt-in PII pass to the Transcripts tool. It runs Desert Ant Labs' **Redact** model (23M-parameter multilingual token classifier, 27 languages including Swedish) over a participant's transcript, stores the detected spans beside the text, and renders `[GIVEN_NAME_1]`-style placeholders in the page, exports, subtitles and thinking-agent input while a toggle is on. The text itself is never rewritten.
 
-The model is an opt-in download (~25 MB) into the config dir. The runtime is `ai-edge-litert` (Google's LiteRT Python package, Apache-2.0), a hard dependency with wheels for macOS arm64, Windows x64 and Linux.
+The model is an opt-in download (~25 MB) into the config dir. It first ran on `ai-edge-litert` (Google's LiteRT Python package); `source/tflite_numpy.py` now evaluates the graph in numpy, so there is no runtime dependency.
 
 ## Status
 
@@ -15,6 +15,7 @@ The model is an opt-in download (~25 MB) into the config dir. The runtime is `ai
 | 2. Worker task, routes, manifest | Done (2026-09-24) |
 | 3. Frontend, exports, agents | Done (2026-09-24) |
 | 4. Tests, docs, version bump | Done (2026-09-24) |
+| 5. Replace `ai-edge-litert` with the numpy evaluator `tflite_numpy.py` | Done (2026-09-25): 644/644 argmax tags and identical spans vs LiteRT over 21 multilingual texts; ~50 ms per window vs ~6 ms |
 
 Update each row as it lands, with any descoped item or changed decision.
 
@@ -100,4 +101,4 @@ Done 2026-09-24: full suite green, `/ui-check` green (chips render on the fixtur
 
 ## Deferred: Align
 
-Desert Ant's **Align** refines word-level timestamps. Files at `huggingface.co/desert-ant-labs/align`: `align-coarse.tflite` (512 KB), `align-fine.tflite` (511 KB), `calibrator.bin` (`ALGN` v1, gradient-boosted trees, 27 features), `mel_filters.bin` (40×257 float32), `refiner_config.json` (16 kHz, n_fft 512, win 400 periodic Hann, hop 160, 40 mels, log_eps 1e-6, coarse 241 frames, fine 81 frames, byte_context 16, pad_byte 256, languages de/en/es/fr/it/ja/ko/pt/zh). Stage contract: `mel[16,1,40,width]` f32, `text_bytes[16,32]` i32, `language_id[16]` i32, `boundary_kind[16]` i32 → `logits[16,width]`; batch 16 with tail rows repeating; z-score per utterance then per crop. The Swift `refine(words, audio, sampleRate, languageCode)` entry accepts any text/start/end word list, so a Python port (~500 lines on the same litert dependency) is possible. No Swedish. Revisit only if Whisper's word timing becomes a felt problem.
+Desert Ant's **Align** refines word-level timestamps. Files at `huggingface.co/desert-ant-labs/align`: `align-coarse.tflite` (512 KB), `align-fine.tflite` (511 KB), `calibrator.bin` (`ALGN` v1, gradient-boosted trees, 27 features), `mel_filters.bin` (40×257 float32), `refiner_config.json` (16 kHz, n_fft 512, win 400 periodic Hann, hop 160, 40 mels, log_eps 1e-6, coarse 241 frames, fine 81 frames, byte_context 16, pad_byte 256, languages de/en/es/fr/it/ja/ko/pt/zh). Stage contract: `mel[16,1,40,width]` f32, `text_bytes[16,32]` i32, `language_id[16]` i32, `boundary_kind[16]` i32 → `logits[16,width]`; batch 16 with tail rows repeating; z-score per utterance then per crop. The Swift `refine(words, audio, sampleRate, languageCode)` entry accepts any text/start/end word list, so a Python port (~500 lines) is possible; it would need `tflite_numpy` to grow the conv/mel ops or bring LiteRT back. No Swedish. Revisit only if Whisper's word timing becomes a felt problem.
