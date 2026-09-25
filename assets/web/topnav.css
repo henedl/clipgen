@@ -451,6 +451,3 @@ html[data-desktop-chrome="macos"][data-desktop-fullscreen] .topnav-left {
   text-wrap: balance;
 }
 
-.toast.hidden {
-  display: none;
-}

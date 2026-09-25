@@ -86,45 +86,6 @@ body {
 .ss-icon--sm { width: var(--icon-size-xs); height: var(--icon-size-xs); }
 .ss-icon--xs { width: 10px; height: 10px; }
 
-/* Header */
-
-#ssHeader {
-  flex-shrink: 0;
-  padding: var(--space-5) var(--layout-padding-x) var(--space-3);
-  max-width: var(--layout-max-width);
-  width: 100%;
-  margin: var(--space-5) auto 0;
-  background: var(--color-panel-bg);
-  border-radius: var(--radius-lg) var(--radius-lg) 0 0;
-  border: 1px solid var(--color-panel-border);
-  border-bottom: none;
-  box-shadow: var(--shadow-xl);
-}
-
-#headerTop {
-  display: flex;
-  align-items: center;
-  gap: var(--space-4);
-}
-
-#ssHeader h1 {
-  font-size: var(--text-xl);
-  font-weight: 600;
-  letter-spacing: -0.01em;
-}
-
-.header-light {
-  font-weight: 400;
-  color: var(--color-text-dim);
-}
-
-#headerActions {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  margin-left: auto;
-}
-
 .participant-label {
   font-size: var(--text-sm);
   color: var(--color-text-dim);
@@ -1557,13 +1518,11 @@ body[data-frontend="screenspace"] {
 
 /* Light-theme task colors are darker (500/600-level): white ink reads better on
  * the fills, except the light yellow (numbers). Icons/chevron follow --cat-ink. */
-html[data-theme="light"] .ss-cat-chip.active,
-.theme-light .ss-cat-chip.active {
+html[data-theme="light"] .ss-cat-chip.active {
   --cat-ink: #ffffff;
   text-shadow: 0 1px 2px rgba(0, 0, 0, 0.32);
 }
-html[data-theme="light"] .ss-cat-chip.active[data-active-type="numbers"],
-.theme-light .ss-cat-chip.active[data-active-type="numbers"] {
+html[data-theme="light"] .ss-cat-chip.active[data-active-type="numbers"] {
   --cat-ink: #14181f;
   text-shadow: none;
 }
@@ -1845,18 +1804,6 @@ html[data-theme="light"] .ss-cat-chip.active[data-active-type="numbers"],
   margin-right: var(--space-1);
 }
 
-.scan-mode-fast-icon {
-  display: inline-block;
-  width: var(--icon-size-xs);
-  height: var(--icon-size-xs);
-  background: var(--color-warning);
-  mask-size: contain;
-  mask-repeat: no-repeat;
-  -webkit-mask-size: contain;
-  -webkit-mask-repeat: no-repeat;
-  flex-shrink: 0;
-}
-
 .scan-toggle-btn {
   display: inline-flex;
   align-items: center;
@@ -1927,8 +1874,6 @@ html[data-theme="light"] .ss-cat-chip.active[data-active-type="numbers"],
   border-radius: var(--radius-sm);
   margin-bottom: var(--space-2);
 }
-
-.fast-scan-label.hidden { display: none; }
 
 .fast-scan-label-icon {
   display: inline-block;
@@ -2039,10 +1984,6 @@ html[data-theme="light"] .ss-cat-chip.active[data-active-type="numbers"],
   text-wrap: balance;
 }
 
-.preview-empty.hidden {
-  display: none;
-}
-
 .model-view-body {
   padding: var(--space-2);
   background: var(--color-surface-alt);
@@ -2114,10 +2055,6 @@ html[data-theme="light"] .ss-cat-chip.active[data-active-type="numbers"],
   padding-inline-start: var(--space-1);
 }
 
-.model-view-overlay-layer.hidden {
-  display: none;
-}
-
 .model-view-overlay-hint {
   margin-left: auto;
   opacity: 0.8;
@@ -2147,10 +2084,6 @@ html[data-theme="light"] .ss-cat-chip.active[data-active-type="numbers"],
   flex-direction: column;
   gap: var(--space-2);
   text-wrap: pretty;
-}
-
-.cal-body.hidden {
-  display: none;
 }
 
 /* Summary chip: green only when all positives pass AND all negatives don't.
@@ -2345,17 +2278,9 @@ html[data-theme="light"] .ss-cat-chip.active[data-active-type="numbers"],
   text-wrap: pretty;
 }
 
-.cal-note.hidden {
-  display: none;
-}
-
 .cal-status {
   font-size: var(--text-xs);
   color: var(--color-text-dim);
-}
-
-.cal-status.hidden {
-  display: none;
 }
 
 .cal-status--loading {
@@ -3110,15 +3035,6 @@ html[data-theme="light"] .ss-cat-chip.active[data-active-type="numbers"],
   cursor: copy;
 }
 
-.ref-frame-preview {
-  width: 80px;
-  height: 45px;
-  border-radius: var(--radius-sm);
-  border: 1px solid var(--color-border);
-  background: #0a0a0a;
-  object-fit: cover;
-}
-
 /* Base .btn / .btn-icon live in tokens.css; only the Screenspace-specific
    icon child (.ss-task-icon) is page-local. */
 .btn-icon .ss-task-icon {
@@ -3370,10 +3286,6 @@ body.panel-dragging #bottomPanel {
   margin-left: auto;
 }
 
-.rp-tab-actions.hidden {
-  display: none;
-}
-
 .rp-switcher-panel {
   position: absolute;
   top: calc(100% + 4px);
@@ -3388,10 +3300,6 @@ body.panel-dragging #bottomPanel {
   box-shadow: var(--shadow-pop);
   padding: var(--space-1);
   z-index: var(--z-dropdown);
-}
-
-.rp-switcher-panel.hidden {
-  display: none;
 }
 
 .rp-switcher-empty {
@@ -3453,21 +3361,11 @@ body.panel-dragging #bottomPanel {
   overflow: hidden;
 }
 
-.rp-tab-panel.hidden {
-  display: none;
-}
-
 .panel-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
   margin-bottom: var(--space-2);
-}
-
-.panel-header-actions {
-  display: flex;
-  align-items: center;
-  gap: 0.15rem;
 }
 
 .task-filter-btn {
@@ -3884,10 +3782,6 @@ body.panel-dragging #bottomPanel {
   color: var(--color-accent);
 }
 
-.rp-icon-btn.hidden {
-  display: none;
-}
-
 .rp-icon-btn-icon {
   width: var(--icon-size-sm);
   height: var(--icon-size-sm);
@@ -3946,10 +3840,6 @@ body.panel-dragging #bottomPanel {
   gap: 2px;
 }
 
-.rp-export-menu.hidden {
-  display: none;
-}
-
 /* Scope note above the format items: the exported file is not the filtered
    list on screen, and nothing else in the UI says so. */
 .rp-export-note {
@@ -3986,10 +3876,6 @@ body.panel-dragging #bottomPanel {
   display: inline-flex;
   align-items: center;
   padding: 0 var(--space-1);
-}
-
-.rp-certainty-wrap.hidden {
-  display: none;
 }
 
 /* Shared slider styling — used by all Screenspace range inputs.
@@ -4123,10 +4009,6 @@ body.panel-dragging #bottomPanel {
   padding: var(--space-1) var(--space-2);
   border-bottom: 1px solid var(--color-border);
   flex: 0 0 auto;
-}
-
-.conf-hist.hidden {
-  display: none;
 }
 
 .conf-hist-track {
@@ -4420,10 +4302,6 @@ body.panel-dragging #bottomPanel {
   line-height: 1.4;
 }
 
-.ss-tooltip.hidden {
-  display: none;
-}
-
 .ss-tooltip-header {
   display: flex;
   align-items: center;
@@ -4481,10 +4359,6 @@ body.panel-dragging #bottomPanel {
   border: 1px solid var(--color-panel-border);
 }
 
-.tool-info-tooltip.hidden {
-  display: none;
-}
-
 .tool-info-header {
   display: flex;
   align-items: center;
@@ -4505,10 +4379,6 @@ body.panel-dragging #bottomPanel {
 .tool-info-close:hover {
   color: var(--color-text);
   background: var(--color-surface-alt);
-}
-
-.tool-info-close.hidden {
-  display: none;
 }
 
 .tool-info-body {
@@ -4538,7 +4408,6 @@ body.panel-dragging #bottomPanel {
 /* Responsive */
 
 @media (max-width: 768px) /* --bp-tablet */ {
-  #ssHeader,
   #ssMain,
   #panelDivider,
   #bottomPanel {

@@ -13,7 +13,6 @@
   var state = SS.state;
   var iconSpan = SS.iconSpan,
     regionColorForIndex = SS.regionColorForIndex,
-    regionToPixels = SS.regionToPixels,
     renderRunRegionPicker = SS.renderRunRegionPicker,
     updateRunButton = SS.updateRunButton;
 

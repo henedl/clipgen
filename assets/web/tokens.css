@@ -1,12 +1,7 @@
 /*
  * clipgen design tokens — single source of truth for shared design values (see AGENTS.md).
  *
- * Default theme is DARK; light is opt-in via html[data-theme="light"] (or
- * .theme-light). The product is dark-first, so users toggle explicitly and there
- * is no prefers-color-scheme handling. Each theme block does declare
- * `color-scheme`, which is a different thing: it tells the engine which way to
- * paint UA-drawn furniture (scrollbars, <select> popups, checkboxes, spinners,
- * autofill) and never reads the OS preference.
+ * Dark is default; html[data-theme="light"] opts into light. Each theme sets color-scheme for UA controls.
  *
  * Two naming systems coexist intentionally:
  *   1. Prototype-aligned names (--bg, --fg, --accent, --severity-*, --cell-data,
@@ -151,7 +146,6 @@
   /* Cell data (timestamp chips on Studio Sheet) */
   --cell-data:        #1d4d5a;
   --cell-data-fg:     #7dd3e0;
-  --cell-data-bright: #2bc8c8;
 
   /* Severity-tinted cell data — chip bg uses transparent so the cell-hover
    * background shows through; float bg is opaque (mixed with --bg) so
@@ -324,7 +318,6 @@
 
   /* Sidebar widths */
   --sidebar-width-default: 340px;
-  --sidebar-width-wide: 420px;
 
   /* Bottom panel height (consumed by screenspace.css + screenspace.js) */
   --bottom-panel-height: 400px;
@@ -333,7 +326,6 @@
   --icon-size-xs: 12px;
   --icon-size-sm: 14px;
   --icon-size-md: 16px;
-  --icon-size-lg: 20px;
   --icon-size-xl: 24px;
 
   /* Breakpoints — for documentation + JS reads only. CSS @media queries
@@ -344,11 +336,8 @@
   --bp-tablet: 768px;
 }
 
-/* Light theme — opt-in via the theme toggle (data-theme="light") or .theme-light
- * on a wrapper element, the latter kept available for embedded views. Severity
- * tokens are intentionally NOT overridden: they stay constant across themes. */
-html[data-theme="light"],
-.theme-light {
+/* Light theme via the toggle's data-theme attribute. Severity tokens stay constant across themes. */
+html[data-theme="light"] {
   color-scheme: light;
 
   /* Surfaces */
@@ -392,7 +381,6 @@ html[data-theme="light"],
   /* Cell data */
   --cell-data:        #b3e3ec;
   --cell-data-fg:     #0a4956;
-  --cell-data-bright: #0a8a96;
 
   /* Severity-tinted cell data — light theme uses a darker green for the
    * positive bucket since #4ade80 (the dark-theme positive token) washes
@@ -452,13 +440,6 @@ html[data-theme="light"],
   --region-color-8: #14b8a6;
 
   --color-pulse: #a855f7;
-}
-
-/* Light theme: invert the brand-mark stroke if a logo image is used elsewhere
- * (matches the prototype's filter on .cg-logo). */
-.theme-light .cg-logo,
-html[data-theme="light"] .cg-logo {
-  filter: invert(1) brightness(0.15);
 }
 
 /* ---- Shared utilities ---- */

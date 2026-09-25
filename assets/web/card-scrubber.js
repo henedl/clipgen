@@ -292,18 +292,11 @@
 
   // ---- Public API ----
 
-  // Attach scrubbing; consumer sets backgroundImage, this owns backgroundSize/Position. opts: spriteData, audioFile, audioBaseUrl, restFrame, onScrub.
+  // Attach sprite scrubbing. opts: spriteData, audioUrl (also the cache key), restFrame, onScrub.
   function attach(mediaEl, opts) {
     if (!mediaEl || !opts || !opts.spriteData) return function () {};
     var sd = opts.spriteData;
-    var audioFile = opts.audioFile || null;
-    var audioBaseUrl = opts.audioBaseUrl || "media/";
-    // An explicit audioUrl skips encodeURIComponent, which would corrupt "?start=&end=" queries.
-    var audioUrl = opts.audioUrl
-      ? opts.audioUrl
-      : audioFile
-        ? audioBaseUrl + encodeURIComponent(audioFile)
-        : null;
+    var audioUrl = opts.audioUrl || null;
 
     // Map a frame index onto the sprite grid's background-position percentages.
     function framePosition(frameIndex) {
@@ -334,9 +327,9 @@
         frameIndex = Math.max(0, Math.min(frameIndex, sd.frameCount - 1));
         mediaEl.style.backgroundPosition = framePosition(frameIndex);
         if (opts.onScrub) opts.onScrub(Math.max(0, Math.min(frac, 1)), frameIndex);
-        if (audioFile && audioUrl) {
-          audioScrubAt(audioFile, audioUrl, frameIndex * sd.interval);
-          var waveform = extractWaveform(audioFile);
+        if (audioUrl) {
+          audioScrubAt(audioUrl, audioUrl, frameIndex * sd.interval);
+          var waveform = extractWaveform(audioUrl);
           if (waveform) {
             var wfCanvas = getOrCreateWaveformCanvas(mediaEl);
             if (wfCanvas) drawWaveform(wfCanvas, waveform, frac);
@@ -346,7 +339,7 @@
     }
 
     function onLeave() {
-      if (sd) mediaEl.style.backgroundPosition = framePosition(restFrame);
+      mediaEl.style.backgroundPosition = framePosition(restFrame);
       if (opts.onScrub) opts.onScrub(null, restFrame);
       audioScrubStop();
       clearWaveform(mediaEl);
@@ -398,16 +391,10 @@
     }
   }
 
-  // Stop audio without detaching (sidebar resize, modal open).
-  function stopAll() {
-    audioScrubStop();
-  }
-
   window.clipgenCardScrubber = {
     attach: attach,
     detachAll: detachAll,
     detachStale: detachStale,
-    stopAll: stopAll,
     purgeAudio: purgeAudio,
     // Primitives for consumers with their own hover handler (the viewer's <video>-seek scrub).
     loadAudioBuffer: loadAudioBuffer,

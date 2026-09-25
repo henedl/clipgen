@@ -1,6 +1,6 @@
 # Code quality plan
 
-> **Status: Wave 1 Python done (2026-09-25); JS and CSS orphans next.** 363 verified findings from an 11-slice review with adversarial verification (22 agents). About 7,500 lines are removable if every item lands. Each item carries its change and the verifier's note below it. Check items off as each batch lands.
+> **Status: Wave 1 done (2026-09-25); Wave 2 next.** 363 verified findings from an 11-slice review with adversarial verification (22 agents). About 7,500 lines are removable if every item lands. Each item carries its change and the verifier's note below it. Check items off as each batch lands.
 
 ## How to work a batch
 
@@ -19,6 +19,8 @@
 ## Wave 1: Delete orphans (59 items, −1753 lines)
 
 Python batch done: all 28 listed items, plus `ProgressScope.add_task`, orphaned by `pipeline-py-1`. Full suite 4405 passed; `/ui-check` 17 passed.
+
+JS/CSS batch done: all 31 items. `css-19` recolors Studio critical/very-positive floats to match their chips (intended). Stale `tokens.css` comment above `.hidden` claims exports strip tokens.css; fix in Wave 2.
 
 Lowest risk. Unused functions, routes, selectors, publishes, params, and dead branches.
 
@@ -111,100 +113,100 @@ Lowest risk. Unused functions, routes, selectors, publishes, params, and dead br
 
 ### JS
 
-- [ ] `studio-shared-js-20` card-scrubber.js:300 audioBaseUrl/audioFile URL-building branch has no caller (−6, low)
+- [x] `studio-shared-js-20` card-scrubber.js:300 audioBaseUrl/audioFile URL-building branch has no caller (−6, low)
   - Change: Drop opts.audioBaseUrl and the encodeURIComponent fallback: require opts.audioUrl and use audioFile only as a cache key, or rename it audioKey. Remove `audioBaseUrl: ""` at studio-scrubber.js:101, and drop the always-true `if (sd)` at 349.
   - Verifier: attach() has only two callers. studio-scrubber.js:92-102 passes audioUrl explicitly (audioFile doubles as cache key, audioBaseUrl: ""), and screenspace-results.js:528 passes no audio, so the audioBaseUrl + encodeURIComponent branch never runs. No test references audioBaseUrl or audioFile. sd is checked non-null at the top of attach, so `if (sd)` in onLeave is always true.
-- [ ] `studio-shared-js-23` dev-token-tweak.js:18 dev-token-tweak.js exits immediately on every page (−740, med)
+- [x] `studio-shared-js-23` dev-token-tweak.js:18 dev-token-tweak.js exits immediately on every page (−740, med)
   - Change: Ask the maintainer whether to delete the 740-line file, its 7 data-dev-only script tags, CLIPGEN_DEV_TOKEN_TWEAK in utils.js:14, and its tests/test_js_color_discipline.py entry. If it stays, fix the stale header reference and reuse utils hexToRgb/rgbToHex and one snippet builder.
   - Verifier: utils.js:14 sets CLIPGEN_DEV_TOKEN_TWEAK = false and dev-token-tweak.js:18 returns on it, so the file does nothing on the 7 pages that load it. The flag is a deliberate kill switch ('disable without removing the script tag'), so deleting it is the maintainer's call, as the proposal says. The header reference 'utils.js:567-626' is stale; those lines are now the tooltip code.
-- [ ] `studio-shared-js-7` hotkeys.js:327 Dead functions and unread namespace publishes across shared modules (−20, low)
+- [x] `studio-shared-js-7` hotkeys.js:327 Dead functions and unread namespace publishes across shared modules (−20, low)
   - Change: Delete hotkeys formatCombo (327-329, also used nowhere internally), motion flyTo (306-309, 'FUTURE SEAM'; update test_motion_wiring.py:40), card-scrubber stopAll (402-404) and media-banner hide (283-286). Also drop the unread publishes: ClipgenHotkeys.closeCheatsheet, ClipgenStartOverlay.close/isOpen, ClipgenCommandPalette.close, clipgenMediaBanner.refresh/teardown, ClipgenExportActions.runExport.
   - Verifier: Grepping assets/web, source, tests and build finds no external reader of formatCombo (not used inside hotkeys.js either), closeCheatsheet (used internally only, keep the function), flyTo (only test_motion_wiring.py:40), stopAll, clipgenMediaBanner.hide/refresh/teardown (refresh and teardown stay as internal functions; only .show is called), ClipgenStartOverlay.close/isOpen, ClipgenCommandPalette.close, or ClipgenExportActions.runExport. desktop_menu.py uses only StartOverlay.open/checkForUpdates and CommandPalette.toggle, and tests/ui uses only .open. Local aliases (`var palette = window.ClipgenCommandPalette`) call only buttonCommand/selectorCommand/register/setParticipants. Update the command-palette.js:14 and export-actions.js:15 header API lists too.
-- [ ] `studio-shared-js-16` start-overlay.js:62 state.sheetLoaded is written twice and never read (−3, low)
+- [x] `studio-shared-js-16` start-overlay.js:62 state.sheetLoaded is written twice and never read (−3, low)
   - Change: Delete the sheetLoaded field (62) and its assignments at 1107 and 2502.
   - Verifier: state.sheetLoaded appears only at start-overlay.js:62, 1107 and 2502, and all three are writes. No test or other file reads it; readers use state.statusData.sheet_loaded.
-- [ ] `studio-shared-js-33` studio-intake.js:564 Eight intake addTo* wrappers and hub intakeAddItem are unreachable (−50, low)
+- [x] `studio-shared-js-33` studio-intake.js:564 Eight intake addTo* wrappers and hub intakeAddItem are unreachable (−50, low)
   - Change: Delete intakeAddToArtifacts/Reel, trIntakeAddTo*, coIntakeAddTo* and mnIntakeAddTo* (564-566, 579-581, 964-974, 1022-1032, 1304-1314), their cfg keys addToArtifacts/addToReel, the intakeAddItem destructure (27), and studio.js intakeAddItem (204-206) with its STUDIO publish (3796). Also drop the CO/MN thresholdSel ids that don't exist (1147, 1422) and their no-op onThresholdChange.
   - Verifier: Nothing reads cfg.addToArtifacts or cfg.addToReel; the only matches are the cfg definitions. The add-all buttons call intakeAddItems directly, which test_intake_add_all_batches_queue_render enforces. intakeAddItem's only callers are the 8 wrappers, and it is published only for them. #coIntakeClusterThreshold and #mnIntakeClusterThreshold are absent from studio.html. When dropping thresholdSel, guard initIntakePanel with `if (cfg.thresholdSel)` instead of relying on qs(undefined).
-- [ ] `studio-shared-js-29` studio.js:103 Dead state: convergence fields and the intake 'new' tracking chain (−14, low)
+- [x] `studio-shared-js-29` studio.js:103 Dead state: convergence fields and the intake 'new' tracking chain (−14, low)
   - Change: Delete state.convergenceDataVersion and state.convergenceStale (103-104), which were left behind when Convergence moved to Overview. Delete state.intakeSeenIds (71), the hasNew loop in applyIntakeEvents (studio-intake.js:139-145) and the unused _hasNew parameter of renderIntake, then call renderIntake() with no argument.
   - Verifier: convergenceDataVersion and convergenceStale appear only in their declarations at studio.js:103-104. intakeSeenIds is written in applyIntakeEvents only to compute hasNew. renderIntake(_hasNew) ignores its argument, and every other caller passes false. Also update the studio.js:16 header comment that lists intakeSeenIds.
-- [ ] `studio-shared-js-17` topnav.js:81 window.CLIPGEN_QUICK_ACTIONS is never set by anything (−4, low) (revised)
+- [x] `studio-shared-js-17` topnav.js:81 window.CLIPGEN_QUICK_ACTIONS is never set by anything (−4, low) (revised)
   - Change: Replace setQuickActions(window.CLIPGEN_QUICK_ACTIONS || []) with setQuickActions(state.quickActions), which keeps the empty-trigger hiding and preserves any pre-mount installs. Rewrite the header lines 4-8 to describe setQuickActions/installQuickActions instead of the global.
   - Verifier: CLIPGEN_QUICK_ACTIONS appears nowhere outside topnav.js. The call cannot be dropped, though: setQuickActions at mount is what hides the empty .topnav-qa trigger (qaWrap display none) and renders any items. Also, setQuickActions stores items in state.quickActions even before mount, so passing [] at mount would wipe a pre-mount install, as the current `|| []` already does.
-- [ ] `studio-shared-js-2` utils.js:2068 initFrontendSwitcher targets markup that no longer exists (−66, low)
+- [x] `studio-shared-js-2` utils.js:2068 initFrontendSwitcher targets markup that no longer exists (−66, low)
   - Change: Delete initFrontendSwitcher (utils.js:2066-2128) and its call sites at studio.js:3740, transcripts.js:3058 and screenspace.js:3219. Update the allowlist comment at tests/test_hotkeys_frontend_source.py:35 ("openBlockingModal focus trap + frontend switcher").
   - Verifier: No html, source or viewer.py file contains any .frontend-switcher markup; the only other match is the tokens.css:1337 comment saying it was removed. qs('.frontend-switcher') returns null and the function returns at once. The three call sites (studio.js:3740, transcripts.js:3058, screenspace.js:3219) and the allowlist comment at test_hotkeys_frontend_source.py:34 are the only other references. utils.js keeps its allowlist entry for the openBlockingModal trap at line 1658.
-- [ ] `screenspace-js-27` screenspace-calibration.js:19 Dead destructured imports and an unread SS publish (−4, low)
+- [x] `screenspace-js-27` screenspace-calibration.js:19 Dead destructured imports and an unread SS publish (−4, low)
   - Change: Drop renderWorkflowParams and restoreTaskToWorkflow from calibration.js's import list (19-20), regionToPixels from regions.js (16), and `SS.gatherMultitoolStepParams = …` from run.js (425).
   - Verifier: In calibration.js, renderWorkflowParams and restoreTaskToWorkflow appear only on the import lines (19-20), and in regions.js regionToPixels appears only on line 16. gatherMultitoolStepParams shows up only at its definition, the in-file call at run.js:230, the SS publish at 425 and a header comment. No SS[...] string access exists, and tests/ui touches only ClipgenScreenspace.state.
-- [ ] `screenspace-js-1` screenspace.js:1809 Sixteen hub delegators have no caller anywhere (−18, low)
+- [x] `screenspace-js-1` screenspace.js:1809 Sixteen hub delegators have no caller anywhere (−18, low)
   - Change: Delete the hub delegators toggleShapeDraw, openSampleModal (1815-1817), stashRegions (1822), refTimeChip, updateParamResetButtons (2257-2259), _updateOverlayUi (2266), updateColorPreview, setTargetColor, renderColorPalette, renderBrightnessStrip, sampleColorFromRegion, updateColorSampleBtnLabel (2281-2286), gatherWorkflowParams (2362), findTask, focusedTaskId, updateResultsCrumb (2366-2371). Satellites are separate IIFEs and cannot see hub closures; they read SS.x directly. Also drop the stale 'hub keeps delegators' lines in the model-view/tasks/color headers.
   - Verifier: Each of the 16 names occurs once in screenspace.js: its own delegator line. No bare hub call, no SS.name = name publish, and no hit in screenspace.html or tests/ (the _updateOverlayUi assertion in test_screenspace_frontend_source.py slices params.js). Satellites reach these through SS.x or their own destructured imports. test_js_dead_functions will not flag the deletion because each name still appears in the satellites.
-- [ ] `transcripts-js-2` transcripts-redact.js:404 Ten TS namespace publishes that no page or test reads (−10, low) (revised)
+- [x] `transcripts-js-2` transcripts-redact.js:404 Ten TS namespace publishes that no page or test reads (−10, low) (revised)
   - Change: Drop TS.setExcluded, TS.redactEnabledFor, TS.labelTitle, TS.setRedactEnabled, TS.regenerateRedact, TS.stopRedact (redact.js 406-415), TS.speakerClass (speakers.js 251), TS.clampMarkersToDuration (video.js 1397) and TS.findOverlapsForSearch (transcripts.js 3144). Each function stays module-local. Keep TS.confirmModelInstall (3165), the documented shot.py --eval probe hook.
   - Verifier: Nine of the ten have no reader anywhere in assets/web, tests/, source/, build/ or agents/. search.js has no xref/findOverlaps reference, so that '// search' note is stale. TS.confirmModelInstall is the exception: its comment marks it as a deliberate hook for shot.py --eval probing. The modal is otherwise reachable only through a model-install flow, and the project keeps probe hooks like this on purpose (see the shot.py in-process state-faking practice). Leave that one in place.
-- [ ] `transcripts-js-3` transcripts.js:47 Write-only state fields: ssEventsLoaded, sheetParticipants, activeTab, labelInput._markId (−6, low)
+- [x] `transcripts-js-3` transcripts.js:47 Write-only state fields: ssEventsLoaded, sheetParticipants, activeTab, labelInput._markId (−6, low)
   - Change: Remove state.ssEventsLoaded (decl 47, write 189), state.sheetParticipants (decl 51, write 211), state.activeTab (decl 62, write agents.js:470) and the expando labelInput._markId (2077).
   - Verifier: ssEventsLoaded (47/189), sheetParticipants (51/211) and activeTab (62, agents 470) have no reads in transcripts*.js, tests/ or source/. The only dynamic state[key] access (agents 1276-1280) touches frictionMin/frictionMax. Tab restore reads getStoredUIMapEntry, not state.activeTab. The only _markId hit is the write at 2077.
-- [ ] `transcripts-js-1` transcripts.js:2443 _whisperDownloadConfirmed is written three times and never read (−6, low)
+- [x] `transcripts-js-1` transcripts.js:2443 _whisperDownloadConfirmed is written three times and never read (−6, low)
   - Change: Delete the var at 2443, the reset in _forgetWhisperDownloadAgreements (557), the write at 657 (plus its comment) and the write in _confirmUncachedWhisperModels (2193). The prompt gate is the server's model_not_cached reply, not this map.
   - Verifier: grep over assets/, source/, tests/, build/, agents/ and plans/ finds only the decl at 2443, the reset at 557 and the writes at 657 and 2193. Nothing reads the map, so the 'skip the transcribe-time prompt' comment at 656 describes behavior that no longer exists. After the change, _forgetWhisperDownloadAgreements only resets the models cache (see finding 8).
-- [ ] `cwo-10` composer-annotate.js:142 drawAnnotation's selected parameter is unused (−0, low)
+- [x] `cwo-10` composer-annotate.js:142 drawAnnotation's selected parameter is unused (−0, low)
   - Change: Remove the `selected` parameter from drawAnnotation and from its only call at line 241. renderAnnotations draws the selection box itself.
   - Verifier: drawAnnotation(ctx, ann, w, h, selected) never reads `selected` in its body. The only caller is composer-annotate.js:241, and renderAnnotations draws the selection outline itself.
-- [ ] `cwo-1` composer.js:413 Ten CO namespace publishes that no satellite reads (−10, low)
+- [x] `cwo-1` composer.js:413 Ten CO namespace publishes that no satellite reads (−10, low)
   - Change: Delete the CO.findCut, CO.findAnnotation, CO.deleteCut, CO.refreshAnnotationViews, CO.deleteSelectedAnnotations, CO.setAnnotationsHidden, CO.copyMarkerToCut, CO.renderCutList, CO.updateGenerateButton and CO.videoGlobalTime assignments. Keep the functions, since hub code calls them directly.
   - Verifier: Grepped all ten names across assets/web, tests, source and build. Each shows up only in its CO.x assignment and in bare calls inside composer.js. No satellite uses CO[...] dynamic access, and transcripts-video.js calls its own videoGlobalTime. The only test check is the 'window.ClipgenComposer' substring.
-- [ ] `cwo-5` overview-convergence.js:425 Local median() duplicates the utils.js global (−6, low)
+- [x] `cwo-5` overview-convergence.js:425 Local median() duplicates the utils.js global (−6, low)
   - Change: Delete the local median() at overview-convergence.js:425-430. buildZone will then use the identical global median from utils.js:977, which overview-metadata.js:400 already uses.
   - Verifier: utils.js:977 defines a global median with the same body, minus the !values guard. utils.js loads before overview-convergence.js in overview.html. Both callers (lines 415-416) pass arrays, and the convergence file is not inlined anywhere without utils.js.
-- [ ] `cwo-6` overview-metadata.js:1033 _formatHmsCompact reimplements formatTime (−9, low)
+- [x] `cwo-6` overview-metadata.js:1033 _formatHmsCompact reimplements formatTime (−9, low)
   - Change: Delete _formatHmsCompact (lines 1033-1041) and use formatTime(maxTime) at line 1097.
   - Verifier: formatTime (utils.js:645) floors to whole seconds and returns h:mm:ss or m:ss via pad2, the same output as _formatHmsCompact. maxTime at 1054 is `histogramData.maxTime || 0`, a finite number >= 0. The only call is line 1097.
-- [ ] `cwo-9` overview-metadata.js:1280 makeSortable takes a columns param it never uses (−0, low)
+- [x] `cwo-9` overview-metadata.js:1280 makeSortable takes a columns param it never uses (−0, low)
   - Change: Drop the `columns` parameter from makeSortable and from both call sites (lines 1275, 1463).
   - Verifier: The makeSortable body (1280-1315) reads only table, data and renderRowsFn, and never touches columns. The two callers are 1275 and 1463. If cwo-41 is applied, cols would move into the helper as a used parameter, so apply one or the other.
-- [ ] `cwo-8` overview-metadata.js:1739 Three drill-down functions ignore their arguments (−15, low) (revised)
+- [x] `cwo-8` overview-metadata.js:1739 Three drill-down functions ignore their arguments (−15, low) (revised)
   - Change: Replace the three drillDown* functions with one openStudio() that sets window.location.href = "/studio/". At 1267 and 1382, drop the IIFEs and pass openStudio directly to addEventListener. At 1196, keep the delegated listener and its td check and call openStudio() in place of drillDownParticipant(td.textContent). About 12 lines saved.
   - Verifier: All three bodies are `void arg; location.href = "/studio/"`. Lines 1267 and 1382 wrap them in IIFEs only to capture a value that is thrown away. But line 1196 sits inside a delegated table click listener that first checks for td.cg-cov-td-left, so openStudio cannot be passed straight in as the handler there.
-- [ ] `cwo-4` overview-reports.js:1058 Empty reportsResize hook plus a hand-rolled resize dispatch (−6, low)
+- [x] `cwo-4` overview-reports.js:1058 Empty reportsResize hook plus a hand-rolled resize dispatch (−6, low)
   - Change: Delete resize() and the OV.reportsResize export in overview-reports.js (lines 1058-1060, 1069) and drop 'reportsResize' from the header comment. Replace the three-branch resize listener at overview.js:310-314 with tabHook(state.activeTab, "Resize"), which already skips missing hooks.
   - Verifier: resize() in overview-reports.js has only a comment for a body. The resize listener at overview.js:310-314 repeats the activeTab/OV.xResize guard three times, and tabHook(tab, phase) already does the same lookup and skips missing hooks. convergenceResize and metadataResize fit the OV[tab+'Resize'] naming.
-- [ ] `cwo-3` overview.js:125 OV.buildClusters, OV.syncTab, OV.setRefreshStale are never read (−3, low)
+- [x] `cwo-3` overview.js:125 OV.buildClusters, OV.syncTab, OV.setRefreshStale are never read (−3, low)
   - Change: Delete the three OV.* assignments at overview.js:125, 137 and 247. The functions are still used locally. The script-flagged convergenceActivate/Deactivate, metadataDeactivate and reportsDeactivate are live: tabHook() at overview.js:206 reaches them through OV[tab + phase].
   - Verifier: OV.buildClusters, OV.syncTab and OV.setRefreshStale appear only at their assignments (overview.js:125,137,247). Every use is a bare local call or the createStalenessTracker closure. The only dynamic lookup is OV[tab+phase] in tabHook, which never builds these names. Tests do not mention them.
-- [ ] `cwo-11` viewer.js:56 _lastSeekProportion is written but never read (−3, low)
+- [x] `cwo-11` viewer.js:56 _lastSeekProportion is written but never read (−3, low)
   - Change: Delete the var at line 56 and the assignments at 1779 and 1797.
   - Verifier: grep across assets, source and tests finds _lastSeekProportion only at the declaration (56) and two writes (1779, 1797). Nothing reads it.
-- [ ] `cwo-12` workflows-canvas.js:1003 _mmDragging flag is always true while its listener exists (−4, low)
+- [x] `cwo-12` workflows-canvas.js:1003 _mmDragging flag is always true while its listener exists (−4, low)
   - Change: Delete _mmDragging and its three writes. Call minimapRecenter(ev) unconditionally in move(), because move is only attached between mousedown and mouseup.
   - Verifier: _mmDragging is set true in onMinimapMouseDown before move is attached, and set false in up() after move is removed. The only read is inside move. Even a missed mouseup leaves the flag true, so it never changes behavior.
-- [ ] `cwo-2` workflows-validate.js:451 WF publishes that nothing consumes (some pinned by a source test) (−8, low)
+- [x] `cwo-2` workflows-validate.js:451 WF publishes that nothing consumes (some pinned by a source test) (−8, low)
   - Change: Drop WF.computeWouldRun, which is not pinned. The hub only calls showRunPreview and clearRunPreview, so also fix the comment at line 450. Then drop WF.canConnect, WF.renderNode, WF.renderPalette, WF.renderRuns, WF.renderStashPalette, WF.renameStash and WF.deleteStash, and remove their strings from the lists in tests/test_workflows_frontend_source.py (lines 134, 142, 153, 238, 328-332).
   - Verifier: computeWouldRun's only call is local (validate:301) and the test pins only 'function computeWouldRun'. canConnect, renderNode, renderPalette, renderRuns, renderStashPalette, renameStash and deleteStash have zero WF.x reads anywhere. test_workflows_frontend_source.py lines 134/142/153/238/328-332 only assert the substrings exist, so removing them together with the publishes is consistent.
 
 ### CSS
 
-- [ ] `css-21` primitives.css:226 .cg-btn-md empty and .cg-btn-lg never applied (−3, low)
+- [x] `css-21` primitives.css:226 .cg-btn-md empty and .cg-btn-lg never applied (−3, low)
   - Change: Delete `.cg-btn-md { /* default */ }` and `.cg-btn-lg {...}` (primitives.css:226-227). Update the header comment (line 11 'sm / md / lg') and line 1, which says primitives are 'shared across Studio, Screenspace, Transcripts'; only studio.html and overview.html load primitives.css.
   - Verifier: primitives.js:745 never emits cg-btn-md. Every createBtn size argument in assets/web/*.js is "sm" (14 sites), with no computed sizes, and no HTML uses cg-btn-lg. Only studio.html and overview.html link primitives.css, so the line-1 header ('shared across Studio, Screenspace, Transcripts') is wrong.
-- [ ] `css-8` screenspace.css:89 Dead page-header ID rules in Screenspace, Transcripts, Studio, Workflows (−65, low)
+- [x] `css-8` screenspace.css:89 Dead page-header ID rules in Screenspace, Transcripts, Studio, Workflows (−65, low)
   - Change: Delete screenspace.css:89-126 (#ssHeader, #headerTop, #ssHeader h1, .header-light, #headerActions) and #ssHeader in the 4541 media query. Delete transcripts.css:49-71 (#headerTop, #trHeader h1, .header-light, #headerActions). Delete #studioHeader from studio.css:2508 and the #wfBlueprintName rules at workflows.css:178-181 and 370.
   - Verifier: ssHeader, headerTop, headerActions, studioHeader and wfBlueprintName appear only in CSS across assets/web, source, tests and build. No string-built IDs exist. transcripts.html has #trHeader but no h1, so keep the #trHeader rule and delete only its h1 descendant rule. .header-light is used only by viewer/gallery/timeline-viewer HTML, which don't load screenspace.css or transcripts.css. At screenspace.css:4541 and studio.css:2508, remove only the dead selector from the grouped media-query rules.
-- [ ] `css-9` screenspace.css:1848 Unreferenced classes across page and shared stylesheets (−85, low)
+- [x] `css-9` screenspace.css:1848 Unreferenced classes across page and shared stylesheets (−85, low)
   - Change: Delete these rules: screenspace.css .scan-mode-fast-icon (1848-1859), .ref-frame-preview (3113-3120), .panel-header-actions (3467-3471); settings-modal.css .settings-trigger-icon (731-746), .mark-cat-error (381-385); transcripts.css .pill-options-footer (2432-2436); studio.css .sparkles-icon (1961-1963); overview-metadata.css .md-title (22-27); overview-convergence.css .cv-detail-actions (230-233), .cv-detail-event-actions (320-325) and the empty `.cv-detail-close { }` (228); composer.css .co-icon-eye-dropper (181); tokens.css .cg-logo block (457-462).
   - Verifier: Each name appears only in its own CSS file across assets/web, source, tests and build. No string-built variants turned up: composer builds co-icon-* classes only as literals, settings-modal.js never builds mark-cat-error, and no x + "-icon" builders exist. 'sparkles' appears only as an icon basename in screenspace-overlay-interaction.js, not as a class. overview-convergence.js:957 adds cv-detail-close, but its CSS rule is empty. tokens.css .cg-logo (457-462) overlaps css-1.
-- [ ] `css-10` screenspace.css:1931 50 `.X.hidden { display:none }` rules shadowed by global .hidden (−150, low)
+- [x] `css-10` screenspace.css:1931 50 `.X.hidden { display:none }` rules shadowed by global .hidden (−150, low)
   - Change: Delete the single-declaration `.foo.hidden { display: none; }` rules on pages that load tokens.css. There are 21 in screenspace.css, 13 in transcripts.css, 7 in studio.css, 3 each in workflows.css and start-overlay.css, 2 each in composer.css, overview-convergence.css and settings-modal.css, and 1 each in media-banner.css and topnav.css. tokens.css:909 `.hidden { display: none !important }` already wins over all of them.
   - Verifier: A scan of non-export page CSS finds 50 rules whose body is exactly `display: none` on `.X.hidden` (composer 2, media-banner 1, overview-convergence 2, screenspace 16, settings-modal 2, start-overlay 3, studio 8, topnav 1, transcripts 12, workflows 3; per-file splits differ slightly from the finding, the total matches). Every page that links these files links tokens.css first. tokens.css:909 `.hidden { display:none !important }` is the only other .hidden definition in these pages, so removing the compound rules changes nothing.
-- [ ] `css-20` studio.css:13 studio.css --color-cell-text/--color-cell-valid defined twice, never read (−4, low)
+- [x] `css-20` studio.css:13 studio.css --color-cell-text/--color-cell-valid defined twice, never read (−4, low)
   - Change: Delete --color-cell-text and --color-cell-valid from the page :root (studio.css:13-14) and the light-theme block (2378-2379).
   - Verifier: grep over assets, source, tests and build finds --color-cell-text and --color-cell-valid only at their definitions (studio.css:13-14, 2378-2379). No var() reader and no getPropertyValue exists.
-- [ ] `css-19` tokens.css:153 Unread tokens; ts-cell-float comment contradicts its severity mapping (−6, low)
+- [x] `css-19` tokens.css:153 Unread tokens; ts-cell-float comment contradicts its severity mapping (−6, low)
   - Change: Delete --cell-data-bright (tokens.css:153, 395), --sidebar-width-wide (327) and --icon-size-lg (336) if the dev widget doesn't need them. Then decide on --cell-data-critical-bg-solid (160) and --cell-data-very-positive-bg-solid (172): either delete them, or use them in studio.css:993-998 so the float really 'mirrors the .ts-cell rules above'. Today it paints critical as high and very-positive as positive.
   - Verifier: No var() reader exists for --cell-data-bright, --sidebar-width-wide, --icon-size-lg, --cell-data-critical-bg-solid or --cell-data-very-positive-bg-solid in assets, source, tests or build. dev-token-tweak.js enumerates tokens by prefix at runtime and does not depend on them. studio.css:989's comment says the float mirrors the .ts-cell rules, but 993-998 fold critical into high and very-positive into positive, while .ts-chip (947/952) uses distinct critical/very-positive tokens. Use the two -solid tokens there (with the matching -fg) and delete the three unused tokens.
-- [ ] `css-1` tokens.css:351 .theme-light selectors are dead in every stylesheet (−17, low)
+- [x] `css-1` tokens.css:351 .theme-light selectors are dead in every stylesheet (−17, low)
   - Change: Delete every `.theme-light` / `html.theme-light` selector and keep only the `html[data-theme="light"]` twin: tokens.css:351, 459; composer.css:19; overview-convergence.css:573; screenspace.css:1561,1566; studio.css:815-816,825,830,2818-2819; workflows.css:2158. Also fix the tokens.css:4-5 and 347-348 comments that say it is kept for embedded views.
   - Verifier: grep for theme-light over source/, assets/web/*.js|*.html, build/ and tests/ returns nothing. Only CSS carries it (17 selectors), and each is paired with html[data-theme="light"]. utils.js sets only the data-theme attribute. The tokens.css:4-5 and 347-348 comments that call it 'kept available for embedded views' are wrong, since no embedded view applies the class.
 

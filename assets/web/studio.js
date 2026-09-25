@@ -13,9 +13,7 @@
  *   generatedViewers           — viewers built this session (not persisted).
  *   cellResults                — per-cell success/error status overlaid
  *                                onto the sheet grid (keyed by cellKey()).
- *   intakeEvents / intakeClusters / intakeSeenIds — Screenspace polling
- *                                snapshot; trIntakeMarks/Clusters mirror
- *                                this for Transcripts.
+ *   intakeEvents / intakeClusters — Screenspace poll snapshot; trIntake* mirror it.
  */
 
 (function () {
@@ -68,7 +66,6 @@
     },
     intakeEvents: [],
     intakeClusters: [],
-    intakeSeenIds: {},
     intakeFilterText: "",
     intakeFilterDetector: "",
     intakeFilterParticipants: [],
@@ -100,8 +97,6 @@
     _mnIntakeFp: null,
     convergenceBaselines: {},
     queuesSeeded: false,
-    convergenceDataVersion: 0,
-    convergenceStale: false,
     sidebarOpen: true,
     sidebarCategories: {},
     sidebarKeywords: {},
@@ -199,10 +194,6 @@
       added = true;
     }
     if (added) renderFn();
-  }
-
-  function intakeAddItem(queue, item, renderFn) {
-    intakeAddItems(queue, [item], renderFn);
   }
 
   function intakeToggleItem(queue, item, renderFn) {
@@ -3443,7 +3434,7 @@
         resetScrubberPrefetch();
         renderArtifactQueue();
         renderReelQueue();
-        renderIntake(false);
+        renderIntake();
       }
     }
     if (applyCrossRefSetting(null, state.settingsData)) rerenderCrossRefs();
@@ -3453,7 +3444,7 @@
   function rerenderCrossRefs() {
     var tooltip = qs("#trIntakeTooltip");
     if (tooltip) tooltip.classList.add("hidden");
-    renderIntake(false);
+    renderIntake();
   }
   window.clipgenRerenderCrossRefs = rerenderCrossRefs;
 
@@ -3731,7 +3722,6 @@
     loadStashes();
     loadArtifactStashes();
     checkNavLinks();
-    initFrontendSwitcher();
     initTopNavActions();
     initCommandPalette();
     initIntake();
@@ -3787,7 +3777,6 @@
   STUDIO.buildXrefBadges = buildXrefBadges;
   STUDIO.findIntakeInQueue = findIntakeInQueue;
   STUDIO.findOverlappingData = findOverlappingData;
-  STUDIO.intakeAddItem = intakeAddItem;
   STUDIO.intakeAddItems = intakeAddItems;
   STUDIO.intakeToggleItem = intakeToggleItem;
   STUDIO.isIntakeSource = isIntakeSource;

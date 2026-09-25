@@ -19,13 +19,6 @@
   flex-wrap: wrap;
 }
 
-.md-title {
-  font-size: var(--text-lg);
-  font-weight: 600;
-  margin: 0;
-  white-space: nowrap;
-}
-
 .md-participant-pills {
   display: flex;
   gap: var(--space-1);

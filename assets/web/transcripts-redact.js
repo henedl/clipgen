@@ -403,14 +403,8 @@
 
   TS.redactOn = redactOn;
   TS.renderRedactPanel = renderRedactPanel;
-  TS.setExcluded = setExcluded;
   TS.initRedact = initRedact;
-  TS.redactEnabledFor = redactEnabledFor;
-  TS.labelTitle = labelTitle;
   TS.redactedTextHtml = redactedTextHtml;
   TS.redactedPlainText = redactedPlainText;
   TS.displayText = displayText;
-  TS.setRedactEnabled = setRedactEnabled;
-  TS.regenerateRedact = regenerateRedact;
-  TS.stopRedact = stopRedact;
 })();

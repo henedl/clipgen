@@ -24,7 +24,6 @@
     buildXrefBadges = STUDIO.buildXrefBadges,
     findIntakeInQueue = STUDIO.findIntakeInQueue,
     findOverlappingData = STUDIO.findOverlappingData,
-    intakeAddItem = STUDIO.intakeAddItem,
     intakeAddItems = STUDIO.intakeAddItems,
     intakeToggleItem = STUDIO.intakeToggleItem,
     renderArtifactQueue = STUDIO.renderArtifactQueue,
@@ -136,17 +135,10 @@
     var raw = JSON.stringify(events);
     if (raw === state._intakeEventsPollRaw) return false;
     state._intakeEventsPollRaw = raw;
-    var hasNew = false;
-    events.forEach(function (ev) {
-      if (!state.intakeSeenIds[ev.id]) {
-        state.intakeSeenIds[ev.id] = "new";
-        hasNew = true;
-      }
-    });
     state.intakeEvents = events;
     var threshold = parseInt((qs("#intakeClusterThreshold") || {}).value, 10) || 10;
     state.intakeClusters = clusterIntakeEvents(intakeClusterSource(), threshold);
-    renderIntake(hasNew);
+    renderIntake();
     return true;
   }
 
@@ -182,7 +174,7 @@
         color: detectorColor(det),
         onClick: function () {
           state.intakeFilterDetector = state.intakeFilterDetector === det ? "" : det;
-          renderIntake(false);
+          renderIntake();
         },
       });
       container.appendChild(chip);
@@ -305,7 +297,7 @@
     filterTextKey: "intakeFilterText",
     filtered: filteredIntakeClusters,
     highlightCard: highlightIntakeCard,
-    rerender: function () { renderIntake(false); },
+    rerender: function () { renderIntake(); },
     getDensityEl: function () { return _intakeDensityEl; },
     setDensityEl: function (dt) { _intakeDensityEl = dt; },
     barCount: function (c) { return c.events ? c.events.length : 1; },
@@ -320,12 +312,10 @@
     searchSel: "#intakeFilterSearch",
     toggleArtifacts: intakeToggleArtifacts,
     toggleReel: intakeToggleReel,
-    addToArtifacts: intakeAddToArtifacts,
-    addToReel: intakeAddToReel,
     onDismiss: intakeDismissCluster,
     onThresholdChange: function (threshold) {
       state.intakeClusters = clusterIntakeEvents(intakeClusterSource(), threshold);
-      renderIntake(false);
+      renderIntake();
     },
     onCardHover: function (card) {
       return card.dataset.transcriptContext || "";
@@ -389,8 +379,6 @@
     searchSel: "#trIntakeFilterSearch",
     toggleArtifacts: trIntakeToggleArtifacts,
     toggleReel: trIntakeToggleReel,
-    addToArtifacts: trIntakeAddToArtifacts,
-    addToReel: trIntakeAddToReel,
     onDismiss: trIntakeDismissCluster,
     onThresholdChange: function () {
       // TR re-polls (the poll re-reads the threshold input itself); ignores arg.
@@ -506,7 +494,7 @@
 
   // ---- Screenspace intake: render cards, filters, and density timeline ----
 
-  function renderIntake(_hasNew) {
+  function renderIntake() {
     ssClearPending();
     var container = qs("#intakeCards");
     var addAllBtn = qs("#intakeAddAllBtn");
@@ -561,10 +549,6 @@
     };
   }
 
-  function intakeAddToArtifacts(cluster) {
-    intakeAddItem(state.artifactQueue, screenspaceClusterToItem(cluster), renderArtifactQueue);
-  }
-
   function intakeToggleArtifacts(cluster) {
     intakeToggleItem(state.artifactQueue, screenspaceClusterToItem(cluster), renderArtifactQueue);
   }
@@ -574,10 +558,6 @@
     apiPut("../screenspace/api/events/bulk-exclude", { ids: ids })
       .then(function () { refreshScreenspaceIntake(); })
       .catch(function () {});
-  }
-
-  function intakeAddToReel(cluster) {
-    intakeAddItem(state.reelQueue, screenspaceClusterToItem(cluster), renderReelQueue);
   }
 
   function intakeToggleReel(cluster) {
@@ -724,7 +704,7 @@
         intakeAddItems(state.reelQueue, items, renderReelQueue);
       });
     }
-    var thresholdInput = qs(cfg.thresholdSel);
+    var thresholdInput = cfg.thresholdSel ? qs(cfg.thresholdSel) : null;
     if (thresholdInput) {
       thresholdInput.addEventListener("change", function () {
         cfg.onThresholdChange(parseInt(this.value, 10) || 5);
@@ -961,16 +941,8 @@
     };
   }
 
-  function trIntakeAddToArtifacts(cluster) {
-    intakeAddItem(state.artifactQueue, transcriptClusterToItem(cluster), renderArtifactQueue);
-  }
-
   function trIntakeToggleArtifacts(cluster) {
     intakeToggleItem(state.artifactQueue, transcriptClusterToItem(cluster), renderArtifactQueue);
-  }
-
-  function trIntakeAddToReel(cluster) {
-    intakeAddItem(state.reelQueue, transcriptClusterToItem(cluster), renderReelQueue);
   }
 
   function trIntakeToggleReel(cluster) {
@@ -1019,16 +991,8 @@
     };
   }
 
-  function coIntakeAddToArtifacts(cut) {
-    intakeAddItem(state.artifactQueue, composerCutToItem(cut), renderArtifactQueue);
-  }
-
   function coIntakeToggleArtifacts(cut) {
     intakeToggleItem(state.artifactQueue, composerCutToItem(cut), renderArtifactQueue);
-  }
-
-  function coIntakeAddToReel(cut) {
-    intakeAddItem(state.reelQueue, composerCutToItem(cut), renderReelQueue);
   }
 
   function coIntakeToggleReel(cut) {
@@ -1144,14 +1108,10 @@
     // --- init / delegated listeners ---
     addAllBtnSel: "#coIntakeAddAllBtn",
     reelAllBtnSel: "#coIntakeReelAllBtn",
-    thresholdSel: "#coIntakeClusterThreshold", // absent — cuts never cluster
     searchSel: "#coIntakeFilterSearch",
     toggleArtifacts: coIntakeToggleArtifacts,
     toggleReel: coIntakeToggleReel,
-    addToArtifacts: coIntakeAddToArtifacts,
-    addToReel: coIntakeAddToReel,
     onDismiss: function () {}, // cuts are deleted on the Composer page, not here
-    onThresholdChange: function () {},
     onCardHover: function (card, idx) {
       var cut = filteredComposerIntakeCuts()[idx];
       return cut ? (cut.label || "") : "";
@@ -1204,7 +1164,7 @@
         state.coIntakeItems = items;
         state.coTrimCardKeys = cardKeys;
         renderComposerIntake();
-        renderIntake(false);
+        renderIntake();
         renderTranscriptIntake();
         // Queue cards carry trim-asterisk badges too — repaint on change.
         renderArtifactQueue();
@@ -1301,16 +1261,8 @@
     };
   }
 
-  function mnIntakeAddToArtifacts(note) {
-    intakeAddItem(state.artifactQueue, mindnodeNoteToItem(note), renderArtifactQueue);
-  }
-
   function mnIntakeToggleArtifacts(note) {
     intakeToggleItem(state.artifactQueue, mindnodeNoteToItem(note), renderArtifactQueue);
-  }
-
-  function mnIntakeAddToReel(note) {
-    intakeAddItem(state.reelQueue, mindnodeNoteToItem(note), renderReelQueue);
   }
 
   function mnIntakeToggleReel(note) {
@@ -1419,14 +1371,10 @@
     // --- init / delegated listeners ---
     addAllBtnSel: "#mnIntakeAddAllBtn",
     reelAllBtnSel: "#mnIntakeReelAllBtn",
-    thresholdSel: "#mnIntakeClusterThreshold", // absent — notes never cluster
     searchSel: "#mnIntakeFilterSearch",
     toggleArtifacts: mnIntakeToggleArtifacts,
     toggleReel: mnIntakeToggleReel,
-    addToArtifacts: mnIntakeAddToArtifacts,
-    addToReel: mnIntakeAddToReel,
     onDismiss: function () {}, // notes are edited in MindNode, not here
-    onThresholdChange: function () {},
     onCardHover: function (card, idx) {
       var note = filteredMindnodeNotes()[idx];
       return note ? (note.text || "") : "";

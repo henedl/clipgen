@@ -32,7 +32,7 @@ HOTKEYS_SRC = (WEB / "hotkeys.js").read_text(encoding="utf-8")
 # open (each detaches on close, or gates on its own open state).
 KEYDOWN_ALLOWLIST = {
     "hotkeys.js",
-    "utils.js",  # openBlockingModal focus trap + frontend switcher
+    "utils.js",  # openBlockingModal focus trap
     "settings-modal.js",  # hotkey recorder (capture-phase, recording only)
     "color-picker.js",
     "composer-annotate.js",  # stroke-menu popover Escape (capture-phase, while open)

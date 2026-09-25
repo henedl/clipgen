@@ -87,7 +87,6 @@
     // `|| 0`: fallback parts (server couldn't probe) may lack a numeric offset.
     return (video ? video.currentTime : 0) + ((part && part.offset) || 0);
   }
-  CO.videoGlobalTime = videoGlobalTime;
 
   // Deferred/coalesced seek scaffolding (createSeekCoalescer, utils.js).
   var _seek = createSeekCoalescer(
@@ -410,7 +409,6 @@
     }
     return null;
   }
-  CO.findCut = findCut;
 
   function updatePendingInfo() {
     var info = qs("#coPendingInfo");
@@ -672,7 +670,6 @@
       recordOp({ type: "delete", cut: snapshot });
     }).catch(opFailed);
   }
-  CO.deleteCut = deleteCut;
 
   // Drag end lands here; *before* is the pre-drag span. Failure rolls the drag back.
   function commitCutTimes(cut, before) {
@@ -719,7 +716,6 @@
     }
     return null;
   }
-  CO.findAnnotation = findAnnotation;
 
   function refreshAnnotationViews() {
     if (CO.updateTimelineHeight) CO.updateTimelineHeight();
@@ -727,7 +723,6 @@
     renderAnnotations();
     renderCutList(); // cut items badge overlapping annotations
   }
-  CO.refreshAnnotationViews = refreshAnnotationViews;
 
   function applyAnnCreate(record) {
     return apiPost("api/annotations", record).then(function (data) {
@@ -869,7 +864,6 @@
       if (firstError) opFailed(firstError);
     });
   }
-  CO.deleteSelectedAnnotations = deleteSelectedAnnotations;
 
   // ---- Selection (multi-select) ----
 
@@ -935,7 +929,6 @@
     renderAnnotations();
     renderTimeline();
   }
-  CO.setAnnotationsHidden = setAnnotationsHidden;
 
   // ---- Annotated exports (server PIL + ffmpeg overlay) ----
 
@@ -1058,7 +1051,6 @@
       refreshCutViews();
     }).catch(opFailed);
   }
-  CO.copyMarkerToCut = copyMarkerToCut;
 
   function nudgeSelectedCut(deltaSeconds) {
     var cut = state.selectedCutId && findCut(state.selectedCutId);
@@ -1164,7 +1156,6 @@
     });
     list.appendChild(frag);
   }
-  CO.renderCutList = renderCutList;
 
   // ---- Sidebar tabs (cuts + one list per marker source) ----
 
@@ -1306,7 +1297,6 @@
     var btn = qs("#coGenerateBtn");
     btn.disabled = state.generating || participantCuts().length === 0;
   }
-  CO.updateGenerateButton = updateGenerateButton;
 
   function onGenerate() {
     var cuts = participantCuts();

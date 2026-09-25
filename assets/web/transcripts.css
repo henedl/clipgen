@@ -46,30 +46,6 @@ body {
   flex-direction: column;
 }
 
-#headerTop {
-  display: flex;
-  align-items: center;
-  gap: var(--space-4);
-}
-
-#trHeader h1 {
-  font-size: var(--text-xl);
-  font-weight: 600;
-  letter-spacing: -0.01em;
-}
-
-.header-light {
-  font-weight: 400;
-  color: var(--color-text-dim);
-}
-
-#headerActions {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  margin-left: auto;
-}
-
 .status-indicator {
   display: inline-block;
   width: 10px;
@@ -304,10 +280,6 @@ body {
   background: var(--color-surface-alt);
 }
 
-#videoPlayer.hidden {
-  display: none;
-}
-
 .video-empty {
   display: flex;
   align-items: center;
@@ -315,10 +287,6 @@ body {
   height: 180px;
   color: var(--color-text-dim);
   font-size: var(--text-sm);
-}
-
-.video-empty.hidden {
-  display: none;
 }
 
 #videoControls {
@@ -476,10 +444,6 @@ body {
   line-height: 1.35;
   z-index: var(--z-toast);
   box-shadow: var(--shadow-md);
-}
-
-.tr-tooltip.hidden {
-  display: none;
 }
 
 .tr-tooltip-cat {
@@ -848,10 +812,6 @@ body {
   border: 1px solid color-mix(in srgb, var(--color-friction) 45%, var(--color-border));
   border-radius: var(--radius-sm);
   background: color-mix(in srgb, var(--color-friction) 12%, transparent);
-}
-
-.agent-stale-banner.hidden {
-  display: none;
 }
 
 .agent-stale-banner-text {
@@ -1422,10 +1382,6 @@ body {
   width: 180px;
 }
 
-.mark-popover.hidden {
-  display: none;
-}
-
 .mark-popover-categories {
   display: flex;
   flex-wrap: wrap;
@@ -1486,10 +1442,6 @@ body {
   display: flex;
   flex-direction: column;
   gap: var(--space-2);
-}
-
-.speaker-popover.hidden {
-  display: none;
 }
 
 .speaker-popover-name {
@@ -2429,12 +2381,6 @@ body {
   text-wrap: pretty;
 }
 
-.pill-options-footer {
-  display: flex;
-  justify-content: flex-end;
-  margin-top: var(--space-1);
-}
-
 .pill-options-agents {
   display: flex;
   flex-direction: column;
@@ -2471,10 +2417,6 @@ body {
 
 .modal {
   background: var(--color-backdrop);
-}
-
-.modal.hidden {
-  display: none;
 }
 
 .modal-content {
@@ -2519,10 +2461,6 @@ body {
   font-size: var(--text-sm);
 }
 
-.model-install-license.hidden {
-  display: none;
-}
-
 .model-install-license a {
   display: inline-flex;
   align-items: center;
@@ -2565,16 +2503,8 @@ body {
   text-wrap: pretty;
 }
 
-.model-install-hint.hidden {
-  display: none;
-}
-
 .model-install-progress {
   margin-bottom: var(--space-4);
-}
-
-.model-install-progress.hidden {
-  display: none;
 }
 
 .model-install-bar {
@@ -2689,10 +2619,6 @@ body {
   margin-bottom: var(--space-4);
 }
 
-.param-modal-progress.hidden {
-  display: none;
-}
-
 .param-modal-bar {
   height: 8px;
   border-radius: var(--radius-full);
@@ -2729,10 +2655,6 @@ body {
   flex-direction: column;
   gap: var(--space-1);
   padding-left: var(--space-3);
-}
-
-.param-modal-track-list.hidden {
-  display: none;
 }
 
 /* Dictionary modal: a Corrections section and a Known-terms section. */

@@ -18,10 +18,6 @@
   background: color-mix(in srgb, var(--color-warning) 10%, transparent);
 }
 
-.media-banner.hidden {
-  display: none;
-}
-
 /* Once the file is fixed the message is informational, not a warning. */
 .media-banner.is-done {
   color: var(--color-text);

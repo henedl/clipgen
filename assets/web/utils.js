@@ -8,11 +8,6 @@
  * running inside their own IIFEs can access them via scope chain.
  */
 
-// ---- Feature flags ----
-
-// Gates dev-token-tweak.js; viewer.py strips data-dev-only tags from exports regardless.
-var CLIPGEN_DEV_TOKEN_TWEAK = false;
-
 // ---- Canonical config ----
 // Offline defaults mirroring config.py; clipgenApplyConfig overlays live payloads. tests/test_shared_constants.py checks.
 
@@ -2061,70 +2056,6 @@ var clipgenStatus = function (force) {
     });
   }
   return _clipgenStatusPromise;
-};
-
-// ---- Frontend switcher (shared across Studio / Screenspace / Transcripts) ----
-
-var initFrontendSwitcher = function () {
-  var root = qs(".frontend-switcher");
-  if (!root) return;
-  var trigger = root.querySelector(".frontend-switcher-trigger");
-  var panel = root.querySelector(".frontend-switcher-panel");
-  if (!trigger || !panel) return;
-  var closeTimer = null;
-
-  function open() {
-    clearTimeout(closeTimer);
-    root.classList.add("open");
-    trigger.setAttribute("aria-expanded", "true");
-    panel.setAttribute("aria-hidden", "false");
-  }
-  function close() {
-    root.classList.remove("open");
-    trigger.setAttribute("aria-expanded", "false");
-    panel.setAttribute("aria-hidden", "true");
-  }
-  function scheduleClose() {
-    clearTimeout(closeTimer);
-    closeTimer = setTimeout(close, 120);
-  }
-
-  root.addEventListener("mouseenter", open);
-  root.addEventListener("mouseleave", scheduleClose);
-  trigger.addEventListener("click", function (e) {
-    e.preventDefault();
-    if (root.classList.contains("open")) close();
-    else open();
-  });
-  trigger.addEventListener("keydown", function (e) {
-    if (e.key === "Enter" || e.key === " ") {
-      e.preventDefault();
-      open();
-      var first = panel.querySelector(".frontend-switcher-item");
-      if (first) first.focus();
-    } else if (e.key === "Escape") {
-      close();
-    }
-  });
-  document.addEventListener("keydown", function (e) {
-    if (e.key === "Escape" && root.classList.contains("open")) {
-      close();
-      trigger.focus();
-    }
-  });
-  document.addEventListener("click", function (e) {
-    if (!root.contains(e.target)) close();
-  });
-
-  clipgenStatus()
-    .then(function (status) {
-      var items = panel.querySelectorAll(".frontend-switcher-item");
-      items.forEach(function (item) {
-        var key = item.dataset.frontend;
-        if (key && status[key] === false) item.classList.add("hidden");
-      });
-    })
-    .catch(function () {});
 };
 
 // Reads a /api/settings save or reset payload; returns whether the value moved.

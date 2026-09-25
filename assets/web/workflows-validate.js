@@ -447,8 +447,7 @@
   // ---- Satellite interface ----
   WF.nodeIssues = nodeIssues;
   WF.refreshValidation = refreshValidation;
-  // Dry-run preview (hub wires the Run split-button hover to these).
-  WF.computeWouldRun = computeWouldRun;
+  // Hub calls these on Run split-button hover.
   WF.showRunPreview = showRunPreview;
   WF.clearRunPreview = clearRunPreview;
 })();

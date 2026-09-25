@@ -1,14 +1,7 @@
 /* Unified top navigation — shared chrome across Studio, Screenspace, Transcripts.
  *
  * Mounts on DOMContentLoaded into a <topnav-mount data-frontend="..."> element.
- * Reads page-specific Quick Actions from window.CLIPGEN_QUICK_ACTIONS, an
- * array of { icon, label, action, disabled?, title? } | { divider: true } |
- * { header } items. Items with disabled=true render grayed and ignore clicks;
- * the title field becomes a hover tooltip explaining why (rendered through the
- * [data-tooltip] singleton in utils.js, not the native attribute).
- * Pages may also call ClipgenTopNav.setQuickActions(items) post-mount to
- * update the menu as state changes, and ClipgenTopNav.onBeforeOpen(cb) to
- * refresh state right before the menu opens.
+ * Pages fill Quick Actions via ClipgenTopNav.setQuickActions or installQuickActions, before or after mount.
  *
  * Wires existing #themeToggle / #logBtn / #settingsBtn IDs inside the new
  * cluster so page setup code that addEventListener's to those IDs continues
@@ -78,7 +71,7 @@
     els.qaPanel = nav.querySelector(".topnav-qa-panel");
 
     bindEvents();
-    setQuickActions(window.CLIPGEN_QUICK_ACTIONS || []);
+    setQuickActions(state.quickActions);
 
     isReady = true;
     for (var i = 0; i < readyCallbacks.length; i++) {

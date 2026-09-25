@@ -6,8 +6,8 @@
  * Loaded after screenspace.js (and before the other satellites, which destructure
  * findTask / restoreTaskToWorkflow / setInputValue / syncValueDisplays off SS at
  * load time). Reads the hub's shared state + helpers through
- * window.ClipgenScreenspace and publishes its entry points back onto it; the hub
- * keeps same-named thin delegators so its own call sites are unchanged. Function
+ * window.ClipgenScreenspace and publishes its entry points back onto it. The hub
+ * delegates only the names it calls itself. Function
  * bodies are unchanged from when they lived inline in screenspace.js — the locals
  * below stand in for the closure. renderResults / loadAndShowResults (results
  * surface) and setTargetColor (color satellite) are reached via SS.* late-binding

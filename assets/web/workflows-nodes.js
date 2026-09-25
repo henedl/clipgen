@@ -801,7 +801,6 @@
 
   window.addEventListener("pagehide", closeParticipantMenu);
 
-  WF.renderNode = renderNode;
   WF.renderAllNodes = renderAllNodes;
   WF.closeParticipantMenu = closeParticipantMenu;
 })();

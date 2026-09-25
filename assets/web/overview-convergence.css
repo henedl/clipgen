@@ -208,7 +208,6 @@
   flex-direction: column;
   gap: var(--space-2-5);
 }
-.cv-detail-inline.hidden { display: none; }
 
 .cv-detail-header {
   display: flex;
@@ -223,13 +222,6 @@
   font-size: 12.5px;
   font-weight: 500;
   color: var(--fg);
-}
-
-.cv-detail-close { /* createBtn handles base styling */ }
-
-.cv-detail-actions {
-  display: flex;
-  gap: var(--space-1-5);
 }
 
 .cv-detail-participants {
@@ -317,13 +309,6 @@
   flex: 1;
 }
 
-.cv-detail-event-actions {
-  display: flex;
-  gap: var(--space-1);
-  margin-left: auto;
-  flex-shrink: 0;
-}
-
 /* ---- Frame Preview ---- */
 
 .cv-frame-preview {
@@ -337,7 +322,6 @@
   box-shadow: var(--shadow-md, 0 4px 12px rgba(0, 0, 0, 0.15));
   overflow: hidden;
 }
-.cv-frame-preview.hidden { display: none; }
 
 .cv-frame-preview-img {
   display: block;
@@ -569,8 +553,7 @@
   );
   z-index: 0;
 }
-html[data-theme="light"] .cv-offset-void,
-.theme-light .cv-offset-void {
+html[data-theme="light"] .cv-offset-void {
   background-color: rgba(0, 0, 0, 0.18);
   background-image: repeating-linear-gradient(
     -45deg,

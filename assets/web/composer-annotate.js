@@ -139,7 +139,7 @@
     }
   }
 
-  function drawAnnotation(ctx, ann, w, h, selected) {
+  function drawAnnotation(ctx, ann, w, h) {
     var style = ann.style || {};
     var color = style.color || CLIPGEN_CONFIG.composerAnnotationColor;
     if (ann.type === "shape") {
@@ -238,7 +238,7 @@
     var soleShape = CO.singleSelectedAnnotation();
     if (!state.annHidden) visibleAnnotations().forEach(function (ann) {
       var selected = CO.isAnnotationSelected(ann.id);
-      var box = drawAnnotation(ctx, ann, w, h, selected);
+      var box = drawAnnotation(ctx, ann, w, h);
       if (!box) return;
       if (selected) {
         ctx.strokeStyle = getCSSVar("--color-accent", "#1d4f72");

@@ -34,13 +34,13 @@ def _theme_block(css: str, opener: str) -> str:
 def test_color_scheme_declared_in_both_theme_blocks():
     css = read(TOKENS)
     assert "color-scheme: dark;" in _theme_block(css, ":root {")
-    assert "color-scheme: light;" in _theme_block(css, 'html[data-theme="light"],')
+    assert "color-scheme: light;" in _theme_block(css, 'html[data-theme="light"] {')
 
 
 def test_scrollbar_tokens_defined_in_both_themes():
     css = read(TOKENS)
     dark = _theme_block(css, ":root {")
-    light = _theme_block(css, 'html[data-theme="light"],')
+    light = _theme_block(css, 'html[data-theme="light"] {')
     # Colors are theme-specific; size/track carry over from :root unchanged.
     for token in ("--scrollbar-thumb:", "--scrollbar-thumb-hover:"):
         assert token in dark, f"{token} missing from :root"

@@ -248,7 +248,6 @@
 
   TS.speakersOn = speakersOn;
   TS.speakerName = speakerName;
-  TS.speakerClass = speakerClass;
   TS.speakerChipHtml = speakerChipHtml;
   TS.speakersEnabledFor = speakersEnabledFor;
   TS.setSpeakersEnabled = setSpeakersEnabled;

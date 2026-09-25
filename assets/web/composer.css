@@ -15,8 +15,7 @@
   --co-timeline-grid: rgba(255, 255, 255, 0.09);
 }
 
-html[data-theme="light"],
-html.theme-light {
+html[data-theme="light"] {
   --co-timeline-stripe: rgba(0, 0, 0, 0.03);
   --co-timeline-grid: rgba(0, 0, 0, 0.12);
 }
@@ -178,7 +177,6 @@ body[data-frontend="composer"] {
 .co-icon-zoom-out { --co-icon: url("icons/magnifying-glass-minus.svg"); }
 .co-icon-eye { --co-icon: url("icons/eye.svg"); }
 .co-icon-eye-slash { --co-icon: url("icons/eye-slash.svg"); }
-.co-icon-eye-dropper { --co-icon: url("icons/eye-dropper.svg"); }
 .co-icon-trash { --co-icon: url("icons/trash.svg"); }
 .co-icon-scissors { --co-icon: url("icons/scissors.svg"); }
 .co-icon-check { --co-icon: url("icons/check.svg"); }
@@ -1050,10 +1048,6 @@ body[data-frontend="composer"] {
   pointer-events: none;
 }
 
-.co-tooltip.hidden {
-  display: none;
-}
-
 .co-tooltip .co-tooltip-source {
   font-weight: 600;
   display: flex;
@@ -1093,10 +1087,6 @@ body[data-frontend="composer"] {
   z-index: var(--z-modal);
   --veil-blur-open: 6px;
   --veil-alpha-open: 0.35;
-}
-
-#logOverlay.hidden {
-  display: none;
 }
 
 html[data-theme="dark"] .log-panel {

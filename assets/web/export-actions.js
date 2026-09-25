@@ -12,7 +12,6 @@
  * Depends on globals from utils.js: apiGet, showToast, clipgenPluralUnit.
  *
  * Public API on window.ClipgenExportActions:
- *   runExport()                   — POST /api/export, toast the result
  *   exportQuickAction()           — TopNav quick-action item with current enabled state
  *   refreshExportStatus(rebuild)  — GET /api/export/status; calls rebuild() on flag flip
  */
@@ -69,7 +68,6 @@
   }
 
   window.ClipgenExportActions = {
-    runExport: runExport,
     exportQuickAction: exportQuickAction,
     refreshExportStatus: refreshExportStatus,
   };

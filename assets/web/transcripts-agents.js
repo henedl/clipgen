@@ -467,7 +467,6 @@
   }
 
   function selectTab(name) {
-    state.activeTab = name;
     var pid = state.selectedParticipant;
     if (pid) setStoredUIMapEntry("transcripts", "tabByParticipant", pid, name);
     if (_tabNames().indexOf(name) < 0) name = "summary";

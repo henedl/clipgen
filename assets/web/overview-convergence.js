@@ -422,13 +422,6 @@
     };
   }
 
-  function median(values) {
-    if (!values || !values.length) return 0;
-    var arr = values.slice().sort(function (a, b) { return a - b; });
-    var mid = Math.floor(arr.length / 2);
-    return arr.length % 2 ? arr[mid] : (arr[mid - 1] + arr[mid]) / 2;
-  }
-
   // --- Filter Pipeline ---
 
   function applyFilters() {

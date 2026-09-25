@@ -1000,7 +1000,6 @@
 
   // Recenter the viewport on the world point under a minimap click/drag.
   var _mmTransform = null;
-  var _mmDragging = false;
   function minimapRecenter(ev) {
     var mm = qs("#wfMinimap");
     var canvas = qs("#wfCanvas");
@@ -1021,15 +1020,13 @@
     e.preventDefault();
     // The minimap sits inside #wfCanvas; stop the bubble that would start a marquee.
     e.stopPropagation();
-    _mmDragging = true;
     minimapRecenter(e);
     function move(ev) {
-      if (_mmDragging) minimapRecenter(ev);
+      minimapRecenter(ev);
     }
     function up() {
       document.removeEventListener("mousemove", move);
       document.removeEventListener("mouseup", up);
-      _mmDragging = false;
       WF.scheduleViewportSave();
     }
     document.addEventListener("mousemove", move);

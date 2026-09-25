@@ -27,10 +27,6 @@ What is pinned in the init script, and why each one:
   and sets ``data-theme`` on ``<html>``. Setting the key rather than poking the
   attribute afterwards is the path a real user with a stored preference takes, so
   the page boots *already* in the target theme instead of repainting into it.
-* ``CLIPGEN_DEV_TOKEN_TWEAK`` — already ``false`` by default (utils.js), so this
-  is not a fix; it is a pin. The flag exists to be flipped on while iterating on
-  the redesign, and a maintainer who left it on would otherwise silently add a
-  widget plus an injected ``<style>`` to every screenshot and every census.
 """
 
 from collections.abc import Iterator
@@ -78,7 +74,6 @@ def build_init_script(theme: str = "dark", *, dismiss_start: bool = True) -> str
         f"{dismiss}"
         f" localStorage.setItem('clipgen-theme', '{theme}');"
         "} catch (e) {}"
-        "window.CLIPGEN_DEV_TOKEN_TWEAK = false;"
         # Chromium keeps 250 resource entries; a soak's polls would fall off.
         "try { performance.setResourceTimingBufferSize(10000); } catch (e) {}"
     )

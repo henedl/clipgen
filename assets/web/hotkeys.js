@@ -324,10 +324,6 @@
     return out;
   }
 
-  function formatCombo(combo) {
-    return comboTokens(combo).join(IS_MAC ? "" : "+");
-  }
-
   // Render a combo into a key-cap as DOM nodes; small glyphs get .hk-glyph.
   function fillKeycap(node, combo) {
     var out = comboTokens(combo);
@@ -851,11 +847,9 @@
     resolvedCombos: resolvedCombos,
     applyOverrides: applyOverrides,
     normalizeEvent: normalizeEvent,
-    formatCombo: formatCombo,
     fillKeycap: fillKeycap,
     comboConflicts: comboConflicts,
     toggleCheatsheet: toggleCheatsheet,
-    closeCheatsheet: closeCheatsheet,
     registerActionHints: registerActionHints
   };
 })();

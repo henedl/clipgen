@@ -122,7 +122,6 @@
 
   OV.ensureData = ensureData;
   OV.refreshData = refreshData;
-  OV.buildClusters = buildClusters;
 
   // Staleness paint: tabs report a stale dataVersion, the hub's single Refresh button shows it.
   function setRefreshStale(stale) {
@@ -133,8 +132,6 @@
       ? "New upstream data available — click to refresh"
       : "Re-fetch sheet, Screenspace, and transcript data";
   }
-
-  OV.setRefreshStale = setRefreshStale;
 
   // Per-tab staleness: snapshot dataVersion at render; flag Refresh once it moves.
   function createStalenessTracker(tabState) {
@@ -244,8 +241,6 @@
     }
   }
 
-  OV.syncTab = syncTab;
-
   // Overview has no TopNav quick actions, so the palette gets tab switchers and refresh here.
   function initCommandPalette() {
     if (!window.ClipgenCommandPalette) return;
@@ -308,9 +303,7 @@
     }
 
     window.addEventListener("resize", function () {
-      if (state.activeTab === "convergence" && OV.convergenceResize) OV.convergenceResize();
-      if (state.activeTab === "metadata" && OV.metadataResize) OV.metadataResize();
-      if (state.activeTab === "reports" && OV.reportsResize) OV.reportsResize();
+      tabHook(state.activeTab, "Resize");
     });
 
     ensureData();

@@ -422,5 +422,4 @@
 
   SS.initRunButton = initRunButton;
   SS.gatherWorkflowParams = gatherWorkflowParams;
-  SS.gatherMultitoolStepParams = gatherMultitoolStepParams;
 })();

@@ -1394,7 +1394,6 @@
   TS.hasTimelineHover = hasTimelineHover;
   TS.restoreMarkers = restoreMarkers;
   TS.updateMarkerInfo = updateMarkerInfo;
-  TS.clampMarkersToDuration = clampMarkersToDuration;
   TS.getStoredMarkersFor = getStoredMarkersFor;
   TS.clearMarkersFor = clearMarkersFor;
 })();

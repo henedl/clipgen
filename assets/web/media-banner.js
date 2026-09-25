@@ -280,11 +280,6 @@
     });
   }
 
-  function hide() {
-    stopPolling();
-    if (_host) render(null);
-  }
-
   function teardown() {
     stopPolling();
     _host = null;
@@ -294,8 +289,5 @@
 
   window.clipgenMediaBanner = {
     show: show,
-    hide: hide,
-    refresh: refresh,
-    teardown: teardown,
   };
 })();

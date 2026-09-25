@@ -15,10 +15,7 @@
  *   • folder + spreadsheet picker (Google / Excel / No spreadsheet)
  *   • persistence via the existing /api/start-settings endpoint
  *
- * Public API on window.ClipgenStartOverlay:
- *   open()    — show the overlay
- *   close()   — hide the overlay
- *   isOpen()  — boolean
+ * Public API on window.ClipgenStartOverlay: open(tab) and checkForUpdates().
  */
 
 (function () {
@@ -59,7 +56,6 @@
   var state = {
     mounted: false,
     open: false,
-    sheetLoaded: false,
     selection: null,        // { type, id_or_path, label } | null
     persistEnabled: true,
     rememberWindow: true,
@@ -1104,7 +1100,6 @@
     // Shared memoized fetch (utils.js); force=true bypasses the page-load snapshot.
     return clipgenStatus(force).then(function (s) {
       state.statusData = s;
-      state.sheetLoaded = !!s.sheet_loaded;
       // startup_notice is handled in applyCurrentSessionPrefill, whose setTab would wipe a highlight set here.
       if (state.startTab === "about") renderAbout();
       // The installed-version highlight reads statusData too.
@@ -2499,7 +2494,6 @@
     mount().then(function () {
       clipgenStatus().then(function (s) {
         state.statusData = s;
-        state.sheetLoaded = !!s.sheet_loaded;
         if (shouldAutoOpen(s)) open();
         // The server decides whether this launch is updatable and honours the cooldown.
         checkForUpdates(false);
@@ -2518,8 +2512,6 @@
 
   window.ClipgenStartOverlay = {
     open: open,
-    close: close,
-    isOpen: function () { return state.open; },
     // macOS "Check for Updates…" menu item: show the About tab and force a check.
     checkForUpdates: function () {
       if (state.open) setStartTab("about"); else open("about");

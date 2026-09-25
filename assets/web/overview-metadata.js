@@ -1030,16 +1030,6 @@
     return out;
   }
 
-  function _formatHmsCompact(sec) {
-    sec = Math.max(0, Math.floor(sec));
-    var h = Math.floor(sec / 3600);
-    var m = Math.floor((sec - h * 3600) / 60);
-    var s = sec - h * 3600 - m * 60;
-    var pad = function (n) { return n < 10 ? "0" + n : "" + n; };
-    if (h > 0) return h + ":" + pad(m) + ":" + pad(s);
-    return m + ":" + pad(s);
-  }
-
   function renderKpiStrip(cache) {
     var P = window.ClipgenPrimitives || {};
     var strip = el("div", "md-kpi-strip");
@@ -1094,7 +1084,7 @@
     }));
     strip.appendChild(P.createKpiCard({
       label: "Project duration",
-      value: _formatHmsCompact(maxTime),
+      value: formatTime(maxTime),
       sub: maxTime ? "hours · all videos" : "—",
       accent: "oklch(0.65 0.16 45)",
     }));
@@ -1193,7 +1183,7 @@
     table.addEventListener("click", function (ev) {
       var td = ev.target.closest && ev.target.closest("td.cg-cov-td-left");
       if (!td) return;
-      drillDownParticipant(td.textContent);
+      openStudio();
     });
     body.appendChild(table);
   }
@@ -1263,21 +1253,19 @@
         row.appendChild(el("td", "md-time-cell", d.mean_duration.toFixed(1) + "s"));
 
         // Drill-down
-        row.addEventListener("click", (function (et) {
-          return function () { drillDownEventType(et); };
-        })(d.event_type));
+        row.addEventListener("click", openStudio);
 
         tbody.appendChild(row);
       }
     }
 
     renderRows(data);
-    makeSortable(table, data, cols, renderRows);
+    makeSortable(table, data, renderRows);
   }
 
   // --- Sortable table mechanism ---
 
-  function makeSortable(table, data, columns, renderRowsFn) {
+  function makeSortable(table, data, renderRowsFn) {
     var headers = table.querySelectorAll("th[data-sort]");
     var currentSort = { col: null, asc: true };
 
@@ -1378,9 +1366,7 @@
       row.appendChild(el("td", "md-time-cell", formatTime(d.first_sec)));
       row.appendChild(el("td", "md-time-cell", formatTime(d.last_sec)));
 
-      row.addEventListener("click", (function (cat) {
-        return function () { drillDownTranscriptCategory(cat); };
-      })(d.category));
+      row.addEventListener("click", openStudio);
 
       tbody.appendChild(row);
     }
@@ -1460,7 +1446,7 @@
     }
 
     renderRows(data);
-    makeSortable(table, data, cols, renderRows);
+    makeSortable(table, data, renderRows);
   }
 
   // --- Section 5: Severity Distribution ---
@@ -1732,22 +1718,8 @@
     }
   }
 
-  // --- Drill-down helpers ---
-  //
-  // Plain navigation; Studio has no deep-link filters yet.
-
-  function drillDownEventType(eventType) {
-    void eventType;
-    window.location.href = "/studio/";
-  }
-
-  function drillDownTranscriptCategory(category) {
-    void category;
-    window.location.href = "/studio/";
-  }
-
-  function drillDownParticipant(participant) {
-    void participant;
+  // Drill-downs open Studio; it has no deep-link filters yet.
+  function openStudio() {
     window.location.href = "/studio/";
   }
 

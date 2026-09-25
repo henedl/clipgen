@@ -116,7 +116,7 @@
 
   var REGION_COLOR_COUNT = 8;
 
-  // Re-reads each call so dev-token-tweak widget overrides take effect live.
+  // Reads the panel height token, falling back to 400px.
   function bottomPanelHeightFromToken() {
     var v = getComputedStyle(document.documentElement)
       .getPropertyValue("--bottom-panel-height")
@@ -1812,14 +1812,11 @@
   function hideRegionNameModal() { return SS.hideRegionNameModal && SS.hideRegionNameModal.apply(null, arguments); }
   function invalidateOverlayRect() { return SS.invalidateOverlayRect && SS.invalidateOverlayRect.apply(null, arguments); }
   function cancelWandDrag() { return SS.cancelWandDrag && SS.cancelWandDrag.apply(null, arguments); }
-  function toggleShapeDraw() { return SS.toggleShapeDraw && SS.toggleShapeDraw.apply(null, arguments); }
   function cancelShapeDraw() { return SS.cancelShapeDraw && SS.cancelShapeDraw.apply(null, arguments); }
-  function openSampleModal() { return SS.openSampleModal && SS.openSampleModal.apply(null, arguments); }
 
   // ---- Region stashing + chip drag (impl in screenspace-regions.js) ----
   function initRegionDrag() { return SS.initRegionDrag && SS.initRegionDrag.apply(null, arguments); }
   function renderStashCards() { return SS.renderStashCards && SS.renderStashCards.apply(null, arguments); }
-  function stashRegions() { return SS.stashRegions && SS.stashRegions.apply(null, arguments); }
 
 
   function templateOverlayBounds() {
@@ -2254,16 +2251,13 @@
 
   // ---- Single-tool parameter panels (impl in screenspace-params.js) ----
   function initParamResets() { return SS.initParamResets && SS.initParamResets.apply(null, arguments); }
-  function refTimeChip() { return SS.refTimeChip && SS.refTimeChip.apply(null, arguments); }
   function renderWorkflowParams() { return SS.renderWorkflowParams && SS.renderWorkflowParams.apply(null, arguments); }
-  function updateParamResetButtons() { return SS.updateParamResetButtons && SS.updateParamResetButtons.apply(null, arguments); }
 
   // ---- Model view (impl in screenspace-model-view.js) ----
   // Delegators; the satellite also publishes _overlayEligibleForActiveTool,
   // _updateMinAreaReadout, _previewRegionRef.
   function initModelView() { return SS.initModelView && SS.initModelView.apply(null, arguments); }
   function refreshModelView(opts) { return SS.refreshModelView && SS.refreshModelView.apply(null, arguments); }
-  function _updateOverlayUi() { return SS._updateOverlayUi && SS._updateOverlayUi.apply(null, arguments); }
   function _overlayEligibleForActiveTool() { return SS._overlayEligibleForActiveTool && SS._overlayEligibleForActiveTool.apply(null, arguments); }
   function _updateMinAreaReadout(sfx) { return SS._updateMinAreaReadout && SS._updateMinAreaReadout.apply(null, arguments); }
 
@@ -2277,13 +2271,6 @@
   function initCalibration() { return SS.calInit && SS.calInit(); }
 
   // ---- Color picker (impl in screenspace-color.js) ----
-  // Delegators; sampleColorFromRegion's handler reference stays unchanged.
-  function updateColorPreview() { return SS.updateColorPreview && SS.updateColorPreview(); }
-  function setTargetColor(h, s, v) { return SS.setTargetColor && SS.setTargetColor(h, s, v); }
-  function renderColorPalette() { return SS.renderColorPalette && SS.renderColorPalette(); }
-  function renderBrightnessStrip() { return SS.renderBrightnessStrip && SS.renderBrightnessStrip(); }
-  function sampleColorFromRegion() { return SS.sampleColorFromRegion && SS.sampleColorFromRegion(); }
-  function updateColorSampleBtnLabel() { return SS.updateColorSampleBtnLabel && SS.updateColorSampleBtnLabel(); }
 
   function activatePipette() {
     if (!state.frameImage) {
@@ -2359,16 +2346,12 @@
   // ---- Run analysis (impl in screenspace-run.js) ----
   // Thin delegators for the hub's own call sites.
   function initRunButton() { return SS.initRunButton && SS.initRunButton.apply(null, arguments); }
-  function gatherWorkflowParams() { return SS.gatherWorkflowParams && SS.gatherWorkflowParams.apply(null, arguments); }
 
   // ---- Task queue (impl in screenspace-tasks.js) ----
   // Thin delegators for the hub's own call sites.
-  function findTask(id) { return SS.findTask && SS.findTask(id); }
-  function focusedTaskId() { return SS.focusedTaskId && SS.focusedTaskId(); }
   function renderTaskList() { return SS.renderTaskList && SS.renderTaskList(); }
   function startSSE() { return SS.startSSE && SS.startSSE(); }
   function setRightPaneTab(tab) { return SS.setRightPaneTab && SS.setRightPaneTab(tab); }
-  function updateResultsCrumb() { return SS.updateResultsCrumb && SS.updateResultsCrumb(); }
   function initRightPaneTabs() { return SS.initRightPaneTabs && SS.initRightPaneTabs(); }
   function initPauseButton() { return SS.initPauseButton && SS.initPauseButton(); }
   function initTaskQueue() { return SS.initTaskQueue && SS.initTaskQueue(); }
@@ -3216,7 +3199,6 @@
     initInfoPanelCollapse();
     initInfoSections();
     initKeyboard();
-    initFrontendSwitcher();
     initTopNavActions();
     initCommandPalette();
 

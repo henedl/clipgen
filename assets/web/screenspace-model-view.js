@@ -10,9 +10,8 @@
  * through window.ClipgenScreenspace (SS). apiGet / qs / numberOrDefault /
  * _formatMinAreaReadout are ambient utils.js / screenspace-utils.js globals.
  * renderOverlay lives in screenspace-overlay.js (loaded AFTER this file), so it
- * is reached late-bound via SS.renderOverlay(...). The hub keeps same-named
- * delegators (initModelView / refreshModelView / _updateMinAreaReadout /
- * _updateOverlayUi / _overlayEligibleForActiveTool) for its own call sites.
+ * is reached late-bound via SS.renderOverlay(...). The hub delegates only
+ * the names it calls itself.
  *
  * Load order: right after screenspace.js and BEFORE screenspace-overlay.js,
  * screenspace-tasks.js, screenspace-multitool-params.js and

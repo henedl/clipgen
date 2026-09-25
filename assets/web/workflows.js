@@ -1219,7 +1219,6 @@
   WF.undo = undo;
   WF.redo = redo;
   WF.flushSave = flushSave; // runs satellite awaits this before POSTing a run
-  WF.renderPalette = renderPalette;
   WF.openBlueprint = openBlueprint;
   // Published for the nodes satellite (palette grey-out logic shared, not duped).
   WF.nodeContextMet = nodeContextMet;

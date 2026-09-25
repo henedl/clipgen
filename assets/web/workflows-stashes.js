@@ -338,11 +338,8 @@
 
   WF.initStashes = initStashes;
   WF.loadStashes = loadStashes;
-  WF.renderStashPalette = renderStashPalette;
   WF.saveSelectionAsStash = saveSelectionAsStash;
   WF.instantiateStash = instantiateStash;
   WF.instantiateSubgraph = instantiateSubgraph;
-  WF.renameStash = renameStash;
-  WF.deleteStash = deleteStash;
   WF.syncStashButton = syncStashButton;
 })();

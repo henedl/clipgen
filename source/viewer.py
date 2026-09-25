@@ -358,13 +358,7 @@ def _generate_viewer_html(
     utils_js_tag = '<script src="utils.js" defer></script>\n  '
     template_html = template_html.replace(utils_js_tag, "")
 
-    # Strip dev-only tags (e.g. dev-token-tweak.js) so they never ship in exports.
-    template_html = re.sub(
-        r"<script\b[^>]*\bdata-dev-only\b[^>]*>\s*</script>\s*",
-        "",
-        template_html,
-        flags=re.IGNORECASE,
-    )
+    # Strip data-dev-only links so they never ship in exports.
     template_html = re.sub(
         r"<link\b[^>]*\bdata-dev-only\b[^>]*/?>\s*",
         "",

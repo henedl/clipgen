@@ -19,7 +19,7 @@
  *
  * All hub data comes from the overview.js hub via window.ClipgenOverview
  * (lazy reads inside activate(), never top-level destructures). Lifecycle:
- * OV.reportsActivate / reportsDeactivate / reportsResize. Participant
+ * OV.reportsActivate / reportsDeactivate. Participant
  * selection is a single key on purpose — a future aggregate mode extends
  * rpState.selected to a set without reshaping the tab.
  */
@@ -1055,10 +1055,6 @@
     if (vid) vid.pause();
   }
 
-  function resize() {
-    // Flow layout only — nothing measures the viewport.
-  }
-
   window.addEventListener("pagehide", function () {
     stopReportPoll();
     stopTaskPoll();
@@ -1066,5 +1062,4 @@
 
   window.ClipgenOverview.reportsActivate = activate;
   window.ClipgenOverview.reportsDeactivate = deactivate;
-  window.ClipgenOverview.reportsResize = resize;
 })();

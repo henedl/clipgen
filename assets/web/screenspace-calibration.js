@@ -16,8 +16,6 @@
   var _previewRegionRef = SS._previewRegionRef,
     loadFrame = SS.loadFrame,
     regionRefPayload = SS.regionRefPayload,
-    renderWorkflowParams = SS.renderWorkflowParams,
-    restoreTaskToWorkflow = SS.restoreTaskToWorkflow,
     setInputValue = SS.setInputValue,
     syncValueDisplays = SS.syncValueDisplays,
     updateRunButton = SS.updateRunButton;

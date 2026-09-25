@@ -46,10 +46,6 @@
   --so-art-line-fill:  rgba(255, 255, 255, 0.28);
 }
 
-.start-overlay.hidden {
-  display: none;
-}
-
 /* The backdrop element itself is styled by tokens.css .cg-veil-layer. It stays a
  * real element rather than the ::before that .cg-modal-veil generates, because
  * it is the click-to-dismiss target and a pseudo-element cannot be one. */
@@ -918,10 +914,6 @@
 }
 .start-overlay .recent-pop { overflow: auto; }
 
-.start-overlay .recent-pop.hidden {
-  display: none;
-}
-
 .start-overlay .recent-pop__item {
   width: 100%;
   text-align: left;
@@ -1151,10 +1143,6 @@
 
 /* Body shared with .recent-pop above; this only sets the vertical overflow. */
 .start-overlay .sheet-picker__menu { overflow-y: auto; }
-
-.start-overlay .sheet-picker__menu.hidden {
-  display: none;
-}
 
 /* Enter only: the section's z-index lift ends at close, so an exit would be covered. */
 .start-overlay .sheet-picker__menu,

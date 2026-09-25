@@ -535,6 +535,5 @@
   WF.cancelConnect = endConnect;
   WF.selectEdge = selectEdge;
   WF.removeEdge = removeEdge;
-  WF.canConnect = canConnect;
   WF.refreshWireDelete = refreshWireDelete;
 })();

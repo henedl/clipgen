@@ -44,11 +44,9 @@
     lastMarkCategory: "bookmark",
     streamingParticipant: null,
     ssEvents: [],
-    ssEventsLoaded: false,
     ssEventsVersion: null, // events_version cursor; unchanged ticks skip the payload
     sheetVersion: null, // sheet_version cursor, same idea for ../studio/api/sheet
     sheetRows: [],
-    sheetParticipants: [],
     sheetLoaded: false,
     // Whether a spreadsheet is loaded at all — gates the per-pill off-sheet badge.
     hasSheet: false,
@@ -59,7 +57,6 @@
     summaryText: "",
     summaryCitations: null,
     citationsGenerating: false,
-    activeTab: "summary",
     frictionData: null,
     // Owner of frictionData; loadFriction blanks the pane only when this changes.
     frictionPid: null,
@@ -184,7 +181,6 @@
         if (data.events_version != null) state.ssEventsVersion = data.events_version;
         if (data.events_unchanged) return;
         state.ssEvents = data.events || [];
-        state.ssEventsLoaded = true;
         _buildEventsIndex();
       })
       .catch(function () { _markXrefSource("screenspace", true); });
@@ -206,7 +202,6 @@
           return;
         }
         state.sheetRows = data.rows || [];
-        state.sheetParticipants = data.participants || [];
         state.sheetLoaded = true;
         _buildSheetIndex();
       })
@@ -552,7 +547,6 @@
 
   // Call once a download attempt has concluded; never mid-download (would re-prompt).
   function _forgetWhisperDownloadAgreements() {
-    _whisperDownloadConfirmed = {};
     _trModelsCache = null;
     _trModelsCachePromise = null;
   }
@@ -651,8 +645,6 @@
         refreshTranscriptionModelHintOnce();
         return;
       }
-      // Skip the transcribe-time prompt while this download is still running.
-      if (data.model) _whisperDownloadConfirmed[data.model] = true;
       apiPost("api/transcribe/warmup", { force: true })
         .then(function (d) {
           if (!d.ok) {
@@ -2072,7 +2064,6 @@
     // Label input
     var labelInput = popover.querySelector(".mark-popover-label");
     labelInput.value = markObj.label || "";
-    labelInput._markId = markObj.id;
     labelInput.onblur = function () {
       var val = labelInput.value.trim();
       if (val !== (markObj.label || "")) {
@@ -2188,7 +2179,6 @@
           sizeMb: m.size_mb,
         }).then(function (ok) {
           if (ok) {
-            _whisperDownloadConfirmed[m.model] = true;
             _trModelsCache = null;
             _trModelsCachePromise = null;
           }
@@ -2437,8 +2427,6 @@
   // Cached models fetch for per-pill overrides; the shared modal has its own cache.
   var _trModelsCache = null;
   var _trModelsCachePromise = null;
-  // Model name -> agreed this session; a downloading model still reads as uncached.
-  var _whisperDownloadConfirmed = {};
   // Serializes confirmModelInstall(); there is one shared modal element.
   var _modelInstallChain = Promise.resolve();
 
@@ -3053,7 +3041,6 @@
     initThemeToggle();
     initStatusIndicatorTooltip();
     checkNavLinks();
-    initFrontendSwitcher();
     initSearch();
     initPillOutsideClick();
     initPillWheelScroll();
@@ -3139,7 +3126,6 @@
   TS.hideMarkPopover = hideMarkPopover; // speakers (one popover at a time)
   TS._isSpeakerTask = _isSpeakerTask; // video, pills
   TS._isRedactTask = _isRedactTask; // pills
-  TS.findOverlapsForSearch = findOverlapsForSearch; // search
   TS.selectParticipant = selectParticipant; // search, pills
   TS.cycleParticipant = cycleParticipant; // video (Z/X participant cycle)
   // Streaming segments for the streamed participant; search reads them here.

@@ -53,7 +53,6 @@
   var _preview = null; // { id, videoEl, wrapEl } — currently previewed artifact
   var _hoverDebounce = null;
   var _seekRaf = 0;
-  var _lastSeekProportion = null;
 
   var SORT_DEFAULT_DIR = {
     severity: "desc",
@@ -1776,7 +1775,6 @@
     preview.appendChild(wrap);
 
     _preview = { id: id, videoEl: vid, wrapEl: wrap, overlay: overlay, timeBadge: timeBadge };
-    _lastSeekProportion = proportion;
   }
 
   function updatePreviewSeek(proportionX) {
@@ -1794,7 +1792,6 @@
       if (_preview && _preview.timeBadge) {
         _preview.timeBadge.textContent = formatTime(seekTime) + " / " + formatTime(vid.duration);
       }
-      _lastSeekProportion = clamped;
     });
   }
 

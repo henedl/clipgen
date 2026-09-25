@@ -10,8 +10,6 @@
 
 /* Page-specific variables — shared tokens are in tokens.css */
 :root {
-  --color-cell-text: #dbeafe;
-  --color-cell-valid: #93c5fd;
   --color-cell-selected: #cbd5e1;
   --color-heatmap: 168, 130, 214;
   --color-cell-hover: var(--color-accent-hover);
@@ -418,10 +416,6 @@ body[data-active-tab]:not([data-active-tab="sheet"]) #studioSidebar {
   animation: cg-pulse 1s ease-in-out infinite;
 }
 
-.tab-status-dot.hidden {
-  display: none;
-}
-
 @media (prefers-reduced-motion: reduce) {
   .tab-status-dot {
     animation: none;
@@ -811,9 +805,7 @@ select.fn-select:hover {
   background: rgba(255, 255, 255, 0.06);
 }
 html[data-theme="light"] .sev-pill.sev-na,
-html[data-theme="light"] .sev-pill.sev-unknown,
-.theme-light .sev-pill.sev-na,
-.theme-light .sev-pill.sev-unknown {
+html[data-theme="light"] .sev-pill.sev-unknown {
   background: rgba(0, 0, 0, 0.06);
 }
 
@@ -821,13 +813,11 @@ html[data-theme="light"] .sev-pill.sev-unknown,
  * (--success) since the dark-theme positive token (--severity-positive) washes out on a
  * light background. Very-positive uses a slightly darker green so it stays
  * distinct from positive (mirrors the dark-theme differentiation). */
-html[data-theme="light"] .sev-pill.sev-positive,
-.theme-light .sev-pill.sev-positive {
+html[data-theme="light"] .sev-pill.sev-positive {
   color: var(--success);
   background: color-mix(in srgb, var(--success) 18%, transparent);
 }
-html[data-theme="light"] .sev-pill.sev-very-positive,
-.theme-light .sev-pill.sev-very-positive {
+html[data-theme="light"] .sev-pill.sev-very-positive {
   color: var(--success-strong);
   background: color-mix(in srgb, var(--success-strong) 18%, transparent);
 }
@@ -986,16 +976,13 @@ body.dragging .ts-cell:hover {
   transition: opacity 60ms ease;
 }
 
-/* Severity-tinted float — mirrors the .ts-cell[data-severity] rules above so
- * the float reads as the same chip widening, not a tooltip. Bg uses the
- * `-solid` token variants (opaque) so the float doesn't reveal cells/text
- * underneath. */
-.ts-cell-float[data-severity="critical"],
-.ts-cell-float[data-severity="high"]          { background: var(--cell-data-high-bg-solid);     color: var(--cell-data-high-fg); }
+/* Severity float matches the .ts-chip colors above; opaque -solid backgrounds hide cells underneath. */
+.ts-cell-float[data-severity="critical"]      { background: var(--cell-data-critical-bg-solid);      color: var(--cell-data-critical-fg); }
+.ts-cell-float[data-severity="high"]          { background: var(--cell-data-high-bg-solid);          color: var(--cell-data-high-fg); }
 .ts-cell-float[data-severity="medium"],
-.ts-cell-float[data-severity="low"]           { background: var(--cell-data-medium-bg-solid);   color: var(--cell-data-medium-fg); }
-.ts-cell-float[data-severity="positive"],
-.ts-cell-float[data-severity="very-positive"] { background: var(--cell-data-positive-bg-solid); color: var(--cell-data-positive-fg); }
+.ts-cell-float[data-severity="low"]           { background: var(--cell-data-medium-bg-solid);        color: var(--cell-data-medium-fg); }
+.ts-cell-float[data-severity="positive"]      { background: var(--cell-data-positive-bg-solid);      color: var(--cell-data-positive-fg); }
+.ts-cell-float[data-severity="very-positive"] { background: var(--cell-data-very-positive-bg-solid); color: var(--cell-data-very-positive-fg); }
 
 /* Float over a cell with text-but-invalid timestamp — match the dashed-border
  * empty-chip look from the row below. Bg is opaque (var(--bg)) so the float
@@ -1958,10 +1945,6 @@ html[data-theme="dark"] .queue-card-error .queue-card-thumb {
   align-items: flex-start;
 }
 
-.sparkles-icon {
-  flex-shrink: 0;
-}
-
 .highlights-drawer {
   position: absolute;
   top: 100%;
@@ -2015,9 +1998,6 @@ html[data-theme="dark"] .queue-card-error .queue-card-thumb {
   display: flex;
   align-items: center;
   justify-content: center;
-}
-#galleryOverlay.hidden {
-  display: none;
 }
 
 .gallery-card {
@@ -2198,10 +2178,6 @@ html[data-theme="dark"] .queue-card-error .queue-card-thumb {
   white-space: nowrap;
 }
 
-.generate-progress.hidden {
-  display: none;
-}
-
 /* Live elapsed clock shown beside the Build Reel button while a reel builds. */
 .job-eta {
   font-size: var(--text-sm);
@@ -2226,10 +2202,6 @@ html[data-theme="dark"] .queue-card-error .queue-card-thumb {
   display: flex;
   align-items: center;
   justify-content: center;
-}
-
-#statusOverlay.hidden {
-  display: none;
 }
 
 .status-card {
@@ -2276,10 +2248,6 @@ html[data-theme="dark"] .queue-card-error .queue-card-thumb {
   right: var(--space-4);
   bottom: var(--space-4);
   z-index: var(--z-toast);
-}
-
-#buildStatus.hidden {
-  display: none;
 }
 
 .build-status-card {
@@ -2335,10 +2303,6 @@ html[data-theme="dark"] .queue-card-error .queue-card-thumb {
   justify-content: center;
 }
 
-#confirmOverlay.hidden {
-  display: none;
-}
-
 /* Shell comes from .cg-modal-card (tokens.css) — which normalizes the old
  * hand-rolled shadow onto --shadow-xl and adds the shared 1px border. This
  * rule owns the centered layout; its gap out-cascades the base's space-3
@@ -2375,8 +2339,6 @@ html[data-theme="dark"] .queue-card-error .queue-card-thumb {
  * default theme, so a single selector that matches everything except an
  * explicit light opt-in covers both system-dark and the manual toggle. */
 :root:not([data-theme="light"]) {
-  --color-cell-text: #1e3a5f;
-  --color-cell-valid: #1d4ed8;
   --color-cell-selected: #334155;
   --color-cell-hover: var(--color-accent-hover);
   --color-heatmap: 192, 160, 235;
@@ -2419,10 +2381,6 @@ html[data-theme="dark"] .queue-card-error .queue-card-thumb {
   align-items: center;
   justify-content: center;
   z-index: var(--z-modal);
-}
-
-#logOverlay.hidden {
-  display: none;
 }
 
 .log-type-badge[data-type="clip"] {
@@ -2505,7 +2463,6 @@ html[data-theme="dark"] .log-panel {
 /* ---- Responsive ---- */
 
 @media (max-width: 768px) /* --bp-tablet */ {
-  #studioHeader,
   #sheetPreview,
   #panelDivider,
   #bottomPanel,
@@ -2687,10 +2644,6 @@ html[data-theme="dark"] .log-panel {
   background: var(--color-surface-alt);
 }
 
-.mn-skipped.hidden {
-  display: none;
-}
-
 .mn-skipped-head {
   font-size: var(--text-xs);
   color: var(--fg-muted);
@@ -2810,13 +2763,9 @@ html[data-theme="dark"] .log-panel {
 /* Light theme — darker greens for the positive buckets (mirrors .sev-pill);
  * the dark-theme green tokens wash out on the light white card surface. */
 html[data-theme="light"] .queue-card[data-severity="positive"] .queue-card-ref,
-html[data-theme="light"] .queue-card[data-severity="positive"] .queue-card-time,
-.theme-light .queue-card[data-severity="positive"] .queue-card-ref,
-.theme-light .queue-card[data-severity="positive"] .queue-card-time { color: var(--success); }
+html[data-theme="light"] .queue-card[data-severity="positive"] .queue-card-time { color: var(--success); }
 html[data-theme="light"] .queue-card[data-severity="very-positive"] .queue-card-ref,
-html[data-theme="light"] .queue-card[data-severity="very-positive"] .queue-card-time,
-.theme-light .queue-card[data-severity="very-positive"] .queue-card-ref,
-.theme-light .queue-card[data-severity="very-positive"] .queue-card-time { color: var(--success-strong); }
+html[data-theme="light"] .queue-card[data-severity="very-positive"] .queue-card-time { color: var(--success-strong); }
 
 .queue-card-text {
   font-size: var(--text-xs);

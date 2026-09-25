@@ -1257,7 +1257,6 @@
   WF.startRun = startRun; // also fans out to a batch when a source is "All"
   WF.stopRun = stopRun;
   WF.refreshRuns = refreshRuns;
-  WF.renderRuns = renderRuns;
   WF.applyLastRunBadges = applyLastRunBadges; // re-applied after renderAllNodes
   WF.syncRunButton = syncRunButton; // re-gated by the validation satellite
 })();

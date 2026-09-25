@@ -131,7 +131,6 @@ def test_hub_and_satellites_publish_canvas_hooks():
     # satellite so palette grey-out logic isn't duplicated).
     for fn in (
         "WF.scheduleSave",
-        "WF.renderPalette",
         "WF.openBlueprint",
         "WF.nodeContextMet",
     ):
@@ -139,7 +138,6 @@ def test_hub_and_satellites_publish_canvas_hooks():
     # Satellite-owned rendering / interaction attached back onto WF.
     for fn in (
         "WF.renderAllNodes",
-        "WF.renderNode",
         "WF.initCanvas",
         "WF.applyViewport",
         "WF.autoArrange",  # "Clean up" auto-layout
@@ -150,7 +148,6 @@ def test_hub_and_satellites_publish_canvas_hooks():
         "WF.cancelConnect",
         "WF.selectEdge",
         "WF.removeEdge",
-        "WF.canConnect",
     ):
         assert fn in src, fn
     # The catalog is fetched (not hardcoded), and the world layer is transformed.
@@ -235,7 +232,6 @@ def test_run_panel_satellite_present_and_wired():
         "WF.startRun",
         "WF.stopRun",
         "WF.refreshRuns",
-        "WF.renderRuns",
     ):
         assert fn in src, fn
     # SSE stream with a polling fallback (mirrors screenspace-tasks). The raw
@@ -325,11 +321,8 @@ def test_stash_satellite_present_and_wired():
     assert "WF.loadStashes" in src
     # Satellite-owned stash lifecycle attached back onto WF.
     for fn in (
-        "WF.renderStashPalette",
         "WF.saveSelectionAsStash",
         "WF.instantiateStash",
-        "WF.renameStash",
-        "WF.deleteStash",
         "WF.syncStashButton",
     ):
         assert fn in src, fn

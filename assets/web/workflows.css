@@ -175,11 +175,6 @@ body[data-frontend="workflows"] {
 /* #wfBlueprintSelect carries no rule of its own: the global `select` base in
  * tokens.css is this switcher's look, declaration for declaration. */
 
-#wfBlueprintName {
-  flex: 1;
-  min-width: 4rem;
-}
-
 #wfDeleteBlueprint {
   margin-left: var(--space-1);
 }
@@ -367,7 +362,6 @@ body[data-frontend="workflows"] {
    .wf-param-input stays: it also matches text inputs, and on a <select> it is
    (0,2,0), which loses to the shared (0,2,1) rule. */
 #wfToolbar button:focus-visible,
-#wfBlueprintName:focus-visible,
 .wf-palette-search:focus-visible,
 .wf-param-input:focus-visible,
 .wf-run-menu-item:focus-visible,
@@ -412,13 +406,7 @@ body[data-frontend="workflows"] {
   z-index: var(--z-float);
 }
 
-.wf-align-guide.hidden {
-  display: none;
-}
-
-/* Corner minimap + zoom controls, floated bottom-right over the canvas. The wrap
-   stacks the control row above the minimap and owns the float + empty-graph hide
-   (toggled by the canvas satellite). */
+/* Zoom controls stacked above the minimap, floated bottom-right over the canvas. */
 .wf-minimap-wrap {
   position: absolute;
   right: var(--space-3);
@@ -428,10 +416,6 @@ body[data-frontend="workflows"] {
   flex-direction: column;
   align-items: flex-end;
   gap: var(--space-1);
-}
-
-.wf-minimap-wrap.hidden {
-  display: none;
 }
 
 .wf-minimap-controls {
@@ -2082,10 +2066,6 @@ body[data-frontend="workflows"] {
   background: rgba(10, 10, 11, 0.55);
 }
 
-.wf-dialog-overlay.hidden {
-  display: none;
-}
-
 /* Shell comes from .cg-modal-card (tokens.css); this owns width + padding. */
 .wf-dialog {
   width: 360px;
@@ -2154,8 +2134,7 @@ body[data-frontend="workflows"] {
   padding: var(--space-2) var(--space-3) var(--space-3);
 }
 
-html[data-theme="light"] .wf-node.wf-note,
-.theme-light .wf-node.wf-note {
+html[data-theme="light"] .wf-node.wf-note {
   --wf-note-bg: color-mix(in srgb, var(--severity-medium) 14%, var(--color-surface));
 }
 

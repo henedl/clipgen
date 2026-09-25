@@ -5,13 +5,7 @@
  * that includes settings-modal.js.
  */
 
-/* Shell (fixed/centered/z-modal) comes from .cg-modal-overlay and the frosted
- * backdrop from .cg-modal-veil, both in tokens.css — this modal was the pattern
- * the shared veil was lifted from, so it now consumes it rather than declaring
- * its own copy. settings-modal.js toggles `.is-veiled` to ramp it. */
-.settings-overlay.hidden {
-  display: none;
-}
+/* Shell and veil come from tokens.css .cg-modal-overlay and .cg-modal-veil. */
 
 .settings-panel {
   background: var(--color-surface);
@@ -97,10 +91,6 @@
   flex: 1;
   overflow-y: auto;
   padding: var(--space-3) var(--space-5);
-}
-
-.settings-tab-panel.hidden {
-  display: none;
 }
 
 .settings-group-label {
@@ -376,12 +366,6 @@
   align-items: center;
   gap: var(--space-2);
   margin-top: var(--space-2);
-}
-
-.mark-cat-error {
-  font-size: var(--text-xs);
-  color: var(--sev-critical);
-  margin-top: var(--space-1);
 }
 
 /* ---- Hotkeys editor ---- */
@@ -726,23 +710,6 @@
   font-size: var(--text-xs);
   color: var(--color-text-dim);
   transition: opacity var(--duration-slow);
-}
-
-/* ---- Trigger icon (cog) for header buttons across frontends ---- */
-
-.settings-trigger-icon {
-  display: inline-block;
-  width: var(--icon-size-md);
-  height: var(--icon-size-md);
-  background-color: currentColor;
-  -webkit-mask-image: url("icons/cog-6-tooth.svg");
-  mask-image: url("icons/cog-6-tooth.svg");
-  -webkit-mask-size: contain;
-  mask-size: contain;
-  -webkit-mask-repeat: no-repeat;
-  mask-repeat: no-repeat;
-  -webkit-mask-position: center;
-  mask-position: center;
 }
 
 html[data-theme="dark"] .settings-panel {
