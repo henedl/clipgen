@@ -956,6 +956,8 @@ def _embed_transcript_on_artifacts(
             language=entry.get("language", ""),
             source_file=entry.get("source_file", str(base_video)),
             model=entry.get("model", ""),
+            redact=bool((entry.get("redaction") or {}).get("enabled")),
+            redact_excluded=list((entry.get("redaction") or {}).get("excluded") or []),
         )
         transcript_version = entry.get("transcribed_at", "")
     elif transcript_cache.get(base_video):
@@ -1019,6 +1021,10 @@ def _transcribe_segments(
                 source_file=entry.get("source_file", str(base_video)),
                 model=entry.get("model", ""),
                 speaker_labels=dict((entry.get("speakers") or {}).get("labels") or {}),
+                redact=bool((entry.get("redaction") or {}).get("enabled")),
+                redact_excluded=list(
+                    (entry.get("redaction") or {}).get("excluded") or []
+                ),
             )
         else:
             context_keywords = transcripts.get_corrections_keywords(corrections) or None

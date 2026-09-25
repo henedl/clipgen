@@ -25,6 +25,10 @@
     speakers: null,
     // False when the bundled speaker model is missing; the pill switch disables.
     speakerModel: true,
+    // {enabled, count, detected} from api/transcript; null until loaded.
+    redaction: null,
+    // False until the Redact model is downloaded; the pill switch disables.
+    redactModel: true,
     corrections: [],
     knownTerms: [],
     tasks: [],
@@ -345,7 +349,7 @@
     var latest = null;
     for (var i = 0; i < state.tasks.length; i++) {
       var t = state.tasks[i];
-      if (t.participant !== pid || _isSpeakerTask(t)) continue;
+      if (t.participant !== pid || _isSpeakerTask(t) || _isRedactTask(t)) continue;
       // Priority: running > queued > failed > completed/cancelled > stale
       if (!latest) { latest = t; continue; }
       var order = { running: 5, queued: 4, failed: 3, completed: 2, cancelled: 1 };
@@ -357,6 +361,23 @@
   // Diarization rides the same task list; streaming and ETA paths must skip it.
   function _isSpeakerTask(t) {
     return !!t && t.kind === "speakers";
+  }
+
+  // The redact pass rides the same list too.
+  function _isRedactTask(t) {
+    return !!t && t.kind === "redact";
+  }
+
+  function _redactTaskForSelected() {
+    var pid = state.selectedParticipant;
+    if (!pid) return null;
+    var latest = null;
+    for (var i = 0; i < state.tasks.length; i++) {
+      var t = state.tasks[i];
+      if (t.participant !== pid || !_isRedactTask(t)) continue;
+      if (!latest || t.created_at > latest.created_at) latest = t;
+    }
+    return latest;
   }
 
   function _speakerTaskForSelected() {
@@ -409,6 +430,7 @@
     var pid = state.selectedParticipant;
     var task = _taskForSelectedParticipant();
     var spk = _speakerTaskForSelected();
+    var red = _redactTaskForSelected();
     var row = _selectedParticipantRow();
     var cls = "status-indicator--ready";
     var taskLine;
@@ -444,6 +466,15 @@
     } else if (spk && spk.status === "failed" && speakersOn()) {
       cls = "status-indicator--error";
       taskLine = pid + ": speaker detection failed" + (spk.error ? " (" + spk.error + ")" : "");
+    } else if (red && red.status === "running") {
+      cls = "status-indicator--working";
+      taskLine = pid + ": redacting… " + Math.round((red.progress || 0) * 100) + "%";
+    } else if (red && red.status === "queued") {
+      cls = "status-indicator--working";
+      taskLine = pid + ": redaction queued";
+    } else if (red && red.status === "failed" && state.redaction && state.redaction.enabled) {
+      cls = "status-indicator--error";
+      taskLine = pid + ": redaction failed" + (red.error ? " (" + red.error + ")" : "");
     } else if (row && row.has_transcript) {
       taskLine = pid + ": " + (row.segment_count || 0) + " segments";
       if (row.has_stale_artifacts) taskLine += " \u00B7 artifacts outdated";
@@ -695,6 +726,7 @@
       _reportAgentErrors(data.participants);
       state.hasSheet = !!data.has_sheet;
       state.speakerModel = data.speaker_model !== false;
+      state.redactModel = data.redact_model !== false;
       state.transcribePrewarm = data.transcribe_prewarm || "queue_open";
       renderPills();
       refreshTopNavActions();
@@ -939,17 +971,28 @@
       if (!data.ok) {
         state.segments = [];
         state.speakers = null;
+        state.redaction = null;
         renderSegments();
         renderTimeline();
+        renderRedactPanel();
         return;
       }
       state.segments = data.segments;
       state.speakers = data.speakers || null;
+      state.redaction = data.redaction || null;
       state.activeSegmentIndex = -1;
       renderSegments();
       renderTimeline();
+      renderRedactPanel();
     });
   }
+
+  // ---- Redaction delegators; implementation in transcripts-redact.js ----
+  function redactOn() { return !!(TS.redactOn && TS.redactOn()); }
+  function redactedTextHtml() { return (TS.redactedTextHtml && TS.redactedTextHtml.apply(null, arguments)) || ""; }
+  function redactedPlainText() { return TS.redactedPlainText && TS.redactedPlainText.apply(null, arguments); }
+  function renderRedactPanel() { return TS.renderRedactPanel && TS.renderRedactPanel(); }
+  function initRedact() { return TS.initRedact && TS.initRedact(); }
 
   // ---- Speaker delegators; implementation in transcripts-speakers.js ----
   function speakersOn() { return !!(TS.speakersOn && TS.speakersOn()); }
@@ -1009,6 +1052,7 @@
 
     var html = "";
     var spkOn = speakersOn();
+    var redOn = redactOn();
     for (var i = 0; i < state.segments.length; i++) {
       var seg = state.segments[i];
       var activeClass = i === state.activeSegmentIndex ? " active" : "";
@@ -1063,21 +1107,25 @@
         html += speakerChipHtml(seg.speaker, { repeat: !!seg.speaker && seg.speaker === prevSpk });
       }
       // Word spans carry data-ws/data-we for the karaoke sweep; count mismatch leaves them untimed.
-      var tokens = seg.text.split(/(\s+)/);
-      var wordCount = 0;
-      for (var w = 0; w < tokens.length; w++) {
-        if (tokens[w] && !/^\s+$/.test(tokens[w])) wordCount++;
-      }
-      var segWords = (!seg.corrected && seg.words && seg.words.length === wordCount) ? seg.words : null;
       var wordHtml = "";
-      var wi = 0;
-      for (var w = 0; w < tokens.length; w++) {
-        if (/^\s+$/.test(tokens[w])) {
-          wordHtml += tokens[w];
-        } else if (tokens[w]) {
-          var timing = segWords ? ' data-ws="' + segWords[wi].start + '" data-we="' + segWords[wi].end + '"' : "";
-          wordHtml += '<span class="segment-word"' + timing + '>' + escapeHtml(tokens[w]) + '</span>';
-          wi++;
+      if (redOn && seg.pii && seg.pii.length) {
+        wordHtml = redactedTextHtml(seg);
+      } else {
+        var tokens = seg.text.split(/(\s+)/);
+        var wordCount = 0;
+        for (var w = 0; w < tokens.length; w++) {
+          if (tokens[w] && !/^\s+$/.test(tokens[w])) wordCount++;
+        }
+        var segWords = (!seg.corrected && seg.words && seg.words.length === wordCount) ? seg.words : null;
+        var wi = 0;
+        for (var w = 0; w < tokens.length; w++) {
+          if (/^\s+$/.test(tokens[w])) {
+            wordHtml += tokens[w];
+          } else if (tokens[w]) {
+            var timing = segWords ? ' data-ws="' + segWords[wi].start + '" data-we="' + segWords[wi].end + '"' : "";
+            wordHtml += '<span class="segment-word"' + timing + '>' + escapeHtml(tokens[w]) + '</span>';
+            wi++;
+          }
         }
       }
       html += '<span class="segment-text" data-id="' + escapeHtml(seg.id) + '">' + annoBadgeHtml + wordHtml + '</span>';
@@ -1413,7 +1461,9 @@
         var src = isStreaming ? (_partialRender.segments || []) : state.segments;
         var segCopy = src[idx];
         if (!segCopy) return;
-        var copyText = segCopy.text;
+        var copyText = (!isStreaming && redactOn() && segCopy.pii && segCopy.pii.length)
+          ? redactedPlainText(segCopy)
+          : segCopy.text;
         if (!isStreaming && segCopy.speaker && speakersOn()) {
           copyText = speakerName(segCopy.speaker) + ": " + copyText;
         }
@@ -1441,6 +1491,11 @@
       if (textEl && row.contains(textEl)) {
         e.stopPropagation();
         if (state.editingTextEl === textEl) return;
+        // A placeholder chip opens the Redact tab, where it can be restored.
+        if (e.target.closest(".segment-pii") && TS.selectTab) {
+          TS.selectTab("redact");
+          return;
+        }
         seekVideo(start);
         return;
       }
@@ -1452,6 +1507,11 @@
       var textEl = e.target.closest(".segment-text");
       if (!textEl || !row.contains(textEl)) return;
       e.stopPropagation();
+      // The editor seeds from the rendered text; placeholders must not become corrections.
+      if (redactOn() && textEl.querySelector(".segment-pii")) {
+        showToast("Turn off redaction to edit this line");
+        return;
+      }
       startSegmentEditing(textEl);
     });
 
@@ -2219,7 +2279,7 @@
     var completed = false;
     for (var i = 0; i < state.tasks.length; i++) {
       var t = state.tasks[i];
-      if (t.participant !== pid || _isSpeakerTask(t)) continue;
+      if (t.participant !== pid || _isSpeakerTask(t) || _isRedactTask(t)) continue;
       if (t.status === "running" || t.status === "queued") running = true;
       else if (t.status === "completed") completed = true;
     }
@@ -2241,7 +2301,9 @@
       state.streamingParticipant = null;
       state.segments = data.segments;
       state.speakers = data.speakers || null;
+      state.redaction = data.redaction || null;
       state.activeSegmentIndex = -1;
+      renderRedactPanel();
       renderSegments();
       renderTimeline();
       _setAnalysisReady(true);
@@ -2267,12 +2329,13 @@
 
       // Now, not after the async chain, or the indicator freezes at "95%".
       updateStatusIndicator();
+      renderRedactPanel();
 
       // Stream partial segments for the selected participant's running task
       var selectedRunningTask = null;
       if (state.selectedParticipant) {
         data.tasks.forEach(function (t) {
-          if (_isSpeakerTask(t)) return;
+          if (_isSpeakerTask(t) || _isRedactTask(t)) return;
           if (t.participant === state.selectedParticipant && t.status === "running" && t.partial_count) {
             selectedRunningTask = t;
           }
@@ -2297,8 +2360,8 @@
       data.tasks.forEach(function (t) {
         if (t.status === "queued" || t.status === "running") hasActive = true;
         if (t.status === "completed" && !_refreshedCompletedTaskIds[t.id]) {
-          // Speaker passes reload labels only; they never reset marks or agents.
-          (_isSpeakerTask(t) ? newlySpeakers : newlyCompleted).push(t.participant);
+          // Speaker and redact passes reload the transcript only; marks and agents stay.
+          ((_isSpeakerTask(t) || _isRedactTask(t)) ? newlySpeakers : newlyCompleted).push(t.participant);
           _refreshedCompletedTaskIds[t.id] = true;
         }
       });
@@ -2752,6 +2815,16 @@
       renderPills();
       if (state.selectedParticipant) loadTranscript(state.selectedParticipant);
     }
+    var red = applied && applied.TRANSCRIBE_REDACT !== undefined
+      ? applied.TRANSCRIBE_REDACT
+      : _settingValueFromRecords(settings, "TRANSCRIBE_REDACT");
+    if (red !== undefined && !!red !== CLIPGEN_CONFIG.transcribeRedact) {
+      CLIPGEN_CONFIG.transcribeRedact = !!red;
+      renderPills();
+      if (state.selectedParticipant) loadTranscript(state.selectedParticipant);
+    }
+    // A model download or removal in Settings flips the pill switches.
+    loadParticipants();
   }
 
   // Shared by the settings modal and the command palette's cross-ref command.
@@ -2911,6 +2984,8 @@
           "panel agents", "tabBtnSummary"),
         clickCommand("transcripts:tab-friction", "Show Friction tab", "table-cells",
           "panel analysis moments", "tabBtnFriction"),
+        clickCommand("transcripts:tab-redact", "Show Redact tab", "table-cells",
+          "panel pii privacy anonymise names", "tabBtnRedact"),
         clickCommand("transcripts:toggle-video", "Toggle video panel", "video-camera",
           "hide show collapse drawer player", "videoCollapseBtn"),
         clickCommand("transcripts:toggle-captions", "Toggle captions", "language",
@@ -2994,14 +3069,15 @@
     initPanelTabs();
     // #tab=friction deep links; the #P07 form is handled in loadParticipants.
     var hashTab = clipgenHashTab();
-    if (hashTab === "summary" || hashTab === "friction") {
-      var hashTabBtn = qs(hashTab === "friction" ? "#tabBtnFriction" : "#tabBtnSummary");
+    if (hashTab === "summary" || hashTab === "friction" || hashTab === "redact") {
+      var hashTabBtn = qs("#tabBtn" + hashTab.charAt(0).toUpperCase() + hashTab.slice(1));
       if (hashTabBtn) hashTabBtn.click();
     }
     initSummaryActions();
     initFriction();
     initFrictionMode();
     initSpeakers();
+    initRedact();
     initTranscriptSettings();
     initTopNavActions();
     initCommandPalette();
@@ -3064,6 +3140,7 @@
   TS.loadParticipants = loadParticipants; // speakers
   TS.hideMarkPopover = hideMarkPopover; // speakers (one popover at a time)
   TS._isSpeakerTask = _isSpeakerTask; // video, pills
+  TS._isRedactTask = _isRedactTask; // pills
   TS.findOverlapsForSearch = findOverlapsForSearch; // search
   TS.selectParticipant = selectParticipant; // search, pills
   TS.cycleParticipant = cycleParticipant; // video (Z/X participant cycle)

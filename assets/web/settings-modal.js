@@ -38,6 +38,7 @@
   var _llmDownloadWatch = {};
   // The Summaries tab's model block refresh, set when the block is built.
   var _llmBlockRefresh = null;
+  var _redactBlockRefresh = null;
   var _closeTimer = null;
   // Titlecard/endcard picker state (shared by the title + end pickers).
   var _cardsCache = null;
@@ -115,6 +116,7 @@
   function _refreshLlmViews() {
     _invalidateModels();
     if (_llmBlockRefresh) _llmBlockRefresh();
+    if (_redactBlockRefresh) _redactBlockRefresh();
     _refreshLlmSelects();
   }
 
@@ -173,6 +175,177 @@
             }
           });
       }, 1000, { runImmediately: true, label: "settings.llmDownload" });
+      poller.start();
+    }).catch(function () {
+      finish({ done: true, succeeded: false, error: "Download failed" });
+    });
+  }
+
+  // The Redact model: one optional download under Transcription → Redaction.
+  function _buildRedactModelBlock() {
+    var wrap = el("div", "settings-llm-models settings-redact-model");
+    wrap.appendChild(el("div", "settings-group-label", "Redact model"));
+    var list = el("div", "settings-llm-models-list");
+    wrap.appendChild(list);
+
+    function refresh() {
+      _fetchModels().then(function (data) {
+        list.textContent = "";
+        var rd = (data && data.redact) || null;
+        if (!rd) {
+          list.appendChild(el("div", "settings-model-note", "Model status unavailable."));
+          return;
+        }
+        list.appendChild(_buildRedactRow(rd));
+      });
+    }
+
+    function _buildRedactRow(rd) {
+      var row = el("div", "settings-llm-model-row");
+      var name = el("span", "settings-llm-model-name");
+      name.appendChild(el("span", "settings-llm-model-title", "Redact " + (rd.tag || "")));
+      name.appendChild(el("span", "settings-llm-model-desc",
+        "Finds names, contacts, addresses and ids in 27 languages. Powered by Desert Ant Labs."));
+      var lic = el("span", "settings-llm-model-desc");
+      lic.appendChild(document.createTextNode("Downloading accepts the "));
+      var licLink = el("a", "", rd.license || "model license");
+      licLink.href = rd.license_url || "#";
+      licLink.target = "_blank";
+      licLink.rel = "noopener";
+      lic.appendChild(licLink);
+      lic.appendChild(document.createTextNode("."));
+      name.appendChild(lic);
+      row.appendChild(name);
+      var size = el("span", "settings-llm-model-size", _formatSize(rd.size_mb || 0));
+      row.appendChild(size);
+      var slot = el("span", "settings-llm-model-link-slot");
+      if (rd.model_url) {
+        var link = el("a", "settings-llm-model-reveal");
+        link.href = rd.model_url;
+        link.target = "_blank";
+        link.rel = "noopener noreferrer";
+        link.title = "View this model on Hugging Face";
+        link.setAttribute("aria-label", "View this model on Hugging Face");
+        link.appendChild(el("span", "settings-llm-model-icon settings-llm-model-icon--link"));
+        slot.appendChild(link);
+      }
+      row.appendChild(slot);
+      var action = el("span", "settings-llm-model-action");
+      row.appendChild(action);
+
+      if (rd.installed) {
+        var done = el("span", "settings-llm-model-state");
+        done.appendChild(el("span", "settings-llm-model-icon settings-llm-model-icon--done"));
+        done.appendChild(document.createTextNode("Downloaded"));
+        action.appendChild(done);
+        var delBtn = el("button", "btn btn-small btn-icon", "Remove");
+        delBtn.type = "button";
+        delBtn.addEventListener("click", function () {
+          delBtn.disabled = true;
+          apiDelete(_getApiRoot() + "/models/redact").then(function (r) {
+            if (!r || !r.ok) {
+              delBtn.disabled = false;
+              _setStatus((r && r.error) || "Remove failed");
+              return;
+            }
+            _refreshLlmViews();
+          }).catch(function () {
+            delBtn.disabled = false;
+            _setStatus("Remove failed");
+          });
+        });
+        action.appendChild(delBtn);
+        return row;
+      }
+
+      var bar = el("div", "settings-llm-model-bar");
+      var fill = el("div", "settings-llm-model-bar-fill");
+      bar.appendChild(fill);
+      var dlBtn = el("button", "btn btn-small btn-icon");
+      dlBtn.type = "button";
+      dlBtn.appendChild(el("span", "settings-llm-model-icon settings-llm-model-icon--download"));
+      dlBtn.appendChild(document.createTextNode("Download"));
+      action.appendChild(dlBtn);
+
+      function onProgress(st) {
+        if (st.done) {
+          if (!st.succeeded) {
+            bar.remove();
+            dlBtn.disabled = false;
+            size.textContent = _formatSize(rd.size_mb || 0);
+            _setStatus(st.error || "Download failed");
+          }
+          return;
+        }
+        if (st.total > 0) {
+          var pct = Math.max(0, Math.min(100, Math.round((st.completed / st.total) * 100)));
+          fill.style.width = pct + "%";
+          size.textContent = _formatSize(Math.round(st.completed / 1048576)) +
+            " / " + _formatSize(rd.size_mb || 0);
+        }
+      }
+      function startWatching() {
+        dlBtn.disabled = true;
+        name.appendChild(bar);
+        _watchRedactDownload(onProgress);
+      }
+      dlBtn.addEventListener("click", startWatching);
+      apiGet(_getApiRoot() + "/models/redact/download-status")
+        .then(function (st) {
+          if (st && st.ok && st.found && !st.done) startWatching();
+        })
+        .catch(function () {});
+      return row;
+    }
+
+    _redactBlockRefresh = refresh;
+    refresh();
+    return wrap;
+  }
+
+  // Start or join the Redact download; the poll survives modal reopen like the GGUF one.
+  var _redactDownloadWatch = null;
+  function _watchRedactDownload(onProgress) {
+    if (_redactDownloadWatch) { _redactDownloadWatch.listeners.push(onProgress); return; }
+    var watch = { listeners: [onProgress] };
+    _redactDownloadWatch = watch;
+
+    function emit(st) {
+      for (var i = 0; i < watch.listeners.length; i++) watch.listeners[i](st);
+    }
+    function finish(st) {
+      _redactDownloadWatch = null;
+      emit(st);
+      if (st.succeeded) _refreshLlmViews();
+    }
+
+    apiPost(_getApiRoot() + "/models/redact/download", {}).then(function (data) {
+      if (!data || !data.ok) {
+        finish({ done: true, succeeded: false, error: (data && data.error) || "Download failed" });
+        return;
+      }
+      if (data.installed) { finish({ done: true, succeeded: true }); return; }
+      var misses = 0;
+      var poller = createPoller(function () {
+        return apiGet(_getApiRoot() + "/models/redact/download-status")
+          .then(function (st) {
+            if (!st || !st.ok || !st.found) {
+              if (++misses >= 20) {
+                poller.stop();
+                finish({ done: true, succeeded: false, error: "Download failed" });
+              }
+              return;
+            }
+            misses = 0;
+            if (st.done) { poller.stop(); finish(st); } else emit(st);
+          })
+          .catch(function () {
+            if (++misses >= 20) {
+              poller.stop();
+              finish({ done: true, succeeded: false, error: "Download failed" });
+            }
+          });
+      }, 1000, { runImmediately: true, label: "settings.redactDownload" });
       poller.start();
     }).catch(function () {
       finish({ done: true, succeeded: false, error: "Download failed" });
@@ -1615,6 +1788,7 @@
       }
 
       if (name === "Summaries") panel.appendChild(_buildLlmModelsBlock());
+      if (name === "Transcription") panel.appendChild(_buildRedactModelBlock());
 
       var resetTabBtn = el("button", "btn btn-small settings-tab-reset", "Reset this tab");
       resetTabBtn.type = "button";

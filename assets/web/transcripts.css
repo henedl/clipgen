@@ -579,6 +579,11 @@ body {
   -webkit-mask-image: url(icons/fire.svg);
 }
 
+.redact-icon {
+  mask-image: url(icons/eye-slash.svg);
+  -webkit-mask-image: url(icons/eye-slash.svg);
+}
+
 /* Marks a control that starts a local AI thinking agent (the Summary /
    Citations / Friction run buttons, in the panel and in the pill dropdown), so
    the glyph sits on the action that spends local compute rather than on the
@@ -1791,6 +1796,153 @@ body {
 /* Word-level karaoke sweep on the playing row (transcripts-video.js) */
 .segment-row.active .segment-word.word-active {
   background: var(--color-selected);
+}
+
+/* PII placeholder chip (transcripts-redact.js); the surface never renders.
+   Muted on purpose: dim mono text on a quiet solid tint, inline so it sits
+   on the line's baseline like the words around it. */
+.segment-pii {
+  --pii: var(--color-text-dim);
+  display: inline;
+  margin: 0 var(--space-1);
+  padding: 0 var(--space-1-5);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  letter-spacing: 0.04em;
+  color: var(--pii);
+  background: color-mix(in oklch, var(--pii) 18%, transparent);
+  border-radius: var(--radius-sm);
+  white-space: nowrap;
+}
+
+.segment-pii:hover {
+  background: color-mix(in oklch, var(--pii) 28%, transparent);
+}
+
+.segment-row.active .segment-pii.word-active {
+  --pii: var(--color-text);
+}
+
+/* Redact tab: switch, model download block, and the detected-items list. */
+.redact-switch {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  font-size: var(--text-xs);
+  color: var(--color-text-dim);
+  cursor: pointer;
+}
+
+.redact-switch input {
+  width: auto;
+  height: auto;
+  margin: 0;
+  accent-color: var(--color-accent);
+  cursor: pointer;
+}
+
+.redact-switch input:disabled {
+  cursor: not-allowed;
+}
+
+.redact-model {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  color: var(--color-text-dim);
+  font-size: var(--text-sm);
+}
+
+.redact-model-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.redact-model-row .settings-llm-model-bar {
+  flex: 1;
+  margin-top: 0;
+}
+
+.redact-list {
+  display: flex;
+  flex-direction: column;
+}
+
+.redact-item {
+  display: grid;
+  grid-template-columns: auto 1fr auto auto auto;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-1) 0;
+  border-bottom: 1px solid var(--color-border);
+  font-size: var(--text-xs);
+  cursor: pointer;
+}
+
+.redact-item:hover {
+  background: var(--color-selected);
+}
+
+.redact-item-label {
+  color: var(--color-text-dim);
+}
+
+.redact-item-surface {
+  color: var(--color-text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.redact-item-meta {
+  color: var(--color-text-dim);
+  font-variant-numeric: tabular-nums;
+}
+
+.redact-item .segment-pii {
+  margin: 0;
+}
+
+.redact-item--restored .segment-pii,
+.redact-item--restored .redact-item-label,
+.redact-item--restored .redact-item-meta {
+  opacity: 0.45;
+}
+
+/* Restore / redact-again: an icon button that only shows its intent on hover. */
+.redact-item-undo {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-1);
+  border: none;
+  background: transparent;
+  color: var(--color-text-dim);
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+}
+
+.redact-item-undo:hover {
+  color: var(--color-text);
+  background: var(--color-surface-alt);
+}
+
+.redact-item-undo-icon {
+  width: var(--icon-size-sm);
+  height: var(--icon-size-sm);
+  background-color: currentColor;
+  mask-image: url(icons/arrow-uturn-left.svg);
+  -webkit-mask-image: url(icons/arrow-uturn-left.svg);
+  mask-size: contain;
+  -webkit-mask-size: contain;
+  mask-repeat: no-repeat;
+  -webkit-mask-repeat: no-repeat;
+}
+
+.redact-item-undo-icon--redo {
+  mask-image: url(icons/eye-slash.svg);
+  -webkit-mask-image: url(icons/eye-slash.svg);
 }
 
 .segment-text-editing {

@@ -23,6 +23,7 @@ dependencies = [
     # from the package), so the Screenspace OCR tools depend on it directly.
     "onnxruntime>=1.24",
     "pywebview>=6.2.1",
+    "ai-edge-litert>=2.2.0",
 ]
 
 [project.optional-dependencies]
@@ -59,7 +60,7 @@ py-modules = [
     "screenspace_preview", "screenspace_primitives", "screenspace_scans",
     "screenspace_server", "screenspace_tools", "screenspace_worker", "server",
     "server_utils", "speakers", "spreadsheet", "start_settings", "thinking_agents",
-    "titlecards", "updater",
+    "redact", "titlecards", "updater",
     "transcripts", "transcripts_server", "utils", "video", "viewer",
     "workflows", "workflows_catalog", "workflows_runner", "workflows_server",
 ]

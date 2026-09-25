@@ -4627,6 +4627,24 @@ def _register_settings_routes(combined: Flask) -> None:
             transcripts_server.api_llm_download_status,
             ["GET"],
         ),
+        (
+            "/api/models/redact/download",
+            "combined_redact_download",
+            transcripts_server.api_redact_download,
+            ["POST"],
+        ),
+        (
+            "/api/models/redact/download-status",
+            "combined_redact_download_status",
+            transcripts_server.api_redact_download_status,
+            ["GET"],
+        ),
+        (
+            "/api/models/redact",
+            "combined_redact_delete",
+            transcripts_server.api_redact_delete,
+            ["DELETE"],
+        ),
     ):
         combined.add_url_rule(rule, endpoint, view, methods=methods)
 
@@ -4643,6 +4661,7 @@ def _register_settings_routes(combined: Flask) -> None:
 def api_models() -> Response:
     import hardware
     import llm_client
+    import redact
     import thinking_agents
     import transcripts
 
@@ -4722,6 +4741,15 @@ def api_models() -> Response:
 
     return ok(
         whisper={"models": whisper_models},
+        redact={
+            "installed": redact.is_redact_model_available(),
+            "size_mb": redact.MODEL_SIZE_MB,
+            "tag": redact.MODEL_TAG,
+            "model_url": redact.MODEL_URL,
+            "vendor_url": redact.VENDOR_URL,
+            "license": redact.LICENSE_NAME,
+            "license_url": redact.LICENSE_URL,
+        },
         llm={
             "available": llm_client.is_available(),
             # "not installed" and "not running" need opposite advice; `available`

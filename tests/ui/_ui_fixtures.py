@@ -22,6 +22,7 @@ input dir is cached by both; the ffmpeg encodes are the only slow part.
 """
 
 import json
+import zlib
 import shutil
 import subprocess
 from datetime import UTC, datetime, timedelta
@@ -459,9 +460,36 @@ def _seed_transcripts() -> None:
                             "end": 11.0,
                             "text": "Now the upload seems stuck.",
                         },
+                        # A tagged line so the smoke renders the placeholder chip path.
+                        {
+                            "id": "P01:3",
+                            "start": 11.0,
+                            "end": 14.0,
+                            "text": "Anna said to mail anna@example.se.",
+                            "pii": [
+                                {
+                                    "label": "GIVEN_NAME",
+                                    "start": 0,
+                                    "end": 4,
+                                    "score": 0.99,
+                                    "text": "Anna",
+                                },
+                                {
+                                    "label": "EMAIL",
+                                    "start": 18,
+                                    "end": 33,
+                                    "score": 1.0,
+                                    "text": "anna@example.se",
+                                },
+                            ],
+                            "pii_crc": zlib.crc32(
+                                b"Anna said to mail anna@example.se."
+                            ),
+                        },
                     ],
                     "language": "en",
                     "model": "base",
+                    "redaction": {"enabled": True, "count": 2, "min_score": 0.6},
                 },
                 "P02": {
                     "segments": [

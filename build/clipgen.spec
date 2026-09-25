@@ -8,7 +8,11 @@
 import sys
 from pathlib import Path
 
-from PyInstaller.utils.hooks import collect_data_files, collect_submodules
+from PyInstaller.utils.hooks import (
+    collect_data_files,
+    collect_dynamic_libs,
+    collect_submodules,
+)
 
 
 # Relative paths in a spec are resolved against two *different* bases, which is
@@ -31,6 +35,9 @@ hiddenimports += collect_submodules("webview")
 # the optional engines whose deps we don't ship (torch/paddle/openvino) with a
 # warning; the onnxruntime engine imports cleanly and is what clipgen uses.
 hiddenimports += collect_submodules("rapidocr")
+# redact.py imports the LiteRT interpreter inside a function; the package's
+# pybind extensions and libLiteRt live beside it and need collecting by hand.
+hiddenimports += collect_submodules("ai_edge_litert")
 if sys.platform == "darwin":
     # desktop_chrome.py reaches these through importlib.import_module (a literal
     # `import AppKit` is an unresolved-import error on the Linux typecheck CI),
@@ -144,6 +151,15 @@ if _missing_tools:
         f"{sorted(_missing_tools)}. Run `uv run build/fetch_binaries.py` first."
     )
 binaries = [(str(_vendor_bin / name), "bin") for name in _tool_names]
+# Guarded like the model datas: a wheel that moved its native libs would
+# freeze an app whose Redact pass dies on import.
+_litert_libs = collect_dynamic_libs("ai_edge_litert")
+if not _litert_libs:
+    raise SystemExit(
+        "clipgen.spec: collect_dynamic_libs('ai_edge_litert') found no native "
+        "libraries. The wheel layout changed; frozen redaction would break."
+    )
+binaries += _litert_libs
 # tkinter is intentionally NOT excluded: utils.open_native_folder_picker
 # uses tkinter.filedialog as the non-macOS fallback for the Start overlay's
 # Browse button. Excluding it silently breaks the Browse flow on Windows/Linux

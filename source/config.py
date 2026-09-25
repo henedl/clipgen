@@ -478,6 +478,10 @@ TRANSCRIBE_PREWARM: str = "queue_open"
 TRANSCRIBE_SPEAKERS: bool = False
 TRANSCRIBE_SPEAKER_MAX: int = 4  # cluster cap, 2..8
 SPEAKER_LABEL_MAX_LEN: int = 40  # speaker rename length; mirrored to JS
+# PII redaction: tag names, contacts and ids after transcription (opt-in download).
+TRANSCRIBE_REDACT: bool = False
+TRANSCRIBE_REDACT_MIN_SCORE: float = 0.6  # detector confidence floor, 0.3..0.95
+TRANSCRIBE_REDACT_ORG: bool = False  # also tag organisation names
 # Mark popover categories, {label, color}. "friction" is one bucket; type lives in each label.
 MARK_CATEGORIES: dict[str, dict[str, str]] = {
     "pain_point": {"label": "Pain Point", "color": "#dc2626"},
@@ -665,6 +669,9 @@ SETTINGS_DESCRIPTIONS: dict[str, str] = {
     "TRANSCRIBE_EDGE_SNAP": "Snap segment boundaries to measured speech energy in the decoded audio, trimming silence overshoot at segment edges. Effectively free.",
     "TRANSCRIBE_SPEAKERS": "Detect who is speaking and label each transcript line (Speaker 1, Speaker 2, …). Runs the bundled speaker model after transcription; each participant pill can override this.",
     "TRANSCRIBE_SPEAKER_MAX": "Most speakers to tell apart per session (2–8). The count is detected automatically up to this cap.",
+    "TRANSCRIBE_REDACT": "Find personal data (names, emails, phones, addresses, ids) in transcripts and show placeholders instead. Runs the Redact model after transcription; each participant pill can override this. Needs the model download below.",
+    "TRANSCRIBE_REDACT_MIN_SCORE": "Confidence a detection needs before it is redacted. Lower catches more, with more false positives.",
+    "TRANSCRIBE_REDACT_ORG": "Also redact organisation and company names.",
     "MARK_CATEGORIES": "Categories available when marking transcript segments. Each entry has a label and a color swatch.",
     "HOTKEY_OVERRIDES": "Custom keyboard-shortcut bindings, keyed by action id. Click a shortcut to rebind it; an empty value disables the shortcut.",
     "HIGHLIGHTS_REEL_DURATION_SECONDS": "Maximum duration in seconds for the highlights reel time budget.",
@@ -989,6 +996,24 @@ STUDIO_SETTINGS: dict[str, dict[str, Any]] = {
         "tab": "Transcription",
         "group": "Markers",
         "type": "mark_categories",
+    },
+    "TRANSCRIBE_REDACT": {
+        "tab": "Transcription",
+        "group": "Redaction",
+        "type": "bool",
+    },
+    "TRANSCRIBE_REDACT_MIN_SCORE": {
+        "tab": "Transcription",
+        "group": "Redaction",
+        "type": "float",
+        "min": 0.3,
+        "max": 0.95,
+        "step": 0.05,
+    },
+    "TRANSCRIBE_REDACT_ORG": {
+        "tab": "Transcription",
+        "group": "Redaction",
+        "type": "bool",
     },
     "HOTKEY_OVERRIDES": {
         "tab": "Hotkeys",

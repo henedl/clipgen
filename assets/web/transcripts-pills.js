@@ -35,6 +35,7 @@
     ensureAgentModelInstalled = TS.ensureAgentModelInstalled,
     _confirmUncachedWhisperModels = TS._confirmUncachedWhisperModels,
     _isSpeakerTask = TS._isSpeakerTask,
+    _isRedactTask = TS._isRedactTask,
     speakersEnabledFor = TS.speakersEnabledFor, // speakers satellite (loads before this one)
     setSpeakersEnabled = TS.setSpeakersEnabled,
     regenerateSpeakers = TS.regenerateSpeakers,
@@ -78,11 +79,11 @@
     return "idle";
   }
 
-  // Latest task per participant, bucketed: tx (transcription) and spk (speakers).
+  // Latest task per participant, bucketed: tx (transcription), spk (speakers), red (redact).
   function _indexTasks() {
-    var idx = { tx: {}, spk: {} };
+    var idx = { tx: {}, spk: {}, red: {} };
     state.tasks.forEach(function (t) {
-      var bucket = _isSpeakerTask(t) ? idx.spk : idx.tx;
+      var bucket = _isSpeakerTask(t) ? idx.spk : (_isRedactTask(t) ? idx.red : idx.tx);
       if (!bucket[t.participant] || t.created_at > bucket[t.participant].created_at) {
         bucket[t.participant] = t;
       }
@@ -92,12 +93,13 @@
 
   function _agentsAttr(s) {
     return s.agents.transcription + "," + s.agents.summary + "," + s.agents.citations + "," +
-      s.agents.friction + "," + s.agents.speakers;
+      s.agents.friction + "," + s.agents.speakers + "," + s.agents.redact;
   }
 
   function pillState(p, idx) {
     var task = idx.tx[p.id];
     var spkTask = idx.spk[p.id];
+    var redTask = idx.red[p.id];
     var status = "idle";
     var progress = 0;
     var taskId = null;
@@ -138,12 +140,27 @@
     } else if (p.speakers && p.speakers.count > 0) {
       spkStatus = "done";
     }
+    var redStatus = "idle";
+    var redProgress = 0;
+    var redError = (p.redaction && p.redaction.error) || null;
+    if (redTask && (redTask.status === "running" || redTask.status === "queued")) {
+      redStatus = redTask.status;
+      if (redTask.status === "running") redProgress = Math.round((redTask.progress || 0) * 100);
+    } else if (redTask && redTask.status === "failed") {
+      redStatus = "failed";
+      redError = redTask.error || redError;
+    } else if (redError) {
+      redStatus = "failed";
+    } else if (p.redaction && p.redaction.detected) {
+      redStatus = "done";
+    }
     var agents = {
       transcription: _dotStateTranscription(p, task),
       summary: (p.agents && p.agents.summary) || "idle",
       citations: (p.agents && p.agents.citations) || "idle",
       friction: (p.agents && p.agents.friction) || "idle",
       speakers: spkStatus,
+      redact: redStatus,
     };
     return {
       status: status,
@@ -153,6 +170,7 @@
       // Running sub-state ("loading_model" / "transcribing") for the dot tooltip.
       phase: task ? task.phase : null,
       speakers: { status: spkStatus, taskId: spkTask ? spkTask.id : null, progress: spkProgress, error: spkError },
+      redaction: { status: redStatus, taskId: redTask ? redTask.id : null, progress: redProgress, error: redError },
     };
   }
 
@@ -187,6 +205,7 @@
             existing[k].getAttribute("data-agents") !== _agentsAttr(s0) ||
             // A speaker pass starting or finishing must rebuild the badge and fill.
             existing[k].getAttribute("data-speakers") !== s0.speakers.status ||
+            existing[k].getAttribute("data-redaction") !== s0.redaction.status ||
             // Phase feeds the dot tooltip closure; a flip must rebuild.
             existing[k].getAttribute("data-phase") !== (s0.phase || "") ||
             existing[k].getAttribute("data-offsheet") !== offSheetFlag(p0) ||
@@ -304,6 +323,7 @@
     wrap.setAttribute("data-active", isActive ? "1" : "0");
     wrap.setAttribute("data-agents", _agentsAttr(s));
     wrap.setAttribute("data-speakers", s.speakers.status);
+    wrap.setAttribute("data-redaction", s.redaction.status);
     wrap.setAttribute("data-phase", s.phase || "");
     wrap.setAttribute("data-offsheet", offSheetFlag(p));
     wrap.setAttribute("data-stale", p.has_stale_artifacts ? "1" : "0");
