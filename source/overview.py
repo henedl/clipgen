@@ -94,4 +94,4 @@ def api_convergence_offsets_put():
     return ok(offsets=cleaned)
 
 
-server_utils.register_static_routes(overview_bp, "overview.html", icons=True)
+server_utils.register_static_routes(overview_bp, "overview.html")

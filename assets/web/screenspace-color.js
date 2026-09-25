@@ -3,9 +3,8 @@
  * The HSV color target picker (preview swatch, hue/sat palette, brightness
  * strip, "from region" sampler). Carved out of screenspace.js to shrink the
  * page script; loaded after it. Reads hub state + helpers via
- * window.ClipgenScreenspace and registers its render functions as SS.*; the
- * hub keeps thin same-named delegators so existing call sites (and the
- * sampleColorFromRegion click handler) are unchanged. Bodies moved verbatim.
+ * window.ClipgenScreenspace and registers its render functions as SS.*.
+ * Other satellites call them through SS. Bodies moved verbatim.
  */
 (function () {
   "use strict";

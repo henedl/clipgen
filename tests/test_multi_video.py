@@ -12,6 +12,7 @@ import files
 import pipeline
 import transcripts
 import utils
+import viewer
 import video
 from utils import ClipRecord
 
@@ -267,8 +268,8 @@ def test_single_video_cut_unchanged_and_no_mapping(monkeypatch, make_clip):
     assert generated == 1
     _, kwargs = run_ffmpeg.call_args
     assert kwargs["input_file"] == "study_P01.mp4"
-    assert kwargs["start_pos"] == "2:04"
-    assert kwargs["end_pos"] == "2:10"
+    assert kwargs["start_pos"] == "0:02:04"
+    assert kwargs["end_pos"] == "0:02:10"
 
 
 def test_multi_video_clip_maps_into_second_video(monkeypatch, make_clip):
@@ -395,7 +396,7 @@ def test_multi_video_gif_duration_clamped_to_segment_end(monkeypatch, make_clip)
 def test_artifact_record_single_video_local_equals_global(make_clip):
     clip = cast(ClipRecord, dict(make_clip()))
     clip["cell_annotations"] = []
-    record = utils.build_artifact_record(
+    record = viewer.build_artifact_record(
         clip,
         "study_P01.mp4",
         "out.mp4",
@@ -413,7 +414,7 @@ def test_artifact_record_single_video_local_equals_global(make_clip):
 def test_artifact_record_multi_video_maps_local(make_clip):
     clip = _multi_clip(make_clip, [("2:04", "2:10")])
     clip["cell_annotations"] = []
-    record = utils.build_artifact_record(
+    record = viewer.build_artifact_record(
         clip,
         "video1.mp4",
         "out.mp4",
@@ -431,7 +432,7 @@ def test_artifact_record_multi_video_maps_local(make_clip):
 def test_artifact_record_boundary_clip_has_parts(make_clip):
     clip = _multi_clip(make_clip, [("1:00", "1:30")])
     clip["cell_annotations"] = []
-    record = utils.build_artifact_record(
+    record = viewer.build_artifact_record(
         clip,
         "video1.mp4",
         "out.mp4",
@@ -453,7 +454,7 @@ def test_artifact_record_screenshot_never_splits(make_clip):
     # frame must map by start only — never split.
     clip = _multi_clip(make_clip, [("1:00", "1:30")])
     clip["cell_annotations"] = []
-    record = utils.build_artifact_record(
+    record = viewer.build_artifact_record(
         clip,
         "video1.mp4",
         "out.png",
@@ -473,7 +474,7 @@ def test_artifact_record_full_path_base_video_normalized_to_basename(make_clip):
     # manifests share one shape. Regression for the path-shape alignment fix.
     clip = cast(ClipRecord, dict(make_clip()))
     clip["cell_annotations"] = []
-    record = utils.build_artifact_record(
+    record = viewer.build_artifact_record(
         clip,
         "/srv/input/study_P01.mp4",
         "out.mp4",
@@ -496,7 +497,7 @@ def test_artifact_record_full_path_timeline_normalized_to_basenames(make_clip):
         ("/srv/input/video1.mp4", 80, 0),
         ("/srv/input/video2.mp4", 120, 80),
     ]
-    record = utils.build_artifact_record(
+    record = viewer.build_artifact_record(
         clip,
         "/srv/input/video1.mp4",
         "out.mp4",
@@ -563,8 +564,8 @@ def test_regenerate_single_artifact_uses_local_times(monkeypatch, tmp_path):
     assert pipeline._regenerate_single_artifact(artifact, set()) is True
     _, kwargs = run_ffmpeg.call_args
     assert kwargs["input_file"] == str(tmp_path / "video2.mp4")
-    assert kwargs["start_pos"] == "0:44"  # local, not global
-    assert kwargs["end_pos"] == "0:50"
+    assert kwargs["start_pos"] == "0:00:44"  # local, not global
+    assert kwargs["end_pos"] == "0:00:50"
 
 
 # ---- Transcribe all parts (merged global timeline) ----
@@ -837,7 +838,7 @@ def test_discover_participant_videos_groups_numbered_parts(monkeypatch, tmp_path
     monkeypatch.setattr(config, "INPUT_DIR", str(tmp_path), raising=False)
     (tmp_path / "study_P01-1.mp4").write_text("v1")
     (tmp_path / "study_P01-2.mp4").write_text("v2")
-    found = utils.discover_participant_videos("study")
+    found = utils.discover_participant_videos()
     # Regression: numbered parts must group under base id P01, never "P01-1".
     ids = [p["id"] for p in found]
     assert ids == ["P01"]
@@ -852,7 +853,7 @@ def test_discover_participant_videos_plain_wins(monkeypatch, tmp_path):
     monkeypatch.setattr(config, "INPUT_DIR", str(tmp_path), raising=False)
     (tmp_path / "study_P01.mp4").write_text("v")
     (tmp_path / "study_P01-1.mp4").write_text("v1")
-    found = utils.discover_participant_videos("study")
+    found = utils.discover_participant_videos()
     assert len(found) == 1
     assert [_basename(p) for p in found[0]["video_paths"]] == ["study_P01.mp4"]
 
@@ -862,7 +863,7 @@ def test_discover_participant_videos_skips_non_contiguous(monkeypatch, tmp_path)
     (tmp_path / "study_P01-1.mp4").write_text("v1")
     (tmp_path / "study_P01-3.mp4").write_text("v3")  # gap → skipped
     (tmp_path / "study_P02.mp4").write_text("v")  # normal participant kept
-    ids = [p["id"] for p in utils.discover_participant_videos("study")]
+    ids = [p["id"] for p in utils.discover_participant_videos()]
     assert ids == ["P02"]
 
 
@@ -870,18 +871,6 @@ def _basename(path_str):
     from pathlib import Path
 
     return Path(path_str).name
-
-
-def test_participant_id_from_source_name():
-    assert utils.participant_id_from_source_name("study_P01.mp4") == "P01"
-    assert utils.participant_id_from_source_name("study_P01-2.mp4") == "P01"
-    assert utils.participant_id_from_source_name("my-study_G02-10.mp4") == "G02"
-    assert utils.participant_id_from_source_name("random.mp4") is None
-    # A Finder/Explorer duplicate ("… copy.mp4") yields a whitespace id, which is
-    # never a real participant — reject it so it can't become a phantom
-    # participant or auto-launch a watch-dir-triggered run for a bogus id.
-    assert utils.participant_id_from_source_name("study_P03 copy.mp4") is None
-    assert utils.participant_id_from_source_name("study_P03 copy 2.mp4") is None
 
 
 def test_parse_source_video_name():
@@ -902,6 +891,7 @@ def test_parse_source_video_name():
     assert utils.parse_source_video_name("_P01.mp4") == ("", "P01", None)
     assert utils.parse_source_video_name("random.mp4") is None
     assert utils.parse_source_video_name("study_P03 copy.mp4") is None
+    assert utils.parse_source_video_name("study_P03 copy 2.mp4") is None
     # A lowercase prefix groups under the configured casing.
     assert utils.parse_source_video_name("study_p01.mp4") == ("study", "P01", None)
 

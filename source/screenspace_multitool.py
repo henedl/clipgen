@@ -17,7 +17,8 @@ from screenspace_tools import (
     check_frame_for_tool,
     score_frame_for_tool,
 )
-from screenspace_frames import _probe_video_meta, scan_video_full_frames
+from screenspace_frames import _resolve_scan_window, scan_video_full_frames
+from screenspace_scans import _progress_fn
 
 
 def _multitool_has_offset(steps: list[dict[str, Any]]) -> bool:
@@ -28,6 +29,11 @@ def _multitool_has_offset(steps: list[dict[str, Any]]) -> bool:
     this to decide whether a paused task must restart from scratch.
     """
     return any(isinstance(s.get("offset"), dict) for s in steps[1:])
+
+
+def _step_logic(steps: list[dict[str, Any]], i: int) -> str:
+    """Step *i*'s chain logic; the first step is always AND."""
+    return (steps[i].get("logic") or "AND").upper() if i > 0 else "AND"
 
 
 def scan_multitool(
@@ -74,13 +80,10 @@ def scan_multitool(
         if s_end is not None:
             scan_end = min(scan_end, s_end) if scan_end is not None else s_end
 
-    vid_fps, vid_duration = _probe_video_meta(video_path)
-    if vid_fps <= 0:
+    window = _resolve_scan_window(video_path, scan_start, scan_end)
+    if window is None:
         return []
-
-    if scan_end is None or scan_end > vid_duration:
-        scan_end = vid_duration
-    total_range = scan_end - scan_start
+    _, vid_duration, scan_end, total_range = window
 
     # Direct callers (MultitoolTool.scan, Workflows ss_scan) bypass the route's
     # _coerce_offset check.
@@ -176,6 +179,8 @@ def scan_multitool(
             on_progress(1.0)
         return emitted
 
+    report = _progress_fn(on_progress, scan_start, total_range)
+
     def _cb(ts: float, frame: np.ndarray) -> bool | None:
         if _cancel():
             return False
@@ -193,7 +198,7 @@ def scan_multitool(
                 cache,
                 prev_cache[0],
             )
-            logic = (step.get("logic") or "AND").upper() if i > 0 else "AND"
+            logic = _step_logic(steps, i)
             if logic == "NOT":
                 if passed:
                     chain_ok = False
@@ -211,8 +216,7 @@ def scan_multitool(
         if chain_ok and len(step_results) == len(steps):
             confidences = []
             for i, sr in enumerate(step_results):
-                logic = (steps[i].get("logic") or "AND").upper() if i > 0 else "AND"
-                if logic == "NOT":
+                if _step_logic(steps, i) == "NOT":
                     continue
                 confidences.append(_extract_confidence(steps[i]["type"], sr))
             rd = {
@@ -225,8 +229,7 @@ def scan_multitool(
             if on_result:
                 on_result(rd)
 
-        if on_progress and total_range > 0:
-            on_progress((ts - scan_start) / total_range)
+        report(ts)
         return None
 
     scan_video_full_frames(
@@ -277,9 +280,7 @@ def _join_multitool_offsets(
     n = len(steps)
     eps = 1e-6
     ts_to_idx = {ts: idx for idx, ts in enumerate(ts_list)}
-    logics = [
-        (steps[i].get("logic") or "AND").upper() if i > 0 else "AND" for i in range(n)
-    ]
+    logics = [_step_logic(steps, i) for i in range(n)]
     offsets: list[dict[str, Any] | None] = [
         steps[i].get("offset") if i > 0 else None for i in range(n)
     ]
@@ -413,7 +414,7 @@ def score_multitool_frame(
         res = score_frame_for_tool(
             step["type"], frame, prev_frame, region, step, ocr_reader=ocr_reader
         )
-        logic = (step.get("logic") or "AND").upper() if i > 0 else "AND"
+        logic = _step_logic(steps, i)
         entry = dict(res)
         entry["type"] = step["type"]
         entry["logic"] = logic

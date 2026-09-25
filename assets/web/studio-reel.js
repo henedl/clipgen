@@ -24,9 +24,9 @@
     isAnyStudioJobRunning = STUDIO.isAnyStudioJobRunning,
     isIntakeSource = STUDIO.isIntakeSource,
     pathBasename = STUDIO.pathBasename,
+    readTitlecardControls = STUDIO.readTitlecardControls,
     renderReelQueue = STUDIO.renderReelQueue,
     revealStatusOverlay = STUDIO.revealStatusOverlay,
-    setButtonProgress = STUDIO.setButtonProgress,
     setCardQueued = STUDIO.setCardQueued,
     setCardResult = STUDIO.setCardResult,
     setReelGenerating = STUDIO.setReelGenerating,
@@ -36,7 +36,9 @@
     showOverlay = STUDIO.showOverlay,
     showResult = STUDIO.showResult,
     stampLog = STUDIO.stampLog,
-    updateSingleCellClass = STUDIO.updateSingleCellClass;
+    updateSingleCellClass = STUDIO.updateSingleCellClass,
+    requestFailReason = STUDIO.requestFailReason;
+  var setButtonProgress = ClipgenPrimitives.setButtonProgress;
 
 
   function onBuildReel() {
@@ -85,10 +87,7 @@
       endpoint = "api/reel";
     }
 
-    var tcCb = qs("#titlecardEnabled");
-    var tcDur = qs("#titlecardDuration");
-    if (tcCb) reelBody.titlecards_enabled = tcCb.checked;
-    if (tcDur) reelBody.titlecard_duration = parseInt(tcDur.value, 10) || 2;
+    Object.assign(reelBody, readTitlecardControls());
 
     var list = qs("#reelList");
     var reelCards = list.querySelectorAll(".queue-card");
@@ -172,19 +171,7 @@
     apiPostNDJSON(endpoint, reelBody, { onLine: handleLine })
       .then(finish)
       .catch(function (err) {
-        // 4xx/5xx (e.g. 409 in-progress) arrive as JSON in err.bodyText; parse into the payload.
-        if (err && err.status >= 400) {
-          try {
-            finalPayload = JSON.parse(err.bodyText);
-          } catch (_) {
-            finalPayload = {
-              ok: false,
-              error: err.bodyText || ("HTTP " + err.status),
-            };
-          }
-        } else {
-          finalPayload = { ok: false, error: "Request failed: " + err };
-        }
+        finalPayload = { ok: false, error: requestFailReason(err) };
         finish();
       });
   }
@@ -195,23 +182,42 @@
 
     showBuildStatus("Building timeline viewer…", null);
 
-    apiPost("api/viewer", {})
+    runOverlayBuild({
+      url: "api/viewer",
+      body: {},
+      subtype: "viewer",
+      description: "Timeline viewer",
+      okMsg: function (data) { return "Viewer created: " + (data.file || ""); },
+      failMsg: "Viewer build failed",
+    });
+  }
+
+  // POSTs a viewer build and logs its file; cancelKey names the user-cancel flag.
+  function runOverlayBuild(opts) {
+    function wasCancelled(data) {
+      if (!opts.cancelKey || !((data && data.cancelled) || state[opts.cancelKey])) return false;
+      state[opts.cancelKey] = false;
+      hideBuildStatus();
+      showToast("Build cancelled");
+      return true;
+    }
+    apiPost(opts.url, opts.body)
       .then(function (data) {
         state.overlayJobRunning = false;
+        if (wasCancelled(data)) return;
         if (data.ok) {
-          state.generatedViewers.push(stampLog({
-            type: "viewer",
-            subtype: "viewer",
-            file: pathBasename(data.file),
-            description: "Timeline viewer",
-          }));
-          showBuildResult("Viewer created: " + (data.file || ""), null, data.file);
+          var entry = { type: "viewer", subtype: opts.subtype, file: pathBasename(data.file) };
+          if (opts.participant) entry.participant = opts.participant;
+          entry.description = opts.description;
+          state.generatedViewers.push(stampLog(entry));
+          showBuildResult(opts.okMsg(data), null, data.file);
         } else {
-          showBuildResult(null, data.error || "Viewer build failed");
+          showBuildResult(null, data.error || opts.failMsg);
         }
       })
       .catch(function (err) {
         state.overlayJobRunning = false;
+        if (wasCancelled(null)) return;
         showBuildResult(null, "Request failed: " + err);
       });
   }
@@ -228,10 +234,10 @@
 
     var parts = [];
     if (ssCount > 0) {
-      parts.push(ssCount + " Screenspace event group" + (ssCount === 1 ? "" : "s"));
+      parts.push(clipgenPluralUnit(ssCount, "Screenspace event group", "Screenspace event groups"));
     }
     if (trCount > 0) {
-      parts.push(trCount + " Transcript mark group" + (trCount === 1 ? "" : "s"));
+      parts.push(clipgenPluralUnit(trCount, "Transcript mark group", "Transcript mark groups"));
     }
     var msg = parts.join(" and ") + " detected. Include them as clips in the timeline viewer?";
 
@@ -285,41 +291,21 @@
       showBuildStatus("Building timeline viewer\u2026", onCancelTimelineViewer);
     }
 
-    apiPost("api/timeline-viewer", body)
-      .then(function (data) {
-        state.overlayJobRunning = false;
-        if (data.cancelled || state.timelineViewerCancelledByUser) {
-          state.timelineViewerCancelledByUser = false;
-          hideBuildStatus();
-          showToast("Build cancelled");
-          return;
+    runOverlayBuild({
+      url: "api/timeline-viewer",
+      body: body,
+      cancelKey: "timelineViewerCancelledByUser",
+      subtype: "timeline-viewer",
+      description: "Timeline viewer (full sheet)",
+      okMsg: function (data) {
+        var msg = "Timeline viewer created: " + (data.file || "");
+        if (data.generated) {
+          msg = "Generated " + clipgenPluralUnit(data.generated, "clip", "clips") + ". " + msg;
         }
-        if (data.ok) {
-          state.generatedViewers.push(stampLog({
-            type: "viewer",
-            subtype: "timeline-viewer",
-            file: pathBasename(data.file),
-            description: "Timeline viewer (full sheet)",
-          }));
-          var msg = "Timeline viewer created: " + (data.file || "");
-          if (data.generated) {
-            msg = "Generated " + clipgenPluralUnit(data.generated, "clip", "clips") + ". " + msg;
-          }
-          showBuildResult(msg, null, data.file);
-        } else {
-          showBuildResult(null, data.error || "Timeline viewer build failed");
-        }
-      })
-      .catch(function (err) {
-        state.overlayJobRunning = false;
-        if (state.timelineViewerCancelledByUser) {
-          state.timelineViewerCancelledByUser = false;
-          hideBuildStatus();
-          showToast("Build cancelled");
-          return;
-        }
-        showBuildResult(null, "Request failed: " + err);
-      });
+        return msg;
+      },
+      failMsg: "Timeline viewer build failed",
+    });
   }
 
   function onCancelTimelineViewer() {
@@ -464,38 +450,16 @@
       onCancelGallery
     );
 
-    apiPost("api/gallery", { participant: participant, format: format, interval: interval, bundle: bundle })
-      .then(function (data) {
-        state.overlayJobRunning = false;
-        if (data.cancelled || state.galleryCancelledByUser) {
-          state.galleryCancelledByUser = false;
-          hideBuildStatus();
-          showToast("Build cancelled");
-          return;
-        }
-        if (data.ok) {
-          state.generatedViewers.push(stampLog({
-            type: "viewer",
-            subtype: "gallery",
-            file: pathBasename(data.file),
-            participant: participant,
-            description: "Gallery viewer (" + format + ", " + interval + "s)",
-          }));
-          showBuildResult("Gallery viewer created: " + (data.file || ""), null, data.file);
-        } else {
-          showBuildResult(null, data.error || "Gallery build failed");
-        }
-      })
-      .catch(function (err) {
-        state.overlayJobRunning = false;
-        if (state.galleryCancelledByUser) {
-          state.galleryCancelledByUser = false;
-          hideBuildStatus();
-          showToast("Build cancelled");
-          return;
-        }
-        showBuildResult(null, "Request failed: " + err);
-      });
+    runOverlayBuild({
+      url: "api/gallery",
+      body: { participant: participant, format: format, interval: interval, bundle: bundle },
+      cancelKey: "galleryCancelledByUser",
+      subtype: "gallery",
+      participant: participant,
+      description: "Gallery viewer (" + format + ", " + interval + "s)",
+      okMsg: function (data) { return "Gallery viewer created: " + (data.file || ""); },
+      failMsg: "Gallery build failed",
+    });
   }
 
   function onCancelGallery() {

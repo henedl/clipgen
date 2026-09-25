@@ -11,7 +11,7 @@
  * tests/test_hotkeys_frontend_source.py's registered-id scan.
  *
  * Exposes exactly one global:
- *   window.ClipgenCommandPalette = { register, setParticipants, open, close, toggle,
+ *   window.ClipgenCommandPalette = { register, setParticipants, open, toggle,
  *                                    buttonCommand, selectorCommand, participantJumps }
  *
  * register(sourceId, providerOrArray) — pages contribute commands. A provider
@@ -701,7 +701,6 @@
     register: register,
     setParticipants: setParticipants,
     open: open,
-    close: close,
     toggle: toggle,
     buttonCommand: buttonCommand,
     selectorCommand: selectorCommand,

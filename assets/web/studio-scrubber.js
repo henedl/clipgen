@@ -97,8 +97,6 @@
           interval: dur / frameCount,
         },
         audioUrl: audioUrl,
-        audioFile: audioUrl, // cache key
-        audioBaseUrl: "",
       });
       // Hover jumps the prefetch queue; the queue still warms it.
       thumb.addEventListener("mouseenter", function () { loadCardSprite(thumb); });

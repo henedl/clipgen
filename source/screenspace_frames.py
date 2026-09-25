@@ -10,14 +10,13 @@ from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
-import cv2
 import numpy as np
 
 import config
 import profiling
 import utils
 import video
-from screenspace_primitives import PHash, ScanCallback, compute_phash
+from screenspace_primitives import PHash, ScanCallback, compute_phash, fit_within
 
 # Long-GOP codecs where keyframe-only decode pays off; intra-only formats gain nothing.
 _NONKEY_SKIP_CODECS = frozenset({"h264", "hevc"})
@@ -51,7 +50,6 @@ def scan_video_frames(
     process attributes ``scan.callback.<kind>`` instead of lumping every
     analysis into one ``scan.callback`` bucket. Decode/filter stay shared.
     """
-    full_frame = region is None
     # Zero-size regions make ffmpeg emit empty frames that crash cv2 downstream.
     if region is not None and (region.get("w", 0) <= 0 or region.get("h", 0) <= 0):
         utils.warning_print(
@@ -63,14 +61,13 @@ def scan_video_frames(
 
     if not _scan_via_ffmpeg_pipe(
         video_path,
-        None if full_frame else region,
+        region,
         interval_seconds,
         callback,
         start_seconds=start_seconds,
         end_seconds=end_seconds if end_seconds is not None else 0.0,
         duration=duration,
         fast_opts=fast_opts,
-        full_frame=full_frame,
         cv_scale=cv_scale,
         profile_kind=profile_kind,
     ):
@@ -258,8 +255,7 @@ def _ffmpeg_pipe_frames(
             yield (actual_ts, frame)
     finally:
         stop_drain.set()
-        if proc.stdout:
-            proc.stdout.close()
+        proc.stdout.close()
         utils.terminate_subprocess(proc)
         drain_thread.join(timeout=1.0)
 
@@ -274,7 +270,6 @@ def _scan_via_ffmpeg_pipe(
     end_seconds: float = 0.0,
     duration: float = 0.0,
     fast_opts: dict[str, Any] | None = None,
-    full_frame: bool = False,
     cv_scale: float = 1.0,
     profile_kind: str = "",
 ) -> bool:
@@ -305,9 +300,8 @@ def _scan_via_ffmpeg_pipe(
     _phash_thresh = (fast_opts or {}).get(
         "phash_threshold", config.SCREENSPACE_FAST_SCAN_PHASH_THRESHOLD
     )
-    _prev_phash: list[PHash | None] = [None]
+    prev_phash: PHash | None = None
 
-    pipe_region = None if full_frame else region
     # Hashing needs the un-downscaled frame, so phash_skip downscales in Python.
     pipe_max_dim = _max_dim if (not _phash_skip and _max_dim > 0) else 0
 
@@ -346,7 +340,7 @@ def _scan_via_ffmpeg_pipe(
             select_interval,
             start_seconds=start_seconds,
             end_seconds=end_seconds,
-            region=pipe_region,
+            region=region,
             frame_width=frame_width,
             frame_height=frame_height,
             max_dim=pipe_max_dim,
@@ -358,22 +352,15 @@ def _scan_via_ffmpeg_pipe(
                 _decode_s += _t_dec - _t_last
             if _phash_skip:
                 fh = compute_phash(frame)
-                if _prev_phash[0] is not None and fh - _prev_phash[0] <= _phash_thresh:
+                if prev_phash is not None and fh - prev_phash <= _phash_thresh:
                     if _prof:
                         _t_last = time.perf_counter()
                         _filter_s += _t_last - _t_dec
                         _n_skipped += 1
                     continue
-                _prev_phash[0] = fh
+                prev_phash = fh
                 if _max_dim > 0:
-                    rh, rw = frame.shape[:2]
-                    if rh > _max_dim or rw > _max_dim:
-                        sc = _max_dim / max(rh, rw)
-                        frame = cv2.resize(
-                            frame,
-                            (int(rw * sc), int(rh * sc)),
-                            interpolation=cv2.INTER_AREA,
-                        )
+                    frame = fit_within(frame, _max_dim)
 
             if _prof:
                 _t_cb = time.perf_counter()
@@ -487,8 +474,3 @@ def _resolve_scan_window(
         end_seconds = vid_duration
     total_range = end_seconds - start_seconds
     return vid_fps, vid_duration, end_seconds, total_range
-
-
-# ---------------------------------------------------------------------------
-# Analysis workflows
-# ---------------------------------------------------------------------------

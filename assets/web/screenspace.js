@@ -26,15 +26,19 @@
 
   var TASK_COLORS = DETECTOR_COLORS;
 
-  var SS_TASK_ICON_TYPES = {
-    multitool: 1, color: 1, change: 1, similarity: 1, text: 1,
-    numbers: 1, template: 1, shape: 1, flow: 1, scene: 1, inactivity: 1,
-    boundary: 1, attention: 1, timelapse: 1,
+  // Heroicon basename per tool; mirrors .ss-task-icon--<type> in screenspace.css.
+  var TOOL_ICON_NAMES = {
+    multitool: "wrench-screwdriver", color: "eye-dropper", change: "bolt",
+    similarity: "photo", text: "language", numbers: "hashtag",
+    template: "viewfinder-circle", shape: "star", flow: "arrows-right-left",
+    scene: "squares-2x2",
+    inactivity: "pause-circle", boundary: "flag", timelapse: "forward",
+    attention: "eye",
   };
 
   // Task-type icon span via mask-image; see .ss-task-icon in screenspace.css.
   function buildTypeIcon(type) {
-    if (!SS_TASK_ICON_TYPES[type]) return null;
+    if (!TOOL_ICON_NAMES[type]) return null;
     var span = document.createElement("span");
     span.className = "ss-task-icon ss-task-icon--" + type;
     return span;
@@ -43,10 +47,7 @@
   // Mask-image icon span; `name` is an assets/icons basename, `sizeClass` an .ss-icon
   // modifier.
   function iconSpan(name, sizeClass) {
-    return iconMaskSpan(name, {
-      className: "ss-icon" + (sizeClass ? " " + sizeClass : ""),
-      basePath: "/screenspace/icons/",
-    });
+    return iconMaskSpan(name, { className: "ss-icon" + (sizeClass ? " " + sizeClass : "") });
   }
 
   // OCR normalize direction; folds confusable glyphs before fuzzy compare (see
@@ -67,7 +68,6 @@
       value: _normalizeMode(mode),
       options: NORMALIZE_MODES,
       size: small ? "sm" : null,
-      basePath: "/screenspace/icons/",
     });
   }
 
@@ -107,7 +107,6 @@
       value: _colorMode(mode),
       options: COLOR_MODES,
       size: small ? "sm" : null,
-      basePath: "/screenspace/icons/",
       onChange: onChange,
     });
   }
@@ -116,7 +115,7 @@
 
   var REGION_COLOR_COUNT = 8;
 
-  // Re-reads each call so dev-token-tweak widget overrides take effect live.
+  // Reads the panel height token, falling back to 400px.
   function bottomPanelHeightFromToken() {
     var v = getComputedStyle(document.documentElement)
       .getPropertyValue("--bottom-panel-height")
@@ -469,10 +468,8 @@
 
     state.participants.forEach(function (p) {
       var lbl = document.createElement("label");
-      var cb = document.createElement("input");
-      cb.type = "checkbox";
+      var cb = checkboxInput(null, state.runParticipants.indexOf(p.id) >= 0);
       cb.value = p.id;
-      cb.checked = state.runParticipants.indexOf(p.id) >= 0;
       cb.addEventListener("change", function () {
         if (cb.checked) {
           if (state.runParticipants.indexOf(p.id) < 0) state.runParticipants.push(p.id);
@@ -488,12 +485,7 @@
       panel.appendChild(lbl);
     });
 
-    btn.addEventListener("click", function (e) {
-      e.stopPropagation();
-      var open = !panel.classList.contains("hidden");
-      panel.classList.toggle("hidden", open);
-      btn.classList.toggle("open", !open);
-    });
+    bindPickerToggle(btn, panel);
 
     wrap.appendChild(btn);
     wrap.appendChild(panel);
@@ -501,14 +493,28 @@
 
   function updatePickerBtnText(btn) {
     var n = state.runParticipants.length;
-    var text = n === 0 ? "No participants"
+    setPickerBtnText(btn, n === 0 ? "No participants"
       : n === 1 ? state.runParticipants[0]
-      : n + " participants";
+      : n + " participants");
+  }
+
+  // Picker button face: optional leading icon, label, chevron.
+  function setPickerBtnText(btn, text, lead) {
     btn.innerHTML = "";
+    if (lead) btn.appendChild(lead);
     btn.appendChild(el("span", "run-picker-btn-text", text));
     var chevron = el("span", "chevron");
     chevron.appendChild(iconSpan("chevron-down", "ss-icon--xs"));
     btn.appendChild(chevron);
+  }
+
+  function bindPickerToggle(btn, panel) {
+    btn.addEventListener("click", function (e) {
+      e.stopPropagation();
+      var open = !panel.classList.contains("hidden");
+      panel.classList.toggle("hidden", open);
+      btn.classList.toggle("open", !open);
+    });
   }
 
   function closeRunPicker() {
@@ -541,6 +547,13 @@
     return !!ref && ref.source === "full_frame";
   }
 
+  function findStash(id) {
+    for (var i = 0; i < state.stashes.length; i++) {
+      if (state.stashes[i].id === id) return state.stashes[i];
+    }
+    return null;
+  }
+
   function normalizeRegionRef(ref) {
     if (!ref) return null;
     if (typeof ref === "string") {
@@ -551,12 +564,8 @@
     if (ref.source === "stash") {
       var stashName = ref.stash_name;
       if (!stashName) {
-        for (var i = 0; i < state.stashes.length; i++) {
-          if (state.stashes[i].id === ref.stash_id) {
-            stashName = state.stashes[i].name;
-            break;
-          }
-        }
+        var stash = findStash(ref.stash_id);
+        if (stash) stashName = stash.name;
       }
       return {
         source: "stash",
@@ -623,9 +632,7 @@
   }
 
   function buildFullFrameIcon() {
-    var icon = el("span", "run-picker-fullframe-icon");
-    applyIconMask(icon, "arrows-pointing-out", "/screenspace/icons/");
-    return icon;
+    return iconMaskSpan("arrows-pointing-out", { className: "run-picker-fullframe-icon" });
   }
 
   function availableRegionRefByKey(key) {
@@ -672,32 +679,46 @@
 
     var panel = el("div", "run-picker-panel hidden");
 
-    // Full-frame entry first; its separator hairline only shows when rows follow.
-    var hasFollowingRows = names.length > 0 || state.stashes.some(function (stash) {
-      return Object.keys(stash.regions).length > 0;
-    });
-    var fullFrameRef = fullFrameRegionRef();
-    var fullFrameLbl = document.createElement("label");
-    fullFrameLbl.className = "run-picker-fullframe" + (hasFollowingRows ? " has-following" : "");
-    var fullFrameCb = document.createElement("input");
-    fullFrameCb.type = "checkbox";
-    fullFrameCb.value = regionRefKey(fullFrameRef);
-    fullFrameCb.checked = hasRunRegion(fullFrameRef);
-    fullFrameCb.addEventListener("change", function () {
-      if (fullFrameCb.checked) {
-        addRunRegion(fullFrameRef);
-      } else {
-        removeRunRegion(fullFrameRef);
-      }
+    function afterRegionToggle() {
       updateRegionPickerBtnText(btn);
       updateRunButton();
       refreshModelView({ debounce: true });
       refreshCalibration({ debounce: true });
+    }
+
+    // Checkbox + lead (icon or color dot) + name; onToggle runs before the shared refresh.
+    function buildRegionRow(ref, cls, lead, text, onToggle) {
+      var lbl = el("label", cls);
+      var cb = checkboxInput(null, hasRunRegion(ref));
+      cb.value = regionRefKey(ref);
+      cb.addEventListener("change", function () {
+        if (cb.checked) addRunRegion(ref);
+        else removeRunRegion(ref);
+        if (onToggle) onToggle();
+        afterRegionToggle();
+      });
+      lbl.appendChild(cb);
+      lbl.appendChild(lead);
+      lbl.appendChild(el("span", "run-picker-label-text", text));
+      return lbl;
+    }
+
+    function regionDot(idx) {
+      var dot = el("span", "region-chip-dot");
+      dot.style.background = regionColorForIndex(idx);
+      return dot;
+    }
+
+    // Full-frame entry first; its separator hairline only shows when rows follow.
+    var hasFollowingRows = names.length > 0 || state.stashes.some(function (stash) {
+      return Object.keys(stash.regions).length > 0;
     });
-    fullFrameLbl.appendChild(fullFrameCb);
-    fullFrameLbl.appendChild(buildFullFrameIcon());
-    fullFrameLbl.appendChild(el("span", "run-picker-label-text", "Full frame"));
-    panel.appendChild(fullFrameLbl);
+    panel.appendChild(buildRegionRow(
+      fullFrameRegionRef(),
+      "run-picker-fullframe" + (hasFollowingRows ? " has-following" : ""),
+      buildFullFrameIcon(),
+      "Full frame"
+    ));
 
     if (names.length > 0) {
       var toggleAll = el("span", "run-picker-toggle-all");
@@ -713,43 +734,19 @@
         var cbs = panel.querySelectorAll(".run-picker-active-region input[type=checkbox]");
         for (var i = 0; i < cbs.length; i++) cbs[i].checked = !allSelected;
         toggleAll.textContent = allSelected ? "Select all" : "Deselect all";
-        updateRegionPickerBtnText(btn);
-        updateRunButton();
-        refreshModelView({ debounce: true });
-        refreshCalibration({ debounce: true });
+        afterRegionToggle();
       });
       panel.appendChild(toggleAll);
 
+      var syncToggleAll = function () {
+        toggleAll.textContent = activeRefs.every(function (activeRef) {
+          return hasRunRegion(activeRef);
+        }) ? "Deselect all" : "Select all";
+      };
       names.forEach(function (name, idx) {
-        var color = regionColorForIndex(idx);
-        var ref = activeRegionRef(name);
-        var lbl = document.createElement("label");
-        lbl.className = "run-picker-active-region";
-        var cb = document.createElement("input");
-        cb.type = "checkbox";
-        cb.value = regionRefKey(ref);
-        cb.checked = hasRunRegion(ref);
-        cb.addEventListener("change", function () {
-          if (cb.checked) {
-            addRunRegion(ref);
-          } else {
-            removeRunRegion(ref);
-          }
-          toggleAll.textContent = activeRefs.every(function (activeRef) {
-            return hasRunRegion(activeRef);
-          }) ? "Deselect all" : "Select all";
-          updateRegionPickerBtnText(btn);
-          updateRunButton();
-          refreshModelView({ debounce: true });
-          refreshCalibration({ debounce: true });
-        });
-        lbl.appendChild(cb);
-        var dot = el("span", "region-chip-dot");
-        dot.style.background = color;
-        lbl.appendChild(dot);
-        var nameSpan = el("span", "run-picker-label-text", name);
-        lbl.appendChild(nameSpan);
-        panel.appendChild(lbl);
+        panel.appendChild(buildRegionRow(
+          activeRegionRef(name), "run-picker-active-region", regionDot(idx), name, syncToggleAll
+        ));
       });
     }
 
@@ -773,43 +770,15 @@
       panel.appendChild(header);
 
       stashNames.forEach(function (name, idx) {
-        var color = regionColorForIndex(idx);
-        var ref = stashRegionRef(stash, name);
-        var lbl = document.createElement("label");
-        lbl.className = "stash-folder-item";
-        var cb = document.createElement("input");
-        cb.type = "checkbox";
-        cb.value = regionRefKey(ref);
-        cb.checked = hasRunRegion(ref);
-        cb.addEventListener("change", function () {
-          if (cb.checked) {
-            addRunRegion(ref);
-          } else {
-            removeRunRegion(ref);
-          }
-          updateRegionPickerBtnText(btn);
-          updateRunButton();
-          refreshModelView({ debounce: true });
-          refreshCalibration({ debounce: true });
-        });
-        lbl.appendChild(cb);
-        var dot = el("span", "region-chip-dot");
-        dot.style.background = color;
-        lbl.appendChild(dot);
-        var nameSpan = el("span", "run-picker-label-text", name);
-        lbl.appendChild(nameSpan);
-        content.appendChild(lbl);
+        content.appendChild(buildRegionRow(
+          stashRegionRef(stash, name), "stash-folder-item", regionDot(idx), name
+        ));
       });
 
       panel.appendChild(content);
     });
 
-    btn.addEventListener("click", function (e) {
-      e.stopPropagation();
-      var open = !panel.classList.contains("hidden");
-      panel.classList.toggle("hidden", open);
-      btn.classList.toggle("open", !open);
-    });
+    bindPickerToggle(btn, panel);
 
     wrap.appendChild(btn);
     wrap.appendChild(panel);
@@ -823,14 +792,8 @@
     var text = n === 0 ? "No region"
       : n === 1 ? regionRefLabel(state.runRegions[0])
       : n + " regions";
-    btn.innerHTML = "";
-    if (n === 1 && isFullFrameRef(state.runRegions[0])) {
-      btn.appendChild(buildFullFrameIcon());
-    }
-    btn.appendChild(el("span", "run-picker-btn-text", text));
-    var chevron = el("span", "chevron");
-    chevron.appendChild(iconSpan("chevron-down", "ss-icon--xs"));
-    btn.appendChild(chevron);
+    var lead = n === 1 && isFullFrameRef(state.runRegions[0]) ? buildFullFrameIcon() : null;
+    setPickerBtnText(btn, text, lead);
   }
 
   // Fast-scan support comes from the server's tool catalog (AnalysisTool ClassVars).
@@ -844,6 +807,7 @@
       "Event label":      "Tag added to each detected event for filtering",
       "Detect first":     "Stop after the first match is found",
       "Region":           "Which screen region this step analyzes",
+      "Consecutive":      "Require this many consecutive sampled frames to match before an event fires (suppresses single-frame flicker; reports the run's median time)",
     },
     color: {
       "Tolerance":        "How far from the target color still counts. Widen to catch more shades, tighten to be stricter",
@@ -855,7 +819,6 @@
       "Threshold":        "How much of the region must change to trigger. Raise it to ignore minor flicker",
       "Noise Thr.":       "Ignore changes below this pixel intensity",
       "Noise":            "Ignore changes below this pixel intensity",
-      "Consecutive":      "Require this many consecutive sampled frames to match before an event fires (suppresses single-frame flicker; reports the run's median time)",
     },
     similarity: {
       "Reference":        "Capture the frame you want later frames to match against",
@@ -871,7 +834,6 @@
       "Enhance ROI":      "Upscale small/low-contrast crops and apply CLAHE before OCR (slower; helps tiny HUD text)",
       "Normalize":        "Fold easily-confused glyphs before matching: digits to letters, off, or letters to digits. Pick the side that matches your search target (letters vs digits).",
       "Language":         "OCR language for text recognition",
-      "Consecutive":      "Require this many consecutive sampled frames to match before an event fires (suppresses single-frame flicker; reports the run's median time)",
     },
     numbers: {
       "Operator":         "Comparison operator for the detected number",
@@ -883,7 +845,6 @@
       "Enhance ROI":      "Upscale small/low-contrast crops and apply CLAHE before OCR (slower; helps tiny HUD numbers)",
       "Integers only":    "Accept only whole-number readings: any extracted value carrying a decimal point or sign is rejected. For whole-number HUD targets.",
       "Integers":         "Accept only whole-number readings: any extracted value carrying a decimal point or sign is rejected. For whole-number HUD targets.",
-      "Consecutive":      "Require this many consecutive sampled frames to match before an event fires (suppresses single-frame flicker; reports the run's median time)",
     },
     timelapse: {
       "Speed":            "Playback speed multiplier for the output",
@@ -910,7 +871,6 @@
     },
     flow: {
       "Magnitude":        "Minimum movement strength to count. Raise it to ignore small or slow motion",
-      "Consecutive":      "Require this many consecutive sampled frames to match before an event fires (suppresses single-frame flicker; reports the run's median time)",
     },
     scene: {
       "Add Scene":        "Capture and name each screen you want to recognize",
@@ -943,8 +903,7 @@
     btn.type = "button";
     btn.className = "scan-toggle-btn";
 
-    var icon = el("span", "scan-toggle-icon");
-    applyIconMask(icon, "chevron-double-right", "/screenspace/icons/");
+    var icon = iconMaskSpan("chevron-double-right", { className: "scan-toggle-icon" });
     btn.appendChild(icon);
 
     function updateState() {
@@ -1026,6 +985,10 @@
   // version bumps drop in-flight loads.
   function selectParticipant(pid, initialTimestamp) {
     var participantRequestVersion = ++_participantRequestVersion;
+    // False once another participant is selected; stale responses bail.
+    function isCurrent() {
+      return participantRequestVersion === _participantRequestVersion && pid === state.selectedParticipant;
+    }
     _frameRequestVersion += 1;
     state.heatmapOverlayRequestVersion += 1;
     state.selectedParticipant = pid;
@@ -1087,7 +1050,7 @@
 
     apiGet("api/video/info/" + encodeURIComponent(pid))
       .then(function (data) {
-        if (participantRequestVersion !== _participantRequestVersion || pid !== state.selectedParticipant) return;
+        if (!isCurrent()) return;
         if (!data.ok) { qs("#videoInfo").classList.remove("cg-shimmer"); qs("#videoInfo").textContent = ""; return; }
         state.videoInfo = data.info;
         // Duration is only known now, so a restored marker can't be range-checked
@@ -1117,7 +1080,7 @@
       })
       .catch(function () {
         // Clear "Loading…" for the still-current participant after a failed fetch.
-        if (participantRequestVersion === _participantRequestVersion && pid === state.selectedParticipant) {
+        if (isCurrent()) {
           qs("#videoInfo").classList.remove("cg-shimmer");
           qs("#videoInfo").textContent = "";
         }
@@ -1126,7 +1089,7 @@
 
     apiGet("api/participants/" + encodeURIComponent(pid) + "/notes")
       .then(function (data) {
-        if (participantRequestVersion !== _participantRequestVersion || pid !== state.selectedParticipant) return;
+        if (!isCurrent()) return;
         if (!data.ok) return;
         renderInfoNotes(data.notes || "");
       })
@@ -1134,7 +1097,7 @@
 
     apiGet("api/participants/" + encodeURIComponent(pid) + "/issues")
       .then(function (data) {
-        if (participantRequestVersion !== _participantRequestVersion || pid !== state.selectedParticipant) return;
+        if (!isCurrent()) return;
         if (!data.ok) return;
         renderInfoIssues(data.issues || []);
       })
@@ -1142,7 +1105,7 @@
 
     apiGet("api/participants/" + encodeURIComponent(pid) + "/marks")
       .then(function (data) {
-        if (participantRequestVersion !== _participantRequestVersion || pid !== state.selectedParticipant) return;
+        if (!isCurrent()) return;
         if (!data.ok) return;
         if (data.categories) setMarkCategories(data.categories);
         renderInfoMarks(data.marks || []);
@@ -1151,15 +1114,11 @@
 
     apiGet("api/pins/" + encodeURIComponent(pid))
       .then(function (data) {
-        if (participantRequestVersion !== _participantRequestVersion || pid !== state.selectedParticipant) return;
+        if (!isCurrent()) return;
         if (!data.ok) return;
         state.pins = data.pins || [];
         state.maxPins = data.max_pins != null ? data.max_pins : null;
-        renderPinTray();
-        updatePinButtons();
-        renderTimeline();
-        updateCalibrationVisibility();
-        refreshCalibration();
+        refreshPinViews();
       })
       .catch(toastError("Failed to load pins"));
   }
@@ -1172,6 +1131,14 @@
   function pinThumbUrl(pid, ts) {
     var u = frameUrl(pid, ts);
     return u + (u.indexOf("?") === -1 ? "?" : "&") + "w=" + PIN_THUMB_WIDTH;
+  }
+
+  function refreshPinViews() {
+    renderPinTray();
+    updatePinButtons();
+    renderTimeline();
+    updateCalibrationVisibility();
+    refreshCalibration();
   }
 
   function updatePinButtons() {
@@ -1206,11 +1173,7 @@
         state.pins.push(data.pin);
         // Re-reveal the tray so a new pin is always visible, even if hidden.
         state.pinTrayHidden = false;
-        renderPinTray();
-        updatePinButtons();
-        renderTimeline();
-        updateCalibrationVisibility();
-        refreshCalibration();
+        refreshPinViews();
       })
       .catch(function () { showToast("Failed to pin frame"); });
   }
@@ -1223,11 +1186,7 @@
           return;
         }
         state.pins = state.pins.filter(function (p) { return p.id !== pinId; });
-        renderPinTray();
-        updatePinButtons();
-        renderTimeline();
-        updateCalibrationVisibility();
-        refreshCalibration();
+        refreshPinViews();
       })
       .catch(function () { showToast("Failed to remove pin"); });
   }
@@ -1250,11 +1209,7 @@
         if (pid !== state.selectedParticipant) return;
         state.pins = [];
         state.hoveredPinId = null;
-        renderPinTray();
-        updatePinButtons();
-        renderTimeline();
-        updateCalibrationVisibility();
-        refreshCalibration();
+        refreshPinViews();
         showToast("All pins cleared");
       })
       .catch(function () { showToast("Failed to clear pins"); });
@@ -1377,80 +1332,50 @@
     if (document.activeElement !== ta) ta.value = notes;
   }
 
-  function renderInfoIssues(issues) {
-    var block = qs("#ssInfoIssuesBlock");
-    var list = qs("#ssInfoIssues");
+  // rowFn maps each item to {dot, text, ts}; rows with ts seek on click.
+  function renderInfoList(blockId, listId, items, rowFn) {
+    var block = qs(blockId);
+    var list = qs(listId);
     if (!block || !list) return;
     list.innerHTML = "";
-    if (!issues || !issues.length) {
-      block.classList.add("hidden");
-      return;
-    }
-    block.classList.remove("hidden");
+    var hasItems = !!(items && items.length);
+    block.classList.toggle("hidden", !hasItems);
+    if (!hasItems) return;
     var frag = document.createDocumentFragment();
-    issues.forEach(function (issue) {
-      var li = document.createElement("li");
-      li.className = "ss-info-issue";
-      var dot = document.createElement("span");
-      dot.className = "ss-info-issue-dot " + (severityClass(issue.severity) || "");
-      var text = document.createElement("span");
-      text.className = "ss-info-issue-text";
-      text.textContent = issue.observation || "(no observation)";
-      li.appendChild(dot);
-      li.appendChild(text);
-      if (issue.timestamp != null) {
-        var ts = document.createElement("span");
-        ts.className = "ss-info-issue-ts";
-        ts.textContent = formatTime(issue.timestamp);
-        li.appendChild(ts);
+    items.forEach(function (item) {
+      var row = rowFn(item);
+      var li = el("li", "ss-info-issue");
+      li.appendChild(row.dot);
+      li.appendChild(el("span", "ss-info-issue-text", row.text));
+      if (row.ts != null) {
+        li.appendChild(el("span", "ss-info-issue-ts", formatTime(row.ts)));
         li.classList.add("ss-info-issue--clickable");
-        li.addEventListener("click", (function (t) {
-          return function () { loadFrame(t); };
-        })(issue.timestamp));
+        li.addEventListener("click", function () { loadFrame(row.ts); });
       }
       frag.appendChild(li);
     });
     list.appendChild(frag);
   }
 
+  function renderInfoIssues(issues) {
+    renderInfoList("#ssInfoIssuesBlock", "#ssInfoIssues", issues, function (issue) {
+      return {
+        dot: el("span", "ss-info-issue-dot " + (severityClass(issue.severity) || "")),
+        text: issue.observation || "(no observation)",
+        ts: issue.timestamp,
+      };
+    });
+  }
+
   function renderInfoMarks(marks) {
-    var block = qs("#ssInfoMarksBlock");
-    var list = qs("#ssInfoMarks");
-    if (!block || !list) return;
-    list.innerHTML = "";
-    if (!marks || !marks.length) {
-      block.classList.add("hidden");
-      return;
-    }
-    block.classList.remove("hidden");
-    var frag = document.createDocumentFragment();
-    marks.forEach(function (mark) {
-      var li = document.createElement("li");
-      li.className = "ss-info-issue";
+    renderInfoList("#ssInfoMarksBlock", "#ssInfoMarks", marks, function (mark) {
       var cat = MARK_CATEGORIES[mark.category] || MARK_CATEGORIES.bookmark;
-      var dot = document.createElement("span");
-      dot.className = "ss-info-issue-dot";
+      var dot = el("span", "ss-info-issue-dot");
       if (cat) dot.style.backgroundColor = cat.color;
-      var text = document.createElement("span");
-      text.className = "ss-info-issue-text";
       var label = (mark.label && mark.label.trim()) || mark.text || "(mark)";
       if (label.length > 120) label = label.slice(0, 117) + "…";
-      text.textContent = label;
-      li.appendChild(dot);
-      li.appendChild(text);
-      if (mark.start != null) {
-        var ts = document.createElement("span");
-        ts.className = "ss-info-issue-ts";
-        ts.textContent = formatTime(mark.start);
-        li.appendChild(ts);
-        li.classList.add("ss-info-issue--clickable");
-        li.addEventListener("click", (function (t) {
-          return function () { loadFrame(t); };
-        })(mark.start));
-      }
-      frag.appendChild(li);
+      return { dot: dot, text: label, ts: mark.start };
     });
-    list.appendChild(frag);
   }
 
   function initInfoNotes() {
@@ -1616,17 +1541,8 @@
       if (e.key === "Enter") input.blur();
     });
 
-    qs("#framePrev").addEventListener("click", function () {
-      if (!state.videoInfo) return;
-      var ts = clamp(state.currentTimestamp - SEEK_STEP, 0, Math.max(0, state.videoInfo.duration - 0.001));
-      loadFrame(ts);
-    });
-
-    qs("#frameNext").addEventListener("click", function () {
-      if (!state.videoInfo) return;
-      var ts = clamp(state.currentTimestamp + SEEK_STEP, 0, Math.max(0, state.videoInfo.duration - 0.001));
-      loadFrame(ts);
-    });
+    qs("#framePrev").addEventListener("click", function () { _seekBy(-SEEK_STEP); });
+    qs("#frameNext").addEventListener("click", function () { _seekBy(SEEK_STEP); });
   }
 
   // ---- Video playback ----
@@ -1812,14 +1728,11 @@
   function hideRegionNameModal() { return SS.hideRegionNameModal && SS.hideRegionNameModal.apply(null, arguments); }
   function invalidateOverlayRect() { return SS.invalidateOverlayRect && SS.invalidateOverlayRect.apply(null, arguments); }
   function cancelWandDrag() { return SS.cancelWandDrag && SS.cancelWandDrag.apply(null, arguments); }
-  function toggleShapeDraw() { return SS.toggleShapeDraw && SS.toggleShapeDraw.apply(null, arguments); }
   function cancelShapeDraw() { return SS.cancelShapeDraw && SS.cancelShapeDraw.apply(null, arguments); }
-  function openSampleModal() { return SS.openSampleModal && SS.openSampleModal.apply(null, arguments); }
 
   // ---- Region stashing + chip drag (impl in screenspace-regions.js) ----
   function initRegionDrag() { return SS.initRegionDrag && SS.initRegionDrag.apply(null, arguments); }
   function renderStashCards() { return SS.renderStashCards && SS.renderStashCards.apply(null, arguments); }
-  function stashRegions() { return SS.stashRegions && SS.stashRegions.apply(null, arguments); }
 
 
   function templateOverlayBounds() {
@@ -1843,8 +1756,7 @@
         x = aPx.x;
         y = aPx.y;
       } else {
-        var displayW = canvas.getBoundingClientRect().width || canvas.width;
-        var s = canvas.width / displayW;
+        var s = canvasScale(canvas);
         x = Math.round(10 * s);
         y = Math.round(10 * s);
       }
@@ -1894,7 +1806,7 @@
     tip.innerHTML = "";
 
     var header = el("div", "tool-info-header");
-    header.appendChild(el("strong", null, type.charAt(0).toUpperCase() + type.slice(1)));
+    header.appendChild(el("strong", null, toolLabel(type)));
     var closeBtn = el("button", "tool-info-close hidden");
     closeBtn.appendChild(iconSpan("x-mark"));
     closeBtn.addEventListener("click", function () {
@@ -1906,22 +1818,7 @@
     tip.appendChild(el("p", "tool-info-body", text));
 
     tip.classList.remove("hidden");
-    positionToolInfoTooltip(tip, anchorEl);
-  }
-
-  function positionToolInfoTooltip(tip, anchorEl) {
-    var rect = anchorEl.getBoundingClientRect();
-    var x = rect.left;
-    var y = rect.bottom + 6;
-    tip.style.left = x + "px";
-    tip.style.top = y + "px";
-    var tipRect = tip.getBoundingClientRect();
-    if (tipRect.right > window.innerWidth - 8) {
-      tip.style.left = (window.innerWidth - tipRect.width - 8) + "px";
-    }
-    if (tipRect.bottom > window.innerHeight - 8) {
-      tip.style.top = (rect.top - tipRect.height - 6) + "px";
-    }
+    positionPopoverAnchored(tip, anchorEl.getBoundingClientRect());
   }
 
   function pinToolInfoTooltip() {
@@ -2011,27 +1908,13 @@
     { label: "Utility", tools: ["timelapse"], icon: "cog-6-tooth" },
   ];
 
-  // Heroicon basenames per tool for the command palette; mirrors .ss-task-icon--<type> in
-  // screenspace.css.
-  var TOOL_ICON_NAMES = {
-    multitool: "wrench-screwdriver", color: "eye-dropper", change: "bolt",
-    similarity: "photo", text: "language", numbers: "hashtag",
-    template: "viewfinder-circle", shape: "star", flow: "arrows-right-left",
-    scene: "squares-2x2",
-    inactivity: "pause-circle", boundary: "flag", timelapse: "forward",
-    attention: "eye",
-  };
-
   var _catNavBuilt = false;
   var _catOutsideBound = false;
 
   // Category glyph; mask set inline since no .ss-task-icon--<type> class exists.
   function buildCatIcon(name) {
     if (!name) return null;
-    return iconMaskSpan(name, {
-      className: "ss-task-icon",
-      basePath: "/screenspace/icons/",
-    });
+    return iconMaskSpan(name, { className: "ss-task-icon" });
   }
 
   // Alt-hold chip hints; while a dropdown is open its items carry the digits (see
@@ -2243,8 +2126,7 @@
     slot.innerHTML = "";
     slot.setAttribute("data-tooltip", "Interval (seconds)");
     var iconWrap = el("div", "interval-icon");
-    var iconMask = el("span", "interval-icon-mask");
-    applyIconMask(iconMask, "clock", "/screenspace/icons/");
+    var iconMask = iconMaskSpan("clock", { className: "interval-icon-mask" });
     iconWrap.appendChild(iconMask);
     slot.appendChild(iconWrap);
     var ctrl = el("div", "param-control");
@@ -2254,16 +2136,13 @@
 
   // ---- Single-tool parameter panels (impl in screenspace-params.js) ----
   function initParamResets() { return SS.initParamResets && SS.initParamResets.apply(null, arguments); }
-  function refTimeChip() { return SS.refTimeChip && SS.refTimeChip.apply(null, arguments); }
   function renderWorkflowParams() { return SS.renderWorkflowParams && SS.renderWorkflowParams.apply(null, arguments); }
-  function updateParamResetButtons() { return SS.updateParamResetButtons && SS.updateParamResetButtons.apply(null, arguments); }
 
   // ---- Model view (impl in screenspace-model-view.js) ----
   // Delegators; the satellite also publishes _overlayEligibleForActiveTool,
   // _updateMinAreaReadout, _previewRegionRef.
   function initModelView() { return SS.initModelView && SS.initModelView.apply(null, arguments); }
   function refreshModelView(opts) { return SS.refreshModelView && SS.refreshModelView.apply(null, arguments); }
-  function _updateOverlayUi() { return SS._updateOverlayUi && SS._updateOverlayUi.apply(null, arguments); }
   function _overlayEligibleForActiveTool() { return SS._overlayEligibleForActiveTool && SS._overlayEligibleForActiveTool.apply(null, arguments); }
   function _updateMinAreaReadout(sfx) { return SS._updateMinAreaReadout && SS._updateMinAreaReadout.apply(null, arguments); }
 
@@ -2277,13 +2156,6 @@
   function initCalibration() { return SS.calInit && SS.calInit(); }
 
   // ---- Color picker (impl in screenspace-color.js) ----
-  // Delegators; sampleColorFromRegion's handler reference stays unchanged.
-  function updateColorPreview() { return SS.updateColorPreview && SS.updateColorPreview(); }
-  function setTargetColor(h, s, v) { return SS.setTargetColor && SS.setTargetColor(h, s, v); }
-  function renderColorPalette() { return SS.renderColorPalette && SS.renderColorPalette(); }
-  function renderBrightnessStrip() { return SS.renderBrightnessStrip && SS.renderBrightnessStrip(); }
-  function sampleColorFromRegion() { return SS.sampleColorFromRegion && SS.sampleColorFromRegion(); }
-  function updateColorSampleBtnLabel() { return SS.updateColorSampleBtnLabel && SS.updateColorSampleBtnLabel(); }
 
   function activatePipette() {
     if (!state.frameImage) {
@@ -2359,16 +2231,12 @@
   // ---- Run analysis (impl in screenspace-run.js) ----
   // Thin delegators for the hub's own call sites.
   function initRunButton() { return SS.initRunButton && SS.initRunButton.apply(null, arguments); }
-  function gatherWorkflowParams() { return SS.gatherWorkflowParams && SS.gatherWorkflowParams.apply(null, arguments); }
 
   // ---- Task queue (impl in screenspace-tasks.js) ----
   // Thin delegators for the hub's own call sites.
-  function findTask(id) { return SS.findTask && SS.findTask(id); }
-  function focusedTaskId() { return SS.focusedTaskId && SS.focusedTaskId(); }
   function renderTaskList() { return SS.renderTaskList && SS.renderTaskList(); }
   function startSSE() { return SS.startSSE && SS.startSSE(); }
   function setRightPaneTab(tab) { return SS.setRightPaneTab && SS.setRightPaneTab(tab); }
-  function updateResultsCrumb() { return SS.updateResultsCrumb && SS.updateResultsCrumb(); }
   function initRightPaneTabs() { return SS.initRightPaneTabs && SS.initRightPaneTabs(); }
   function initPauseButton() { return SS.initPauseButton && SS.initPauseButton(); }
   function initTaskQueue() { return SS.initTaskQueue && SS.initTaskQueue(); }
@@ -2581,9 +2449,7 @@
     }
     if (!ssNavItems(region).length) return;
     // Drop lingering native focus so only one focus indicator shows.
-    if (window.ClipgenHotkeys && window.ClipgenHotkeys.blurStrayFocus) {
-      window.ClipgenHotkeys.blurStrayFocus();
-    }
+    window.ClipgenHotkeys.blurStrayFocus();
     ssSetFocusRegion(region);
   }
 
@@ -2738,10 +2604,7 @@
           if (_blinkStart) return; // blur can swallow a keyup; don't restack
           _blinkStart = Date.now();
           state.overlayBlinkActive = true;
-          var curTs = Number(state.currentTimestamp || 0).toFixed(3);
-          if (!state.overlayImage || state.overlayImageTimestamp !== curTs || state.overlayImageTool !== SS._previewToolKey()) {
-            refreshModelView();
-          }
+          if (SS.overlayImageStale()) refreshModelView();
           renderOverlay();
         },
         onRelease: function () {
@@ -2844,16 +2707,10 @@
       var consumed = true;
       if (state.pipetteActive) {
         deactivatePipette();
-      } else if (state.draggingRegion) {
-        var orig = state.draggingRegion.origRegion;
-        state.regions[state.draggingRegion.name] = Object.assign({}, state.regions[state.draggingRegion.name], orig);
+      } else if (state.draggingRegion || state.resizingRegion) {
+        var gesture = state.draggingRegion || state.resizingRegion;
+        state.regions[gesture.name] = Object.assign({}, state.regions[gesture.name], gesture.origRegion);
         state.draggingRegion = null;
-        document.body.style.cursor = "";
-        document.body.style.userSelect = "";
-        renderOverlay();
-      } else if (state.resizingRegion) {
-        var origR = state.resizingRegion.origRegion;
-        state.regions[state.resizingRegion.name] = Object.assign({}, state.regions[state.resizingRegion.name], origR);
         state.resizingRegion = null;
         document.body.style.cursor = "";
         document.body.style.userSelect = "";
@@ -2923,61 +2780,20 @@
   }
 
   function toggleBottomPanel() {
-    var panel = qs("#bottomPanel");
-    if (!panel || panel._transitioning) return;
-    panel._transitioning = true;
-
-    if (state.bottomCollapsed) {
-      // --- Restore ---
-      state.bottomCollapsed = false;
-      var maxH = Math.round(window.innerHeight * 0.6);
-      var targetH = Math.min(state.panelHeightBeforeCollapse || bottomPanelHeightFromToken(), maxH);
-
-      document.body.classList.add("bottom-animating");
-      document.body.classList.remove("bottom-collapsed");
-
-      panel.style.height = "0px";
-      panel.offsetHeight; // reflow — pin start frame
-      panel.style.height = targetH + "px";
-
-      onCollapseTransitionEnd(panel, function () {
-        state.panelHeight = targetH;
-        panel._transitioning = false;
-        document.body.classList.remove("bottom-animating");
-      });
-    } else {
-      // --- Collapse ---
-      state.bottomCollapsed = true;
-      state.panelHeightBeforeCollapse = state.panelHeight;
-
-      var currentH = panel.offsetHeight;
-      document.body.classList.add("bottom-animating");
-
-      panel.style.height = currentH + "px";
-      panel.offsetHeight; // reflow
-      document.body.classList.add("bottom-collapsed");
-      panel.style.height = "0px";
-
-      onCollapseTransitionEnd(panel, function () {
-        panel._transitioning = false;
-        document.body.classList.remove("bottom-animating");
-      });
-    }
-  }
-
-  function onCollapseTransitionEnd(el, cb) {
-    var fired = false;
-    function done() {
-      if (fired) return;
-      fired = true;
-      el.removeEventListener("transitionend", handler);
-      cb();
-    }
-    function handler(e) {
-      if (e.target === el && e.propertyName === "height") done();
-    }
-    el.addEventListener("transitionend", handler);
-    setTimeout(done, 400);
+    togglePanelCollapse(qs("#bottomPanel"), {
+      isCollapsed: function () { return state.bottomCollapsed; },
+      setCollapsed: function (v) {
+        state.bottomCollapsed = v;
+        if (v) state.panelHeightBeforeCollapse = state.panelHeight;
+      },
+      getTargetHeight: function () {
+        var maxH = Math.round(window.innerHeight * 0.6);
+        return Math.min(state.panelHeightBeforeCollapse || bottomPanelHeightFromToken(), maxH);
+      },
+      onSettled: function (collapsed, targetH) {
+        if (!collapsed) state.panelHeight = targetH;
+      },
+    });
   }
 
   // ---- Preview resize ----
@@ -3024,15 +2840,7 @@
     participants.forEach(function (p) {
       var pid = p.id;
       chain = chain.then(function () {
-        return apiPost("api/tasks", { type: "boundary", participant: pid })
-          .then(function (data) {
-            if (data.ok && data.task) {
-              if (!state.tasks.some(function (t) { return t.id === data.task.id; })) {
-                state.tasks.push(data.task);
-              }
-              renderTaskList();
-            }
-          })
+        return SS.enqueueTask({ type: "boundary", participant: pid })
           .catch(function () { return null; });
       });
     });
@@ -3077,7 +2885,6 @@
   // Command palette additions: Run plus per-participant jumps; the provider re-runs on
   // every open.
   function initCommandPalette() {
-    if (!window.ClipgenCommandPalette) return;
     window.ClipgenCommandPalette.setParticipants(function () {
       return (state.participants || []).map(function (p) { return p.id; });
     });
@@ -3216,7 +3023,6 @@
     initInfoPanelCollapse();
     initInfoSections();
     initKeyboard();
-    initFrontendSwitcher();
     initTopNavActions();
     initCommandPalette();
 
@@ -3358,6 +3164,7 @@
   SS.taskRegionPixels = taskRegionPixels;
   SS.regionRefPayload = regionRefPayload;
   SS.normalizeRegionRef = normalizeRegionRef;
+  SS.findStash = findStash;
   SS.activeRegionRef = activeRegionRef;
   SS.availableRegionRefByKey = availableRegionRefByKey;
   SS.allAvailableRegionRefs = allAvailableRegionRefs;
@@ -3365,6 +3172,7 @@
   SS.regionRefKey = regionRefKey;
   SS.regionRefLabel = regionRefLabel;
   SS.buildTypeIcon = buildTypeIcon;
+  SS.TOOL_ICON_NAMES = TOOL_ICON_NAMES;
   // The tasks satellite calls this after moving the active .wf-tab manually.
   SS.syncToolCategoryNav = syncToolCategoryNav;
   SS.iconSpan = iconSpan;

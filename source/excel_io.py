@@ -45,13 +45,6 @@ def _cell_to_str(v: Any) -> str:
     return str(v)
 
 
-class _CellLike(NamedTuple):
-    """Minimal cell-like object with .row and .col (1-based) for header lookup."""
-
-    row: int
-    col: int
-
-
 class _SpreadsheetLike(NamedTuple):
     """Minimal spreadsheet-like object with .title and .url = None for Excel."""
 
@@ -84,31 +77,9 @@ class ExcelSheetAdapter:
                 row.append("")
         self._data = rows
 
-    def find(self, text: str) -> _CellLike | None:
-        """Find first cell with exact match. Returns cell-like with .row, .col (1-based)."""
-        for row_idx, row in enumerate(self._data):
-            for col_idx, cell_value in enumerate(row):
-                if cell_value == text:
-                    return _CellLike(row=row_idx + 1, col=col_idx + 1)
-        return None
-
     def get_all_values(self) -> list[list[str]]:
         """Return all sheet data as list of rows (list of strings)."""
         return self._data
-
-    def row_values(self, row_1based: int) -> list[str]:
-        """Return one row as list of strings. row_1based is 1-based."""
-        idx = row_1based - 1
-        if 0 <= idx < len(self._data):
-            return self._data[idx]
-        return []
-
-    @property
-    def col_count(self) -> int:
-        """Number of columns (max length of any row)."""
-        if not self._data:
-            return 0
-        return max(len(row) for row in self._data)
 
 
 def _get_worksheet_from_workbook(wb: Any, preferred_name: str | None = None) -> Any:
@@ -219,30 +190,33 @@ def select_excel_file() -> ExcelSheetAdapter | None:
         ).strip()
         if not choice:
             return None
-        # Try as index
-        if choice.isdigit():
-            idx = int(choice)
-            if 1 <= idx <= len(paths):
-                return open_excel_workbook(paths[idx - 1])
-            utils.info_print(
-                f"Invalid index. Enter a number between 1 and {len(paths)}."
-            )
+        match = _match_excel_choice(choice, paths)
+        if match == _BAD_INDEX:
             continue
-        # Try as filename
-        for p in paths:
-            if Path(p).name == choice:
-                return open_excel_workbook(p)
+        if match is not None:
+            return open_excel_workbook(match)
         utils.info_print(f'No file named "{choice}". Enter an index or exact filename.')
+
+
+_BAD_INDEX = "bad-index"
+
+
+def _match_excel_choice(choice: str, paths: list[str]) -> str | None:
+    """Match an index or exact filename; a bad index warns and returns _BAD_INDEX."""
+    if choice.isdigit() and paths:
+        idx = int(choice)
+        if 1 <= idx <= len(paths):
+            return paths[idx - 1]
+        utils.info_print(f"Invalid index. Enter a number between 1 and {len(paths)}.")
+        return _BAD_INDEX
+    return next((p for p in paths if Path(p).name == choice), None)
 
 
 def _print_credentials_help() -> None:
     """Print troubleshooting steps for setting up Google credentials."""
-    utils.info_print(
-        "Google Sheets access requires a 'credentials.json' file in the working directory."
-    )
-    utils.info_print(f"Working directory: {Path.cwd()}")
+    utils.info_print("Google Sheets access requires a 'credentials.json' file.")
     utils.info_print("Troubleshooting steps:")
-    utils.info_print("  1. Ensure 'credentials.json' exists in the working directory")
+    utils.info_print("  1. Put 'credentials.json' in a location listed above")
     utils.info_print("  2. Verify the credentials file is valid JSON")
     utils.info_print(
         "  3. Check that the service account has access to Google Sheets API"
@@ -288,27 +262,11 @@ def prompt_for_excel_fallback() -> ExcelSheetAdapter | None:
         if choice.lower() == "help":
             _print_credentials_help()
             continue
-        if choice.isdigit() and paths:
-            idx = int(choice)
-            if 1 <= idx <= len(paths):
-                adapter = open_excel_workbook(paths[idx - 1])
-                if adapter is not None:
-                    return adapter
-                continue
-            utils.info_print(
-                f"Invalid index. Enter a number between 1 and {len(paths)}."
-            )
-            continue
-        # Exact filename match inside cwd.
-        matched = False
-        for p in paths:
-            if Path(p).name == choice:
-                adapter = open_excel_workbook(p)
-                if adapter is not None:
-                    return adapter
-                matched = True
-                break
-        if matched:
+        match = _match_excel_choice(choice, paths)
+        if match is not None:
+            adapter = None if match == _BAD_INDEX else open_excel_workbook(match)
+            if adapter is not None:
+                return adapter
             continue
         # Treat as a path (absolute or relative to cwd).
         candidate = Path(choice).expanduser()

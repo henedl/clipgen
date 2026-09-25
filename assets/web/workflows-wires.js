@@ -44,13 +44,7 @@
     return node;
   }
 
-  function findEdge(id) {
-    var edges = state.edges || [];
-    for (var i = 0; i < edges.length; i++) {
-      if (edges[i].id === id) return edges[i];
-    }
-    return null;
-  }
+  function findEdge(id) { return findById(state.edges, id); }
 
   // ---- Geometry ----
 
@@ -143,7 +137,7 @@
     if (!svg) return;
     while (svg.firstChild) svg.removeChild(svg.firstChild);
     var frag = document.createDocumentFragment();
-    (state.edges || []).forEach(function (edge) {
+    state.edges.forEach(function (edge) {
       var a = portWorldPos(edge.from, edge.fromPort, "out");
       var b = portWorldPos(edge.to, edge.toPort, "in");
       if (!a || !b) return;
@@ -159,7 +153,7 @@
         !!outType &&
         !!inType &&
         outType !== inType &&
-        !!(state.adapters && state.adapters.has(outType + ">" + inType));
+        state.adapters.has(outType + ">" + inType);
       var wire = svgEl(
         "path",
         "wf-wire" +
@@ -194,7 +188,7 @@
   function canConnect(outType, inType) {
     // Exact match or one registered adapter (single hop, like the runner's _gather_inputs).
     if (outType === inType) return true;
-    return !!(state.adapters && state.adapters.has(outType + ">" + inType));
+    return state.adapters.has(outType + ">" + inType);
   }
 
   // ---- Connect: highlight ----
@@ -425,11 +419,11 @@
       return;
     }
     // An input holds one wire; a new connection replaces the old (or a duplicate).
-    var edges = (state.edges || []).filter(function (edge) {
+    var edges = state.edges.filter(function (edge) {
       return !(edge.to === inp.nodeId && edge.toPort === inp.port);
     });
     edges.push({
-      id: "e_" + Math.random().toString(36).slice(2, 10),
+      id: "e_" + WF.randomId(),
       from: out.nodeId,
       fromPort: out.port,
       to: inp.nodeId,
@@ -451,7 +445,7 @@
 
   function removeEdge(id) {
     if (!id) return;
-    state.edges = (state.edges || []).filter(function (edge) {
+    state.edges = state.edges.filter(function (edge) {
       return edge.id !== id;
     });
     if (state.selectedEdge === id) state.selectedEdge = null;
@@ -535,6 +529,5 @@
   WF.cancelConnect = endConnect;
   WF.selectEdge = selectEdge;
   WF.removeEdge = removeEdge;
-  WF.canConnect = canConnect;
   WF.refreshWireDelete = refreshWireDelete;
 })();

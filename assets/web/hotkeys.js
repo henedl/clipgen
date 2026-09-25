@@ -324,10 +324,6 @@
     return out;
   }
 
-  function formatCombo(combo) {
-    return comboTokens(combo).join(IS_MAC ? "" : "+");
-  }
-
   // Render a combo into a key-cap as DOM nodes; small glyphs get .hk-glyph.
   function fillKeycap(node, combo) {
     var out = comboTokens(combo);
@@ -468,7 +464,7 @@
   }
 
   function blockingModalOpen() {
-    if (typeof isBlockingModalOpen === "function" && isBlockingModalOpen()) return true;
+    if (isBlockingModalOpen()) return true;
     return document.body && document.body.classList.contains("modal-open");
   }
 
@@ -605,7 +601,7 @@
     _hintTimer = null;
     if (_hintsShown || isTypingTarget(document.activeElement)) return;
     // Scope hints to a modal's own controls; an unscopable modal (bare body.modal-open) suppresses them.
-    var modalRoot = (typeof getActiveModalRoot === "function") ? getActiveModalRoot() : null;
+    var modalRoot = getActiveModalRoot();
     if (blockingModalOpen() && !modalRoot) return;
     var scope = modalRoot || document;
     var nodes = scope.querySelectorAll("[data-hotkey]");
@@ -807,29 +803,26 @@
     if (!_sheetEl) _sheetEl = buildSheet();
     renderSheet();
     _sheetOpen = true;
-    if (typeof popModalIn === "function") popModalIn(_sheetEl, _sheetEl.querySelector(".hk-panel"));
-    else _sheetEl.classList.remove("hidden");
+    popModalIn(_sheetEl, _sheetEl.querySelector(".hk-panel"));
     // Next frame, so the backdrop has a painted start value to fade from.
     requestAnimationFrame(function () {
       if (_sheetOpen) _sheetEl.classList.add("is-open");
     });
-    if (typeof openBlockingModal === "function") {
-      openBlockingModal(_sheetEl, {
-        onEscape: closeCheatsheet,
-        onBackdropClick: closeCheatsheet,
-        restoreFocus: true
-      });
-    }
+    openBlockingModal(_sheetEl, {
+      onEscape: closeCheatsheet,
+      onBackdropClick: closeCheatsheet,
+      restoreFocus: true
+    });
   }
 
   function closeCheatsheet() {
     if (!_sheetEl || !_sheetOpen) return;
     _sheetOpen = false;
     _sheetEl.classList.remove("is-open");
-    if (typeof closeBlockingModal === "function") closeBlockingModal(_sheetEl);
-    var hide = function () { _sheetEl.classList.add("hidden"); };
-    if (typeof popModalOut === "function") popModalOut(_sheetEl, _sheetEl.querySelector(".hk-panel"), hide);
-    else hide();
+    closeBlockingModal(_sheetEl);
+    popModalOut(_sheetEl, _sheetEl.querySelector(".hk-panel"), function () {
+      _sheetEl.classList.add("hidden");
+    });
   }
 
   function toggleCheatsheet() {
@@ -851,11 +844,9 @@
     resolvedCombos: resolvedCombos,
     applyOverrides: applyOverrides,
     normalizeEvent: normalizeEvent,
-    formatCombo: formatCombo,
     fillKeycap: fillKeycap,
     comboConflicts: comboConflicts,
     toggleCheatsheet: toggleCheatsheet,
-    closeCheatsheet: closeCheatsheet,
     registerActionHints: registerActionHints
   };
 })();

@@ -42,7 +42,6 @@
   var _fetchTimer = 0;
   var _inflight = 0;
   var _mediaVersion = 0;  // bumped on participant switch; stale loads no-op
-  var _renderQueued = false;
 
   // Span-keyed: editing a trim or cut invalidates its sprite and audio for free.
   function mediaKey(keyStem, start, end) {
@@ -75,14 +74,9 @@
     _fetchTimer = setTimeout(flushFetches, FETCH_DEBOUNCE_MS);
   }
 
-  function queueRender() {
-    if (_renderQueued) return;
-    _renderQueued = true;
-    requestAnimationFrame(function () {
-      _renderQueued = false;
-      if (CO.renderTimeline) CO.renderTimeline();
-    });
-  }
+  var queueRender = rafThrottle(function () {
+    if (CO.renderTimeline) CO.renderTimeline();
+  });
 
   function evictIfNeeded() {
     while (_spriteCount > SPRITE_CACHE_MAX) {
@@ -333,47 +327,38 @@
 
   // ---- Toggles ----
 
+  // Persisted lane-UI checkboxes; after runs once the flag flips.
+  var SCRUB_TOGGLES = [
+    { sel: "#coThumbsToggle input", key: "markerThumbnails", after: function () {
+      if (CO.renderTimeline) CO.renderTimeline();
+    } },
+    { sel: "#coScrubAudioToggle input", key: "markerAudioScrub", after: function () {
+      if (!state.markerAudioScrub) scrubHoverEnd();
+    } },
+    { sel: "#coFollowToggle input", key: "followPlayhead", after: null },
+  ];
+
   function syncScrubToggles() {
-    var thumbs = qs("#coThumbsToggle input");
-    if (thumbs) thumbs.checked = !!state.markerThumbnails;
-    var scrub = qs("#coScrubAudioToggle input");
-    if (scrub) scrub.checked = !!state.markerAudioScrub;
-    var follow = qs("#coFollowToggle input");
-    if (follow) follow.checked = !!state.followPlayhead;
+    SCRUB_TOGGLES.forEach(function (t) {
+      var box = qs(t.sel);
+      if (box) box.checked = !!state[t.key];
+    });
   }
 
   function initMarkerScrub() {
     // change, not label click: hotkeys route through label.click(). blur(): a
     // focused checkbox swallows hotkeys.
-    var thumbs = qs("#coThumbsToggle input");
-    if (thumbs) {
-      thumbs.addEventListener("change", function () {
+    SCRUB_TOGGLES.forEach(function (t) {
+      var box = qs(t.sel);
+      if (!box) return;
+      box.addEventListener("change", function () {
         this.blur();
-        state.markerThumbnails = !state.markerThumbnails;
+        state[t.key] = !state[t.key];
         syncScrubToggles();
         if (CO.persistLaneUi) CO.persistLaneUi();
-        if (CO.renderTimeline) CO.renderTimeline();
+        if (t.after) t.after();
       });
-    }
-    var scrub = qs("#coScrubAudioToggle input");
-    if (scrub) {
-      scrub.addEventListener("change", function () {
-        this.blur();
-        state.markerAudioScrub = !state.markerAudioScrub;
-        syncScrubToggles();
-        if (CO.persistLaneUi) CO.persistLaneUi();
-        if (!state.markerAudioScrub) scrubHoverEnd();
-      });
-    }
-    var follow = qs("#coFollowToggle input");
-    if (follow) {
-      follow.addEventListener("change", function () {
-        this.blur();
-        state.followPlayhead = !state.followPlayhead;
-        syncScrubToggles();
-        if (CO.persistLaneUi) CO.persistLaneUi();
-      });
-    }
+    });
     syncScrubToggles();
   }
 

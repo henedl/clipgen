@@ -139,7 +139,7 @@
     }
   }
 
-  function drawAnnotation(ctx, ann, w, h, selected) {
+  function drawAnnotation(ctx, ann, w, h) {
     var style = ann.style || {};
     var color = style.color || CLIPGEN_CONFIG.composerAnnotationColor;
     if (ann.type === "shape") {
@@ -238,7 +238,7 @@
     var soleShape = CO.singleSelectedAnnotation();
     if (!state.annHidden) visibleAnnotations().forEach(function (ann) {
       var selected = CO.isAnnotationSelected(ann.id);
-      var box = drawAnnotation(ctx, ann, w, h, selected);
+      var box = drawAnnotation(ctx, ann, w, h);
       if (!box) return;
       if (selected) {
         ctx.strokeStyle = getCSSVar("--color-accent", "#1d4f72");
@@ -438,7 +438,7 @@
 
   function defaultSpan() {
     // New annotations inside a cut adopt its span (selected cut wins); later edits are free-form.
-    var cuts = (CO.participantCuts ? CO.participantCuts() : []).filter(function (c) {
+    var cuts = CO.participantCuts().filter(function (c) {
       return c.start <= state.playhead && state.playhead <= c.end;
     });
     if (cuts.length) {
@@ -488,7 +488,7 @@
   var _chipGate = "";
 
   function syncPaletteChips() {
-    var selected = CO.selectedAnnotations ? CO.selectedAnnotations() : [];
+    var selected = CO.selectedAnnotations();
     var hasText = selected.some(function (a) { return a.type === "text"; });
     var hasStroke = selected.some(function (a) {
       return a.type === "shape" || a.type === "freehand";
@@ -660,9 +660,13 @@
   // ---- Init ----
 
   function initAnnotate() {
-    var canvas = canvasEl();
-    var video = qs("#coVideo");
+    initPalette();
+    initGestures();
+    CO.syncAnnotationDefaults();
+  }
 
+  // Swatch pair, style chips, and the config-driven defaults sync.
+  function initPalette() {
     // ---- Two-color swatch pair; color model in the file header ----
     var pairHost = qs("#coSwatchPair");
 
@@ -730,11 +734,6 @@
     resetBtn.setAttribute("aria-label", "Reset to the default colors");
     resetBtn.setAttribute("data-tooltip", "Reset to the default colors");
     var resetGlyph = el("span", "co-swatch-reset-glyph");
-    resetGlyph.style.setProperty(
-      "--co-swatch-default", CLIPGEN_CONFIG.composerAnnotationColor);
-    resetGlyph.style.setProperty(
-      "--co-swatch-default-secondary",
-      CLIPGEN_CONFIG.composerAnnotationColorSecondary);
     resetBtn.appendChild(resetGlyph);
     resetBtn.addEventListener("click", function () {
       state.annColorSecondary = CLIPGEN_CONFIG.composerAnnotationColorSecondary;
@@ -764,22 +763,14 @@
       if (fp) fp.textContent = String(Math.round(state.annFontSize * 1000));
     }
 
-    function applyAnnStrokeWidth(v) {
-      state.annStrokeWidth = v;
-      updateChipPreviews();
-      applyStyleToSelection({ strokeWidth: v });
-    }
-
-    function applyAnnStrokeStyle(s) {
-      state.annStrokeStyle = s;
-      updateChipPreviews();
-      applyStyleToSelection({ strokeStyle: s });
-    }
-
-    function applyAnnFontSize(v) {
-      state.annFontSize = v;
-      updateChipPreviews();
-      applyStyleToSelection({ fontSize: v });
+    function chipSetter(stateKey, patchKey) {
+      return function (v) {
+        state[stateKey] = v;
+        updateChipPreviews();
+        var patch = {};
+        patch[patchKey] = v;
+        applyStyleToSelection(patch);
+      };
     }
 
     var widthBtn = qs("#coStrokeWidthBtn");
@@ -795,7 +786,7 @@
             line.style.borderTopStyle = "solid";
           },
         };
-      }), state.annStrokeWidth, applyAnnStrokeWidth);
+      }), state.annStrokeWidth, chipSetter("annStrokeWidth", "strokeWidth"));
     });
 
     var styleBtn = qs("#coStrokeStyleBtn");
@@ -810,7 +801,7 @@
             line.style.borderTopStyle = s;
           },
         };
-      }), state.annStrokeStyle, applyAnnStrokeStyle);
+      }), state.annStrokeStyle, chipSetter("annStrokeStyle", "strokeStyle"));
     });
 
     var fontBtn = qs("#coFontSizeBtn");
@@ -827,7 +818,7 @@
             cell.style.fontSize = fontDisplayPx(v) + "px";
           },
         };
-      }), state.annFontSize, applyAnnFontSize);
+      }), state.annFontSize, chipSetter("annFontSize", "fontSize"));
     });
 
     updateChipPreviews();
@@ -848,6 +839,12 @@
       paintSwatches();
       updateChipPreviews();
     };
+  }
+
+  // Tool buttons, canvas sizing, text input, and pointer gestures.
+  function initGestures() {
+    var canvas = canvasEl();
+    var video = qs("#coVideo");
 
     // Tool buttons ([data-tool] excludes the independent #coToolHide toggle).
     qsa(".co-tool-btn[data-tool]").forEach(function (btn) {
@@ -936,16 +933,7 @@
     });
 
     // One update per frame: pointer events arrive at 120–240 Hz and each branch renders.
-    var _moveRaf = 0;
-    var _lastMove = null;
-    canvas.addEventListener("pointermove", function (e) {
-      _lastMove = e;
-      if (_moveRaf) return;
-      _moveRaf = requestAnimationFrame(function () {
-        _moveRaf = 0;
-        handlePointerMove(_lastMove);
-      });
-    });
+    canvas.addEventListener("pointermove", rafThrottle(handlePointerMove));
 
     function handlePointerMove(e) {
       var pos = eventToNormalized(e);

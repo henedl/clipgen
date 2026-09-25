@@ -9,7 +9,7 @@
  * used to poke directly through cancelPendingSeek / clearTimelineMarkers /
  * hasTimelineHover. Plain utils.js globals (qs/el/formatTime/MARK_CATEGORIES/
  * getCanvasThemeColors/drawTimelineRuler/niceTimeInterval/getCSSVar/hexToRgba/
- * getStoredUIState/setStoredUIStateField/clipgenInstallPausedFrameOverlay) and
+ * getStoredUIState/setStoredUIStateField) and
  * window.ClipgenVideoControls are reached via the scope chain.
  */
 (function () {
@@ -149,7 +149,7 @@
     if (rect.width === 0) return;
     var dpr = window.devicePixelRatio || 1;
     [c1, c2].forEach(function (c) {
-      var cssH = c === c2 ? c.offsetHeight || 48 : c.offsetHeight || 48;
+      var cssH = c.offsetHeight || 48;
       var cssW = rect.width;
       c.width = Math.round(cssW * dpr);
       c.height = Math.round(cssH * dpr);
@@ -326,7 +326,6 @@
     var canvas = qs("#timelineCanvas");
     if (!canvas) return;
     var ctx = canvas.getContext("2d");
-    var v = qs("#videoPlayer");
     var cssW = canvas.offsetWidth;
     var cssH = canvas.offsetHeight;
     ctx.clearRect(0, 0, cssW, cssH);
@@ -548,9 +547,9 @@
 
   // Load `pid`'s markers into state (nulls when it has none). Callers repaint.
   function restoreMarkers(pid) {
-    var entry = pid ? _readStoredMarkers()[pid] : null;
-    state.inMarker = entry && typeof entry.in === "number" ? entry.in : null;
-    state.outMarker = entry && typeof entry.out === "number" ? entry.out : null;
+    var m = getStoredMarkersFor(pid);
+    state.inMarker = m.in;
+    state.outMarker = m.out;
   }
 
   // Drop markers past the video end; a stale one would reach the transcription out-of-
@@ -640,6 +639,18 @@
     if (TS._hideFrictionTooltip) TS._hideFrictionTooltip();
   }
 
+  // Place a shown tooltip above-right of the cursor, clamped to the viewport.
+  function placeCursorTooltip(tip, clientX, clientY) {
+    var tipRect = tip.getBoundingClientRect();
+    var x = clientX + 12;
+    var y = clientY - tipRect.height - 12;
+    if (x + tipRect.width > window.innerWidth - 8) x = window.innerWidth - tipRect.width - 8;
+    if (y < 8) y = clientY + 16;
+    if (y + tipRect.height > window.innerHeight - 8) y = Math.max(8, window.innerHeight - tipRect.height - 8);
+    tip.style.left = x + "px";
+    tip.style.top = y + "px";
+  }
+
   function showTimelineTooltip(hit, clientX, clientY) {
     var tip = qs("#trTooltip");
     if (!tip) return;
@@ -648,10 +659,10 @@
     var mark = getMarkForSegment(seg);
     var cat = (mark && MARK_CATEGORIES[mark.category]) || MARK_CATEGORIES.bookmark || { label: "Mark", color: "#888" };
     // Placeholders, not the surface, while redaction is applied.
-    var shown = (TS.displayText ? TS.displayText(seg) : seg.text || "").trim();
+    var shown = TS.displayText(seg).trim();
     var snippet = shown.slice(0, 80);
     if (shown.length > 80) snippet += "…";
-    if (seg.speaker && TS.speakersOn && TS.speakersOn()) {
+    if (seg.speaker && TS.speakersOn()) {
       snippet = TS.speakerName(seg.speaker) + ": " + snippet;
     }
     var extraCount = (seg.marks && seg.marks.length > 1) ? (seg.marks.length - 1) : 0;
@@ -671,14 +682,7 @@
     tip.appendChild(document.createElement("br"));
     tip.appendChild(document.createTextNode(snippet));
     tip.classList.remove("hidden");
-    var tipRect = tip.getBoundingClientRect();
-    var x = clientX + 12;
-    var y = clientY - tipRect.height - 12;
-    if (x + tipRect.width > window.innerWidth - 8) x = window.innerWidth - tipRect.width - 8;
-    if (y < 8) y = clientY + 16;
-    if (y + tipRect.height > window.innerHeight - 8) y = Math.max(8, window.innerHeight - tipRect.height - 8);
-    tip.style.left = x + "px";
-    tip.style.top = y + "px";
+    placeCursorTooltip(tip, clientX, clientY);
   }
 
   function hideTimelineTooltip() {
@@ -698,14 +702,15 @@
     _markerHitRects = [];
   }
 
-  function onMarkerClick(hit) {
-    var seg = state.segments[hit.segIndex];
+  // Seek to a segment and scroll its row into view; agents' moment chips share it.
+  function seekToSegmentIndex(idx) {
+    var seg = state.segments[idx];
     if (!seg) return;
     seekVideo(seg.start);
     if (!state.cachedSegmentRows) {
       state.cachedSegmentRows = qs("#segmentList").querySelectorAll(".segment-row");
     }
-    var row = state.cachedSegmentRows[hit.segIndex];
+    var row = state.cachedSegmentRows[idx];
     if (row) scrollToSegment(row);
   }
 
@@ -827,10 +832,63 @@
       });
     });
 
-    // Keep the paused frame visible across tab switches. See utils.js.
-    clipgenInstallPausedFrameOverlay(video);
+    // Keep the paused frame visible across tab switches.
+    installPausedOverlay(video);
 
     updatePlayerButtons();
+  }
+
+  // Hidden tabs drop paused <video> frames; snapshot to canvas until repaint. Positioned parent required.
+  function installPausedOverlay(video) {
+    if (!video || video._clipgenPausedOverlay) return;
+    var parent = video.parentNode;
+    if (!parent) return;
+
+    var canvas = document.createElement("canvas");
+    canvas.className = "video-paused-overlay";
+    // Inline styles so the helper works without page-specific CSS.
+    canvas.style.position = "absolute";
+    canvas.style.inset = "0";
+    canvas.style.width = "100%";
+    canvas.style.height = "100%";
+    canvas.style.objectFit = "contain";
+    canvas.style.pointerEvents = "none";
+    canvas.style.display = "none";
+    parent.appendChild(canvas);
+    video._clipgenPausedOverlay = canvas;
+
+    var hide = function () { canvas.style.display = "none"; };
+
+    var snapshot = function () {
+      if (!video.src || !video.paused) return;
+      var w = video.videoWidth, h = video.videoHeight;
+      // videoWidth/Height are zero until the first frame decodes.
+      if (!w || !h) return;
+      canvas.width = w;
+      canvas.height = h;
+      try {
+        canvas.getContext("2d").drawImage(video, 0, 0, w, h);
+        canvas.style.display = "";
+      } catch (_) {
+        // Cross-origin or other draw failure: leave the overlay hidden.
+      }
+    };
+
+    // The live video reasserts itself: drop the snapshot.
+    video.addEventListener("play", hide);
+    video.addEventListener("seeked", hide);
+    video.addEventListener("emptied", hide);
+    video.addEventListener("loadedmetadata", hide);
+
+    document.addEventListener("visibilitychange", function () {
+      if (document.hidden) {
+        snapshot();
+      } else if (video.paused && video.src) {
+        // Nudge currentTime so `seeked` hides the snapshot; same-value assignment may be optimized away.
+        var t = video.currentTime;
+        video.currentTime = t > 0.001 ? t - 0.001 : 0.001;
+      }
+    });
   }
 
   function initTimelineCanvas() {
@@ -857,7 +915,7 @@
     canvas.addEventListener("click", function (e) {
       var hit = hitTestTimeline(e.clientX, e.clientY);
       if (hit) {
-        onMarkerClick(hit);
+        seekToSegmentIndex(hit.segIndex);
         return;
       }
       var t = timelineXToTime(e);
@@ -1055,12 +1113,12 @@
       {
         id: "transcripts.cyclePartPrev",
         when: _hotkeysActive,
-        handler: function () { if (TS.cycleParticipant) TS.cycleParticipant(-1); },
+        handler: function () { TS.cycleParticipant(-1); },
       },
       {
         id: "transcripts.cyclePartNext",
         when: _hotkeysActive,
-        handler: function () { if (TS.cycleParticipant) TS.cycleParticipant(1); },
+        handler: function () { TS.cycleParticipant(1); },
       },
       {
         id: "transcripts.pillMenu",
@@ -1367,10 +1425,10 @@
     var visibleBottom = scroller.scrollTop + scroller.clientHeight;
 
     if (rowTopInScroll < visibleTop + 40) {
-      _ignoreScrollUntil = Date.now() + 120;
+      ignoreNextScroll();
       scroller.scrollTop = rowTopInScroll - chromeTop - 40;
     } else if (rowBottomInScroll > visibleBottom - 40) {
-      _ignoreScrollUntil = Date.now() + 120;
+      ignoreNextScroll();
       scroller.scrollTop = rowBottomInScroll - scroller.clientHeight + 40;
     }
   }
@@ -1385,16 +1443,16 @@
   TS.updateTranscribeFill = updateTranscribeFill;
   TS.seekVideo = seekVideo;
   TS.scrollToSegment = scrollToSegment;
+  TS.seekToSegmentIndex = seekToSegmentIndex;
+  TS.placeCursorTooltip = placeCursorTooltip;
   TS.ignoreNextScroll = ignoreNextScroll;
   TS.applyCaptionMode = applyCaptionMode;
-  TS._partForGlobal = clipgenPartForGlobal;
   TS._partMediaUrl = _partMediaUrl;
   TS.cancelPendingSeek = cancelPendingSeek;
   TS.clearTimelineMarkers = clearTimelineMarkers;
   TS.hasTimelineHover = hasTimelineHover;
   TS.restoreMarkers = restoreMarkers;
   TS.updateMarkerInfo = updateMarkerInfo;
-  TS.clampMarkersToDuration = clampMarkersToDuration;
   TS.getStoredMarkersFor = getStoredMarkersFor;
   TS.clearMarkersFor = clearMarkersFor;
 })();

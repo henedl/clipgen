@@ -104,7 +104,7 @@ def test_concatenate_clips_reencode_fallback(monkeypatch):
 
     monkeypatch.setattr(video, "run_ffmpeg_process", fake_run_ffmpeg_process)
 
-    ok = video.concatenate_clips(["a.mp4", "b.mp4"], "reel.mp4", reencode_on_fail=True)
+    ok = video.concatenate_clips(["a.mp4", "b.mp4"], "reel.mp4")
     assert ok is True
     assert len(captured_commands) == 2
     assert "-c" in captured_commands[0] and "copy" in captured_commands[0]
@@ -296,9 +296,7 @@ def test_concatenate_clips_reencode_uses_hardware_encoder(monkeypatch):
         lambda command, **_kw: (captured.append(command), results.pop(0))[1],
     )
 
-    assert video.concatenate_clips(
-        ["a.mp4", "b.mp4"], "reel.mp4", reencode_on_fail=True
-    )
+    assert video.concatenate_clips(["a.mp4", "b.mp4"], "reel.mp4")
     assert "h264_videotoolbox" in captured[1]
     assert "libx264" not in captured[1]
 
@@ -1470,22 +1468,22 @@ def test_extract_frame_at_timestamp_debug_mode(monkeypatch):
     assert frame.shape == (1080, 1920, 3)
 
 
-# ---- accurate_seek_args ----
+# ---- accurate_seek_pre_post ----
 
 
-def test_accurate_seek_args_zero_returns_empty_list():
-    assert video.accurate_seek_args(0.0) == []
+def test_accurate_seek_pre_post_zero_returns_empty_list():
+    assert video.accurate_seek_pre_post(0.0)[0] == []
 
 
-def test_accurate_seek_args_is_a_single_pre_input_seek():
+def test_accurate_seek_pre_post_keeps_exact_float():
     """One pre-input -ss, exact float preserved — no two-stage split.
 
     Pre-input -ss is frame-accurate on every decoded output (ffmpeg
     decodes-and-discards from the prior keyframe); the old split decoded
     ~2 s of extra frames per extraction for a bit-identical result.
     """
-    assert video.accurate_seek_args(12.345) == ["-ss", "12.345"]
-    assert video.accurate_seek_args(0.5) == ["-ss", "0.5"]
+    assert video.accurate_seek_pre_post(12.345)[0] == ["-ss", "12.345"]
+    assert video.accurate_seek_pre_post(0.5)[0] == ["-ss", "0.5"]
 
 
 def test_accurate_seek_pre_post_zero_start_is_single_pre_input():

@@ -10,6 +10,7 @@ Flask = pytest.importorskip("flask").Flask
 
 import config
 import screenspace
+import screenspace_manifest
 import screenspace_preview
 import screenspace_server
 import server_utils
@@ -1608,13 +1609,13 @@ def test_extract_media_shaped_region_sets_mask(tool, image_key, mask_key):
         "h": 40,
         "mask_points": [[[0.5, 0.0], [1.0, 1.0], [0.0, 1.0]]],
     }
-    screenspace_server._extract_tool_media(spec, tool, lambda ts: frame, region_coords)
+    screenspace_manifest.extract_tool_media(spec, tool, lambda ts: frame, region_coords)
     assert spec[image_key].shape[:2] == (40, 40)
     assert spec[mask_key] is not None
     assert spec[mask_key].shape == (40, 40)
     # Rect-only capture regions keep the unmasked path.
     rect_spec: dict[str, Any] = {"reference_timestamp": 0.0}
-    screenspace_server._extract_tool_media(
+    screenspace_manifest.extract_tool_media(
         rect_spec, tool, lambda ts: frame, {"x": 10, "y": 10, "w": 40, "h": 40}
     )
     assert mask_key not in rect_spec

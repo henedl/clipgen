@@ -4,7 +4,7 @@
  * the region-chip drag state machine, carved out of screenspace.js. Loads
  * before screenspace-overlay-interaction.js, which destructures stashRegions
  * at load time; SS.renderRegionChips / SS.updateRegionButtons are therefore reached
- * late-bound through SS. Function bodies are unchanged from the hub.
+ * late-bound through SS.
  */
 (function () {
   "use strict";
@@ -12,10 +12,9 @@
   var SS = window.ClipgenScreenspace;
   var state = SS.state;
   var iconSpan = SS.iconSpan,
+    findStash = SS.findStash,
     regionColorForIndex = SS.regionColorForIndex,
-    regionToPixels = SS.regionToPixels,
-    renderRunRegionPicker = SS.renderRunRegionPicker,
-    updateRunButton = SS.updateRunButton;
+    renderRunRegionPicker = SS.renderRunRegionPicker;
 
 
   // Stash id whose card gets the landing animation; consumed on first render.
@@ -31,15 +30,12 @@
         state.regions = {};
         state.activeRegion = null;
         state.pendingRegion = null;
-        SS.renderRegionChips();
-        SS.renderOverlay();
-        SS.updateRegionButtons();
-        updateRunButton();
+        SS.refreshRegionUi();
         renderStashCards();
         showToast("Regions stashed");
       };
       // Pills stash out (jump + wiggle + dissolve), then the stash card lands.
-      if (chips.length && window.ClipgenMotion) ClipgenMotion.animateOutAll(chips, "stash").then(commit);
+      if (chips.length) ClipgenMotion.animateOutAll(chips, "stash").then(commit);
       else commit();
     }).catch(toastError("Could not create stash"));
   }
@@ -61,10 +57,7 @@
       state.regions = data.regions || {};
       state.activeRegion = null;
       state.pendingRegion = null;
-      SS.renderRegionChips();
-      SS.renderOverlay();
-      SS.updateRegionButtons();
-      updateRunButton();
+      SS.refreshRegionUi();
       renderStashCards();
       showToast("Regions restored");
     }).catch(toastError("Could not restore stash"));
@@ -75,12 +68,8 @@
     apiPost("api/stashes/" + stashId + "/regions", { name: name })
       .then(function (data) {
         if (!data.ok) return;
-        for (var i = 0; i < state.stashes.length; i++) {
-          if (state.stashes[i].id === stashId) {
-            state.stashes[i] = data.stash;
-            break;
-          }
-        }
+        var idx = state.stashes.indexOf(findStash(stashId));
+        if (idx >= 0) state.stashes[idx] = data.stash;
         renderStashCards(); // updated count + dots
         renderRunRegionPicker(); // stash folder now lists the new region
         showToast("Added “" + name + "” to " + data.stash.name);
@@ -93,12 +82,8 @@
   function renameStash(stashId, newName) {
     apiPut("api/stashes/" + stashId, { name: newName }).then(function (data) {
       if (!data.ok) return;
-      for (var i = 0; i < state.stashes.length; i++) {
-        if (state.stashes[i].id === stashId) {
-          state.stashes[i].name = data.stash.name;
-          break;
-        }
-      }
+      var stash = findStash(stashId);
+      if (stash) stash.name = data.stash.name;
       renderRunRegionPicker();
     }).catch(toastError("Could not rename stash"));
   }
@@ -118,7 +103,7 @@
     state.stashes.forEach(function (stash) {
       var card = el("div", "stash-card");
       card.dataset.stashId = stash.id;
-      if (stash.id === _justStashedStashId && window.ClipgenMotion) {
+      if (stash.id === _justStashedStashId) {
         ClipgenMotion.animateIn(card, "stashLand");
         _justStashedStashId = null;
       }
@@ -300,32 +285,9 @@
     return name ? Object.keys(state.regions).indexOf(name) : -1;
   }
 
-  function _cacheRegionDragMidpoints(container) {
-    var chips = container.querySelectorAll(".region-chip:not(.dragging)");
-    var mids = new Array(chips.length);
-    for (var i = 0; i < chips.length; i++) {
-      var r = chips[i].getBoundingClientRect();
-      mids[i] = r.left + r.width / 2;
-    }
-    _regionDragMidpoints = mids;
-  }
-
   function getRegionDropIndex(container, clientX) {
-    var mids = _regionDragMidpoints;
-    if (!mids) {
-      _cacheRegionDragMidpoints(container);
-      mids = _regionDragMidpoints;
-    }
-    for (var i = 0; i < mids.length; i++) {
-      if (clientX < mids[i]) return i;
-    }
-    return mids.length;
-  }
-
-  function clearRegionDragIndicators(container) {
-    var chips = container.querySelectorAll(".region-chip.drag-over");
-    for (var i = 0; i < chips.length; i++) chips[i].classList.remove("drag-over");
-    container.classList.remove("drag-over-append");
+    if (!_regionDragMidpoints) _regionDragMidpoints = dragMidpoints(container, ".region-chip", "x");
+    return indexBefore(_regionDragMidpoints, clientX);
   }
 
   function initRegionDrag() {
@@ -343,7 +305,7 @@
       chip.classList.add("dragging");
       setRegionDragData(e.dataTransfer, chip.dataset.regionIdx, chip.dataset.regionName);
       e.dataTransfer.effectAllowed = "copyMove";
-      _cacheRegionDragMidpoints(chips);
+      _regionDragMidpoints = dragMidpoints(chips, ".region-chip", "x");
     });
 
     chips.addEventListener("dragend", function (e) {
@@ -354,7 +316,7 @@
         _regionDragOverRaf = null;
       }
       _regionPendingDragOverX = null;
-      clearRegionDragIndicators(chips);
+      clearDropIndicators(chips, ".region-chip");
       clearStashDragIndicators();
       _regionDragMidpoints = null;
       if (_regionDragMoved || _regionDragDropped) {
@@ -376,7 +338,7 @@
       _regionDragOverRaf = requestAnimationFrame(function () {
         _regionDragOverRaf = null;
         if (_regionPendingDragOverX == null) return;
-        clearRegionDragIndicators(chips);
+        clearDropIndicators(chips, ".region-chip");
         var visible = chips.querySelectorAll(".region-chip:not(.dragging)");
         var idx = getRegionDropIndex(chips, _regionPendingDragOverX);
         if (idx < visible.length) visible[idx].classList.add("drag-over");
@@ -394,7 +356,7 @@
       if (!hasRegionDragPayload(e)) return;
       e.preventDefault();
       _regionDragDropped = true;
-      clearRegionDragIndicators(chips);
+      clearDropIndicators(chips, ".region-chip");
       var fromIdx = getDraggedRegionIndex(e);
       if (fromIdx < 0) return;
       var toIdx = getRegionDropIndex(chips, e.clientX);

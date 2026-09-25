@@ -42,9 +42,10 @@ Clip record (returned by generation functions):
 """
 
 import re
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
-from typing import Any, NamedTuple
+from datetime import datetime
+from typing import Any, Literal, NamedTuple
 
 import config
 import google_api
@@ -185,6 +186,12 @@ def get_num_participants(header_row: list[str], id_cell: Any, col_count: int) ->
     return num_participants
 
 
+def is_excel_worksheet(worksheet: Any) -> bool:
+    """Return True if worksheet is the Excel adapter (local file, no URL)."""
+    spread = getattr(worksheet, "spreadsheet", None)
+    return spread is not None and getattr(spread, "url", None) is None
+
+
 def build_sheet_context(sheet: Any) -> SheetContext | None:
     """Validate headers, load sheet data, and build a SheetContext.
 
@@ -192,7 +199,9 @@ def build_sheet_context(sheet: Any) -> SheetContext | None:
     Returns None if validation fails (missing headers, empty sheet, no participants).
     """
     sheet_data = google_api.get_sheet_values(sheet)
-    utils.debug_print(f"Sheet dumped into memory at {utils.get_current_time()}")
+    utils.debug_print(
+        f"Sheet dumped into memory at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+    )
 
     if len(sheet_data) <= 1:
         utils.error_print(
@@ -278,21 +287,6 @@ def get_participant_list(
     return participants
 
 
-def parse_participant_selection(input_str: str) -> list[str]:
-    """Parse a participant selection string into a list of IDs.
-
-    Splits on + or , and returns non-empty stripped tokens.
-
-    Args:
-        input_str: User input (e.g. "P01 + P03" or "P01, P03" or "1, 3")
-
-    Returns:
-        List of participant ID strings (e.g. ['P01', 'P03'])
-    """
-    # Support both + and , as separators
-    return utils.split_selector_tokens(input_str)
-
-
 def parse_cell_specifications(cell_input: str) -> list[tuple[str, int]]:
     """Parse cell specification string into list of (participant_id, row_number) tuples.
 
@@ -312,11 +306,6 @@ def parse_cell_specifications(cell_input: str) -> list[tuple[str, int]]:
             )
 
         parts = spec.split(".", 1)
-        if len(parts) != 2:
-            raise ValueError(
-                f'Invalid cell specification "{spec}". Expected format: P01.11'
-            )
-
         participant_id = parts[0].strip()
         row_str = parts[1].strip()
 
@@ -339,6 +328,11 @@ def parse_cell_specifications(cell_input: str) -> list[tuple[str, int]]:
         specs.append((participant_id, row_number))
 
     return specs
+
+
+_FLAG_TOKENS: tuple[
+    Literal["batch", "keyword", "severity", "highlights", "chronologic"], ...
+] = ("batch", "keyword", "severity", "highlights", "chronologic")
 
 
 def parse_reel_input(input_string: str) -> ReelInput:
@@ -388,29 +382,10 @@ def parse_reel_input(input_string: str) -> ReelInput:
     seen_cells = set()
     seen_participants = set()
 
-    for part in parts:
-        token = part.strip()
-        if not token:
-            continue
-        # Batch keyword: literal "batch"
-        if token.lower() == "batch":
-            result["batch"] = True
-            continue
-        # Keyword mode: literal "keyword"
-        if token.lower() == "keyword":
-            result["keyword"] = True
-            continue
-        # Severity ordering: literal "severity"
-        if token.lower() == "severity":
-            result["severity"] = True
-            continue
-        # Highlights keyword: literal "highlights"
-        if token.lower() == "highlights":
-            result["highlights"] = True
-            continue
-        # Chronologic keyword: literal "chronologic"
-        if token.lower() == "chronologic":
-            result["chronologic"] = True
+    for token in parts:
+        flag = next((key for key in _FLAG_TOKENS if token.lower() == key), None)
+        if flag:
+            result[flag] = True
             continue
         # Range: "13-16" -> start, end (digits hyphen digits)
         range_match = re.match(r"^(\d+)\s*-\s*(\d+)$", token)
@@ -448,6 +423,20 @@ def parse_reel_input(input_string: str) -> ReelInput:
                 result["participants"].append(token)
 
     return result
+
+
+def clip_selector_names(parsed: ReelInput) -> list[str]:
+    """Names of the clip selectors present in *parsed*, in display order."""
+    keys = (
+        "batch",
+        "keyword",
+        "lines",
+        "ranges",
+        "cells",
+        "participants",
+        "categories",
+    )
+    return [key for key in keys if parsed.get(key)]
 
 
 def detect_mode_from_input(input_string: str) -> tuple[str | None, dict[str, Any]]:
@@ -492,7 +481,7 @@ def detect_mode_from_input(input_string: str) -> tuple[str | None, dict[str, Any
     if has_cells:
         return ("cell", {"cell_specs": parsed["cells"]})
     if has_participants:
-        # participant_id is a string that parse_participant_selection() will parse
+        # utils.split_selector_tokens() splits this string later.
         participant_id = ",".join(parsed["participants"])
         return ("participant", {"participant_id": participant_id})
 
@@ -521,6 +510,21 @@ def find_participant_column(
         if header_value.lower() == normalized_target:
             return col_idx
     return None
+
+
+def resolve_participant_token(
+    ctx: SheetContext, available: list[str], token: str
+) -> str | None:
+    """Resolve a 1-based index or header ID to a participant ID, else None."""
+    if token.isdigit():
+        idx = int(token)
+        return available[idx - 1] if 1 <= idx <= len(available) else None
+    col_idx = find_participant_column(ctx.header_row, ctx.id_cell, token)
+    if col_idx is None:
+        return None
+    if col_idx < len(ctx.header_row):
+        return utils.normalize_participant_id(ctx.header_row[col_idx])
+    return token
 
 
 def participant_filename_overrides(
@@ -656,12 +660,6 @@ def get_line_timestamps(ctx: SheetContext, line_index: int) -> list[ClipRecord]:
     Returns:
         List of clip records, one per timestamp found
     """
-    if config.DEBUGGING:
-        config.debug_ic(line_index, ctx.num_participants, ctx.study_name)
-    utils.debug_print(
-        f"Running method get_line_timestamps, starting line index {line_index} (real sheet line {line_index + 1})"
-    )
-
     if line_index < 0 or line_index >= len(ctx.sheet_data):
         if config.DEBUGGING:
             config.debug_ic(line_index, len(ctx.sheet_data))
@@ -674,43 +672,19 @@ def get_line_timestamps(ctx: SheetContext, line_index: int) -> list[ClipRecord]:
     clips = []
     try:
         for col_index, value in enumerate(ctx.sheet_data[line_index]):
-            utils.debug_print(f"Item {col_index} with value '{value}' being processed.")
             if col_index < ctx.id_cell.col:
-                utils.debug_print(f"Skipping item {col_index} with value '{value}'")
-            elif col_index == ctx.id_cell.col + ctx.num_participants:
-                utils.debug_print(
-                    f"Exit for-loop, reached final column {col_index} (real sheet column {col_index + 1})."
-                )
+                continue
+            if col_index == ctx.id_cell.col + ctx.num_participants:
                 break
-            elif value is None or value == "":
-                pass
-            else:
-                issue = _make_clip_record(ctx, line_index, col_index, value)
-                if config.DEBUGGING:
-                    config.debug_ic(
-                        issue.get("participant"),
-                        issue.get("desc"),
-                        issue.get("category"),
-                    )
-                    config.debug_ic(issue)
-                utils.debug_print(
-                    f"Participant ID at R{ctx.id_cell.row},C{col_index} -> '{issue.get('participant')}'"
-                )
-                utils.debug_print(
-                    f"Description at R{line_index},C{ctx.observation_cell.col - 1} -> '{issue.get('desc')}'"
-                )
-                utils.debug_print(
-                    f"Timestamp at R{issue['cell'].row - 1},C{issue['cell'].col - 1} -> '{issue['cell'].value}'"
-                )
-                utils.debug_print(
-                    f"Actual cell at address {utils.safe_cell_a1(issue['cell'].row, issue['cell'].col)}"
-                )
-                clips.append(issue)
-                display_value = value.replace("\n", " ")
-                cell_addr = utils.safe_cell_a1(issue["cell"].row, issue["cell"].col)
-                utils.verbose_print(
-                    f"+ Found timestamp: {display_value} at address {cell_addr}"
-                )
+            if value is None or value == "":
+                continue
+            issue = _make_clip_record(ctx, line_index, col_index, value)
+            clips.append(issue)
+            display_value = value.replace("\n", " ")
+            cell_addr = utils.safe_cell_a1(issue["cell"].row, issue["cell"].col)
+            utils.verbose_print(
+                f"+ Found timestamp: {display_value} at address {cell_addr}"
+            )
     except IndexError as e:
         if config.DEBUGGING:
             config.debug_ic(e, line_index)
@@ -718,12 +692,6 @@ def get_line_timestamps(ctx: SheetContext, line_index: int) -> list[ClipRecord]:
             f"Index error while reading row {line_index + 1}: {e}",
             ["The spreadsheet structure may be malformed."],
         )
-
-    utils.debug_print(
-        f"Line completed, returning list of {len(clips)} potential clips."
-    )
-    if config.DEBUGGING:
-        config.debug_ic(clips)
     return clips
 
 
@@ -762,13 +730,39 @@ def collect_severities(ctx: SheetContext) -> tuple[list[str], dict[str, int]]:
     return severities, counts
 
 
+def _data_rows(
+    ctx: SheetContext, start: int | None = None, end: int | None = None
+) -> Iterator[int]:
+    """Row indices from *start* to *end*, skipping the Filename override row."""
+    first = ctx.first_data_row_idx if start is None else start
+    last = len(ctx.sheet_data) if end is None else end
+    return (i for i in range(first, last) if i != ctx.filename_row_idx)
+
+
+def iter_data_rows(ctx: SheetContext) -> Iterator[tuple[int, list[str], str, str]]:
+    """Yield (row_idx, row_data, observation, severity), skipping baseline and filename rows."""
+    obs_col = ctx.observation_cell.col - 1
+    sev_col = ctx.severity_cell.col - 1 if ctx.severity_cell else None
+    for row_idx in _data_rows(ctx):
+        if row_idx == ctx.baseline_row_idx:
+            continue
+        row_data = ctx.sheet_data[row_idx]
+        observation = row_data[obs_col] if obs_col < len(row_data) else ""
+        severity = ""
+        if (
+            sev_col is not None
+            and sev_col < len(row_data)
+            and row_data[sev_col].strip()
+        ):
+            severity = utils.normalize_severity(row_data[sev_col])
+        yield row_idx, row_data, observation, severity
+
+
 def collect_annotations(ctx: SheetContext) -> tuple[list[str], dict[str, int]]:
     """Scan sheet and return unique annotation IDs found in timestamp cells, plus cell counts."""
     annotation_ids: list[str] = []
     counts: dict[str, int] = {}
-    for i in range(ctx.first_data_row_idx, len(ctx.sheet_data)):
-        if ctx.filename_row_idx is not None and i == ctx.filename_row_idx:
-            continue
+    for i in _data_rows(ctx):
         for col_idx in range(ctx.id_cell.col, ctx.id_cell.col + ctx.num_participants):
             if col_idx >= len(ctx.sheet_data[i]):
                 continue
@@ -826,7 +820,6 @@ def generate_list(
     line_numbers: list[int] | None = None,
     range_start: int | None = None,
     range_end: int | None = None,
-    skip_prompts: bool = False,
     cell_specs: list[tuple[str, int]] | None = None,
     participant_id: str | None = None,
     reel_input: str | None = None,
@@ -843,8 +836,7 @@ def generate_list(
     ``(participant_id, row_number)`` tuples, *participant_id* as a comma/plus
     separated string, *reel_input*, *categories*).
 
-    Passing a pre-built *ctx* skips the sheet API call. *skip_prompts* (the CLI
-    ``--no-input`` flag) drops the batch/keyword confirmations.
+    Passing a pre-built *ctx* skips the sheet API call.
     """
     if config.DEBUGGING:
         config.debug_ic(mode, line_numbers, range_start, range_end)
@@ -915,7 +907,7 @@ def generate_list(
         available_list = get_participant_list(
             ctx.header_row, ctx.id_cell, ctx.num_participants
         )
-        participant_ids = parse_participant_selection(participant_id)
+        participant_ids = utils.split_selector_tokens(participant_id)
         if not participant_ids:
             utils.error_print(
                 "No participant ID(s) provided.",
@@ -966,12 +958,8 @@ def generate_list(
 
 def generate_batch_timestamps(ctx: SheetContext) -> list[ClipRecord]:
     """Generate clip records for all rows in batch mode."""
-    utils.debug_print("Running method generate_batch_timestamps()")
     clips = []
-    for i in range(ctx.first_data_row_idx, len(ctx.sheet_data)):
-        if ctx.filename_row_idx is not None and i == ctx.filename_row_idx:
-            continue
-        utils.debug_print(f"Batching on line {i} (real sheet line {i + 1})")
+    for i in _data_rows(ctx):
         clips.extend(get_line_timestamps(ctx, i))
     return clips
 
@@ -1012,12 +1000,9 @@ def generate_category_timestamps(
     ctx: SheetContext, selected_categories: list[str]
 ) -> list[ClipRecord]:
     """Generate clip records for all rows matching any of the selected categories."""
-    utils.debug_print("Starting method generate_category_timestamps()")
     clips = []
     category_col = ctx.category_cell.col - 1
-    for i in range(ctx.first_data_row_idx, len(ctx.sheet_data)):
-        if ctx.filename_row_idx is not None and i == ctx.filename_row_idx:
-            continue
+    for i in _data_rows(ctx):
         if category_col >= len(ctx.sheet_data[i]):
             continue
         row_category = ctx.sheet_data[i][category_col].strip()
@@ -1037,9 +1022,7 @@ def generate_severity_timestamps(
     clips = []
     severity_col = ctx.severity_cell.col - 1
     selected_lower = {s.lower() for s in selected_severities}
-    for i in range(ctx.first_data_row_idx, len(ctx.sheet_data)):
-        if ctx.filename_row_idx is not None and i == ctx.filename_row_idx:
-            continue
+    for i in _data_rows(ctx):
         if severity_col < len(ctx.sheet_data[i]):
             raw = ctx.sheet_data[i][severity_col].strip()
             normalized = utils.normalize_severity(raw)
@@ -1083,15 +1066,7 @@ def generate_line_timestamps(
 
     clips = []
     for line_num in valid_lines:
-        utils.debug_print(
-            f"Calling get_line_timestamps() from generate_line_timestamps() for line {line_num}"
-        )
         clips.extend(get_line_timestamps(ctx, line_num - 1))
-
-    utils.debug_print(
-        f"Printing return of get_line_timestamps() in generate_line_timestamps(): {len(clips)} total clips"
-    )
-    utils.debug_print(str(clips))
     return clips
 
 
@@ -1106,11 +1081,7 @@ def generate_range_timestamps(
         end_line: Ending row number (1-based, inclusive)
     """
     clips = []
-    for i in range(start_line - 1, end_line):
-        # Skip the Filename override row; its cells are not timestamps.
-        if ctx.filename_row_idx is not None and i == ctx.filename_row_idx:
-            continue
-        utils.debug_print(f"Batching on line {i}")
+    for i in _data_rows(ctx, start_line - 1, end_line):
         clips.extend(get_line_timestamps(ctx, i))
     return clips
 
@@ -1119,14 +1090,11 @@ def generate_participant_timestamps(
     ctx: SheetContext, participant_id: str
 ) -> list[ClipRecord]:
     """Generate clip records for all rows in a single participant's column."""
-    utils.debug_print("Starting method generate_participant_timestamps()")
     col_idx = find_participant_column(ctx.header_row, ctx.id_cell, participant_id)
     if col_idx is None:
         return []
     clips = []
-    for row_idx in range(ctx.first_data_row_idx, len(ctx.sheet_data)):
-        if ctx.filename_row_idx is not None and row_idx == ctx.filename_row_idx:
-            continue
+    for row_idx in _data_rows(ctx):
         if col_idx >= len(ctx.sheet_data[row_idx]):
             continue
         cell_value = ctx.sheet_data[row_idx][col_idx]
@@ -1154,7 +1122,6 @@ def generate_cell_timestamps(
     Returns:
         List of clip records
     """
-    utils.debug_print("Starting method generate_cell_timestamps()")
     clips = []
 
     for participant_id, row_number in cell_specs:
@@ -1197,16 +1164,6 @@ def generate_cell_timestamps(
             continue
 
         issue = _make_clip_record(ctx, row_idx, col_idx, cell_value)
-        # Use actual header value for participant when available
-        participant_row = ctx.id_cell.row - 1
-        if (
-            0 <= participant_row < len(ctx.sheet_data)
-            and col_idx < len(ctx.sheet_data[participant_row])
-            and ctx.sheet_data[participant_row][col_idx]
-        ):
-            issue["participant"] = utils.normalize_participant_id(
-                ctx.sheet_data[participant_row][col_idx]
-            )
         clips.append(issue)
         display_value = cell_value.replace("\n", " ")
         cell_addr = utils.safe_cell_a1(issue["cell"].row, issue["cell"].col)
@@ -1220,6 +1177,13 @@ def generate_cell_timestamps(
 # ---- Clip sorting ----
 
 
+def _clip_times(clip: Any) -> list[tuple[str, str]]:
+    """Parse a clip's raw cell value, annotations stripped, into (start, end) pairs."""
+    cell_value = str(clip.get("cell").value if clip.get("cell") is not None else "")
+    cleaned_value, _, _ = utils.parse_cell_annotations(cell_value)
+    return utils.parse_timestamps(cleaned_value)
+
+
 def sort_clips_chronologically(clips: list[ClipRecord]) -> None:
     """Sort clip records in-place by earliest start timestamp in each clip cell.
 
@@ -1228,9 +1192,7 @@ def sort_clips_chronologically(clips: list[ClipRecord]) -> None:
     """
 
     def _clip_start_seconds(clip: Any) -> float:
-        cell_value = str(clip.get("cell").value if clip.get("cell") is not None else "")
-        cleaned_value, _, _ = utils.parse_cell_annotations(cell_value)
-        parsed_times = utils.parse_timestamps(cleaned_value)
+        parsed_times = _clip_times(clip)
         if not parsed_times:
             return float("inf")
         first_start = parsed_times[0][0]
@@ -1258,9 +1220,7 @@ _MAX_SEVERITY_MAGNITUDE = -min(config.SEVERITY_LABEL_TO_NUMERIC.values())
 
 def _clip_duration_seconds(clip: Any) -> float:
     """Estimate a clip's total duration in seconds from its raw cell value."""
-    cell_value = str(clip.get("cell").value if clip.get("cell") is not None else "")
-    cleaned_value, _, _ = utils.parse_cell_annotations(cell_value)
-    parsed_times = utils.parse_timestamps(cleaned_value)
+    parsed_times = _clip_times(clip)
     if not parsed_times:
         return float(config.DEFAULT_DURATION_SECONDS)
     total = 0.0
@@ -1368,33 +1328,18 @@ def generate_reel_timestamps(
         )
         return []
 
+    clip_selectors = clip_selector_names(selectors)
     has_any = (
-        selectors["batch"]
-        or selectors["keyword"]
+        clip_selectors
         or selectors["chronologic"]
         or selectors.get("severity")
         or selectors.get("highlights")
-        or selectors["lines"]
-        or selectors["ranges"]
-        or selectors["categories"]
-        or selectors["cells"]
-        or selectors["participants"]
     )
     if not has_any:
         return []
 
     # Highlights alone defaults to batch (score all available clips)
-    if selectors.get("highlights") and not any(
-        [
-            selectors["batch"],
-            selectors["keyword"],
-            selectors["lines"],
-            selectors["ranges"],
-            selectors["categories"],
-            selectors["cells"],
-            selectors["participants"],
-        ]
-    ):
+    if selectors.get("highlights") and not clip_selectors:
         selectors["batch"] = True
 
     all_issues: list[ClipRecord] = []

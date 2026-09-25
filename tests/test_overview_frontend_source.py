@@ -63,7 +63,7 @@ def test_staleness_is_version_based_and_running_check_is_strict():
     assert "createStalenessTracker(mdState)" in md
     assert 's === "queued" || s === "running"' in md
     cv = (_WEB / "overview-convergence.js").read_text(encoding="utf-8")
-    assert "cvState._snapshot = { version: state.dataVersion }" in cv
+    assert "tracker.take();" in cv
     assert "createStalenessTracker(cvState)" in cv
     sm = (_WEB / "overview-reports.js").read_text(encoding="utf-8")
     assert "createStalenessTracker(rpState)" in sm

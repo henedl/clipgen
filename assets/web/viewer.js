@@ -52,8 +52,6 @@
 
   var _preview = null; // { id, videoEl, wrapEl } — currently previewed artifact
   var _hoverDebounce = null;
-  var _seekRaf = 0;
-  var _lastSeekProportion = null;
 
   var SORT_DEFAULT_DIR = {
     severity: "desc",
@@ -218,14 +216,7 @@
         ctx.drawImage(video, 0, 0, 320, 180);
         canvas.toBlob(function (blob) {
           if (!blob) { mediaEl.classList.remove("thumb-pending"); finish(); return; }
-          var url = _thumbCache.setBlob(artifact.id, blob);
-          var img = document.createElement("img");
-          img.decoding = "async";
-          img.src = url;
-          img.alt = artifact.description || "";
-          mediaEl.classList.remove("thumb-pending");
-          mediaEl.classList.add("thumb-loaded");
-          mediaEl.appendChild(img);
+          showThumb(mediaEl, _thumbCache.setBlob(artifact.id, blob), artifact.description);
           finish();
         }, "image/jpeg", 0.7);
       } catch (_) {
@@ -233,6 +224,17 @@
         finish();
       }
     };
+  }
+
+  // Swaps a card's pending placeholder for its thumbnail image.
+  function showThumb(mediaEl, url, alt) {
+    var img = document.createElement("img");
+    img.decoding = "async";
+    img.src = url;
+    img.alt = alt || "";
+    mediaEl.classList.remove("thumb-pending");
+    mediaEl.classList.add("thumb-loaded");
+    mediaEl.appendChild(img);
   }
 
   function processThumbQueue() {
@@ -366,13 +368,7 @@
       var media = card.querySelector(".artifact-media");
       if (!media || media.querySelector("img")) return;
       if (_thumbCache.get(a.id)) {
-        var img = document.createElement("img");
-        img.decoding = "async";
-        img.src = _thumbCache.get(a.id);
-        img.alt = a.description || "";
-        media.classList.remove("thumb-pending");
-        media.classList.add("thumb-loaded");
-        media.appendChild(img);
+        showThumb(media, _thumbCache.get(a.id), a.description);
         return;
       }
       _thumbQueue.push({ mediaEl: media, artifact: a });
@@ -395,32 +391,32 @@
 
   // ---- Filmstrip mode ----
 
+  // Returns the stored boolean (else initial); clicks flip it, save, and call onToggle.
+  function bindPersistedToggle(btn, storageKey, initial, onToggle) {
+    var value = initial;
+    try {
+      var stored = window.localStorage.getItem(storageKey);
+      if (stored === "true" || stored === "false") value = stored === "true";
+    } catch (_) {}
+    if (!btn) return value;
+    btn.setAttribute("aria-pressed", value ? "true" : "false");
+    btn.addEventListener("click", function () {
+      value = !value;
+      try { window.localStorage.setItem(storageKey, value ? "true" : "false"); } catch (_) {}
+      btn.setAttribute("aria-pressed", value ? "true" : "false");
+      onToggle(value);
+    });
+    return value;
+  }
+
   function initFilmstripToggle() {
-    var defaultOn = data && data.meta && data.meta.filmstripEnabled;
-    var stored = null;
-    try { stored = window.localStorage.getItem(FILMSTRIP_STORAGE_KEY); } catch (_) {}
-    if (stored === "true") _filmstripEnabled = true;
-    else if (stored === "false") _filmstripEnabled = false;
-    else _filmstripEnabled = !!defaultOn;
-
-    var btn = qs("#filmstripToggle");
-    if (btn) {
-      btn.addEventListener("click", toggleFilmstrip);
-      updateFilmstripButton();
-    }
-  }
-
-  function updateFilmstripButton() {
-    var btn = qs("#filmstripToggle");
-    if (btn) btn.setAttribute("aria-pressed", _filmstripEnabled ? "true" : "false");
-  }
-
-  function toggleFilmstrip() {
-    _filmstripEnabled = !_filmstripEnabled;
-    try { window.localStorage.setItem(FILMSTRIP_STORAGE_KEY, _filmstripEnabled ? "true" : "false"); } catch (_) {}
-    updateFilmstripButton();
-    if (_filmstripEnabled) applyFilmstripMode();
-    else removeFilmstripMode();
+    var defaultOn = !!(data && data.meta && data.meta.filmstripEnabled);
+    _filmstripEnabled = bindPersistedToggle(qs("#filmstripToggle"), FILMSTRIP_STORAGE_KEY,
+      defaultOn, function (on) {
+        _filmstripEnabled = on;
+        if (on) applyFilmstripMode();
+        else removeFilmstripMode();
+      });
   }
 
   function applyFilmstripMode() {
@@ -552,12 +548,7 @@
           video.onseeked = null;
           canvas.toBlob(function (blob) {
             if (!blob) { markerEl.classList.remove("filmstrip-loading"); finish(); return; }
-            var url = _filmstripCache.setBlob(artifact.id, blob);
-            if (_filmstripEnabled && markerEl.classList.contains("filmstrip-loading")) {
-              markerEl.style.backgroundImage = "url(" + url + ")";
-              markerEl.classList.remove("filmstrip-loading");
-              markerEl.classList.add("filmstrip-thumb");
-            }
+            applyFilmstripBg(markerEl, _filmstripCache.setBlob(artifact.id, blob));
             finish();
           }, "image/jpeg", 0.7);
         }
@@ -580,15 +571,19 @@
     };
   }
 
+  // Paints a finished strip onto a marker that is still waiting for it.
+  function applyFilmstripBg(markerEl, url) {
+    if (!_filmstripEnabled || !markerEl.classList.contains("filmstrip-loading")) return;
+    markerEl.style.backgroundImage = "url(" + url + ")";
+    markerEl.classList.remove("filmstrip-loading");
+    markerEl.classList.add("filmstrip-thumb");
+  }
+
   function processFilmstripThumbQueue() {
     while (_filmstripThumbActive < FILMSTRIP_CONCURRENCY && _filmstripThumbQueue.length) {
       var item = _filmstripThumbQueue.shift();
       if (_filmstripCache.get(item.artifact.id)) {
-        if (_filmstripEnabled && item.el.classList.contains("filmstrip-loading")) {
-          item.el.style.backgroundImage = "url(" + _filmstripCache.get(item.artifact.id) + ")";
-          item.el.classList.remove("filmstrip-loading");
-          item.el.classList.add("filmstrip-thumb");
-        }
+        applyFilmstripBg(item.el, _filmstripCache.get(item.artifact.id));
         continue;
       }
       _filmstripThumbActive++;
@@ -625,24 +620,12 @@
       btn.style.display = "none";
       return;
     }
-    var stored = null;
-    try { stored = window.localStorage.getItem(SCREENSPACE_STORAGE_KEY); } catch (_) {}
-    if (stored === "false") _screenspaceVisible = false;
-    else _screenspaceVisible = true;
-
-    btn.addEventListener("click", toggleScreenspace);
-    updateScreenspaceButton();
+    _screenspaceVisible = bindPersistedToggle(btn, SCREENSPACE_STORAGE_KEY, true,
+      setScreenspaceVisible);
   }
 
-  function updateScreenspaceButton() {
-    var btn = qs("#screenspaceToggle");
-    if (btn) btn.setAttribute("aria-pressed", _screenspaceVisible ? "true" : "false");
-  }
-
-  function toggleScreenspace() {
-    _screenspaceVisible = !_screenspaceVisible;
-    try { window.localStorage.setItem(SCREENSPACE_STORAGE_KEY, _screenspaceVisible ? "true" : "false"); } catch (_) {}
-    updateScreenspaceButton();
+  function setScreenspaceVisible(on) {
+    _screenspaceVisible = on;
 
     // Participant timelines mode: re-render to add/remove per-participant sub-tracks
     if (qs("#participantTimelines")) {
@@ -674,26 +657,13 @@
   function initScrubAudioToggle() {
     var btn = qs("#scrubAudioToggle");
     if (!btn) return;
-    var stored = null;
-    try { stored = window.localStorage.getItem(SCRUBAUDIO_STORAGE_KEY); } catch (_) {}
-    _scrubAudioEnabled = stored === "true";
-    btn.addEventListener("click", toggleScrubAudio);
-    updateScrubAudioButton();
-  }
-
-  function updateScrubAudioButton() {
-    var btn = qs("#scrubAudioToggle");
-    if (btn) btn.setAttribute("aria-pressed", _scrubAudioEnabled ? "true" : "false");
-  }
-
-  function toggleScrubAudio() {
-    _scrubAudioEnabled = !_scrubAudioEnabled;
-    try { window.localStorage.setItem(SCRUBAUDIO_STORAGE_KEY, _scrubAudioEnabled ? "true" : "false"); } catch (_) {}
-    updateScrubAudioButton();
-    if (!_scrubAudioEnabled && window.clipgenCardScrubber) {
-      window.clipgenCardScrubber.audioScrubStop();
-      if (_cardScrub) window.clipgenCardScrubber.clearWaveform(_cardScrub.mediaEl);
-    }
+    _scrubAudioEnabled = bindPersistedToggle(btn, SCRUBAUDIO_STORAGE_KEY, false, function (on) {
+      _scrubAudioEnabled = on;
+      if (!on && window.clipgenCardScrubber) {
+        window.clipgenCardScrubber.audioScrubStop();
+        if (_cardScrub) window.clipgenCardScrubber.clearWaveform(_cardScrub.mediaEl);
+      }
+    });
   }
 
   // ---- Initialization ----
@@ -1150,7 +1120,7 @@
 
   function bindMarkerEvents(marker, a) {
     marker.addEventListener("mouseenter", function (ev) {
-      onMarkerHover(ev);
+      showTooltipForArtifact(a, ev);
       clearTimeout(_hoverDebounce);
       var target = ev.currentTarget;
       var cx = ev.clientX;
@@ -1175,6 +1145,19 @@
     });
   }
 
+  // Timeline marker at the artifact's span; 0.4% minimum width, 0.5% for screenshots.
+  function buildArtifactMarker(a) {
+    var marker = el("div", markerClasses(a));
+    marker.dataset.id = a.id;
+    var endSec = a.end || a.start || 0;
+    var widthPct = Math.max(((endSec - (a.start || 0)) / state.duration) * 100, 0.4);
+    if (a.type === "screen") widthPct = Math.max(widthPct, 0.5);
+    marker.style.left = ((a.start || 0) / state.duration) * 100 + "%";
+    marker.style.width = widthPct + "%";
+    bindMarkerEvents(marker, a);
+    return marker;
+  }
+
   function renderTimeline() {
     var track = qs("#timelineTrack");
     if (!track) return;
@@ -1182,21 +1165,7 @@
 
     var markers = [];
     state.artifacts.forEach(function (a) {
-      var marker = el("div", markerClasses(a));
-      marker.dataset.id = a.id;
-
-      var startPct = ((a.start || 0) / state.duration) * 100;
-      var endSec = a.end || a.start || 0;
-      var widthPct = ((endSec - (a.start || 0)) / state.duration) * 100;
-      var minWidth = 0.4;
-      if (widthPct < minWidth) widthPct = minWidth;
-      if (a.type === "screen") widthPct = Math.max(widthPct, 0.5);
-
-      marker.style.left = startPct + "%";
-      marker.style.width = widthPct + "%";
-
-      bindMarkerEvents(marker, a);
-
+      var marker = buildArtifactMarker(a);
       track.appendChild(marker);
       markers.push({ el: marker, artifact: a });
     });
@@ -1214,13 +1183,13 @@
       });
     }
 
-    renderTicks();
+    renderTicks("#timelineTicks");
     updateTimelineVisibility();
     updateCount();
   }
 
-  function renderTicks() {
-    var container = qs("#timelineTicks");
+  function renderTicks(sel) {
+    var container = qs(sel);
     if (!container) return;
     container.innerHTML = "";
 
@@ -1453,12 +1422,7 @@
         media.appendChild(img);
       } else if (a.type === "clip") {
         if (_thumbCache.get(a.id)) {
-          var cimg = document.createElement("img");
-          cimg.decoding = "async";
-          cimg.src = _thumbCache.get(a.id);
-          cimg.alt = a.description || "";
-          media.classList.add("thumb-loaded");
-          media.appendChild(cimg);
+          showThumb(media, _thumbCache.get(a.id), a.description);
         } else {
           media.classList.add("thumb-pending");
         }
@@ -1516,9 +1480,8 @@
 
   // ---- Selection & detail ----
 
-  function selectArtifactVisuals(id) {
-    state.selectedId = id;
-
+  // Deselects markers (restoring their collapsed z-order) and cards.
+  function clearSelectedVisuals() {
     qsa(".artifact-marker.selected").forEach(function (m) {
       m.classList.remove("selected");
       var storedZ = m.dataset.collapsedZ;
@@ -1527,6 +1490,12 @@
     qsa("#artifactList .artifact-card.selected").forEach(function (c) {
       c.classList.remove("selected");
     });
+  }
+
+  function selectArtifactVisuals(id) {
+    state.selectedId = id;
+
+    clearSelectedVisuals();
 
     var marker = document.querySelector('.artifact-marker[data-id="' + id + '"]');
     if (marker) {
@@ -1577,14 +1546,7 @@
   function clearSelection() {
     state.selectedId = null;
     _preview = null;
-    qsa(".artifact-marker.selected").forEach(function (m) {
-      m.classList.remove("selected");
-      var storedZ = m.dataset.collapsedZ;
-      m.style.zIndex = storedZ || "";
-    });
-    qsa("#artifactList .artifact-card.selected").forEach(function (c) {
-      c.classList.remove("selected");
-    });
+    clearSelectedVisuals();
     var empty = qs("#detailEmpty");
     var content = qs("#detailContent");
     if (empty) empty.classList.remove("hidden");
@@ -1600,11 +1562,22 @@
     }
   }
 
-  function findArtifact(id) {
-    for (var i = 0; i < state.artifacts.length; i++) {
-      if (state.artifacts[i].id === id) return state.artifacts[i];
+  function findArtifact(id) { return findById(state.artifacts, id); }
+
+  // Screenshot or GIF into container; false for clips, which need a player.
+  function appendStillPreview(container, a) {
+    if (a.type === "gif" && isVideoLoop(a.file)) {
+      container.appendChild(createLoopVideo(a.file, a.description || "gif"));
+    } else if (a.type === "screen" || a.type === "gif") {
+      var img = document.createElement("img");
+      img.decoding = "async";
+      img.src = a.file;
+      img.alt = a.description || (a.type === "screen" ? "screenshot" : "gif");
+      container.appendChild(img);
+    } else {
+      return false;
     }
-    return null;
+    return true;
   }
 
   function showDetail(a) {
@@ -1622,23 +1595,7 @@
 
     if (!a.file) return;
 
-    if (a.type === "screen") {
-      var img = document.createElement("img");
-      img.decoding = "async";
-      img.src = a.file;
-      img.alt = a.description || "screenshot";
-      preview.appendChild(img);
-    } else if (a.type === "gif") {
-      if (isVideoLoop(a.file)) {
-        preview.appendChild(createLoopVideo(a.file, a.description || "gif"));
-      } else {
-        var gifImg = document.createElement("img");
-        gifImg.decoding = "async";
-        gifImg.src = a.file;
-        gifImg.alt = a.description || "gif";
-        preview.appendChild(gifImg);
-      }
-    } else {
+    if (!appendStillPreview(preview, a)) {
       var vid = document.createElement("video");
       vid.controls = true;
       vid.preload = "metadata";
@@ -1699,26 +1656,7 @@
     preview.innerHTML = "";
     _preview = null;
 
-    if (a.type === "screen") {
-      var img = document.createElement("img");
-      img.decoding = "async";
-      img.src = a.file;
-      img.alt = a.description || "screenshot";
-      preview.appendChild(img);
-      _preview = { id: id, videoEl: null, wrapEl: null };
-      return;
-    }
-
-    if (a.type === "gif") {
-      if (isVideoLoop(a.file)) {
-        preview.appendChild(createLoopVideo(a.file, a.description || "gif"));
-      } else {
-        var gifImg = document.createElement("img");
-        gifImg.decoding = "async";
-        gifImg.src = a.file;
-        gifImg.alt = a.description || "gif";
-        preview.appendChild(gifImg);
-      }
+    if (appendStillPreview(preview, a)) {
       _preview = { id: id, videoEl: null, wrapEl: null };
       return;
     }
@@ -1776,7 +1714,6 @@
     preview.appendChild(wrap);
 
     _preview = { id: id, videoEl: vid, wrapEl: wrap, overlay: overlay, timeBadge: timeBadge };
-    _lastSeekProportion = proportion;
   }
 
   function updatePreviewSeek(proportionX) {
@@ -1784,19 +1721,16 @@
     var vid = _preview.videoEl;
     if (!vid.duration || !isFinite(vid.duration)) return;
     if (vid.readyState < 1) return; // metadata not yet loaded
-
-    if (_seekRaf) return;
-    _seekRaf = requestAnimationFrame(function () {
-      _seekRaf = 0;
-      var clamped = Math.max(0, Math.min(1, proportionX));
-      var seekTime = vid.duration * clamped;
-      vid.currentTime = seekTime;
-      if (_preview && _preview.timeBadge) {
-        _preview.timeBadge.textContent = formatTime(seekTime) + " / " + formatTime(vid.duration);
-      }
-      _lastSeekProportion = clamped;
-    });
+    seekPreview(vid, proportionX);
   }
+
+  var seekPreview = rafThrottle(function (vid, proportionX) {
+    var seekTime = vid.duration * Math.max(0, Math.min(1, proportionX));
+    vid.currentTime = seekTime;
+    if (_preview && _preview.timeBadge) {
+      _preview.timeBadge.textContent = formatTime(seekTime) + " / " + formatTime(vid.duration);
+    }
+  });
 
   function activatePreview() {
     if (!_preview || !_preview.videoEl) return;
@@ -1872,12 +1806,6 @@
 
   // ---- Tooltip ----
 
-  function onMarkerHover(ev) {
-    var id = ev.currentTarget.dataset.id;
-    var a = findArtifact(id);
-    if (a) showTooltipForArtifact(a, ev);
-  }
-
   function showTooltipForArtifact(a, ev) {
     var tip = qs("#tooltip");
     if (!tip) return;
@@ -1903,13 +1831,13 @@
 
     tip.innerHTML = html;
     tip.classList.remove("hidden");
-    positionTooltip(tip, ev.clientX, ev.clientY);
+    positionTooltipAtCursor(tip, ev.clientX, ev.clientY);
   }
 
   function showTooltipForScreenspaceCluster(c, ev) {
     var tip = qs("#tooltip");
     if (!tip) return;
-    var color = SS_DETECTOR_COLORS[c.type] || "#888";
+    var color = DETECTOR_COLORS[c.type] || "#888";
     var avgConf = c.count > 0 ? (c.confSum / c.count) : 0;
 
     tip.innerHTML = "";
@@ -1950,36 +1878,15 @@
     tip.appendChild(details);
 
     tip.classList.remove("hidden");
-    positionTooltip(tip, ev.clientX, ev.clientY);
+    positionTooltipAtCursor(tip, ev.clientX, ev.clientY);
   }
 
-  var _tooltipRaf = 0;
-  function moveTooltip(ev) {
-    var clientX = ev.clientX;
-    var clientY = ev.clientY;
-    if (_tooltipRaf) return;
-    _tooltipRaf = requestAnimationFrame(function () {
-      _tooltipRaf = 0;
-      var tip = qs("#tooltip");
-      if (tip && !tip.classList.contains("hidden")) {
-        positionTooltip(tip, clientX, clientY);
-      }
-    });
-  }
-
-  function positionTooltip(tip, clientX, clientY) {
-    var x = clientX + 12;
-    var y = clientY + 12;
-    var rect = tip.getBoundingClientRect();
-    if (x + rect.width > window.innerWidth - 8) {
-      x = clientX - rect.width - 12;
+  var moveTooltip = rafThrottle(function (ev) {
+    var tip = qs("#tooltip");
+    if (tip && !tip.classList.contains("hidden")) {
+      positionTooltipAtCursor(tip, ev.clientX, ev.clientY);
     }
-    if (y + rect.height > window.innerHeight - 8) {
-      y = clientY - rect.height - 12;
-    }
-    tip.style.left = x + "px";
-    tip.style.top = y + "px";
-  }
+  });
 
   function hideTooltip() {
     var tip = qs("#tooltip");
@@ -2031,20 +1938,7 @@
       var track = el("div", "participant-track");
       var markers = [];
       grouped[pid].forEach(function (a) {
-        var marker = el("div", markerClasses(a));
-        marker.dataset.id = a.id;
-
-        var startPct = ((a.start || 0) / state.duration) * 100;
-        var endSec = a.end || a.start || 0;
-        var widthPct = ((endSec - (a.start || 0)) / state.duration) * 100;
-        if (widthPct < 0.4) widthPct = 0.4;
-        if (a.type === "screen") widthPct = Math.max(widthPct, 0.5);
-
-        marker.style.left = startPct + "%";
-        marker.style.width = widthPct + "%";
-
-        bindMarkerEvents(marker, a);
-
+        var marker = buildArtifactMarker(a);
         track.appendChild(marker);
         markers.push({ el: marker, artifact: a });
       });
@@ -2089,20 +1983,7 @@
       legend.classList.add("hidden");
     }
 
-    renderParticipantTicks();
-  }
-
-  function renderParticipantTicks() {
-    var container = qs("#participantTicks");
-    if (!container) return;
-    container.innerHTML = "";
-
-    var numTicks = 8;
-    var step = state.duration / numTicks;
-    for (var i = 0; i <= numTicks; i++) {
-      var tick = el("span", null, formatTime(i * step));
-      container.appendChild(tick);
-    }
+    renderTicks("#participantTicks");
   }
 
   function showPlayer(a) {
@@ -2120,23 +2001,7 @@
 
     if (!a.file) return;
 
-    if (a.type === "screen") {
-      var img = document.createElement("img");
-      img.decoding = "async";
-      img.src = a.file;
-      img.alt = a.description || "screenshot";
-      preview.appendChild(img);
-    } else if (a.type === "gif") {
-      if (isVideoLoop(a.file)) {
-        preview.appendChild(createLoopVideo(a.file, a.description || "gif"));
-      } else {
-        var gifImg = document.createElement("img");
-        gifImg.decoding = "async";
-        gifImg.src = a.file;
-        gifImg.alt = a.description || "gif";
-        preview.appendChild(gifImg);
-      }
-    } else {
+    if (!appendStillPreview(preview, a)) {
       var vid = document.createElement("video");
       vid.controls = true;
       vid.autoplay = true;
@@ -2146,8 +2011,6 @@
   }
 
   // ---- Screenspace track ----
-
-  var SS_DETECTOR_COLORS = DETECTOR_COLORS;
 
   var SS_DETECTOR_ICON_PATHS = {
     multitool: { viewBox: "0 0 16 16", paths: [

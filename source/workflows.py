@@ -91,6 +91,7 @@ from workflows_runner import (  # noqa: F401
     compute_resume_plan,
     node_exec_definition,
     inspectable_sidecar_view,
+    read_node_sidecar,
     run_results_dir,
     topo_order,
     write_node_sidecar,
@@ -169,6 +170,31 @@ def save_workflows_manifest(
 # Lazy imports inside each executor keep Workflows atop the import DAG.
 
 
+def _artifacts_out(
+    study: str, records: Any = (), count: int | None = None, **extra: Any
+) -> dict[str, Any]:
+    """Artifacts-port envelope; ``count`` defaults to the record count."""
+    records = list(records)
+    return {
+        "artifacts": {
+            "artifacts": records,
+            "study": study,
+            "count": len(records) if count is None else count,
+        },
+        **extra,
+    }
+
+
+def _events_out(
+    src: dict[str, Any], events: Any = (), raw: Any = (), **extra: Any
+) -> dict[str, Any]:
+    """Events-port envelope for detector executors."""
+    return {
+        "events": {"events": list(events), "source": src, "raw_results": list(raw)},
+        **extra,
+    }
+
+
 # ---- Sources ----
 
 
@@ -209,7 +235,6 @@ def _exec_sheet_selection(
         "reel",
         ctx=ctx.sheet_context,
         reel_input=selector,
-        skip_prompts=True,
     )
     study = str(getattr(ctx.sheet_context, "study_name", "") or "")
     return {"clips": {"records": records, "study": study}}
@@ -248,12 +273,7 @@ def _exec_time_range(
     input, and ``make_clips`` falls back to its wired ``video`` for the source.
     """
     raw = str(params.get("ranges", "") or "").strip()
-    ranges: list[tuple[float, float]] = []
-    for start_str, end_str in utils.parse_timestamps(raw) if raw else []:
-        start = utils.timestamp_to_seconds(start_str)
-        end = utils.timestamp_to_seconds(end_str)
-        if start is not None and end is not None:
-            ranges.append((start, max(start, end)))
+    ranges = utils.times_to_spans(utils.parse_timestamps(raw) if raw else [])
     return {"timeRange": {"ranges": ranges, "source": {}}}
 
 
@@ -444,10 +464,7 @@ def _exec_transcript_export(
             "source_file": str(src.get("source_filename", "") or ""),
         }
     else:
-        return {
-            "artifacts": {"artifacts": [], "study": study, "count": 0},
-            "__note__": "No transcript or segments wired",
-        }
+        return _artifacts_out(study, __note__="No transcript or segments wired")
     result = cast(
         transcripts.TranscriptResult,
         {
@@ -464,17 +481,19 @@ def _exec_transcript_export(
     output_path = files.get_unique_filename(f"{stem}{ext}", file_format=ext)
     if not transcripts.write_transcript(result, output_path, fmt=fmt):
         files.release_reservation(output_path)
-        return {
-            "artifacts": {"artifacts": [], "study": study, "count": 0},
-            "__degraded__": "Transcript couldn't be written",
-        }
+        return _artifacts_out(study, __degraded__="Transcript couldn't be written")
     # "export" routes to the viewer's Attachments pane; "transcript" is a timeline
     # card type.
     rec = _attachment_artifact("export", output_path, src, f"Transcript ({fmt})")
-    return {"artifacts": {"artifacts": [rec], "study": study, "count": 1}}
+    return _artifacts_out(study, [rec])
 
 
 # ---- Thinking (local LLM) ----
+
+
+def _llm_down(port: str, empty: Any, label: str) -> dict[str, Any]:
+    """Degraded result for a thinking node whose AI server would not start."""
+    return {port: empty, "__degraded__": f"AI server would not start. {label} skipped"}
 
 
 def _exec_summarize(
@@ -486,10 +505,7 @@ def _exec_summarize(
     transcript = inputs.get("transcript") or {}
     segments = transcript.get("segments") or []
     if not llm_client.ensure_server():
-        return {
-            "summary": "",
-            "__degraded__": "AI server would not start. Summary skipped",
-        }
+        return _llm_down("summary", "", "Summary")
     summary = thinking_agents.summarize_transcript(
         segments, model=params.get("model") or None, cancel_event=ctx.cancel_event
     )
@@ -506,10 +522,7 @@ def _exec_citations(
     seg_val = inputs.get("segments") or {}
     segments = seg_val.get("segments") or []
     if not llm_client.ensure_server():
-        return {
-            "citations": [],
-            "__degraded__": "AI server would not start. Citations skipped",
-        }
+        return _llm_down("citations", [], "Citations")
     cites = thinking_agents.find_citations(
         summary,
         segments,
@@ -530,10 +543,7 @@ def _exec_friction(
     segments = seg_val.get("segments") or []
     summary = str(inputs.get("summary") or "")
     if not llm_client.ensure_server():
-        return {
-            "friction": [],
-            "__degraded__": "AI server would not start. Friction skipped",
-        }
+        return _llm_down("friction", [], "Friction")
     scored = friction.score_segments(segments)
     candidates = friction.select_candidates(scored, config.FRICTION_CANDIDATE_LIMIT)
     moments = thinking_agents.find_friction_moments(
@@ -562,10 +572,7 @@ def _exec_report(
     if not summary:
         return {"report": "", "__note__": "No summary wired"}
     if not llm_client.ensure_server():
-        return {
-            "report": "",
-            "__degraded__": "AI server would not start. Report skipped",
-        }
+        return _llm_down("report", "", "Report")
     # Same injection seam as the Overview Reports tab; unwired, both lists are empty.
     observation_lines, mark_lines = thinking_agents.report_source_lines(participant)
     text = thinking_agents.build_report(
@@ -596,9 +603,13 @@ def _build_ss_scan_params(tool_name: str, params: dict[str, Any]) -> dict[str, A
     the caller (it needs the video path + region).
     """
 
-    def _num(key: str, default: float = 0.0) -> float:
+    defaults = {
+        spec["name"]: spec["default"] for spec in _SS_DETECTOR_SPECS.get(tool_name, [])
+    }
+
+    def _num(key: str) -> float:
         val = params.get(key)
-        return float(val) if val not in (None, "") else float(default)
+        return float(val) if val not in (None, "") else float(defaults.get(key, 0.0))
 
     if tool_name == "color":
         return {
@@ -608,9 +619,9 @@ def _build_ss_scan_params(tool_name: str, params: dict[str, Any]) -> dict[str, A
                 "v": _num("color_v"),
             },
             "tolerance": {
-                "h": _num("tol_h", 10),
-                "s": _num("tol_s", 50),
-                "v": _num("tol_v", 50),
+                "h": _num("tol_h"),
+                "s": _num("tol_s"),
+                "v": _num("tol_v"),
             },
             "color_mode": str(params.get("color_mode", "average") or "average"),
             "min_coverage": _num("min_coverage"),
@@ -620,41 +631,39 @@ def _build_ss_scan_params(tool_name: str, params: dict[str, Any]) -> dict[str, A
         return {
             "threshold": _num("threshold"),
             "noise_threshold": _num("noise_threshold"),
-            "require_consecutive": int(_num("require_consecutive", 1)),
+            "require_consecutive": int(_num("require_consecutive")),
             "interval": _num("interval"),
         }
     if tool_name == "flow":
         return {
             "magnitude_threshold": _num("magnitude_threshold"),
-            "require_consecutive": int(_num("require_consecutive", 1)),
+            "require_consecutive": int(_num("require_consecutive")),
             "interval": _num("interval"),
         }
     if tool_name == "text":
         return {
             "search_string": str(params.get("search_string", "") or ""),
-            "fuzzy_threshold": _num("fuzzy_threshold", 80),
-            "interval": _num("interval", 2.0),
+            "fuzzy_threshold": _num("fuzzy_threshold"),
+            "interval": _num("interval"),
         }
     if tool_name == "numbers":
         out: dict[str, Any] = {
             "operator": str(params.get("operator", "gt") or "gt"),
             "target_value": _num("target_value"),
             "integers_only": bool(params.get("integers_only", False)),
-            "interval": _num("interval", 2.0),
+            "interval": _num("interval"),
         }
         if params.get("range_min") not in (None, ""):
             out["range_min"] = _num("range_min")
         if params.get("range_max") not in (None, ""):
             out["range_max"] = _num("range_max")
         return out
-    if tool_name == "similarity":
-        return {"threshold": _num("threshold"), "interval": _num("interval")}
-    if tool_name == "scene":
+    if tool_name in ("similarity", "scene"):
         return {"threshold": _num("threshold"), "interval": _num("interval")}
     if tool_name == "template":
         return {
             "threshold": _num("threshold"),
-            "template_scale": _num("template_scale", 1.0),
+            "template_scale": _num("template_scale"),
             "interval": _num("interval"),
         }
     if tool_name == "shape":
@@ -745,10 +754,9 @@ def _run_ss_detector(
     paths = list(src.get("video_paths") or [])
     tool = screenspace.TOOLS.get(tool_name)
     if not paths or tool is None:
-        empty = {"events": {"events": [], "source": src, "raw_results": []}}
         if not paths:
-            return {**empty, "__note__": "No video wired"}
-        return {**empty, "__degraded__": f"Unknown detector: {tool_name}"}
+            return _events_out(src, __note__="No video wired")
+        return _events_out(src, __degraded__=f"Unknown detector: {tool_name}")
 
     # _resolve_region_coords supplies the full frame when unwired; zero-size coords
     # would silently no-op.
@@ -760,10 +768,9 @@ def _run_ss_detector(
     if tool_name in _SS_REFERENCE_DETECTORS and not _attach_ss_reference(
         tool_name, base_params, params, paths[0], region_coords
     ):
-        return {
-            "events": {"events": [], "source": src, "raw_results": []},
-            "__degraded__": "Couldn't read the reference frame at the given time",
-        }
+        return _events_out(
+            src, __degraded__="Couldn't read the reference frame at the given time"
+        )
 
     task = screenspace_manifest.create_task(
         tool_name,
@@ -822,13 +829,13 @@ def _run_ss_detector(
 
     events = screenspace_manifest.generate_events_from_results(task, raw_results)
     # raw_results feeds the heatmap node only; other consumers read ``events``.
-    return {"events": {"events": events, "source": src, "raw_results": raw_results}}
+    return _events_out(src, events, raw_results)
 
 
 def _make_ss_executor(
     tool_name: str,
 ) -> Callable[[NodeContext, dict[str, Any], dict[str, Any]], dict[str, Any]]:
-    """Bind ``_run_ss_detector`` to one tool so all ten nodes share one body."""
+    """Bind ``_run_ss_detector`` to one tool so every ss_ detector shares one body."""
 
     def _exec(
         ctx: NodeContext, inputs: dict[str, Any], params: dict[str, Any]
@@ -886,7 +893,7 @@ def _exec_multitool(
     paths = list(src.get("video_paths") or [])
     raw_steps = list(params.get("steps") or [])
     if not paths or len(raw_steps) < 2:
-        return {"events": {"events": [], "source": src, "raw_results": []}}
+        return _events_out(src)
 
     region_name, region_coords = _resolve_region_coords(
         inputs.get("region") or {}, paths[0]
@@ -905,7 +912,7 @@ def _exec_multitool(
             step["logic"] = str(raw.get("logic", "AND") or "AND").upper()
         steps.append(step)
     if len(steps) < 2:
-        return {"events": {"events": [], "source": src, "raw_results": []}}
+        return _events_out(src)
 
     task = screenspace_manifest.create_task(
         "multitool",
@@ -932,7 +939,7 @@ def _exec_multitool(
         or []
     )
     events = screenspace_manifest.generate_events_from_results(task, raw_results)
-    return {"events": {"events": events, "source": src, "raw_results": raw_results}}
+    return _events_out(src, events, raw_results)
 
 
 # ---- Artifact ----
@@ -1010,10 +1017,9 @@ def _exec_make_clips(
             )
 
     if not records:
-        return {
-            "artifacts": {"artifacts": [], "study": study, "count": 0},
-            "__note__": "No clips to render. Wire clips, a time range, or a video",
-        }
+        return _artifacts_out(
+            study, __note__="No clips to render. Wire clips, a time range, or a video"
+        )
     pad_pre, pad_post, max_duration = _artifact_padding_params(params)
     count, artifacts = pipeline.process_clips(
         records,
@@ -1026,7 +1032,7 @@ def _exec_make_clips(
         pad_post=pad_post,
         max_duration=max_duration,
     )
-    return {"artifacts": {"artifacts": artifacts, "study": study, "count": count}}
+    return _artifacts_out(study, artifacts, count)
 
 
 def _exec_interval_captures(
@@ -1046,9 +1052,8 @@ def _exec_interval_captures(
     src = inputs.get("video") or {}
     paths = list(src.get("video_paths") or [])
     study = str(src.get("study", "") or "")
-    empty = {"artifacts": {"artifacts": [], "study": study, "count": 0}}
     if not paths:
-        return {**empty, "__note__": "No video wired"}
+        return _artifacts_out(study, __note__="No video wired")
 
     interval = float(
         params.get("interval", config.GALLERY_INTERVAL_SECONDS)
@@ -1070,7 +1075,9 @@ def _exec_interval_captures(
     if not ranges:
         duration = video_mod.get_file_duration(paths[0]) or 0
         if duration <= 0:
-            return {**empty, "__degraded__": "Couldn't read the video duration"}
+            return _artifacts_out(
+                study, __degraded__="Couldn't read the video duration"
+            )
         ranges = [(0.0, float(duration))]
 
     # Expand windows into sample points; GIFs get a [t, t+gif_dur] span.
@@ -1081,7 +1088,9 @@ def _exec_interval_captures(
             sample_ranges.append((t, t + gif_dur if fmt == "gif" else t))
             t += interval
     if not sample_ranges:
-        return {**empty, "__note__": "No sample points in the given interval/range"}
+        return _artifacts_out(
+            study, __note__="No sample points in the given interval/range"
+        )
 
     records = files.build_clip_records(
         participant=str(src.get("participant", "") or ""),
@@ -1096,7 +1105,7 @@ def _exec_interval_captures(
         include_severity=False,
         cancel_flag=ctx.cancel_flag,
     )
-    return {"artifacts": {"artifacts": artifacts, "study": study, "count": count}}
+    return _artifacts_out(study, artifacts, count)
 
 
 def _attachment_artifact(
@@ -1135,18 +1144,12 @@ def _exec_timelapse(
     paths = list(src.get("video_paths") or [])
     study = str(src.get("study", "") or "")
     if not paths:
-        return {
-            "artifacts": {"artifacts": [], "study": study, "count": 0},
-            "__note__": "No video wired",
-        }
+        return _artifacts_out(study, __note__="No video wired")
 
     # Full-frame fallback already applied; a zero size means the video probe failed.
     _name, region_coords = _resolve_region_coords(inputs.get("region") or {}, paths[0])
     if region_coords["w"] <= 0 or region_coords["h"] <= 0:
-        return {
-            "artifacts": {"artifacts": [], "study": study, "count": 0},
-            "__degraded__": "Couldn't read the video",
-        }
+        return _artifacts_out(study, __degraded__="Couldn't read the video")
 
     out_format = str(params.get("output_format", "mp4") or "mp4")
     if out_format not in ("mp4", "gif"):
@@ -1166,12 +1169,9 @@ def _exec_timelapse(
     )
     if not result:
         files.release_reservation(output_path)
-        return {
-            "artifacts": {"artifacts": [], "study": study, "count": 0},
-            "__degraded__": "Timelapse couldn't be generated",
-        }
+        return _artifacts_out(study, __degraded__="Timelapse couldn't be generated")
     rec = _attachment_artifact("timelapse", result, src, "Timelapse")
-    return {"artifacts": {"artifacts": [rec], "study": study, "count": 1}}
+    return _artifacts_out(study, [rec])
 
 
 def _exec_heatmap(
@@ -1193,22 +1193,19 @@ def _exec_heatmap(
             if not results
             else "No video for the heatmap"
         )
-        return {
-            "artifacts": {"artifacts": [], "study": study, "count": 0},
-            "__note__": note,
-        }
+        return _artifacts_out(study, __note__=note)
     if style not in ("template", "flow", "change", "attention"):
         # "auto" infers from the per-frame payload, not the producing node type, so
         # merges stay correct.
         style = _infer_heatmap_style(results)
         if not style:
-            return {
-                "artifacts": {"artifacts": [], "study": study, "count": 0},
-                "__note__": (
+            return _artifacts_out(
+                study,
+                __note__=(
                     "The wired events carry no heatmap data — use a "
                     "template/flow/change/attention detector upstream"
                 ),
-            }
+            )
 
     props = video.probe_video_properties(paths[0]) or {}
     width = int(props.get("width", 0) or 0) or 1920
@@ -1263,12 +1260,9 @@ def _exec_heatmap(
         failure_note = "Not enough detector results for an animated heatmap"
     if not result:
         files.release_reservation(output_path)
-        return {
-            "artifacts": {"artifacts": [], "study": study, "count": 0},
-            "__note__": failure_note,
-        }
+        return _artifacts_out(study, __note__=failure_note)
     rec = _attachment_artifact("heatmap", result, src, f"{style.title()} heatmap")
-    return {"artifacts": {"artifacts": [rec], "study": study, "count": 1}}
+    return _artifacts_out(study, [rec])
 
 
 def _infer_heatmap_style(results: list[Any]) -> str:
@@ -1323,11 +1317,11 @@ def _exec_build_reel(
     if params.get("chronological"):
         records = sorted(records, key=_reel_start_seconds)
     if not records:
-        return {
-            "artifacts": {"artifacts": [], "study": study, "count": 0},
-            "manifest": {"path": None, "records": []},
-            "__note__": "No clips to build a reel from",
-        }
+        return _artifacts_out(
+            study,
+            manifest={"path": None, "records": []},
+            __note__="No clips to build a reel from",
+        )
     # process_reel treats a supplied output_file as a reservation and releases it
     # on failure.
     name = utils.sanitize_filename(str(params.get("name", "") or "").strip()) or "reel"
@@ -1341,10 +1335,9 @@ def _exec_build_reel(
         pad_post=pad_post,
         max_duration=max_duration,
     )
-    return {
-        "artifacts": {"artifacts": reels, "study": study, "count": count},
-        "manifest": {"path": None, "records": reels},
-    }
+    return _artifacts_out(
+        study, reels, count, manifest={"path": None, "records": reels}
+    )
 
 
 def _exec_post_process(
@@ -1379,14 +1372,7 @@ def _exec_post_process(
         records: list[dict[str, Any]],
         note: str | None = None,
     ) -> dict[str, Any]:
-        out: dict[str, Any] = {
-            "video": video_out,
-            "artifacts": {
-                "artifacts": records,
-                "study": study,
-                "count": len(records),
-            },
-        }
+        out = _artifacts_out(study, records, video=video_out)
         if note:
             out["__note__"] = note
         return out
@@ -1447,8 +1433,6 @@ def _exec_post_process(
     if op == "normalize_audio":
         # In-place per part, sharing the .orig slot and already-rewritten skip
         # with remux.
-        import transcripts_server
-
         failures: list[str] = []
         done = 0
         already = 0
@@ -1463,7 +1447,7 @@ def _exec_post_process(
             if props is None:
                 failures.append(f"{Path(path).name}: could not probe the file")
                 continue
-            indices = transcripts_server._resolve_normalize_indices(props, "auto")
+            indices = video_mod.resolve_normalize_indices(props, "auto")
             if isinstance(indices, str):
                 failures.append(f"{Path(path).name}: {indices}")
                 continue
@@ -1585,7 +1569,7 @@ def _exec_data_export(
             (
                 f"export_segments{suffix}",
                 data_export.build_transcript_segments(manifest),
-                data_export._TRANSCRIPT_SEGMENT_BASE_COLS,
+                data_export.TRANSCRIPT_SEGMENT_COLUMNS,
                 "Segments export",
             )
         )
@@ -1616,7 +1600,7 @@ def _exec_data_export(
                 (
                     "export_friction_moments",
                     moments,
-                    data_export._FRICTION_MOMENT_COLS,
+                    data_export.FRICTION_MOMENT_COLUMNS,
                     "Friction moments export",
                 )
             )
@@ -1626,15 +1610,15 @@ def _exec_data_export(
                 (
                     "export_friction_segments",
                     scored,
-                    data_export._FRICTION_SEGMENT_COLS,
+                    data_export.FRICTION_SEGMENT_COLUMNS,
                     "Friction segments export",
                 )
             )
     if not surfaces:
-        return {
-            "artifacts": {"artifacts": [], "study": study, "count": 0},
-            "__note__": "No events or segments wired (and no opt-in tables had rows)",
-        }
+        return _artifacts_out(
+            study,
+            __note__="No events or segments wired (and no opt-in tables had rows)",
+        )
 
     records: list[dict[str, Any]] = []
     written: list[str] = []
@@ -1659,17 +1643,14 @@ def _exec_data_export(
                 files.release_reservation(output_path)
                 for prior in written:
                     files.release_reservation(prior)
-                return {
-                    "artifacts": {"artifacts": [], "study": study, "count": 0},
-                    "__degraded__": "Export couldn't be written",
-                }
+                return _artifacts_out(study, __degraded__="Export couldn't be written")
             written.append(output_path)
             records.append(
                 _attachment_artifact(
                     "export", output_path, src, f"{description} ({label})"
                 )
             )
-    return {"artifacts": {"artifacts": records, "study": study, "count": len(records)}}
+    return _artifacts_out(study, records)
 
 
 def _exec_timeline_viewer(
@@ -1751,59 +1732,22 @@ def _reduce_collection(metric: str, inputs: dict[str, Any]) -> float:
     Reads whichever of events / clipRecords / segments is wired (events first).
     ``max_confidence`` only applies to events; it falls back to 0 otherwise.
     """
-    events = (inputs.get("events") or {}).get("events")
-    records = (inputs.get("clips") or {}).get("records")
-    segments = (inputs.get("segments") or {}).get("segments")
-
-    if events is not None:
-        items = list(events)
+    for kind, key in (
+        ("events", "events"),
+        ("clips", "records"),
+        ("segments", "segments"),
+    ):
+        items = (inputs.get(kind) or {}).get(key)
+        if items is None:
+            continue
+        items = list(items)
         if metric == "count":
             return float(len(items))
+        field = "confidence" if metric == "max_confidence" else "duration"
+        values = [float(_collection_field(kind, it, field) or 0.0) for it in items]
         if metric == "max_confidence":
-            confs = [float(e.get("confidence", 0.0) or 0.0) for e in items]
-            return max(confs) if confs else 0.0
-        return float(
-            sum(
-                max(
-                    0.0,
-                    float(e.get("time_out", 0.0) or 0.0)
-                    - float(e.get("time_in", 0.0) or 0.0),
-                )
-                for e in items
-            )
-        )
-
-    if records is not None:
-        items = list(records)
-        if metric == "count":
-            return float(len(items))
-        if metric == "max_confidence":
-            return 0.0
-        total = 0.0
-        for rec in items:
-            for start_str, end_str in rec.get("times") or []:
-                start = utils.timestamp_to_seconds(start_str)
-                end = utils.timestamp_to_seconds(end_str)
-                if start is not None and end is not None:
-                    total += max(0.0, end - start)
-        return total
-
-    if segments is not None:
-        items = list(segments)
-        if metric == "count":
-            return float(len(items))
-        if metric == "max_confidence":
-            return 0.0
-        return float(
-            sum(
-                max(
-                    0.0,
-                    float(s.get("end", 0.0) or 0.0) - float(s.get("start", 0.0) or 0.0),
-                )
-                for s in items
-            )
-        )
-
+            return max(values, default=0.0)
+        return float(sum(values))
     return 0.0
 
 
@@ -1904,8 +1848,7 @@ def _collection_field(kind: str, item: Any, field: str) -> float | str | None:
 
     Numeric fields return ``float``; text fields (``category``/``severity``/
     ``desc``/``text``/``type``/``participant``) return ``str``. Clip ``duration``
-    sums the record's ``times`` spans, mirroring ``_exec_measure``'s total-duration
-    path. ``timerange`` items are ``(start, end)`` tuples, not dicts.
+    sums the record's ``times`` spans. ``timerange`` items are ``(start, end)`` tuples.
     """
     if kind == "timerange":
         if not isinstance(item, (list, tuple)) or len(item) < 2:
@@ -1944,13 +1887,8 @@ def _collection_field(kind: str, item: Any, field: str) -> float | str | None:
             return float(item.get("time_in", 0.0) or 0.0)
     elif kind == "clips":
         if field == "duration":
-            total = 0.0
-            for start_str, end_str in item.get("times") or []:
-                start = utils.timestamp_to_seconds(start_str)
-                end = utils.timestamp_to_seconds(end_str)
-                if start is not None and end is not None:
-                    total += max(0.0, end - start)
-            return total
+            spans = utils.times_to_spans(item.get("times") or [])
+            return float(sum(end - start for start, end in spans))
         if field in ("category", "severity", "desc"):
             return str(item.get(field, "") or "")
     elif kind == "segments":
@@ -2234,7 +2172,7 @@ _TEXT_FIELDS = frozenset(
 
 
 def _predicate_params(kind: str) -> list[ParamSpec]:
-    """The shared ``{field, op, value}`` clause for filter / partition nodes."""
+    """The ``{field, op, value}`` clause params a filter node renders."""
     meta = _COLLECTION_KINDS[kind]
     numeric = [f for f in meta["fields"] if f not in _TEXT_FIELDS]
     # A ``>=`` default on a text field (segments: ``text``) would drop every item.

@@ -2,8 +2,9 @@
 
 All user-facing interactive prompts (line selection, range selection, cell
 selection, participant selection, category selection, batch/keyword confirmation,
-and browse mode) live here. Generation functions in spreadsheet.py are kept pure:
-they take resolved parameters and return clip records, never prompting the user.
+browse mode, and the settings grid) live here. Generation functions in
+spreadsheet.py are kept pure: they take resolved parameters and return clip
+records, never prompting the user.
 
 Each prompt function takes a SheetContext for data preview and returns the
 resolved parameters (or None if the user cancels / enters invalid input and
@@ -35,6 +36,17 @@ def prompt_batch_confirm(ctx: SheetContext) -> bool:
     )
     msg = f"\nThis will generate {len(clips)} clips (from {num_data_rows} data rows and {ctx.num_participants} participant column(s)). Proceed? [y/n]\n>> "
     yn = utils.read_user_input(msg)
+    return yn.strip().lower() == "y"
+
+
+def _confirm_items(
+    items: list[str], confirm_label: str, confirm_display: Callable[[str], str]
+) -> bool:
+    """List *items* under *confirm_label* and ask for a yes/no confirmation."""
+    utils.info_print(confirm_label)
+    for item in items:
+        utils.info_print(f"  - {confirm_display(item)}")
+    yn = utils.read_user_input("\nIs this correct? [y/n]\n>> ")
     return yn.strip().lower() == "y"
 
 
@@ -84,11 +96,7 @@ def prompt_multi_selection(
                     f"  Invalid index(es): {', '.join(str(i) for i in invalid_indices)}"
                 )
             if selected:
-                utils.info_print(confirm_label)
-                for item in selected:
-                    utils.info_print(f"  - {confirm_display(item)}")
-                yn = utils.read_user_input("\nIs this correct? [y/n]\n>> ")
-                if yn.strip().lower() == "y":
+                if _confirm_items(selected, confirm_label, confirm_display):
                     return selected
             else:
                 utils.info_print("No valid selections. Please try again.")
@@ -116,11 +124,7 @@ def prompt_multi_selection(
             if unmatched:
                 utils.info_print(f"Could not match: {', '.join(unmatched)}")
             if matched:
-                utils.info_print(confirm_label)
-                for item in matched:
-                    utils.info_print(f"  - {confirm_display(item)}")
-                yn = utils.read_user_input("\nIs this correct? [y/n]\n>> ")
-                if yn.strip().lower() == "y":
+                if _confirm_items(matched, confirm_label, confirm_display):
                     return matched
             else:
                 utils.info_print(no_match_msg)
@@ -324,7 +328,7 @@ def prompt_participant_selection(ctx: SheetContext) -> list[str] | None:
         if not selection:
             utils.info_print("Please enter one or more participant numbers or IDs.")
             continue
-        tokens = spreadsheet.parse_participant_selection(selection)
+        tokens = utils.split_selector_tokens(selection)
         if not tokens:
             utils.info_print(
                 "No valid participant(s) entered. Use + or , as separator."
@@ -333,25 +337,11 @@ def prompt_participant_selection(ctx: SheetContext) -> list[str] | None:
         chosen_ids = []
         invalid_tokens = []
         for token in tokens:
-            if token.isdigit():
-                idx = int(token)
-                if 1 <= idx <= len(available_list):
-                    chosen_ids.append(available_list[idx - 1])
-                else:
-                    invalid_tokens.append(token)
+            pid = spreadsheet.resolve_participant_token(ctx, available_list, token)
+            if pid is None:
+                invalid_tokens.append(token)
             else:
-                col_idx = spreadsheet.find_participant_column(
-                    ctx.header_row, ctx.id_cell, token
-                )
-                if col_idx is not None:
-                    if col_idx < len(ctx.header_row):
-                        chosen_ids.append(
-                            utils.normalize_participant_id(ctx.header_row[col_idx])
-                        )
-                    else:
-                        chosen_ids.append(token)
-                else:
-                    invalid_tokens.append(token)
+                chosen_ids.append(pid)
         if invalid_tokens:
             still_invalid = []
             for token in invalid_tokens:
@@ -365,12 +355,7 @@ def prompt_participant_selection(ctx: SheetContext) -> list[str] | None:
                     f"Not found: {', '.join(still_invalid)}. Available: {', '.join(available_list)}"
                 )
                 continue
-        seen = set()
-        unique_ids = []
-        for pid in chosen_ids:
-            if pid not in seen:
-                seen.add(pid)
-                unique_ids.append(pid)
+        unique_ids = list(dict.fromkeys(chosen_ids))
         utils.info_print(f"Selected participant(s): {', '.join(unique_ids)}")
         yn = utils.read_user_input(
             "Generate all clips for these participants? [y/n]\n>> "
@@ -413,7 +398,175 @@ def prompt_keyword_selection(ctx: SheetContext) -> list[str] | None:
     )
 
 
+# ---- Settings grid ----
+
+
+def set_program_settings() -> bool:
+    """Interactive settings screen with grid display and type-safe value changes.
+
+    Returns:
+        True if a setting was changed, False otherwise.
+    """
+    descriptions = {
+        name: meta["description"] for name, meta in config.STUDIO_SETTINGS.items()
+    } | config.CLI_SETTING_DESCRIPTIONS
+    settings_list = list(descriptions)
+
+    if utils._use_rich() and utils.console is not None:
+        from rich.table import Table
+
+        table = Table(
+            show_header=True,
+            header_style="bold cyan",
+            border_style="dim",
+            expand=False,
+        )
+        table.add_column("#", justify="right", style="bold", width=3)
+        table.add_column("Setting", style="yellow", min_width=12)
+        table.add_column("Value", style="green", min_width=6)
+        table.add_column("Description", max_width=60, overflow="fold")
+        for i, name in enumerate(settings_list, 1):
+            table.add_row(
+                str(i),
+                name,
+                str(getattr(config, name, "?")),
+                descriptions[name],
+            )
+        utils.console.print(table)
+    else:
+        for i, name in enumerate(settings_list, 1):
+            val = getattr(config, name, "?")
+            utils.info_print(
+                f"  {i:>2}. {name:<30} = {val!s:<10}  {descriptions[name]}"
+            )
+
+    choice = utils.read_user_input(
+        "\nSetting to change (number or name, or empty to go back):\n>> "
+    )
+    if not choice:
+        return False
+
+    setting_name = None
+    if choice.isdigit():
+        idx = int(choice) - 1
+        if 0 <= idx < len(settings_list):
+            setting_name = settings_list[idx]
+    else:
+        upper = choice.strip().upper()
+        if upper in descriptions:
+            setting_name = upper
+
+    if setting_name is None:
+        utils.error_print(f"Unknown setting: '{choice}'")
+        return False
+
+    current_value = getattr(config, setting_name)
+    utils.info_print(f"  Current value: {current_value!r}")
+    utils.info_print(f"  {descriptions[setting_name]}")
+
+    new_raw = utils.read_user_input("\nNew value (empty to cancel):\n>> ")
+    if not new_raw:
+        return False
+
+    current_type = type(current_value)
+    try:
+        if current_type is bool:
+            converted = utils.coerce_bool(new_raw)
+        elif current_type is int:
+            converted = int(new_raw)
+        elif current_type is float:
+            converted = float(new_raw)
+        else:
+            converted = new_raw
+    except (ValueError, TypeError):
+        utils.error_print(f"Invalid value '{new_raw}' for type {current_type.__name__}")
+        return False
+
+    # Prompts are .format()-ed at agent runtime; validate here or the KeyError
+    # surfaces mid-run.
+    meta = config.STUDIO_SETTINGS.get(setting_name) or {}
+    if meta.get("type") == "prompt":
+        prompt_err = utils.validate_prompt(
+            str(converted), meta.get("placeholders") or []
+        )
+        if prompt_err is not None:
+            utils.error_print(f"Invalid prompt: {prompt_err}")
+            return False
+    # Same for the filename template: unvalidated, it surfaces as a broken
+    # participant list.
+    if setting_name == "SOURCE_FILENAME_PATTERN":
+        converted = str(converted).strip()
+        pattern_err = utils.validate_source_filename_pattern(converted)
+        if pattern_err is not None:
+            utils.error_print(f"Invalid pattern: {pattern_err}")
+            return False
+
+    setattr(config, setting_name, converted)
+    utils.info_print(f"  '{setting_name}' set to {converted!r}")
+    return True
+
+
 # ---- Browse mode ----
+
+
+_NOOP = "\x00_noop"
+
+
+def _read_browse_key() -> str:
+    """Read an arrow key instantly, or a typed line for text commands."""
+    prompt = "⌕ "
+
+    if not sys.stdin.isatty():
+        return utils.read_user_input(prompt)
+
+    sys.stdout.write(prompt)
+    sys.stdout.flush()
+
+    import termios
+    import tty
+
+    fd = sys.stdin.fileno()
+    old_settings = termios.tcgetattr(fd)
+    try:
+        tty.setraw(fd)
+        ch = sys.stdin.read(1)
+
+        if ch == "\x1b":
+            seq = sys.stdin.read(2)
+            sys.stdout.write("\r\n")
+            if len(seq) == 2 and seq[0] == "[":
+                if seq[1] == "A":
+                    return "up"
+                if seq[1] == "B":
+                    return "down"
+            return _NOOP
+
+        if ch in ("\r", "\n"):
+            sys.stdout.write("\r\n")
+            return ""
+
+        if ch == "\x03":
+            sys.stdout.write("\r\n")
+            raise KeyboardInterrupt
+
+        if ch == "\x04":
+            sys.stdout.write("\r\n")
+            raise EOFError
+
+    finally:
+        termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
+
+    # Printable character: echo it and read the rest as a normal line
+    sys.stdout.write(ch)
+    sys.stdout.flush()
+    rest = input()
+    full_line = ch + rest
+
+    value = full_line.strip()
+    if not value:
+        return value
+    utils.check_navigation_keywords(value)
+    return value
 
 
 def browse_spreadsheet(sheet: Any, *, process_fn=None) -> None:
@@ -583,74 +736,6 @@ def browse_spreadsheet(sheet: Any, *, process_fn=None) -> None:
     # Initial display
     display_rows(current_row, config.BROWSE_LINES_TO_DISPLAY)
 
-    _NOOP = "\x00_noop"
-
-    def _read_browse_key() -> str:
-        """Read arrow keys instantly or fall back to line input for text commands.
-
-        Renders a search bar around the input: top border is printed before
-        reading, right edge + bottom border after the user finishes typing.
-        """
-        print()  # blank line before search bar
-        _print_search_bar_top()
-        prompt = "⌕ "
-
-        if not sys.stdin.isatty():
-            return utils.read_user_input(prompt)
-
-        sys.stdout.write(prompt)
-        sys.stdout.flush()
-
-        import termios
-        import tty
-
-        fd = sys.stdin.fileno()
-        old_settings = termios.tcgetattr(fd)
-        try:
-            tty.setraw(fd)
-            ch = sys.stdin.read(1)
-
-            if ch == "\x1b":
-                seq = sys.stdin.read(2)
-                termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
-                sys.stdout.write("\r\n")
-                if len(seq) == 2 and seq[0] == "[":
-                    if seq[1] == "A":
-                        return "up"
-                    if seq[1] == "B":
-                        return "down"
-                return _NOOP
-
-            if ch in ("\r", "\n"):
-                termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
-                sys.stdout.write("\r\n")
-                return ""
-
-            if ch == "\x03":
-                termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
-                sys.stdout.write("\r\n")
-                raise KeyboardInterrupt
-
-            if ch == "\x04":
-                termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
-                sys.stdout.write("\r\n")
-                raise EOFError
-
-        finally:
-            termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
-
-        # Printable character: echo it and read the rest as a normal line
-        sys.stdout.write(ch)
-        sys.stdout.flush()
-        rest = input()
-        full_line = ch + rest
-
-        value = full_line.strip()
-        if not value:
-            return value
-        utils.check_navigation_keywords(value)
-        return value
-
     def _handle_navigation(cmd: str, cur: int) -> tuple[bool, int]:
         """Handle navigation commands: up/down/page/jump/open/format switch.
 
@@ -747,16 +832,7 @@ def browse_spreadsheet(sheet: Any, *, process_fn=None) -> None:
         """
         if process_fn is not None:
             parsed = spreadsheet.parse_reel_input(raw)
-            has_selectors = (
-                parsed.get("batch")
-                or parsed.get("keyword")
-                or parsed["lines"]
-                or parsed["ranges"]
-                or parsed["cells"]
-                or parsed["participants"]
-                or parsed["categories"]
-            )
-            if has_selectors:
+            if spreadsheet.clip_selector_names(parsed):
                 if parsed.get("chronologic"):
                     utils.info_print(
                         "Chronologic selector is not supported in browse mode."
@@ -808,6 +884,8 @@ def browse_spreadsheet(sheet: Any, *, process_fn=None) -> None:
 
     # Navigation loop
     while True:
+        print()  # blank line before search bar
+        _print_search_bar_top()
         raw_input = _read_browse_key().strip()
         user_input = raw_input.lower()
 

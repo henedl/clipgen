@@ -9,7 +9,7 @@ import argparse
 import io
 import os
 import sys
-from collections.abc import Callable
+from collections.abc import Callable, Collection
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, NamedTuple
@@ -19,6 +19,7 @@ import cli_event_clips
 import cli_screenspace
 import config
 import files
+import interactive
 import profiling
 import spreadsheet
 import transcripts
@@ -139,24 +140,15 @@ def get_runtime_working_dir() -> str:
     if not getattr(sys, "frozen", False):
         return str(Path(__file__).resolve().parent.parent)
 
-    exe_dir = Path(sys.executable).resolve().parent
-    # .../clipgen.app/Contents/MacOS/clipgen → .../  (the .app's parent)
-    if exe_dir.name == "MacOS" and exe_dir.parent.name == "Contents":
-        bundle = exe_dir.parent.parent
-        if bundle.suffix == ".app":
-            return str(bundle.parent)
-    # One-dir build: _MEIPASS is lib/ under the exe dir. One-file's temp dir never
-    # matches.
-    meipass = getattr(sys, "_MEIPASS", None)
-    if meipass and Path(meipass).resolve().parent == exe_dir:
-        # Portable zip: parent of the exe dir. Inno install: stay in {app}, not
-        # Programs.
-        if (exe_dir / "unins000.exe").is_file() or exe_dir.parent.name.lower() == (
-            "programs"
-        ):
-            return str(exe_dir)
-        return str(exe_dir.parent)
-    return str(exe_dir)
+    kind, root = utils.frozen_layout()
+    if kind == "mac-app":
+        return str(root.parent)
+    if kind == "one-dir":
+        # Portable zip: parent of the exe dir. Inno install: stay in {app}, not Programs.
+        if (root / "unins000.exe").is_file() or root.parent.name.lower() == "programs":
+            return str(root)
+        return str(root.parent)
+    return str(root)
 
 
 # ---- Google authentication ----
@@ -441,7 +433,6 @@ def _generate_cli_clips(
     cli_mode_args: CliModeArgs,
 ) -> list[ClipRecord]:
     """Resolve CLI arguments into a list of clip records."""
-    skip_prompts = args.no_input
     mixed_selectors = getattr(args, "mixed", None)
     output_format = "screen" if args.screen else "gif" if args.gif else "clip"
 
@@ -449,35 +440,16 @@ def _generate_cli_clips(
         any(getattr(args, a, None) for a in _SELECTION_ATTRS) or args.highlights
     )
 
-    def _parse_cli_categories(raw: str | None) -> list[str]:
-        """Parse CLI category string into a list of category names."""
-        if not raw:
-            return []
-        seen = set()
-        result: list[str] = []
-        for name in utils.split_selector_tokens(raw):
-            if name not in seen:
-                seen.add(name)
-                result.append(name)
-        return result
-
-    cli_categories = _parse_cli_categories(getattr(args, "category", None))
-
-    def _parse_cli_severities(raw: str | None) -> list[str]:
-        if not raw:
-            return []
-        seen = set()
-        result: list[str] = []
-        for token in utils.split_selector_tokens(raw):
-            name = utils.normalize_severity(token)
-            if not name:
-                continue
-            if name not in seen:
-                seen.add(name)
-                result.append(name)
-        return result
-
-    cli_severities = _parse_cli_severities(getattr(args, "severity", None))
+    cli_categories = list(
+        dict.fromkeys(
+            utils.split_selector_tokens(getattr(args, "category", None) or "")
+        )
+    )
+    severities = (
+        utils.normalize_severity(t)
+        for t in utils.split_selector_tokens(getattr(args, "severity", None) or "")
+    )
+    cli_severities = list(dict.fromkeys(s for s in severities if s))
 
     cli_annotation_ids = None
     if isinstance(args.keyword, str):
@@ -490,16 +462,13 @@ def _generate_cli_clips(
         try:
             duration = int(args.highlights)
         except ValueError:
+            duration = 0
+        if duration > 0:
+            config.HIGHLIGHTS_REEL_DURATION_SECONDS = duration
+        else:
             utils.warning_print(
                 f"Invalid highlights duration '{args.highlights}', using default ({config.HIGHLIGHTS_REEL_DURATION_SECONDS}s)."
             )
-        else:
-            if duration <= 0:
-                utils.warning_print(
-                    f"Invalid highlights duration '{args.highlights}', using default ({config.HIGHLIGHTS_REEL_DURATION_SECONDS}s)."
-                )
-            else:
-                config.HIGHLIGHTS_REEL_DURATION_SECONDS = duration
 
     mode_dispatch: list[tuple] = [
         (
@@ -529,39 +498,21 @@ def _generate_cli_clips(
 
     for condition, mode, kwargs in mode_dispatch:
         if condition:
-            return spreadsheet.generate_list(
-                worksheet, mode, skip_prompts=skip_prompts, **kwargs
-            )
+            return spreadsheet.generate_list(worksheet, mode, **kwargs)
     return []
 
 
-def _resolve_chronologic_output_file(
-    args: Any, clips_list: list[ClipRecord]
-) -> str | None:
-    """Build the output filename for chronologic reel mode."""
-    if not args.chronologic:
+def _resolve_reel_output_file(args: Any, clips_list: list[ClipRecord]) -> str | None:
+    """Reserve the default filename for chronologic or highlights reels."""
+    study_name = clips_list[0].get("study", "").strip() if clips_list else ""
+    if args.chronologic:
+        participant_id = utils.normalize_participant_id(args.chronologic)
+        name = files.default_reel_filename(study_name, "chronologic", participant_id)
+    elif args.highlights:
+        name = files.default_reel_filename(study_name, "highlights")
+    else:
         return None
-    participant_id = utils.normalize_participant_id(args.chronologic)
-    study_name = clips_list[0].get("study", "").strip() if clips_list else ""
-    if study_name and participant_id:
-        return files.get_unique_filename(
-            f"{study_name}_{participant_id}_chronologic{config.FILEFORMAT}"
-        )
-    if participant_id:
-        return files.get_unique_filename(
-            f"{participant_id}_chronologic{config.FILEFORMAT}"
-        )
-    return files.get_unique_filename(f"chronologic{config.FILEFORMAT}")
-
-
-def _resolve_highlights_output_file(
-    clips_list: list[ClipRecord],
-) -> str | None:
-    """Build the output filename for highlights reel mode."""
-    study_name = clips_list[0].get("study", "").strip() if clips_list else ""
-    if study_name:
-        return files.get_unique_filename(f"{study_name}_highlights{config.FILEFORMAT}")
-    return files.get_unique_filename(f"highlights{config.FILEFORMAT}")
+    return files.get_unique_filename(name)
 
 
 # ---- CLI mode runner ----
@@ -603,28 +554,13 @@ def _run_gallery_cli(args: argparse.Namespace) -> None:
     if interval is None or interval <= 0:
         interval = config.GALLERY_INTERVAL_SECONDS
     bundle = getattr(args, "bundle", False) or config.GALLERY_BUNDLE_ENABLED
-
-    artifacts = video.generate_interval_captures(
-        str(video_path),
-        interval_seconds=interval,
-        output_format=output_format,
-        gif_duration_seconds=config.GALLERY_GIF_DURATION_SECONDS,
-    )
-    if not artifacts:
-        return
-
-    duration = video.get_file_duration(str(video_path)) or 0
-    data = viewer.finalize_gallery_data(
-        artifacts,
-        source_video=video_path.name,
-        video_duration=duration,
-        output_format=output_format,
-        interval=interval,
+    app._build_gallery(
+        video_path,
+        output_format,
+        interval,
+        config.GALLERY_GIF_DURATION_SECONDS,
         bundle=bundle,
     )
-    gallery_path = viewer.generate_gallery_viewer(data)
-    if gallery_path:
-        utils.info_print(f"Gallery viewer created: {gallery_path}")
 
 
 def _run_pre_transcribe(worksheet: Any, args: Any) -> None:
@@ -638,20 +574,9 @@ def _run_pre_transcribe(worksheet: Any, args: Any) -> None:
         ctx.header_row, ctx.id_cell, ctx.num_participants
     )
 
-    requested_ids = getattr(args, "pre_transcribe", [])
-    if not requested_ids:
-        target_ids = list(available)
-    else:
-        target_ids = []
-        for raw_id in requested_ids:
-            pid = utils.normalize_participant_id(raw_id)
-            if pid in available:
-                target_ids.append(pid)
-            else:
-                utils.warning_print(
-                    f"Participant '{raw_id}' not found in spreadsheet. "
-                    f"Available: {', '.join(available)}"
-                )
+    target_ids = _select_transcript_targets(
+        getattr(args, "pre_transcribe", []), available, "not found in spreadsheet."
+    )
 
     if not target_ids:
         utils.error_print("No valid participants to transcribe.")
@@ -743,26 +668,21 @@ def _run_pre_transcribe(worksheet: Any, args: Any) -> None:
 
 def _select_transcript_targets(
     requested: list[str] | None,
-    source_transcripts: dict[str, Any],
+    available: Collection[str],
+    reason: str = "has no transcript; skipping.",
 ) -> list[str]:
-    """Resolve a requested participant list against transcripted participants.
-
-    ``requested`` is the value of ``args.summarize``, ``args.citations``, or
-    ``args.friction`` — None should never reach here, but ``[]`` means "all
-    transcripted".
-    Unknown IDs print a warning and are dropped.
-    """
+    """Resolve requested IDs against *available*; empty means all, unknown IDs warn."""
     if not requested:
-        return list(source_transcripts.keys())
+        return list(available)
     targets: list[str] = []
     for raw_id in requested:
         pid = utils.normalize_participant_id(raw_id)
-        if pid in source_transcripts:
+        if pid in available:
             targets.append(pid)
         else:
             utils.warning_print(
-                f"Participant {raw_id!r} has no transcript; skipping. "
-                f"Available: {', '.join(sorted(source_transcripts.keys()))}"
+                f"Participant {raw_id!r} {reason} "
+                f"Available: {', '.join(sorted(available))}"
             )
     return targets
 
@@ -905,7 +825,7 @@ def _run_friction_agent(args: argparse.Namespace) -> None:
 
 def _run_timeline_viewer_mode(worksheet: Any, args: Any) -> None:
     """Export all clips via batch mode and generate a per-participant timeline viewer."""
-    clips_list = spreadsheet.generate_list(worksheet, "batch", skip_prompts=True)
+    clips_list = spreadsheet.generate_list(worksheet, "batch")
     outputs_generated, artifacts = app.process_clips(clips_list, output_format="clip")
 
     if not config.REENCODING:
@@ -916,28 +836,12 @@ def _run_timeline_viewer_mode(worksheet: Any, args: Any) -> None:
         utils.warning_print("No artifacts were generated; skipping timeline viewer.")
         return
 
-    study = artifacts[0].get("study", "")
-    ss_events = viewer.load_screenspace_events_for_viewer()
-    data = viewer.finalize_timeline_data(
-        artifacts,
-        study=study,
-        worksheet_title=getattr(worksheet, "title", ""),
-        is_excel=app._is_excel_worksheet(worksheet),
-        mode="timeline-viewer",
-        screenspace_events=ss_events or None,
-    )
-    viewer_path = viewer.generate_timeline_viewer(
-        data,
-        template_name="timeline-viewer.html",
-        output_basename="timeline_viewer.html",
-    )
-    if viewer_path:
-        utils.info_print(f"Participant timeline viewer created: {viewer_path}")
+    app._build_timeline_viewer(worksheet, artifacts)
 
     if getattr(args, "manifest", False):
         manifest_path = viewer.save_manifest(
             artifacts,
-            study=study,
+            study=artifacts[0].get("study", ""),
             worksheet_title=getattr(worksheet, "title", ""),
             is_excel=app._is_excel_worksheet(worksheet),
             mode="timeline-viewer",
@@ -985,9 +889,7 @@ def run_cli_mode(worksheet: Any, args: Any, cli_mode_args: CliModeArgs) -> None:
     reel_records: list = []
 
     if is_reel:
-        reel_output_file = _resolve_chronologic_output_file(args, clips_list)
-        if args.highlights and reel_output_file is None:
-            reel_output_file = _resolve_highlights_output_file(clips_list)
+        reel_output_file = _resolve_reel_output_file(args, clips_list)
         outputs_generated, reel_records = app.process_reel(
             clips_list,
             output_file=reel_output_file,
@@ -1346,7 +1248,7 @@ def _maybe_apply_persisted_dirs(args: Any) -> None:
     import start_settings
 
     settings = start_settings.load_start_settings()
-    if not settings.get("persist_enabled", True):
+    if not settings.get("persist_enabled"):
         return
     if getattr(args, "input", None) is None:
         last_input = settings.get("last_input") or ""
@@ -1442,27 +1344,36 @@ def _launch_web_frontend(
     to the server's boot-build thread instead, and *worksheet_factory* defers
     the `-s` worksheet open the same way.
     """
+    kw: dict[str, Any] = {
+        "worksheet": worksheet,
+        "default_page": default_page,
+        "gspread_client": gspread_client,
+        "gspread_client_factory": gspread_client_factory,
+        "worksheet_factory": worksheet_factory,
+    }
     if _use_desktop_window(args):
         import desktop
 
-        desktop.launch(
-            worksheet=worksheet,
-            default_page=default_page,
-            gspread_client=gspread_client,
-            gspread_client_factory=gspread_client_factory,
-            worksheet_factory=worksheet_factory,
-        )
+        desktop.launch(**kw)
         return
 
     import server
 
-    server.start_combined_server(
-        worksheet=worksheet,
-        default_page=default_page,
-        gspread_client=gspread_client,
-        gspread_client_factory=gspread_client_factory,
-        worksheet_factory=worksheet_factory,
-    )
+    server.start_combined_server(**kw)
+
+
+def _load_manifest_or_exit() -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Load manifest artifacts and reels, exiting when both are empty."""
+    artifacts, reels = viewer.load_manifest_both()
+    if not artifacts and not reels:
+        utils.error_print(
+            "No manifest found or manifest is empty.",
+            [
+                f"Run a clip generation mode with --manifest first to create {config.MANIFEST_FILENAME}."
+            ],
+        )
+        sys.exit(1)
+    return artifacts, reels
 
 
 def _dispatch_standalone_mode(
@@ -1476,15 +1387,7 @@ def _dispatch_standalone_mode(
     """
     # Standalone viewer: regenerate viewer from saved manifest
     if getattr(args, "viewer", False) and not cli_mode:
-        existing_artifacts, existing_reels = viewer.load_manifest_both()
-        if not existing_artifacts and not existing_reels:
-            utils.error_print(
-                "No manifest found or manifest is empty.",
-                [
-                    f"Run a clip generation mode with --manifest first to create {config.MANIFEST_FILENAME}."
-                ],
-            )
-            sys.exit(1)
+        existing_artifacts, existing_reels = _load_manifest_or_exit()
         primary = existing_artifacts[0] if existing_artifacts else existing_reels[0]
         study = primary.get("study", "")
         participant = primary.get("participant", "")
@@ -1536,15 +1439,7 @@ def _dispatch_standalone_mode(
 
     # Standalone regenerate from manifest
     if getattr(args, "regenerate", False) and not cli_mode:
-        existing_artifacts, existing_reels = viewer.load_manifest_both()
-        if not existing_artifacts and not existing_reels:
-            utils.error_print(
-                "No manifest found or manifest is empty.",
-                [
-                    f"Run a clip generation mode with --manifest first to create {config.MANIFEST_FILENAME}."
-                ],
-            )
-            sys.exit(1)
+        existing_artifacts, existing_reels = _load_manifest_or_exit()
         media_count = sum(
             1 for a in existing_artifacts if a.get("type") != "transcript"
         )
@@ -1631,7 +1526,7 @@ def main() -> None:
             )
             sys.exit(1)
         # Reopen the grid after each change; empty input exits.
-        while utils.set_program_settings():
+        while interactive.set_program_settings():
             pass
 
     if not video.check_ffmpeg_tools_available():
@@ -1773,11 +1668,3 @@ def main() -> None:
         except utils.QuitProgram:
             # Keyword-aware input requested exit; helper already printed context message.
             sys.exit(0)
-
-
-if __name__ == "__main__":
-    try:
-        main()
-    except KeyboardInterrupt:
-        utils.info_print("Interrupted by user")
-        sys.exit(0)

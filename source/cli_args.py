@@ -322,7 +322,7 @@ def _add_viewer_args(parser: argparse.ArgumentParser) -> None:
     viewer_manifest.add_argument(
         "--overview",
         action="store_true",
-        help="Launch the Overview frontend (Metadata, Convergence, and the 3D similarity Map)",
+        help="Launch the Overview frontend (Metadata, Convergence, Reports)",
     )
     viewer_manifest.add_argument(
         "--desktop",
@@ -680,9 +680,12 @@ def _add_event_clip_args(parser: argparse.ArgumentParser) -> None:
     event_clips.add_argument(
         "--cluster-gap",
         type=float,
-        default=5.0,
+        default=config.EVENT_CLUSTER_GAP_SECONDS,
         metavar="SECONDS",
-        help="Cluster events whose gap is <= SECONDS into one clip (default: 5.0; 0 disables).",
+        help=(
+            "Cluster events whose gap is <= SECONDS into one clip "
+            f"(default: {config.EVENT_CLUSTER_GAP_SECONDS}; 0 disables)."
+        ),
     )
     event_clips.add_argument(
         "--clip-pre",
@@ -797,17 +800,7 @@ def _add_filmstrip_args(parser: argparse.ArgumentParser) -> None:
 
 
 def parse_arguments() -> argparse.Namespace:
-    """Parse command-line arguments for non-interactive mode.
-
-    At most one selection-mode flag (-b, -l, -r, -C, -c, -p, -k, -S, -M, -R, -T) may be
-    given; if none is given, the program runs in interactive mode (see --help groups for
-    all options: output format, transcription, paths, viewer/manifest, run flags).
-
-    Returns:
-        argparse.Namespace with mode flags/values, spreadsheet, yes, verbose, screen, gif,
-        transcribe, transcript_format, pre_transcribe, viewer, manifest, timeline_viewer,
-        input, output, titlecards, and related attributes.
-    """
+    """Parse CLI arguments; with no selection flag, clipgen runs interactively."""
     parser = argparse.ArgumentParser(
         description=(
             f"clipgen v{utils.get_version()} - Video clip generator from Google Sheets "

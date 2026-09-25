@@ -37,7 +37,7 @@ def test_motion_module_exists_and_exports_api():
     assert MOTION_JS.is_file(), "assets/web/motion.js is missing"
     src = MOTION_JS.read_text(encoding="utf-8")
     assert "global.ClipgenMotion = {" in src
-    for fn in ("animateOut", "animateOutAll", "animateIn", "flyTo"):
+    for fn in ("animateOut", "animateOutAll", "animateIn"):
         assert "function " + fn + "(" in src, f"motion.js should define {fn}()"
     assert "var PARAMS = {" in src, "motion.js should expose the tweakable PARAMS"
 

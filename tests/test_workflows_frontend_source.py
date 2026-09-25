@@ -131,7 +131,6 @@ def test_hub_and_satellites_publish_canvas_hooks():
     # satellite so palette grey-out logic isn't duplicated).
     for fn in (
         "WF.scheduleSave",
-        "WF.renderPalette",
         "WF.openBlueprint",
         "WF.nodeContextMet",
     ):
@@ -139,7 +138,6 @@ def test_hub_and_satellites_publish_canvas_hooks():
     # Satellite-owned rendering / interaction attached back onto WF.
     for fn in (
         "WF.renderAllNodes",
-        "WF.renderNode",
         "WF.initCanvas",
         "WF.applyViewport",
         "WF.autoArrange",  # "Clean up" auto-layout
@@ -150,7 +148,6 @@ def test_hub_and_satellites_publish_canvas_hooks():
         "WF.cancelConnect",
         "WF.selectEdge",
         "WF.removeEdge",
-        "WF.canConnect",
     ):
         assert fn in src, fn
     # The catalog is fetched (not hardcoded), and the world layer is transformed.
@@ -235,7 +232,6 @@ def test_run_panel_satellite_present_and_wired():
         "WF.startRun",
         "WF.stopRun",
         "WF.refreshRuns",
-        "WF.renderRuns",
     ):
         assert fn in src, fn
     # SSE stream with a polling fallback (mirrors screenspace-tasks). The raw
@@ -262,7 +258,7 @@ def test_batch_via_all_participants_option():
     assert "blueprintWantsBatch" in runs
     assert "batches:" in src  # state.batches on the hub
     assert "api/batches" in runs
-    assert "subscribeBatch" in runs
+    assert "_batchChannel.subscribe(" in runs
 
     # The old standalone control is gone.
     html = WORKFLOWS_HTML.read_text(encoding="utf-8")
@@ -325,11 +321,8 @@ def test_stash_satellite_present_and_wired():
     assert "WF.loadStashes" in src
     # Satellite-owned stash lifecycle attached back onto WF.
     for fn in (
-        "WF.renderStashPalette",
         "WF.saveSelectionAsStash",
         "WF.instantiateStash",
-        "WF.renameStash",
-        "WF.deleteStash",
         "WF.syncStashButton",
     ):
         assert fn in src, fn
@@ -671,13 +664,13 @@ def test_run_to_selected_node():
 
 
 def test_theme_toggle_icons_styled():
-    """The sun/moon icon visuals AND the #themeToggle button base (including the
-    position:relative anchor the absolutely-positioned icons hang off of) live
-    once in topnav.css; the per-page duplicates were removed."""
+    """The sun/moon icons live once in tokens.css (TopNav and exports); the
+    #themeToggle button base, with its position:relative anchor, in topnav.css."""
+    tokens_css = (_WEB / "tokens.css").read_text(encoding="utf-8")
+    assert ".theme-icon-sun" in tokens_css
+    assert ".theme-icon-moon" in tokens_css
+    assert '#themeToggle[data-theme="dark"] .theme-icon-moon' in tokens_css
     topnav_css = (_WEB / "topnav.css").read_text(encoding="utf-8")
-    assert ".theme-icon-sun" in topnav_css
-    assert ".theme-icon-moon" in topnav_css
-    assert '#themeToggle[data-theme="dark"] .theme-icon-moon' in topnav_css
     # The absolutely-positioned icons need a positioned button to anchor to —
     # supplied by topnav.css's consolidated .topnav-right #themeToggle block.
     assert "position: relative;" in topnav_css

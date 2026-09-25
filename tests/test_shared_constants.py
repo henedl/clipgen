@@ -165,25 +165,17 @@ def test_clipgen_config_defaults_match_python():
 
 
 def test_clipgen_apply_config_covers_frontend_config():
-    """clipgenApplyConfig must have a branch for every get_frontend_config key.
+    """Every get_frontend_config key needs a CLIPGEN_CONFIG default.
 
-    test_clipgen_config_defaults_match_python compares default *values*, so a
-    key the server ships but the applier silently drops stays green while the
-    live frontend runs the JS defaults forever (the six composerAnnotation*
-    keys shipped un-applied this way). Coverage is asserted as payload.<key>
-    access inside the function body.
+    clipgenApplyConfig copies only keys present in the JS defaults, so a key
+    the server ships without a default is silently dropped and the live
+    frontend never sees it.
     """
-    match = re.search(
-        r"var\s+clipgenApplyConfig\s*=\s*function\s*\(payload\)\s*\{(.*?)\n\};",
-        _js_source(),
-        re.DOTALL,
-    )
-    assert match, "clipgenApplyConfig not found in utils.js"
-    handled = set(re.findall(r"payload\.(\w+)", match.group(1)))
-    missing = set(utils.get_frontend_config().keys()) - handled
+    js_keys = set(_parse_js_object_literal("CLIPGEN_CONFIG").keys())
+    missing = set(utils.get_frontend_config().keys()) - js_keys
     assert not missing, (
         f"clipgenApplyConfig drops config keys the server ships: "
-        f"{sorted(missing)}. Add a type-guarded branch for each in utils.js."
+        f"{sorted(missing)}. Add a default for each to CLIPGEN_CONFIG in utils.js."
     )
 
 
@@ -454,12 +446,7 @@ def test_detector_registries_stay_aligned():
     )
 
     ss_js = (WEB / "screenspace.js").read_text(encoding="utf-8")
-    icon_types = _flat_js_object_keys(ss_js, "SS_TASK_ICON_TYPES")
     icon_names = _flat_js_object_keys(ss_js, "TOOL_ICON_NAMES")
-    assert icon_types == engine, (
-        f"screenspace.js SS_TASK_ICON_TYPES drifted from TOOLS: "
-        f"{sorted(icon_types)} vs {sorted(engine)}."
-    )
     assert icon_names == engine, (
         f"screenspace.js TOOL_ICON_NAMES drifted from TOOLS: "
         f"{sorted(icon_names)} vs {sorted(engine)}."

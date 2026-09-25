@@ -20,9 +20,6 @@
     "CLI",
   ];
 
-  // EXIT_MS must match --duration-veil (tokens.css) so veil and overlay finish together.
-  var EXIT_MS = 360;
-
   var _root = null;
   var _tabsEl = null;
   var _panelsEl = null;
@@ -34,8 +31,8 @@
   var _opts = {};
   var _modelsCache = null;
   var _modelsCachePromise = null;
-  // Running GGUF downloads by model ref; a rebuilt row joins the existing poll.
-  var _llmDownloadWatch = {};
+  // Running model downloads by key; a rebuilt row joins the existing poll.
+  var _downloadWatch = {};
   // The Summaries tab's model block refresh, set when the block is built.
   var _llmBlockRefresh = null;
   var _redactBlockRefresh = null;
@@ -48,15 +45,8 @@
   var _revealBtn = null;
   var _SAMPLE_TITLE_TEXT = "Sample description";
 
-  function _getApiRoot() {
-    // Settings and models live at the combined-app root, not under a page prefix.
-    return "/api";
-  }
-
-  function _formatSize(mb) {
-    if (mb >= 1024) return (mb / 1024).toFixed(1) + " GB";
-    return mb + " MB";
-  }
+  // Settings and models live at the combined-app root, not a page prefix.
+  var API_ROOT = "/api";
 
   var FIT_LABELS = { fits: "Fits", tight: "Tight", too_big: "Too large" };
 
@@ -67,8 +57,8 @@
     var chip = el("span", "settings-llm-model-fit", isReco ? "Recommended" : FIT_LABELS[fit.level]);
     if (isReco) chip.classList.add("settings-llm-model-fit--reco");
     else if (fit.level === "too_big") chip.classList.add("settings-llm-model-fit--warn");
-    chip.title = "Needs about " + _formatSize(fit.need_mb) + ", " +
-      _formatSize(fit.usable_mb) + " usable";
+    chip.title = "Needs about " + formatModelSize(fit.need_mb) + ", " +
+      formatModelSize(fit.usable_mb) + " usable";
     return chip;
   }
 
@@ -83,7 +73,7 @@
     var parts = [];
     if (hw.chip) parts.push(hw.chip);
     if (hw.memory_mb) {
-      parts.push(_formatSize(hw.memory_mb).replace(".0 GB", " GB") +
+      parts.push(formatModelSize(hw.memory_mb).replace(".0 GB", " GB") +
         (hw.unified_memory ? " unified memory" : " RAM"));
     }
     if (hw.cpu_count) parts.push(hw.cpu_count + " cores");
@@ -93,7 +83,7 @@
   function _fetchModels() {
     if (_modelsCache) return Promise.resolve(_modelsCache);
     if (_modelsCachePromise) return _modelsCachePromise;
-    _modelsCachePromise = apiGet(_getApiRoot() + "/models")
+    _modelsCachePromise = apiGet(API_ROOT + "/models")
       .then(function (data) {
         // Cache only when the AI server answered; otherwise retry on the next open.
         if (data && data.ok && !(data.llm && data.llm.available === false)) {
@@ -133,52 +123,117 @@
     }
   }
 
-  // Start or join a GGUF download; one shared poll per model survives modal reopen.
-  function _watchLlmDownload(model, onProgress) {
-    var watch = _llmDownloadWatch[model];
+  // Start or join a download; spec is {key, startUrl, body, statusUrl, label}.
+  function _watchDownload(spec, onProgress) {
+    var watch = _downloadWatch[spec.key];
     if (watch) { watch.listeners.push(onProgress); return; }
     watch = { listeners: [onProgress] };
-    _llmDownloadWatch[model] = watch;
+    _downloadWatch[spec.key] = watch;
 
     function emit(st) {
       for (var i = 0; i < watch.listeners.length; i++) watch.listeners[i](st);
     }
     function finish(st) {
-      delete _llmDownloadWatch[model];
+      delete _downloadWatch[spec.key];
       emit(st);
       if (st.succeeded) _refreshLlmViews();
     }
+    function fail(error) {
+      finish({ done: true, succeeded: false, error: error || "Download failed" });
+    }
 
-    apiPost(_getApiRoot() + "/models/llm/download", { model: model }).then(function (data) {
-      if (!data || !data.ok) {
-        finish({ done: true, succeeded: false, error: (data && data.error) || "Download failed" });
-        return;
-      }
+    apiPost(spec.startUrl, spec.body).then(function (data) {
+      if (!data || !data.ok) { fail(data && data.error); return; }
+      if (data.installed) { finish({ done: true, succeeded: true }); return; }
       var misses = 0;
+      function miss() {
+        if (++misses < 20) return;
+        poller.stop();
+        fail();
+      }
       var poller = createPoller(function () {
-        return apiGet(_getApiRoot() + "/models/llm/download-status?model=" + encodeURIComponent(model))
+        return apiGet(spec.statusUrl)
           .then(function (st) {
-            if (!st || !st.ok || !st.found) {
-              if (++misses >= 20) {
-                poller.stop();
-                finish({ done: true, succeeded: false, error: "Download failed" });
-              }
-              return;
-            }
+            if (!st || !st.ok || !st.found) { miss(); return; }
             misses = 0;
             if (st.done) { poller.stop(); finish(st); } else emit(st);
           })
-          .catch(function () {
-            if (++misses >= 20) {
-              poller.stop();
-              finish({ done: true, succeeded: false, error: "Download failed" });
-            }
-          });
-      }, 1000, { runImmediately: true, label: "settings.llmDownload" });
+          .catch(miss);
+      }, 1000, { runImmediately: true, label: spec.label });
       poller.start();
-    }).catch(function () {
-      finish({ done: true, succeeded: false, error: "Download failed" });
-    });
+    }).catch(function () { fail(); });
+  }
+
+  // Only catalog models carry a source page; the rest get no link at all.
+  function _modelLinkButton(model) {
+    if (!model.model_url) return null;
+    var link = el("a", "settings-llm-model-reveal");
+    link.href = model.model_url;
+    link.target = "_blank";
+    link.rel = "noopener noreferrer";
+    link.title = "View this model on Hugging Face";
+    link.setAttribute("aria-label", "View this model on Hugging Face");
+    link.appendChild(
+      el("span", "settings-llm-model-icon settings-llm-model-icon--link")
+    );
+    return link;
+  }
+
+  // Same width with or without a link, so the columns to its right line up.
+  function _modelLinkSlot(model) {
+    var slot = el("span", "settings-llm-model-link-slot");
+    var link = _modelLinkButton(model);
+    if (link) slot.appendChild(link);
+    return slot;
+  }
+
+  function _downloadedState() {
+    var done = el("span", "settings-llm-model-state");
+    done.appendChild(el("span", "settings-llm-model-icon settings-llm-model-icon--done"));
+    done.appendChild(document.createTextNode("Downloaded"));
+    return done;
+  }
+
+  // Download button plus in-row progress bar; rejoins a download started before reopen.
+  function _downloadAction(name, size, action, sizeMb, spec) {
+    var bar = el("div", "settings-llm-model-bar");
+    var fill = el("div", "settings-llm-model-bar-fill");
+    bar.appendChild(fill);
+    var dlBtn = el("button", "btn btn-small btn-icon");
+    dlBtn.type = "button";
+    dlBtn.appendChild(el("span", "settings-llm-model-icon settings-llm-model-icon--download"));
+    dlBtn.appendChild(document.createTextNode("Download"));
+    action.appendChild(dlBtn);
+
+    function onProgress(st) {
+      if (st.done) {
+        if (!st.succeeded) {
+          bar.remove();
+          dlBtn.disabled = false;
+          size.textContent = formatModelSize(sizeMb);
+          _setStatus(st.error || "Download failed");
+        }
+        return;
+      }
+      if (st.total > 0) {
+        var pct = Math.max(0, Math.min(100, Math.round((st.completed / st.total) * 100)));
+        fill.style.width = pct + "%";
+        size.textContent = formatModelSize(Math.round(st.completed / 1048576)) +
+          " / " + formatModelSize(sizeMb);
+      }
+    }
+    function startWatching() {
+      dlBtn.disabled = true;
+      name.appendChild(bar);
+      _watchDownload(spec, onProgress);
+    }
+    dlBtn.addEventListener("click", startWatching);
+    apiGet(spec.statusUrl)
+      .then(function (st) {
+        if (st && st.ok && st.found && !st.done) startWatching();
+      })
+      .catch(function () {});
+    return dlBtn;
   }
 
   // The Redact model: one optional download under Transcription → Redaction.
@@ -216,33 +271,19 @@
       lic.appendChild(document.createTextNode("."));
       name.appendChild(lic);
       row.appendChild(name);
-      var size = el("span", "settings-llm-model-size", _formatSize(rd.size_mb || 0));
+      var size = el("span", "settings-llm-model-size", formatModelSize(rd.size_mb || 0));
       row.appendChild(size);
-      var slot = el("span", "settings-llm-model-link-slot");
-      if (rd.model_url) {
-        var link = el("a", "settings-llm-model-reveal");
-        link.href = rd.model_url;
-        link.target = "_blank";
-        link.rel = "noopener noreferrer";
-        link.title = "View this model on Hugging Face";
-        link.setAttribute("aria-label", "View this model on Hugging Face");
-        link.appendChild(el("span", "settings-llm-model-icon settings-llm-model-icon--link"));
-        slot.appendChild(link);
-      }
-      row.appendChild(slot);
+      row.appendChild(_modelLinkSlot(rd));
       var action = el("span", "settings-llm-model-action");
       row.appendChild(action);
 
       if (rd.installed) {
-        var done = el("span", "settings-llm-model-state");
-        done.appendChild(el("span", "settings-llm-model-icon settings-llm-model-icon--done"));
-        done.appendChild(document.createTextNode("Downloaded"));
-        action.appendChild(done);
+        action.appendChild(_downloadedState());
         var delBtn = el("button", "btn btn-small btn-icon", "Remove");
         delBtn.type = "button";
         delBtn.addEventListener("click", function () {
           delBtn.disabled = true;
-          apiDelete(_getApiRoot() + "/models/redact").then(function (r) {
+          apiDelete(API_ROOT + "/models/redact").then(function (r) {
             if (!r || !r.ok) {
               delBtn.disabled = false;
               _setStatus((r && r.error) || "Remove failed");
@@ -258,98 +299,19 @@
         return row;
       }
 
-      var bar = el("div", "settings-llm-model-bar");
-      var fill = el("div", "settings-llm-model-bar-fill");
-      bar.appendChild(fill);
-      var dlBtn = el("button", "btn btn-small btn-icon");
-      dlBtn.type = "button";
-      dlBtn.appendChild(el("span", "settings-llm-model-icon settings-llm-model-icon--download"));
-      dlBtn.appendChild(document.createTextNode("Download"));
-      action.appendChild(dlBtn);
-
-      function onProgress(st) {
-        if (st.done) {
-          if (!st.succeeded) {
-            bar.remove();
-            dlBtn.disabled = false;
-            size.textContent = _formatSize(rd.size_mb || 0);
-            _setStatus(st.error || "Download failed");
-          }
-          return;
-        }
-        if (st.total > 0) {
-          var pct = Math.max(0, Math.min(100, Math.round((st.completed / st.total) * 100)));
-          fill.style.width = pct + "%";
-          size.textContent = _formatSize(Math.round(st.completed / 1048576)) +
-            " / " + _formatSize(rd.size_mb || 0);
-        }
-      }
-      function startWatching() {
-        dlBtn.disabled = true;
-        name.appendChild(bar);
-        _watchRedactDownload(onProgress);
-      }
-      dlBtn.addEventListener("click", startWatching);
-      apiGet(_getApiRoot() + "/models/redact/download-status")
-        .then(function (st) {
-          if (st && st.ok && st.found && !st.done) startWatching();
-        })
-        .catch(function () {});
+      _downloadAction(name, size, action, rd.size_mb || 0, {
+        key: "redact",
+        startUrl: API_ROOT + "/models/redact/download",
+        body: {},
+        statusUrl: API_ROOT + "/models/redact/download-status",
+        label: "settings.redactDownload",
+      });
       return row;
     }
 
     _redactBlockRefresh = refresh;
     refresh();
     return wrap;
-  }
-
-  // Start or join the Redact download; the poll survives modal reopen like the GGUF one.
-  var _redactDownloadWatch = null;
-  function _watchRedactDownload(onProgress) {
-    if (_redactDownloadWatch) { _redactDownloadWatch.listeners.push(onProgress); return; }
-    var watch = { listeners: [onProgress] };
-    _redactDownloadWatch = watch;
-
-    function emit(st) {
-      for (var i = 0; i < watch.listeners.length; i++) watch.listeners[i](st);
-    }
-    function finish(st) {
-      _redactDownloadWatch = null;
-      emit(st);
-      if (st.succeeded) _refreshLlmViews();
-    }
-
-    apiPost(_getApiRoot() + "/models/redact/download", {}).then(function (data) {
-      if (!data || !data.ok) {
-        finish({ done: true, succeeded: false, error: (data && data.error) || "Download failed" });
-        return;
-      }
-      if (data.installed) { finish({ done: true, succeeded: true }); return; }
-      var misses = 0;
-      var poller = createPoller(function () {
-        return apiGet(_getApiRoot() + "/models/redact/download-status")
-          .then(function (st) {
-            if (!st || !st.ok || !st.found) {
-              if (++misses >= 20) {
-                poller.stop();
-                finish({ done: true, succeeded: false, error: "Download failed" });
-              }
-              return;
-            }
-            misses = 0;
-            if (st.done) { poller.stop(); finish(st); } else emit(st);
-          })
-          .catch(function () {
-            if (++misses >= 20) {
-              poller.stop();
-              finish({ done: true, succeeded: false, error: "Download failed" });
-            }
-          });
-      }, 1000, { runImmediately: true, label: "settings.redactDownload" });
-      poller.start();
-    }).catch(function () {
-      finish({ done: true, succeeded: false, error: "Download failed" });
-    });
   }
 
   // Recommendation, catalog, then the downloaded models with show/delete.
@@ -464,29 +426,6 @@
       return name;
     }
 
-    // Only catalog models carry a source page; the rest get no link at all.
-    function _modelLinkButton(model) {
-      if (!model.model_url) return null;
-      var link = el("a", "settings-llm-model-reveal");
-      link.href = model.model_url;
-      link.target = "_blank";
-      link.rel = "noopener noreferrer";
-      link.title = "View this model on Hugging Face";
-      link.setAttribute("aria-label", "View this model on Hugging Face");
-      link.appendChild(
-        el("span", "settings-llm-model-icon settings-llm-model-icon--link")
-      );
-      return link;
-    }
-
-    // Same width with or without a link, so the columns to its right line up.
-    function _modelLinkSlot(model) {
-      var slot = el("span", "settings-llm-model-link-slot");
-      var link = _modelLinkButton(model);
-      if (link) slot.appendChild(link);
-      return slot;
-    }
-
     // A curated model: Download with an in-row progress bar, or "Downloaded".
     function _buildSuggestedRow(model, recommended) {
       var row = el("div", "settings-llm-model-row");
@@ -497,7 +436,7 @@
         row.classList.add("settings-llm-model-row--unusable");
       }
       row.appendChild(name);
-      var size = el("span", "settings-llm-model-size", _formatSize(model.size_mb));
+      var size = el("span", "settings-llm-model-size", formatModelSize(model.size_mb));
       row.appendChild(size);
       var chip = _fitChip(model, model.name === recommended);
       if (chip) row.appendChild(chip);
@@ -506,53 +445,19 @@
       row.appendChild(action);
 
       if (model.installed) {
-        var done = el("span", "settings-llm-model-state");
-        done.appendChild(el("span", "settings-llm-model-icon settings-llm-model-icon--done"));
-        done.appendChild(document.createTextNode("Downloaded"));
-        action.appendChild(done);
+        action.appendChild(_downloadedState());
         return row;
       }
 
-      var bar = el("div", "settings-llm-model-bar");
-      var fill = el("div", "settings-llm-model-bar-fill");
-      bar.appendChild(fill);
-      var dlBtn = el("button", "btn btn-small btn-icon");
-      dlBtn.type = "button";
+      var dlBtn = _downloadAction(name, size, action, model.size_mb, {
+        key: "llm:" + model.name,
+        startUrl: API_ROOT + "/models/llm/download",
+        body: { model: model.name },
+        statusUrl: API_ROOT + "/models/llm/download-status?model=" + encodeURIComponent(model.name),
+        label: "settings.llmDownload",
+      });
       // The recommendation widget's "Use recommended" clicks this by model.
       dlBtn.setAttribute("data-model", model.name);
-      dlBtn.appendChild(el("span", "settings-llm-model-icon settings-llm-model-icon--download"));
-      dlBtn.appendChild(document.createTextNode("Download"));
-      action.appendChild(dlBtn);
-
-      function onProgress(st) {
-        if (st.done) {
-          if (!st.succeeded) {
-            bar.remove();
-            dlBtn.disabled = false;
-            size.textContent = _formatSize(model.size_mb);
-            _setStatus(st.error || "Download failed");
-          }
-          return;
-        }
-        if (st.total > 0) {
-          var pct = Math.max(0, Math.min(100, Math.round((st.completed / st.total) * 100)));
-          fill.style.width = pct + "%";
-          size.textContent = _formatSize(Math.round(st.completed / 1048576)) +
-            " / " + _formatSize(model.size_mb);
-        }
-      }
-      function startWatching() {
-        dlBtn.disabled = true;
-        name.appendChild(bar);
-        _watchLlmDownload(model.name, onProgress);
-      }
-      dlBtn.addEventListener("click", startWatching);
-      // A download started before the modal was closed is still running.
-      apiGet(_getApiRoot() + "/models/llm/download-status?model=" + encodeURIComponent(model.name))
-        .then(function (st) {
-          if (st && st.ok && st.found && !st.done) startWatching();
-        })
-        .catch(function () {});
       return row;
     }
 
@@ -566,7 +471,7 @@
       }
       row.appendChild(name);
       row.appendChild(
-        el("span", "settings-llm-model-size", model.size_mb ? _formatSize(model.size_mb) : "")
+        el("span", "settings-llm-model-size", model.size_mb ? formatModelSize(model.size_mb) : "")
       );
       row.appendChild(_modelLinkSlot(model));
 
@@ -578,7 +483,7 @@
         el("span", "settings-llm-model-icon settings-llm-model-icon--reveal")
       );
       showBtn.addEventListener("click", function () {
-        apiPost(_getApiRoot() + "/models/llm/reveal", { model: model.name })
+        apiPost(API_ROOT + "/models/llm/reveal", { model: model.name })
           .catch(function (e) {
             _setStatus((e && e.message) || "Could not open the folder");
           });
@@ -603,7 +508,7 @@
       delBtn.appendChild(document.createTextNode("Delete"));
       delBtn.addEventListener("click", function () {
         delBtn.disabled = true;
-        apiDelete(_getApiRoot() + "/models/llm/" + encodeURIComponent(model.name))
+        apiDelete(API_ROOT + "/models/llm/" + encodeURIComponent(model.name))
           .then(function () { _refreshLlmViews(); })
           .catch(function (e) {
             delBtn.disabled = false;
@@ -653,7 +558,7 @@
         opt.value = refByStem[m.name] || m.name;
         // No room for the raw id in an option; it goes in the tooltip.
         var label = m.label || m.name;
-        if (m.size_mb) label += " (" + _formatSize(m.size_mb) + ")";
+        if (m.size_mb) label += " (" + formatModelSize(m.size_mb) + ")";
         if (m.description) label += " \u2014 " + m.description;
         // Still selectable: a llama.cpp upgrade may fix it; the mark warns.
         if (m.unusable) label += " \u2014 won't load";
@@ -677,7 +582,7 @@
         }
         var sopt = document.createElement("option");
         sopt.value = sm.name;
-        sopt.textContent = (sm.label || sm.name) + " (" + _formatSize(sm.size_mb) +
+        sopt.textContent = (sm.label || sm.name) + " (" + formatModelSize(sm.size_mb) +
           ") \u2014 not downloaded" + _fitSuffix(sm, sm.name === data.llm.recommended);
         sopt.title = sm.name + " \u2014 " + sm.description;
         if (sm.name === currentValue) {
@@ -807,7 +712,7 @@
     _navRow = null;
     if (_panelsEl) _panelsEl.focus();
     // Set the active-modal root ourselves: this modal bypasses openBlockingModal (own Escape/focus).
-    if (typeof setActiveModalRoot === "function") setActiveModalRoot(_root);
+    setActiveModalRoot(_root);
 
     // Next frame: build in the backdrop blur and slide/scale the panel.
     requestAnimationFrame(function () {
@@ -819,11 +724,11 @@
   function _close() {
     if (!_root || _root.classList.contains("hidden")) return;
     // Release the root now; showHints() keeps hints suppressed through the fade-out.
-    if (typeof setActiveModalRoot === "function") setActiveModalRoot(null);
+    setActiveModalRoot(null);
     // A hotkey recording capture-listener must never outlive the modal.
     _hkStopRecording();
     // The color popover lives on document.body and would outlive the modal.
-    if (window.ClipgenColorPicker) window.ClipgenColorPicker.close();
+    window.ClipgenColorPicker.close();
     // Drop the keyboard cursor so a re-open starts in mouse mode again.
     _navVisible = false;
     _selectNavRow(null, false);
@@ -836,7 +741,7 @@
       // Keep the topnav covered until the veil has faded.
       document.body.classList.remove("modal-open");
       _closeTimer = null;
-    }, EXIT_MS);
+    }, _cgVeilMs(_root));
   }
 
   function _load() {
@@ -844,10 +749,10 @@
     _panelsEl.textContent = "";
     _panelsEl.appendChild(el("span", "cg-shimmer", "Loading settings\u2026"));
     // Refetch the card list on every open so external uploads show up.
-    if (window.ClipgenColorPicker) window.ClipgenColorPicker.close();
+    window.ClipgenColorPicker.close();
     _cardsCache = null;
     _cardsCachePromise = null;
-    apiGet(_getApiRoot() + "/settings")
+    apiGet(API_ROOT + "/settings")
       .then(function (data) {
         if (!data.ok) {
           _panelsEl.textContent = "Failed to load settings.";
@@ -876,7 +781,7 @@
   }
 
   function _reveal() {
-    apiPost(_getApiRoot() + "/settings/reveal", {})
+    apiPost(API_ROOT + "/settings/reveal", {})
       .catch(function (err) {
         _setStatus((err && err.message) || "Could not open the folder");
       });
@@ -921,7 +826,7 @@
     }
     _setStatus("Saving\u2026", true);
 
-    apiPut(_getApiRoot() + "/settings", { settings: payload })
+    apiPut(API_ROOT + "/settings", { settings: payload })
       .then(function (data) {
         if (!data || !data.ok) {
           _setStatus(data && data.error ? "Save failed: " + data.error : "Save failed");
@@ -945,40 +850,32 @@
       });
   }
 
-  function _resetTab(tabName) {
-    apiPut(_getApiRoot() + "/settings", { reset: "tab:" + tabName })
+  function _reset(payload, okLabel, scope) {
+    apiPut(API_ROOT + "/settings", { reset: payload })
       .then(function (data) {
         if (!data.ok) {
           _setStatus("Reset failed");
           return;
         }
-        _setStatus("Reset " + tabName);
+        _setStatus(okLabel);
         setTimeout(function () { _setStatus(""); }, 2000);
-        _reloadAfterReset(tabName);
+        _reloadAfterReset(scope);
       })
       .catch(function () {
         _setStatus("Reset failed");
       });
+  }
+
+  function _resetTab(tabName) {
+    _reset("tab:" + tabName, "Reset " + tabName, tabName);
   }
 
   function _resetAll() {
-    apiPut(_getApiRoot() + "/settings", { reset: "all" })
-      .then(function (data) {
-        if (!data.ok) {
-          _setStatus("Reset failed");
-          return;
-        }
-        _setStatus("Reset to defaults");
-        setTimeout(function () { _setStatus(""); }, 2000);
-        _reloadAfterReset("all");
-      })
-      .catch(function () {
-        _setStatus("Reset failed");
-      });
+    _reset("all", "Reset to defaults", "all");
   }
 
   function _reloadAfterReset(scope) {
-    apiGet(_getApiRoot() + "/settings")
+    apiGet(API_ROOT + "/settings")
       .then(function (data) {
         if (!data.ok) return;
         _settings = data.settings;
@@ -1010,18 +907,19 @@
 
     var controlDiv = el("div", "settings-control");
     var settingName = s.name;
+    function commit(v) {
+      var setting = _findSetting(settingName);
+      if (setting) setting.value = v;
+      _updateChanged(settingName);
+      _scheduleSave();
+    }
 
     if (s.type === "bool") {
       var toggle = document.createElement("input");
       toggle.type = "checkbox";
       toggle.className = "settings-toggle";
       toggle.checked = !!s.value;
-      toggle.addEventListener("change", function () {
-        var setting = _findSetting(settingName);
-        if (setting) setting.value = this.checked;
-        _updateChanged(settingName);
-        _scheduleSave();
-      });
+      toggle.addEventListener("change", function () { commit(this.checked); });
       controlDiv.appendChild(toggle);
     } else if (s.type === "select" && s.options) {
       var sel = document.createElement("select");
@@ -1032,12 +930,7 @@
         if (s.options[oi] === s.value) opt.selected = true;
         sel.appendChild(opt);
       }
-      sel.addEventListener("change", function () {
-        var setting = _findSetting(settingName);
-        if (setting) setting.value = this.value;
-        _updateChanged(settingName);
-        _scheduleSave();
-      });
+      sel.addEventListener("change", function () { commit(this.value); });
       controlDiv.appendChild(sel);
     } else if (s.type === "model_select") {
       var msel = document.createElement("select");
@@ -1049,12 +942,7 @@
       curOpt.selected = true;
       msel.appendChild(curOpt);
       msel.disabled = true;
-      msel.addEventListener("change", function () {
-        var setting = _findSetting(settingName);
-        if (setting) setting.value = this.value;
-        _updateChanged(settingName);
-        _scheduleSave();
-      });
+      msel.addEventListener("change", function () { commit(this.value); });
       controlDiv.appendChild(msel);
       _loadModelsForSelect(msel, s.provider, s.value, s.emptyLabel);
     } else if (s.type === "str") {
@@ -1063,12 +951,7 @@
       txtInput.autocomplete = "off";
       txtInput.value = s.value || "";
       txtInput.placeholder = String(s.default || "");
-      txtInput.addEventListener("change", function () {
-        var setting = _findSetting(settingName);
-        if (setting) setting.value = this.value;
-        _updateChanged(settingName);
-        _scheduleSave();
-      });
+      txtInput.addEventListener("change", function () { commit(this.value); });
       controlDiv.appendChild(txtInput);
     } else if (s.type === "float") {
       var fInput = document.createElement("input");
@@ -1080,16 +963,14 @@
       fInput.placeholder = String(s.default);
       fInput.addEventListener("change", function () {
         var setting = _findSetting(settingName);
+        var n = parseFloat(this.value);
         if (setting) {
-          var n = parseFloat(this.value);
           if (isNaN(n)) n = setting.default;
           if (setting.min !== undefined && setting.min !== null && n < setting.min) n = setting.min;
           if (setting.max !== undefined && setting.max !== null && n > setting.max) n = setting.max;
-          setting.value = n;
           this.value = n;
         }
-        _updateChanged(settingName);
-        _scheduleSave();
+        commit(n);
       });
       controlDiv.appendChild(fInput);
     } else if (s.type === "mark_categories") {
@@ -1125,12 +1006,7 @@
       ta.spellcheck = false;
       ta.rows = 8;
       ta.value = s.value || "";
-      ta.addEventListener("change", function () {
-        var setting = _findSetting(settingName);
-        if (setting) setting.value = this.value;
-        _updateChanged(settingName);
-        _scheduleSave();
-      });
+      ta.addEventListener("change", function () { commit(this.value); });
       controlDiv.appendChild(ta);
 
       var resetBtn = el("button", "btn btn-small settings-prompt-reset", "Reset to default");
@@ -1138,10 +1014,8 @@
       resetBtn.addEventListener("click", function () {
         var setting = _findSetting(settingName);
         if (!setting) return;
-        setting.value = setting.default;
         ta.value = setting.default || "";
-        _updateChanged(settingName);
-        _scheduleSave();
+        commit(setting.default);
       });
       controlDiv.appendChild(resetBtn);
     } else {
@@ -1152,12 +1026,7 @@
       if (s.step !== undefined && s.step !== null) input.step = s.step;
       input.value = s.value;
       input.placeholder = String(s.default);
-      input.addEventListener("change", function () {
-        var setting = _findSetting(settingName);
-        if (setting) setting.value = parseInt(this.value, 10) || 0;
-        _updateChanged(settingName);
-        _scheduleSave();
-      });
+      input.addEventListener("change", function () { commit(parseInt(this.value, 10) || 0); });
       controlDiv.appendChild(input);
     }
 
@@ -1273,12 +1142,6 @@
     container.innerHTML = "";
     var setting = _findSetting(settingName);
     if (!setting) return;
-    if (!window.ClipgenHotkeys) {
-      container.appendChild(
-        el("div", "settings-label-desc", "Hotkey catalog unavailable on this page."),
-      );
-      return;
-    }
     if (!setting.value || typeof setting.value !== "object") setting.value = {};
     // Keep the live registry in sync with the editor (also after resets).
     window.ClipgenHotkeys.applyOverrides(setting.value);
@@ -1473,7 +1336,7 @@
     }
     if (_cardsCache) return Promise.resolve(_cardsCache);
     if (_cardsCachePromise) return _cardsCachePromise;
-    _cardsCachePromise = apiGet(_getApiRoot() + "/titlecards")
+    _cardsCachePromise = apiGet(API_ROOT + "/titlecards")
       .then(function (data) {
         _cardsCachePromise = null;
         if (data && data.ok) _cardsCache = data;
@@ -1579,7 +1442,6 @@
   }
 
   function _openCardColorPicker(box, preview, kind) {
-    if (!window.ClipgenColorPicker) return;
     var colorSettingName = _cardColorSettingName(kind);
     window.ClipgenColorPicker.open({
       anchor: box,
@@ -1649,7 +1511,7 @@
     var form = new FormData();
     form.append("file", file);
     // Manual fetch, not apiPost: FormData upload; keep data.error from non-2xx and r.ok.
-    fetch(_getApiRoot() + "/titlecards/upload", { method: "POST", body: form })
+    fetch(API_ROOT + "/titlecards/upload", { method: "POST", body: form })
       .then(function (r) {
         return r.json().then(
           function (j) { return { ok: r.ok, body: j }; },
@@ -1679,20 +1541,10 @@
 
   function _deleteCard(name) {
     _setStatus("Deleting…", true);
-    // Manual fetch, not apiDelete: keep data.error from non-2xx responses and r.ok.
-    fetch(_getApiRoot() + "/titlecards/image/" + encodeURIComponent(name), {
-      method: "DELETE",
-    })
-      .then(function (r) {
-        return r.json().then(
-          function (j) { return { ok: r.ok, body: j }; },
-          function () { return { ok: r.ok, body: null }; }
-        );
-      })
-      .then(function (res) {
-        var data = res.body;
-        if (!res.ok || !data || !data.ok) {
-          _setStatus(data && data.error ? data.error : "Delete failed");
+    apiDelete(API_ROOT + "/titlecards/image/" + encodeURIComponent(name))
+      .then(function (data) {
+        if (!data || !data.ok) {
+          _setStatus((data && data.error) || "Delete failed");
           return;
         }
         _setStatus("Deleted");
@@ -1708,8 +1560,8 @@
         }
         _refreshAllCardPickers();
       })
-      .catch(function () {
-        _setStatus("Delete failed");
+      .catch(function (err) {
+        _setStatus(err.serverMessage || "Delete failed");
       });
   }
 
@@ -1950,7 +1802,7 @@
 
   function _navActive() {
     return _isModalOpen() && !_hkRecordCleanup &&
-      !(window.ClipgenColorPicker && window.ClipgenColorPicker.isOpen && window.ClipgenColorPicker.isOpen());
+      !window.ClipgenColorPicker.isOpen();
   }
 
   document.addEventListener("keydown", function (e) {
@@ -1999,7 +1851,7 @@
   document.addEventListener("keydown", function (e) {
     if (e.key !== "Escape") return;
     if (!_root || _root.classList.contains("hidden")) return;
-    if (window.ClipgenColorPicker && window.ClipgenColorPicker.isOpen && window.ClipgenColorPicker.isOpen()) return;
+    if (window.ClipgenColorPicker.isOpen()) return;
     e.preventDefault();
     _close();
   });
@@ -2021,27 +1873,25 @@
   }
 
   // Modal-only tab hotkeys: digits 1–9 jump, Z/X cycle like Screenspace's tool tabs.
-  if (window.ClipgenHotkeys) {
-    window.ClipgenHotkeys.register([
-      {
-        id: "settings.tab",
-        inModal: true,
-        when: _isModalOpen,
-        handler: function (e, combo) {
-          var n = parseInt(combo, 10);
-          if (!_tabsEl || isNaN(n)) return;
-          var btns = _tabsEl.querySelectorAll(".settings-tab");
-          var btn = btns[n - 1];
-          if (btn) btn.click();
-        }
-      },
-      { id: "settings.cyclePrev", inModal: true, when: _isModalOpen, handler: function () { _cycleTab(-1); } },
-      { id: "settings.cycleNext", inModal: true, when: _isModalOpen, handler: function () { _cycleTab(1); } },
-      // Reset hotkeys reuse the buttons' unconfirmed handlers; Shift+R resets everything.
-      { id: "settings.resetTab", inModal: true, when: _isModalOpen, handler: function () { _resetTab(_activeTab); } },
-      { id: "settings.resetAll", inModal: true, when: _isModalOpen, handler: function () { _resetAll(); } }
-    ]);
-  }
+  window.ClipgenHotkeys.register([
+    {
+      id: "settings.tab",
+      inModal: true,
+      when: _isModalOpen,
+      handler: function (e, combo) {
+        var n = parseInt(combo, 10);
+        if (!_tabsEl || isNaN(n)) return;
+        var btns = _tabsEl.querySelectorAll(".settings-tab");
+        var btn = btns[n - 1];
+        if (btn) btn.click();
+      }
+    },
+    { id: "settings.cyclePrev", inModal: true, when: _isModalOpen, handler: function () { _cycleTab(-1); } },
+    { id: "settings.cycleNext", inModal: true, when: _isModalOpen, handler: function () { _cycleTab(1); } },
+    // Reset hotkeys reuse the buttons' unconfirmed handlers; Shift+R resets everything.
+    { id: "settings.resetTab", inModal: true, when: _isModalOpen, handler: function () { _resetTab(_activeTab); } },
+    { id: "settings.resetAll", inModal: true, when: _isModalOpen, handler: function () { _resetAll(); } }
+  ]);
 
   window.openSettingsModal = function (options) {
     _opts = options || {};

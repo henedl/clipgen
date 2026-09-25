@@ -35,11 +35,11 @@ from utils import ClipRecord
 
 # Re-exported so cli.py and tests/test_cli_args.py can reach app.process_clips.
 from pipeline import (
-    is_excel_worksheet as _is_excel_worksheet,
     process_clips,
     process_reel,
     regenerate_from_manifest,
 )
+from spreadsheet import is_excel_worksheet as _is_excel_worksheet
 
 # ---- Mode configuration ----
 
@@ -164,11 +164,7 @@ def _open_worksheet(
         with profiling.span("sheets.open"):
             ss = open_callable()
         return google_api.get_worksheet(ss, preferred_name=worksheet_name)
-    except (
-        gspread.SpreadsheetNotFound,
-        gspread.exceptions.APIError,
-        gspread.exceptions.GSpreadException,
-    ) as e:
+    except gspread.exceptions.GSpreadException as e:
         utils.error_print(f"Could not open spreadsheet {error_context}: {e}")
         return None
 
@@ -285,11 +281,7 @@ def list_worksheet_titles(
                 ss = gspread_client.open(doc_list[chosen_index].strip())
         with profiling.span("sheets.worksheets"):
             titles = [ws.title for ws in ss.worksheets()]
-    except (
-        gspread.SpreadsheetNotFound,
-        gspread.exceptions.APIError,
-        gspread.exceptions.GSpreadException,
-    ) as e:
+    except gspread.exceptions.GSpreadException as e:
         utils.error_print(f"Could not list worksheets for '{id_or_path}': {e}")
         return [], ""
     return titles, utils.pick_worksheet_title(titles) or ""
@@ -335,7 +327,7 @@ def _handle_spreadsheet_command(
         )
     # Handle 'settings' command
     if input_name.startswith(config.COMMAND_SETTINGS):
-        utils.set_program_settings()
+        interactive.set_program_settings()
         return None
     # Handle name search
     return open_spreadsheet_by_name(
@@ -366,9 +358,6 @@ def select_spreadsheet(gspread_client: Any, doc_list: list[str]) -> Any:
                 f"('{config.COMMAND_LIST_ALL}' for list, '{config.COMMAND_LIST_NEW}' for list of newest, "
                 f"'{config.COMMAND_OPEN_LAST}' to immediately open latest, '{config.COMMAND_SETTINGS}' to change settings):\n>> "
             )
-        except utils.TopToSpreadsheet:
-            # Already at spreadsheet selection; bubble up so main can restart selection loop.
-            raise
         except utils.BackToModeSelection:
             # From this context, going "back" is equivalent to going to spreadsheet selection.
             raise utils.TopToSpreadsheet()
@@ -378,11 +367,7 @@ def select_spreadsheet(gspread_client: Any, doc_list: list[str]) -> Any:
             )
             if worksheet is not None:
                 return worksheet
-        except (
-            gspread.SpreadsheetNotFound,
-            gspread.exceptions.APIError,
-            gspread.exceptions.GSpreadException,
-        ) as e:
+        except gspread.exceptions.GSpreadException as e:
             consecutive_open_failures += 1
             if consecutive_open_failures == 1:
                 utils.error_print(
@@ -455,16 +440,7 @@ def _resolve_unrecognized_input(
         return spreadsheet.generate_list(worksheet, detected_mode, **detected_kwargs)
 
     parsed = spreadsheet.parse_reel_input(user_input)
-    selector_types = [
-        ("batch", bool(parsed.get("batch"))),
-        ("keyword", bool(parsed.get("keyword"))),
-        ("lines", len(parsed["lines"]) > 0),
-        ("ranges", len(parsed["ranges"]) > 0),
-        ("cells", len(parsed["cells"]) > 0),
-        ("participants", len(parsed["participants"]) > 0),
-        ("categories", len(parsed["categories"]) > 0),
-    ]
-    non_empty_types = [name for name, present in selector_types if present]
+    non_empty_types = spreadsheet.clip_selector_names(parsed)
     has_chronologic = bool(parsed.get("chronologic"))
 
     if not non_empty_types:
@@ -506,12 +482,18 @@ def _run_standard_mode(mode: str, worksheet: Any) -> list[ClipRecord] | None:
 
 
 def _record_interactive_artifacts(
-    artifacts: list[dict[str, Any]], worksheet: Any, *, mode: str = "interactive"
+    artifacts: list[dict[str, Any]],
+    worksheet: Any,
+    *,
+    mode: str = "interactive",
+    reels: bool = False,
 ) -> None:
-    """Append this run's artifacts to the session list and persist the manifest."""
+    """Append artifacts (or reels) to the session list and persist the manifest."""
     if not artifacts:
         return
-    viewer.INTERACTIVE_ARTIFACTS.extend(artifacts)
+    (viewer.INTERACTIVE_REELS if reels else viewer.INTERACTIVE_ARTIFACTS).extend(
+        artifacts
+    )
     if config.MANIFEST_ENABLED:
         viewer.save_manifest(
             viewer.INTERACTIVE_ARTIFACTS,
@@ -530,8 +512,6 @@ def _print_run_summary(message: str) -> None:
     utils.info_print(message)
     utils.info_print("")
 
-
-# ---- Clip processing pipeline (moved to pipeline.py) ----
 
 # ---- Interactive mode flows ----
 
@@ -593,32 +573,16 @@ def _prompt_chronologic_participant_selection(
         if not selection:
             utils.info_print("Please enter one participant.")
             continue
-        tokens = spreadsheet.parse_participant_selection(selection)
+        tokens = utils.split_selector_tokens(selection)
         if len(tokens) != 1:
             utils.info_print("Please provide exactly one participant.")
             continue
 
         token = tokens[0]
-        if token.isdigit():
-            idx = int(token)
-            if 1 <= idx <= len(available_list):
-                return available_list[idx - 1], ctx
-            utils.info_print(
-                f"Not found: {token}. Available: {', '.join(available_list)}"
-            )
-            continue
-
-        col_idx = spreadsheet.find_participant_column(
-            ctx.header_row, ctx.id_cell, token
-        )
-        if col_idx is None:
-            utils.info_print(
-                f"Not found: {token}. Available: {', '.join(available_list)}"
-            )
-            continue
-        if col_idx < len(ctx.header_row):
-            return utils.normalize_participant_id(ctx.header_row[col_idx]), ctx
-        return token, ctx
+        pid = spreadsheet.resolve_participant_token(ctx, available_list, token)
+        if pid is not None:
+            return pid, ctx
+        utils.info_print(f"Not found: {token}. Available: {', '.join(available_list)}")
 
 
 def _run_reel_mode_interactive(
@@ -711,35 +675,15 @@ def _run_reel_mode_interactive(
         return ([], False, None)
 
     study_name = clips_list[0].get("study", "").strip() if clips_list else ""
-    default_filename = (
-        f"{study_name}_reel{config.FILEFORMAT}"
-        if study_name
-        else f"reel{config.FILEFORMAT}"
-    )
+    kind, pid = "reel", ""
     if parsed_reel["chronologic"] and parsed_reel["participants"]:
-        chronologic_pid = utils.normalize_participant_id(
-            parsed_reel["participants"][0]
-        ).strip()
-        if study_name and chronologic_pid:
-            default_filename = (
-                f"{study_name}_{chronologic_pid}_chronologic{config.FILEFORMAT}"
-            )
-        elif chronologic_pid:
-            default_filename = f"{chronologic_pid}_chronologic{config.FILEFORMAT}"
-        else:
-            default_filename = f"chronologic{config.FILEFORMAT}"
+        kind = "chronologic"
+        pid = utils.normalize_participant_id(parsed_reel["participants"][0]).strip()
     elif parsed_reel.get("highlights"):
-        default_filename = (
-            f"{study_name}_highlights{config.FILEFORMAT}"
-            if study_name
-            else f"highlights{config.FILEFORMAT}"
-        )
+        kind = "highlights"
     elif parsed_reel["severity"]:
-        default_filename = (
-            f"{study_name}_severity_reel{config.FILEFORMAT}"
-            if study_name
-            else f"severity_reel{config.FILEFORMAT}"
-        )
+        kind = "severity_reel"
+    default_filename = files.default_reel_filename(study_name, kind, pid)
 
     output_file = utils.read_user_input(
         f"\nOutput filename (Enter for default {default_filename}):\n>> "
@@ -842,9 +786,7 @@ def _run_reellate_mode_interactive() -> tuple[bool, str | None]:
     resolved_clips = [str(utils.resolve_output_path(name)) for name in selected_clips]
 
     def _concat_reellate() -> bool:
-        return video.concatenate_clips(
-            resolved_clips, output_file, reencode_on_fail=True
-        )
+        return video.concatenate_clips(resolved_clips, output_file)
 
     ok = False
     try:
@@ -1022,32 +964,33 @@ def _run_gallery_mode_interactive() -> None:
     )
     output_format = "gif" if fmt_input in ("g", "gif") else "screen"
 
-    interval_input = utils.read_user_input(
-        f"Capture interval in seconds [{config.GALLERY_INTERVAL_SECONDS}]:\n>> "
-    ).strip()
-    try:
-        interval = (
-            int(interval_input) if interval_input else config.GALLERY_INTERVAL_SECONDS
-        )
-    except ValueError:
-        interval = config.GALLERY_INTERVAL_SECONDS
-    if interval <= 0:
-        interval = config.GALLERY_INTERVAL_SECONDS
-
+    interval = _prompt_positive_int(
+        "Capture interval in seconds", config.GALLERY_INTERVAL_SECONDS
+    )
     gif_duration = config.GALLERY_GIF_DURATION_SECONDS
     if output_format == "gif":
-        dur_input = utils.read_user_input(
-            f"GIF duration in seconds [{config.GALLERY_GIF_DURATION_SECONDS}]:\n>> "
-        ).strip()
-        try:
-            gif_duration = (
-                int(dur_input) if dur_input else config.GALLERY_GIF_DURATION_SECONDS
-            )
-        except ValueError:
-            gif_duration = config.GALLERY_GIF_DURATION_SECONDS
-        if gif_duration <= 0:
-            gif_duration = config.GALLERY_GIF_DURATION_SECONDS
+        gif_duration = _prompt_positive_int("GIF duration in seconds", gif_duration)
+    _build_gallery(video_path, output_format, interval, gif_duration)
 
+
+def _prompt_positive_int(label: str, default: int) -> int:
+    """Prompt for a positive int; blank, invalid, or <= 0 gives the default."""
+    raw = utils.read_user_input(f"{label} [{default}]:\n>> ").strip()
+    try:
+        value = int(raw) if raw else default
+    except ValueError:
+        return default
+    return value if value > 0 else default
+
+
+def _build_gallery(
+    video_path: Path,
+    output_format: str,
+    interval: int,
+    gif_duration: int,
+    bundle: bool = False,
+) -> None:
+    """Capture frames at an interval and write the gallery viewer."""
     artifacts = video.generate_interval_captures(
         str(video_path),
         interval_seconds=interval,
@@ -1056,7 +999,6 @@ def _run_gallery_mode_interactive() -> None:
     )
     if not artifacts:
         return
-
     duration = video.get_file_duration(str(video_path)) or 0
     data = viewer.finalize_gallery_data(
         artifacts,
@@ -1064,10 +1006,31 @@ def _run_gallery_mode_interactive() -> None:
         video_duration=duration,
         output_format=output_format,
         interval=interval,
+        bundle=bundle,
     )
     gallery_path = viewer.generate_gallery_viewer(data)
     if gallery_path:
         utils.info_print(f"Gallery viewer created: {gallery_path}")
+
+
+def _build_timeline_viewer(worksheet: Any, artifacts: list[dict[str, Any]]) -> None:
+    """Write the per-participant timeline viewer for batch artifacts."""
+    ss_events = viewer.load_screenspace_events_for_viewer()
+    data = viewer.finalize_timeline_data(
+        artifacts,
+        study=artifacts[0].get("study", ""),
+        worksheet_title=getattr(worksheet, "title", ""),
+        is_excel=_is_excel_worksheet(worksheet),
+        mode="timeline-viewer",
+        screenspace_events=ss_events or None,
+    )
+    viewer_path = viewer.generate_timeline_viewer(
+        data,
+        template_name="timeline-viewer.html",
+        output_basename="timeline_viewer.html",
+    )
+    if viewer_path:
+        utils.info_print(f"Participant timeline viewer created: {viewer_path}")
 
 
 def _dispatch_interactive_mode(
@@ -1100,30 +1063,12 @@ def _dispatch_interactive_mode(
     if mode == "gallery":
         _run_gallery_mode_interactive()
         return None
-    if mode == "studio":
+    if mode in ("studio", "screenspace", "transcripts"):
         import server
 
         server.start_combined_server(
             worksheet=worksheet,
-            default_page="studio",
-            gspread_client=gspread_client,
-        )
-        return None
-    if mode == "screenspace":
-        import server
-
-        server.start_combined_server(
-            worksheet=worksheet,
-            default_page="screenspace",
-            gspread_client=gspread_client,
-        )
-        return None
-    if mode == "transcripts":
-        import server
-
-        server.start_combined_server(
-            worksheet=worksheet,
-            default_page="transcripts",
+            default_page=mode,
             gspread_client=gspread_client,
         )
         return None
@@ -1133,37 +1078,21 @@ def _dispatch_interactive_mode(
         data_export.run_cli_export()
         return ([], False, None)
     if mode == "timeline-viewer":
-        clips_list = spreadsheet.generate_list(worksheet, "batch", skip_prompts=True)
+        clips_list = spreadsheet.generate_list(worksheet, "batch")
         outputs_generated, artifacts = process_clips(clips_list, output_format="clip")
         if not config.REENCODING:
             _print_reencoding_warning(utils.info_print)
         _print_completion_message(outputs_generated, "clip", is_reel=False)
         if artifacts:
             _record_interactive_artifacts(artifacts, worksheet, mode="timeline-viewer")
-            study = artifacts[0].get("study", "")
-            ss_events = viewer.load_screenspace_events_for_viewer()
-            data = viewer.finalize_timeline_data(
-                artifacts,
-                study=study,
-                worksheet_title=getattr(worksheet, "title", ""),
-                is_excel=_is_excel_worksheet(worksheet),
-                mode="timeline-viewer",
-                screenspace_events=ss_events or None,
-            )
-            viewer_path = viewer.generate_timeline_viewer(
-                data,
-                template_name="timeline-viewer.html",
-                output_basename="timeline_viewer.html",
-            )
-            if viewer_path:
-                utils.info_print(f"Participant timeline viewer created: {viewer_path}")
+            _build_timeline_viewer(worksheet, artifacts)
         else:
             utils.warning_print(
                 "No artifacts were generated; skipping timeline viewer."
             )
         return None
     if mode == "settings":
-        utils.set_program_settings()
+        interactive.set_program_settings()
         return None
     if mode == "reel":
         clips, confirmed, reel_file = _run_reel_mode_interactive(worksheet)
@@ -1184,8 +1113,6 @@ def _dispatch_interactive_mode(
     if mode in _STANDARD_MODES:
         clips = _run_standard_mode(mode, worksheet)
         return (clips or [], False, None)
-    if mode:
-        return (spreadsheet.generate_list(worksheet, mode), False, None)
 
     # No alias match -- try auto-detection and mixed selectors
     clips = _resolve_unrecognized_input(worksheet, raw_input, help_lines=_ALL_MODE_HELP)
@@ -1259,17 +1186,7 @@ def run_interactive_mode(worksheet: Any, gspread_client: Any = None) -> None:
                     clips_list,
                     output_file=reel_output_file,
                 )
-                if reel_records:
-                    viewer.INTERACTIVE_REELS.extend(reel_records)
-                    if config.MANIFEST_ENABLED:
-                        viewer.save_manifest(
-                            viewer.INTERACTIVE_ARTIFACTS,
-                            new_reels=viewer.INTERACTIVE_REELS,
-                            study=reel_records[0].get("study", ""),
-                            worksheet_title=getattr(worksheet, "title", ""),
-                            is_excel=_is_excel_worksheet(worksheet),
-                            mode="interactive",
-                        )
+                _record_interactive_artifacts(reel_records, worksheet, reels=True)
             else:
                 outputs_generated, artifacts = process_clips(
                     clips_list, include_severity=(resolved_mode == "severity")

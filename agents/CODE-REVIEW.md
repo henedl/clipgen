@@ -85,3 +85,13 @@ The two most error-prone refactors in this repo each have a dedicated skill and 
 
 - **JS hub→satellite carve completeness**: Each page script is its own IIFE scope, so a bare cross-file function call throws `ReferenceError` at runtime (invisible to `node --check`), shipped 3× (`e4f67b2`, `8c7f347`). Every hub-called function defined in a satellite needs a same-named hub delegator (or a late-bound `SS.fn(...)` call); every moved `var` must route through `state.`/the namespace, never a bare cross-file read. Guarded by `tests/test_frontend_satellite_wiring.py` statically, and at runtime by [/ui-check](skills/ui-check/SKILL.md) — the carve bug surfaces there as a `pageerror` naming the symbol, which is what the static scan can only approximate. Procedure: [agents/skills/carve-satellite/SKILL.md](skills/carve-satellite/SKILL.md).
 - **Python god-file split**: New modules go in `source/` and must be listed in `pyproject.toml [tool.setuptools] py-modules` (guarded by `tests/test_packaging.py`); the facade must re-export every public **and test-touched private** name; and test `mock.patch` targets must point at the owning sibling, not the facade (re-export only rebinds, `5683a96`). Procedure: [agents/skills/split-module/SKILL.md](skills/split-module/SKILL.md).
+
+## Orphans and helpers
+
+Four ratchets lock in the code-quality cleanup. Each baseline may only shrink, and each failure message says what to do.
+
+- **Dead JS functions**: `tests/test_js_dead_functions.py` fails on a top-level `function` whose name appears nowhere else.
+- **Dead Python functions**: `tests/test_py_dead_functions.py` does the same for undecorated functions in `source/`. A name only tests call must sit in `KNOWN_TEST_ONLY` with a reason; only fixture seams such as cache resets belong there.
+- **Dead CSS classes**: `tests/test_css_dead_selectors.py` fails on a class no JS, HTML, or Python file sets. Concatenated names (`"task-card-" + status`) count through their prefix.
+- **Long functions**: `tests/test_function_length.py` fails on a new Python or JS function of 150+ lines, or a pinned one growing over 10%. Split along named phases, as in Wave 5 of [plans/CODE-QUALITY-PLAN.md](../plans/CODE-QUALITY-PLAN.md).
+- **House rule**: inline a helper with one caller unless it is a `mock.patch` target, a thread target, a registry entry, or a named domain concept. Extract once a shape repeats.

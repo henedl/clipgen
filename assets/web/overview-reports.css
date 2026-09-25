@@ -359,10 +359,8 @@
   margin-left: auto;
   font-weight: 600;
   white-space: nowrap;
+  color: var(--sev, var(--sev-unknown));
 }
-
-/* Colored via the tokens.css severity indirection. */
-.rp-clip-sev { color: var(--sev, var(--sev-unknown)); }
 
 /* ---- Inline player ---- */
 

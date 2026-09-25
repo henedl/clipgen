@@ -53,6 +53,7 @@ import importlib
 import sys
 import threading
 import time
+from collections.abc import Callable
 from typing import Any
 
 import config
@@ -181,10 +182,8 @@ def on_shown(window: Any) -> None:
         return
     try:
         AppKit = utils.import_appkit()
-        # Imported by name for the same reason as AppKit — see utils.import_appkit().
-        app_helper: Any = importlib.import_module("PyObjCTools.AppHelper")
         _rearm_reassert_budget()
-        app_helper.callAfter(lambda: _apply_titlebar_layout(AppKit, native))
+        _call_after(lambda: _apply_titlebar_layout(AppKit, native))
     except Exception as exc:
         utils.warning_print(f"Could not place the window buttons: {exc}")
 
@@ -204,8 +203,7 @@ def ensure_key(window: Any) -> None:
         return
     try:
         AppKit = utils.import_appkit()
-        app_helper: Any = importlib.import_module("PyObjCTools.AppHelper")
-        app_helper.callAfter(lambda: _claim_key(AppKit, native, _KEY_ATTEMPTS))
+        _call_after(lambda: _claim_key(AppKit, native, _KEY_ATTEMPTS))
     except Exception as exc:
         utils.warning_print(f"Could not focus the window: {exc}")
 
@@ -241,15 +239,13 @@ def set_appearance(window: Any, theme: str) -> None:
         AppKit = utils.import_appkit()
         # The constants are their own names; getattr is belt-and-braces.
         appearance = AppKit.NSAppearance.appearanceNamed_(getattr(AppKit, name, name))
-        # Imported by name for the same reason as AppKit — see utils.import_appkit().
-        app_helper: Any = importlib.import_module("PyObjCTools.AppHelper")
 
         def apply_appearance() -> None:
             native.setAppearance_(appearance)
             # Changing appearance re-lays out the titlebar and resets the lights.
             _apply_titlebar_layout(AppKit, native)
 
-        app_helper.callAfter(apply_appearance)
+        _call_after(apply_appearance)
     except Exception as exc:
         # Cosmetic: the worst case is the flash this exists to remove.
         utils.warning_print(f"Could not match the window appearance: {exc}")
@@ -275,18 +271,40 @@ def titlebar_double_click(window: Any) -> None:
         )
         if action is None:
             return
-        # Imported by name (see utils.import_appkit). callAfter hops off the bridge's worker thread.
-        app_helper: Any = importlib.import_module("PyObjCTools.AppHelper")
+        # callAfter hops off the bridge's worker thread.
         if action == "minimize":
-            app_helper.callAfter(lambda: native.performMiniaturize_(None))
+            _call_after(lambda: native.performMiniaturize_(None))
         else:
-            app_helper.callAfter(lambda: native.performZoom_(None))
+            _call_after(lambda: native.performZoom_(None))
     except Exception as exc:
         # A gesture that does nothing is a cosmetic loss, not a broken window.
         utils.warning_print(f"Could not run the title-bar double-click action: {exc}")
 
 
 # ---- Internals ----
+
+
+def _call_after(fn: Callable[[], None]) -> None:
+    """Run *fn* on AppKit's thread; imported by name, see utils.import_appkit()."""
+    app_helper: Any = importlib.import_module("PyObjCTools.AppHelper")
+    app_helper.callAfter(fn)
+
+
+def _after_delay(
+    seconds: float, fn: Callable[[], None], failure_msg: str
+) -> threading.Timer:
+    """Start a daemon timer that hops *fn* onto AppKit's thread."""
+
+    def fire() -> None:
+        try:
+            _call_after(fn)
+        except Exception as exc:
+            utils.verbose_print(f"{failure_msg}: {exc}")
+
+    timer = threading.Timer(seconds, fire)
+    timer.daemon = True
+    timer.start()
+    return timer
 
 
 def _double_click_action(setting: str | None) -> str | None:
@@ -544,7 +562,7 @@ def _log_titlebar_inventory(container: Any, buttons: list[Any]) -> None:
             f"{' hidden' if view.isHidden() else ''}]"
         )
 
-    if getattr(config, "VERBOSITY", config.STANDARD) < config.VERBOSE:
+    if config.VERBOSITY < config.VERBOSE:
         return
     try:
         states = ",".join(
@@ -656,17 +674,11 @@ def _schedule_settle(AppKit: Any, native: Any, attempts: int) -> None:
     if _settle_timer is not None and _settle_timer.is_alive():
         return  # one pending check is enough; it re-arms itself if it acts
 
-    def fire() -> None:
-        try:
-            # Imported by name (see utils.import_appkit). callAfter hops off the timer thread.
-            app_helper: Any = importlib.import_module("PyObjCTools.AppHelper")
-            app_helper.callAfter(lambda: _settle(AppKit, native, attempts))
-        except Exception as exc:
-            utils.verbose_print(f"Could not re-check the titlebar layout: {exc}")
-
-    _settle_timer = threading.Timer(_SETTLE_DELAY_S, fire)
-    _settle_timer.daemon = True
-    _settle_timer.start()
+    _settle_timer = _after_delay(
+        _SETTLE_DELAY_S,
+        lambda: _settle(AppKit, native, attempts),
+        "Could not re-check the titlebar layout",
+    )
 
 
 def _settle(AppKit: Any, native: Any, attempts: int) -> None:
@@ -708,17 +720,11 @@ def _claim_key(AppKit: Any, native: Any, attempts: int) -> None:
     if attempts <= 1:
         return
 
-    def fire() -> None:
-        try:
-            # Imported by name (see utils.import_appkit). callAfter hops off the timer thread.
-            app_helper: Any = importlib.import_module("PyObjCTools.AppHelper")
-            app_helper.callAfter(lambda: _claim_key(AppKit, native, attempts - 1))
-        except Exception as exc:
-            utils.verbose_print(f"Could not re-check the window focus: {exc}")
-
-    _key_timer = threading.Timer(_KEY_DELAY_S, fire)
-    _key_timer.daemon = True
-    _key_timer.start()
+    _key_timer = _after_delay(
+        _KEY_DELAY_S,
+        lambda: _claim_key(AppKit, native, attempts - 1),
+        "Could not re-check the window focus",
+    )
 
 
 def _rekey_if_forgotten(AppKit: Any, native: Any) -> bool:
@@ -740,7 +746,7 @@ def _rekey_if_forgotten(AppKit: Any, native: Any) -> bool:
 def _log_focus_state(AppKit: Any, native: Any, phase: str) -> None:
     """Print the app/window focus state at ``-v``, once per change."""
     global _last_focus
-    if getattr(config, "VERBOSITY", config.STANDARD) < config.VERBOSE:
+    if config.VERBOSITY < config.VERBOSE:
         return
     try:
         app = AppKit.NSApplication.sharedApplication()

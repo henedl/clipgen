@@ -58,10 +58,8 @@ class NodeContext:
         """
         import files
 
-        for entry in files.resolve_participant_videos():
-            if entry.get("id") == participant and entry.get("has_video"):
-                return list(entry["video_paths"])
-        return []
+        record = files.find_participant_record(None, participant)
+        return list(record["video_paths"]) if record and record.get("has_video") else []
 
 
 # ---------------------------------------------------------------------------
@@ -135,6 +133,28 @@ _LLM_MODEL_PARAM: ParamSpec = {
     "default": "",
     "label": "AI model (blank = default)",
     "datalist": "llm-models",
+}
+
+
+# Pads omit "min" so negatives (trim inward) are accepted; max_duration 0 = no cap.
+_PAD_PARAMS: list[ParamSpec] = [
+    {"name": "pad_start", "type": "number", "default": 0, "label": "Pad start (s)"},
+    {"name": "pad_end", "type": "number", "default": 0, "label": "Pad end (s)"},
+    {
+        "name": "max_duration",
+        "type": "number",
+        "default": 0,
+        "min": 0,
+        "label": "Max duration (s, 0 = none)",
+    },
+]
+
+_GATE_OP_PARAM: ParamSpec = {
+    "name": "op",
+    "type": "enum",
+    "default": ">=",
+    "choices": [">=", ">", "<=", "<", "==", "!="],
+    "label": "Comparison",
 }
 
 
@@ -569,22 +589,7 @@ NODE_TYPES: dict[str, NodeType] = {
                 "label": "Titlecard duration (s)",
                 "showIf": {"param": "titlecards", "equals": True},
             },
-            # Pads omit "min" so negatives (trim inward) are accepted; max_duration
-            # 0 = no cap.
-            {
-                "name": "pad_start",
-                "type": "number",
-                "default": 0,
-                "label": "Pad start (s)",
-            },
-            {"name": "pad_end", "type": "number", "default": 0, "label": "Pad end (s)"},
-            {
-                "name": "max_duration",
-                "type": "number",
-                "default": 0,
-                "min": 0,
-                "label": "Max duration (s, 0 = none)",
-            },
+            *_PAD_PARAMS,
         ],
         "requires": ["videoDir"],
     },
@@ -645,22 +650,7 @@ NODE_TYPES: dict[str, NodeType] = {
                 "default": False,
                 "label": "Chronological order",
             },
-            # Pads omit "min" so negatives (trim inward) are accepted; max_duration
-            # 0 = no cap.
-            {
-                "name": "pad_start",
-                "type": "number",
-                "default": 0,
-                "label": "Pad start (s)",
-            },
-            {"name": "pad_end", "type": "number", "default": 0, "label": "Pad end (s)"},
-            {
-                "name": "max_duration",
-                "type": "number",
-                "default": 0,
-                "min": 0,
-                "label": "Max duration (s, 0 = none)",
-            },
+            *_PAD_PARAMS,
         ],
         "requires": ["videoDir"],
     },
@@ -789,13 +779,7 @@ NODE_TYPES: dict[str, NodeType] = {
         # control input.
         "outputs": [{"name": "pass", "type": "control"}],
         "params": [
-            {
-                "name": "op",
-                "type": "enum",
-                "default": ">=",
-                "choices": [">=", ">", "<=", "<", "==", "!="],
-                "label": "Comparison",
-            },
+            _GATE_OP_PARAM,
             {"name": "threshold", "type": "number", "default": 0, "label": "Threshold"},
         ],
         "requires": [],
@@ -821,13 +805,7 @@ NODE_TYPES: dict[str, NodeType] = {
                 "choices": ["count", "max_confidence", "total_duration"],
                 "label": "Metric",
             },
-            {
-                "name": "op",
-                "type": "enum",
-                "default": ">=",
-                "choices": [">=", ">", "<=", "<", "==", "!="],
-                "label": "Comparison",
-            },
+            _GATE_OP_PARAM,
             {"name": "threshold", "type": "number", "default": 0, "label": "Threshold"},
         ],
         "requires": [],
@@ -873,6 +851,14 @@ _INTERVAL_PARAM: ParamSpec = {
     "default": 0,
     "min": 0,
     "label": "Interval (s, 0=auto)",
+}
+
+_REFERENCE_PARAM: ParamSpec = {
+    "name": "reference_seconds",
+    "type": "number",
+    "default": 0.0,
+    "min": 0,
+    "label": "Reference time (s)",
 }
 
 _SS_DETECTOR_SPECS: dict[str, list[ParamSpec]] = {
@@ -992,13 +978,7 @@ _SS_DETECTOR_SPECS: dict[str, list[ParamSpec]] = {
         _INTERVAL_PARAM,
     ],
     "similarity": [
-        {
-            "name": "reference_seconds",
-            "type": "number",
-            "default": 0.0,
-            "min": 0,
-            "label": "Reference time (s)",
-        },
+        _REFERENCE_PARAM,
         {
             "name": "threshold",
             "type": "number",
@@ -1053,13 +1033,7 @@ _SS_DETECTOR_SPECS: dict[str, list[ParamSpec]] = {
         },
     ],
     "template": [
-        {
-            "name": "reference_seconds",
-            "type": "number",
-            "default": 0.0,
-            "min": 0,
-            "label": "Reference time (s)",
-        },
+        _REFERENCE_PARAM,
         {
             "name": "threshold",
             "type": "number",
@@ -1078,13 +1052,7 @@ _SS_DETECTOR_SPECS: dict[str, list[ParamSpec]] = {
         _INTERVAL_PARAM,
     ],
     "shape": [
-        {
-            "name": "reference_seconds",
-            "type": "number",
-            "default": 0.0,
-            "min": 0,
-            "label": "Reference time (s)",
-        },
+        _REFERENCE_PARAM,
         {
             "name": "threshold",
             "type": "number",
@@ -1161,13 +1129,7 @@ _SS_DETECTOR_SPECS: dict[str, list[ParamSpec]] = {
         _INTERVAL_PARAM,
     ],
     "scene": [
-        {
-            "name": "reference_seconds",
-            "type": "number",
-            "default": 0.0,
-            "min": 0,
-            "label": "Reference time (s)",
-        },
+        _REFERENCE_PARAM,
         {
             "name": "threshold",
             "type": "number",
@@ -1610,8 +1572,6 @@ BUILTIN_STASHES: list[dict[str, Any]] = [
 # Source descriptors: embedded in every domain value; keeps the adapters pure
 # ---------------------------------------------------------------------------
 
-_DEFAULT_EVENT_CLUSTER_GAP = 5.0  # seconds; matches the CLI --cluster-gap default
-
 
 def _study_from_filename(filename: str) -> str:
     """Derive the study name from a patterned source basename ('' when absent)."""
@@ -1728,11 +1688,7 @@ def _adapt_cliprecords_to_timerange(value: dict[str, Any]) -> dict[str, Any]:
             if rec.get("times")
             else files.prepare_clip(cast(utils.ClipRecord, dict(rec)))
         )
-        for start_str, end_str in prepared.get("times") or []:
-            start = utils.timestamp_to_seconds(start_str)
-            end = utils.timestamp_to_seconds(end_str)
-            if start is not None and end is not None:
-                ranges.append((start, max(start, end)))
+        ranges.extend(utils.times_to_spans(prepared.get("times") or []))
         if not source and rec.get("participant"):
             source = {
                 "participant": str(rec.get("participant", "") or ""),
@@ -1746,21 +1702,16 @@ def _adapt_cliprecords_to_timerange(value: dict[str, Any]) -> dict[str, Any]:
 def _adapt_events_to_cliprecords(value: dict[str, Any]) -> dict[str, Any]:
     import files
 
-    events = value.get("events") or []
-    source = value.get("source") or _source_from_events(events)
-    spans: list[tuple[float, float]] = []
-    for ev in events:
-        t_in = float(ev.get("time_in", 0.0) or 0.0)
-        t_out = float(ev.get("time_out", t_in) or t_in)
-        spans.append((t_in, max(t_in, t_out)))
+    projected = _adapt_events_to_timerange(value)
+    source = projected["source"]
     records = files.build_clip_records(
         participant=str(source.get("participant", "") or ""),
         source_filename=_clip_source_filename(source),
-        time_ranges=spans,
+        time_ranges=projected["ranges"],
         description="event",
         category="workflow",
         study=str(source.get("study", "") or ""),
-        cluster_gap=_DEFAULT_EVENT_CLUSTER_GAP,
+        cluster_gap=config.EVENT_CLUSTER_GAP_SECONDS,
     )
     return {"records": records, "study": str(source.get("study", "") or "")}
 

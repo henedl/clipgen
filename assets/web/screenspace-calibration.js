@@ -6,7 +6,6 @@
  * script; loaded after it. Reads hub state + helpers via
  * window.ClipgenScreenspace and registers its entry points as SS.cal*; the
  * hub keeps thin same-named delegators so its ~30 call sites are unchanged.
- * Function bodies are unchanged from when they lived inline in screenspace.js.
  */
 (function () {
   "use strict";
@@ -16,8 +15,6 @@
   var _previewRegionRef = SS._previewRegionRef,
     loadFrame = SS.loadFrame,
     regionRefPayload = SS.regionRefPayload,
-    renderWorkflowParams = SS.renderWorkflowParams,
-    restoreTaskToWorkflow = SS.restoreTaskToWorkflow,
     setInputValue = SS.setInputValue,
     syncValueDisplays = SS.syncValueDisplays,
     updateRunButton = SS.updateRunButton;
@@ -60,14 +57,6 @@
       };
     }
     return CAL_AXIS.color;
-  }
-
-  function _calIsCalibratable(tool) {
-    return tool === "multitool" || !!CAL_AXIS[tool];
-  }
-
-  function _calTitle(type) {
-    return type ? type.charAt(0).toUpperCase() + type.slice(1) : "";
   }
 
   // Range from the live slider, else the descriptor (color / scene have none).
@@ -437,7 +426,7 @@
             : (CAL_AXIS[stepType] || { sliderId: null, rangeMin: 0, rangeMax: 1, invert: false, drawLine: false });
           var sliderId = axis.sliderId ? axis.sliderId + "_mt" + k : null;
           var label = el("div", "cal-track-label");
-          label.appendChild(el("span", null, (k + 1) + ". " + _calTitle(stepType)));
+          label.appendChild(el("span", null, (k + 1) + ". " + toolLabel(stepType)));
           if (k > 0 && logic) {
             label.appendChild(el("span", "cal-track-logic" + (logic === "NOT" ? " is-not" : ""), logic));
           }
@@ -535,7 +524,7 @@
   // Request body via the Run path's param + region builders; {skip: reason} when not ready.
   function _calBuildBody() {
     var tool = state.activeWorkflow;
-    if (!_calIsCalibratable(tool)) return { skip: "Calibration is not available for this tool." };
+    if (tool !== "multitool" && !CAL_AXIS[tool]) return { skip: "Calibration is not available for this tool." };
     var params = SS.gatherWorkflowParams(tool, { silent: true });
     if (params === null) return { skip: "Add the missing parameters above to calibrate." };
     var body = { participant: state.selectedParticipant, tool: tool, parameters: params };
@@ -552,20 +541,22 @@
     return { body: body };
   }
 
+  function _calClear(msg, kind) {
+    state.calibrationResult = null;
+    renderCalibration();
+    _calStatus(msg, kind);
+  }
+
   function _doRefreshCalibration() {
     var gen = ++_calibrationGen;
     var pid = state.selectedParticipant;
     if (!pid || !state.pins || !state.pins.length) {
-      state.calibrationResult = null;
-      renderCalibration();
-      _calStatus("");
+      _calClear("");
       return;
     }
     var built = _calBuildBody();
     if (built.skip) {
-      state.calibrationResult = null;
-      renderCalibration();
-      _calStatus(built.skip);
+      _calClear(built.skip);
       return;
     }
     var tool = built.body.tool;
@@ -584,9 +575,7 @@
         // Drop stale responses: superseded gen or a participant switched away from.
         if (gen !== _calibrationGen || pid !== state.selectedParticipant) return;
         if (!data || !data.ok) {
-          state.calibrationResult = null;
-          renderCalibration();
-          _calStatus("Calibration unavailable.", "error");
+          _calClear("Calibration unavailable.", "error");
           return;
         }
         if (needsOcr) state.calibrationOcrWarmed = true;
@@ -597,9 +586,7 @@
       .catch(function () {
         if (gen !== _calibrationGen || pid !== state.selectedParticipant) return;
         // Clear the now-stale dots so an error can't be read as current scores.
-        state.calibrationResult = null;
-        renderCalibration();
-        _calStatus("Calibration unavailable.", "error");
+        _calClear("Calibration unavailable.", "error");
       });
   }
 

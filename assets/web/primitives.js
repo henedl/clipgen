@@ -1,5 +1,5 @@
-/* clipgen design primitives — factory helpers shared across Studio,
- * Screenspace, and Transcripts. Each factory returns a DOM element
+/* clipgen design primitives — factory helpers shared by Studio and
+ * Overview. Each factory returns a DOM element
  * (not an HTML string) so callers can wire event handlers cleanly and
  * appending hundreds of cards in a frame stays cheap.
  *

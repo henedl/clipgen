@@ -44,10 +44,8 @@ class Agent(TypedDict):
 
     Keys:
       key:                Stable identifier (e.g. "summary", "citations").
-      enabled_config_key: Name of a ``config`` attribute (bool) that gates
-                          this agent. None of the attributes currently
-                          differ per-agent, but keeping them separate means
-                          future agents can have their own toggle.
+      enabled_config_key: Name of the ``config`` bool that toggles this
+                          agent; each agent has its own.
       model_config_key:   Name of the ``config`` attribute (str) holding the
                           Model value (HF ref or stem) this agent runs against. Read by
                           the orchestrator for cancel-after-stop unload
@@ -58,8 +56,6 @@ class Agent(TypedDict):
       depends_on:         Other agent keys whose ``manifest_field`` must be
                           present on the transcript entry before this agent
                           can run. Also used to skip Pass 2 when Pass 1 failed.
-      thread_name_prefix: Prefix for the daemon thread name (useful for
-                          debugging).
       on_upstream_change: How this agent's result reacts when an upstream
                           dependency is regenerated: ``"clear"`` drops the
                           field (the default), ``"stale"`` keeps it but flags
@@ -85,7 +81,6 @@ class Agent(TypedDict):
     model_config_key: str
     manifest_field: str
     depends_on: list[str]
-    thread_name_prefix: str
     on_upstream_change: str
     run: Callable[..., Any]
 
@@ -471,7 +466,7 @@ def _extract_json_objects(text: str) -> list[dict[str, Any]]:
     return objects
 
 
-def _extract_json_array(text: str) -> list[Any]:
+def _extract_json_array(text: str) -> list[dict[str, Any]]:
     """Best-effort extraction of a model response's JSON array of objects.
 
     Qwen sometimes wraps JSON in prose, ``<think>`` blocks, or markdown fences
@@ -522,7 +517,7 @@ def _extract_json_array(text: str) -> list[Any]:
     if saw_empty_array:
         # The model answered with an empty array; salvaging prose objects would fabricate entries.
         return []
-    return list(_extract_json_objects(cleaned))
+    return _extract_json_objects(cleaned)
 
 
 def _format_friction_candidates(
@@ -565,8 +560,6 @@ def _parse_friction_response(response: str) -> list[dict[str, Any]]:
     """
     moments: list[dict[str, Any]] = []
     for item in _extract_json_array(response):
-        if not isinstance(item, dict):
-            continue
         seg_ids = item.get("segment_ids")
         if isinstance(seg_ids, str):
             seg_ids = [seg_ids]
@@ -600,9 +593,7 @@ def _parse_friction_response(response: str) -> list[dict[str, Any]]:
 def friction_model() -> str:
     """Resolve the model the friction agent should use.
 
-    Blank ``LLM_FRICTION_MODEL`` means "follow the summary model", so a single
-    AI-model setting drives all three thinking agents. Set the override to pin
-    friction to a different (e.g. smaller/faster) model.
+    Blank ``LLM_FRICTION_MODEL`` follows the summary model; set it to pin another.
     """
     return config.LLM_FRICTION_MODEL or config.LLM_SUMMARY_MODEL
 
@@ -672,17 +663,6 @@ def find_friction_moments(
     return moments[: config.FRICTION_MOMENT_LIMIT]
 
 
-def _segments_duration(segments: list[dict[str, Any]]) -> float:
-    """Return the transcript duration (largest segment end time), or 0.0."""
-    end = 0.0
-    for seg in segments:
-        try:
-            end = max(end, float(seg.get("end", 0.0)))
-        except (TypeError, ValueError):
-            continue
-    return end
-
-
 def _run_friction(
     entry: dict[str, Any],
     cancel_event: threading.Event | None,
@@ -703,7 +683,7 @@ def _run_friction(
 
     model = friction_model()
     scored = friction.score_segments(segments)
-    stats = friction.compute_stats(scored, _segments_duration(segments))
+    stats = friction.compute_stats(scored, friction.segments_duration(segments))
     candidates = friction.select_candidates(scored, config.FRICTION_CANDIDATE_LIMIT)
 
     if cancel_event is not None and cancel_event.is_set():
@@ -956,7 +936,6 @@ AGENTS: list[Agent] = [
         model_config_key="LLM_SUMMARY_MODEL",
         manifest_field="summary",
         depends_on=[],
-        thread_name_prefix="summary",
         on_upstream_change="clear",
         run=_run_summary,
     ),
@@ -966,7 +945,6 @@ AGENTS: list[Agent] = [
         model_config_key="LLM_SUMMARY_MODEL",
         manifest_field="citations",
         depends_on=["summary"],
-        thread_name_prefix="citations",
         on_upstream_change="clear",
         run=_run_citations,
     ),
@@ -976,7 +954,6 @@ AGENTS: list[Agent] = [
         model_config_key="LLM_FRICTION_MODEL",
         manifest_field="friction",
         depends_on=["summary"],
-        thread_name_prefix="friction",
         on_upstream_change="stale",
         run=_run_friction,
     ),
@@ -986,7 +963,6 @@ AGENTS: list[Agent] = [
         model_config_key="LLM_REPORT_MODEL",
         manifest_field="report",
         depends_on=["summary"],
-        thread_name_prefix="report",
         on_upstream_change="clear",
         run=_run_report,
     ),

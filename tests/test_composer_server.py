@@ -1,11 +1,4 @@
-"""Smoke tests for the Composer Flask blueprint.
-
-Verifies the page serves, participant/part discovery, the composer manifest
-round-trip (cuts CRUD + UI toggles persisted to the ``composer`` section),
-and span clamping — mirroring tests/test_workflows_api.py's bare-blueprint
-setup. Combined-app registration (topnav-visible ``/composer/`` + the
-``/api/status`` flag) is exercised against ``server.build_combined_app``.
-"""
+"""Composer blueprint smoke tests: discovery, manifest round-trip, clamping, combined-app mount."""
 
 import json
 from pathlib import Path
@@ -14,6 +7,7 @@ import pytest
 
 Flask = pytest.importorskip("flask").Flask
 
+import composer_render
 import composer_server
 import config
 import files
@@ -744,7 +738,7 @@ def test_annotation_shape_crud_and_validation(co_client):
 
 
 def test_render_annotation_overlay_draws_shapes():
-    overlay = composer_server._render_annotation_overlay(
+    overlay = composer_render.render_annotation_overlay(
         [
             {
                 "type": "shape",
@@ -785,7 +779,7 @@ def test_render_annotation_overlay_draws_shapes():
 
 
 def test_render_annotation_overlay_draws_pixels():
-    overlay = composer_server._render_annotation_overlay(
+    overlay = composer_render.render_annotation_overlay(
         [
             {
                 "type": "freehand",
@@ -811,7 +805,7 @@ def test_render_annotation_overlay_draws_pixels():
 
 
 def test_render_annotation_overlay_dashed_freehand_has_gaps():
-    overlay = composer_server._render_annotation_overlay(
+    overlay = composer_render.render_annotation_overlay(
         [
             {
                 "type": "freehand",
@@ -834,7 +828,7 @@ def test_render_annotation_overlay_dashed_freehand_has_gaps():
 def test_render_annotation_overlay_dashed_dotted_shapes_draw():
     # Rotated dashed rect + rotated dotted ellipse must render without error and
     # put down some pixels (the dash/perimeter-polygon paths, not the solid ones).
-    overlay = composer_server._render_annotation_overlay(
+    overlay = composer_render.render_annotation_overlay(
         [
             {
                 "type": "shape",
@@ -1208,8 +1202,7 @@ def test_combined_app_registers_composer(tmp_path, monkeypatch):
     app = server.build_combined_app(worksheet=None, default_page="composer")
     with app.test_client() as client:
         assert client.get("/").location.endswith("/composer/")
-        status = client.get("/api/status").get_json()
-        assert status["composer"] is True
+        assert client.get("/api/status").get_json()["ok"] is True
         assert client.get("/composer/").status_code == 200
 
 

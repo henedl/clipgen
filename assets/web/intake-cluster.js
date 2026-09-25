@@ -3,9 +3,9 @@
  * Pure grouping helpers that collapse raw Screenspace events and Transcript
  * marks into time-adjacent clusters. No DOM, no module state — each function
  * takes its data plus a threshold (in seconds) and returns a fresh list of
- * clusters. Consumers: Studio (studio.js + its sub-tabs convergence.js /
- * metadata.js), Composer, and the Transcripts "Clip Marked Lines" action, which
- * clusters the same way so identical marks yield identical spans on every page.
+ * clusters. Consumers: Studio intake, Overview Convergence and Metadata,
+ * Composer, and the Transcripts "Clip Marked Lines" batch action. Every page
+ * clusters the same way, so identical marks yield identical spans.
  *
  * Loaded before each page's hub script so consumers can read it on init.
  *
@@ -16,6 +16,7 @@
  *   clusterTranscriptMarks(marks, thresholdSec)  — group Transcript marks by
  *                                                  participant, merging runs closer
  *                                                  than thresholdSec.
+ *   DEFAULT_GAP_SECONDS                          — every page's default threshold.
  */
 (function () {
   "use strict";
@@ -115,6 +116,7 @@
   }
 
   window.ClipgenIntakeCluster = {
+    DEFAULT_GAP_SECONDS: 10, // studio.html's threshold inputs still hardcode value="10"
     clusterIntakeEvents: clusterIntakeEvents,
     clusterTranscriptMarks: clusterTranscriptMarks,
   };

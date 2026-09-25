@@ -12,7 +12,7 @@ layer lives in ``thinking_agents.py``. Category keys here are mirrored by
 asserts the two key sets stay equal.
 
 Score formula (per segment):
-    Σ(weight[cat] × match_count[cat]) / max(word_count, 1), clamped to [0, 1].
+    Σ(weight[cat] × match_count[cat]) / max(word_count, 8), clamped to [0, 1].
 
 Segments are plain dicts (the same shape used elsewhere: ``id``, ``start``,
 ``end``, ``text``). Scored rows are plain dicts: ``id``, ``score``,
@@ -171,6 +171,17 @@ def select_candidates(
     return candidates[:n]
 
 
+def segments_duration(segments: list[dict[str, Any]]) -> float:
+    """Return the transcript duration (largest segment end time), or 0.0."""
+    end = 0.0
+    for seg in segments:
+        try:
+            end = max(end, float(seg.get("end", 0.0)))
+        except (TypeError, ValueError):
+            continue
+    return end
+
+
 def compute_stats(
     scored: list[dict[str, Any]], duration_seconds: float
 ) -> dict[str, Any]:
@@ -183,10 +194,11 @@ def compute_stats(
     total = 0
     for row in scored:
         for category, count in row.get("counts", {}).items():
-            by_category[category] = by_category.get(category, 0) + count
+            by_category[category] += count
             total += count
-    minutes = duration_seconds / 60.0 if duration_seconds > 0 else 0.0
-    markers_per_minute = round(total / minutes, 2) if minutes > 0 else 0.0
+    markers_per_minute = (
+        round(total / (duration_seconds / 60.0), 2) if duration_seconds > 0 else 0.0
+    )
     return {
         "by_category": by_category,
         "markers_per_minute": markers_per_minute,

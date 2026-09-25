@@ -208,11 +208,13 @@
 
   // ---- Blueprint switcher ---------------------------------------------------
 
-  function findBlueprint(id) {
-    for (var i = 0; i < state.blueprints.length; i++) {
-      if (state.blueprints[i].id === id) return state.blueprints[i];
-    }
-    return null;
+  function findBlueprint(id) { return findById(state.blueprints, id); }
+
+  // Rename, else catalog label, else type; renames disambiguate duplicate node types.
+  function nodeLabel(node) {
+    if (node.name) return node.name;
+    var type = state.catalogById[node.type];
+    return (type && type.label) || node.type;
   }
 
   function populateSelect() {
@@ -230,12 +232,6 @@
     if (state.activeBlueprintId) sel.value = state.activeBlueprintId;
   }
 
-  function syncToolbar() {
-    var sel = qs("#wfBlueprintSelect");
-    // The selected <option> already shows the name; nothing else to sync.
-    if (sel && state.activeBlueprintId) sel.value = state.activeBlueprintId;
-  }
-
   // Flushes the outgoing blueprint's pending save so no edit is lost or mis-attributed.
   function openBlueprint(bp) {
     if (!bp) return;
@@ -250,7 +246,8 @@
     state.selectedEdge = null;
     if (WF.clearRunPreview) WF.clearRunPreview(); // stale preview classes
     resetHistory(); // history doesn't span blueprints
-    syncToolbar();
+    var sel = qs("#wfBlueprintSelect");
+    if (sel) sel.value = bp.id;
     // A corrupt blueprint must not throw into loadWorkspace: that disables the whole toolbar.
     try {
       syncTriggerButton();
@@ -268,15 +265,19 @@
     }
   }
 
+  function adoptBlueprint(bp) {
+    state.blueprints.push(bp);
+    populateSelect();
+    openBlueprint(bp);
+  }
+
   function loadBlueprints() {
     return apiGet("api/blueprints").then(function (res) {
       var list = (res && res.blueprints) || [];
       if (!list.length) {
         // Fresh launch — auto-create one so the canvas is immediately usable.
         return apiPost("api/blueprints", { name: "Untitled" }).then(function (r) {
-          state.blueprints = [r.blueprint];
-          populateSelect();
-          openBlueprint(r.blueprint);
+          adoptBlueprint(r.blueprint);
         });
       }
       state.blueprints = list;
@@ -292,9 +293,7 @@
           showToast("Failed to create blueprint");
           return;
         }
-        state.blueprints.push(res.blueprint);
-        populateSelect();
-        openBlueprint(res.blueprint);
+        adoptBlueprint(res.blueprint);
       })
       .catch(function () {
         showToast("Failed to create blueprint");
@@ -369,9 +368,7 @@
             showToast("Import failed");
             return;
           }
-          state.blueprints.push(res.blueprint);
-          populateSelect();
-          openBlueprint(res.blueprint);
+          adoptBlueprint(res.blueprint);
         })
         .catch(function () {
           showToast("Import failed");
@@ -1054,14 +1051,10 @@
         openBlueprint(findBlueprint(sel.value));
       });
     }
-    var renameBtn = qs("#wfRenameBlueprint");
-    if (renameBtn) renameBtn.addEventListener("click", openRenameDialog);
     var paletteSearch = qs("#wfPaletteSearch");
     if (paletteSearch) {
       paletteSearch.addEventListener("input", renderPalette);
     }
-    var newBtn = qs("#wfNewBlueprint");
-    if (newBtn) newBtn.addEventListener("click", createBlueprint);
     var importFile = qs("#wfImportFile");
     if (importFile) {
       importFile.addEventListener("change", function () {
@@ -1071,38 +1064,25 @@
     }
     buildQuickActions();
     initCommandPalette();
-    var delBtn = qs("#wfDeleteBlueprint");
-    if (delBtn) delBtn.addEventListener("click", requestDeleteBlueprint);
-    var undoBtn = qs("#wfUndo");
-    if (undoBtn) {
-      undoBtn.addEventListener("click", function () {
-        undo();
-      });
-    }
-    var redoBtn = qs("#wfRedo");
-    if (redoBtn) {
-      redoBtn.addEventListener("click", function () {
-        redo();
-      });
-    }
-    var cleanBtn = qs("#wfCleanUp");
-    if (cleanBtn) {
-      cleanBtn.addEventListener("click", function () {
-        if (WF.autoArrange) WF.autoArrange();
-      });
-    }
-    var snapBtn = qs("#wfSnapBtn");
-    if (snapBtn) {
-      snapBtn.addEventListener("click", function () {
-        if (WF.toggleSnap) WF.toggleSnap();
-      });
-    }
-    var noteBtn = qs("#wfAddNote");
-    if (noteBtn) {
-      noteBtn.addEventListener("click", function () {
-        if (WF.addNote) WF.addNote();
-      });
-    }
+    // Static toolbar buttons; satellite handlers keep their WF guards.
+    [
+      ["#wfRenameBlueprint", openRenameDialog],
+      ["#wfNewBlueprint", createBlueprint],
+      ["#wfDeleteBlueprint", requestDeleteBlueprint],
+      ["#wfUndo", function () { undo(); }],
+      ["#wfRedo", function () { redo(); }],
+      ["#wfCleanUp", function () { if (WF.autoArrange) WF.autoArrange(); }],
+      ["#wfSnapBtn", function () { if (WF.toggleSnap) WF.toggleSnap(); }],
+      ["#wfAddNote", function () { if (WF.addNote) WF.addNote(); }],
+      ["#wfZoomIn", function () { if (WF.zoomAtCenter) WF.zoomAtCenter(1.25); }],
+      ["#wfZoomOut", function () { if (WF.zoomAtCenter) WF.zoomAtCenter(1 / 1.25); }],
+      ["#wfMinimapFit", function () { if (WF.fitToView) WF.fitToView(); }],
+      ["#wfStopBtn", function () { if (WF.stopRun) WF.stopRun(); }],
+      ["#wfOverlayRetry", loadWorkspace],
+    ].forEach(function (binding) {
+      var btn = qs(binding[0]);
+      if (btn) btn.addEventListener("click", binding[1]);
+    });
 
     // Blueprint action hotkeys; canvas-editing ones register in workflows-canvas.js. All gate on readiness.
     function _blueprintReady() {
@@ -1138,25 +1118,6 @@
         }
       });
     }
-    // Minimap zoom controls (in/out about the canvas centre + fit-to-content).
-    var zoomInBtn = qs("#wfZoomIn");
-    if (zoomInBtn) {
-      zoomInBtn.addEventListener("click", function () {
-        if (WF.zoomAtCenter) WF.zoomAtCenter(1.25);
-      });
-    }
-    var zoomOutBtn = qs("#wfZoomOut");
-    if (zoomOutBtn) {
-      zoomOutBtn.addEventListener("click", function () {
-        if (WF.zoomAtCenter) WF.zoomAtCenter(1 / 1.25);
-      });
-    }
-    var minimapFitBtn = qs("#wfMinimapFit");
-    if (minimapFitBtn) {
-      minimapFitBtn.addEventListener("click", function () {
-        if (WF.fitToView) WF.fitToView();
-      });
-    }
     var runBtn = qs("#wfRunBtn");
     if (runBtn) {
       runBtn.addEventListener("click", function () {
@@ -1185,20 +1146,11 @@
       });
     }
     initRunMenu();
-    var stopBtn = qs("#wfStopBtn");
-    if (stopBtn) {
-      stopBtn.addEventListener("click", function () {
-        if (WF.stopRun) WF.stopRun();
-      });
-    }
     var triggerBtn = qs("#wfTriggerBtn");
     var triggerMenu = qs("#wfTriggerMenu");
     if (triggerBtn && triggerMenu) {
       _triggerMenuCtl = bindMenuToggle(triggerBtn, triggerMenu);
     }
-
-    var retryBtn = qs("#wfOverlayRetry");
-    if (retryBtn) retryBtn.addEventListener("click", loadWorkspace);
 
     // Handlers no-op until state.ready; loadWorkspace flips the gate.
     if (WF.initCanvas) WF.initCanvas();
@@ -1219,8 +1171,8 @@
   WF.undo = undo;
   WF.redo = redo;
   WF.flushSave = flushSave; // runs satellite awaits this before POSTing a run
-  WF.renderPalette = renderPalette;
   WF.openBlueprint = openBlueprint;
+  WF.nodeLabel = nodeLabel; // runs + validate satellites
   // Published for the nodes satellite (palette grey-out logic shared, not duped).
   WF.nodeContextMet = nodeContextMet;
   // The validate satellite re-gates the trigger on every edit: errors block arming.

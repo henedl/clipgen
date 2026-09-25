@@ -150,7 +150,7 @@ def test_reel_concatenates_both_windows_or_writes_nothing(
 def test_single_seek_matches_two_stage_seek_exactly(tmp_path):
     """The single pre-input -ss must decode the exact frame the old split did.
 
-    accurate_seek_args emits one pre-input -ss and relies on ffmpeg
+    accurate_seek_pre_post emits one pre-input -ss and relies on ffmpeg
     decoding-and-discarding from the prior keyframe when the output is
     re-encoded. That is a claim about ffmpeg's behavior, not clipgen's, so it
     can only be locked against the real binary: every extracted frame must be
@@ -175,6 +175,6 @@ def test_single_seek_matches_two_stage_seek_exactly(tmp_path):
             ["-ss", str(ts - 2.0)] if ts > 2.0 else [],
             ["-ss", "2.0"] if ts > 2.0 else ["-ss", str(ts)],
         )
-        new = raw_frame(video.accurate_seek_args(ts), [])
+        new = raw_frame(video.accurate_seek_pre_post(ts)[0], [])
         assert len(new) > 0
         assert new == old, f"frame at t={ts} drifted off the two-stage result"

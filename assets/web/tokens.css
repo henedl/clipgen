@@ -1,12 +1,7 @@
 /*
  * clipgen design tokens — single source of truth for shared design values (see AGENTS.md).
  *
- * Default theme is DARK; light is opt-in via html[data-theme="light"] (or
- * .theme-light). The product is dark-first, so users toggle explicitly and there
- * is no prefers-color-scheme handling. Each theme block does declare
- * `color-scheme`, which is a different thing: it tells the engine which way to
- * paint UA-drawn furniture (scrollbars, <select> popups, checkboxes, spinners,
- * autofill) and never reads the OS preference.
+ * Dark is default; html[data-theme="light"] opts into light. Each theme sets color-scheme for UA controls.
  *
  * Two naming systems coexist intentionally:
  *   1. Prototype-aligned names (--bg, --fg, --accent, --severity-*, --cell-data,
@@ -151,7 +146,6 @@
   /* Cell data (timestamp chips on Studio Sheet) */
   --cell-data:        #1d4d5a;
   --cell-data-fg:     #7dd3e0;
-  --cell-data-bright: #2bc8c8;
 
   /* Severity-tinted cell data — chip bg uses transparent so the cell-hover
    * background shows through; float bg is opaque (mixed with --bg) so
@@ -324,7 +318,6 @@
 
   /* Sidebar widths */
   --sidebar-width-default: 340px;
-  --sidebar-width-wide: 420px;
 
   /* Bottom panel height (consumed by screenspace.css + screenspace.js) */
   --bottom-panel-height: 400px;
@@ -333,7 +326,6 @@
   --icon-size-xs: 12px;
   --icon-size-sm: 14px;
   --icon-size-md: 16px;
-  --icon-size-lg: 20px;
   --icon-size-xl: 24px;
 
   /* Breakpoints — for documentation + JS reads only. CSS @media queries
@@ -344,11 +336,8 @@
   --bp-tablet: 768px;
 }
 
-/* Light theme — opt-in via the theme toggle (data-theme="light") or .theme-light
- * on a wrapper element, the latter kept available for embedded views. Severity
- * tokens are intentionally NOT overridden: they stay constant across themes. */
-html[data-theme="light"],
-.theme-light {
+/* Light theme via the toggle's data-theme attribute. Severity tokens stay constant across themes. */
+html[data-theme="light"] {
   color-scheme: light;
 
   /* Surfaces */
@@ -392,7 +381,6 @@ html[data-theme="light"],
   /* Cell data */
   --cell-data:        #b3e3ec;
   --cell-data-fg:     #0a4956;
-  --cell-data-bright: #0a8a96;
 
   /* Severity-tinted cell data — light theme uses a darker green for the
    * positive bucket since #4ade80 (the dark-theme positive token) washes
@@ -452,13 +440,6 @@ html[data-theme="light"],
   --region-color-8: #14b8a6;
 
   --color-pulse: #a855f7;
-}
-
-/* Light theme: invert the brand-mark stroke if a logo image is used elsewhere
- * (matches the prototype's filter on .cg-logo). */
-.theme-light .cg-logo,
-html[data-theme="light"] .cg-logo {
-  filter: invert(1) brightness(0.15);
 }
 
 /* ---- Shared utilities ---- */
@@ -574,6 +555,84 @@ body {
     -webkit-text-fill-color: var(--fg-muted);
   }
 }
+/* Mask-icon base as longhands, so inline mask-image from utils.js keeps these. */
+.co-panel-toggle-icon,
+.media-banner-icon,
+.cv-offset-lock-btn,
+.cv-offset-couple-btn,
+.md-icon,
+.md-details-chev,
+.md-section-chevron,
+.md-outlier-icon,
+.cg-btn-icon,
+.ss-task-icon,
+.ss-icon,
+.ss-info-collapse-icon,
+.ss-info-expand-icon,
+.ss-info-section-chevron,
+.amplitude-btn-icon,
+.ss-cat-chevron,
+.interval-icon-mask,
+.run-picker-fullframe-icon,
+.scan-toggle-icon,
+.task-fast-badge-icon,
+.fast-scan-label-icon,
+.preview-section-icon,
+.multitool-operator-icon,
+.multitool-offset-icon,
+.multitool-offset-sep,
+.ref-seek-icon,
+.param-reset-icon,
+.ss-sample-modal__hist-icon,
+.ss-template-icon-btn__glyph,
+.rp-tab-icon,
+.rp-tab-chevron,
+.task-card-type-icon,
+.rp-icon-btn-icon,
+.heatmap-collapse-chevron,
+.heatmap-thumb-glyph,
+.settings-llm-model-icon,
+.start-overlay .so-icon,
+.cg-icon,
+.studio-sidebar-toggle-icon,
+.brand-mark,
+.cg-tooltip--has-icon .cg-tooltip-icon,
+.cg-segtrack-icon,
+.topnav-icon,
+.player-btn-icon,
+.panel-tab-icon,
+.summary-icon,
+.ai-agent-badge,
+.summary-action-icon,
+.friction-jump-step-icon,
+.speaker-popover-reset-icon,
+.redact-item-undo-icon,
+.segment-copy-icon,
+.pill-trigger-icon,
+.pill-chevron,
+.pill-offsheet-badge,
+.model-install-license-icon,
+.track-expand-icon,
+.video-play-overlay-icon,
+.wf-run-caret-icon,
+.wf-btn-icon,
+.wf-label-icon,
+.wf-node-help,
+.wf-node-mute,
+.wf-stash-btn-icon,
+.wf-stash-badge,
+.wf-trigger-icon,
+.wf-run-triggered::before,
+.wf-wire-delete-icon,
+.wf-run-node-icon {
+  -webkit-mask-repeat: no-repeat;
+          mask-repeat: no-repeat;
+  -webkit-mask-size: contain;
+          mask-size: contain;
+  -webkit-mask-position: center;
+          mask-position: center;
+}
+
 /* Cross-reference badge icon (mask-image from assets/icons/) */
 .xref-badge-icon {
   display: block;
@@ -602,12 +661,6 @@ body {
   background-color: currentColor;
   mask-image: var(--brand-mark-svg);
   -webkit-mask-image: var(--brand-mark-svg);
-  mask-size: contain;
-  -webkit-mask-size: contain;
-  mask-repeat: no-repeat;
-  -webkit-mask-repeat: no-repeat;
-  mask-position: center;
-  -webkit-mask-position: center;
 }
 
 /* Hydrated state — JS injected an inline <svg> child, so drop the mask paint
@@ -748,12 +801,6 @@ body {
   flex-shrink: 0;
   opacity: 0.75;
   background-color: currentColor;
-  mask-size: contain;
-  -webkit-mask-size: contain;
-  mask-repeat: no-repeat;
-  -webkit-mask-repeat: no-repeat;
-  mask-position: center;
-  -webkit-mask-position: center;
 }
 /* Long unbroken text (a path, a URL) would otherwise refuse to shrink and push
    past the max-width instead of wrapping. */
@@ -776,6 +823,36 @@ button[data-tooltip]:disabled { pointer-events: auto; cursor: not-allowed; }
   box-shadow: var(--shadow-pop);
   padding: var(--space-1);
   z-index: var(--z-dropdown);
+}
+
+/* Ghost transport buttons on the Composer, Transcripts and Screenspace players. */
+.co-player-btn,
+.player-btn,
+.region-toggle-btn {
+  background: none;
+  border: none;
+  color: var(--color-text-dim);
+  cursor: pointer;
+  padding: var(--space-1);
+  border-radius: var(--radius-sm);
+  transition: background var(--duration-fast), color var(--duration-fast);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+.co-player-btn.active,
+.player-btn.active,
+.region-toggle-btn.active { color: var(--color-accent); }
+/* Text variant: the playback-speed readout. */
+.co-speed-btn,
+.player-speed-btn,
+.video-speed-btn {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  font-variant-numeric: tabular-nums;
+  min-width: 2.25rem;
+  padding: var(--space-1) var(--space-2);
 }
 
 /* Audio-level popover — glass hover panel on a video player's speaker button
@@ -886,13 +963,7 @@ audio.cg-audiotrack { display: none; }
   box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent) 25%, transparent);
 }
 
-/* Per-severity color indirection. Elements carrying a severityClass() class
-   (utils.js: sev-critical … sev-very-positive, sev-na, sev-unknown — kept in
-   sync with Python via tests/test_shared_constants.py) get --sev bound to
-   their severity color; a component then paints whichever property it colors
-   from `var(--sev, <fallback>)` instead of repeating an eight-line ladder.
-   NOT for viewer.css/gallery.css — exported HTML strips tokens.css, so those
-   keep their local ladders. */
+/* Binds --sev per severity class; components paint from var(--sev, fallback). */
 .sev-critical      { --sev: var(--sev-critical); }
 .sev-high          { --sev: var(--sev-high); }
 .sev-medium        { --sev: var(--sev-medium); }
@@ -902,18 +973,12 @@ audio.cg-audiotrack { display: none; }
 .sev-very-positive { --sev: var(--sev-very-positive); }
 .sev-unknown       { --sev: var(--sev-unknown); }
 
-/* The page-wide hide utility. !important on purpose: it must out-cascade
-   .cg-modal-overlay's `display: flex` (and any display an adopter sets)
-   regardless of specificity or source order. gallery.css keeps its own copy —
-   exported HTML strips tokens.css. */
+/* Page-wide hide; !important out-cascades .cg-modal-overlay's display: flex. */
 .hidden {
   display: none !important;
 }
 
-/* Modal dialog card shell — the surface inside a .cg-modal-overlay. Add
-   ALONGSIDE a page-local class that owns width and padding (and any deliberate
-   deviations), e.g. class="wf-dialog cg-modal-card". Same export caveat as
-   .cg-modal-overlay. */
+/* Modal card shell; pair with a page class that owns width and padding. */
 .cg-modal-card {
   background: var(--color-surface);
   border: 1px solid var(--color-panel-border);
@@ -934,14 +999,7 @@ audio.cg-audiotrack { display: none; }
   color: var(--color-text-dim);
 }
 
-/* Centered blocking-modal overlay shell — shared across pages. Add ALONGSIDE a
-   page-local class that owns the backdrop color and the show/hide toggle, e.g.
-   class="wf-dialog-overlay cg-modal-overlay". Unlike .cg-menu this DOES set
-   `display: flex`, so each adopter's hide mechanism must out-cascade it: a
-   compound rule (.modal.hidden) or an !important .hidden utility both do; a
-   bare later-loading .hidden also works (equal specificity, page CSS loads
-   after tokens.css). NOT for hotkeys.css/gallery/viewer overlays — those ship
-   in exported HTML where tokens.css is stripped, and stay self-contained. */
+/* Modal backdrop shell; sets display: flex, so adopters hide it with .hidden. */
 .cg-modal-overlay {
   position: fixed;
   inset: 0;
@@ -1322,12 +1380,6 @@ select:not([multiple]):not([size]):not(.cg-select-nocaret) {
   width: var(--segtrack-icon);
   height: var(--segtrack-icon);
   background-color: currentColor;
-  mask-size: contain;
-  mask-repeat: no-repeat;
-  mask-position: center;
-  -webkit-mask-size: contain;
-  -webkit-mask-repeat: no-repeat;
-  -webkit-mask-position: center;
 }
 .cg-segtrack-label { white-space: nowrap; }
 @media (prefers-reduced-motion: reduce) {
@@ -1414,6 +1466,76 @@ body.dragging #coToolbar {
   height: 100%;
   flex: 1 1 auto;
   margin-left: 50px;
+}
+
+/* Studio and Overview sub-tabs: underline on active. */
+.preview-tab {
+  display: inline-flex;
+  align-items: center;
+  height: 100%;
+  padding: 0 2px;
+  font-size: var(--subheader-font-size);
+  font-weight: 400;
+  background: none;
+  border: none;
+  border-bottom: 1px solid transparent;
+  margin-bottom: -1px; /* sits on subheader's bottom border */
+  color: var(--fg-muted);
+  cursor: pointer;
+  transition: color var(--duration-fast);
+  font-family: inherit;
+}
+.preview-tab:hover { color: var(--fg); }
+.preview-tab.active {
+  color: var(--fg);
+  border-bottom-color: var(--fg);
+}
+
+/* Newly shown sub-tab panel; pages list their panels' transitions. */
+.tab-slide-enter {
+  opacity: 0 !important;
+  transform: translateX(12px);
+}
+@media (prefers-reduced-motion: reduce) {
+  .tab-slide-enter {
+    opacity: 1 !important;
+    transform: none;
+  }
+}
+
+/* Sun/moon crossfade for #themeToggle in the TopNav and exports; keyed on data-theme. */
+.theme-toggle-icon {
+  position: absolute;
+  width: var(--icon-size-md);
+  height: var(--icon-size-md);
+  border-radius: var(--radius-full);
+  transition: opacity var(--duration-normal) ease, transform var(--duration-normal) ease;
+}
+
+.theme-icon-sun {
+  background: radial-gradient(circle at 30% 30%, #ffffff 0, #fde68a 40%, #fbbf24 70%, #f59e0b 100%);
+  box-shadow: 0 0 8px rgba(251, 191, 36, 0.6);
+  opacity: 1;
+  transform: translateX(0) scale(1);
+}
+
+.theme-icon-moon {
+  background:
+    radial-gradient(circle at 30% 30%, #e5e7eb 0, #9ca3af 40%, #4b5563 100%),
+    radial-gradient(circle at 65% 35%, transparent 0, transparent 55%, rgba(15, 23, 42, 0.9) 56%, rgba(15, 23, 42, 0.9) 100%);
+  box-shadow: 0 0 10px rgba(148, 163, 184, 0.5);
+  opacity: 0;
+  transform: translateX(6px) scale(0.85);
+}
+
+#themeToggle[data-theme="dark"] .theme-icon-sun {
+  opacity: 0;
+  transform: translateX(-6px) scale(0.85);
+}
+
+#themeToggle[data-theme="dark"] .theme-icon-moon {
+  opacity: 1;
+  transform: translateX(0) scale(1);
 }
 .subheader-actions {
   display: flex;

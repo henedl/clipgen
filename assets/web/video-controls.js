@@ -64,6 +64,106 @@
   var SYNC_MAX = 0.06;      // cap the rate trim at ±6% (inaudible tempo shift)
   var SYNC_HARD = 0.75;     // s — beyond this, a one-off hard resync (seek) is ok
 
+  // One label + slider + readout row; onGesture runs inside the input's user activation.
+  function makeRow(labelText, percent, onGesture, onValue) {
+    var row = document.createElement("div");
+    row.className = "audio-popover-row";
+    var label = document.createElement("span");
+    label.className = "audio-popover-label";
+    label.textContent = labelText;
+    var slider = document.createElement("input");
+    slider.type = "range";
+    slider.className = "audio-slider";
+    slider.min = "0";
+    slider.max = "200";
+    slider.step = "1";
+    slider.value = String(percent);
+    slider.setAttribute("aria-label", labelText + " — 100% is source level");
+    var value = document.createElement("span");
+    value.className = "audio-popover-value";
+    value.textContent = percent + "%";
+    function commit() {
+      onGesture();
+      var v = parseInt(slider.value, 10);
+      if (isNaN(v)) v = 100;
+      value.textContent = v + "%";
+      onValue(v);
+    }
+    slider.addEventListener("input", commit);
+    slider.addEventListener("dblclick", function () {
+      slider.value = "100";
+      commit();
+    });
+    row.appendChild(label);
+    row.appendChild(slider);
+    row.appendChild(value);
+    return row;
+  }
+
+  // ---- Popover DOM (glass panel); buildRows(rowsEl, captionEl) fills it when dirty ----
+  function createAudioPopover(button, buildRows) {
+    var popover = null;
+    var rowsContainer = null;
+    var caption = null;
+    var rowsDirty = true;
+    var closeTimer = null;
+
+    function isOpen() { return popover && popover.style.display !== "none"; }
+    function cancelClose() {
+      if (closeTimer) { clearTimeout(closeTimer); closeTimer = null; }
+    }
+    function scheduleClose() {
+      cancelClose();
+      closeTimer = setTimeout(close, 120);
+    }
+    function close() { if (popover) popover.style.display = "none"; }
+    function rebuild() {
+      rowsDirty = false;
+      buildRows(rowsContainer, caption);
+    }
+
+    function buildPopover() {
+      popover = document.createElement("div");
+      popover.className = "audio-popover";
+      popover.setAttribute("role", "dialog");
+      popover.setAttribute("aria-label", "Audio levels");
+      rowsContainer = document.createElement("div");
+      rowsContainer.className = "audio-popover-rows";
+      popover.appendChild(rowsContainer);
+      caption = document.createElement("div");
+      caption.className = "audio-popover-caption";
+      caption.style.display = "none";
+      popover.appendChild(caption);
+      popover.addEventListener("mouseenter", cancelClose);
+      popover.addEventListener("mouseleave", scheduleClose);
+      document.body.appendChild(popover);
+    }
+
+    function open() {
+      cancelClose();
+      if (!popover) buildPopover();
+      if (rowsDirty) rebuild();
+      // Measure hidden, then anchor to the button (bottom-left, viewport-clamped).
+      popover.style.visibility = "hidden";
+      popover.style.display = "flex";
+      if (typeof positionPopoverAnchored === "function") {
+        positionPopoverAnchored(popover, button.getBoundingClientRect());
+      }
+      popover.style.visibility = "";
+    }
+
+    button.addEventListener("mouseenter", open);
+    button.addEventListener("mouseleave", scheduleClose);
+
+    return {
+      // Rebuild now if open, else on the next open.
+      markDirty: function () {
+        rowsDirty = true;
+        if (isOpen()) rebuild();
+      },
+    };
+  }
+
   function attachAudioPanel(opts) {
     opts = opts || {};
     var video = opts.video;
@@ -168,8 +268,7 @@
       teardownMulti();
       lastSig = "single";
       video.muted = muted;
-      rowsDirty = true;
-      if (isOpen()) rebuildRows();
+      pop.markDirty();
     }
 
     function enterMulti(tracks) {
@@ -359,65 +458,11 @@
       if (sig === lastSig) return;
       lastSig = sig;
       if (wantMulti) enterMulti(tracks); else enterSingle();
-      rowsDirty = true;
-      if (isOpen()) rebuildRows();
+      pop.markDirty();
     };
 
-    // ---- Popover DOM (glass panel; rows rebuilt per mode) ----
-    var popover = null;
-    var rowsContainer = null;
-    var caption = null;
-    var rowsDirty = true;
-    var closeTimer = null;
-
-    function isOpen() { return popover && popover.style.display !== "none"; }
-    function cancelClose() {
-      if (closeTimer) { clearTimeout(closeTimer); closeTimer = null; }
-    }
-    function scheduleClose() {
-      cancelClose();
-      closeTimer = setTimeout(close, 120);
-    }
-    function close() { if (popover) popover.style.display = "none"; }
-
-    // One label + slider + readout row; onGesture runs inside the input's user activation.
-    function makeRow(labelText, percent, onGesture, onValue) {
-      var row = document.createElement("div");
-      row.className = "audio-popover-row";
-      var label = document.createElement("span");
-      label.className = "audio-popover-label";
-      label.textContent = labelText;
-      var slider = document.createElement("input");
-      slider.type = "range";
-      slider.className = "audio-slider";
-      slider.min = "0";
-      slider.max = "200";
-      slider.step = "1";
-      slider.value = String(percent);
-      slider.setAttribute("aria-label", labelText + " — 100% is source level");
-      var value = document.createElement("span");
-      value.className = "audio-popover-value";
-      value.textContent = percent + "%";
-      function commit() {
-        onGesture();
-        var v = parseInt(slider.value, 10);
-        if (isNaN(v)) v = 100;
-        value.textContent = v + "%";
-        onValue(v);
-      }
-      slider.addEventListener("input", commit);
-      slider.addEventListener("dblclick", function () {
-        slider.value = "100";
-        commit();
-      });
-      row.appendChild(label);
-      row.appendChild(slider);
-      row.appendChild(value);
-      return row;
-    }
-
-    function rebuildRows() {
-      rowsDirty = false;
+    // Rows follow the mode: one per mixed track, else a single volume row.
+    function rebuildRows(rowsContainer, caption) {
       rowsContainer.innerHTML = "";
       var tracks = safeTracks();
       if (multiActive) {
@@ -451,38 +496,7 @@
       }
     }
 
-    function buildPopover() {
-      popover = document.createElement("div");
-      popover.className = "audio-popover";
-      popover.setAttribute("role", "dialog");
-      popover.setAttribute("aria-label", "Audio levels");
-      rowsContainer = document.createElement("div");
-      rowsContainer.className = "audio-popover-rows";
-      popover.appendChild(rowsContainer);
-      caption = document.createElement("div");
-      caption.className = "audio-popover-caption";
-      caption.style.display = "none";
-      popover.appendChild(caption);
-      popover.addEventListener("mouseenter", cancelClose);
-      popover.addEventListener("mouseleave", scheduleClose);
-      document.body.appendChild(popover);
-    }
-
-    function open() {
-      cancelClose();
-      if (!popover) buildPopover();
-      if (rowsDirty) rebuildRows();
-      // Measure hidden, then anchor to the button (bottom-left, viewport-clamped).
-      popover.style.visibility = "hidden";
-      popover.style.display = "flex";
-      if (typeof positionPopoverAnchored === "function") {
-        positionPopoverAnchored(popover, button.getBoundingClientRect());
-      }
-      popover.style.visibility = "";
-    }
-
-    button.addEventListener("mouseenter", open);
-    button.addEventListener("mouseleave", scheduleClose);
+    var pop = createAudioPopover(button, rebuildRows);
 
     return ctrl;
   }

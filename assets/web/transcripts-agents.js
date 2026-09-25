@@ -4,8 +4,8 @@
  * friction pass (mode switch, score histogram, category chips, moment jump strip,
  * and the decorations they drive on the transcript below), plus the panel tab
  * switching. These are the local-LLM "thinking agent" results
- * surfaced per participant. Loaded LAST (after transcripts.js + the other
- * satellites); reads the hub's shared state + helpers through
+ * surfaced per participant. Loads after the hub and every satellite except
+ * batch; reads the hub's shared state + helpers through
  * window.ClipgenTranscripts (TS) and publishes its load/clear/stop/init entry
  * points back so selectParticipant, the task poller, the visibility/focus
  * handlers, boot, and the segment-list hover can reach them. The pills satellite
@@ -26,7 +26,6 @@
     reportAgentError = TS.reportAgentError,
     renderTimeline = TS.renderTimeline,
     seekVideo = TS.seekVideo,
-    scrollToSegment = TS.scrollToSegment,
     loadTranscript = TS.loadTranscript,
     ensureAgentModelInstalled = TS.ensureAgentModelInstalled,
     _trFetchModels = TS._trFetchModels,
@@ -36,7 +35,11 @@
     _citationsEtaTracker = TS._citationsEtaTracker,
     _frictionEtaTracker = TS._frictionEtaTracker,
     _updateAgentElapsed = TS._updateAgentElapsed,
-    _currentParticipantHasTranscript = TS._currentParticipantHasTranscript;
+    _currentParticipantHasTranscript = TS._currentParticipantHasTranscript,
+    _segmentIndexById = TS._segmentIndexById,
+    seekToSegmentIndex = TS.seekToSegmentIndex,
+    placeCursorTooltip = TS.placeCursorTooltip,
+    _selectedParticipantRow = TS._selectedParticipantRow;
 
   // ---- Thinking-agent plumbing (shared poll factory) ----
   // A new agent is one descriptor plus hooks.
@@ -214,10 +217,8 @@
     renderSummary(data.summary);
     if (data.citations && data.citations.length > 0) {
       state.summaryCitations = data.citations;
-      state.citationsGenerating = false;
       renderCitations();
     } else if (data.citations_generating) {
-      state.summaryCitations = null;
       state.citationsGenerating = true;
       renderCitationsStatus(
         data.citations_started_at ? data.citations_started_at * 1000 : undefined
@@ -328,17 +329,9 @@
   }
 
   function renderSummaryEmpty() {
-    _stopSummaryPoll();
-    _stopCitationsPoll();
+    clearSummary();
     _summaryEtaTracker.reset();
-    qs("#summaryContent").innerHTML = "";
-    qs("#summaryBody").classList.add("hidden");
-    qs("#summaryActions").classList.add("hidden");
     qs("#summaryEmpty").classList.remove("hidden");
-    state.summaryEditing = false;
-    state.summaryText = "";
-    state.summaryCitations = null;
-    state.citationsGenerating = false;
     _updateSummaryEmptyHint();
   }
 
@@ -467,7 +460,6 @@
   }
 
   function selectTab(name) {
-    state.activeTab = name;
     var pid = state.selectedParticipant;
     if (pid) setStoredUIMapEntry("transcripts", "tabByParticipant", pid, name);
     if (_tabNames().indexOf(name) < 0) name = "summary";
@@ -486,9 +478,9 @@
   }
 
   function initPanelTabs() {
-    qs("#tabBtnSummary").addEventListener("click", function () { selectTab("summary"); });
-    qs("#tabBtnFriction").addEventListener("click", function () { selectTab("friction"); });
-    qs("#tabBtnRedact").addEventListener("click", function () { selectTab("redact"); });
+    PANEL_TABS.forEach(function (t) {
+      qs(t.btn).addEventListener("click", function () { selectTab(t.name); });
+    });
     qs("#summaryRunCta").addEventListener("click", function () { _startSummaryRun(); });
   }
 
@@ -736,16 +728,8 @@
   // ---- Friction detection ----
   // A control surface over #segmentList; everything reads one derived map (_recomputeFrictionMatches).
 
-  function _currentParticipant() {
-    var pid = state.selectedParticipant;
-    for (var i = 0; i < state.participants.length; i++) {
-      if (state.participants[i].id === pid) return state.participants[i];
-    }
-    return null;
-  }
-
   function _frictionDepMet() {
-    var p = _currentParticipant();
+    var p = _selectedParticipantRow();
     if (!p) return false;
     // state.summaryText lands before /api/participants catches up, so trust it too.
     if (state.summaryText) return true;
@@ -1104,7 +1088,7 @@
 
   function _frictionQuote(seg, maxChars) {
     // Through the redact satellite, so a quote never leaks a redacted name.
-    var text = (TS.displayText ? TS.displayText(seg) : (seg && seg.text) || "").trim();
+    var text = TS.displayText(seg).trim();
     if (!text) return "";
     if (text.length > maxChars) text = text.slice(0, maxChars - 1).replace(/\s+\S*$/, "") + "…";
     return "“" + text + "”";
@@ -1510,36 +1494,6 @@
     return !(f && f[_frictionMomentCategory(m)] === false);
   }
 
-  // id->index map, rebuilt when segments are replaced; the per-frame drag recompute needs dict hits.
-  var _segIndexMap = null;
-  var _segIndexMapFor = null;
-
-  function _segmentIndexById(id) {
-    if (_segIndexMapFor !== state.segments) {
-      _segIndexMap = {};
-      for (var i = 0; i < state.segments.length; i++) {
-        // First occurrence wins, matching the scan this replaced.
-        if (!(state.segments[i].id in _segIndexMap)) {
-          _segIndexMap[state.segments[i].id] = i;
-        }
-      }
-      _segIndexMapFor = state.segments;
-    }
-    var idx = _segIndexMap[id];
-    return idx === undefined ? -1 : idx;
-  }
-
-  function _seekToSegmentIndex(idx) {
-    var seg = state.segments[idx];
-    if (!seg) return;
-    seekVideo(seg.start);
-    if (!state.cachedSegmentRows) {
-      state.cachedSegmentRows = qs("#segmentList").querySelectorAll(".segment-row");
-    }
-    var row = state.cachedSegmentRows[idx];
-    if (row) scrollToSegment(row);
-  }
-
   // Resolved segment indices a moment cites, in order, valid only.
   function _momentSegmentIndices(m) {
     var idxs = [];
@@ -1619,7 +1573,7 @@
     state.frictionMomentIndex = i;
     renderFrictionJumpStrip();
     // Seek to the FIRST cited segment; the callout closes the passage below.
-    _seekToSegmentIndex(moments[i].idxs[0]);
+    seekToSegmentIndex(moments[i].idxs[0]);
   }
 
   function _stepFrictionMoment(dir) {
@@ -1796,7 +1750,7 @@
     { value: "highlight", icon: "fire", title: "Highlight matching segments in the transcript" },
     { value: "isolate", icon: "funnel", title: "Show only matching segments" },
   ];
-  var FRICTION_MODE_ORDER = ["off", "highlight", "isolate"];
+  var FRICTION_MODE_ORDER = FRICTION_MODES.map(function (m) { return m.value; });
 
   function _frictionMode(v) {
     return v === "highlight" || v === "isolate" ? v : "off";
@@ -1898,14 +1852,7 @@
       (seg ? formatTime(seg.start) + " · " : "") +
       (scoreParts.length ? scoreParts.join(" · ") : "score 0.00")));
     tip.classList.remove("hidden");
-    var tipRect = tip.getBoundingClientRect();
-    var x = clientX + 12;
-    var y = clientY - tipRect.height - 12;
-    if (x + tipRect.width > window.innerWidth - 8) x = window.innerWidth - tipRect.width - 8;
-    if (y < 8) y = clientY + 16;
-    if (y + tipRect.height > window.innerHeight - 8) y = Math.max(8, window.innerHeight - tipRect.height - 8);
-    tip.style.left = x + "px";
-    tip.style.top = y + "px";
+    placeCursorTooltip(tip, clientX, clientY);
     state.frictionTooltipShown = true;
   }
 
@@ -1933,7 +1880,6 @@
   TS._stopSummaryPoll = _stopSummaryPoll;
   TS._stopCitationsPoll = _stopCitationsPoll;
   TS._stopFrictionPoll = _stopFrictionPoll;
-  TS._currentParticipant = _currentParticipant;
   TS._frictionDepMet = _frictionDepMet;
   TS._showFrictionTooltip = _showFrictionTooltip;
   TS._hideFrictionTooltip = _hideFrictionTooltip;

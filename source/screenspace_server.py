@@ -54,7 +54,7 @@ API endpoints (all under /screenspace/):
 """
 
 import atexit
-import binascii
+import contextlib
 import copy
 import json
 import math
@@ -95,7 +95,6 @@ from server_utils import (
 )
 
 
-# Per-tool optional float overrides api_preview reads straight into params.
 def _preview_ref_rect(
     region_coords: dict[str, Any] | None, frame_w: int, frame_h: int
 ) -> dict[str, Any] | None:
@@ -105,26 +104,30 @@ def _preview_ref_rect(
     region; without it the run region doubles as the sample rect — the
     CLI/workflows single-region semantics.
     """
-    ref_region_str = request.args.get("ref_region", "").strip()
-    if ref_region_str:
-        rr_parts = ref_region_str.split(",")
-        if len(rr_parts) == 4:
-            try:
-                rrx, rry, rrw, rrh = (float(p) for p in rr_parts)
-            except ValueError:
-                pass
-            else:
-                region_coords = {
-                    "x": round(rrx * frame_w),
-                    "y": round(rry * frame_h),
-                    "w": round(rrw * frame_w),
-                    "h": round(rrh * frame_h),
-                }
+    with contextlib.suppress(ValueError):
+        region_coords = (
+            _parse_norm_rect(request.args.get("ref_region", ""), frame_w, frame_h)
+            or region_coords
+        )
     ref_mask = _parse_mask_points(request.args.get("ref_mask", "").strip())
     if region_coords is not None and ref_mask:
         region_coords = dict(region_coords)
         region_coords["mask_points"] = ref_mask
     return region_coords
+
+
+def _parse_norm_rect(raw: str, frame_w: int, frame_h: int) -> dict[str, Any] | None:
+    """Pixel rect from normalized "x,y,w,h"; None unless four parts, ValueError if non-numeric."""
+    parts = raw.strip().split(",")
+    if len(parts) != 4:
+        return None
+    x, y, w, h = (float(p) for p in parts)
+    return {
+        "x": round(x * frame_w),
+        "y": round(y * frame_h),
+        "w": round(w * frame_w),
+        "h": round(h * frame_h),
+    }
 
 
 def _parse_mask_points(raw: str) -> list[list[list[float]]]:
@@ -159,34 +162,6 @@ _VALID_STEP_TYPES = (
     "flow",
     "scene",
 )
-
-
-def _template_bgr_and_mask_from_b64(upload_b64: str) -> tuple[Any, Any]:
-    """Decode a base64-encoded image file into a BGR template and optional uint8 mask.
-
-    RGBA inputs yield ``(bgr, alpha_mask)``; RGB/gray yield ``(bgr, None)``.
-
-    Raises:
-        ValueError: invalid base64 or undecodable image bytes.
-    """
-    import base64
-
-    import cv2
-    import numpy as np
-
-    try:
-        img_bytes = base64.b64decode(upload_b64)
-    except (ValueError, binascii.Error) as exc:
-        raise ValueError("Could not decode uploaded image") from exc
-    img_arr = np.frombuffer(img_bytes, dtype=np.uint8)
-    img = cv2.imdecode(img_arr, cv2.IMREAD_UNCHANGED)
-    if img is None:
-        raise ValueError("Invalid image data")
-    if len(img.shape) == 2:
-        return cv2.cvtColor(img, cv2.COLOR_GRAY2BGR), None
-    if img.shape[2] == 4:
-        return cv2.cvtColor(img, cv2.COLOR_BGRA2BGR), img[:, :, 3]
-    return img, None
 
 
 # ---- Module-level state (set once by _init_screenspace_state) ----
@@ -248,17 +223,19 @@ def _notify_sse_clients(event_type: str = "update") -> None:
     _sse_notify(marker=event_type)
 
 
+def _task_state() -> dict[str, Any]:
+    """Slim task list plus worker flags; clients pull results via /api/tasks/<id>/results."""
+    tasks = _worker.get_all_tasks(include_results=False) if _worker else []
+    return {
+        "tasks": [_clean_task(t) for t in tasks],
+        "paused": _worker.is_paused if _worker else False,
+        "worker_alive": _worker.is_alive if _worker else False,
+    }
+
+
 def _sse_task_payload() -> str:
     """Build an SSE data line with current task state."""
-    # Slim ticks: no result lists (clients pull tails via /api/tasks/<id>/results).
-    tasks = _worker.get_all_tasks(include_results=False) if _worker else []
-    clean = [_clean_task(t) for t in tasks]
-    paused = _worker.is_paused if _worker else False
-    alive = _worker.is_alive if _worker else False
-    data = json.dumps(
-        {"ok": True, "tasks": clean, "paused": paused, "worker_alive": alive}
-    )
-    return f"data: {data}\n\n"
+    return f"data: {json.dumps({'ok': True, **_task_state()})}\n\n"
 
 
 # ---- Blueprint ----
@@ -272,7 +249,6 @@ server_utils.register_static_routes(
     # snapshot served dead links.
     media_dir_getter=lambda: str(utils.get_effective_output_dir()),
     media_error="Output directory not configured",
-    icons=True,
 )
 
 remux_server.register_remux_routes(
@@ -375,13 +351,7 @@ def api_participant_notes_set(pid: str) -> FlaskResponse:
 
 @screenspace_bp.route("/api/participants/<pid>/issues")
 def api_participant_issues(pid: str) -> FlaskResponse:
-    """Return up to five Sheet rows tagged to a participant, ranked by severity.
-
-    Returns an empty list when Screenspace runs without a Sheet (no Studio).
-    Mirrors the row construction in ``server.api_sheet`` so the participant
-    column lookup, baseline/filename row skipping, and severity normalization
-    match Studio's view.
-    """
+    """Return up to five Sheet rows for a participant, ranked by severity; empty without a Sheet."""
     if not _participant_exists(pid):
         return err(f"Unknown participant {pid}", 404)
 
@@ -399,29 +369,13 @@ def api_participant_issues(pid: str) -> FlaskResponse:
     p_idx = participants.index(pid)
     col_idx = ctx.id_cell.col + p_idx
 
-    obs_col = ctx.observation_cell.col - 1
-    sev_col = ctx.severity_cell.col - 1 if ctx.severity_cell else None
-
     candidates: list[dict[str, Any]] = []
-    for row_idx in range(ctx.first_data_row_idx, len(ctx.sheet_data)):
-        if ctx.baseline_row_idx is not None and row_idx == ctx.baseline_row_idx:
-            continue
-        if ctx.filename_row_idx is not None and row_idx == ctx.filename_row_idx:
-            continue
-        row_data = ctx.sheet_data[row_idx]
+    for row_idx, row_data, observation, severity in spreadsheet.iter_data_rows(ctx):
         if col_idx >= len(row_data) or not row_data[col_idx].strip():
             continue
         raw_cell = row_data[col_idx].strip()
         ts_pairs = utils.parse_timestamps(raw_cell)
         ts_seconds = utils.timestamp_to_seconds(ts_pairs[0][0]) if ts_pairs else None
-        observation = row_data[obs_col] if obs_col < len(row_data) else ""
-        severity = ""
-        if (
-            sev_col is not None
-            and sev_col < len(row_data)
-            and row_data[sev_col].strip()
-        ):
-            severity = utils.normalize_severity(row_data[sev_col])
         candidates.append(
             {
                 "rowNum": row_idx + 1,
@@ -695,15 +649,6 @@ def _calibration_interval(task_type: str, parameters: dict[str, Any]) -> float:
     return val if val > 0 else float(config.SCREENSPACE_DEFAULT_INTERVAL)
 
 
-def _calibratable_tool(tool: str) -> bool:
-    """A tool is calibratable when it exposes a per-frame scalar (or is multitool)."""
-    if tool == "timelapse" or tool not in _VALID_TASK_TYPES:
-        return False
-    if tool == "multitool":
-        return True
-    return bool(screenspace.TOOLS[tool].score_key)
-
-
 @screenspace_bp.route("/api/calibrate", methods=["POST"])
 @json_endpoint
 def api_calibrate() -> FlaskResponse:
@@ -717,7 +662,11 @@ def api_calibrate() -> FlaskResponse:
     data = require_json_body()
 
     tool = (data.get("tool") or "").strip()
-    if not _calibratable_tool(tool):
+    # Calibratable tools expose a per-frame score; multitool chains them.
+    calibratable = tool in _VALID_TASK_TYPES and (
+        tool == "multitool" or bool(screenspace.TOOLS[tool].score_key)
+    )
+    if not calibratable:
         return err(f"Tool '{tool}' is not calibratable")
 
     # Reuse task-creation validation by reshaping the body into a task request.
@@ -1099,7 +1048,7 @@ def _preview_reference_params(
                 upload_b64 = raw.strip()
     if upload_b64:
         try:
-            bgr, mask = _template_bgr_and_mask_from_b64(upload_b64)
+            bgr, mask = screenspace.decode_reference_image(upload_b64)
         except ValueError:
             return "Could not decode uploaded image"
         params[image_param] = bgr
@@ -1162,26 +1111,17 @@ def api_preview(participant: str, timestamp: str) -> FlaskResponse:
         return err("Could not read frame")
     frame_h, frame_w = frame.shape[:2]
 
-    region_coords: dict[str, Any] | None = None
-    region_str = request.args.get("region", "").strip()
-    if region_str:
-        parts = region_str.split(",")
-        if len(parts) == 4:
-            try:
-                rx, ry, rw, rh = (float(p) for p in parts)
-            except ValueError:
-                return err("Invalid region")
-            region_coords = {
-                "x": round(rx * frame_w),
-                "y": round(ry * frame_h),
-                "w": round(rw * frame_w),
-                "h": round(rh * frame_h),
-            }
-            # Optional contours "u1,v1;u2,v2|..." as bbox-relative fractions; malformed
-            # values fall back to the plain rect.
-            mask_points = _parse_mask_points(request.args.get("mask", "").strip())
-            if mask_points:
-                region_coords["mask_points"] = mask_points
+    region_coords: dict[str, Any] | None
+    try:
+        region_coords = _parse_norm_rect(
+            request.args.get("region", ""), frame_w, frame_h
+        )
+    except ValueError:
+        return err("Invalid region")
+    # Optional bbox-relative contours "u1,v1;u2,v2|..."; malformed values keep the plain rect.
+    mask_points = _parse_mask_points(request.args.get("mask", "").strip())
+    if region_coords is not None and mask_points:
+        region_coords["mask_points"] = mask_points
 
     tool_spec = screenspace.TOOLS.get(tool)
     # Prev frame for temporal-pair tools; the tool names its own gap setting.
@@ -1248,26 +1188,23 @@ def api_preview(participant: str, timestamp: str) -> FlaskResponse:
         layer_img = screenspace_preview.build_overlay_layer(
             frame, prev_frame, region_coords, tool, layer, params
         )
-        if layer_img is None or getattr(layer_img, "size", 0) == 0:
-            return err("Could not build overlay layer", 500)
-        png_bytes = screenspace_preview.encode_png(layer_img, cap_width=False)
-        if not png_bytes:
-            return err("Could not encode overlay", 500)
-        return Response(
-            png_bytes,
-            mimetype="image/png",
-            headers={"Cache-Control": "no-cache"},
-        )
+        return _png_response(layer_img, "overlay layer", cap_width=False)
 
     img = screenspace_preview.build_preview(
         frame, prev_frame, region_coords, tool, params
     )
-    if img is None or getattr(img, "size", 0) == 0:
-        return err("Could not build preview", 500)
+    return _png_response(img, "preview")
 
-    png_bytes = screenspace_preview.encode_png(img)
+
+def _png_response(img: Any, label: str, cap_width: bool = True) -> FlaskResponse:
+    """Uncached PNG response for *img*, or a 500 naming *label*."""
+    import screenspace_preview
+
+    if img is None or getattr(img, "size", 0) == 0:
+        return err(f"Could not build {label}", 500)
+    png_bytes = screenspace_preview.encode_png(img, cap_width=cap_width)
     if not png_bytes:
-        return err("Could not encode preview", 500)
+        return err(f"Could not encode {label}", 500)
     return Response(
         png_bytes,
         mimetype="image/png",
@@ -1366,6 +1303,12 @@ def api_video_info(participant: str) -> FlaskResponse:
     return ok(info=utils.sanitize_floats(info))
 
 
+def _part_path(paths: list[str]) -> str:
+    """Sub-video picked by ``?part=N``; part 0 when absent or out of range."""
+    part = request.args.get("part", type=int)
+    return paths[part] if part is not None and 0 <= part < len(paths) else paths[0]
+
+
 @screenspace_bp.route("/api/video/stream/<participant>")
 def api_video_stream(participant: str) -> FlaskResponse:
     """Stream the source video file for a participant (range-request aware).
@@ -1380,11 +1323,7 @@ def api_video_stream(participant: str) -> FlaskResponse:
     paths = _participant_video_paths(participant)
     if not paths:
         return err_no_video(participant)
-    # ?part=N selects the sub-video for multi-video participants; defaults to part 0.
-    part = request.args.get("part", type=int)
-    video_path = (
-        paths[part] if part is not None and 0 <= part < len(paths) else paths[0]
-    )
+    video_path = _part_path(paths)
     response = send_file(video_path, mimetype="video/mp4", conditional=True)
     response.headers["Cache-Control"] = "no-cache"
     return response
@@ -1396,10 +1335,7 @@ def api_video_audio_track(participant: str, idx: int) -> FlaskResponse:
     paths = _participant_video_paths(participant)
     if not paths:
         return err_no_video(participant)
-    part = request.args.get("part", type=int)
-    video_path = (
-        paths[part] if part is not None and 0 <= part < len(paths) else paths[0]
-    )
+    video_path = _part_path(paths)
     out = video.extract_audio_track(video_path, idx)
     if out is None:
         return err("Could not extract audio track", 500)
@@ -1772,12 +1708,8 @@ def api_tasks_stream() -> FlaskResponse:
 @screenspace_bp.route("/api/tasks")
 def api_tasks_list() -> FlaskResponse:
     """List all tasks with status and progress."""
-    # Polling fallback for the SSE stream — slim, same as _sse_task_payload.
-    tasks = _worker.get_all_tasks(include_results=False) if _worker else []
-    clean = [_clean_task(t) for t in tasks]
-    paused = _worker.is_paused if _worker else False
-    alive = _worker.is_alive if _worker else False
-    return ok(tasks=clean, paused=paused, worker_alive=alive)
+    # Polling fallback for the SSE stream.
+    return ok(**_task_state())
 
 
 @screenspace_bp.route("/api/tasks/<task_id>")
@@ -1926,7 +1858,7 @@ def _coerce_tool_spec(spec: dict[str, Any], tool_type: str, context: str = "") -
     elif tool_type == "color":
         _coerce_color_controls(spec, context=context)
     if tool_type == "template":
-        _coerce_template_controls(spec)
+        _coerce_template_controls(spec, context=context)
     elif tool_type == "shape":
         _coerce_shape_controls(spec, context=context)
 
@@ -1950,68 +1882,6 @@ def _coerce_task_params(task_type: str, parameters: dict[str, Any]) -> dict[str,
         raise ApiError(str(exc)) from exc
 
     return parameters
-
-
-def _extract_tool_media(
-    spec: dict[str, Any],
-    tool_type: str,
-    frame_at: Callable[[float], "Any | None"],
-    region_coords: dict[str, Any],
-    context: str = "",
-) -> None:
-    """Extract the reference frame / template image into one spec.
-
-    Mutates *spec* in place (task params or a multitool step). *frame_at* maps a
-    GLOBAL reference timestamp into the owning sub-video. *context* prefixes error
-    messages (e.g. ``"Step 0: "``). Raises ``ApiError`` (400) on failure. Shared
-    by the task-level and per-step multitool paths.
-    """
-    tool_spec = screenspace.TOOLS.get(tool_type)
-    if tool_spec is not None and tool_spec.reference_region_param:
-        ref_ts = cast(float, spec["reference_timestamp"])
-        frame = frame_at(float(ref_ts))
-        if frame is None:
-            raise ApiError(f"{context}could not read reference frame")
-        spec[tool_spec.reference_region_param] = screenspace.extract_region(
-            frame, region_coords
-        )
-
-    elif tool_spec is not None and tool_spec.reference is not None:
-        body_key, image_param, mask_param = tool_spec.reference
-        upload_b64 = spec.pop(body_key, None)
-        if upload_b64:
-            try:
-                bgr, mask = _template_bgr_and_mask_from_b64(upload_b64)
-            except ValueError as exc:
-                raise ApiError(f"{context}could not decode uploaded image") from exc
-            spec[image_param] = bgr
-            if mask is not None:
-                spec[mask_param] = mask
-        else:
-            ref_ts = cast(float, spec["reference_timestamp"])
-            frame = frame_at(float(ref_ts))
-            if frame is None:
-                raise ApiError(f"{context}could not read {tool_type} reference frame")
-            spec[image_param] = screenspace.extract_region(frame, region_coords)
-            screenspace.attach_capture_mask(
-                spec, image_param, mask_param, region_coords
-            )
-
-    elif tool_type == "scene":
-        scene_refs = cast(list[dict[str, Any]], spec["scene_references"])
-        reference_scenes = []
-        for ref in scene_refs:
-            frame = frame_at(float(ref["timestamp"]))
-            if frame is None:
-                raise ApiError(
-                    f"{context}could not read frame for scene '{ref['name']}'"
-                )
-            ref_region = screenspace.extract_region(frame, region_coords)
-            scene_entry: dict = {"name": ref["name"], "frame": ref_region}
-            if "threshold" in ref:
-                scene_entry["threshold"] = float(ref["threshold"])
-            reference_scenes.append(scene_entry)
-        spec["reference_scenes"] = reference_scenes
 
 
 def _prepare_multitool_steps(
@@ -2041,9 +1911,12 @@ def _prepare_multitool_steps(
         else:
             step["region_coords"] = region_coords  # fallback to top-level
 
-        step_rc = step["region_coords"]
-
-        _extract_tool_media(step, stype, frame_at, step_rc, context=f"Step {i}: ")
+        try:
+            screenspace.extract_tool_media(
+                step, stype, frame_at, step["region_coords"], context=f"Step {i}: "
+            )
+        except ValueError as exc:
+            raise ApiError(str(exc)) from exc
 
     return parameters
 
@@ -2107,7 +1980,10 @@ def _prepare_task_media(
             extract_coords = resolve_region_fn(ref_region, ref_norm)
         else:
             parameters.pop("reference_region", None)
-    _extract_tool_media(parameters, task_type, frame_at, extract_coords)
+    try:
+        screenspace.extract_tool_media(parameters, task_type, frame_at, extract_coords)
+    except ValueError as exc:
+        raise ApiError(str(exc)) from exc
 
     if task_type == "multitool":
         parameters = _prepare_multitool_steps(
@@ -2353,14 +2229,13 @@ def api_intake_poll() -> FlaskResponse:
     polls into a single request. Both reads are the same slim, in-memory ones
     those routes do (no results, no disk I/O). ``?events_version=N`` skips the
     events payload when nothing changed since the client's last tick."""
-    tasks = [
-        _clean_task(t)
-        for t in (_worker.get_all_tasks(include_results=False) if _worker else [])
-    ]
-    running = any(t.get("status") == "running" for t in tasks)
-    queued = any(t.get("status") == "queued" for t in tasks)
-    alive = _worker.is_alive if _worker else False
-    status = {"running": running, "worker_alive": alive, "queued": queued}
+    state = _task_state()
+    statuses = {t.get("status") for t in state["tasks"]}
+    status = {
+        "running": "running" in statuses,
+        "worker_alive": state["worker_alive"],
+        "queued": "queued" in statuses,
+    }
     version, events = _events_payload(
         request.args, _client_events_version(request.args)
     )
@@ -2390,12 +2265,7 @@ def api_export_events() -> FlaskResponse:
     participant = request.args.get("participant")
     detector = request.args.get("detector")
 
-    if excluded_filter == "false":
-        include_excluded = False
-    elif excluded_filter == "true":
-        include_excluded = True
-    else:
-        include_excluded = True
+    include_excluded = excluded_filter != "false"
 
     with _manifest_lock:
         manifest_snapshot = copy.deepcopy(_manifest)
@@ -2535,8 +2405,6 @@ def _coerce_offset(step: dict[str, Any], *, context: str = "") -> None:
 
 def _coerce_template_controls(params: dict[str, Any], *, context: str = "") -> None:
     """Validate template-tool controls: template_scale."""
-    import config
-
     if "template_scale" in params and params["template_scale"] is not None:
         scale = _coerce_float(
             params["template_scale"], "template_scale", context=context
@@ -2561,7 +2429,10 @@ def _coerce_shape_controls(params: dict[str, Any], *, context: str = "") -> None
             val = _coerce_float(params[key], key, context=context)
             if val is None or val <= 0:
                 raise ValueError(f"{context}{key} must be a positive number")
-            params[key] = max(0.1, min(4.0, val))
+            params[key] = max(
+                config.SCREENSPACE_SHAPE_SCALE_LIMIT_MIN,
+                min(config.SCREENSPACE_SHAPE_SCALE_LIMIT_MAX, val),
+            )
         if (
             min_key in params
             and max_key in params
@@ -2575,7 +2446,7 @@ def _coerce_shape_controls(params: dict[str, Any], *, context: str = "") -> None
             steps = int(params[steps_key])
         except (TypeError, ValueError) as exc:
             raise ValueError(f"{context}{steps_key} must be an integer") from exc
-        params[steps_key] = max(1, min(12, steps))
+        params[steps_key] = max(1, min(config.SCREENSPACE_SHAPE_SCALE_STEPS_MAX, steps))
 
 
 def _coerce_ocr_controls(params: dict[str, Any], *, context: str = "") -> None:
@@ -2612,11 +2483,7 @@ def _coerce_ocr_controls(params: dict[str, Any], *, context: str = "") -> None:
 
 
 def _coerce_consecutive(params: dict[str, Any], *, context: str = "") -> None:
-    """Validate the optional require_consecutive control (Text/Numbers/Change/Flow).
-
-    Clamps to [1, 10]; drops the key when it resolves to 1 (the default) so the
-    manifest stays clean.
-    """
+    """Clamp require_consecutive to its limit; drop the default of 1."""
     raw = params.get("require_consecutive")
     if raw is None:
         params.pop("require_consecutive", None)
@@ -2625,7 +2492,7 @@ def _coerce_consecutive(params: dict[str, Any], *, context: str = "") -> None:
         count = int(raw)
     except (TypeError, ValueError) as exc:
         raise ValueError(f"{context}require_consecutive must be an integer") from exc
-    count = max(1, min(10, count))
+    count = max(1, min(config.SCREENSPACE_REQUIRE_CONSECUTIVE_MAX, count))
     if count == 1:
         params.pop("require_consecutive", None)
     else:
@@ -2641,11 +2508,7 @@ def _coerce_color_controls(params: dict[str, Any], *, context: str = "") -> None
     mode or when it resolves to 0 (the default).
     """
     mode = params.get("color_mode")
-    if mode not in ("average", "presence"):
-        params.pop("color_mode", None)
-        params.pop("min_coverage", None)
-        return
-    if mode == "average":
+    if mode != "presence":
         params.pop("color_mode", None)
         params.pop("min_coverage", None)
         return
@@ -2714,42 +2577,6 @@ def _clean_task(task: dict[str, Any]) -> dict[str, Any]:
 # ---- State initialization ----
 
 
-def _backfill_missing_events(manifest: dict[str, Any]) -> None:
-    """Heal manifests where completed tasks have results but no events.
-
-    Why: events are generated only at task completion. Tasks completed before
-    the events system existed (or whose events were lost) leave the frontend
-    unable to render exclude toggles. Backfill so older results behave like
-    new ones.
-    """
-    import screenspace
-
-    events = manifest.setdefault("events", [])
-    task_ids_with_events = {e.get("task_id") for e in events if e.get("task_id")}
-    added = 0
-    for task in manifest.get("tasks", []):
-        if task.get("status") != screenspace.TASK_STATUS_COMPLETED:
-            continue
-        if task.get("id") in task_ids_with_events:
-            continue
-        result = task.get("result")
-        if not isinstance(result, list) or not result:
-            continue
-        new_events = screenspace.generate_events_from_results(task, result)
-        if new_events:
-            events.extend(new_events)
-            added += len(new_events)
-    if added:
-        screenspace.save_screenspace_manifest(
-            manifest.get("regions", {}),
-            manifest.get("tasks", []),
-            events,
-            stashes=manifest.get("stashes", []),
-            per_participant=manifest.get("per_participant", {}),
-            pins=manifest.get("pins") or {},
-        )
-
-
 def _init_screenspace_state(sheet_context: Any = None) -> None:
     """Initialize module-level state for Screenspace routes.
 
@@ -2761,8 +2588,6 @@ def _init_screenspace_state(sheet_context: Any = None) -> None:
     ``server._swap_worksheet`` re-inits this blueprint on every sheet swap, so
     the stored reference is replaced rather than going stale.
     """
-    import screenspace
-
     global _manifest, _worker, _participant_source
 
     # Old worker callbacks resolve globals late and would pollute the new manifest; retire it first.
@@ -2773,7 +2598,6 @@ def _init_screenspace_state(sheet_context: Any = None) -> None:
         _worker.stop(join_timeout=2.0)
 
     _manifest = screenspace.load_screenspace_manifest()
-    _backfill_missing_events(_manifest)
 
     # mtime None forces the first _refresh_participants() call to build.
     _participant_source = {"sheet_context": sheet_context, "dir": "", "mtime": None}
@@ -2792,8 +2616,6 @@ def _init_screenspace_state(sheet_context: Any = None) -> None:
 
 def _do_persist(*, drain_events: bool = True) -> None:
     """Persist manifest to disk — caller must hold _manifest_lock."""
-    import screenspace
-
     if _worker and drain_events:
         new_events = _worker.drain_new_events()
         if new_events:

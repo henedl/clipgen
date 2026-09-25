@@ -16,8 +16,6 @@ def open_native_folder_picker(initial_dir: str = "") -> str | None:
     Returns the chosen folder's absolute path on confirm, ``None`` when the
     user cancels or no native dialog is available on this platform.
     """
-    import subprocess
-
     if sys.platform == "darwin":
         prompt = "Select a folder for clipgen"
         safe_initial = ""
@@ -27,20 +25,15 @@ def open_native_folder_picker(initial_dir: str = "") -> str | None:
                     safe_initial = initial_dir
             except OSError:
                 pass
+        location = ""
         if safe_initial:
-            # Escape backslashes first, then double quotes, for safe embedding
-            # in an AppleScript double-quoted string literal.
+            # Escape backslashes, then quotes, for an AppleScript string literal.
             escaped = safe_initial.replace("\\", "\\\\").replace('"', '\\"')
-            script = (
-                f'set chosenFolder to choose folder with prompt "{prompt}" '
-                f'default location POSIX file "{escaped}"\n'
-                "return POSIX path of chosenFolder"
-            )
-        else:
-            script = (
-                f'set chosenFolder to choose folder with prompt "{prompt}"\n'
-                "return POSIX path of chosenFolder"
-            )
+            location = f' default location POSIX file "{escaped}"'
+        script = (
+            f'set chosenFolder to choose folder with prompt "{prompt}"{location}\n'
+            "return POSIX path of chosenFolder"
+        )
         try:
             result = subprocess.run(
                 ["osascript", "-e", script],

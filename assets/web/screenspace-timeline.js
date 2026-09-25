@@ -10,7 +10,7 @@
  * findTask / focusedTaskId live in screenspace-tasks.js, which loads AFTER this
  * file, so they are called late-bound as SS.findTask(...) / SS.focusedTaskId(...)
  * rather than destructured. formatTime/formatDuration/clamp/hexToRgba/el/qs and
- * the drawTimelineRuler/niceTimeInterval/drawAmplitudeBands canvas helpers are
+ * the drawTimelineRuler/niceTimeInterval canvas helpers are
  * ambient utils.js globals (scope chain); sizeCanvasToDisplay comes from
  * screenspace-utils.js the same way.
  *
@@ -39,8 +39,10 @@
   // CSS-pixel canvas size (set by sizeTimelineCanvas); the backing store is dpr× larger.
   var _timelineCss = { w: 0, h: 0, dpr: 1 };
 
-  // Cached results from state.taskResults (filled by _syncTaskResults), or null until loaded.
-  function _taskResults(task) {
+  // Cached results (filled by _syncTaskResults) for this participant's live tasks, else null.
+  function _visibleResults(task) {
+    if (task.status === "cancelled") return null;
+    if (task.participant && task.participant !== state.selectedParticipant) return null;
     var r = state.taskResults[task.id];
     return Array.isArray(r) ? r : null;
   }
@@ -203,9 +205,7 @@
     qs("#clearMarkersBtn").addEventListener("click", function () {
       state.inMarker = null;
       state.outMarker = null;
-      persistMarkers();
-      updateMarkerInfo();
-      renderTimeline();
+      _commitMarkers();
     });
     qs("#amplitudeGraphBtn").addEventListener("click", function () {
       state.amplitudeGraphEnabled = !state.amplitudeGraphEnabled;
@@ -267,6 +267,12 @@
     } catch (_) { /* sessionStorage may be unavailable */ }
   }
 
+  function _commitMarkers() {
+    persistMarkers();
+    updateMarkerInfo();
+    renderTimeline();
+  }
+
   // Load `pid`'s markers into state (nulls when it has none). Callers repaint.
   function restoreMarkers(pid) {
     var entry = pid ? _readStoredMarkers()[pid] : null;
@@ -283,26 +289,20 @@
     if (state.inMarker !== null && state.inMarker > duration) { state.inMarker = null; changed = true; }
     if (state.outMarker !== null && state.outMarker > duration) { state.outMarker = null; changed = true; }
     if (changed) {
-      persistMarkers();
-      updateMarkerInfo();
-      renderTimeline();
+      _commitMarkers();
     }
   }
 
   function setInMark() {
     state.inMarker = state.currentTimestamp;
     if (state.outMarker !== null && state.inMarker > state.outMarker) state.outMarker = null;
-    persistMarkers();
-    updateMarkerInfo();
-    renderTimeline();
+    _commitMarkers();
   }
 
   function setOutMark() {
     state.outMarker = state.currentTimestamp;
     if (state.inMarker !== null && state.outMarker < state.inMarker) state.inMarker = null;
-    persistMarkers();
-    updateMarkerInfo();
-    renderTimeline();
+    _commitMarkers();
   }
 
   function updateMarkerInfo() {
@@ -406,9 +406,8 @@
     if (ampOn) {
       var seriesByType = {};
       state.tasks.forEach(function (task) {
-        var ampRes = _taskResults(task);
-        if (!ampRes || task.status === "cancelled") return;
-        if (task.participant && task.participant !== state.selectedParticipant) return;
+        var ampRes = _visibleResults(task);
+        if (!ampRes) return;
         if (task.type === "timelapse") return;
         // Boundaries are orientation scaffolding, not events; they render as flags instead.
         if (task.type === "boundary") return;
@@ -419,7 +418,7 @@
         var results = ampRes;
         for (var ri = 0; ri < results.length; ri++) {
           var r = results[ri];
-          var ts = r.timestamp !== undefined ? r.timestamp : r.start;
+          var ts = resultTime(r);
           if (ts !== undefined) dst.push(ts);
         }
       });
@@ -450,9 +449,8 @@
     });
 
     state.tasks.forEach(function (task) {
-      var taskRes = _taskResults(task);
-      if (!taskRes || task.status === "cancelled") return;
-      if (task.participant && task.participant !== state.selectedParticipant) return;
+      var taskRes = _visibleResults(task);
+      if (!taskRes) return;
       var color = taskTypeColor(task.type);
       var dimmed = focused && task.id !== focused;
       var taskExcluded = excludedByTask[task.id] || {};
@@ -476,7 +474,7 @@
         ctx.lineWidth = 1.5;
         var results = taskRes;
         results.forEach(function (r) {
-          var ts = r.timestamp !== undefined ? r.timestamp : r.start;
+          var ts = resultTime(r);
           if (ts === undefined) return;
           var isExcluded = taskExcluded[ts.toFixed(2)];
           var sceneDimmed = task.type === "scene" && state.hoveredResultSceneName !== null
@@ -539,6 +537,89 @@
     renderPlayhead();
   }
 
+  // Stacked per-series bands normalized to their own peaks; dimKey paints last; colors are #rrggbb.
+  function drawAmplitudeBands(ctx, opts) {
+    var x = opts.x, y = opts.y, w = opts.w, h = opts.h;
+    var visStart = opts.visStart, visEnd = opts.visEnd;
+    var series = opts.series || [];
+    var binPx = opts.binPx || 2;
+    var dimKey = opts.dimKey;
+
+    if (w <= 0 || h <= 0 || series.length === 0) return;
+    var visLen = visEnd - visStart;
+    if (!(visLen > 0)) return;
+
+    var numBins = Math.max(1, Math.ceil(w / binPx));
+    var binSec = visLen / numBins;
+
+    // Bin each series and remember its own max
+    var binned = [];
+    for (var s = 0; s < series.length; s++) {
+      var ts = series[s].timestamps || [];
+      var bins = new Array(numBins);
+      for (var b = 0; b < numBins; b++) bins[b] = 0;
+      var maxCount = 0;
+      for (var i = 0; i < ts.length; i++) {
+        var t = ts[i];
+        if (t < visStart || t >= visEnd) continue;
+        var idx = Math.floor((t - visStart) / binSec);
+        if (idx < 0) idx = 0;
+        else if (idx >= numBins) idx = numBins - 1;
+        var c = bins[idx] + 1;
+        bins[idx] = c;
+        if (c > maxCount) maxCount = c;
+      }
+      binned.push({ key: series[s].key, color: series[s].color, bins: bins, max: maxCount });
+    }
+
+    // Order: dimmed series first, focused series last (paints on top)
+    var order = [];
+    for (var k = 0; k < binned.length; k++) {
+      if (dimKey && binned[k].key !== dimKey) order.push(k);
+    }
+    for (var k2 = 0; k2 < binned.length; k2++) {
+      if (!dimKey || binned[k2].key === dimKey) order.push(k2);
+    }
+
+    var baselineY = y + h;
+    for (var oi = 0; oi < order.length; oi++) {
+      var ser = binned[order[oi]];
+      if (ser.max <= 0) continue;
+      var dimmed = dimKey && ser.key !== dimKey;
+      var fillAlpha = dimmed ? 0.05 : 0.18;
+      var strokeAlpha = dimmed ? 0.25 : 1.0;
+
+      // Build the area path along bin tops
+      ctx.beginPath();
+      ctx.moveTo(x, baselineY);
+      for (var bi = 0; bi < numBins; bi++) {
+        var norm = ser.bins[bi] / ser.max;
+        var py = baselineY - norm * h;
+        var px = x + bi * binPx;
+        ctx.lineTo(px, py);
+        ctx.lineTo(px + binPx, py);
+      }
+      ctx.lineTo(x + numBins * binPx, baselineY);
+      ctx.closePath();
+      ctx.fillStyle = hexToRgba(ser.color, fillAlpha);
+      ctx.fill();
+
+      ctx.beginPath();
+      var started = false;
+      for (var bi2 = 0; bi2 < numBins; bi2++) {
+        var n2 = ser.bins[bi2] / ser.max;
+        var py2 = baselineY - n2 * h;
+        var px2 = x + bi2 * binPx;
+        if (!started) { ctx.moveTo(px2, py2); started = true; }
+        else ctx.lineTo(px2, py2);
+        ctx.lineTo(px2 + binPx, py2);
+      }
+      ctx.lineWidth = 1.5;
+      ctx.strokeStyle = strokeAlpha === 1.0 ? ser.color : hexToRgba(ser.color, strokeAlpha);
+      ctx.stroke();
+    }
+  }
+
   // Boundary flags in #boundaryFlagRail, above the result band; rebuilt on every pan/zoom/resize/focus.
   function renderBoundaryFlags(visStart, visLen, w, excludedByTask, focused) {
     var rail = qs("#boundaryFlagRail");
@@ -549,13 +630,12 @@
     var frag = document.createDocumentFragment();
     state.tasks.forEach(function (task) {
       if (task.type !== "boundary") return;
-      var bRes = _taskResults(task);
-      if (!bRes || task.status === "cancelled") return;
-      if (task.participant && task.participant !== state.selectedParticipant) return;
+      var bRes = _visibleResults(task);
+      if (!bRes) return;
       var dimmed = focused && task.id !== focused;
       var taskExcluded = excludedByTask[task.id] || {};
       bRes.forEach(function (r) {
-        var ts = r.timestamp !== undefined ? r.timestamp : r.start;
+        var ts = resultTime(r);
         if (ts === undefined) return;
         var x = ((ts - visStart) / visLen) * w;
         if (x < 0 || x > w) return;
@@ -667,8 +747,7 @@
       icon.style.flexShrink = "0";
       header.appendChild(icon);
     }
-    var label = (hit.task.parameters || {}).event_label || hit.task.name ||
-      hit.task.type.charAt(0).toUpperCase() + hit.task.type.slice(1);
+    var label = (hit.task.parameters || {}).event_label || hit.task.name || toolLabel(hit.task.type);
     header.appendChild(el("strong", "", label));
     tip.appendChild(header);
 
@@ -677,7 +756,7 @@
     if (r.start !== undefined && r.end !== undefined) {
       timeStr = formatTime(r.start, { decimals: 1 }) + " \u2013 " + formatTime(r.end, { decimals: 1 });
     } else {
-      var ts = r.timestamp !== undefined ? r.timestamp : r.start;
+      var ts = resultTime(r);
       timeStr = formatTime(ts, { decimals: 1 });
     }
     tip.appendChild(el("span", "ss-tooltip-time", timeStr));
@@ -720,21 +799,7 @@
     tip.appendChild(details);
 
     tip.classList.remove("hidden");
-    positionSsTooltip(tip, clientX, clientY);
-  }
-
-  function positionSsTooltip(tip, clientX, clientY) {
-    var x = clientX + 12;
-    var y = clientY + 12;
-    var rect = tip.getBoundingClientRect();
-    if (x + rect.width > window.innerWidth - 8) {
-      x = clientX - rect.width - 12;
-    }
-    if (y + rect.height > window.innerHeight - 8) {
-      y = clientY - rect.height - 12;
-    }
-    tip.style.left = x + "px";
-    tip.style.top = y + "px";
+    positionTooltipAtCursor(tip, clientX, clientY);
   }
 
   function hideSsTooltip() {

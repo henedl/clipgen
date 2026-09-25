@@ -18,7 +18,6 @@ _BASELINE = {
     "composer-annotate.js": 10,
     "composer-timeline.js": 3,
     "composer.js": 1,
-    "dev-token-tweak.js": 9,
     "overview-convergence.js": 2,
     "overview-metadata.js": 2,
     "screenspace-color.js": 12,

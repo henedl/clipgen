@@ -214,23 +214,12 @@ console = Console(theme=_CLIPGEN_THEME, highlight=False) if RICH_AVAILABLE else 
 
 def _use_rich() -> bool:
     """Check if Rich output should be used."""
-    return (
-        RICH_AVAILABLE and console is not None and getattr(config, "RICH_COLORS", True)
-    )
-
-
-def _use_panels() -> bool:
-    """Check if Rich panels should be used for errors/warnings/success."""
-    return getattr(config, "RICH_PANELS", True)
+    return RICH_AVAILABLE and console is not None and config.RICH_COLORS
 
 
 def use_progress() -> bool:
     """Check if Rich progress bars should be used."""
-    return (
-        RICH_AVAILABLE
-        and console is not None
-        and getattr(config, "RICH_PROGRESS", True)
-    )
+    return RICH_AVAILABLE and console is not None and config.RICH_PROGRESS
 
 
 # ---- Print functions ----
@@ -249,7 +238,7 @@ def debug_print(message: str) -> None:
 
 def verbose_print(message: str) -> None:
     """Print informational messages when VERBOSITY is set to the highest level."""
-    if getattr(config, "VERBOSITY", config.STANDARD) >= config.VERBOSE:
+    if config.VERBOSITY >= config.VERBOSE:
         if _use_rich() and console is not None:
             console.print(message, style="verbose")
         else:
@@ -258,7 +247,7 @@ def verbose_print(message: str) -> None:
 
 def standard_print(message: str) -> None:
     """Print informational messages for standard verbosity and above."""
-    if getattr(config, "VERBOSITY", config.STANDARD) >= config.STANDARD:
+    if config.VERBOSITY >= config.STANDARD:
         if _use_rich() and console is not None:
             console.print(message, style="verbose")
         else:
@@ -284,7 +273,7 @@ def _styled_print(
             for detail in details:
                 content.append(f"\n  {detail}", style=details_style)
 
-        if panel_border_style and _use_panels():
+        if panel_border_style and config.RICH_PANELS:
             console.print(
                 Panel(content, border_style=panel_border_style, padding=(0, 1))
             )
@@ -448,11 +437,6 @@ class ProgressScope:
         if self.progress is not None:
             self.progress.update(self.task, **kwargs)
 
-    def add_task(self, label: str, total: int) -> Any:
-        if self.progress is None:
-            return None
-        return self.progress.add_task(label, total=total)
-
 
 @contextlib.contextmanager
 def progress_scope(label: str, total: int) -> Iterator[ProgressScope]:
@@ -494,7 +478,7 @@ T = TypeVar("T")
 
 def run_with_spinner(message: str, callback: Callable[[], T]) -> T:
     """Run callback with an indeterminate Rich spinner; if progress disabled, run callback only."""
-    if not use_progress() or not RICH_AVAILABLE or console is None:
+    if not use_progress():
         return callback()
     with Progress(
         SpinnerColumn(),
@@ -511,7 +495,7 @@ def print_mode_heading(label: str, style: str | None = None) -> None:
     style should be a theme key (e.g. 'mode.spreadsheet') so colors render correctly.
     No-op when VERBOSITY is below STANDARD (e.g. CLI mode without -v).
     """
-    if getattr(config, "VERBOSITY", config.STANDARD) < config.STANDARD:
+    if config.VERBOSITY < config.STANDARD:
         return
     if _use_rich() and console is not None and style:
         console.print()
@@ -529,7 +513,7 @@ def print_mode_heading(label: str, style: str | None = None) -> None:
 
 def get_effective_input_dir() -> Path:
     """Return the effective input directory for source videos."""
-    configured = getattr(config, "INPUT_DIR", "") or ""
+    configured = config.INPUT_DIR or ""
     if configured:
         return Path(configured).expanduser()
     return Path.cwd()
@@ -537,7 +521,7 @@ def get_effective_input_dir() -> Path:
 
 def get_effective_output_dir() -> Path:
     """Return the effective output directory for generated artifacts."""
-    configured = getattr(config, "OUTPUT_DIR", "") or ""
+    configured = config.OUTPUT_DIR or ""
     if configured:
         return Path(configured).expanduser()
     return Path.cwd()
@@ -766,10 +750,6 @@ def require_optional(module_name: str, feature_label: str) -> None:
         ) from None
 
 
-# One manifest file, one key per tool section; per-section JSON text cached by
-# (mtime_ns, size).
-
-
 def _lock_fd(fd: int) -> None:
     """Block until *fd* holds an exclusive lock (flock on POSIX, msvcrt on Windows)."""
     if sys.platform == "win32":
@@ -874,6 +854,20 @@ def get_bundled_assets_root() -> Path:
             getattr(sys, "_MEIPASS", str(Path(sys.executable).resolve().parent))
         )
     return Path(__file__).resolve().parent.parent
+
+
+def frozen_layout() -> tuple[str | None, Path]:
+    """Classify a frozen build: ("mac-app", bundle), ("one-dir", exe_dir), or (None, exe_dir)."""
+    exe_dir = Path(sys.executable).resolve().parent
+    if exe_dir.name == "MacOS" and exe_dir.parent.name == "Contents":
+        bundle = exe_dir.parent.parent
+        if bundle.suffix == ".app":
+            return "mac-app", bundle
+    # One-dir: _MEIPASS is lib/ under the exe dir; one-file's temp dir never matches.
+    meipass = getattr(sys, "_MEIPASS", None)
+    if meipass and Path(meipass).resolve().parent == exe_dir:
+        return "one-dir", exe_dir
+    return None, exe_dir
 
 
 @functools.cache
@@ -1000,7 +994,7 @@ def sanitize_filename(text: str) -> str:
 @functools.cache
 def get_known_annotation_map() -> dict[str, str]:
     """Return configured annotation tokens mapped to normalized annotation IDs."""
-    configured_map = getattr(config, "ANNOTATION_KEYPHRASES", {"!key": "key"})
+    configured_map = config.ANNOTATION_KEYPHRASES
     normalized_map: dict[str, str] = {}
     for token, annotation_id in configured_map.items():
         normalized_map[str(token).strip().lower()] = str(annotation_id).strip().lower()
@@ -1259,193 +1253,6 @@ def pick_worksheet_title(
     return None
 
 
-def _resolve_segment_source_fields(
-    clip: "ClipRecord",
-    base_video: str,
-    start_str: str,
-    end_str: str,
-    *,
-    allow_split: bool,
-) -> dict[str, Any]:
-    """Resolve the source-video fields for one persisted segment record.
-
-    ``sourceVideo`` is always a **basename** (matching ``pipeline.cut_global_range``);
-    regeneration resolves it against the input dir via ``resolve_input_path``.
-    Single-video (no ``source_timeline``): ``sourceVideo`` is *base_video*'s
-    basename and the local times equal the global times. Multi-video: the global
-    ``[start, end]`` is mapped onto ``clip['source_timeline']`` into the owning
-    sub-video plus local offsets. When *allow_split* is True (video clips) and the
-    range straddles a recording boundary, a ``parts`` list describes each piece so
-    it can be re-cut and stitched; ``sourceVideo``/``localStart``/``localEnd``
-    carry the first piece. When *allow_split* is False (screenshots/GIFs/
-    transcripts) a single frame's position maps by start only — never split.
-
-    ``start``/``end`` (global seconds) stay on the record for the timeline
-    viewer; these fields drive regeneration, which re-cuts from ``sourceVideo``.
-    """
-    global_start = timestamp_to_seconds(start_str) or 0.0
-    global_end = timestamp_to_seconds(end_str) or 0.0
-    timeline = clip.get("source_timeline")
-    if not timeline or len(timeline) < 2:
-        return {
-            "sourceVideo": Path(base_video).name,
-            "localStart": global_start,
-            "localEnd": global_end,
-        }
-
-    if allow_split:
-        pieces = map_global_range_to_segments(timeline, global_start, global_end)
-        if pieces:
-            parts = [
-                {
-                    "sourceVideo": Path(timeline[index][0]).name,
-                    "localStart": local_start,
-                    "localEnd": local_end,
-                }
-                for index, local_start, local_end in pieces
-            ]
-            first = parts[0]
-            fields: dict[str, Any] = {
-                "sourceVideo": first["sourceVideo"],
-                "localStart": first["localStart"],
-                "localEnd": first["localEnd"],
-            }
-            if len(parts) > 1:
-                fields["parts"] = parts
-            return fields
-        return {
-            "sourceVideo": Path(base_video).name,
-            "localStart": global_start,
-            "localEnd": global_end,
-        }
-
-    mapped = map_global_to_segment(timeline, global_start)
-    if mapped is None:
-        return {
-            "sourceVideo": Path(base_video).name,
-            "localStart": global_start,
-            "localEnd": global_end,
-        }
-    index, local_start = mapped
-    seg_duration = timeline[index][1]
-    local_end = min(float(seg_duration), local_start + (global_end - global_start))
-    return {
-        "sourceVideo": Path(timeline[index][0]).name,
-        "localStart": local_start,
-        "localEnd": local_end,
-    }
-
-
-def _clip_metadata_fields(
-    clip: "ClipRecord",
-    base_video: str,
-    start_str: str,
-    end_str: str,
-    *,
-    allow_split: bool = False,
-) -> dict[str, Any]:
-    """Extract the shared per-segment metadata that every persisted record needs.
-
-    Used by both ``build_artifact_record`` (manifest artifacts) and
-    ``build_reel_component`` (reel-component records). The two shapes only differ
-    by file-specific fields (id/file/type/thumbnail), so the body of every
-    persisted record flows from one place.
-
-    ``start``/``end`` are GLOBAL seconds (the timeline viewer positions artifacts
-    by them). ``sourceVideo``/``localStart``/``localEnd`` (and ``parts`` for a
-    boundary-spanning clip) describe where the segment was actually cut from and
-    drive regeneration — see :func:`_resolve_segment_source_fields`.
-    """
-    cell = clip.get("cell")
-    cell_row = getattr(cell, "row", None)
-    cell_col = getattr(cell, "col", None)
-    fields: dict[str, Any] = {
-        "start": timestamp_to_seconds(start_str),
-        "end": timestamp_to_seconds(end_str),
-        "study": clip.get("study", ""),
-        "participant": clip.get("participant", ""),
-        "category": clip.get("category", ""),
-        "severity": clip.get("severity", ""),
-        "description": clip.get("desc", ""),
-        "cellRow": cell_row,
-        "cellCol": cell_col,
-        "cellA1": safe_cell_a1(cell_row, cell_col),
-        "annotations": list(clip.get("cell_annotations", [])),
-    }
-    fields.update(
-        _resolve_segment_source_fields(
-            clip, base_video, start_str, end_str, allow_split=allow_split
-        )
-    )
-    return fields
-
-
-def build_artifact_record(
-    clip: "ClipRecord",
-    base_video: str,
-    out_path: str,
-    start_str: str,
-    end_str: str,
-    *,
-    artifact_type: str,
-    seg_idx: int,
-) -> dict[str, Any]:
-    """Build one artifact dict from a clip record + one segment.
-
-    Single source of truth for the artifact record shape used by clipgen_manifest
-    and the timeline viewer. Callers may add or override fields after the call
-    (e.g. transcripts append ``transcriptFormat``).
-
-    The artifact id is built from ``cell.row`` / ``cell.col`` (plus the type for
-    non-clips) and is the manifest dedup key. Callers must therefore provide either a real spreadsheet cell
-    (positive row/col) or a synthetic cell with a unique ``(row, col)`` pair —
-    see ``_make_synthetic_clip_record`` in ``cli.py``, which mints negative
-    rows namespaced per-mode by ``cell_col``. Passing ``cell=None`` or a stub
-    without ``.row``/``.col`` raises ``ValueError`` to prevent silent id
-    collisions (two such records with the same ``seg_idx`` would dedup against
-    each other in ``viewer.save_manifest``).
-    """
-    cell = clip.get("cell")
-    cell_row = getattr(cell, "row", None)
-    cell_col = getattr(cell, "col", None)
-    if cell_row is None or cell_col is None:
-        raise ValueError(
-            "build_artifact_record requires a cell with row and col; "
-            "synthetic records must use a unique (row, col) pair — see "
-            "_make_synthetic_clip_record in cli.py for the negative-row "
-            "convention."
-        )
-    # A cell's clip, screenshot and GIF must not share an id.
-    type_suffix = "" if artifact_type == "clip" else f"-{artifact_type}"
-    return {
-        "id": f"a{cell_row}c{cell_col}s{seg_idx}{type_suffix}",
-        "type": artifact_type,
-        "file": Path(out_path).name,
-        "thumbnail": "",
-        # Only video clips may span a recording boundary; screenshots and GIFs map
-        # by start.
-        **_clip_metadata_fields(
-            clip, base_video, start_str, end_str, allow_split=(artifact_type == "clip")
-        ),
-    }
-
-
-def build_reel_component(
-    clip: "ClipRecord",
-    base_video: str,
-    start_str: str,
-    end_str: str,
-) -> dict[str, Any]:
-    """Build one reel-component dict from a clip record + one segment.
-
-    Reel components describe an input segment used to assemble a reel — they
-    share the artifact record's per-segment metadata shape but omit the
-    file/id/type fields (the rendered output is the reel itself, not the
-    component). Stored in the ``components`` list of a reel manifest entry.
-    """
-    return _clip_metadata_fields(clip, base_video, start_str, end_str, allow_split=True)
-
-
 # ---- Timestamp parsing pipeline ----
 #
 # Reading order: token splitting → add_duration → _parse_single_timestamp_token
@@ -1478,7 +1285,7 @@ def _clean_timestamp_token(token: str) -> str:
 @functools.cache
 def get_ignored_timestamp_tokens() -> set[str]:
     """Return configured ignored non-timestamp tokens in normalized form."""
-    configured_tokens = getattr(config, "IGNORED_TIMESTAMP_TOKENS", set())
+    configured_tokens = config.IGNORED_TIMESTAMP_TOKENS
     normalized_tokens: set[str] = set()
     for token in configured_tokens:
         cleaned = _clean_timestamp_token(str(token).strip().lower())
@@ -1648,6 +1455,17 @@ def timestamp_to_seconds(ts_str: str) -> float | None:
     )
 
 
+def times_to_spans(pairs: Any) -> list[tuple[float, float]]:
+    """Timestamp string pairs to ``(start, end)`` seconds; unparseable pairs are skipped."""
+    spans: list[tuple[float, float]] = []
+    for start_str, end_str in pairs:
+        start = timestamp_to_seconds(start_str)
+        end = timestamp_to_seconds(end_str)
+        if start is not None and end is not None:
+            spans.append((start, max(start, end)))
+    return spans
+
+
 def parse_timestamps(
     cell_value: str, cell_ref: str | None = None
 ) -> list[tuple[str, str]]:
@@ -1689,7 +1507,7 @@ def parse_timestamps(
         if config.DEBUGGING:
             config.debug_ic(skipped_timestamps)
         # Only show detailed skipped-timestamp warnings at verbose verbosity.
-        if getattr(config, "VERBOSITY", config.STANDARD) >= config.VERBOSE:
+        if config.VERBOSITY >= config.VERBOSE:
             cell_info = f" in cell {cell_ref}" if cell_ref else ""
             details = []
             for ts in skipped_timestamps[: config.MAX_SKIPPED_TIMESTAMPS_TO_SHOW]:
@@ -1906,7 +1724,7 @@ def convert_clock_pairs_to_relative(
         cell_info = f" in cell {cell_ref}" if cell_ref else ""
         # Standard verbosity: short summary so users notice silent drops.
         # Verbose: full list and explanation.
-        verbosity = getattr(config, "VERBOSITY", config.STANDARD)
+        verbosity = config.VERBOSITY
         if verbosity >= config.VERBOSE:
             details = [f"    '{s}'" for s in skipped]
             details.append(
@@ -2090,102 +1908,11 @@ def suggest_close_match(
     return None
 
 
-def set_program_settings() -> bool:
-    """Interactive settings screen with grid display and type-safe value changes.
-
-    Returns:
-        True if a setting was changed, False otherwise.
-    """
-    settings_list = list(config.SETTINGS_DESCRIPTIONS.keys())
-
-    if _use_rich() and console is not None:
-        table = Table(
-            show_header=True,
-            header_style="bold cyan",
-            border_style="dim",
-            expand=False,
-        )
-        table.add_column("#", justify="right", style="bold", width=3)
-        table.add_column("Setting", style="yellow", min_width=12)
-        table.add_column("Value", style="green", min_width=6)
-        table.add_column("Description", max_width=60, overflow="fold")
-        for i, name in enumerate(settings_list, 1):
-            table.add_row(
-                str(i),
-                name,
-                str(getattr(config, name, "?")),
-                config.SETTINGS_DESCRIPTIONS[name],
-            )
-        console.print(table)
-    else:
-        for i, name in enumerate(settings_list, 1):
-            val = getattr(config, name, "?")
-            info_print(
-                f"  {i:>2}. {name:<30} = {val!s:<10}  {config.SETTINGS_DESCRIPTIONS[name]}"
-            )
-
-    choice = read_user_input(
-        "\nSetting to change (number or name, or empty to go back):\n>> "
-    )
-    if not choice:
-        return False
-
-    setting_name = None
-    if choice.isdigit():
-        idx = int(choice) - 1
-        if 0 <= idx < len(settings_list):
-            setting_name = settings_list[idx]
-    else:
-        upper = choice.strip().upper()
-        if upper in config.SETTINGS_DESCRIPTIONS:
-            setting_name = upper
-
-    if setting_name is None:
-        error_print(f"Unknown setting: '{choice}'")
-        return False
-
-    current_value = getattr(config, setting_name)
-    info_print(f"  Current value: {current_value!r}")
-    info_print(f"  {config.SETTINGS_DESCRIPTIONS[setting_name]}")
-
-    new_raw = read_user_input("\nNew value (empty to cancel):\n>> ")
-    if not new_raw:
-        return False
-
-    current_type = type(current_value)
-    try:
-        if current_type is bool:
-            converted = new_raw.strip().lower() in ("true", "1", "yes", "on")
-        elif current_type is int:
-            converted = int(new_raw)
-        elif current_type is float:
-            converted = float(new_raw)
-        else:
-            converted = new_raw
-    except (ValueError, TypeError):
-        error_print(f"Invalid value '{new_raw}' for type {current_type.__name__}")
-        return False
-
-    # Prompts are .format()-ed at agent runtime; validate here or the KeyError
-    # surfaces mid-run.
-    meta = config.STUDIO_SETTINGS.get(setting_name) or {}
-    if meta.get("type") == "prompt":
-        prompt_err = validate_prompt(str(converted), meta.get("placeholders") or [])
-        if prompt_err is not None:
-            error_print(f"Invalid prompt: {prompt_err}")
-            return False
-    # Same for the filename template: unvalidated, it surfaces as a broken
-    # participant list.
-    if setting_name == "SOURCE_FILENAME_PATTERN":
-        converted = str(converted).strip()
-        pattern_err = validate_source_filename_pattern(converted)
-        if pattern_err is not None:
-            error_print(f"Invalid pattern: {pattern_err}")
-            return False
-
-    setattr(config, setting_name, converted)
-    info_print(f"  '{setting_name}' set to {converted!r}")
-    return True
+def coerce_bool(value: Any) -> bool:
+    """Bools pass through; strings like 'true'/'1'/'yes'/'on' are True."""
+    if isinstance(value, bool):
+        return value
+    return str(value).strip().lower() in ("true", "1", "yes", "on")
 
 
 def validate_prompt(text: str, placeholders: list[str]) -> str | None:
@@ -2245,15 +1972,6 @@ def format_filesize(size_bytes: float, precision: int = 2) -> str:
         suffix_index += 1
         size_bytes = size_bytes / 1024
     return f"{size_bytes:.{precision}f}{suffixes[suffix_index]}"
-
-
-def get_current_time() -> str:
-    """Get current time as formatted string.
-
-    Returns:
-        Current time in format 'YYYY-MM-DD HH:MM:SS'
-    """
-    return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
 
 # ISO 639-1 -> 639-2/T for every Whisper language. /T deliberately: players want
@@ -2445,16 +2163,6 @@ def parse_source_video_name(name: str) -> tuple[str, str, int | None] | None:
     return (groups.get("study") or "", pid, int(part) if part else None)
 
 
-def participant_id_from_source_name(name: str) -> str | None:
-    """Extract the participant id from a source-video filename, or None.
-
-    Thin wrapper over :func:`parse_source_video_name`; a numbered ``-N`` part
-    groups under its base participant id.
-    """
-    parsed = parse_source_video_name(name)
-    return parsed[1] if parsed else None
-
-
 # Keyed dir -> (mtime_ns, pattern, fileformat, result); settings PUTs change
 # pattern/fileformat without touching the dir.
 _discover_videos_cache: dict[
@@ -2463,7 +2171,7 @@ _discover_videos_cache: dict[
 _discover_videos_lock = threading.Lock()
 
 
-def discover_participant_videos(study_name: str = "") -> list[dict[str, Any]]:
+def discover_participant_videos() -> list[dict[str, Any]]:
     """Scan the input directory and return one entry per participant.
 
     A participant's session may span several files (a recording that broke off,

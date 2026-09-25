@@ -1,7 +1,8 @@
-"""Combined Flask server for clipgen Studio, Screenspace, Transcripts, and Workflows.
+"""Combined Flask server for every clipgen web tool.
 
-Entry point: start_combined_server(worksheet, port, default_page) registers
-Studio, Screenspace, Transcripts, and Workflows blueprints on one app at config.SERVER_PORT (8089).
+Entry point: start_combined_server(worksheet, port, default_page) registers the
+Studio, Screenspace, Transcripts, Workflows, Composer, and Overview blueprints on
+one app at config.SERVER_PORT (8089).
 Module-level state: _worksheet, _sheet_context, _generated_artifacts, _generated_reels
 (initialized by _init_studio_state()).
 
@@ -12,7 +13,7 @@ Studio API endpoints (studio_bp, mounted under /studio/):
   Sheet  GET  /api/sheet               – spreadsheet grid data (rows, participants, timestamps)
          POST /api/sheet/refresh       – re-fetch spreadsheet data from source (Google/Excel)
          GET  /api/sheet/baseline      – per-participant baseline timestamps for convergence
-         GET/PUT /api/convergence/offsets – read/persist per-participant convergence offsets
+         GET  /api/mindnode            – active MindNode document for the intake tab
   Build  POST /api/generate            – generate clip/screen/gif artifacts for cells
          POST /api/generate/cancel     – cancel an in-progress clip generation
          POST /api/generate-intake     – generate artifacts from an intake/screenspace manifest
@@ -24,23 +25,24 @@ Studio API endpoints (studio_bp, mounted under /studio/):
          GET  /api/job-status          – poll the status of a background build job
   Export POST /api/viewer              – generate timeline viewer from session artifacts
          POST /api/open-viewer         – open an already-generated viewer HTML
+         POST /api/reveal-artifact     – show an artifact in the OS file browser
          POST /api/timeline-viewer     – batch-export all clips and generate timeline viewer
          POST /api/timeline-viewer/cancel – cancel a batch timeline-viewer export
          POST /api/gallery             – generate gallery from a video file
          POST /api/gallery/cancel      – cancel a gallery build
-  State  GET/POST /api/manifest        – read or write the cumulative artifact manifest
-         POST /api/regenerate          – regenerate all media from saved manifest
+  State  GET  /api/manifest            – read the cumulative artifact manifest
          GET/POST /api/stashes         – reel stash CRUD
          GET/POST /api/artifact-stashes – artifact stash CRUD
-  Cards  GET  /api/titlecards          – list title/end card background options
-         GET  /api/titlecards/default/<kind> – default title/end card image
-         GET/DELETE /api/titlecards/image/<path:name> – fetch or remove an uploaded card
-         POST /api/titlecards/upload   – upload a title/end card background
   Config GET/PUT /api/settings         – read or update config settings
 
 Combined app-level routes (registered by start_combined_server, not under /studio/):
+  GET/PUT /api/settings         – settings, re-mounted for every page
+  GET  /api/titlecards          – list title/end card background options
+  GET  /api/titlecards/default/<kind> – default title/end card image
+  GET/DELETE /api/titlecards/image/<path:name> – fetch or remove an uploaded card
+  POST /api/titlecards/upload   – upload a title/end card background
   GET  /                        – Start overlay / active-tool landing page
-  GET  /api/status              – which interfaces are active (studio/screenspace/transcripts)
+  GET  /api/status              – sheet, directories, and version for every page
   GET  /api/export/status, POST /api/export – analysis-ready JSON/CSV export
   GET/POST /api/dirs            – input/output directory picker
   GET  /api/spreadsheets/excel|google – spreadsheet discovery
@@ -49,6 +51,7 @@ Combined app-level routes (registered by start_combined_server, not under /studi
 
 import concurrent.futures
 import copy
+import functools
 import hashlib
 import json
 import os
@@ -81,7 +84,12 @@ from flask import (
     send_from_directory,
 )
 from flask.json.provider import DefaultJSONProvider
-from werkzeug.serving import ThreadedWSGIServer, WSGIRequestHandler, make_server
+from werkzeug.serving import (
+    BaseWSGIServer,
+    ThreadedWSGIServer,
+    WSGIRequestHandler,
+    make_server,
+)
 
 import config
 import files
@@ -109,7 +117,7 @@ from server_utils import (
     parse_number_arg,
     remove_by_id,
 )
-from datetime import UTC
+from datetime import UTC, datetime
 
 FlaskResponse = Response | tuple[Response, int]
 _SERVER_POLL_INTERVAL = 0.5
@@ -273,12 +281,9 @@ def _coerce_mark_categories(value: Any) -> dict[str, dict[str, str]] | None:
     return cleaned
 
 
-# Alias keeps the `server._MediaCache` name for tests.
-_MediaCache = MediaCache
-
-_thumbnail_cache = _MediaCache(_THUMBNAIL_CACHE_MAX)
-_sprite_cache = _MediaCache(_SPRITE_CACHE_MAX)
-_audio_cache = _MediaCache(_AUDIO_CACHE_MAX)
+_thumbnail_cache = MediaCache(_THUMBNAIL_CACHE_MAX)
+_sprite_cache = MediaCache(_SPRITE_CACHE_MAX)
+_audio_cache = MediaCache(_AUDIO_CACHE_MAX)
 
 
 def _try_claim_busy(slot: str) -> str | None:
@@ -297,6 +302,15 @@ def _try_claim_busy(slot: str) -> str | None:
         return token
 
 
+def _positive_int(raw: Any) -> int | None:
+    """Parse *raw* as an int; None unless it is positive."""
+    try:
+        val = int(raw)
+    except (ValueError, TypeError):
+        return None
+    return val if val > 0 else None
+
+
 def _parse_titlecard_request(
     data: dict[str, Any],
 ) -> tuple[bool | None, int | None]:
@@ -304,16 +318,7 @@ def _parse_titlecard_request(
     enabled: bool | None = None
     if data.get("titlecards_enabled") is not None:
         enabled = bool(data["titlecards_enabled"])
-    duration: int | None = None
-    raw_duration = data.get("titlecard_duration")
-    if raw_duration is not None:
-        try:
-            val = int(raw_duration)
-            if val > 0:
-                duration = val
-        except (ValueError, TypeError):
-            pass
-    return enabled, duration
+    return enabled, _positive_int(data.get("titlecard_duration"))
 
 
 def _index_artifact(a: dict[str, Any]) -> None:
@@ -342,22 +347,11 @@ def _extend_generated_artifacts(artifacts: list[dict[str, Any]]) -> None:
             _index_artifact(a)
 
 
-def _append_generated_artifact(artifact: dict[str, Any]) -> None:
-    with _generated_output_lock:
-        _generated_artifacts.append(artifact)
-        _index_artifact(artifact)
-
-
 def _extend_generated_reels(reels: list[dict[str, Any]]) -> None:
     if not reels:
         return
     with _generated_output_lock:
         _generated_reels.extend(reels)
-
-
-def _append_generated_reel(reel: dict[str, Any]) -> None:
-    with _generated_output_lock:
-        _generated_reels.append(reel)
 
 
 def _release_busy(slot: str, token: str | None = None) -> None:
@@ -409,40 +403,18 @@ def _record_reel_event(event: dict[str, Any]) -> None:
             _reel_job_state["concat_progress"] = 1.0
 
 
-def _reset_generate_job_state(total: int) -> None:
-    """Initialize the generate progress snapshot when /api/generate starts.
-
-    *total* counts artifacts (one per timestamp segment), matching the Studio
-    queue's card count — not cells, and not yielded NDJSON lines.
-    """
+def _reset_job_state(state: dict[str, Any], total: int) -> None:
+    """Start a generate or intake progress snapshot; *total* counts artifacts."""
     with _job_state_lock:
-        _generate_job_state["total"] = max(0, int(total))
-        _generate_job_state["done"] = 0
-        _generate_job_state["started_at"] = time.time()
+        state["total"] = max(0, int(total))
+        state["done"] = 0
+        state["started_at"] = time.time()
 
 
-def _increment_generate_done(n: int = 1) -> None:
-    """Advance the generate-job 'done' counter by n artifacts.
-
-    One yielded line covers a whole cell, so callers pass that cell's segment
-    count rather than 1.
-    """
+def _bump_job_done(state: dict[str, Any], n: int = 1) -> None:
+    """Advance a job's 'done' counter; generate passes a cell's segment count."""
     with _job_state_lock:
-        _generate_job_state["done"] += n
-
-
-def _reset_intake_job_state(total: int) -> None:
-    """Initialize the intake progress snapshot when /api/generate-intake starts."""
-    with _job_state_lock:
-        _intake_job_state["total"] = max(0, int(total))
-        _intake_job_state["done"] = 0
-        _intake_job_state["started_at"] = time.time()
-
-
-def _increment_intake_done(n: int = 1) -> None:
-    """Advance the intake-job 'done' counter by n (one per yielded line)."""
-    with _job_state_lock:
-        _intake_job_state["done"] += n
+        state["done"] += n
 
 
 def _mark_intake_active(active: bool) -> None:
@@ -487,7 +459,6 @@ studio_bp = Blueprint("studio", __name__)
 server_utils.register_static_routes(
     studio_bp,
     "studio.html",
-    icons=True,
     media_dir_getter=lambda: str(utils.get_effective_output_dir()),
 )
 
@@ -528,22 +499,10 @@ def api_thumbnail(participant: str, start_seconds: str) -> FlaskResponse:
 
     # Second-granular: floor fractions and clamp negatives, like the other media routes.
     start_sec = max(0, parse_number_arg(start_seconds, "timestamp", int_only=True))
-    sources = _resolve_participant_sources(participant)
-    if not sources or not sources[0].is_file():
+    resolved = _resolve_clip_media_source(participant, start_sec)
+    if resolved is None:
         return err("Source video not found", 404)
-
-    # Multi-video: map the global second into the owning part's local offset.
-    cut_sec = start_sec
-    video_path = sources[0]
-    if len(sources) >= 2:
-        timeline = video.build_source_timeline([str(p) for p in sources])
-        if timeline is None:
-            return err("Source video not found", 404)
-        mapped = utils.resolve_timeline_segment(timeline, start_sec)
-        if mapped is None:
-            return err("Timestamp beyond recording", 404)
-        video_path = Path(mapped[0])
-        cut_sec = int(mapped[1])
+    video_path, cut_sec = resolved[0], int(resolved[1])
 
     # Include mtime so replacing a source file on disk invalidates stale thumbnails.
     cache_key = (str(video_path), cut_sec, mtime_or_zero(video_path))
@@ -566,12 +525,7 @@ def api_thumbnail(participant: str, start_seconds: str) -> FlaskResponse:
 def _resolve_clip_media_source(
     participant: str, start_sec: float
 ) -> tuple[Path, float] | None:
-    """Resolve ``(video_path, local_start_seconds)`` for a participant timestamp.
-
-    Mirrors api_thumbnail's source resolution: maps a global second into the
-    owning sub-video for multi-video participants. Returns ``None`` when no
-    source video exists or the timestamp is beyond the recording.
-    """
+    """Map a participant timestamp to ``(video_path, local_start)``; None when unresolvable."""
     sources = _resolve_participant_sources(participant)
     if not sources or not sources[0].is_file():
         return None
@@ -645,24 +599,9 @@ def _build_sheet_payload(ctx: spreadsheet.SheetContext) -> dict[str, Any]:
     )
 
     rows: list[dict[str, Any]] = []
-    for row_idx in range(ctx.first_data_row_idx, len(ctx.sheet_data)):
-        if ctx.baseline_row_idx is not None and row_idx == ctx.baseline_row_idx:
-            continue
-        if ctx.filename_row_idx is not None and row_idx == ctx.filename_row_idx:
-            continue
-
-        row_data = ctx.sheet_data[row_idx]
-        obs_col = ctx.observation_cell.col - 1
-        cat_col = ctx.category_cell.col - 1
-
-        observation = row_data[obs_col] if obs_col < len(row_data) else ""
+    cat_col = ctx.category_cell.col - 1
+    for row_idx, row_data, observation, severity in spreadsheet.iter_data_rows(ctx):
         category = row_data[cat_col] if cat_col < len(row_data) else ""
-
-        severity = ""
-        if ctx.severity_cell:
-            sev_col = ctx.severity_cell.col - 1
-            if sev_col < len(row_data) and row_data[sev_col].strip():
-                severity = utils.normalize_severity(row_data[sev_col])
 
         cells: dict[str, dict[str, Any]] = {}
         row_keywords: set[str] = set()
@@ -928,7 +867,9 @@ def _save_manifest_quiet() -> None:
             removed_ids=removed_ids,
             study=study,
             worksheet_title=getattr(_worksheet, "title", ""),
-            is_excel=pipeline.is_excel_worksheet(_worksheet) if _worksheet else False,
+            is_excel=spreadsheet.is_excel_worksheet(_worksheet)
+            if _worksheet
+            else False,
             mode="studio",
         )
     except (OSError, TypeError, ValueError) as e:
@@ -998,8 +939,6 @@ def _process_intake_item(
     if not video_paths:
         return {"_ok": False, "_error": f"No video for {participant}"}
     timeline = video.timeline_or_none(video_paths)
-
-    out_path: str | None = None
 
     span_hash = hashlib.md5(f"{participant}_{start}_{end}".encode()).hexdigest()[:8]
     # Fold source metadata and batch index into the id: distinct events can share a span.
@@ -1079,8 +1018,6 @@ def _process_intake_item(
             description = item_label
         elif item_text:
             description = item_text if len(item_text) <= 80 else item_text[:77] + "…"
-        else:
-            description = event_type or default_desc
     artifact: dict[str, Any] = {
         "id": f"intake_{id_hash}_s0",
         "type": output_format,
@@ -1115,28 +1052,11 @@ def _process_intake_item(
     if source == "transcript":
         import transcripts_server
 
-        with transcripts_server._manifest_lock:
-            src_entry = transcripts_server._manifest.get("source_transcripts", {}).get(
-                participant, {}
-            )
-            transcript_text = item_text
-            if not transcript_text and mark_ids:
-                # Fallback: marks name segments; join those segments' text.
-                mark_set = set(mark_ids)
-                wanted = {
-                    m.get("segment_id")
-                    for m in transcripts_server._manifest.get("marks", []) or []
-                    if isinstance(m, dict) and m.get("id") in mark_set
-                }
-                parts: list[str] = []
-                for seg in src_entry.get("segments", []) or []:
-                    if seg.get("id") in wanted:
-                        t = (seg.get("text") or "").strip()
-                        if t:
-                            parts.append(t)
-                transcript_text = " ".join(parts)
-        artifact["transcript_version"] = src_entry.get("transcribed_at", "")
-        artifact["transcriptText"] = transcript_text
+        version, joined = transcripts_server.intake_transcript(
+            participant, [] if item_text else mark_ids
+        )
+        artifact["transcript_version"] = version
+        artifact["transcriptText"] = item_text or joined
         if item_label:
             artifact["transcriptLabel"] = item_label
     return artifact
@@ -1169,29 +1089,15 @@ def _generate_intake_clips(
         ]
 
     results: list[dict[str, Any]] = [{} for _ in items]
-    # See pipeline._parallel_map_ordered for what this label pair buys.
-    _worker = profiling.bind(profiling.timed("pipeline.clip")(_process_intake_item))
-    with (
-        profiling.span("pipeline.pool_wall"),
-        concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool,
-    ):
-        future_to_idx = {
-            pool.submit(
-                _worker,
-                item,
-                output_format,
-                study,
-                index=idx,
-                cancel_flag=cancel_flag,
-            ): idx
-            for idx, item in enumerate(items)
-        }
-        for future in concurrent.futures.as_completed(future_to_idx):
-            idx = future_to_idx[future]
-            try:
-                results[idx] = future.result()
-            except Exception as exc:
-                results[idx] = {"_ok": False, "_error": str(exc)}
+    pipeline._parallel_map_ordered(
+        list(enumerate(items)),
+        lambda pair: _process_intake_item(
+            pair[1], output_format, study, index=pair[0], cancel_flag=cancel_flag
+        ),
+        workers=workers,
+        results=results,
+        on_error=lambda _idx, exc: {"_ok": False, "_error": str(exc)},
+    )
     return results
 
 
@@ -1285,11 +1191,7 @@ def _coerce_studio_setting(name: str, value: Any) -> tuple[bool, Any, str | None
     expected_type = type(default) if default is not None else str
     try:
         if expected_type is bool:
-            coerced: Any = (
-                value
-                if isinstance(value, bool)
-                else str(value).lower() in ("true", "1", "yes", "on")
-            )
+            coerced: Any = utils.coerce_bool(value)
         elif expected_type is int:
             coerced = int(value)
         elif expected_type is float:
@@ -1413,6 +1315,10 @@ def _find_existing_artifacts(
     return results
 
 
+def _ndjson_line(obj: Any) -> str:
+    return json.dumps(obj) + "\n"
+
+
 def _stream_reel_job(
     work: Callable[[Callable[[dict[str, Any]], None]], None],
     *,
@@ -1464,7 +1370,7 @@ def _stream_reel_job(
         event = event_queue.get()
         if event is sentinel:
             return
-        yield json.dumps(event) + "\n"
+        yield _ndjson_line(event)
 
 
 def _stream_process_reel(
@@ -1549,6 +1455,32 @@ def _apply_time_overrides(clips: list[Any], overrides: dict[str, Any]) -> None:
             clip["times"] = new_times
 
 
+def _discard_artifact_files(artifacts: list[dict[str, Any]]) -> None:
+    """Unlink each artifact's media file, ignoring missing names and OS errors."""
+    for art in artifacts:
+        name = art.get("file", "")
+        if not name:
+            continue
+        try:
+            Path(utils.resolve_output_path(name)).unlink(missing_ok=True)
+        except OSError:
+            pass
+
+
+def _titlecards_match(
+    record: dict[str, Any], cards: bool, dur: Any, title_img: str, end_img: str
+) -> bool:
+    """True when a cached record's titlecard state matches the request."""
+    return bool(record.get("titlecards", False)) == cards and (
+        not cards
+        or (
+            record.get("titlecardDuration") == dur
+            and record.get("titlecardImage", "") == title_img
+            and record.get("endcardImage", "") == end_img
+        )
+    )
+
+
 @studio_bp.route("/api/generate", methods=["POST"])
 def api_generate() -> FlaskResponse:
     if _worksheet is None:
@@ -1586,7 +1518,6 @@ def api_generate() -> FlaskResponse:
             "cell",
             ctx=_sheet_context,
             cell_specs=cell_specs,
-            skip_prompts=True,
         )
         _apply_time_overrides(clips, overrides)
     except Exception as e:
@@ -1604,7 +1535,7 @@ def api_generate() -> FlaskResponse:
 
     def stream() -> Any:
         # Fall back to the cell count so the readout still shows a denominator.
-        _reset_generate_job_state(total_artifacts or len(cell_strings))
+        _reset_job_state(_generate_job_state, total_artifacts or len(cell_strings))
         cancel_flag = _generate_cancel_event.is_set
         clip_cells: set[str] = set()
         req_cards, req_dur = pipeline._resolve_titlecard_options(
@@ -1634,16 +1565,8 @@ def api_generate() -> FlaskResponse:
             for a in existing:
                 matches = not cell_overridden and (
                     output_format != "clip"
-                    or (
-                        bool(a.get("titlecards", False)) == req_cards
-                        and (
-                            not req_cards
-                            or (
-                                a.get("titlecardDuration") == req_dur
-                                and a.get("titlecardImage", "") == req_title_img
-                                and a.get("endcardImage", "") == req_end_img
-                            )
-                        )
+                    or _titlecards_match(
+                        a, req_cards, req_dur, req_title_img, req_end_img
                     )
                 )
                 (fresh if matches else stale).append(a)
@@ -1659,18 +1582,15 @@ def api_generate() -> FlaskResponse:
             if fresh:
                 # Advance by segment count, not len(fresh), to stay in step with the
                 # client's queue cards.
-                _increment_generate_done(len(clip.get("times") or []))
-                yield (
-                    json.dumps(
-                        {
-                            "cell": cell_str,
-                            "ok": True,
-                            "generated": len(fresh),
-                            "artifacts": fresh,
-                            "skipped": True,
-                        }
-                    )
-                    + "\n"
+                _bump_job_done(_generate_job_state, len(clip.get("times") or []))
+                yield _ndjson_line(
+                    {
+                        "cell": cell_str,
+                        "ok": True,
+                        "generated": len(fresh),
+                        "artifacts": fresh,
+                        "skipped": True,
+                    }
                 )
             else:
                 to_generate.append((clip, cell_str, stale))
@@ -1692,13 +1612,7 @@ def api_generate() -> FlaskResponse:
                     ]
                     _rebuild_artifact_index()
                     _manifest_removals.update(str(i) for i in stale_ids if i)
-                for a in stale:
-                    try:
-                        Path(utils.resolve_output_path(a["file"])).unlink(
-                            missing_ok=True
-                        )
-                    except OSError:
-                        pass
+                _discard_artifact_files(stale)
             generated, artifacts = pipeline.process_clips(
                 [clip],
                 output_format=output_format,
@@ -1710,17 +1624,25 @@ def api_generate() -> FlaskResponse:
             # Post-cancel results must not be appended; unlink their files so no
             # orphan media remains.
             if cancel_flag():
-                for a in artifacts:
-                    try:
-                        Path(utils.resolve_output_path(a["file"])).unlink(
-                            missing_ok=True
-                        )
-                    except OSError:
-                        pass
+                _discard_artifact_files(artifacts)
                 return 0, []
             if generated > 0:
                 _extend_generated_artifacts(artifacts)
             return generated, artifacts
+
+        def _cell_result(cell_str: str, fn: Callable[[], Any]) -> str:
+            try:
+                generated, artifacts = fn()
+                return _ndjson_line(
+                    {
+                        "cell": cell_str,
+                        "ok": generated > 0,
+                        "generated": generated,
+                        "artifacts": artifacts,
+                    }
+                )
+            except Exception as e:
+                return _ndjson_line({"cell": cell_str, "ok": False, "error": str(e)})
 
         if to_generate:
             workers = pipeline._resolve_clip_workers()
@@ -1744,61 +1666,26 @@ def api_generate() -> FlaskResponse:
                                 f.cancel()
                             break
                         clip, cell_str = future_to_cell[future]
-                        _increment_generate_done(len(clip.get("times") or []))
-                        try:
-                            generated, artifacts = future.result()
-                            yield (
-                                json.dumps(
-                                    {
-                                        "cell": cell_str,
-                                        "ok": generated > 0,
-                                        "generated": generated,
-                                        "artifacts": artifacts,
-                                    }
-                                )
-                                + "\n"
-                            )
-                        except Exception as e:
-                            yield (
-                                json.dumps(
-                                    {"cell": cell_str, "ok": False, "error": str(e)}
-                                )
-                                + "\n"
-                            )
+                        _bump_job_done(
+                            _generate_job_state, len(clip.get("times") or [])
+                        )
+                        yield _cell_result(cell_str, future.result)
             else:
                 for clip, cell_str, stale in to_generate:
                     if cancel_flag():
                         break
-                    _increment_generate_done(len(clip.get("times") or []))
-                    try:
-                        generated, artifacts = _generate_and_persist(clip, stale)
-                        yield (
-                            json.dumps(
-                                {
-                                    "cell": cell_str,
-                                    "ok": generated > 0,
-                                    "generated": generated,
-                                    "artifacts": artifacts,
-                                }
-                            )
-                            + "\n"
-                        )
-                    except Exception as e:
-                        yield (
-                            json.dumps({"cell": cell_str, "ok": False, "error": str(e)})
-                            + "\n"
-                        )
+                    _bump_job_done(_generate_job_state, len(clip.get("times") or []))
+                    yield _cell_result(
+                        cell_str, functools.partial(_generate_and_persist, clip, stale)
+                    )
 
         for cs in cell_strings:
             if str(cs).lower() not in clip_cells:
                 # Unresolved refs added no segments to total_artifacts; advancing here
                 # would overshoot.
-                yield (
-                    json.dumps({"cell": cs, "ok": False, "error": "No clip found"})
-                    + "\n"
-                )
+                yield _ndjson_line({"cell": cs, "ok": False, "error": "No clip found"})
         if cancel_flag():
-            yield json.dumps({"cancelled": True}) + "\n"
+            yield _ndjson_line({"cancelled": True})
 
     def stream_with_busy_release() -> Any:
         try:
@@ -1828,16 +1715,11 @@ def api_highlights_preview() -> FlaskResponse:
         return err("No spreadsheet loaded — pick one from the Start panel.")
 
     data = request.get_json(silent=True) or {}
-    highlights_duration = data.get("highlights_duration")
+    highlights_duration = _positive_int(data.get("highlights_duration"))
 
     overrides: dict[str, Any] = {}
-    if highlights_duration is not None:
-        try:
-            val = int(highlights_duration)
-            if val > 0:
-                overrides["HIGHLIGHTS_REEL_DURATION_SECONDS"] = val
-        except (ValueError, TypeError):
-            pass
+    if highlights_duration:
+        overrides["HIGHLIGHTS_REEL_DURATION_SECONDS"] = highlights_duration
 
     with _override_config(**overrides):
         clips = spreadsheet.generate_list(
@@ -1845,7 +1727,6 @@ def api_highlights_preview() -> FlaskResponse:
             "reel",
             ctx=_sheet_context,
             reel_input="highlights, batch",
-            skip_prompts=True,
         )
 
     if not clips:
@@ -1880,7 +1761,7 @@ def api_reel() -> FlaskResponse:
 
     data = request.get_json(silent=True) or {}
     cell_strings = data.get("cells", [])
-    highlights_duration = data.get("highlights_duration")
+    highlights_duration = _positive_int(data.get("highlights_duration"))
     reel_overrides: dict[str, Any] = data.get("overrides") or {}
     titlecards_enabled, titlecard_duration_seconds = _parse_titlecard_request(data)
 
@@ -1888,13 +1769,8 @@ def api_reel() -> FlaskResponse:
         return err("No cells specified")
 
     highlights_overrides: dict[str, Any] = {}
-    if highlights_duration is not None:
-        try:
-            val = int(highlights_duration)
-            if val > 0:
-                highlights_overrides["HIGHLIGHTS_REEL_DURATION_SECONDS"] = val
-        except (ValueError, TypeError):
-            pass
+    if highlights_duration:
+        highlights_overrides["HIGHLIGHTS_REEL_DURATION_SECONDS"] = highlights_duration
 
     token = _try_claim_busy("reel")
     if token is None:
@@ -1916,33 +1792,23 @@ def api_reel() -> FlaskResponse:
                     "reel",
                     ctx=_sheet_context,
                     reel_input=reel_input,
-                    skip_prompts=True,
                 )
                 _apply_time_overrides(clips, reel_overrides)
 
                 # Cancelled during the sheet fetch: stop before a stale reel is deleted.
                 if _reel_cancel_event.is_set():
-                    yield (
-                        json.dumps(
-                            {
-                                "ok": False,
-                                "cancelled": True,
-                                "error": "Reel generation cancelled",
-                            }
-                        )
-                        + "\n"
+                    yield _ndjson_line(
+                        {
+                            "ok": False,
+                            "cancelled": True,
+                            "error": "Reel generation cancelled",
+                        }
                     )
                     return
 
                 if not clips:
-                    yield (
-                        json.dumps(
-                            {
-                                "ok": False,
-                                "error": "No clips found for the specified cells",
-                            }
-                        )
-                        + "\n"
+                    yield _ndjson_line(
+                        {"ok": False, "error": "No clips found for the specified cells"}
                     )
                     return
 
@@ -1953,7 +1819,7 @@ def api_reel() -> FlaskResponse:
                     files.prepare_clip(clip)
                     for start_str, end_str in clip.get("times", []):
                         components.append(
-                            utils.build_reel_component(clip, "", start_str, end_str)
+                            viewer.build_reel_component(clip, "", start_str, end_str)
                         )
                 req_cards, req_dur = pipeline._resolve_titlecard_options(
                     titlecards_enabled, titlecard_duration_seconds
@@ -1971,25 +1837,16 @@ def api_reel() -> FlaskResponse:
                         reel_path = Path(utils.resolve_output_path(reel["file"]))
                         if not reel_path.is_file():
                             continue
-                        matches = bool(reel.get("titlecards", False)) == req_cards and (
-                            not req_cards
-                            or (
-                                reel.get("titlecardDuration") == req_dur
-                                and reel.get("titlecardImage", "") == req_title_img
-                                and reel.get("endcardImage", "") == req_end_img
-                            )
-                        )
-                        if matches:
-                            yield (
-                                json.dumps(
-                                    {
-                                        "ok": True,
-                                        "generated": 1,
-                                        "reels": [reel],
-                                        "skipped": True,
-                                    }
-                                )
-                                + "\n"
+                        if _titlecards_match(
+                            reel, req_cards, req_dur, req_title_img, req_end_img
+                        ):
+                            yield _ndjson_line(
+                                {
+                                    "ok": True,
+                                    "generated": 1,
+                                    "reels": [reel],
+                                    "skipped": True,
+                                }
                             )
                             return
                         # Stale reel (e.g. titlecards toggled): drop record + file.
@@ -2017,7 +1874,7 @@ def api_reel() -> FlaskResponse:
                     token=token,
                 )
         except Exception as e:
-            yield json.dumps({"ok": False, "error": str(e)}) + "\n"
+            yield _ndjson_line({"ok": False, "error": str(e)})
         finally:
             if not started["worker"]:
                 _release_busy("reel", token)
@@ -2057,20 +1914,6 @@ def api_viewer() -> FlaskResponse:
         return err(str(e), 500)
 
 
-def _discard_artifact_files(artifacts: list[dict[str, Any]]) -> None:
-    """Unlink the on-disk media for *artifacts* so a cancelled viewer/gallery
-    build leaves no orphan clips or captures: the manifest is never published in
-    that case, but ffmpeg may have already written files before the cancel."""
-    for art in artifacts:
-        name = art.get("file", "")
-        if not name:
-            continue
-        try:
-            Path(utils.resolve_output_path(name)).unlink(missing_ok=True)
-        except OSError:
-            pass
-
-
 @studio_bp.route("/api/timeline-viewer", methods=["POST"])
 def api_timeline_viewer() -> FlaskResponse:
     if _worksheet is None:
@@ -2085,9 +1928,7 @@ def api_timeline_viewer() -> FlaskResponse:
         include_intake = req.get("include_intake", False)
         intake_items = req.get("intake_items", [])
 
-        clips_list = spreadsheet.generate_list(
-            _worksheet, "batch", ctx=_sheet_context, skip_prompts=True
-        )
+        clips_list = spreadsheet.generate_list(_worksheet, "batch", ctx=_sheet_context)
         if not clips_list:
             return err("No clips found in sheet")
 
@@ -2129,7 +1970,7 @@ def api_timeline_viewer() -> FlaskResponse:
             artifacts,
             study=study,
             worksheet_title=getattr(_worksheet, "title", ""),
-            is_excel=pipeline.is_excel_worksheet(_worksheet),
+            is_excel=spreadsheet.is_excel_worksheet(_worksheet),
             mode="timeline-viewer",
             screenspace_events=ss_events or None,
         )
@@ -2173,12 +2014,7 @@ def api_gallery() -> FlaskResponse:
         return err("A gallery build is already in progress.", 409)
 
     try:
-        try:
-            interval = int(interval)
-            if interval < 1:
-                interval = config.GALLERY_INTERVAL_SECONDS
-        except (ValueError, TypeError):
-            interval = config.GALLERY_INTERVAL_SECONDS
+        interval = _positive_int(interval) or config.GALLERY_INTERVAL_SECONDS
 
         sources = _resolve_participant_sources(participant)
         if not sources or not sources[0].is_file():
@@ -2297,47 +2133,14 @@ def api_reveal_artifact() -> FlaskResponse:
     return ok(path=str(p))
 
 
-@studio_bp.route("/api/manifest", methods=["GET", "POST"])
+@studio_bp.route("/api/manifest")
 def api_manifest() -> FlaskResponse:
-    if request.method == "GET":
-        artifacts, reels = viewer.load_manifest_both()
-        return ok(artifacts=artifacts, reels=reels)
-
-    # Snapshot under the lock so a concurrent extend can't produce a partial export.
-    with _generated_output_lock:
-        artifacts = list(_generated_artifacts)
-        reels = list(_generated_reels)
-    if not artifacts and not reels:
-        return err("No artifacts to export. Generate artifacts first.")
-
-    try:
-        study = ""
-        if artifacts:
-            study = artifacts[0].get("study", "")
-        elif reels:
-            study = reels[0].get("study", "")
-
-        manifest_path = viewer.save_manifest(
-            artifacts,
-            new_reels=reels or None,
-            study=study,
-            worksheet_title=getattr(_worksheet, "title", ""),
-            is_excel=pipeline.is_excel_worksheet(_worksheet) if _worksheet else False,
-            mode="studio",
-        )
-        if manifest_path:
-            return ok(file=str(manifest_path))
-        return err("Failed to write manifest", 500)
-
-    except Exception as e:
-        return err(str(e), 500)
+    artifacts, reels = viewer.load_manifest_both()
+    return ok(artifacts=artifacts, reels=reels)
 
 
 def _handle_stash_crud(load_fn: Any, save_fn: Any, id_prefix: str) -> FlaskResponse:
     """Shared create/update/delete logic for stash endpoints."""
-    import uuid
-    from datetime import datetime
-
     data = request.get_json(silent=True) or {}
     action = data.get("action", "create")
 
@@ -2418,7 +2221,7 @@ def _settings_records() -> list[dict[str, Any]]:
                 "name": name,
                 "value": getattr(config, name),
                 "default": _settings_defaults.get(name),
-                "description": config.SETTINGS_DESCRIPTIONS.get(name, ""),
+                "description": meta["description"],
                 "tab": meta.get("tab", "General"),
                 "group": meta.get("group", ""),
                 "type": meta.get("type", "str"),
@@ -2492,11 +2295,7 @@ def _apply_settings_payload(data: dict[str, Any]) -> tuple[dict[str, Any], str |
 
     if "TITLECARDS_ENABLED" in settings_data:
         raw_value = settings_data["TITLECARDS_ENABLED"]
-        new_enabled = (
-            raw_value
-            if isinstance(raw_value, bool)
-            else str(raw_value).lower() in ("true", "1", "yes", "on")
-        )
+        new_enabled = utils.coerce_bool(raw_value)
         if (
             new_enabled
             and not getattr(config, "TITLECARDS_ENABLED", False)
@@ -2643,7 +2442,6 @@ def _card_picker_payload(kind: str) -> dict[str, Any]:
     return {"selected": selected, "items": items}
 
 
-@studio_bp.route("/api/titlecards", methods=["GET"])
 def api_titlecards_list() -> FlaskResponse:
     """List background choices (default, color, none, uploads) for both cards."""
     return ok(
@@ -2652,7 +2450,6 @@ def api_titlecards_list() -> FlaskResponse:
     )
 
 
-@studio_bp.route("/api/titlecards/default/<kind>", methods=["GET"])
 def api_titlecard_default(kind: str) -> FlaskResponse:
     """Serve the bundled default titlecard/endcard image for previews."""
     if kind not in ("title", "end"):
@@ -2664,7 +2461,6 @@ def api_titlecard_default(kind: str) -> FlaskResponse:
     return send_file(str(path))
 
 
-@studio_bp.route("/api/titlecards/image/<path:name>", methods=["GET"])
 def api_titlecard_image(name: str) -> FlaskResponse:
     """Serve an uploaded card background by filename (used for previews)."""
     safe = Path(name).name
@@ -2675,7 +2471,6 @@ def api_titlecard_image(name: str) -> FlaskResponse:
     return send_from_directory(str(_titlecard_images_dir()), safe)
 
 
-@studio_bp.route("/api/titlecards/upload", methods=["POST"])
 def api_titlecard_upload() -> FlaskResponse:
     """Accept a card background image upload (PNG/JPG/WebP) into the upload pool."""
     file = request.files.get("file")
@@ -2719,7 +2514,6 @@ def api_titlecard_upload() -> FlaskResponse:
     )
 
 
-@studio_bp.route("/api/titlecards/image/<path:name>", methods=["DELETE"])
 def api_titlecard_delete(name: str) -> FlaskResponse:
     """Delete an uploaded card background; reset any selection that used it."""
     safe = Path(name).name
@@ -2784,28 +2578,23 @@ def api_generate_intake() -> FlaskResponse:
             )
         except Exception as exc:
             result = {"_ok": False, "_error": str(exc)}
-        _increment_intake_done()
+        _bump_job_done(_intake_job_state)
         ok = result.pop("_ok", False)
         error = result.pop("_error", "")
         result.pop("_cancelled", None)
         # Results finishing after cancel are dropped and unlinked so no orphan
         # media remains.
         if ok and cancel_flag():
-            try:
-                Path(utils.resolve_output_path(result.get("file", ""))).unlink(
-                    missing_ok=True
-                )
-            except OSError:
-                pass
-            return json.dumps({"index": idx, "ok": False, "error": "cancelled"}) + "\n"
+            _discard_artifact_files([result])
+            return _ndjson_line({"index": idx, "ok": False, "error": "cancelled"})
         if ok:
-            _append_generated_artifact(result)
-            return json.dumps({"index": idx, "ok": True, "artifact": result}) + "\n"
-        return json.dumps({"index": idx, "ok": False, "error": error}) + "\n"
+            _extend_generated_artifacts([result])
+            return _ndjson_line({"index": idx, "ok": True, "artifact": result})
+        return _ndjson_line({"index": idx, "ok": False, "error": error})
 
     def stream() -> Iterator[str]:
         started["stream"] = True
-        _reset_intake_job_state(len(items))
+        _reset_job_state(_intake_job_state, len(items))
         try:
             workers = pipeline._resolve_clip_workers()
             # Same labels as pipeline._parallel_map_ordered: CLIP_PARALLEL_WORKERS
@@ -2834,7 +2623,7 @@ def api_generate_intake() -> FlaskResponse:
                         break
                     yield _run_item(idx, item)
             if cancel_flag():
-                yield json.dumps({"cancelled": True}) + "\n"
+                yield _ndjson_line({"cancelled": True})
         finally:
             # Persist whatever completed even if the client disconnects mid-stream.
             _save_manifest_quiet()
@@ -2897,9 +2686,7 @@ def api_reel_direct() -> FlaskResponse:
             concat_last_emit = [0.0]
 
             def on_concat_progress(fraction: float) -> None:
-                import time as _time
-
-                now = _time.monotonic()
+                now = time.monotonic()
                 if (
                     concat_last_emit[0] != 0.0
                     and fraction < 0.99
@@ -2913,6 +2700,20 @@ def api_reel_direct() -> FlaskResponse:
             emit_event({"phase": "start", "total_clips": total})
 
             completed = 0
+
+            def advance(failure_label: str | None = None) -> None:
+                nonlocal completed
+                if failure_label is not None:
+                    failed_segments.append(failure_label)
+                completed += 1
+                emit_event(
+                    {
+                        "phase": "clip_done",
+                        "clip_index": completed - 1,
+                        "total_clips": total,
+                    }
+                )
+
             for seg in segments:
                 if _reel_cancel_event.is_set():
                     break
@@ -2924,29 +2725,13 @@ def api_reel_direct() -> FlaskResponse:
                     seg.get("event_type") or seg.get("desc") or ""
                 ).strip() or f"segment {completed + 1}"
                 if end <= start:
-                    failed_segments.append(f"{seg_label} — empty time span")
-                    completed += 1
-                    emit_event(
-                        {
-                            "phase": "clip_done",
-                            "clip_index": completed - 1,
-                            "total_clips": total,
-                        }
-                    )
+                    advance(f"{seg_label} — empty time span")
                     continue
 
                 video_paths = _resolve_intake_video_paths(participant)
 
                 if not video_paths:
-                    failed_segments.append(f"{seg_label} — no video for {participant}")
-                    completed += 1
-                    emit_event(
-                        {
-                            "phase": "clip_done",
-                            "clip_index": completed - 1,
-                            "total_clips": total,
-                        }
-                    )
+                    advance(f"{seg_label} — no video for {participant}")
                     continue
                 timeline = video.timeline_or_none(video_paths)
 
@@ -2990,16 +2775,7 @@ def api_reel_direct() -> FlaskResponse:
                         all_cards_applied = False
                 if ok:
                     clip_paths.append(tmp_path)
-                else:
-                    failed_segments.append(seg_label)
-                completed += 1
-                emit_event(
-                    {
-                        "phase": "clip_done",
-                        "clip_index": completed - 1,
-                        "total_clips": total,
-                    }
-                )
+                advance(None if ok else seg_label)
 
             if _reel_cancel_event.is_set():
                 emit_event(
@@ -3038,7 +2814,6 @@ def api_reel_direct() -> FlaskResponse:
                 concat_ok = video.concatenate_clips(
                     clip_paths,
                     reel_name,
-                    reencode_on_fail=True,
                     cancel_flag=_reel_cancel_event.is_set,
                     on_progress=on_concat_progress,
                 )
@@ -3063,7 +2838,7 @@ def api_reel_direct() -> FlaskResponse:
                     "titlecardImage": direct_title_img,
                     "endcardImage": direct_end_img,
                 }
-                _append_generated_reel(reel_record)
+                _extend_generated_reels([reel_record])
                 _save_manifest_quiet()
                 emit_event({"ok": True, "generated": 1, "reels": [reel_record]})
             else:
@@ -3210,16 +2985,6 @@ def _init_studio_state(worksheet: Any) -> None:
 # ---- Entry point ----
 
 
-def _derive_sheet_meta(worksheet: Any) -> dict[str, str] | None:
-    """Return ``{type, id_or_path, label}`` for a CLI-loaded worksheet.
-
-    Used so the Start overlay's spreadsheet picker can show the currently
-    loaded sheet when the overlay is opened on a session that was launched
-    from the CLI (not via the runtime ``/api/spreadsheets/open`` endpoint).
-    """
-    return files.derive_sheet_meta(worksheet)
-
-
 def _spreadsheet_label() -> str:
     """Human-readable identifier for the currently loaded spreadsheet."""
     if _worksheet is None:
@@ -3256,23 +3021,27 @@ def _swap_worksheet(new_worksheet: Any) -> None:
     import workflows_server
 
     global _worksheet, _generated_artifacts, _generated_reels
+    # Lambdas resolve module attributes at call time, so test monkeypatches apply.
+    repins: list[Callable[[Any], None]] = [
+        lambda ws: screenspace_server._init_screenspace_state(
+            sheet_context=_sheet_context
+        ),
+        lambda ws: transcripts_server._init_transcripts_state(
+            sheet_context=_sheet_context
+        ),
+        lambda ws: workflows_server.repin_sheet_state(
+            sheet_context=_sheet_context, worksheet=ws
+        ),
+        lambda ws: composer_server.repin_sheet_state(sheet_context=_sheet_context),
+    ]
     prev_worksheet = _worksheet
     prev_sheet_context = _sheet_context
     prev_artifacts = _generated_artifacts
     prev_reels = _generated_reels
     try:
         _init_studio_state(new_worksheet)
-        screenspace_server._init_screenspace_state(
-            sheet_context=_sheet_context,
-        )
-        transcripts_server._init_transcripts_state(
-            sheet_context=_sheet_context,
-        )
-        workflows_server.repin_sheet_state(
-            sheet_context=_sheet_context,
-            worksheet=new_worksheet,
-        )
-        composer_server.repin_sheet_state(sheet_context=_sheet_context)
+        for repin in repins:
+            repin(new_worksheet)
     except Exception:
         _worksheet = prev_worksheet
         _set_sheet_context(prev_sheet_context)
@@ -3280,28 +3049,12 @@ def _swap_worksheet(new_worksheet: Any) -> None:
             _generated_artifacts = prev_artifacts
             _generated_reels = prev_reels
             _rebuild_artifact_index()
-        # Best-effort re-pin of sister blueprints; swallow so the original exception
-        # surfaces.
-        try:
-            screenspace_server._init_screenspace_state(
-                sheet_context=_sheet_context,
-            )
-        except Exception:  # noqa: S110 - deliberate, see the comment above
-            pass
-        try:
-            transcripts_server._init_transcripts_state(
-                sheet_context=_sheet_context,
-            )
-        except Exception:  # noqa: S110 - deliberate, see the comment above
-            pass
-        try:
-            workflows_server.repin_sheet_state(
-                sheet_context=_sheet_context,
-                worksheet=prev_worksheet,
-            )
-            composer_server.repin_sheet_state(sheet_context=_sheet_context)
-        except Exception:  # noqa: S110 - deliberate, see the comment above
-            pass
+        # Best-effort rollback re-pin; swallow so the original exception surfaces.
+        for repin in repins:
+            try:
+                repin(prev_worksheet)
+            except Exception:  # noqa: S110 - deliberate, see the comment above
+                pass
         raise
 
 
@@ -3383,6 +3136,7 @@ def _open_worksheet_for(
     with it — ``/api/spreadsheets/open`` swaps it in via :func:`_swap_worksheet`,
     ``/api/spreadsheets/preview`` only reads from it. Returns ``(None, "")`` when
     the spreadsheet can't be resolved; raises whatever the backing library does.
+    Callers verify Google auth first.
     """
     if type_ == "excel":
         import excel_io
@@ -3392,10 +3146,6 @@ def _open_worksheet_for(
             Path(id_or_path).name,
         )
 
-    if _google_auth.client is None:
-        raise RuntimeError(
-            "Not authenticated with Google — click 'Connect Google' first."
-        )
     import app as _app
 
     if id_or_path.startswith(("http://", "https://")):
@@ -3680,7 +3430,7 @@ def _init_combined_state(
         sys.exit(1)
     # CLI launches seed the meta and recents here; /api/spreadsheets/open does it itself.
     global _active_sheet_meta
-    _active_sheet_meta = _derive_sheet_meta(worksheet)
+    _active_sheet_meta = files.derive_sheet_meta(worksheet)
     # Before the sibling initialisers below, which resolve participants.
     _seed_filename_overrides(_active_sheet_meta)
     if gspread_client is not None:
@@ -3773,12 +3523,6 @@ def status() -> Response:
     meta = _active_sheet_meta if _worksheet is not None else None
     mn = _current_mindnode_doc()
     return ok(
-        studio=True,
-        screenspace=True,
-        transcripts=True,
-        workflows=True,
-        composer=True,
-        overview=True,
         sheet_loaded=_worksheet is not None,
         startup_notice=(_startup_notice or {}).get("message", ""),
         startup_notice_source=(_startup_notice or {}).get("source_type", ""),
@@ -3798,8 +3542,8 @@ def status() -> Response:
         version=utils.get_version(),
         # Native window: pages may offer "show on disk" actions.
         desktop=utils.GUI_LAUNCH,
-        author="Henrik Edlund",
-        license="MIT",
+        author=config.AUTHOR,
+        license=config.LICENSE,
         repo_url=config.REPO_URL,
     )
 
@@ -3839,19 +3583,6 @@ def api_export() -> FlaskResponse:
         written=[p.name for p in written],
         output_dir=str(output_dir),
     )
-
-
-def _register_core_routes(combined: Flask) -> None:
-    """Root-level status, profiling, and export routes."""
-    for rule, view, methods in (
-        ("/api/profile", api_profile, ["GET"]),
-        ("/api/profile/deep", api_profile_deep, ["GET"]),
-        ("/api/profile/deep/file", api_profile_deep_file, ["GET"]),
-        ("/api/status", status, ["GET"]),
-        ("/api/export/status", api_export_status, ["GET"]),
-        ("/api/export", api_export, ["POST"]),
-    ):
-        combined.add_url_rule(rule, view.__name__, view, methods=methods)
 
 
 # ---- Combined-app routes: Start overlay: directories, spreadsheet picker, sessions, About tab. ----
@@ -3928,6 +3659,11 @@ def api_spreadsheets_mindnode() -> Response:
     return ok(input_dir=str(input_dir), files=mindnode.find_documents(input_dir))
 
 
+def _preview_base_dir(raw: str | None) -> Path:
+    """The typed input dir when set, else the effective one."""
+    return Path(raw).expanduser() if raw else utils.get_effective_input_dir()
+
+
 def api_spreadsheets_mindnode_preview() -> FlaskResponse:
     """Summarize a ``.mindnode`` document before it is opened.
 
@@ -3948,9 +3684,7 @@ def api_spreadsheets_mindnode_preview() -> FlaskResponse:
         doc = mindnode.parse_document(path)
     except ValueError as exc:
         return err(str(exc), 400)
-    base_dir = (
-        Path(input_dir).expanduser() if input_dir else utils.get_effective_input_dir()
-    )
+    base_dir = _preview_base_dir(input_dir)
     rows, unmatched = _preview_source_rows(
         doc["study"],
         list(doc["participants"]),
@@ -4126,9 +3860,7 @@ def api_spreadsheets_preview() -> Response:
     user_overrides = start_settings.filename_overrides(
         type_, id_or_path, loaded_worksheet
     )
-    base_dir = (
-        Path(input_dir).expanduser() if input_dir else utils.get_effective_input_dir()
-    )
+    base_dir = _preview_base_dir(input_dir)
     rows, unmatched = _preview_source_rows(
         ctx.study_name, participants, sheet_overrides, user_overrides, base_dir
     )
@@ -4183,9 +3915,7 @@ def api_spreadsheets_preview_override() -> FlaskResponse:
     ):
         _seed_filename_overrides(active)
 
-    base_dir = (
-        Path(input_dir).expanduser() if input_dir else utils.get_effective_input_dir()
-    )
+    base_dir = _preview_base_dir(input_dir)
     # Recompute this participant's row only; a one-entry-stale datalist isn't
     # worth a full preview read.
     rows, _unmatched = _preview_source_rows(
@@ -4422,40 +4152,6 @@ def api_start_settings_post() -> FlaskResponse:
     return ok(settings=start_settings.load_start_settings())
 
 
-def _register_start_routes(combined: Flask) -> None:
-    """Start overlay: directories, spreadsheet picker, sessions, About tab."""
-    for rule, view, methods in (
-        ("/api/dirs", api_dirs_get, ["GET"]),
-        ("/api/dirs", api_dirs_post, ["POST"]),
-        ("/api/spreadsheets/excel", api_spreadsheets_excel, ["GET"]),
-        ("/api/spreadsheets/mindnode", api_spreadsheets_mindnode, ["GET"]),
-        (
-            "/api/spreadsheets/mindnode/preview",
-            api_spreadsheets_mindnode_preview,
-            ["GET"],
-        ),
-        ("/api/spreadsheets/mindnode/thumb", api_spreadsheets_mindnode_thumb, ["GET"]),
-        ("/api/spreadsheets/google", api_spreadsheets_google, ["GET"]),
-        ("/api/spreadsheets/worksheets", api_spreadsheets_worksheets, ["GET"]),
-        ("/api/spreadsheets/preview", api_spreadsheets_preview, ["GET"]),
-        (
-            "/api/spreadsheets/preview/override",
-            api_spreadsheets_preview_override,
-            ["POST"],
-        ),
-        ("/api/spreadsheets/google/auth", api_spreadsheets_google_auth, ["POST"]),
-        ("/api/spreadsheets/open", api_spreadsheets_open, ["POST"]),
-        ("/api/spreadsheets/close", api_spreadsheets_close, ["POST"]),
-        ("/api/folder-picker", api_folder_picker, ["POST"]),
-        ("/api/sessions/record", api_sessions_record, ["POST"]),
-        ("/api/changelog", api_changelog, ["GET"]),
-        ("/api/licenses", api_licenses, ["GET"]),
-        ("/api/start-settings", api_start_settings_get, ["GET"]),
-        ("/api/start-settings", api_start_settings_post, ["POST"]),
-    ):
-        combined.add_url_rule(rule, view.__name__, view, methods=methods)
-
-
 # ---- Combined-app routes: Self-update (frozen desktop app only). ----
 
 
@@ -4521,19 +4217,6 @@ def api_update_reveal() -> FlaskResponse:
     if not updater.reveal_download():
         return err("No downloaded update to show", 404)
     return ok(**updater.status())
-
-
-def _register_update_routes(combined: Flask) -> None:
-    """Self-update (frozen desktop app only)."""
-    for rule, view, methods in (
-        ("/api/update/status", api_update_status, ["GET"]),
-        ("/api/update/check", api_update_check, ["POST"]),
-        ("/api/update/download", api_update_download, ["POST"]),
-        ("/api/update/apply", api_update_apply, ["POST"]),
-        ("/api/update/skip", api_update_skip, ["POST"]),
-        ("/api/update/reveal", api_update_reveal, ["POST"]),
-    ):
-        combined.add_url_rule(rule, view.__name__, view, methods=methods)
 
 
 # ---- Combined-app routes: Shared settings routes every page needs, re-mounted at root. ----
@@ -4648,12 +4331,6 @@ def _register_settings_routes(combined: Flask) -> None:
     ):
         combined.add_url_rule(rule, endpoint, view, methods=methods)
 
-    for rule, view, methods in (
-        ("/api/settings/reveal", combined_settings_reveal, ["POST"]),
-        ("/api/models/llm/reveal", combined_llm_reveal, ["POST"]),
-    ):
-        combined.add_url_rule(rule, view.__name__, view, methods=methods)
-
 
 # ---- Combined-app routes: Local LLM model discovery. ----
 
@@ -4766,10 +4443,55 @@ def api_models() -> Response:
     )
 
 
-def _register_model_routes(combined: Flask) -> None:
-    """Local LLM model discovery."""
-    for rule, view, methods in (("/api/models", api_models, ["GET"]),):
-        combined.add_url_rule(rule, view.__name__, view, methods=methods)
+# Root-level (rule, view, methods); endpoints are the view names.
+_ROOT_ROUTES = (
+    # Status, profiling, export.
+    ("/api/profile", api_profile, ["GET"]),
+    ("/api/profile/deep", api_profile_deep, ["GET"]),
+    ("/api/profile/deep/file", api_profile_deep_file, ["GET"]),
+    ("/api/status", status, ["GET"]),
+    ("/api/export/status", api_export_status, ["GET"]),
+    ("/api/export", api_export, ["POST"]),
+    # Start overlay.
+    ("/api/dirs", api_dirs_get, ["GET"]),
+    ("/api/dirs", api_dirs_post, ["POST"]),
+    ("/api/spreadsheets/excel", api_spreadsheets_excel, ["GET"]),
+    ("/api/spreadsheets/mindnode", api_spreadsheets_mindnode, ["GET"]),
+    (
+        "/api/spreadsheets/mindnode/preview",
+        api_spreadsheets_mindnode_preview,
+        ["GET"],
+    ),
+    ("/api/spreadsheets/mindnode/thumb", api_spreadsheets_mindnode_thumb, ["GET"]),
+    ("/api/spreadsheets/google", api_spreadsheets_google, ["GET"]),
+    ("/api/spreadsheets/worksheets", api_spreadsheets_worksheets, ["GET"]),
+    ("/api/spreadsheets/preview", api_spreadsheets_preview, ["GET"]),
+    (
+        "/api/spreadsheets/preview/override",
+        api_spreadsheets_preview_override,
+        ["POST"],
+    ),
+    ("/api/spreadsheets/google/auth", api_spreadsheets_google_auth, ["POST"]),
+    ("/api/spreadsheets/open", api_spreadsheets_open, ["POST"]),
+    ("/api/spreadsheets/close", api_spreadsheets_close, ["POST"]),
+    ("/api/folder-picker", api_folder_picker, ["POST"]),
+    ("/api/sessions/record", api_sessions_record, ["POST"]),
+    ("/api/changelog", api_changelog, ["GET"]),
+    ("/api/licenses", api_licenses, ["GET"]),
+    ("/api/start-settings", api_start_settings_get, ["GET"]),
+    ("/api/start-settings", api_start_settings_post, ["POST"]),
+    # Self-update (frozen desktop app only).
+    ("/api/update/status", api_update_status, ["GET"]),
+    ("/api/update/check", api_update_check, ["POST"]),
+    ("/api/update/download", api_update_download, ["POST"]),
+    ("/api/update/apply", api_update_apply, ["POST"]),
+    ("/api/update/skip", api_update_skip, ["POST"]),
+    ("/api/update/reveal", api_update_reveal, ["POST"]),
+    # Settings reveal and model discovery.
+    ("/api/settings/reveal", combined_settings_reveal, ["POST"]),
+    ("/api/models/llm/reveal", combined_llm_reveal, ["POST"]),
+    ("/api/models", api_models, ["GET"]),
+)
 
 
 def build_combined_app(
@@ -4817,11 +4539,9 @@ def build_combined_app(
     def root():
         return redirect(f"/{default_page}/")
 
-    _register_core_routes(combined)
-    _register_start_routes(combined)
-    _register_update_routes(combined)
+    for rule, view, methods in _ROOT_ROUTES:
+        combined.add_url_rule(rule, view.__name__, view, methods=methods)
     _register_settings_routes(combined)
-    _register_model_routes(combined)
 
     return combined
 
@@ -5061,26 +4781,24 @@ def serve_combined_app(
             f"Port {requested} is already in use — starting on a free port instead."
         )
         requested = 0
-    try:
-        srv = make_server(
+
+    def _bind(port: int) -> BaseWSGIServer:
+        return make_server(
             "127.0.0.1",
-            requested,
+            port,
             dispatcher,
             threaded=True,
             request_handler=QuietWSGIRequestHandler,
         )
+
+    try:
+        srv = _bind(requested)
     except (OSError, SystemExit):
         # Probe/bind race. werkzeug turns EADDRINUSE into sys.exit(1), so catch
         # SystemExit too.
         if requested == 0:
             raise
-        srv = make_server(
-            "127.0.0.1",
-            0,
-            dispatcher,
-            threaded=True,
-            request_handler=QuietWSGIRequestHandler,
-        )
+        srv = _bind(0)
 
     # `threaded=True` guarantees this; make_server's return type is the base class.
     assert isinstance(srv, ThreadedWSGIServer)

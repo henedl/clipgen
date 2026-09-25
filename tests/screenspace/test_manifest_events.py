@@ -389,8 +389,7 @@ class TestDescribeTask:
 
 
 class TestGenerateEventsFromResults:
-    def _make_worker_and_task(self, task_type, **params):
-        worker = screenspace.ScreenspaceWorker()
+    def _make_task(self, task_type, **params):
         task = {
             "id": "ss_test1234",
             "type": task_type,
@@ -399,87 +398,87 @@ class TestGenerateEventsFromResults:
             "region": "hud",
             "parameters": params,
         }
-        return worker, task
+        return task
 
     def test_change_events(self):
-        worker, task = self._make_worker_and_task("change")
+        task = self._make_task("change")
         raw = [
             {"timestamp": 10.0, "magnitude": 0.15},
             {"timestamp": 20.0, "magnitude": 0.8},
         ]
-        events = worker._generate_events_from_results(task, raw)
+        events = screenspace.generate_events_from_results(task, raw)
         assert len(events) == 2
         assert events[0]["confidence"] == 0.15
         assert events[0]["metadata"]["magnitude"] == 0.15
         assert events[1]["confidence"] == 0.8
 
     def test_similarity_events(self):
-        worker, task = self._make_worker_and_task("similarity")
+        task = self._make_task("similarity")
         raw = [{"timestamp": 5.0, "score": 0.95}]
-        events = worker._generate_events_from_results(task, raw)
+        events = screenspace.generate_events_from_results(task, raw)
         assert len(events) == 1
         assert events[0]["confidence"] == 0.95
         assert events[0]["metadata"]["score"] == 0.95
 
     def test_text_events(self):
-        worker, task = self._make_worker_and_task("text")
+        task = self._make_task("text")
         raw = [{"timestamp": 30.0, "text_found": "hello", "confidence": 0.9}]
-        events = worker._generate_events_from_results(task, raw)
+        events = screenspace.generate_events_from_results(task, raw)
         assert len(events) == 1
         assert events[0]["metadata"]["text_found"] == "hello"
         assert events[0]["confidence"] == 0.9
 
     def test_numbers_events(self):
-        worker, task = self._make_worker_and_task("numbers")
+        task = self._make_task("numbers")
         raw = [{"timestamp": 15.0, "number_found": 42, "confidence": 0.42}]
-        events = worker._generate_events_from_results(task, raw)
+        events = screenspace.generate_events_from_results(task, raw)
         assert len(events) == 1
         assert events[0]["confidence"] == 0.42
         assert events[0]["metadata"]["value"] == 42
 
     def test_color_events(self):
-        worker, task = self._make_worker_and_task("color")
+        task = self._make_task("color")
         raw = [{"timestamp": 5.0, "_confidence": 0.7}]
-        events = worker._generate_events_from_results(task, raw)
+        events = screenspace.generate_events_from_results(task, raw)
         assert len(events) == 1
         assert events[0]["confidence"] == 0.7
 
     def test_timelapse_no_events(self):
-        worker, task = self._make_worker_and_task("timelapse")
-        events = worker._generate_events_from_results(task, [{"file": "out.mp4"}])
+        task = self._make_task("timelapse")
+        events = screenspace.generate_events_from_results(task, [{"file": "out.mp4"}])
         assert events == []
 
     def test_template_events(self):
-        worker, task = self._make_worker_and_task("template")
+        task = self._make_task("template")
         raw = [{"timestamp": 5.0, "best_score": 0.85, "match_count": 2}]
-        events = worker._generate_events_from_results(task, raw)
+        events = screenspace.generate_events_from_results(task, raw)
         assert len(events) == 1
         assert events[0]["confidence"] == 0.85
         assert events[0]["metadata"]["match_count"] == 2
         assert events[0]["metadata"]["best_score"] == 0.85
 
     def test_flow_events(self):
-        worker, task = self._make_worker_and_task("flow")
+        task = self._make_task("flow")
         raw = [{"timestamp": 10.0, "magnitude": 5.0, "angle": 90.0}]
-        events = worker._generate_events_from_results(task, raw)
+        events = screenspace.generate_events_from_results(task, raw)
         assert len(events) == 1
         assert events[0]["confidence"] == 0.5  # 5.0 / 10.0
         assert events[0]["metadata"]["magnitude"] == 5.0
         assert events[0]["metadata"]["angle"] == 90.0
 
     def test_scene_events(self):
-        worker, task = self._make_worker_and_task("scene")
+        task = self._make_task("scene")
         raw = [{"timestamp": 15.0, "scene_name": "menu", "score": 0.92}]
-        events = worker._generate_events_from_results(task, raw)
+        events = screenspace.generate_events_from_results(task, raw)
         assert len(events) == 1
         assert events[0]["confidence"] == 0.92
         assert events[0]["metadata"]["scene_name"] == "menu"
         assert events[0]["metadata"]["score"] == 0.92
 
     def test_inactivity_events(self):
-        worker, task = self._make_worker_and_task("inactivity")
+        task = self._make_task("inactivity")
         raw = [{"start": 5.0, "end": 15.0, "duration": 10.0, "avg_distance": 2.5}]
-        events = worker._generate_events_from_results(task, raw)
+        events = screenspace.generate_events_from_results(task, raw)
         assert len(events) == 1
         assert events[0]["time_in"] == 5.0
         assert events[0]["time_out"] == 15.0
@@ -489,7 +488,7 @@ class TestGenerateEventsFromResults:
         assert abs(events[0]["confidence"] - 0.3333) < 0.01
 
     def test_boundary_events(self):
-        worker, task = self._make_worker_and_task("boundary")
+        task = self._make_task("boundary")
         raw = [
             {
                 "timestamp": 12.0,
@@ -500,7 +499,7 @@ class TestGenerateEventsFromResults:
                 "scene_label": "Scene B",
             }
         ]
-        events = worker._generate_events_from_results(task, raw)
+        events = screenspace.generate_events_from_results(task, raw)
         assert len(events) == 1
         assert events[0]["time_in"] == 12.0
         assert events[0]["time_out"] == 12.0
@@ -573,61 +572,6 @@ class TestManifestWithEvents:
         loaded = screenspace.load_screenspace_manifest()
         assert loaded["events"][0]["navigational"] is True
         assert loaded["events"][0]["metadata"]["distance"] == 22
-
-
-class TestBackfillMissingEvents:
-    def _completed_template_task(self):
-        return {
-            "id": "ss_template1",
-            "type": "template",
-            "status": "completed",
-            "source_video": "study_P01.mp4",
-            "participant": "P01",
-            "region": "icon",
-            "parameters": {},
-            "result": [
-                {"timestamp": 5.0, "best_score": 0.9, "match_count": 1},
-                {"timestamp": 10.0, "best_score": 0.7, "match_count": 2},
-            ],
-        }
-
-    def test_backfills_when_no_events(self, tmp_path, monkeypatch):
-        import screenspace_server
-
-        monkeypatch.setattr(config, "OUTPUT_DIR", str(tmp_path))
-        manifest = {
-            "regions": {},
-            "tasks": [self._completed_template_task()],
-            "events": [],
-            "stashes": [],
-        }
-        screenspace_server._backfill_missing_events(manifest)
-        assert len(manifest["events"]) == 2
-        assert all(e["task_id"] == "ss_template1" for e in manifest["events"])
-        assert manifest["events"][0]["detector"] == "template"
-
-    def test_skips_tasks_with_existing_events(self, tmp_path, monkeypatch):
-        import screenspace_server
-
-        monkeypatch.setattr(config, "OUTPUT_DIR", str(tmp_path))
-        manifest = {
-            "regions": {},
-            "tasks": [self._completed_template_task()],
-            "events": [{"id": "ev_x", "task_id": "ss_template1"}],
-            "stashes": [],
-        }
-        screenspace_server._backfill_missing_events(manifest)
-        assert len(manifest["events"]) == 1
-
-    def test_skips_non_completed_tasks(self, tmp_path, monkeypatch):
-        import screenspace_server
-
-        monkeypatch.setattr(config, "OUTPUT_DIR", str(tmp_path))
-        task = self._completed_template_task()
-        task["status"] = "running"
-        manifest = {"regions": {}, "tasks": [task], "events": [], "stashes": []}
-        screenspace_server._backfill_missing_events(manifest)
-        assert manifest["events"] == []
 
 
 class TestDrainNewEvents:

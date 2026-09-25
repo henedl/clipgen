@@ -302,6 +302,93 @@ def test_strip_entry_drops_spans():
     assert "pii" not in seg and "pii_crc" not in seg
 
 
+def _pii_entry(enabled=None):
+    segs = [
+        {
+            "id": "P01:0",
+            "start": 0.0,
+            "end": 2.0,
+            **_seg("Hi Anna", ("GIVEN_NAME", 3, 7)),
+        },
+        {
+            "id": "P01:1",
+            "start": 5.0,
+            "end": 7.0,
+            **_seg("Erik and Anna", ("GIVEN_NAME", 0, 4), ("GIVEN_NAME", 9, 13)),
+        },
+    ]
+    segs[1]["words"] = [{"word": "Erik", "start": 5.0, "end": 5.4}]
+    entry: dict[str, Any] = {"segments": segs}
+    if enabled is not None:
+        entry["redaction"] = {"enabled": enabled}
+    return entry
+
+
+@pytest.mark.parametrize(
+    ("enabled", "default", "wanted"),
+    [
+        (True, False, True),
+        (False, True, False),
+        (None, True, True),
+        (None, False, False),
+    ],
+)
+def test_entry_wanted_falls_back_to_global_default(
+    monkeypatch, enabled, default, wanted
+):
+    monkeypatch.setattr(config, "TRANSCRIBE_REDACT", default)
+    assert redact.entry_wanted(_pii_entry(enabled)) is wanted
+
+
+def test_manifest_transcript_redacts_before_clip_filter(monkeypatch):
+    import pipeline
+    import transcripts
+
+    monkeypatch.setattr(config, "TRANSCRIBE_REDACT", True)
+    result = pipeline._manifest_transcript(_pii_entry(), [], "")
+    clipped = transcripts.filter_segments(result, 4.0, 8.0, offset_to_zero=True)
+    # Numbering spans the whole entry: Anna stays _1 inside a later clip.
+    assert [s["text"] for s in clipped["segments"]] == [
+        "[GIVEN_NAME_2] and [GIVEN_NAME_1]"
+    ]
+    assert not {"words", "pii", "pii_crc"} & set(clipped["segments"][0])
+
+
+def test_manifest_transcript_keeps_text_when_off():
+    import pipeline
+
+    result = pipeline._manifest_transcript(_pii_entry(False), [], "")
+    assert result["segments"][1]["text"] == "Erik and Anna"
+    assert result["segments"][1]["words"]
+
+
+def test_transcript_clip_rows_use_redacted_text(monkeypatch):
+    import cli_event_clips
+
+    monkeypatch.setattr(config, "TRANSCRIBE_REDACT", True)
+    manifest = {"source_transcripts": {"P01": _pii_entry()}, "marks": []}
+    rows = cli_event_clips._filter_transcript_segments(
+        manifest, participants=None, mark_categories=None, text_substr="given_name_1"
+    )
+    assert [row["text"] for _pid, row, _marks in rows] == [
+        "Hi [GIVEN_NAME_1]",
+        "[GIVEN_NAME_2] and [GIVEN_NAME_1]",
+    ]
+    assert not cli_event_clips._filter_transcript_segments(
+        manifest, participants=None, mark_categories=None, text_substr="anna"
+    )
+
+
+def test_export_redacts_on_global_default(monkeypatch):
+    import data_export
+
+    monkeypatch.setattr(config, "TRANSCRIBE_REDACT", True)
+    rows = data_export.build_transcript_segments(
+        {"source_transcripts": {"P01": _pii_entry()}}
+    )
+    assert rows[0]["text"] == "Hi [GIVEN_NAME_1]"
+
+
 # ---- Assets and download ---------------------------------------------------
 
 

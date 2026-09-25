@@ -16,6 +16,7 @@
   var SS = window.ClipgenScreenspace;
   var state = SS.state;
   var buildTypeIcon = SS.buildTypeIcon,
+    enqueueTask = SS.enqueueTask,
     findTask = SS.findTask,
     iconSpan = SS.iconSpan,
     loadFrame = SS.loadFrame,
@@ -324,72 +325,55 @@
     var row = el("div", "result-row" + (isExcluded ? " excluded" : ""));
     row.dataset.resultIndex = rIdx;
 
+    // Color and inactivity report spans; every other tool reports one instant.
+    var isSpan = task.type === "color" || task.type === "inactivity";
+    row.dataset.timestamp = isSpan ? r.start : r.timestamp;
+    row.appendChild(el("span", "result-timestamp", isSpan
+      ? formatTime(r.start, { decimals: 1 }) + " \u2013 " + formatTime(r.end, { decimals: 1 })
+      : formatTime(r.timestamp, { decimals: 1 })));
+
     if (task.type === "color") {
-      row.dataset.timestamp = r.start;
-      row.appendChild(el("span", "result-timestamp", formatTime(r.start, { decimals: 1 }) + " \u2013 " + formatTime(r.end, { decimals: 1 })));
       row.appendChild(el("span", "result-detail", r.duration.toFixed(1) + "s"));
     } else if (task.type === "inactivity") {
-      row.dataset.timestamp = r.start;
-      row.appendChild(el("span", "result-timestamp", formatTime(r.start, { decimals: 1 }) + " \u2013 " + formatTime(r.end, { decimals: 1 })));
       row.appendChild(el("span", "result-detail", r.duration.toFixed(1) + "s"));
       row.appendChild(el("span", "result-score", "d:" + (r.avg_distance !== undefined ? r.avg_distance : "?")));
     } else if (task.type === "change") {
-      row.dataset.timestamp = r.timestamp;
-      row.appendChild(el("span", "result-timestamp", formatTime(r.timestamp, { decimals: 1 })));
       row.appendChild(buildConfBar(Math.min(r.magnitude, 1), task.type));
       row.appendChild(el("span", "result-score", (r.magnitude * 100).toFixed(1) + "%"));
     } else if (task.type === "similarity") {
-      row.dataset.timestamp = r.timestamp;
-      row.appendChild(el("span", "result-timestamp", formatTime(r.timestamp, { decimals: 1 })));
       row.appendChild(buildConfBar(r.score, task.type));
       row.appendChild(el("span", "result-score", (r.score * 100).toFixed(1) + "%"));
     } else if (task.type === "text") {
-      row.dataset.timestamp = r.timestamp;
-      row.appendChild(el("span", "result-timestamp", formatTime(r.timestamp, { decimals: 1 })));
       row.appendChild(el("span", "result-detail", r.text_found || ""));
       row.appendChild(buildConfBar(r.confidence, task.type));
       row.appendChild(el("span", "result-score", (r.confidence * 100).toFixed(0) + "%"));
     } else if (task.type === "numbers") {
-      row.dataset.timestamp = r.timestamp;
-      row.appendChild(el("span", "result-timestamp", formatTime(r.timestamp, { decimals: 1 })));
       row.appendChild(el("span", "result-detail", String(r.number_found)));
       if (r.confidence !== undefined) {
         row.appendChild(buildConfBar(r.confidence, task.type));
         row.appendChild(el("span", "result-score", (r.confidence * 100).toFixed(0) + "%"));
       }
     } else if (task.type === "template" || task.type === "shape") {
-      row.dataset.timestamp = r.timestamp;
-      row.appendChild(el("span", "result-timestamp", formatTime(r.timestamp, { decimals: 1 })));
       row.appendChild(buildConfBar(r.best_score, task.type));
       row.appendChild(el("span", "result-score", (r.best_score * 100).toFixed(1) + "%"));
       row.appendChild(el("span", "result-detail", r.match_count + " match" + (r.match_count !== 1 ? "es" : "")));
     } else if (task.type === "flow") {
-      row.dataset.timestamp = r.timestamp;
-      row.appendChild(el("span", "result-timestamp", formatTime(r.timestamp, { decimals: 1 })));
       row.appendChild(buildConfBar(Math.min(r.magnitude / 20, 1), task.type));
       row.appendChild(el("span", "result-score", r.magnitude.toFixed(2)));
     } else if (task.type === "scene") {
-      row.dataset.timestamp = r.timestamp;
-      row.appendChild(el("span", "result-timestamp", formatTime(r.timestamp, { decimals: 1 })));
       row.appendChild(el("span", "result-detail", r.scene_name));
       row.appendChild(buildConfBar(r.score, task.type));
       row.appendChild(el("span", "result-score", (r.score * 100).toFixed(1) + "%"));
     } else if (task.type === "boundary") {
-      row.dataset.timestamp = r.timestamp;
-      row.appendChild(el("span", "result-timestamp", formatTime(r.timestamp, { decimals: 1 })));
       row.appendChild(buildConfBar(r._confidence !== undefined ? r._confidence : 0, task.type));
       row.appendChild(el("span", "result-score", "d:" + (r.distance !== undefined ? r.distance : "?")));
       // Scene label (Scene A/B/… — recurrence-aware for scene/hybrid metrics).
       if (r.scene_label) row.appendChild(el("span", "result-scene", r.scene_label));
     } else if (task.type === "attention") {
       // Confirmed focus shifts; Δ is the normalized jump of the attention peak.
-      row.dataset.timestamp = r.timestamp;
-      row.appendChild(el("span", "result-timestamp", formatTime(r.timestamp, { decimals: 1 })));
       row.appendChild(buildConfBar(r._confidence !== undefined ? r._confidence : 0, task.type));
       row.appendChild(el("span", "result-score", "Δ" + (r.shift_distance !== undefined ? r.shift_distance.toFixed(2) : "?")));
     } else if (task.type === "multitool") {
-      row.dataset.timestamp = r.timestamp;
-      row.appendChild(el("span", "result-timestamp", formatTime(r.timestamp, { decimals: 1 })));
       var badges = el("span", "result-detail multitool-badges");
       var stepDefs = (task.parameters && task.parameters.steps) || [];
       var types = r.tool_types || stepDefs.map(function (s) { return s.type; });
@@ -457,7 +441,7 @@
       cutoff: state.certaintyCutoff,
       showExcluded: state.showExcluded,
       eventsLen: (state.taskEvents[state.selectedTaskId] || []).length,
-      heatmapSig: (task.heatmap || "") + "|" + (task.heatmap_gif || "") + "|" + (task.heatmap_rolling_gif || ""),
+      heatmapSig: taskHeatmapSig(task),
       fastScan: (task.parameters || {}).scan_mode === "fast",
       rawLen: Array.isArray(results) ? results.length : -1,
     };
@@ -596,6 +580,13 @@
   var RESULTS_RENDER_ALL = 150;
   var RESULTS_CHUNK = 120;
 
+  // False when the result's confidence sits below the certainty cutoff.
+  function passesCutoff(r, task, hasConf) {
+    if (!hasConf || state.certaintyCutoff <= 0) return true;
+    var conf = resultConfidence(r, task);
+    return !(conf !== null && conf < state.certaintyCutoff);
+  }
+
   function renderResults() {
     return clipgenPerf.span("screenspace.renderResults", renderResultsImpl);
   }
@@ -632,10 +623,7 @@
           var appendFrag = document.createDocumentFragment();
           for (var ai = prev.rawLen; ai < results.length; ai++) {
             var ar = results[ai];
-            if (hasConfFast && state.certaintyCutoff > 0) {
-              var acv = resultConfidence(ar, task);
-              if (acv !== null && acv < state.certaintyCutoff) continue;
-            }
+            if (!passesCutoff(ar, task, hasConfFast)) continue;
             appendFrag.appendChild(buildResultRow(ar, ai, null, false, task));
           }
           container.appendChild(appendFrag);
@@ -674,8 +662,7 @@
     if ((task.parameters || {}).scan_mode === "fast") {
       fastLabel.classList.remove("hidden");
       fastLabel.innerHTML = "";
-      var fIcon = el("span", "fast-scan-label-icon");
-      applyIconMask(fIcon, "chevron-double-right", "/screenspace/icons/");
+      var fIcon = iconMaskSpan("chevron-double-right", { className: "fast-scan-label-icon" });
       fastLabel.appendChild(fIcon);
       fastLabel.appendChild(document.createTextNode("Fast scan results"));
       var rerunBtn = el("button", "btn btn-small fast-scan-rerun-btn", "Re-Run Normal");
@@ -691,15 +678,10 @@
             parameters: params,
           };
           if (t.region_ref) body.region_ref = t.region_ref;
-          apiPost("api/tasks", body).then(function (data) {
-            if (data.ok) {
-              state.tasks.push(data.task);
-              renderTaskList();
-              startSSE();
-              showToast("Re-queued in Normal mode");
-            } else {
-              showToast(data.error || "Failed to re-queue task");
-            }
+          enqueueTask(body, "Failed to re-queue task").then(function (data) {
+            if (!data.ok) return;
+            startSSE();
+            showToast("Re-queued in Normal mode");
           }).catch(toastError("Could not queue task"));
         });
       })(task);
@@ -741,7 +723,6 @@
         vid.muted = true;
         wrapper.appendChild(vid);
       }
-      container.innerHTML = "";
       container.appendChild(wrapper);
       return;
     }
@@ -861,7 +842,7 @@
     var visibleRows = [];
     results.forEach(function (r, rIdx) {
       // Find matching event for this result
-      var ts = r.timestamp !== undefined ? r.timestamp : r.start;
+      var ts = resultTime(r);
       var tsKey = ts !== undefined ? ts.toFixed(2) : null;
       var matchedEvent = null;
       if (tsKey && eventsByTs[tsKey]) {
@@ -872,11 +853,7 @@
         }
       }
 
-      // Certainty filtering
-      if (hasConf && state.certaintyCutoff > 0) {
-        var confValue = resultConfidence(r, task);
-        if (confValue !== null && confValue < state.certaintyCutoff) return;
-      }
+      if (!passesCutoff(r, task, hasConf)) return;
 
       var isExcluded = matchedEvent && matchedEvent.excluded;
       if (isExcluded && !state.showExcluded) return;

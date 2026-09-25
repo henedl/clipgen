@@ -29,15 +29,7 @@
     ctx.save();
     ctx.globalCompositeOperation = "destination-in";
     // Default (opaque) fill is fine: only alpha survives destination-in.
-    ctx.beginPath();
-    r.points.forEach(function (contour) {
-      if (contour.length < 3) return;
-      ctx.moveTo(contour[0][0] * w, contour[0][1] * h);
-      for (var i = 1; i < contour.length; i++) {
-        ctx.lineTo(contour[i][0] * w, contour[i][1] * h);
-      }
-      ctx.closePath();
-    });
+    traceRegionPolygonPath(ctx, r.points, { x: 0, y: 0, w: w, h: h });
     ctx.fill();
     ctx.restore();
   }
@@ -201,19 +193,13 @@
       undoBtn.type = "button";
       undoBtn.title = "Undo";
       undoBtn.setAttribute("aria-label", "Undo");
-      undoBtn.appendChild(iconMaskSpan("arrow-uturn-left", {
-        className: "ss-sample-modal__hist-icon",
-        basePath: "/screenspace/icons/",
-      }));
+      undoBtn.appendChild(iconMaskSpan("arrow-uturn-left", { className: "ss-sample-modal__hist-icon" }));
       undoBtn.addEventListener("click", undo);
       redoBtn = el("button", "btn btn-small ss-sample-modal__hist");
       redoBtn.type = "button";
       redoBtn.title = "Redo";
       redoBtn.setAttribute("aria-label", "Redo");
-      redoBtn.appendChild(iconMaskSpan("arrow-uturn-right", {
-        className: "ss-sample-modal__hist-icon",
-        basePath: "/screenspace/icons/",
-      }));
+      redoBtn.appendChild(iconMaskSpan("arrow-uturn-right", { className: "ss-sample-modal__hist-icon" }));
       redoBtn.addEventListener("click", redo);
       syncHistButtons();
       controls.appendChild(undoBtn);

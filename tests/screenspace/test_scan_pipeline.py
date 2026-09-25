@@ -416,7 +416,7 @@ class TestScanViaFfmpegPipe:
             received.append((ts, frame.copy()))
 
         result = screenspace._scan_via_ffmpeg_pipe(
-            "/fake.mp4", None, 1.0, cb, duration=10.0, full_frame=True
+            "/fake.mp4", None, 1.0, cb, duration=10.0
         )
         assert result is True
         assert len(received) == 1
@@ -482,7 +482,7 @@ class TestScanViaFfmpegPipe:
                 return False
 
         result = screenspace._scan_via_ffmpeg_pipe(
-            "/fake.mp4", None, 1.0, cb, duration=10.0, full_frame=True
+            "/fake.mp4", None, 1.0, cb, duration=10.0
         )
         assert result is True
         assert call_count[0] == 2
@@ -556,7 +556,6 @@ class TestKeyframeSkipGating:
             interval,
             lambda ts, f: None,
             duration=30.0,
-            full_frame=True,
             fast_opts=fast_opts,
         )
         return captured["cmd"]
@@ -613,7 +612,7 @@ class TestKeyframeSkipGating:
         monkeypatch.setattr("video.probe_max_keyframe_gap", _probe)
         monkeypatch.setattr(config, "SCREENSPACE_FAST_SCAN_SKIP_NONKEY", True)
         screenspace._scan_via_ffmpeg_pipe(
-            "/fake.mp4", None, 3.0, lambda ts, f: None, duration=30.0, full_frame=True
+            "/fake.mp4", None, 3.0, lambda ts, f: None, duration=30.0
         )
         assert "-skip_frame" not in captured["cmd"]
         assert probe_calls == []

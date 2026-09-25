@@ -31,10 +31,7 @@
 
   function iconSpan(mode) {
     var name = mode === "done" ? "check-circle" : "exclamation-triangle";
-    var span = el("span", "media-banner-icon");
-    span.style.maskImage = 'url("icons/' + name + '.svg")';
-    span.style.webkitMaskImage = 'url("icons/' + name + '.svg")';
-    return span;
+    return iconMaskSpan(name, { className: "media-banner-icon" });
   }
 
   // ---- Rendering ----
@@ -79,7 +76,6 @@
       actions.appendChild(btn);
     });
     root.appendChild(actions);
-    if (window.clipgenInitDataTooltips) window.clipgenInitDataTooltips();
   }
 
   // ---- Actions ----
@@ -280,11 +276,6 @@
     });
   }
 
-  function hide() {
-    stopPolling();
-    if (_host) render(null);
-  }
-
   function teardown() {
     stopPolling();
     _host = null;
@@ -294,8 +285,5 @@
 
   window.clipgenMediaBanner = {
     show: show,
-    hide: hide,
-    refresh: refresh,
-    teardown: teardown,
   };
 })();

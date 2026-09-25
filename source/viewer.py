@@ -61,6 +61,174 @@ def _export_config() -> dict[str, Any]:
     return cfg
 
 
+def _resolve_segment_source_fields(
+    clip: utils.ClipRecord,
+    base_video: str,
+    start_str: str,
+    end_str: str,
+    *,
+    allow_split: bool,
+) -> dict[str, Any]:
+    """Resolve the source-video fields for one persisted segment record.
+
+    ``sourceVideo`` is always a **basename** (matching ``pipeline.cut_global_range``);
+    regeneration resolves it against the input dir via ``resolve_input_path``.
+    Single-video (no ``source_timeline``): ``sourceVideo`` is *base_video*'s
+    basename and the local times equal the global times. Multi-video: the global
+    ``[start, end]`` is mapped onto ``clip['source_timeline']`` into the owning
+    sub-video plus local offsets. When *allow_split* is True (video clips) and the
+    range straddles a recording boundary, a ``parts`` list describes each piece so
+    it can be re-cut and stitched; ``sourceVideo``/``localStart``/``localEnd``
+    carry the first piece. When *allow_split* is False (screenshots/GIFs/
+    transcripts) a single frame's position maps by start only — never split.
+
+    ``start``/``end`` (global seconds) stay on the record for the timeline
+    viewer; these fields drive regeneration, which re-cuts from ``sourceVideo``.
+    """
+    global_start = utils.timestamp_to_seconds(start_str) or 0.0
+    global_end = utils.timestamp_to_seconds(end_str) or 0.0
+    fallback: dict[str, Any] = {
+        "sourceVideo": Path(base_video).name,
+        "localStart": global_start,
+        "localEnd": global_end,
+    }
+    timeline = clip.get("source_timeline")
+    if not timeline or len(timeline) < 2:
+        return fallback
+
+    if allow_split:
+        pieces = utils.map_global_range_to_segments(timeline, global_start, global_end)
+        if pieces:
+            parts = [
+                {
+                    "sourceVideo": Path(timeline[index][0]).name,
+                    "localStart": local_start,
+                    "localEnd": local_end,
+                }
+                for index, local_start, local_end in pieces
+            ]
+            first = parts[0]
+            fields: dict[str, Any] = {
+                "sourceVideo": first["sourceVideo"],
+                "localStart": first["localStart"],
+                "localEnd": first["localEnd"],
+            }
+            if len(parts) > 1:
+                fields["parts"] = parts
+            return fields
+        return fallback
+
+    mapped = utils.map_global_to_segment(timeline, global_start)
+    if mapped is None:
+        return fallback
+    index, local_start = mapped
+    seg_duration = timeline[index][1]
+    local_end = min(float(seg_duration), local_start + (global_end - global_start))
+    return {
+        "sourceVideo": Path(timeline[index][0]).name,
+        "localStart": local_start,
+        "localEnd": local_end,
+    }
+
+
+def _clip_metadata_fields(
+    clip: utils.ClipRecord,
+    base_video: str,
+    start_str: str,
+    end_str: str,
+    *,
+    allow_split: bool = False,
+) -> dict[str, Any]:
+    """Extract the shared per-segment metadata that every persisted record needs.
+
+    Used by both ``build_artifact_record`` (manifest artifacts) and
+    ``build_reel_component`` (reel-component records). The two shapes only differ
+    by file-specific fields (id/file/type/thumbnail), so the body of every
+    persisted record flows from one place.
+
+    ``start``/``end`` are GLOBAL seconds (the timeline viewer positions artifacts
+    by them). ``sourceVideo``/``localStart``/``localEnd`` (and ``parts`` for a
+    boundary-spanning clip) describe where the segment was actually cut from and
+    drive regeneration — see :func:`_resolve_segment_source_fields`.
+    """
+    cell = clip.get("cell")
+    cell_row = getattr(cell, "row", None)
+    cell_col = getattr(cell, "col", None)
+    fields: dict[str, Any] = {
+        "start": utils.timestamp_to_seconds(start_str),
+        "end": utils.timestamp_to_seconds(end_str),
+        "study": clip.get("study", ""),
+        "participant": clip.get("participant", ""),
+        "category": clip.get("category", ""),
+        "severity": clip.get("severity", ""),
+        "description": clip.get("desc", ""),
+        "cellRow": cell_row,
+        "cellCol": cell_col,
+        "cellA1": utils.safe_cell_a1(cell_row, cell_col),
+        "annotations": list(clip.get("cell_annotations", [])),
+    }
+    fields.update(
+        _resolve_segment_source_fields(
+            clip, base_video, start_str, end_str, allow_split=allow_split
+        )
+    )
+    return fields
+
+
+def build_artifact_record(
+    clip: utils.ClipRecord,
+    base_video: str,
+    out_path: str,
+    start_str: str,
+    end_str: str,
+    *,
+    artifact_type: str,
+    seg_idx: int,
+) -> dict[str, Any]:
+    """Build one artifact dict; its id needs a unique cell (row, col).
+
+    Synthetic records get negative rows from ``files.build_clip_records``.
+    """
+    cell = clip.get("cell")
+    cell_row = getattr(cell, "row", None)
+    cell_col = getattr(cell, "col", None)
+    if cell_row is None or cell_col is None:
+        raise ValueError(
+            "build_artifact_record requires a cell with row and col; "
+            "synthetic records must use a unique (row, col) pair — see "
+            "files.build_clip_records for the negative-row convention."
+        )
+    # A cell's clip, screenshot and GIF must not share an id.
+    type_suffix = "" if artifact_type == "clip" else f"-{artifact_type}"
+    return {
+        "id": f"a{cell_row}c{cell_col}s{seg_idx}{type_suffix}",
+        "type": artifact_type,
+        "file": Path(out_path).name,
+        "thumbnail": "",
+        # Only video clips may span a recording boundary; screenshots and GIFs map
+        # by start.
+        **_clip_metadata_fields(
+            clip, base_video, start_str, end_str, allow_split=(artifact_type == "clip")
+        ),
+    }
+
+
+def build_reel_component(
+    clip: utils.ClipRecord,
+    base_video: str,
+    start_str: str,
+    end_str: str,
+) -> dict[str, Any]:
+    """Build one reel-component dict from a clip record + one segment.
+
+    Reel components describe an input segment used to assemble a reel — they
+    share the artifact record's per-segment metadata shape but omit the
+    file/id/type fields (the rendered output is the reel itself, not the
+    component). Stored in the ``components`` list of a reel manifest entry.
+    """
+    return _clip_metadata_fields(clip, base_video, start_str, end_str, allow_split=True)
+
+
 def build_artifact_records_for_clip(
     clip: utils.ClipRecord,
     base_video: str,
@@ -95,7 +263,7 @@ def build_artifact_records_for_clip(
     )
     times = clip.get("times", [])
     records = [
-        utils.build_artifact_record(
+        build_artifact_record(
             clip,
             base_video,
             out_path,
@@ -278,73 +446,48 @@ def _generate_viewer_html(
         utils.warning_print(f"Could not read {viewer_label.lower()} assets: {e}")
         return None
 
-    # Prepend design tokens so standalone viewers have the full token set
-    tokens_path = assets_dir / "tokens.css"
-    if tokens_path.is_file():
+    def _optional_asset(name: str) -> str | None:
+        path = assets_dir / name
+        if not path.is_file():
+            return None
         try:
-            css_text = _read_bundled_asset(str(tokens_path)) + "\n" + css_text
+            return _read_bundled_asset(str(path))
         except OSError:
-            pass
+            return None
 
-    # Inline the hotkey registry; exports run the default keymap (see _export_config).
-    hk_css_tag = '<link rel="stylesheet" href="hotkeys.css">'
-    hk_js_tag = '<script src="hotkeys.js" defer></script>'
-    if hk_css_tag in template_html:
-        hk_css_path = assets_dir / "hotkeys.css"
-        if hk_css_path.is_file():
-            try:
-                css_text = css_text + "\n" + _read_bundled_asset(str(hk_css_path))
-            except OSError:
-                pass
-        template_html = template_html.replace(hk_css_tag, "")
-    if hk_js_tag in template_html:
-        hk_js_path = assets_dir / "hotkeys.js"
-        if hk_js_path.is_file():
-            try:
-                # utils.js is prepended later, so the order stays utils -> hotkeys -> page.
-                js_text = _read_bundled_asset(str(hk_js_path)) + "\n" + js_text
-            except OSError:
-                pass
-        template_html = template_html.replace(hk_js_tag, "")
+    # Prepend tokens, then the shared export shell, ahead of page CSS.
+    for name in ("export-chrome.css", "tokens.css"):
+        text = _optional_asset(name)
+        if text is not None:
+            css_text = text + "\n" + css_text
 
-    # Inline motion.js (JS-only) or the export's toast fade no-ops; consumers read ClipgenMotion lazily.
-    mo_js_tag = '<script src="motion.js" defer></script>'
-    if mo_js_tag in template_html:
-        mo_js_path = assets_dir / "motion.js"
-        if mo_js_path.is_file():
-            try:
-                js_text = _read_bundled_asset(str(mo_js_path)) + "\n" + js_text
-            except OSError:
-                pass
-        template_html = template_html.replace(mo_js_tag, "")
-
-    # Inline card-scrubber where referenced (timeline only); external tags are stripped below.
-    cs_css_tag = '<link rel="stylesheet" href="card-scrubber.css">'
-    cs_js_tag = '<script src="card-scrubber.js" defer></script>'
-    if cs_css_tag in template_html:
-        cs_css_path = assets_dir / "card-scrubber.css"
-        if cs_css_path.is_file():
-            try:
-                css_text = css_text + "\n" + _read_bundled_asset(str(cs_css_path))
-            except OSError:
-                pass
-        template_html = template_html.replace(cs_css_tag, "")
-    if cs_js_tag in template_html:
-        cs_js_path = assets_dir / "card-scrubber.js"
-        if cs_js_path.is_file():
-            try:
-                js_text = _read_bundled_asset(str(cs_js_path)) + "\n" + js_text
-            except OSError:
-                pass
-        template_html = template_html.replace(cs_js_tag, "")
+    # Prepend order keeps JS as utils -> card-scrubber -> motion -> hotkeys -> page.
+    for name in (
+        "hotkeys.css",
+        "hotkeys.js",
+        "motion.js",
+        "card-scrubber.css",
+        "card-scrubber.js",
+    ):
+        is_css = name.endswith(".css")
+        tag = (
+            f'<link rel="stylesheet" href="{name}">'
+            if is_css
+            else f'<script src="{name}" defer></script>'
+        )
+        if tag not in template_html:
+            continue
+        text = _optional_asset(name)
+        if text is not None and is_css:
+            css_text = css_text + "\n" + text
+        elif text is not None:
+            js_text = text + "\n" + js_text
+        template_html = template_html.replace(tag, "")
 
     # Prepend shared utilities so standalone viewers have them
-    utils_js_path = assets_dir / "utils.js"
-    if utils_js_path.is_file():
-        try:
-            js_text = _read_bundled_asset(str(utils_js_path)) + "\n" + js_text
-        except OSError:
-            pass
+    utils_js = _optional_asset("utils.js")
+    if utils_js is not None:
+        js_text = utils_js + "\n" + js_text
 
     # Inline CSS
     css_link_tag = f'<link rel="stylesheet" href="{css_name}">'
@@ -358,13 +501,7 @@ def _generate_viewer_html(
     utils_js_tag = '<script src="utils.js" defer></script>\n  '
     template_html = template_html.replace(utils_js_tag, "")
 
-    # Strip dev-only tags (e.g. dev-token-tweak.js) so they never ship in exports.
-    template_html = re.sub(
-        r"<script\b[^>]*\bdata-dev-only\b[^>]*>\s*</script>\s*",
-        "",
-        template_html,
-        flags=re.IGNORECASE,
-    )
+    # Strip data-dev-only links so they never ship in exports.
     template_html = re.sub(
         r"<link\b[^>]*\bdata-dev-only\b[^>]*/?>\s*",
         "",

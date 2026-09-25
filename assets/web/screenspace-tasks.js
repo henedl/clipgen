@@ -6,10 +6,9 @@
  * Loaded after screenspace.js (and before the other satellites, which destructure
  * findTask / restoreTaskToWorkflow / setInputValue / syncValueDisplays off SS at
  * load time). Reads the hub's shared state + helpers through
- * window.ClipgenScreenspace and publishes its entry points back onto it; the hub
- * keeps same-named thin delegators so its own call sites are unchanged. Function
- * bodies are unchanged from when they lived inline in screenspace.js — the locals
- * below stand in for the closure. renderResults / loadAndShowResults (results
+ * window.ClipgenScreenspace and publishes its entry points back onto it. The hub
+ * delegates only the names it calls itself. The locals below stand in for the
+ * hub closure. renderResults / loadAndShowResults (results
  * surface) and setTargetColor (color satellite) are reached via SS.* late-binding
  * because their owners load/register after this file.
  */
@@ -46,26 +45,9 @@
   var _etaTicker = createIntervalTicker(tickEtas, {
     gateHidden: true,
     isActive: function () {
-      return state.tasks.some(taskIsActive);
+      return state.tasks.some(taskIsRunning);
     },
   });
-
-  var TASK_TYPE_ICON_FILES = {
-    multitool: "link",
-    color: "eye-dropper",
-    change: "bolt",
-    similarity: "photo",
-    text: "language",
-    numbers: "hashtag",
-    timelapse: "forward",
-    template: "viewfinder-circle",
-    shape: "star",
-    flow: "arrows-right-left",
-    scene: "squares-2x2",
-    inactivity: "pause-circle",
-    boundary: "flag",
-    attention: "eye",
-  };
 
   function sortTasks() {
     // completed/failed at top (oldest first), then running, then queued (by priority), cancelled last
@@ -78,12 +60,6 @@
         return (a.priority || 100) - (b.priority || 100);
       }
       return (a.created_at || "").localeCompare(b.created_at || "");
-    });
-  }
-
-  function selectableTasks() {
-    return state.tasks.filter(function (t) {
-      return isTaskRestorable(t);
     });
   }
 
@@ -135,11 +111,22 @@
     crumbEl.style.color = taskTypeColor(task.type);
   }
 
+  // Select a task and show its results, switching participant if needed.
+  function selectTaskResults(task) {
+    if (task.participant && task.participant !== state.selectedParticipant) {
+      selectParticipant(task.participant);
+    }
+    state.selectedTaskId = task.id;
+    setRightPaneTab("results");
+    SS.loadAndShowResults(task.id);
+    renderTaskList();
+  }
+
   function openResultsSwitcher() {
     var panel = qs("#resultsSwitcherPanel");
     if (!panel) return;
     panel.innerHTML = "";
-    var tasks = selectableTasks();
+    var tasks = state.tasks.filter(isTaskRestorable);
     if (tasks.length === 0) {
       var empty = el("div", "rp-switcher-empty", "No completed tasks yet.");
       panel.appendChild(empty);
@@ -162,17 +149,9 @@
         }
         item.addEventListener("click", function (e) {
           e.stopPropagation();
-          var taskId = t.id;
           closeResultsSwitcher();
-          var task = findTask(taskId);
-          if (!task) return;
-          if (task.participant && task.participant !== state.selectedParticipant) {
-            selectParticipant(task.participant);
-          }
-          state.selectedTaskId = taskId;
-          setRightPaneTab("results");
-          SS.loadAndShowResults(taskId);
-          renderTaskList();
+          var task = findTask(t.id);
+          if (task) selectTaskResults(task);
         });
         frag.appendChild(item);
       });
@@ -280,13 +259,7 @@
           updateResultsCrumb();
           setRightPaneTab("queue");
         } else {
-          if (task.participant && task.participant !== state.selectedParticipant) {
-            selectParticipant(task.participant);
-          }
-          state.selectedTaskId = taskId;
-          setRightPaneTab("results");
-          SS.loadAndShowResults(taskId);
-          renderTaskList();
+          selectTaskResults(task);
         }
       }
     });
@@ -341,7 +314,7 @@
         _taskListDragOverRaf = null;
       }
       _taskListPendingDragOver = null;
-      clearDragIndicators(taskListEl);
+      clearDropIndicators(taskListEl, ".task-card");
       _taskDragCache = null;
     });
 
@@ -381,7 +354,7 @@
         if (!pending) return;
         var idx = pending.insertIdx;
         var cardsNow = taskListEl.querySelectorAll(".task-card:not(.dragging)");
-        clearDragIndicators(taskListEl);
+        clearDropIndicators(taskListEl, ".task-card");
         if (idx < cardsNow.length) {
           cardsNow[idx].classList.add("drag-over");
         } else {
@@ -400,7 +373,7 @@
 
     taskListEl.addEventListener("drop", function (e) {
       e.preventDefault();
-      clearDragIndicators(taskListEl);
+      clearDropIndicators(taskListEl, ".task-card");
       var draggedId = e.dataTransfer.getData("text/plain");
       if (!draggedId) return;
 
@@ -417,7 +390,7 @@
         var fromIdx = queuedIds.indexOf(draggedId);
         if (fromIdx < 0) return;
         queuedIds.splice(fromIdx, 1);
-        var toIdx = getDropIndexAmongStatus(taskListEl, e.clientY, "queued");
+        var toIdx = getDropIndex(taskListEl, e.clientY, "queued");
         queuedIds.splice(toIdx, 0, draggedId);
 
         apiPut("api/tasks/reorder", { task_ids: queuedIds }).catch(function () {
@@ -439,7 +412,7 @@
         }
         if (fromIdx2 < 0) return;
         finishedTasks.splice(fromIdx2, 1);
-        var toIdx2 = getDropIndexAmongStatus(taskListEl, e.clientY, "finished");
+        var toIdx2 = getDropIndex(taskListEl, e.clientY, "finished");
         finishedTasks.splice(toIdx2, 0, draggedTask);
         // Reassign created_at to maintain the visual order across polls
         var timestamps = finishedTasks.map(function (t) { return t.created_at; });
@@ -476,28 +449,10 @@
     _taskDragCache = { all: all, queued: queued, finished: finished };
   }
 
-  function getDropIndex(container, clientY) {
+  // group: "all", "queued" or "finished".
+  function getDropIndex(container, clientY, group) {
     if (!_taskDragCache) _cacheTaskDragMidpoints(container);
-    var mids = _taskDragCache.all;
-    for (var i = 0; i < mids.length; i++) {
-      if (clientY < mids[i]) return i;
-    }
-    return mids.length;
-  }
-
-  function getDropIndexAmongStatus(container, clientY, group) {
-    if (!_taskDragCache) _cacheTaskDragMidpoints(container);
-    var mids = group === "queued" ? _taskDragCache.queued : _taskDragCache.finished;
-    for (var i = 0; i < mids.length; i++) {
-      if (clientY < mids[i]) return i;
-    }
-    return mids.length;
-  }
-
-  function clearDragIndicators(container) {
-    var cards = container.querySelectorAll(".task-card.drag-over");
-    for (var i = 0; i < cards.length; i++) cards[i].classList.remove("drag-over");
-    container.classList.remove("drag-over-append");
+    return indexBefore(_taskDragCache[group || "all"], clientY);
   }
 
   // Sets value without dispatching input; callers needing listeners must dispatch it themselves.
@@ -534,6 +489,7 @@
     }
 
     // Select region
+    var regionRestored = true;
     if (task.region_ref) {
       var restoredRef = normalizeRegionRef(task.region_ref);
       state.runRegions = restoredRef ? [restoredRef] : [];
@@ -545,15 +501,15 @@
       } else {
         state.activeRegion = null;
       }
-      renderRegionChips();
-      renderRunRegionPicker();
-      renderOverlay();
-      updateRegionButtons();
     } else if (task.region && state.regions[task.region]) {
       state.activeRegion = task.region;
       state.pendingRegion = null;
       state.runRegions = [activeRegionRef(task.region)];
       state.runRegionsSeeded = false;
+    } else {
+      regionRestored = false;
+    }
+    if (regionRestored) {
       renderRegionChips();
       renderRunRegionPicker();
       renderOverlay();
@@ -573,9 +529,7 @@
     // For scene, restore references into state before rendering so the list shows them.
     if (task.type === "scene") {
       var sceneParams = task.parameters || {};
-      state.sceneReferences = (sceneParams.scene_references || []).map(function (ref) {
-        return { name: ref.name, timestamp: ref.timestamp, threshold: numberOrDefault(ref.threshold, 0.75) };
-      });
+      state.sceneReferences = (sceneParams.scene_references || []).map(sceneRefPayload);
     }
 
     // Rebuild multitool steps first; step._initial lets _mtRender* set values at creation.
@@ -591,9 +545,7 @@
         if (s.region) step.region = s.region;
         if (s.region_ref) step.region_ref = s.region_ref;
         if (s.reference_timestamp !== undefined) step._refTs = s.reference_timestamp;
-        if (s.scene_references) step._scenes = s.scene_references.map(function (ref) {
-          return { name: ref.name, timestamp: ref.timestamp, threshold: numberOrDefault(ref.threshold, 0.75) };
-        });
+        if (s.scene_references) step._scenes = s.scene_references.map(sceneRefPayload);
         step._initial = s;
         return step;
       });
@@ -605,6 +557,13 @@
     state.suppressCalibrationRefresh = false;
 
     params = task.parameters || {};
+    if ((task.type === "template" || task.type === "shape") && params.reference_timestamp !== undefined) {
+      state.referenceTimestamp = params.reference_timestamp;
+      // Re-arm the capture region (name only) so a re-run samples the same region.
+      state.capturedRefPreview = params.reference_region
+        ? { region: params.reference_region, ts: params.reference_timestamp, dataUrl: null }
+        : null;
+    }
     if (task.type === "multitool") {
       setInputValue("#paramMultitoolInterval", numberOrDefault(params.interval, 1.0));
     } else if (task.type === "color") {
@@ -612,7 +571,7 @@
       var ch = numberOrDefault(tc.h, 90);
       var cs = numberOrDefault(tc.s, 200);
       var cv = numberOrDefault(tc.v, 200);
-      var savedTol = params.tolerance ? Math.round(params.tolerance.h * 100 / 90) : 30;
+      var savedTol = colorTolPct(params.tolerance);
       setInputValue("#paramColorTol", savedTol);
       setInputValue("#paramColorInterval", numberOrDefault(params.interval, 1.0));
       var savedColorMode = _colorMode(params.color_mode);
@@ -670,26 +629,12 @@
         setInputValue("#paramTlSampleInterval", params.sample_interval);
       }
     } else if (task.type === "template") {
-      if (params.reference_timestamp !== undefined) {
-        state.referenceTimestamp = params.reference_timestamp;
-        // Re-arm the capture region (name only) so a re-run samples the same region.
-        state.capturedRefPreview = params.reference_region
-          ? { region: params.reference_region, ts: params.reference_timestamp, dataUrl: null }
-          : null;
-      }
       setInputValue("#paramTemplateThresh", numberOrDefault(params.threshold, 0.70));
       setInputValue("#paramTemplateInterval", numberOrDefault(params.interval, 1.0));
       if (params.template_scale) {
         setInputValue("#paramTemplateScale", Math.round(params.template_scale * 100));
       }
     } else if (task.type === "shape") {
-      if (params.reference_timestamp !== undefined) {
-        state.referenceTimestamp = params.reference_timestamp;
-        // Re-arm the capture region (name only) so a re-run samples the same region.
-        state.capturedRefPreview = params.reference_region
-          ? { region: params.reference_region, ts: params.reference_timestamp, dataUrl: null }
-          : null;
-      }
       setInputValue("#paramShapeThresh", numberOrDefault(params.threshold, 0.55));
       if (params.scale_min) {
         setInputValue("#paramShapeScaleMin", Math.round(params.scale_min * 100));
@@ -760,6 +705,19 @@
     // Re-evaluate pins so the strip and Run hint reflect the restored params.
     refreshCalibration();
     showToast("Restored " + task.type + " task parameters");
+  }
+
+  // POST a task and list it once; failMsg toasts failures (or the server error).
+  function enqueueTask(body, failMsg) {
+    return apiPost("api/tasks", body).then(function (data) {
+      if (data.ok && data.task) {
+        if (!findTask(data.task.id)) state.tasks.push(data.task);
+        renderTaskList();
+      } else if (failMsg) {
+        showToast(data.error || failMsg);
+      }
+      return data;
+    });
   }
 
   function findTask(id) {
@@ -880,17 +838,15 @@
       var badge = el("span", "task-card-type");
       badge.style.color = taskTypeColor(task.type);
       badge.title = task.type;
-      var typeIconEl = el("span", "task-card-type-icon");
-      var iconFile = TASK_TYPE_ICON_FILES[task.type] || "squares-2x2";
-      applyIconMask(typeIconEl, iconFile, "/screenspace/icons/");
+      var iconFile = SS.TOOL_ICON_NAMES[task.type] || "squares-2x2";
+      var typeIconEl = iconMaskSpan(iconFile, { className: "task-card-type-icon" });
       badge.appendChild(typeIconEl);
       card.appendChild(badge);
 
       // Fast scan badge
       if ((task.parameters || {}).scan_mode === "fast") {
         var fb = el("span", "task-fast-badge");
-        var bi = el("span", "task-fast-badge-icon");
-        applyIconMask(bi, "chevron-double-right", "/screenspace/icons/");
+        var bi = iconMaskSpan("chevron-double-right", { className: "task-fast-badge-icon" });
         fb.appendChild(bi);
         fb.appendChild(document.createTextNode("Fast"));
         card.appendChild(fb);
@@ -976,7 +932,8 @@
 
   // ---- Elapsed / ETA ticker ----
 
-  function taskIsActive(task) {
+  // Running or paused; utils isTaskActive also counts queued.
+  function taskIsRunning(task) {
     return task.status === "running" || task.status === "paused";
   }
 
@@ -1013,14 +970,14 @@
     var fills = document.querySelectorAll("#taskList [data-task-progress]");
     for (var i = 0; i < fills.length; i++) {
       var t = findTask(fills[i].dataset.taskProgress);
-      if (t && taskIsActive(t)) {
+      if (t && taskIsRunning(t)) {
         fills[i].style.width = Math.round((t.progress || 0) * 100) + "%";
       }
     }
     var spans = document.querySelectorAll("#taskList [data-task-status]");
     for (var j = 0; j < spans.length; j++) {
       var st = findTask(spans[j].dataset.taskStatus);
-      if (st && taskIsActive(st)) spans[j].textContent = taskStatusText(st);
+      if (st && taskIsRunning(st)) spans[j].textContent = taskStatusText(st);
     }
   }
 
@@ -1057,23 +1014,17 @@
     var spans = document.querySelectorAll("#taskList [data-task-eta]");
     for (var i = 0; i < spans.length; i++) {
       var task = findTask(spans[i].dataset.taskEta);
-      if (task && taskIsActive(task)) spans[i].textContent = taskEtaLabel(task);
+      if (task && taskIsRunning(task)) spans[i].textContent = taskEtaLabel(task);
     }
   }
 
   function ensureEtaTicker() {
     // Start only while a task is active and the tab is visible; otherwise stop.
-    if (state.tasks.some(taskIsActive) && !document.hidden) _etaTicker.ensure();
+    if (state.tasks.some(taskIsRunning) && !document.hidden) _etaTicker.ensure();
     else _etaTicker.stop();
   }
 
   // ---- SSE (Server-Sent Events) with polling fallback ----
-
-  // Heatmap filenames land after completion (outside the worker lock); signature catches late arrival.
-  function _heatmapSig(t) {
-    if (!t) return "";
-    return (t.heatmap || "") + "|" + (t.heatmap_gif || "") + "|" + (t.heatmap_rolling_gif || "");
-  }
 
   // Results are append-only during a scan, so result_count is a safe tail cursor for _syncTaskResults.
   var _resultFetching = {};
@@ -1085,8 +1036,7 @@
     tasks.forEach(function (t) {
       seenNow[t.id] = t.status;
       var prev = _taskStatusSeen[t.id];
-      var terminal = t.status === "completed" || t.status === "failed" || t.status === "cancelled";
-      if (prev && prev !== t.status && terminal) {
+      if (prev && prev !== t.status && taskIsTerminal(t)) {
         delete state.taskResults[t.id];
       }
       var cached = state.taskResults[t.id];
@@ -1146,7 +1096,7 @@
     var oldSelected = state.selectedTaskId;
     var oldTask = oldSelected ? findTask(oldSelected) : null;
     var wasRunning = oldTask && (oldTask.status === "queued" || oldTask.status === "running");
-    var oldHeatmapSig = _heatmapSig(oldTask);
+    var oldHeatmapSig = taskHeatmapSig(oldTask);
     state.tasks = data.tasks;
     _reconcileResultCache(data.tasks);
     // Rebuild the pause icon only on flips; every push (~2/s) would refetch its svg.
@@ -1156,7 +1106,7 @@
     }
     // Rebuild only on status/heatmap transitions; progress and result_count update in place (tickTaskProgress, _syncTaskResults).
     var taskFp = JSON.stringify(data.tasks.map(function (t) {
-      return t.id + ":" + t.status + ":" + _heatmapSig(t);
+      return t.id + ":" + t.status + ":" + taskHeatmapSig(t);
     }));
     var taskChanged = taskFp !== _lastTaskFp;
     _lastTaskFp = taskFp;
@@ -1177,7 +1127,7 @@
     } else if (oldSelected) {
       // Late heatmap arrival on a completed task: re-render so the section appears.
       var curTask = findTask(oldSelected);
-      if (curTask && curTask.status === "completed" && _heatmapSig(curTask) !== oldHeatmapSig) {
+      if (curTask && curTask.status === "completed" && taskHeatmapSig(curTask) !== oldHeatmapSig) {
         if (state.selectedTaskResults) SS.renderResults();
         else SS.loadAndShowResults(oldSelected);
       }
@@ -1224,10 +1174,7 @@
   }
 
   function pollTasks() {
-    var hasActive = state.tasks.some(function (t) {
-      return isTaskActive(t);
-    });
-    if (!hasActive) {
+    if (!state.tasks.some(isTaskActive)) {
       stopPolling();
       return;
     }
@@ -1252,9 +1199,9 @@
     }
     _taskListPendingDragOver = null;
     var stepsDiv = document.querySelector(".multitool-steps");
-    if (stepsDiv) SS.clearMultitoolDragIndicators(stepsDiv);
+    if (stepsDiv) clearDropIndicators(stepsDiv, ".multitool-step");
     var taskListEl = qs("#taskList");
-    if (taskListEl) clearDragIndicators(taskListEl);
+    if (taskListEl) clearDropIndicators(taskListEl, ".task-card");
   });
 
   document.addEventListener("visibilitychange", function () {
@@ -1264,16 +1211,14 @@
       _etaTicker.stop();
       return;
     }
-    var hasActive = state.tasks.some(function (t) {
-      return isTaskActive(t);
-    });
-    if (hasActive) startSSE();
+    if (state.tasks.some(isTaskActive)) startSSE();
     ensureEtaTicker();
   });
 
   // ---- Satellite interface (window.ClipgenScreenspace) ----
   // Consumed by hub delegators and later-loading satellites.
   SS.findTask = findTask;
+  SS.enqueueTask = enqueueTask;
   SS.focusedTaskId = focusedTaskId;
   SS.renderTaskList = renderTaskList;
   SS.startSSE = startSSE;

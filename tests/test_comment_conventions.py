@@ -252,7 +252,7 @@ _TEST_BASELINE: dict[str, int] = {
     "tests/test_media_play_frontend_source.py": 2,
     "tests/test_mindnode.py": 5,
     "tests/test_motion_wiring.py": 27,
-    "tests/test_multi_video.py": 7,
+    "tests/test_multi_video.py": 6,
     "tests/test_overview.py": 1,
     "tests/test_packaging.py": 4,
     "tests/test_participant_merge.py": 5,

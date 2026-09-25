@@ -125,20 +125,7 @@
     var now = ctx.currentTime;
 
     // Crossfade-out the previous snippet instead of hard-stopping (avoids clicks).
-    if (_audioGain) {
-      _audioGain.gain.cancelScheduledValues(now);
-      _audioGain.gain.setValueAtTime(_audioGain.gain.value, now);
-      _audioGain.gain.linearRampToValueAtTime(0, now + _audioFadeOut);
-    }
-    if (_audioSource) {
-      var prev = _audioSource;
-      var prevGain = _audioGain;
-      setTimeout(function () {
-        try { prev.stop(); } catch (_) {}
-        prev.disconnect();
-        if (prevGain) prevGain.disconnect();
-      }, _audioFadeOut * 1000 + 5);
-    }
+    if (_audioSource) _fadeOutSource(_audioSource, _audioGain, now);
 
     var gain = ctx.createGain();
     gain.connect(ctx.destination);
@@ -161,23 +148,24 @@
     _audioGain = gain;
   }
 
+  // Ramps gain to zero, then stops and disconnects the source.
+  function _fadeOutSource(src, gain, now) {
+    if (gain) {
+      gain.gain.cancelScheduledValues(now);
+      gain.gain.setValueAtTime(gain.gain.value, now);
+      gain.gain.linearRampToValueAtTime(0, now + _audioFadeOut);
+    }
+    setTimeout(function () {
+      try { src.stop(); } catch (_) {}
+      src.disconnect();
+      if (gain) gain.disconnect();
+    }, _audioFadeOut * 1000 + 5);
+  }
+
   function audioScrubStop() {
     _audioLastTime = -1;
     if (_audioSource) {
-      var ctx = getAudioContext();
-      var now = ctx.currentTime;
-      var src = _audioSource;
-      var gain = _audioGain;
-      if (gain) {
-        gain.gain.cancelScheduledValues(now);
-        gain.gain.setValueAtTime(gain.gain.value, now);
-        gain.gain.linearRampToValueAtTime(0, now + _audioFadeOut);
-      }
-      setTimeout(function () {
-        try { src.stop(); } catch (_) {}
-        src.disconnect();
-        if (gain) gain.disconnect();
-      }, _audioFadeOut * 1000 + 5);
+      _fadeOutSource(_audioSource, _audioGain, getAudioContext().currentTime);
       _audioSource = null;
       _audioGain = null;
     }
@@ -292,18 +280,11 @@
 
   // ---- Public API ----
 
-  // Attach scrubbing; consumer sets backgroundImage, this owns backgroundSize/Position. opts: spriteData, audioFile, audioBaseUrl, restFrame, onScrub.
+  // Attach sprite scrubbing. opts: spriteData, audioUrl (also the cache key), restFrame, onScrub.
   function attach(mediaEl, opts) {
     if (!mediaEl || !opts || !opts.spriteData) return function () {};
     var sd = opts.spriteData;
-    var audioFile = opts.audioFile || null;
-    var audioBaseUrl = opts.audioBaseUrl || "media/";
-    // An explicit audioUrl skips encodeURIComponent, which would corrupt "?start=&end=" queries.
-    var audioUrl = opts.audioUrl
-      ? opts.audioUrl
-      : audioFile
-        ? audioBaseUrl + encodeURIComponent(audioFile)
-        : null;
+    var audioUrl = opts.audioUrl || null;
 
     // Map a frame index onto the sprite grid's background-position percentages.
     function framePosition(frameIndex) {
@@ -334,9 +315,9 @@
         frameIndex = Math.max(0, Math.min(frameIndex, sd.frameCount - 1));
         mediaEl.style.backgroundPosition = framePosition(frameIndex);
         if (opts.onScrub) opts.onScrub(Math.max(0, Math.min(frac, 1)), frameIndex);
-        if (audioFile && audioUrl) {
-          audioScrubAt(audioFile, audioUrl, frameIndex * sd.interval);
-          var waveform = extractWaveform(audioFile);
+        if (audioUrl) {
+          audioScrubAt(audioUrl, audioUrl, frameIndex * sd.interval);
+          var waveform = extractWaveform(audioUrl);
           if (waveform) {
             var wfCanvas = getOrCreateWaveformCanvas(mediaEl);
             if (wfCanvas) drawWaveform(wfCanvas, waveform, frac);
@@ -346,7 +327,7 @@
     }
 
     function onLeave() {
-      if (sd) mediaEl.style.backgroundPosition = framePosition(restFrame);
+      mediaEl.style.backgroundPosition = framePosition(restFrame);
       if (opts.onScrub) opts.onScrub(null, restFrame);
       audioScrubStop();
       clearWaveform(mediaEl);
@@ -359,29 +340,25 @@
     _attached.push(entry);
 
     return function detach() {
-      mediaEl.removeEventListener("mousemove", onMove);
-      mediaEl.removeEventListener("mouseleave", onLeave);
-      var canvas = mediaEl.querySelector(".waveform-canvas");
-      if (canvas) canvas.remove();
-      var scrim = mediaEl.querySelector(".waveform-scrim");
-      if (scrim) scrim.remove();
+      _detachEntry(entry, true);
       var idx = _attached.indexOf(entry);
       if (idx >= 0) _attached.splice(idx, 1);
     };
   }
 
+  function _detachEntry(entry, removeOverlay) {
+    entry.el.removeEventListener("mousemove", entry.onMove);
+    entry.el.removeEventListener("mouseleave", entry.onLeave);
+    if (!removeOverlay) return;
+    var canvas = entry.el.querySelector(".waveform-canvas");
+    if (canvas) canvas.remove();
+    var scrim = entry.el.querySelector(".waveform-scrim");
+    if (scrim) scrim.remove();
+  }
+
   // Detach everything and stop audio, e.g. when the fancy-cards toggle goes off.
   function detachAll() {
-    var copy = _attached.slice();
-    for (var i = 0; i < copy.length; i++) {
-      var entry = copy[i];
-      entry.el.removeEventListener("mousemove", entry.onMove);
-      entry.el.removeEventListener("mouseleave", entry.onLeave);
-      var canvas = entry.el.querySelector(".waveform-canvas");
-      if (canvas) canvas.remove();
-      var scrim = entry.el.querySelector(".waveform-scrim");
-      if (scrim) scrim.remove();
-    }
+    _attached.forEach(function (entry) { _detachEntry(entry, true); });
     _attached.length = 0;
     audioScrubStop();
   }
@@ -391,23 +368,16 @@
     for (var i = _attached.length - 1; i >= 0; i--) {
       var entry = _attached[i];
       if (!entry.el.isConnected) {
-        entry.el.removeEventListener("mousemove", entry.onMove);
-        entry.el.removeEventListener("mouseleave", entry.onLeave);
+        _detachEntry(entry, false);
         _attached.splice(i, 1);
       }
     }
-  }
-
-  // Stop audio without detaching (sidebar resize, modal open).
-  function stopAll() {
-    audioScrubStop();
   }
 
   window.clipgenCardScrubber = {
     attach: attach,
     detachAll: detachAll,
     detachStale: detachStale,
-    stopAll: stopAll,
     purgeAudio: purgeAudio,
     // Primitives for consumers with their own hover handler (the viewer's <video>-seek scrub).
     loadAudioBuffer: loadAudioBuffer,

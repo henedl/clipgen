@@ -19,8 +19,7 @@
   var STEP_TRACK_H = 8; // minor/major tick strip just under the timestamps
   var LANE_GAP = 3;
   var ROW_H = 15;       // one marker sub-row (14px bar + 1px gap)
-  var THUMB_ROW_H = 42; // marker sub-row with thumbnail strips (41px bar + 1px gap)
-  var THUMB_CUT_H = 42; // cuts track height with thumbnail strips
+  var THUMB_ROW_H = 42; // lane row and cuts track; thumb-sized even with Thumbs off
   var MAX_LANE_ROWS = 8; // unfold ceiling; denser overlaps collapse onto the last row
   var EDGE_SLOP = 5;    // px hit zone around a cut edge
   var MIN_CUT_SECONDS = 0.2;
@@ -57,18 +56,11 @@
 
   // Minimal sub-row count: greedy packing over start-sorted markers is optimal.
   function neededRows(markers) {
-    var sorted = markers.slice().sort(function (a, b) { return a.start - b.start; });
-    var rowEnds = [];
-    sorted.forEach(function (m) {
-      for (var r = 0; r < rowEnds.length; r++) {
-        if (rowEnds[r] <= m.start) {
-          rowEnds[r] = m.end;
-          return;
-        }
-      }
-      rowEnds.push(m.end);
+    var n = 0;
+    assignRows(markers, MAX_LANE_ROWS).forEach(function (m) {
+      if (m._row + 1 > n) n = m._row + 1;
     });
-    return Math.min(Math.max(rowEnds.length, 1), MAX_LANE_ROWS);
+    return Math.max(n, 1);
   }
 
   function laneRows(source) {
@@ -79,14 +71,9 @@
     return neededRows(state.markers[source]);
   }
 
-  // Always thumb-sized so bars fit a frame; the Thumbs toggle only gates drawing.
-  function laneRowH() { return THUMB_ROW_H; }
-  function cutTrackH() { return THUMB_CUT_H; }
-
   // Annotation spans as packable {start, end, ann} entries for the lane.
   function annotationSpans() {
-    var annotations = CO.participantAnnotations ? CO.participantAnnotations() : [];
-    return annotations.map(function (ann) {
+    return CO.participantAnnotations().map(function (ann) {
       return { start: ann.span.start, end: ann.span.end, ann: ann };
     });
   }
@@ -94,7 +81,7 @@
   // Ruler → cuts → annotations (when any) → visible source lanes; strip height follows (updateTimelineHeight).
   function layout() {
     var cutY = RULER_H + STEP_TRACK_H + 2;
-    var y = cutY + cutTrackH() + 4;
+    var y = cutY + THUMB_ROW_H + 4;
     var spans = annotationSpans();
     var annRows = !spans.length
       ? 0
@@ -106,12 +93,12 @@
     var lanes = {};
     SOURCES.forEach(function (source) {
       var rows = laneRows(source);
-      lanes[source] = { y: y, rows: rows, h: rows * laneRowH() };
-      if (rows) y += rows * laneRowH() + LANE_GAP;
+      lanes[source] = { y: y, rows: rows, h: rows * THUMB_ROW_H };
+      if (rows) y += rows * THUMB_ROW_H + LANE_GAP;
     });
     return {
       cutY: cutY,
-      cutH: cutTrackH(),
+      cutH: THUMB_ROW_H,
       lanes: lanes,
       annotationsLane: annotationsLane,
       canvasH: y + 2,
@@ -311,9 +298,7 @@
 
     // Cuts track, directly under the ruler; numbering matches the cut list's index badges.
     var cutIndexById = {};
-    if (CO.sortedCuts) {
-      CO.sortedCuts().forEach(function (c, i) { cutIndexById[c.id] = i + 1; });
-    }
+    CO.sortedCuts().forEach(function (c, i) { cutIndexById[c.id] = i + 1; });
     CO.participantCuts().forEach(function (cut) {
       if (cut.end < vis.start || cut.start > vis.end) return;
       var x1 = tx(cut.start);
@@ -360,7 +345,7 @@
       var markers = state.markers[source] || [];
       if (!markers.length) return;
       var color = colors[source];
-      var rowH = laneRowH();
+      var rowH = THUMB_ROW_H;
       assignRows(markers, lane.rows).forEach(function (m) {
         if (m.end < vis.start || m.start > vis.end) return;
         var x1 = tx(m.start);
@@ -693,15 +678,7 @@
 
     // One gesture at a time: edge drag > body drag > pan > scrub.
     var drag = null;   // {type, cut?, edge?, startX, startOffset?, origStart?, origEnd?, moved}
-    var _dragRaf = 0;
-
-    function scheduleRender() {
-      if (_dragRaf) return;
-      _dragRaf = requestAnimationFrame(function () {
-        _dragRaf = 0;
-        renderTimeline();
-      });
-    }
+    var scheduleRender = rafThrottle(renderTimeline);
 
     canvas.addEventListener("pointerdown", function (e) {
       // Primary button only; a right-click drag racing the trim DELETE could rewrite the deleted span.
@@ -798,16 +775,7 @@
     });
 
     // One pass per frame: hover runs two hit-tests plus tooltip writes, scrub seeks the video.
-    var _moveRaf = 0;
-    var _lastMove = null;
-    canvas.addEventListener("pointermove", function (e) {
-      _lastMove = e;
-      if (_moveRaf) return;
-      _moveRaf = requestAnimationFrame(function () {
-        _moveRaf = 0;
-        handlePointerMove(_lastMove);
-      });
-    });
+    canvas.addEventListener("pointermove", rafThrottle(handlePointerMove));
 
     function handlePointerMove(e) {
       if (!drag) {
@@ -833,49 +801,29 @@
         return;
       }
       var ts;
-      if (drag.type === "edge") {
+      var edgeSpan = drag.type === "edge" ? drag.cut
+        : drag.type === "marker-edge" ? drag.marker
+          : drag.type === "ann-edge" ? drag.ann.span : null;
+      if (edgeSpan) {
         ts = xToTime(e.clientX);
         if (ts === null) return;
         drag.moved = true;
-        var cut = drag.cut;
         if (drag.edge === "start") {
-          cut.start = clamp(ts, 0, cut.end - MIN_CUT_SECONDS);
+          edgeSpan.start = clamp(ts, 0, edgeSpan.end - MIN_CUT_SECONDS);
         } else {
-          cut.end = clamp(ts, cut.start + MIN_CUT_SECONDS, state.duration);
+          edgeSpan.end = clamp(ts, edgeSpan.start + MIN_CUT_SECONDS, state.duration);
         }
         scheduleRender();
-      } else if (drag.type === "marker-edge") {
-        ts = xToTime(e.clientX);
-        if (ts === null) return;
-        drag.moved = true;
-        var marker = drag.marker;
-        if (drag.edge === "start") {
-          marker.start = clamp(ts, 0, marker.end - MIN_CUT_SECONDS);
-        } else {
-          marker.end = clamp(ts, marker.start + MIN_CUT_SECONDS, state.duration);
-        }
-        scheduleRender();
-      } else if (drag.type === "ann-edge") {
-        ts = xToTime(e.clientX);
-        if (ts === null) return;
-        drag.moved = true;
-        var span = drag.ann.span;
-        if (drag.edge === "start") {
-          span.start = clamp(ts, 0, span.end - MIN_CUT_SECONDS);
-        } else {
-          span.end = clamp(ts, span.start + MIN_CUT_SECONDS, state.duration);
-        }
-        scheduleRender();
-      } else if (drag.type === "body") {
+      } else if (drag.type === "body" || drag.type === "annotation") {
+        // Translate the whole cut or visibility span, preserving its length.
+        var bodySpan = drag.type === "body" ? drag.cut : drag.ann.span;
         var visLen = state.duration / state.zoom;
-        var rect = getRect();
-        var dt = ((e.clientX - drag.startX) / rect.width) * visLen;
+        var dt = ((e.clientX - drag.startX) / getRect().width) * visLen;
         if (Math.abs(e.clientX - drag.startX) > 3) drag.moved = true;
         if (!drag.moved) return;
         var bodyLen = drag.origEnd - drag.origStart;
-        var newStart = clamp(drag.origStart + dt, 0, state.duration - bodyLen);
-        drag.cut.start = newStart;
-        drag.cut.end = newStart + bodyLen;
+        bodySpan.start = clamp(drag.origStart + dt, 0, state.duration - bodyLen);
+        bodySpan.end = bodySpan.start + bodyLen;
         canvas.classList.add("co-drag-body");
         scheduleRender();
       } else if (drag.type === "pan") {
@@ -885,19 +833,6 @@
         if (Math.abs(dx) > 3) drag.moved = true;
         state.offset = clamp(drag.startOffset - (dx / rect2.width) * visLen2,
           0, Math.max(0, state.duration - visLen2));
-        scheduleRender();
-      } else if (drag.type === "annotation") {
-        // Translate the whole visibility span, preserving its length.
-        var visLenA = state.duration / state.zoom;
-        var rectA = getRect();
-        var dtA = ((e.clientX - drag.startX) / rectA.width) * visLenA;
-        if (Math.abs(e.clientX - drag.startX) > 3) drag.moved = true;
-        if (!drag.moved) return;
-        var spanLen = drag.origEnd - drag.origStart;
-        var annStart = clamp(drag.origStart + dtA, 0, state.duration - spanLen);
-        drag.ann.span.start = annStart;
-        drag.ann.span.end = annStart + spanLen;
-        canvas.classList.add("co-drag-body");
         scheduleRender();
       } else if (drag.type === "marker") {
         if (Math.abs(e.clientX - drag.startX) > 3) drag.moved = true;
@@ -957,10 +892,10 @@
       }
       var ts = xToTime(e.clientX);
       if (ts === null) return;
-      if (CO.seekVideo) CO.seekVideo(ts);
+      CO.seekVideo(ts);
       if (state.pendingIn === null) {
-        if (CO.setInPoint) CO.setInPoint();
-      } else if (CO.setOutPoint) {
+        CO.setInPoint();
+      } else {
         CO.setOutPoint();
       }
     });

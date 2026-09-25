@@ -46,10 +46,6 @@
   --so-art-line-fill:  rgba(255, 255, 255, 0.28);
 }
 
-.start-overlay.hidden {
-  display: none;
-}
-
 /* The backdrop element itself is styled by tokens.css .cg-veil-layer. It stays a
  * real element rather than the ::before that .cg-modal-veil generates, because
  * it is the click-to-dismiss target and a pseudo-element cannot be one. */
@@ -90,12 +86,6 @@
   width: 14px;
   height: 14px;
   background-color: currentColor;
-  mask-size: contain;
-  -webkit-mask-size: contain;
-  mask-repeat: no-repeat;
-  -webkit-mask-repeat: no-repeat;
-  mask-position: center;
-  -webkit-mask-position: center;
   flex-shrink: 0;
 }
 
@@ -679,8 +669,7 @@
   gap: 18px;
 }
 
-/* Same idea as overview.css .tab-slide-enter: the newly revealed panel eases
- * in, so switching tabs reads as a move rather than a repaint. */
+/* Like tokens.css .tab-slide-enter: the new panel eases in, reading as a move. */
 .start-overlay .start-tabpanel.is-entering .start-tabpanel__scroll {
   animation: so-tab-enter 220ms var(--ease-out);
 }
@@ -918,10 +907,6 @@
 }
 .start-overlay .recent-pop { overflow: auto; }
 
-.start-overlay .recent-pop.hidden {
-  display: none;
-}
-
 .start-overlay .recent-pop__item {
   width: 100%;
   text-align: left;
@@ -1151,10 +1136,6 @@
 
 /* Body shared with .recent-pop above; this only sets the vertical overflow. */
 .start-overlay .sheet-picker__menu { overflow-y: auto; }
-
-.start-overlay .sheet-picker__menu.hidden {
-  display: none;
-}
 
 /* Enter only: the section's z-index lift ends at close, so an exit would be covered. */
 .start-overlay .sheet-picker__menu,

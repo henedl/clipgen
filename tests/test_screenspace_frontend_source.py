@@ -232,11 +232,11 @@ def test_model_view_overlay_uses_preview_region():
 
 
 def test_multitool_branch_refreshes_model_view():
-    """The multitool branch returns early; without its own refresh the preview went stale."""
-    start = PARAMS_JS.index(
-        'if (type === "multitool") {\n      SS.renderMultitoolParams'
-    )
-    body = PARAMS_JS[start : PARAMS_JS.index("return;", start)]
+    """Multitool must reach the shared refresh tail; an early return left the preview stale."""
+    start = PARAMS_JS.index("function _renderWorkflowParamsBuild()")
+    body = PARAMS_JS[start : PARAMS_JS.index("function refTimeChip(", start)]
+    assert "return;" not in body
+    assert 'if (type === "multitool") {\n      SS.renderMultitoolParams' in body
     assert "refreshModelView();" in body
     assert "_updateOverlayUi();" in body
 

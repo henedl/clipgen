@@ -291,11 +291,9 @@ class TestSearchWindow:
         prepared = screenspace._prepare_shape_reference(
             _make_outline(42), scale_min=0.7, scale_max=1.4, scale_steps=5
         )
-        sequential = screenspace_primitives._match_shape_scales(
-            edges, prepared, 0.1, 0.3
-        )
+        sequential = screenspace.match_shape(edges, prepared, 0.1, 0.3)
         with ThreadPoolExecutor(max_workers=4) as executor:
-            parallel = screenspace_primitives._match_shape_scales(
+            parallel = screenspace.match_shape(
                 edges, prepared, 0.1, 0.3, executor=executor
             )
         assert parallel == sequential
@@ -309,9 +307,7 @@ class TestSearchWindow:
             return map(fn, entries)
 
         pool.map.side_effect = ordered
-        got = screenspace_primitives._match_shape_scales(
-            edges, prepared, 0.1, 0.3, executor=pool
-        )
+        got = screenspace.match_shape(edges, prepared, 0.1, 0.3, executor=pool)
         assert got == sequential
         assert seen == [entry["scale"] for entry in prepared]
 

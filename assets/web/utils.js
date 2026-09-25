@@ -8,11 +8,6 @@
  * running inside their own IIFEs can access them via scope chain.
  */
 
-// ---- Feature flags ----
-
-// Gates dev-token-tweak.js; viewer.py strips data-dev-only tags from exports regardless.
-var CLIPGEN_DEV_TOKEN_TWEAK = false;
-
 // ---- Canonical config ----
 // Offline defaults mirroring config.py; clipgenApplyConfig overlays live payloads. tests/test_shared_constants.py checks.
 
@@ -77,113 +72,19 @@ var CLIPGEN_CONFIG = {
 
 var clipgenApplyConfig = function (payload) {
   if (!payload || typeof payload !== "object") return;
-  if (typeof payload.defaultDuration === "number") {
-    CLIPGEN_CONFIG.defaultDuration = payload.defaultDuration;
+  // Copy each payload key whose type matches the offline default.
+  Object.keys(CLIPGEN_CONFIG).forEach(function (k) {
+    var def = CLIPGEN_CONFIG[k];
+    var val = payload[k];
+    var ok = Array.isArray(def) ? Array.isArray(val) : typeof val === typeof def && val !== null;
+    if (ok) CLIPGEN_CONFIG[k] = val;
+  });
+  var hk = payload.hotkeyOverrides;
+  if (hk && typeof hk === "object" && window.ClipgenHotkeys) {
+    window.ClipgenHotkeys.applyOverrides(hk);
   }
-  if (Array.isArray(payload.severity)) {
-    CLIPGEN_CONFIG.severity = payload.severity;
-  }
-  if (Array.isArray(payload.annotationKeyphrases)) {
-    CLIPGEN_CONFIG.annotationKeyphrases = payload.annotationKeyphrases;
-  }
-  if (Array.isArray(payload.annotations)) {
-    CLIPGEN_CONFIG.annotations = payload.annotations;
-  }
-  if (Array.isArray(payload.ignoredTimestampTokens)) {
-    CLIPGEN_CONFIG.ignoredTimestampTokens = payload.ignoredTimestampTokens;
-  }
-  if (typeof payload.screenspaceOcrMinConfidence === "number") {
-    CLIPGEN_CONFIG.screenspaceOcrMinConfidence = payload.screenspaceOcrMinConfidence;
-  }
-  if (typeof payload.screenspaceOcrFuzzyThreshold === "number") {
-    CLIPGEN_CONFIG.screenspaceOcrFuzzyThreshold = payload.screenspaceOcrFuzzyThreshold;
-  }
-  if (typeof payload.screenspaceMultitoolMaxOffset === "number") {
-    CLIPGEN_CONFIG.screenspaceMultitoolMaxOffset = payload.screenspaceMultitoolMaxOffset;
-  }
-  if (Array.isArray(payload.screenspaceMaskFallbackTools)) {
-    CLIPGEN_CONFIG.screenspaceMaskFallbackTools = payload.screenspaceMaskFallbackTools;
-  }
-  if (Array.isArray(payload.frictionCategories)) {
-    CLIPGEN_CONFIG.frictionCategories = payload.frictionCategories;
-  }
-  if (typeof payload.frictionColorToken === "string") {
-    CLIPGEN_CONFIG.frictionColorToken = payload.frictionColorToken;
-  }
-  if (typeof payload.frictionMomentLimit === "number") {
-    CLIPGEN_CONFIG.frictionMomentLimit = payload.frictionMomentLimit;
-  }
-  if (Array.isArray(payload.convergenceSources)) {
-    CLIPGEN_CONFIG.convergenceSources = payload.convergenceSources;
-  }
-  if (typeof payload.cardScrubberSpriteCols === "number") {
-    CLIPGEN_CONFIG.cardScrubberSpriteCols = payload.cardScrubberSpriteCols;
-  }
-  if (typeof payload.cardScrubberSpriteRows === "number") {
-    CLIPGEN_CONFIG.cardScrubberSpriteRows = payload.cardScrubberSpriteRows;
-  }
-  if (typeof payload.clipFormat === "string") {
-    CLIPGEN_CONFIG.clipFormat = payload.clipFormat;
-  }
-  if (typeof payload.screenshotFormat === "string") {
-    CLIPGEN_CONFIG.screenshotFormat = payload.screenshotFormat;
-  }
-  if (typeof payload.gifFormat === "string") {
-    CLIPGEN_CONFIG.gifFormat = payload.gifFormat;
-  }
-  if (typeof payload.composerAnnotationColor === "string") {
-    CLIPGEN_CONFIG.composerAnnotationColor = payload.composerAnnotationColor;
-  }
-  if (typeof payload.composerAnnotationColorSecondary === "string") {
-    CLIPGEN_CONFIG.composerAnnotationColorSecondary = payload.composerAnnotationColorSecondary;
-  }
-  if (typeof payload.composerAnnotationStrokeWidth === "number") {
-    CLIPGEN_CONFIG.composerAnnotationStrokeWidth = payload.composerAnnotationStrokeWidth;
-  }
-  if (typeof payload.composerAnnotationStrokeStyle === "string") {
-    CLIPGEN_CONFIG.composerAnnotationStrokeStyle = payload.composerAnnotationStrokeStyle;
-  }
-  if (typeof payload.composerAnnotationFontSize === "number") {
-    CLIPGEN_CONFIG.composerAnnotationFontSize = payload.composerAnnotationFontSize;
-  }
-  if (typeof payload.composerAnnotationSpanSeconds === "number") {
-    CLIPGEN_CONFIG.composerAnnotationSpanSeconds = payload.composerAnnotationSpanSeconds;
-  }
-  if (typeof payload.composerScrubMaxAudioSeconds === "number") {
-    CLIPGEN_CONFIG.composerScrubMaxAudioSeconds = payload.composerScrubMaxAudioSeconds;
-  }
-  if (typeof payload.composerDoubleClickCuts === "boolean") {
-    CLIPGEN_CONFIG.composerDoubleClickCuts = payload.composerDoubleClickCuts;
-  }
-  if (typeof payload.crossReferences === "boolean") {
-    CLIPGEN_CONFIG.crossReferences = payload.crossReferences;
-  }
-  if (typeof payload.mediaContainerWarning === "boolean") {
-    CLIPGEN_CONFIG.mediaContainerWarning = payload.mediaContainerWarning;
-  }
-  if (typeof payload.transcribeSpeakers === "boolean") {
-    CLIPGEN_CONFIG.transcribeSpeakers = payload.transcribeSpeakers;
-  }
-  if (typeof payload.speakerLabelMaxLen === "number") {
-    CLIPGEN_CONFIG.speakerLabelMaxLen = payload.speakerLabelMaxLen;
-  }
-  if (typeof payload.transcribeRedact === "boolean") {
-    CLIPGEN_CONFIG.transcribeRedact = payload.transcribeRedact;
-  }
-  if (payload.subtitleContainers && typeof payload.subtitleContainers === "object") {
-    CLIPGEN_CONFIG.subtitleContainers = payload.subtitleContainers;
-  }
-  if (payload.hotkeyOverrides && typeof payload.hotkeyOverrides === "object") {
-    CLIPGEN_CONFIG.hotkeyOverrides = payload.hotkeyOverrides;
-    if (window.ClipgenHotkeys) {
-      window.ClipgenHotkeys.applyOverrides(payload.hotkeyOverrides);
-    }
-  }
-  if (typeof payload.profiling === "boolean") {
-    CLIPGEN_CONFIG.profiling = payload.profiling;
-    if (payload.profiling && window.clipgenPerf) {
-      window.clipgenPerf.observe();
-    }
+  if (payload.profiling === true && window.clipgenPerf) {
+    window.clipgenPerf.observe();
   }
 };
 
@@ -755,6 +656,12 @@ var formatDuration = function (sec) {
   return m + ":" + pad2(s);
 };
 
+// Model download sizes: whole MB below 1 GB, one decimal above.
+var formatModelSize = function (mb) {
+  if (mb >= 1024) return (mb / 1024).toFixed(1) + " GB";
+  return Math.round(mb) + " MB";
+};
+
 // ---- Elapsed-time / ETA estimation for long-running operations ----
 
 // Null unless 0 < progress < 1 and elapsed > 0; callers show elapsed only.
@@ -868,6 +775,15 @@ var artifactDurationSec = function (a) {
   return d;
 };
 
+// Returns a copy of arr with v removed if present, else appended.
+var toggleInArray = function (arr, v) {
+  var out = arr.slice();
+  var idx = out.indexOf(v);
+  if (idx >= 0) out.splice(idx, 1);
+  else out.push(v);
+  return out;
+};
+
 var truncate = function (str, max) {
   if (!str) return "";
   return str.length > max ? str.slice(0, max) + "\u2026" : str;
@@ -895,19 +811,10 @@ var parseTimestamp = function (str) {
 // Clock semantics: 2-part is HH:MM. Mirrors Python utils._clock_to_seconds.
 var parseClockTimestamp = function (str) {
   str = (str == null ? "" : String(str)).trim();
-  if (!str) return null;
-  var parts = str.split(":");
-  if (parts.length === 3) {
-    var h = parseFloat(parts[0]), m = parseFloat(parts[1]), s = parseFloat(parts[2]);
-    if (isNaN(h) || isNaN(m) || isNaN(s)) return null;
-    return h * 3600 + m * 60 + s;
-  }
-  if (parts.length === 2) {
-    var h2 = parseFloat(parts[0]), m2 = parseFloat(parts[1]);
-    if (isNaN(h2) || isNaN(m2)) return null;
-    return h2 * 3600 + m2 * 60;
-  }
-  return null;
+  var n = str.split(":").length;
+  if (n === 2) str += ":00";
+  else if (n !== 3) return null;
+  return parseTimestamp(str);
 };
 
 // Mirrors files.prepare_clip + utils.convert_clock_pairs_to_relative. A baseline makes tokens clock times; defaultDuration is required.
@@ -1007,6 +914,17 @@ var positionTooltipAnchored = function (tooltipEl, anchorRect) {
   tooltipEl.style.top = top + "px";
 };
 
+// Below-right of the cursor, flipping to the other side near viewport edges.
+var positionTooltipAtCursor = function (tip, clientX, clientY) {
+  var x = clientX + 12;
+  var y = clientY + 12;
+  var rect = tip.getBoundingClientRect();
+  if (x + rect.width > window.innerWidth - 8) x = clientX - rect.width - 12;
+  if (y + rect.height > window.innerHeight - 8) y = clientY - rect.height - 12;
+  tip.style.left = x + "px";
+  tip.style.top = y + "px";
+};
+
 // Below the anchor, flipping above when cramped; popover must be visible to measure.
 var positionPopoverAnchored = function (popoverEl, anchorRect) {
   var w = popoverEl.offsetWidth;
@@ -1030,6 +948,28 @@ var debounce = function (fn, ms) {
     clearTimeout(timer);
     timer = setTimeout(function () { fn.apply(ctx, args); }, ms);
   };
+};
+
+// Runs fn at most once per frame, with the latest call's arguments.
+var rafThrottle = function (fn) {
+  var raf = 0;
+  var lastArgs = null;
+  return function () {
+    lastArgs = arguments;
+    if (raf) return;
+    raf = requestAnimationFrame(function () {
+      raf = 0;
+      fn.apply(null, lastArgs);
+    });
+  };
+};
+
+// First item whose .id matches, or null (ES5 has no Array.prototype.find).
+var findById = function (list, id) {
+  for (var i = 0; i < list.length; i++) {
+    if (list[i].id === id) return list[i];
+  }
+  return null;
 };
 
 var escapeHtml = function (str) {
@@ -1152,27 +1092,25 @@ var showToast = function (msg, opts) {
 // ---- Severity ----
 // CLIPGEN_CONFIG.severity mirrors config.py SEVERITY_NUMERIC_TO_LABEL (tests/test_shared_constants.py).
 
+var severityEntry = function (raw) {
+  var k = String(raw || "").trim().toLowerCase();
+  if (!k) return null;
+  for (var i = 0; i < CLIPGEN_CONFIG.severity.length; i++) {
+    if (CLIPGEN_CONFIG.severity[i].label.toLowerCase() === k) return CLIPGEN_CONFIG.severity[i];
+  }
+  return null;
+};
+
 var severityClass = function (raw) {
   if (!raw || !String(raw).trim()) return "";
-  var k = String(raw).trim().toLowerCase();
-  for (var i = 0; i < CLIPGEN_CONFIG.severity.length; i++) {
-    if (CLIPGEN_CONFIG.severity[i].label.toLowerCase() === k) {
-      return CLIPGEN_CONFIG.severity[i].cssClass;
-    }
-  }
-  return "sev-unknown";
+  var e = severityEntry(raw);
+  return e ? e.cssClass : "sev-unknown";
 };
 
 // Lowest = most severe (Critical -4). Null for unknown; callers decide how to treat it.
 var severityRank = function (raw) {
-  if (!raw || !String(raw).trim()) return null;
-  var k = String(raw).trim().toLowerCase();
-  for (var i = 0; i < CLIPGEN_CONFIG.severity.length; i++) {
-    if (CLIPGEN_CONFIG.severity[i].label.toLowerCase() === k) {
-      return CLIPGEN_CONFIG.severity[i].rank;
-    }
-  }
-  return null;
+  var e = severityEntry(raw);
+  return e ? e.rank : null;
 };
 
 // Vertical wheel scrolls an overflowing strip horizontally; passive:false so preventDefault works.
@@ -1221,29 +1159,19 @@ var apiGet = function (path) {
   return fetch(path).then(_apiJson);
 };
 
-var apiPost = function (path, body) {
-  return fetch(path, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-  }).then(_apiJson);
+var _apiSend = function (method) {
+  return function (path, body) {
+    return fetch(path, {
+      method: method,
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }).then(_apiJson);
+  };
 };
 
-var apiPut = function (path, body) {
-  return fetch(path, {
-    method: "PUT",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-  }).then(_apiJson);
-};
-
-var apiPatch = function (path, body) {
-  return fetch(path, {
-    method: "PATCH",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-  }).then(_apiJson);
-};
+var apiPost = _apiSend("POST");
+var apiPut = _apiSend("PUT");
+var apiPatch = _apiSend("PATCH");
 
 var apiDelete = function (path) {
   return fetch(path, { method: "DELETE" }).then(_apiJson);
@@ -1422,6 +1350,27 @@ var createManagedPoller = function (fn, intervalMs, opts) {
       poller = null;
     },
   };
+};
+
+// Polls a model download status; resolves the final status, or null after 20 misses.
+var pollDownloadStatus = function (url, onProgress, opts) {
+  opts = opts || {};
+  return new Promise(function (resolve) {
+    var misses = 0;
+    function miss() {
+      if (++misses >= 20) { poller.stop(); resolve(null); }
+    }
+    var poller = createPoller(function () {
+      if (opts.isCancelled && opts.isCancelled()) { poller.stop(); resolve(null); return; }
+      return apiGet(url).then(function (st) {
+        if (!st || !st.ok || !st.found) { miss(); return; }
+        misses = 0;
+        if (onProgress) onProgress(st);
+        if (st.done) { poller.stop(); resolve(st); }
+      }).catch(miss);
+    }, 1000, { runImmediately: true, label: opts.label });
+    poller.start();
+  });
 };
 
 // ---- SSE stream ----
@@ -2063,70 +2012,6 @@ var clipgenStatus = function (force) {
   return _clipgenStatusPromise;
 };
 
-// ---- Frontend switcher (shared across Studio / Screenspace / Transcripts) ----
-
-var initFrontendSwitcher = function () {
-  var root = qs(".frontend-switcher");
-  if (!root) return;
-  var trigger = root.querySelector(".frontend-switcher-trigger");
-  var panel = root.querySelector(".frontend-switcher-panel");
-  if (!trigger || !panel) return;
-  var closeTimer = null;
-
-  function open() {
-    clearTimeout(closeTimer);
-    root.classList.add("open");
-    trigger.setAttribute("aria-expanded", "true");
-    panel.setAttribute("aria-hidden", "false");
-  }
-  function close() {
-    root.classList.remove("open");
-    trigger.setAttribute("aria-expanded", "false");
-    panel.setAttribute("aria-hidden", "true");
-  }
-  function scheduleClose() {
-    clearTimeout(closeTimer);
-    closeTimer = setTimeout(close, 120);
-  }
-
-  root.addEventListener("mouseenter", open);
-  root.addEventListener("mouseleave", scheduleClose);
-  trigger.addEventListener("click", function (e) {
-    e.preventDefault();
-    if (root.classList.contains("open")) close();
-    else open();
-  });
-  trigger.addEventListener("keydown", function (e) {
-    if (e.key === "Enter" || e.key === " ") {
-      e.preventDefault();
-      open();
-      var first = panel.querySelector(".frontend-switcher-item");
-      if (first) first.focus();
-    } else if (e.key === "Escape") {
-      close();
-    }
-  });
-  document.addEventListener("keydown", function (e) {
-    if (e.key === "Escape" && root.classList.contains("open")) {
-      close();
-      trigger.focus();
-    }
-  });
-  document.addEventListener("click", function (e) {
-    if (!root.contains(e.target)) close();
-  });
-
-  clipgenStatus()
-    .then(function (status) {
-      var items = panel.querySelectorAll(".frontend-switcher-item");
-      items.forEach(function (item) {
-        var key = item.dataset.frontend;
-        if (key && status[key] === false) item.classList.add("hidden");
-      });
-    })
-    .catch(function () {});
-};
-
 // Reads a /api/settings save or reset payload; returns whether the value moved.
 var applyCrossRefSetting = function (applied, settings) {
   var value;
@@ -2262,91 +2147,6 @@ var setStoredUIMapEntry = function (page, field, key, value) {
   setStoredUIStateField(page, field, map);
 };
 
-// ---- Canvas helpers (timeline overlays) ----
-
-// Stacked per-series bands normalized to their own peaks; dimKey paints last; colors are #rrggbb.
-var drawAmplitudeBands = function (ctx, opts) {
-  var x = opts.x, y = opts.y, w = opts.w, h = opts.h;
-  var visStart = opts.visStart, visEnd = opts.visEnd;
-  var series = opts.series || [];
-  var binPx = opts.binPx || 2;
-  var dimKey = opts.dimKey;
-
-  if (w <= 0 || h <= 0 || series.length === 0) return;
-  var visLen = visEnd - visStart;
-  if (!(visLen > 0)) return;
-
-  var numBins = Math.max(1, Math.ceil(w / binPx));
-  var binSec = visLen / numBins;
-
-  // Bin each series and remember its own max
-  var binned = [];
-  for (var s = 0; s < series.length; s++) {
-    var ts = series[s].timestamps || [];
-    var bins = new Array(numBins);
-    for (var b = 0; b < numBins; b++) bins[b] = 0;
-    var maxCount = 0;
-    for (var i = 0; i < ts.length; i++) {
-      var t = ts[i];
-      if (t < visStart || t >= visEnd) continue;
-      var idx = Math.floor((t - visStart) / binSec);
-      if (idx < 0) idx = 0;
-      else if (idx >= numBins) idx = numBins - 1;
-      var c = bins[idx] + 1;
-      bins[idx] = c;
-      if (c > maxCount) maxCount = c;
-    }
-    binned.push({ key: series[s].key, color: series[s].color, bins: bins, max: maxCount });
-  }
-
-  // Order: dimmed series first, focused series last (paints on top)
-  var order = [];
-  for (var k = 0; k < binned.length; k++) {
-    if (dimKey && binned[k].key !== dimKey) order.push(k);
-  }
-  for (var k2 = 0; k2 < binned.length; k2++) {
-    if (!dimKey || binned[k2].key === dimKey) order.push(k2);
-  }
-
-  var baselineY = y + h;
-  for (var oi = 0; oi < order.length; oi++) {
-    var ser = binned[order[oi]];
-    if (ser.max <= 0) continue;
-    var dimmed = dimKey && ser.key !== dimKey;
-    var fillAlpha = dimmed ? 0.05 : 0.18;
-    var strokeAlpha = dimmed ? 0.25 : 1.0;
-
-    // Build the area path along bin tops
-    ctx.beginPath();
-    ctx.moveTo(x, baselineY);
-    for (var bi = 0; bi < numBins; bi++) {
-      var norm = ser.bins[bi] / ser.max;
-      var py = baselineY - norm * h;
-      var px = x + bi * binPx;
-      ctx.lineTo(px, py);
-      ctx.lineTo(px + binPx, py);
-    }
-    ctx.lineTo(x + numBins * binPx, baselineY);
-    ctx.closePath();
-    ctx.fillStyle = hexToRgba(ser.color, fillAlpha);
-    ctx.fill();
-
-    ctx.beginPath();
-    var started = false;
-    for (var bi2 = 0; bi2 < numBins; bi2++) {
-      var n2 = ser.bins[bi2] / ser.max;
-      var py2 = baselineY - n2 * h;
-      var px2 = x + bi2 * binPx;
-      if (!started) { ctx.moveTo(px2, py2); started = true; }
-      else ctx.lineTo(px2, py2);
-      ctx.lineTo(px2 + binPx, py2);
-    }
-    ctx.lineWidth = 1.5;
-    ctx.strokeStyle = strokeAlpha === 1.0 ? ser.color : hexToRgba(ser.color, strokeAlpha);
-    ctx.stroke();
-  }
-};
-
 // ---- Timeline ruler core (shared by canvas timeline surfaces) ----
 
 // "Nice" tick intervals (seconds) for a timeline ruler, coarse → fine.
@@ -2398,62 +2198,6 @@ var drawTimelineRuler = function (ctx, opts) {
   }
   ctx.textAlign = "start";
 };
-
-// ---- Video helpers ----
-
-// Hidden tabs drop paused <video> frames; snapshot to canvas until repaint. Positioned parent required.
-var clipgenInstallPausedFrameOverlay = function (video) {
-  if (!video || video._clipgenPausedOverlay) return;
-  var parent = video.parentNode;
-  if (!parent) return;
-
-  var canvas = document.createElement("canvas");
-  canvas.className = "video-paused-overlay";
-  // Inline styles so the helper works without page-specific CSS.
-  canvas.style.position = "absolute";
-  canvas.style.inset = "0";
-  canvas.style.width = "100%";
-  canvas.style.height = "100%";
-  canvas.style.objectFit = "contain";
-  canvas.style.pointerEvents = "none";
-  canvas.style.display = "none";
-  parent.appendChild(canvas);
-  video._clipgenPausedOverlay = canvas;
-
-  var hide = function () { canvas.style.display = "none"; };
-
-  var snapshot = function () {
-    if (!video.src || !video.paused) return;
-    var w = video.videoWidth, h = video.videoHeight;
-    // videoWidth/Height are zero until the first frame decodes.
-    if (!w || !h) return;
-    canvas.width = w;
-    canvas.height = h;
-    try {
-      canvas.getContext("2d").drawImage(video, 0, 0, w, h);
-      canvas.style.display = "";
-    } catch (_) {
-      // Cross-origin or other draw failure: leave the overlay hidden.
-    }
-  };
-
-  // The live video reasserts itself: drop the snapshot.
-  video.addEventListener("play", hide);
-  video.addEventListener("seeked", hide);
-  video.addEventListener("emptied", hide);
-  video.addEventListener("loadedmetadata", hide);
-
-  document.addEventListener("visibilitychange", function () {
-    if (document.hidden) {
-      snapshot();
-    } else if (video.paused && video.src) {
-      // Nudge currentTime so `seeked` hides the snapshot; same-value assignment may be optimized away.
-      var t = video.currentTime;
-      video.currentTime = t > 0.001 ? t - 0.001 : 0.001;
-    }
-  });
-};
-
 
 // ---- Drag-to-resize handles ----
 
@@ -2538,4 +2282,46 @@ function initPanelDivider(cfg) {
     },
     onToggle: cfg.onToggle,
   });
+}
+
+// Animates a bottom panel between pixel heights; `auto` mid-flight would hitch.
+function togglePanelCollapse(panel, cfg) {
+  if (!panel || panel._transitioning) return;
+  panel._transitioning = true;
+  var collapse = !cfg.isCollapsed();
+  var targetH = 0;
+  cfg.setCollapsed(collapse);
+  document.body.classList.add("bottom-animating");
+  if (collapse) {
+    panel.style.height = panel.offsetHeight + "px";
+    panel.offsetHeight; // reflow — pin the start frame
+    document.body.classList.add("bottom-collapsed");
+    panel.style.height = "0px";
+  } else {
+    targetH = cfg.getTargetHeight();
+    document.body.classList.remove("bottom-collapsed");
+    panel.style.height = "0px";
+    panel.offsetHeight; // reflow — pin the start frame
+    panel.style.height = targetH + "px";
+  }
+  onCollapseTransitionEnd(panel, function () {
+    panel._transitioning = false;
+    document.body.classList.remove("bottom-animating");
+    cfg.onSettled(collapse, targetH);
+  });
+}
+
+function onCollapseTransitionEnd(el, cb) {
+  var fired = false;
+  function done() {
+    if (fired) return;
+    fired = true;
+    el.removeEventListener("transitionend", handler);
+    cb();
+  }
+  function handler(e) {
+    if (e.target === el && e.propertyName === "height") done();
+  }
+  el.addEventListener("transitionend", handler);
+  setTimeout(done, 400);
 }

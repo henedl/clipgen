@@ -13,11 +13,12 @@ import threading
 import time
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import config
 import files
 import titlecards
+import redact
 import transcripts
 import profiling
 import utils
@@ -86,12 +87,6 @@ def _resolve_titlecard_images(cards_enabled: bool) -> tuple[str, str]:
     if not cards_enabled:
         return "", ""
     return _card_image_identity("title"), _card_image_identity("end")
-
-
-def is_excel_worksheet(worksheet: Any) -> bool:
-    """Return True if worksheet is the Excel adapter (local file, no URL)."""
-    spread = getattr(worksheet, "spreadsheet", None)
-    return spread is not None and getattr(spread, "url", None) is None
 
 
 # ---- Clip processing pipeline ----
@@ -342,46 +337,35 @@ def _point_source(
 
 
 def _stitch_clip_pieces(
-    timeline: list[tuple[str, int, int]],
-    pieces: list[tuple[int, float, float]],
+    pieces: list[tuple[str, float, float]],
     out_name: str,
     file_extension: str,
     cancel_flag: Callable[[], bool] | None,
 ) -> bool:
-    """Cut each boundary-spanning piece to a temp file and concatenate into *out_name*.
+    """Cut ``(source, local_start, local_end)`` pieces to temps, concat into *out_name*.
 
-    Used when a clip range straddles the boundary between two source videos: each
-    piece is cut from its sub-video at local offsets, then stitched into one clip
-    (mirrors the reel temp-file + concat pattern). Returns False (cleaning up) if
-    any piece fails.
+    Returns False, cleaning up, if any piece fails.
     """
     temp_paths: list[str] = []
-    for n, (index, local_start, local_end) in enumerate(pieces):
+    for n, (source_path, local_start, local_end) in enumerate(pieces):
         tmp = files.get_unique_filename(
             f"_multipart_{n + 1}{file_extension}", file_format=file_extension
         )
-        if video.run_ffmpeg(
-            input_file=timeline[index][0],
+        temp_paths.append(tmp)
+        if not video.run_ffmpeg(
+            input_file=source_path,
             output_file=tmp,
             start_pos=_local_timestamp(local_start),
             end_pos=_local_timestamp(local_end),
             reencode=config.REENCODING,
             cancel_flag=cancel_flag,
         ):
-            temp_paths.append(tmp)
-        else:
-            files.release_reservation(tmp)
             for p in temp_paths:
-                Path(p).unlink(missing_ok=True)
+                files.release_reservation(p)
             return False
-    ok = video.concatenate_clips(
-        temp_paths, out_name, reencode_on_fail=True, cancel_flag=cancel_flag
-    )
+    ok = video.concatenate_clips(temp_paths, out_name, cancel_flag=cancel_flag)
     for p in temp_paths:
-        try:
-            Path(p).unlink(missing_ok=True)
-        except OSError:
-            pass
+        files.release_reservation(p)
     return ok
 
 
@@ -411,11 +395,11 @@ def cut_global_range(
     """
     if timeline is None:
         ok = video.run_ffmpeg(
-            base_video,
-            out_path,
-            _local_timestamp(start_seconds),
-            _local_timestamp(end_seconds),
-            reencode,
+            input_file=base_video,
+            output_file=out_path,
+            start_pos=_local_timestamp(start_seconds),
+            end_pos=_local_timestamp(end_seconds),
+            reencode=reencode,
             cancel_flag=cancel_flag,
         )
         if not ok:
@@ -432,11 +416,11 @@ def cut_global_range(
     if len(pieces) == 1:
         seg_index, local_start, local_end = pieces[0]
         ok = video.run_ffmpeg(
-            timeline[seg_index][0],
-            out_path,
-            _local_timestamp(local_start),
-            _local_timestamp(local_end),
-            reencode,
+            input_file=timeline[seg_index][0],
+            output_file=out_path,
+            start_pos=_local_timestamp(local_start),
+            end_pos=_local_timestamp(local_end),
+            reencode=reencode,
             cancel_flag=cancel_flag,
         )
         if not ok:
@@ -448,7 +432,8 @@ def cut_global_range(
         }
 
     extension = Path(out_path).suffix or config.FILEFORMAT
-    if not _stitch_clip_pieces(timeline, pieces, out_path, extension, cancel_flag):
+    sourced = [(timeline[i][0], start, end) for i, start, end in pieces]
+    if not _stitch_clip_pieces(sourced, out_path, extension, cancel_flag):
         return None
     parts = [
         {
@@ -546,12 +531,11 @@ def _process_single_clip_segments(
     the generate-cache (``server.py`` Phase 1) skip it forever, so the card could never
     be applied. See ``titlecards.wrap_clip_with_cards``.
 
-    Caller must have already called prepare_clip(clip). Does not add to missing_videos; caller handles that.
+    Caller must have already called prepare_clip(clip).
 
     Args:
         clip: Prepared clip dict with 'times', 'category', 'study', 'participant', 'desc'
         base_video: Path to source video file
-        missing_videos: Set of already-reported missing paths (read-only here)
         filename_prefix: Prefix for output filename (e.g. '_reel_part_' for reel)
         collect_paths: If True, return list of (output_path, time_index) pairs; otherwise return empty list
         enforce_size: If True (default), compress each final clip to config.MAX_FILESIZE_MB
@@ -645,41 +629,18 @@ def _process_single_clip_segments(
             )
             return (generated, output_paths, False)
         if output_format == "clip":
-            if timeline:
-                global_start = utils.timestamp_to_seconds(start_time) or 0.0
-                global_end = utils.timestamp_to_seconds(end_time) or 0.0
-                pieces = utils.map_global_range_to_segments(
-                    timeline, global_start, global_end
-                )
-                if not pieces:
-                    ok = False
-                elif len(pieces) == 1:
-                    seg_index, local_start, local_end = pieces[0]
-                    ok = video.run_ffmpeg(
-                        input_file=timeline[seg_index][0],
-                        output_file=out_name,
-                        start_pos=_local_timestamp(local_start),
-                        end_pos=_local_timestamp(local_end),
-                        reencode=config.REENCODING,
-                        cancel_flag=cancel_flag,
-                    )
-                else:
-                    ok = _stitch_clip_pieces(
-                        timeline,
-                        pieces,
-                        out_name,
-                        file_extension,
-                        cancel_flag,
-                    )
-            else:
-                ok = video.run_ffmpeg(
-                    input_file=base_video,
-                    output_file=out_name,
-                    start_pos=start_time,
-                    end_pos=end_time,
+            ok = (
+                cut_global_range(
+                    timeline or None,
+                    base_video,
+                    utils.timestamp_to_seconds(start_time) or 0.0,
+                    utils.timestamp_to_seconds(end_time) or 0.0,
+                    out_name,
                     reencode=config.REENCODING,
                     cancel_flag=cancel_flag,
                 )
+                is not None
+            )
             if ok and cards_enabled:
                 # Wrap at the clip's own resolution: a later part may differ from
                 # the first source.
@@ -739,10 +700,7 @@ def _process_single_clip_segments(
                 output_paths.append((out_name, time_idx))
         elif cancel_flag and cancel_flag():
             # Killed mid-encode: the partial output is corrupt; remove it.
-            try:
-                Path(out_name).unlink(missing_ok=True)
-            except OSError:
-                pass
+            files.release_reservation(out_name)
             break
         else:
             files.release_reservation(out_name)
@@ -804,12 +762,9 @@ def _clip_progress_label(clip: ClipRecord) -> str:
 def _run_clip_pipeline(
     clips_list: list[Any],
     *,
-    empty_warning: str,
     intro_message: str,
     task_label: str,
     per_clip_fn: Callable[[Any, set[str]], Any],
-    show_fallback_counter: bool = False,
-    secondary_task_label: str | None = None,
     parallel: bool = False,
     cancel_flag: Callable[[], bool] | None = None,
     on_clip_complete: Callable[[int, int], None] | None = None,
@@ -824,10 +779,6 @@ def _run_clip_pipeline(
     the returned list — callers receive only successful results and can iterate
     them without defensive ``None`` checks.
     """
-    if not clips_list:
-        utils.warning_print(empty_warning)
-        return ([], set())
-
     utils.standard_print(intro_message)
     missing_videos: set[str] = set()
 
@@ -901,19 +852,11 @@ def _run_clip_pipeline(
         results = []
         with utils.progress_scope(task_label, total_clips) as ps:
             _active_progress = ps.progress
-            if secondary_task_label:
-                ps.add_task(secondary_task_label, total_clips)
-            for index, clip in enumerate(clips_list, start=1):
+            for clip in clips_list:
                 if cancel_flag and cancel_flag():
                     break
                 if ps.live:
                     ps.update(description=_clip_progress_label(clip))
-                elif (
-                    show_fallback_counter
-                    and getattr(config, "VERBOSITY", config.STANDARD) >= config.VERBOSE
-                    and total_clips > 1
-                ):
-                    utils.verbose_print(f"Processing clip {index} of {total_clips}...")
                 results.append(wrapped_process(clip))
                 ps.update(advance=1)
                 _notify_clip_done()
@@ -924,6 +867,39 @@ def _run_clip_pipeline(
     # Drop cancelled futures' slots; the sequential path yields the same shape.
     results = [r for r in results if r is not None]
     return (results, missing_videos)
+
+
+def _manifest_transcript(
+    entry: dict[str, Any], corrections: list[Any], fallback_source: str
+) -> transcripts.TranscriptResult:
+    """Corrected TranscriptResult with PII placeholders baked in over the whole entry.
+
+    Rendering before any clip filter keeps placeholder numbering per participant.
+    """
+    corrected = transcripts.apply_corrections(entry.get("segments", []), corrections)
+    raw_texts = [seg["text"] for seg in corrected]
+    texts = redact.entry_texts(entry, raw_texts)
+    segments = corrected
+    if texts != raw_texts:
+        # Word timings and span offsets describe the raw text; drop them with it.
+        segments = [
+            cast(
+                transcripts.TranscriptSegment,
+                {
+                    k: v
+                    for k, v in {**seg, "text": text}.items()
+                    if k not in ("words", "pii", "pii_crc")
+                },
+            )
+            for seg, text in zip(corrected, texts, strict=True)
+        ]
+    return transcripts.TranscriptResult(
+        segments=segments,
+        language=entry.get("language", ""),
+        source_file=entry.get("source_file", fallback_source),
+        model=entry.get("model", ""),
+        speaker_labels=dict((entry.get("speakers") or {}).get("labels") or {}),
+    )
 
 
 def _embed_transcript_on_artifacts(
@@ -949,16 +925,7 @@ def _embed_transcript_on_artifacts(
     transcript_version = ""
     if participant and participant in source_transcripts:
         entry = source_transcripts[participant]
-        raw_segments = entry.get("segments", [])
-        corrected = transcripts.apply_corrections(raw_segments, corrections)
-        full_transcript = transcripts.TranscriptResult(
-            segments=corrected,
-            language=entry.get("language", ""),
-            source_file=entry.get("source_file", str(base_video)),
-            model=entry.get("model", ""),
-            redact=bool((entry.get("redaction") or {}).get("enabled")),
-            redact_excluded=list((entry.get("redaction") or {}).get("excluded") or []),
-        )
+        full_transcript = _manifest_transcript(entry, corrections, str(base_video))
         transcript_version = entry.get("transcribed_at", "")
     elif transcript_cache.get(base_video):
         full_transcript = transcript_cache[base_video]
@@ -968,8 +935,6 @@ def _embed_transcript_on_artifacts(
 
     times = clip.get("times", [])
     for art_idx, (_out_path, time_idx) in enumerate(segment_details):
-        if art_idx >= len(artifacts):
-            break
         start_str, end_str = times[time_idx]
         start_sec = utils.timestamp_to_seconds(start_str) or 0.0
         end_sec = utils.timestamp_to_seconds(end_str) or 0.0
@@ -1012,19 +977,8 @@ def _transcribe_segments(
         corrections = manifest.get("corrections", [])
 
         if participant and participant in source_transcripts:
-            entry = source_transcripts[participant]
-            raw_segments = entry.get("segments", [])
-            corrected = transcripts.apply_corrections(raw_segments, corrections)
-            transcript_cache[base_video] = transcripts.TranscriptResult(
-                segments=corrected,
-                language=entry.get("language", ""),
-                source_file=entry.get("source_file", str(base_video)),
-                model=entry.get("model", ""),
-                speaker_labels=dict((entry.get("speakers") or {}).get("labels") or {}),
-                redact=bool((entry.get("redaction") or {}).get("enabled")),
-                redact_excluded=list(
-                    (entry.get("redaction") or {}).get("excluded") or []
-                ),
+            transcript_cache[base_video] = _manifest_transcript(
+                source_transcripts[participant], corrections, str(base_video)
             )
         else:
             context_keywords = transcripts.get_corrections_keywords(corrections) or None
@@ -1068,7 +1022,7 @@ def _transcribe_segments(
         )
         t_path = files.get_unique_filename(Path(out_path).stem + ext, file_format=ext)
         if transcripts.write_transcript(clipped, t_path):
-            artifact = utils.build_artifact_record(
+            artifact = viewer.build_artifact_record(
                 clip,
                 base_video,
                 t_path,
@@ -1304,9 +1258,6 @@ def process_clips(
         "screen": "screenshot(s)",
         "gif": "GIF(s)",
     }.get(output_format, "file(s)")
-    cards_enabled, _card_duration = _resolve_titlecard_options(
-        titlecards_enabled, titlecard_duration_seconds
-    )
     if cards_enabled and clear_titlecard_cache:
         titlecards.clear_endcard_cache()
 
@@ -1368,19 +1319,10 @@ def _build_reel_transcript(
         title_offset = titlecard_duration if carded else 0
         end_offset = endcard_duration if carded else 0
 
-        full_transcript = None
         if participant and participant in source_transcripts:
-            entry = source_transcripts[participant]
-            raw_segments = entry.get("segments", [])
-            corrected = transcripts.apply_corrections(raw_segments, corrections)
-            full_transcript = transcripts.TranscriptResult(
-                segments=corrected,
-                language=entry.get("language", ""),
-                source_file=entry.get("source_file", ""),
-                model=entry.get("model", ""),
+            full_transcript = _manifest_transcript(
+                source_transcripts[participant], corrections, ""
             )
-
-        if full_transcript:
             clipped = transcripts.filter_segments(
                 full_transcript, comp_start, comp_end, offset_to_zero=True
             )
@@ -1546,7 +1488,7 @@ def _process_reel(
         )
         times = clip.get("times", [])
         clip_components = [
-            utils.build_reel_component(clip, base_video, *times[time_idx])
+            viewer.build_reel_component(clip, base_video, *times[time_idx])
             for _out_path, time_idx in segment_paths
         ]
         # Per part, so the reel transcript offsets only cards that landed.
@@ -1567,7 +1509,6 @@ def _process_reel(
 
     all_results, _ = _run_clip_pipeline(
         clips_list,
-        empty_warning="No clips to process for reel. No timestamps were found or selected.",
         intro_message="* Reel mode: generating individual clips, then concatenating into one file.",
         task_label="Generating reel clips",
         per_clip_fn=process_reel_clip,
@@ -1580,10 +1521,7 @@ def _process_reel(
     if cancel_flag and cancel_flag():
         for segment_paths, _, _, _ in all_results:
             for entry in segment_paths:
-                try:
-                    Path(entry[0]).unlink(missing_ok=True)
-                except OSError:
-                    pass
+                files.release_reservation(entry[0])
         return (0, [])
 
     # Assemble ordered paths and components from per-clip results
@@ -1605,10 +1543,7 @@ def _process_reel(
     # cached.
     if reel_failures:
         for path in clip_paths:
-            try:
-                Path(path).unlink(missing_ok=True)
-            except OSError:
-                pass
+            files.release_reservation(path)
         files.release_reservation(output_file)
         utils.error_print(
             f"Reel aborted: {len(reel_failures)} clip(s) could not be generated.",
@@ -1632,18 +1567,15 @@ def _process_reel(
         files.release_reservation(output_file)
         return (0, [])
 
-    if output_file is None and study_name:
-        output_file = files.get_unique_filename(f"{study_name}_reel{config.FILEFORMAT}")
-    elif output_file is None:
-        output_file = files.get_unique_filename(f"reel{config.FILEFORMAT}")
+    if output_file is None:
+        output_file = files.get_unique_filename(
+            files.default_reel_filename(study_name, "reel")
+        )
 
     # Check cancel flag before starting concatenation
     if cancel_flag and cancel_flag():
         for path in clip_paths:
-            try:
-                Path(path).unlink(missing_ok=True)
-            except OSError:
-                pass
+            files.release_reservation(path)
         files.release_reservation(output_file)
         return (0, [])
 
@@ -1662,7 +1594,6 @@ def _process_reel(
         return video.concatenate_clips(
             clip_paths,
             output_file,
-            reencode_on_fail=True,
             cancel_flag=cancel_flag,
             on_progress=_on_concat_progress if progress_cb is not None else None,
         )
@@ -1681,15 +1612,9 @@ def _process_reel(
 
     # If cancelled during concatenation, clean up output and temp clips
     if cancel_flag and cancel_flag():
-        try:
-            Path(output_file).unlink(missing_ok=True)
-        except OSError:
-            pass
+        files.release_reservation(output_file)
         for path in clip_paths:
-            try:
-                Path(path).unlink(missing_ok=True)
-            except OSError:
-                pass
+            files.release_reservation(path)
         return (0, [])
 
     for path in clip_paths:
@@ -1909,34 +1834,19 @@ def _regenerate_single_artifact(
 
     parts = artifact.get("parts")
     if artifact_type == "clip" and parts:
-        temp_paths: list[str] = []
-        for n, part in enumerate(parts):
+        pieces: list[tuple[str, float, float]] = []
+        for part in parts:
             part_source = part.get("sourceVideo", "")
             part_path = str(utils.resolve_input_path(part_source))
             if not Path(part_path).is_file():
                 if part_path not in missing_videos:
                     missing_videos.add(part_path)
                     utils.warning_print(f"Source video not found: '{part_source}'")
-                for p in temp_paths:
-                    Path(p).unlink(missing_ok=True)
                 return False
-            tmp = files.get_unique_filename(f"_multipart_{n + 1}{config.FILEFORMAT}")
-            if video.run_ffmpeg(
-                input_file=part_path,
-                output_file=tmp,
-                start_pos=utils.seconds_to_timestamp(round(part.get("localStart", 0))),
-                end_pos=utils.seconds_to_timestamp(round(part.get("localEnd", 0))),
-                reencode=config.REENCODING,
-            ):
-                temp_paths.append(tmp)
-            else:
-                files.release_reservation(tmp)
-                for p in temp_paths:
-                    Path(p).unlink(missing_ok=True)
-                return False
-        ok = video.concatenate_clips(temp_paths, output_path, reencode_on_fail=True)
-        for p in temp_paths:
-            Path(p).unlink(missing_ok=True)
+            pieces.append(
+                (part_path, part.get("localStart", 0), part.get("localEnd", 0))
+            )
+        ok = _stitch_clip_pieces(pieces, output_path, config.FILEFORMAT, None)
         if ok and artifact.get("titlecards"):
             ok = _reapply_titlecards(artifact, output_path)
         if ok:
@@ -1959,9 +1869,8 @@ def _regenerate_single_artifact(
 
     local_start = artifact.get("localStart", artifact.get("start", 0))
     local_end = artifact.get("localEnd", artifact.get("end", 0))
-    # Round like _local_timestamp so regeneration reproduces the original cut.
-    start_ts = utils.seconds_to_timestamp(round(local_start))
-    end_ts = utils.seconds_to_timestamp(round(local_end))
+    start_ts = _local_timestamp(local_start)
+    end_ts = _local_timestamp(local_end)
 
     if artifact_type == "clip":
         ok = video.run_ffmpeg(
@@ -2038,14 +1947,8 @@ def _regenerate_reel(
                 {
                     "idx": len(tasks),
                     "source_path": source_path,
-                    # Match _local_timestamp's rounding and force_hours so
-                    # regeneration reproduces the original cut.
-                    "start_ts": utils.seconds_to_timestamp(
-                        round(local_start), force_hours=True
-                    ),
-                    "end_ts": utils.seconds_to_timestamp(
-                        round(local_end), force_hours=True
-                    ),
+                    "start_ts": _local_timestamp(local_start),
+                    "end_ts": _local_timestamp(local_end),
                 }
             )
 
@@ -2091,17 +1994,14 @@ def _regenerate_reel(
 
     def _cleanup() -> None:
         for p in all_names:
-            try:
-                Path(p).unlink(missing_ok=True)
-            except OSError:
-                pass
+            files.release_reservation(p)
 
     if not all(ok for _name, ok in ordered):
         _cleanup()  # any failed cut aborts the whole reel
         return False
 
     output_file = str(utils.resolve_output_path(reel.get("file", "reel.mp4")))
-    ok = video.concatenate_clips(all_names, output_file, reencode_on_fail=True)
+    ok = video.concatenate_clips(all_names, output_file)
 
     _cleanup()
     return ok

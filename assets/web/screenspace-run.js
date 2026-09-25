@@ -4,8 +4,8 @@
  * initRunButton (queues one task per selected participant, or a multitool
  * chain) and gatherWorkflowParams / gatherMultitoolStepParams (the single
  * save path every tool's panel feeds). Loads last: it destructures the
- * tasks satellite's renderTaskList / startSSE and the hub's region-ref
- * helpers at load time. Function bodies are unchanged from the hub.
+ * tasks satellite's enqueueTask / startSSE and the hub's region-ref
+ * helpers at load time.
  */
 (function () {
   "use strict";
@@ -17,7 +17,7 @@
     normalizeRegionRef = SS.normalizeRegionRef,
     regionRefLabel = SS.regionRefLabel,
     regionRefPayload = SS.regionRefPayload,
-    renderTaskList = SS.renderTaskList,
+    enqueueTask = SS.enqueueTask,
     startSSE = SS.startSSE,
     toolSupportsFastScan = SS.toolSupportsFastScan;
 
@@ -63,16 +63,7 @@
               region: mtRegion,
               parameters: params,
             };
-            return apiPost("api/tasks", body).then(function (data) {
-              if (data.ok) {
-                if (!state.tasks.some(function (t) { return t.id === data.task.id; })) {
-                  state.tasks.push(data.task);
-                }
-                renderTaskList();
-              } else {
-                showToast(data.error || "Failed to create task for " + pid);
-              }
-            });
+            return enqueueTask(body, "Failed to create task for " + pid);
           });
         });
       } else {
@@ -87,16 +78,7 @@
                 parameters: params,
               };
               if (normalizedRegion) body.region_ref = regionRefPayload(normalizedRegion);
-              return apiPost("api/tasks", body).then(function (data) {
-                if (data.ok) {
-                  if (!state.tasks.some(function (t) { return t.id === data.task.id; })) {
-                    state.tasks.push(data.task);
-                  }
-                  renderTaskList();
-                } else {
-                  showToast(data.error || "Failed to create task for " + pid + " / " + regionRefLabel(normalizedRegion));
-                }
-              });
+              return enqueueTask(body, "Failed to create task for " + pid + " / " + regionRefLabel(normalizedRegion));
             });
           });
         });
@@ -109,36 +91,40 @@
     });
   }
 
-  function gatherMultitoolStepParams(stepType, idx, opts) {
-    // opts.silent drops missing-input toasts for the calibration strip's per-keystroke
-    // probes.
+  // Suffix-aware input readers; rawNum yields NaN so callers can test emptiness.
+  function _paramReader(sfx, opts) {
+    // opts.silent mutes missing-input toasts for the calibration strip's probes.
     var silent = !!(opts && opts.silent);
-    function toast(msg) { if (!silent) showToast(msg); }
-    var sfx = "_mt" + idx;
-    // Suffix-aware readers; rawNum deliberately yields NaN for inputs whose emptiness is
-    // checked.
-    function num(id, d) { return numberOrDefault((qs("#" + id + sfx) || {}).value, d); }
-    function intv(id, d) { return intOrDefault((qs("#" + id + sfx) || {}).value, d); }
-    function chk(id) { return !!((qs("#" + id + sfx) || {}).checked); }
-    function str(id, d) { return (qs("#" + id + sfx) || {}).value || d; }
-    function rawNum(id) { return parseFloat((qs("#" + id + sfx) || {}).value); }
+    function input(id) { return qs("#" + id + sfx) || {}; }
+    return {
+      num: function (id, d) { return numberOrDefault(input(id).value, d); },
+      intv: function (id, d) { return intOrDefault(input(id).value, d); },
+      chk: function (id) { return !!input(id).checked; },
+      str: function (id, d) { return input(id).value || d; },
+      rawNum: function (id) { return parseFloat(input(id).value); },
+      toast: function (msg) { if (!silent) showToast(msg); },
+    };
+  }
+
+  function _colorParams(rd, p) {
+    p.target_color = {
+      h: rd.num("paramColorH", 0),
+      s: rd.num("paramColorS", 0),
+      v: rd.num("paramColorV", 0),
+    };
+    p.tolerance = colorTolerance(rd.num("paramColorTol", 30));
+    if (rd.str("paramColorMode", "") === "presence") {
+      p.color_mode = "presence";
+      p.min_coverage = rd.num("paramColorMinArea", 1) / 100;
+    }
+  }
+
+  function gatherMultitoolStepParams(stepType, idx, opts) {
+    var rd = _paramReader("_mt" + idx, opts);
+    var num = rd.num, intv = rd.intv, chk = rd.chk, str = rd.str, rawNum = rd.rawNum, toast = rd.toast;
     var p = {};
     if (stepType === "color") {
-      p.target_color = {
-        h: num("paramColorH", 0),
-        s: num("paramColorS", 0),
-        v: num("paramColorV", 0),
-      };
-      var tol = num("paramColorTol", 30);
-      p.tolerance = {
-        h: Math.round(tol * 90 / 100),
-        s: Math.round(tol * 128 / 100),
-        v: Math.round(tol * 128 / 100),
-      };
-      if (str("paramColorMode", "") === "presence") {
-        p.color_mode = "presence";
-        p.min_coverage = num("paramColorMinArea", 1) / 100;
-      }
+      _colorParams(rd, p);
     } else if (stepType === "change") {
       p.threshold = num("paramChangeThresh", 0.03);
       p.noise_threshold = intv("paramChangeNoise", 30);
@@ -193,9 +179,7 @@
         toast("Step " + (idx + 1) + ": add at least one scene reference");
         return null;
       }
-      p.scene_references = step._scenes.map(function (ref) {
-        return { name: ref.name, timestamp: ref.timestamp, threshold: numberOrDefault(ref.threshold, 0.75) };
-      });
+      p.scene_references = step._scenes.map(sceneRefPayload);
     } else if (stepType === "inactivity") {
       p.threshold = intv("paramInactThresh", 10);
     }
@@ -207,18 +191,8 @@
   }
 
   function gatherWorkflowParams(type, opts) {
-    // opts.silent drops missing-input toasts for the calibration strip's per-keystroke
-    // probes.
-    var silent = !!(opts && opts.silent);
-    function toast(msg) { if (!silent) showToast(msg); }
-    var sfx = "";
-    // Suffix-aware readers; rawNum deliberately yields NaN for inputs whose emptiness is
-    // checked.
-    function num(id, d) { return numberOrDefault((qs("#" + id + sfx) || {}).value, d); }
-    function intv(id, d) { return intOrDefault((qs("#" + id + sfx) || {}).value, d); }
-    function chk(id) { return !!((qs("#" + id + sfx) || {}).checked); }
-    function str(id, d) { return (qs("#" + id + sfx) || {}).value || d; }
-    function rawNum(id) { return parseFloat((qs("#" + id + sfx) || {}).value); }
+    var rd = _paramReader("", opts);
+    var num = rd.num, intv = rd.intv, chk = rd.chk, str = rd.str, rawNum = rd.rawNum, toast = rd.toast;
     var params = {};
     if (type === "multitool") {
       if (state.multitoolSteps.length < 2) {
@@ -244,27 +218,8 @@
         params.steps.push(stepP);
       }
       params.interval = num("paramMultitoolInterval", 1.0);
-      var mtLabelEl = qs("#paramEventLabel");
-      if (mtLabelEl && mtLabelEl.value.trim()) params.event_label = mtLabelEl.value.trim();
-      var mtDfEl = qs("#paramDetectFirst");
-      if (mtDfEl && mtDfEl.checked) params.detect_first = true;
-      return params;
     } else if (type === "color") {
-      params.target_color = {
-        h: num("paramColorH", 0),
-        s: num("paramColorS", 0),
-        v: num("paramColorV", 0),
-      };
-      var tol = num("paramColorTol", 30);
-      params.tolerance = {
-        h: Math.round(tol * 90 / 100),
-        s: Math.round(tol * 128 / 100),
-        v: Math.round(tol * 128 / 100),
-      };
-      if (str("paramColorMode", "") === "presence") {
-        params.color_mode = "presence";
-        params.min_coverage = num("paramColorMinArea", 1) / 100;
-      }
+      _colorParams(rd, params);
       params.interval = num("paramColorInterval", 1.0);
     } else if (type === "change") {
       params.threshold = num("paramChangeThresh", 0.03);
@@ -327,31 +282,11 @@
       var si = rawNum("paramTlSampleInterval");
       if (si > 0) params.sample_interval = si;
       params.output_format = str("paramTlFormat", "mp4");
-    } else if (type === "template") {
+    } else if (type === "template" || type === "shape") {
+      // Upload keys carry the tool prefix: template_image_data, shape_name, …
       if (state.uploadedTemplate) {
-        params.template_image_data = state.uploadedTemplate.data;
-        if (state.uploadedTemplate.name) params.template_name = state.uploadedTemplate.name;
-      } else if (state.referenceTimestamp !== null) {
-        params.reference_timestamp = state.referenceTimestamp;
-        // Pin the sample to its capture region; the run target only scopes the search.
-        var tplSnap = state.capturedRefPreview;
-        if (tplSnap && tplSnap.ts === state.referenceTimestamp && tplSnap.region) {
-          params.reference_region = tplSnap.region;
-        }
-      } else {
-        toast("Capture a template region or upload a PNG");
-        return null;
-      }
-      params.threshold = num("paramTemplateThresh", 0.70);
-      params.interval = num("paramTemplateInterval", 1.0);
-      var scalePct = rawNum("paramTemplateScale");
-      if (!isNaN(scalePct) && scalePct > 0 && scalePct !== 100) {
-        params.template_scale = scalePct / 100;
-      }
-    } else if (type === "shape") {
-      if (state.uploadedTemplate) {
-        params.shape_image_data = state.uploadedTemplate.data;
-        if (state.uploadedTemplate.name) params.shape_name = state.uploadedTemplate.name;
+        params[type + "_image_data"] = state.uploadedTemplate.data;
+        if (state.uploadedTemplate.name) params[type + "_name"] = state.uploadedTemplate.name;
       } else if (state.referenceTimestamp !== null) {
         params.reference_timestamp = state.referenceTimestamp;
         // Pin the sample to its capture region; the run target only scopes the search.
@@ -360,20 +295,29 @@
           params.reference_region = capSnap.region;
         }
       } else {
-        toast("Capture a shape region or upload a PNG");
+        toast("Capture a " + type + " region or upload a PNG");
         return null;
       }
-      params.threshold = num("paramShapeThresh", 0.55);
-      params.scale_min = num("paramShapeScaleMin", 50) / 100;
-      params.scale_max = num("paramShapeScaleMax", 200) / 100;
-      params.scale_steps = intv("paramShapeSteps", 7);
-      var linkEl = qs("#paramShapeLinkAxes");
-      if (linkEl && !linkEl.checked) {
-        params.scale_y_min = num("paramShapeScaleYMin", 90) / 100;
-        params.scale_y_max = num("paramShapeScaleYMax", 110) / 100;
-        params.scale_y_steps = intv("paramShapeStepsY", 3);
+      if (type === "template") {
+        params.threshold = num("paramTemplateThresh", 0.70);
+        params.interval = num("paramTemplateInterval", 1.0);
+        var scalePct = rawNum("paramTemplateScale");
+        if (!isNaN(scalePct) && scalePct > 0 && scalePct !== 100) {
+          params.template_scale = scalePct / 100;
+        }
+      } else {
+        params.threshold = num("paramShapeThresh", 0.55);
+        params.scale_min = num("paramShapeScaleMin", 50) / 100;
+        params.scale_max = num("paramShapeScaleMax", 200) / 100;
+        params.scale_steps = intv("paramShapeSteps", 7);
+        var linkEl = qs("#paramShapeLinkAxes");
+        if (linkEl && !linkEl.checked) {
+          params.scale_y_min = num("paramShapeScaleYMin", 90) / 100;
+          params.scale_y_max = num("paramShapeScaleYMax", 110) / 100;
+          params.scale_y_steps = intv("paramShapeStepsY", 3);
+        }
+        params.interval = num("paramShapeInterval", 1.0);
       }
-      params.interval = num("paramShapeInterval", 1.0);
     } else if (type === "flow") {
       params.magnitude_threshold = num("paramFlowMag", 2.0);
       params.interval = num("paramFlowInterval", 1.0);
@@ -384,9 +328,7 @@
         toast("Add at least one scene reference");
         return null;
       }
-      params.scene_references = state.sceneReferences.map(function (ref) {
-        return { name: ref.name, timestamp: ref.timestamp, threshold: numberOrDefault(ref.threshold, 0.75) };
-      });
+      params.scene_references = state.sceneReferences.map(sceneRefPayload);
       params.interval = num("paramSceneInterval", 1.0);
     } else if (type === "inactivity") {
       params.threshold = intv("paramInactThresh", 10);
@@ -422,5 +364,4 @@
 
   SS.initRunButton = initRunButton;
   SS.gatherWorkflowParams = gatherWorkflowParams;
-  SS.gatherMultitoolStepParams = gatherMultitoolStepParams;
 })();

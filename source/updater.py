@@ -102,23 +102,14 @@ _verified: dict[str, Any] | None = None
 
 
 def install_shape() -> Shape:
-    """Classify this process's install; mirrors cli.get_runtime_working_dir."""
+    """Classify this process's install on top of utils.frozen_layout."""
     if not getattr(sys, "frozen", False):
         return "unsupported"
-    exe_dir = Path(sys.executable).resolve().parent
-    if exe_dir.name == "MacOS" and exe_dir.parent.name == "Contents":
-        if exe_dir.parent.parent.suffix == ".app":
-            return "mac-app"
-        return "unsupported"
-    meipass = getattr(sys, "_MEIPASS", None)
-    if (
-        sys.platform == "win32"
-        and meipass
-        and Path(meipass).resolve().parent == exe_dir
-    ):
-        if (exe_dir / "unins000.exe").is_file():
-            return "win-inno"
-        return "win-zip"
+    kind, root = utils.frozen_layout()
+    if kind == "mac-app":
+        return "mac-app"
+    if kind == "one-dir" and sys.platform == "win32":
+        return "win-inno" if (root / "unins000.exe").is_file() else "win-zip"
     return "unsupported"
 
 
@@ -275,12 +266,6 @@ def start_check(*, force: bool = False) -> bool:
     return True
 
 
-def run_check(*, force: bool = False) -> None:
-    """start_check plus finish_check in one call (tests, CLI)."""
-    if start_check(force=force):
-        finish_check(force=force)
-
-
 def _recover(fn: Callable[..., None]) -> Callable[..., None]:
     """A crashing thread body lands in ``error`` instead of a stuck phase."""
 
@@ -320,11 +305,7 @@ def finish_check(*, force: bool = False) -> None:
             else:
                 _status["phase"] = "idle"
             return
-        if not is_newer(release["tag"], current):
-            _latest = None
-            _status.update(phase="idle", version=None, release_url=release["url"])
-            return
-        if skipped == release["tag"]:
+        if not is_newer(release["tag"], current) or skipped == release["tag"]:
             _latest = None
             _status.update(phase="idle", version=None, release_url=release["url"])
             return
@@ -355,17 +336,11 @@ def finish_check(*, force: bool = False) -> None:
             _status.update(phase="error", error="Release publishes no checksum")
             return
         _status["asset"] = asset["name"]
-        if same_file:
+        ready = already if same_file else existing
+        if ready:
             _status.update(
                 phase="ready",
-                path=already,
-                total=asset["size"],
-                completed=asset["size"],
-            )
-        elif existing is not None:
-            _status.update(
-                phase="ready",
-                path=str(existing),
+                path=str(ready),
                 total=asset["size"],
                 completed=asset["size"],
             )
@@ -510,12 +485,6 @@ def start_download() -> bool:
             return False
         _status.update(phase="downloading", completed=0, error=None)
     return True
-
-
-def run_download() -> None:
-    """start_download plus finish_download in one call."""
-    if start_download():
-        finish_download()
 
 
 @_recover
@@ -823,12 +792,6 @@ def start_apply() -> bool:
     return True
 
 
-def run_apply() -> None:
-    """start_apply plus finish_apply in one call."""
-    if start_apply():
-        finish_apply()
-
-
 @_recover
 def finish_apply() -> None:
     """Thread body behind /api/update/apply; quits the app on success."""
@@ -844,7 +807,9 @@ def finish_apply() -> None:
                 else problem
             )
         return
-    request_quit()
+    import desktop
+
+    desktop.request_quit()
 
 
 def skip_version() -> bool:
@@ -858,13 +823,6 @@ def skip_version() -> bool:
         _status.update(phase="idle", skipped=tag, error=None)
     _save_state(skipped=tag)
     return True
-
-
-def request_quit() -> None:
-    """Close the desktop window so the process unwinds and exits."""
-    import desktop
-
-    desktop.request_quit()
 
 
 def reveal_download() -> bool:

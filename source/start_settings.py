@@ -164,7 +164,7 @@ def _record_recent_dir(path: str, last_key: str, recents_key: str) -> None:
     """Store *path* under *last_key* and at the head of *recents_key*."""
     with _settings_lock():
         settings = load_start_settings()
-        if not settings.get("persist_enabled", True):
+        if not settings.get("persist_enabled"):
             return
         if not path:
             return
@@ -189,7 +189,7 @@ def record_recent_spreadsheet(
     """Record a spreadsheet selection as last/recent."""
     with _settings_lock():
         settings = load_start_settings()
-        if not settings.get("persist_enabled", True):
+        if not settings.get("persist_enabled"):
             return
         if type_ not in ("google", "excel") or not id_or_path:
             return
@@ -247,7 +247,7 @@ def record_project_session(
     """
     with _settings_lock():
         settings = load_start_settings()
-        if not settings.get("persist_enabled", True):
+        if not settings.get("persist_enabled"):
             return
         if not input_dir or not output_dir:
             return
@@ -366,7 +366,7 @@ def record_window_geometry(x: int, y: int, width: int, height: int) -> None:
     """
     with _settings_lock():
         settings = load_start_settings()
-        if not settings.get("remember_window", True):
+        if not settings.get("remember_window"):
             return
         if width <= 0 or height <= 0:
             return

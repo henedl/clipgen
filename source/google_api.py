@@ -159,43 +159,11 @@ def find_spreadsheet_by_name(search_name: str, doc_list: list[str]) -> int:
     Returns:
         The index of matching sheet, or -1 if not found.
     """
-    if config.DEBUGGING:
-        config.debug_ic(search_name)
-    utils.debug_print("Running method find_spreadsheet_by_name()")
+    names = [doc.strip().lower() for doc in doc_list]
     search_name = search_name.strip().lower()
-    search_name_guess = search_name + " data set"
-    utils.debug_print(
-        f"Using search_name '{search_name}', search_name_guess '{search_name_guess}'"
-    )
-
-    for i, doc in enumerate(doc_list):
-        doc_name = doc.strip().lower()
-        if config.DEBUGGING:
-            config.debug_ic(doc_name, search_name)
-        utils.debug_print(
-            f"Attempting exact match with '{doc}', formatted as '{doc_name}'"
-        )
-        if doc_name == search_name:
-            utils.debug_print(f"Matched sheet '{doc_name}' with input '{search_name}'")
-            if config.DEBUGGING:
-                config.debug_ic(i)
-            return i
-        utils.debug_print(f"Found no exact match at step {i}")
-
-    for i, doc in enumerate(doc_list):
-        doc_name = doc.strip().lower()
-        utils.debug_print(
-            f"Attempting guess match with '{doc}', formatted as '{doc_name}'"
-        )
-        if doc_name == search_name_guess:
-            utils.debug_print(
-                f"Matched sheet '{doc_name}' with guess '{search_name_guess}'"
-            )
-            if config.DEBUGGING:
-                config.debug_ic(i)
-            return i
-        utils.debug_print(f"Found no guess match at step {i}")
-
-    if config.DEBUGGING:
-        config.debug_ic(-1)
+    for target in (search_name, search_name + " data set"):
+        if target in names:
+            index = names.index(target)
+            utils.debug_print(f"Matched sheet '{doc_list[index]}' with '{target}'")
+            return index
     return -1

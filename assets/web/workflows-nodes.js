@@ -22,7 +22,7 @@
   // One port column; outputs are CSS-flipped. Wired ports get `.wf-port-connected` (filled dot).
   function buildPortColumn(node, ports, isOutput) {
     var col = el("div", "wf-port-col " + (isOutput ? "outputs" : "inputs"));
-    var edges = state.edges || [];
+    var edges = state.edges;
     (ports || []).forEach(function (port) {
       // The `__gate__` control input reads as a muted "gate" anchor, not a port name.
       var isControl = port.type === "control";
@@ -73,7 +73,7 @@
   }
 
   function stepParamSpecs(stepType) {
-    var nt = state.catalogById && state.catalogById["ss_" + stepType];
+    var nt = state.catalogById["ss_" + stepType];
     return (nt && nt.params) || [];
   }
 
@@ -84,6 +84,19 @@
       if (n.id && n.id.indexOf("ss_") === 0) out.push(n.id.slice(3));
     });
     return out;
+  }
+
+  // A select over values; labelFn(v) names each option, else the value itself.
+  function buildSelect(cls, values, current, labelFn) {
+    var sel = el("select", cls);
+    values.forEach(function (v) {
+      var o = el("option");
+      o.value = v;
+      o.textContent = labelFn ? labelFn(v) : v;
+      if (v === current) o.selected = true;
+      sel.appendChild(o);
+    });
+    return sel;
   }
 
   // Detect node: a detector dropdown plus that detector's ss_<tool> params, swapped in place.
@@ -99,14 +112,7 @@
 
     var row = el("div", "wf-param");
     row.appendChild(el("label", "wf-param-label", "Detector"));
-    var sel = el("select", "wf-param-input");
-    types.forEach(function (t) {
-      var o = el("option");
-      o.value = t;
-      o.textContent = t;
-      if (t === node.params.detector) o.selected = true;
-      sel.appendChild(o);
-    });
+    var sel = buildSelect("wf-param-input", types, node.params.detector);
     var body = el("div", "wf-detect-body");
     function renderBody() {
       body.innerHTML = "";
@@ -185,8 +191,7 @@
   // One ParamSpec editor writing to `store` and autosaving. Scalar editors never re-render, so focus survives.
   function buildParamControl(node, spec, store) {
     if (spec.type === "step-list") return buildStepList(node, spec);
-    store = store || node.params;
-    var value = store ? store[spec.name] : spec.default;
+    var value = store[spec.name];
     var input;
     if (spec.type === "number") {
       input = el("input", "wf-param-input");
@@ -201,14 +206,7 @@
         WF.scheduleSave();
       });
     } else if (spec.type === "enum") {
-      input = el("select", "wf-param-input");
-      (spec.choices || []).forEach(function (choice) {
-        var opt = el("option");
-        opt.value = choice;
-        opt.textContent = choice;
-        if (choice === value) opt.selected = true;
-        input.appendChild(opt);
-      });
+      input = buildSelect("wf-param-input", spec.choices || [], value);
       input.addEventListener("change", function () {
         store[spec.name] = input.value;
         WF.scheduleSave();
@@ -230,18 +228,12 @@
       ((state.context && state.context.regions) || []).length
     ) {
       // Saved regions become a picker so typos can't full-frame the scan; missing names stay selectable.
-      input = el("select", "wf-param-input");
       var regions = state.context.regions;
       var names = [""].concat(regions);
       if (value && names.indexOf(value) < 0) names.push(value);
-      names.forEach(function (name) {
-        var opt = el("option");
-        opt.value = name;
-        if (name === "") opt.textContent = "(none)";
-        else if (regions.indexOf(name) < 0) opt.textContent = name + " (missing)";
-        else opt.textContent = name;
-        if (name === value) opt.selected = true;
-        input.appendChild(opt);
+      input = buildSelect("wf-param-input", names, value, function (name) {
+        if (name === "") return "(none)";
+        return regions.indexOf(name) < 0 ? name + " (missing)" : name;
       });
       input.addEventListener("change", function () {
         store[spec.name] = input.value;
@@ -268,7 +260,6 @@
 
   // Param row: label, reset chip (shown when value differs from default), control.
   function buildParamRow(node, spec, store) {
-    store = store || node.params;
     var row = el("div", "wf-param");
     var head = el("div", "wf-param-head");
     head.appendChild(el("label", "wf-param-label", spec.label || spec.name));
@@ -378,7 +369,7 @@
   function buildParticipantSelect(spec, store) {
     var ALL = WF.ALL_PARTICIPANTS;
     var participants = (state.context && state.context.participants) || [];
-    var current = store ? store[spec.name] : spec.default;
+    var current = store[spec.name];
     var isAll = current === ALL;
 
     // Discovered ids plus any stored id not discovered, so saved selections round-trip.
@@ -429,7 +420,7 @@
       else if (!picked.length) out = [];
       else if (picked.length === 1) out = picked[0];
       else out = picked;
-      if (store) store[spec.name] = out;
+      store[spec.name] = out;
       refreshSummary();
       WF.scheduleSave();
     }
@@ -473,26 +464,23 @@
       });
     });
 
-    // Portaled onto <body>: the canvas clips it and #wfWorld's transform defeats position:fixed. See transcripts-pills.js.
-    if (WF.bindMenuToggle) {
-      // `toggle` is assigned before any click can fire, so onOpen can close over it.
-      var toggle = WF.bindMenuToggle(btn, menu, {
-        onOpen: function () {
-          closeParticipantMenu(); // only one open at a time
-          document.body.appendChild(menu);
-          positionPopoverAnchored(menu, btn.getBoundingClientRect());
-          _openParticipantMenu = { menu: menu, close: toggle.close };
-        },
-        onClose: function () {
-          // Back into the card, or drop it when the card is already gone.
-          if (wrap.isConnected) wrap.appendChild(menu);
-          else if (menu.parentNode) menu.parentNode.removeChild(menu);
-          if (_openParticipantMenu && _openParticipantMenu.menu === menu) {
-            _openParticipantMenu = null;
-          }
-        },
-      });
-    }
+    // Portaled to <body> past canvas clipping; `toggle` is set before any click fires.
+    var toggle = WF.bindMenuToggle(btn, menu, {
+      onOpen: function () {
+        closeParticipantMenu(); // only one open at a time
+        document.body.appendChild(menu);
+        positionPopoverAnchored(menu, btn.getBoundingClientRect());
+        _openParticipantMenu = { menu: menu, close: toggle.close };
+      },
+      onClose: function () {
+        // Back into the card, or drop it when the card is already gone.
+        if (wrap.isConnected) wrap.appendChild(menu);
+        else if (menu.parentNode) menu.parentNode.removeChild(menu);
+        if (_openParticipantMenu && _openParticipantMenu.menu === menu) {
+          _openParticipantMenu = null;
+        }
+      },
+    });
     refreshSummary();
     return wrap;
   }
@@ -526,14 +514,7 @@
     var card = el("div", "wf-step");
     var head = el("div", "wf-step-head");
 
-    var typeSel = el("select", "wf-param-input");
-    multitoolStepTypes().forEach(function (t) {
-      var o = el("option");
-      o.value = t;
-      o.textContent = t;
-      if (t === step.type) o.selected = true;
-      typeSel.appendChild(o);
-    });
+    var typeSel = buildSelect("wf-param-input", multitoolStepTypes(), step.type);
     typeSel.addEventListener("change", function () {
       step.type = typeSel.value;
       WF.scheduleSave();
@@ -543,14 +524,8 @@
 
     // Steps after the first carry a chain logic (AND / NOT).
     if (idx > 0) {
-      var logicSel = el("select", "wf-param-input wf-step-logic");
-      ["AND", "NOT"].forEach(function (l) {
-        var o = el("option");
-        o.value = l;
-        o.textContent = l;
-        if (l === (step.logic || "AND")) o.selected = true;
-        logicSel.appendChild(o);
-      });
+      var logicSel = buildSelect("wf-param-input wf-step-logic", ["AND", "NOT"],
+        step.logic || "AND");
       logicSel.addEventListener("change", function () {
         step.logic = logicSel.value;
         WF.scheduleSave();
@@ -591,7 +566,6 @@
 
   function buildParamEditors(node, type) {
     if (node.type === "detect") return buildDetectEditor(node);
-    if (!node.params) node.params = {};
     var wrap = el("div", "wf-node-params");
     buildParamsInto(wrap, node, type.params, node.params);
     return wrap;
@@ -689,7 +663,7 @@
     // Muted nodes are dimmed; the runner skips them and their downstream subtree.
     if (node.disabled) card.classList.add("wf-node-muted");
     // Greyed when context is unmet, dashed `.invalid` on errors; warnings are tooltip-only.
-    if (WF.nodeContextMet && !WF.nodeContextMet(type)) {
+    if (!WF.nodeContextMet(type)) {
       card.classList.add("disabled");
       card.title = "Requires " + ((type.requires || []).join(", ") || "context");
     } else {
@@ -777,13 +751,13 @@
     world.innerHTML = "";
     if (wires) world.appendChild(wires);
     var frag = document.createDocumentFragment();
-    (state.nodes || []).forEach(function (node) {
+    state.nodes.forEach(function (node) {
       frag.appendChild(renderNode(node));
     });
     world.appendChild(frag);
 
     var empty = qs("#wfCanvasEmpty");
-    if (empty) empty.classList.toggle("hidden", (state.nodes || []).length > 0);
+    if (empty) empty.classList.toggle("hidden", state.nodes.length > 0);
 
     // Port DOM was rebuilt → drop the wires' cached port offsets, then redraw.
     if (WF.clearPortCache) WF.clearPortCache();
@@ -801,7 +775,6 @@
 
   window.addEventListener("pagehide", closeParticipantMenu);
 
-  WF.renderNode = renderNode;
   WF.renderAllNodes = renderAllNodes;
   WF.closeParticipantMenu = closeParticipantMenu;
 })();

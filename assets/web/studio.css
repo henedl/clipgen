@@ -10,8 +10,6 @@
 
 /* Page-specific variables — shared tokens are in tokens.css */
 :root {
-  --color-cell-text: #dbeafe;
-  --color-cell-valid: #93c5fd;
   --color-cell-selected: #cbd5e1;
   --color-heatmap: 168, 130, 214;
   --color-cell-hover: var(--color-accent-hover);
@@ -29,12 +27,6 @@ html {
 .cg-icon {
   display: inline-block;
   background-color: currentColor;
-  mask-size: contain;
-  mask-repeat: no-repeat;
-  mask-position: center;
-  -webkit-mask-size: contain;
-  -webkit-mask-repeat: no-repeat;
-  -webkit-mask-position: center;
 }
 .cg-icon--x-mark      { mask-image: url(icons/x-mark.svg);      -webkit-mask-image: url(icons/x-mark.svg); }
 .cg-icon--folder-open { mask-image: url(icons/folder-open.svg); -webkit-mask-image: url(icons/folder-open.svg); }
@@ -191,13 +183,7 @@ body {
   height: 11px;
   background-color: currentColor;
   mask-image: url("icons/chevron-double-left.svg");
-  mask-size: contain;
-  mask-repeat: no-repeat;
-  mask-position: center;
   -webkit-mask-image: url("icons/chevron-double-left.svg");
-  -webkit-mask-size: contain;
-  -webkit-mask-repeat: no-repeat;
-  -webkit-mask-position: center;
   /* Transition added by `#studioSidebar.tx-ready` rule above. */
 }
 #studioSidebar[data-open="false"] .studio-sidebar-toggle-icon {
@@ -337,34 +323,6 @@ body[data-active-tab]:not([data-active-tab="sheet"]) #studioSidebar {
   padding-top: var(--space-2);
 }
 
-/* Sub-tab underline-on-active styling (matches the prototype). */
-
-.preview-tab {
-  display: inline-flex;
-  align-items: center;
-  height: 100%;
-  padding: 0 2px;
-  font-size: 12.5px;
-  font-weight: 400;
-  background: none;
-  border: none;
-  border-bottom: 1px solid transparent;
-  margin-bottom: -1px; /* sits on subheader's bottom border */
-  color: var(--fg-muted);
-  cursor: pointer;
-  transition: color var(--duration-fast);
-  font-family: inherit;
-}
-
-.preview-tab:hover {
-  color: var(--fg);
-}
-
-.preview-tab.active {
-  color: var(--fg);
-  border-bottom-color: var(--fg);
-}
-
 /* Slide-fade transition for sub-tab content. Matches prototype TabSlide
  * (lines 1766–1793): translateX 12 → 0 + opacity 0 → 1 over ~180ms.
  * studio.js applies .tab-slide-enter on the newly-shown panel, then removes
@@ -376,10 +334,6 @@ body[data-active-tab]:not([data-active-tab="sheet"]) #studioSidebar {
 #mnIntakePanel {
   transition: opacity 180ms ease-out, transform 220ms var(--ease-out-soft);
 }
-.tab-slide-enter {
-  opacity: 0 !important;
-  transform: translateX(12px);
-}
 @media (prefers-reduced-motion: reduce) {
   #sheetGrid,
   #intakePanel,
@@ -387,10 +341,6 @@ body[data-active-tab]:not([data-active-tab="sheet"]) #studioSidebar {
   #coIntakePanel,
   #mnIntakePanel {
     transition: none;
-  }
-  .tab-slide-enter {
-    opacity: 1 !important;
-    transform: none;
   }
 }
 
@@ -416,10 +366,6 @@ body[data-active-tab]:not([data-active-tab="sheet"]) #studioSidebar {
   vertical-align: middle;
   /* Shared breathe from tokens.css; 0.35 is its default trough. */
   animation: cg-pulse 1s ease-in-out infinite;
-}
-
-.tab-status-dot.hidden {
-  display: none;
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -785,8 +731,6 @@ select.fn-select:hover {
   gap: 5px;
   padding: 2px 7px;
   border-radius: var(--radius-full);
-  background: rgba(255, 255, 255, 0.06);
-  color: var(--fg-muted);
   font-size: var(--text-2xs);
   line-height: 1.4;
   white-space: nowrap;
@@ -811,9 +755,7 @@ select.fn-select:hover {
   background: rgba(255, 255, 255, 0.06);
 }
 html[data-theme="light"] .sev-pill.sev-na,
-html[data-theme="light"] .sev-pill.sev-unknown,
-.theme-light .sev-pill.sev-na,
-.theme-light .sev-pill.sev-unknown {
+html[data-theme="light"] .sev-pill.sev-unknown {
   background: rgba(0, 0, 0, 0.06);
 }
 
@@ -821,13 +763,11 @@ html[data-theme="light"] .sev-pill.sev-unknown,
  * (--success) since the dark-theme positive token (--severity-positive) washes out on a
  * light background. Very-positive uses a slightly darker green so it stays
  * distinct from positive (mirrors the dark-theme differentiation). */
-html[data-theme="light"] .sev-pill.sev-positive,
-.theme-light .sev-pill.sev-positive {
+html[data-theme="light"] .sev-pill.sev-positive {
   color: var(--success);
   background: color-mix(in srgb, var(--success) 18%, transparent);
 }
-html[data-theme="light"] .sev-pill.sev-very-positive,
-.theme-light .sev-pill.sev-very-positive {
+html[data-theme="light"] .sev-pill.sev-very-positive {
   color: var(--success-strong);
   background: color-mix(in srgb, var(--success-strong) 18%, transparent);
 }
@@ -986,16 +926,13 @@ body.dragging .ts-cell:hover {
   transition: opacity 60ms ease;
 }
 
-/* Severity-tinted float — mirrors the .ts-cell[data-severity] rules above so
- * the float reads as the same chip widening, not a tooltip. Bg uses the
- * `-solid` token variants (opaque) so the float doesn't reveal cells/text
- * underneath. */
-.ts-cell-float[data-severity="critical"],
-.ts-cell-float[data-severity="high"]          { background: var(--cell-data-high-bg-solid);     color: var(--cell-data-high-fg); }
+/* Severity float matches the .ts-chip colors above; opaque -solid backgrounds hide cells underneath. */
+.ts-cell-float[data-severity="critical"]      { background: var(--cell-data-critical-bg-solid);      color: var(--cell-data-critical-fg); }
+.ts-cell-float[data-severity="high"]          { background: var(--cell-data-high-bg-solid);          color: var(--cell-data-high-fg); }
 .ts-cell-float[data-severity="medium"],
-.ts-cell-float[data-severity="low"]           { background: var(--cell-data-medium-bg-solid);   color: var(--cell-data-medium-fg); }
-.ts-cell-float[data-severity="positive"],
-.ts-cell-float[data-severity="very-positive"] { background: var(--cell-data-positive-bg-solid); color: var(--cell-data-positive-fg); }
+.ts-cell-float[data-severity="low"]           { background: var(--cell-data-medium-bg-solid);        color: var(--cell-data-medium-fg); }
+.ts-cell-float[data-severity="positive"]      { background: var(--cell-data-positive-bg-solid);      color: var(--cell-data-positive-fg); }
+.ts-cell-float[data-severity="very-positive"] { background: var(--cell-data-very-positive-bg-solid); color: var(--cell-data-very-positive-fg); }
 
 /* Float over a cell with text-but-invalid timestamp — match the dashed-border
  * empty-chip look from the row below. Bg is opaque (var(--bg)) so the float
@@ -1958,10 +1895,6 @@ html[data-theme="dark"] .queue-card-error .queue-card-thumb {
   align-items: flex-start;
 }
 
-.sparkles-icon {
-  flex-shrink: 0;
-}
-
 .highlights-drawer {
   position: absolute;
   top: 100%;
@@ -2007,18 +1940,6 @@ html[data-theme="dark"] .queue-card-error .queue-card-thumb {
 }
 
 /* Gallery configuration dialog — triggered from TopNav Quick Actions. */
-
-#galleryOverlay {
-  position: fixed;
-  inset: 0;
-  z-index: var(--z-modal);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-#galleryOverlay.hidden {
-  display: none;
-}
 
 .gallery-card {
   background: var(--bg-elevated);
@@ -2198,10 +2119,6 @@ html[data-theme="dark"] .queue-card-error .queue-card-thumb {
   white-space: nowrap;
 }
 
-.generate-progress.hidden {
-  display: none;
-}
-
 /* Live elapsed clock shown beside the Build Reel button while a reel builds. */
 .job-eta {
   font-size: var(--text-sm);
@@ -2219,17 +2136,14 @@ html[data-theme="dark"] .queue-card-error .queue-card-thumb {
  * prefers-reduced-motion fallback. #buildStatus is the exception: a non-blocking
  * corner card, so no veil and only its card animates. */
 
-#statusOverlay {
+#statusOverlay,
+#confirmOverlay {
   position: fixed;
   inset: 0;
   z-index: var(--z-dropdown);
   display: flex;
   align-items: center;
   justify-content: center;
-}
-
-#statusOverlay.hidden {
-  display: none;
 }
 
 .status-card {
@@ -2278,10 +2192,6 @@ html[data-theme="dark"] .queue-card-error .queue-card-thumb {
   z-index: var(--z-toast);
 }
 
-#buildStatus.hidden {
-  display: none;
-}
-
 .build-status-card {
   display: flex;
   align-items: center;
@@ -2324,21 +2234,6 @@ html[data-theme="dark"] .queue-card-error .queue-card-thumb {
   gap: var(--space-2);
 }
 
-/* Confirm overlay */
-
-#confirmOverlay {
-  position: fixed;
-  inset: 0;
-  z-index: var(--z-dropdown);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
-#confirmOverlay.hidden {
-  display: none;
-}
-
 /* Shell comes from .cg-modal-card (tokens.css) — which normalizes the old
  * hand-rolled shadow onto --shadow-xl and adds the shared 1px border. This
  * rule owns the centered layout; its gap out-cascades the base's space-3
@@ -2375,8 +2270,6 @@ html[data-theme="dark"] .queue-card-error .queue-card-thumb {
  * default theme, so a single selector that matches everything except an
  * explicit light opt-in covers both system-dark and the manual toggle. */
 :root:not([data-theme="light"]) {
-  --color-cell-text: #1e3a5f;
-  --color-cell-valid: #1d4ed8;
   --color-cell-selected: #334155;
   --color-cell-hover: var(--color-accent-hover);
   --color-heatmap: 192, 160, 235;
@@ -2409,21 +2302,6 @@ html[data-theme="dark"] .queue-card-error .queue-card-thumb {
 }
 
 /* ---- Artifact Log overlay ---- */
-
-/* Backdrop + the `position: relative` that lifts .log-panel above it both come
- * from .cg-modal-veil (tokens.css). */
-#logOverlay {
-  position: fixed;
-  inset: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  z-index: var(--z-modal);
-}
-
-#logOverlay.hidden {
-  display: none;
-}
 
 .log-type-badge[data-type="clip"] {
   background: #dbeafe;
@@ -2505,7 +2383,6 @@ html[data-theme="dark"] .log-panel {
 /* ---- Responsive ---- */
 
 @media (max-width: 768px) /* --bp-tablet */ {
-  #studioHeader,
   #sheetPreview,
   #panelDivider,
   #bottomPanel,
@@ -2687,10 +2564,6 @@ html[data-theme="dark"] .log-panel {
   background: var(--color-surface-alt);
 }
 
-.mn-skipped.hidden {
-  display: none;
-}
-
 .mn-skipped-head {
   font-size: var(--text-xs);
   color: var(--fg-muted);
@@ -2810,13 +2683,9 @@ html[data-theme="dark"] .log-panel {
 /* Light theme — darker greens for the positive buckets (mirrors .sev-pill);
  * the dark-theme green tokens wash out on the light white card surface. */
 html[data-theme="light"] .queue-card[data-severity="positive"] .queue-card-ref,
-html[data-theme="light"] .queue-card[data-severity="positive"] .queue-card-time,
-.theme-light .queue-card[data-severity="positive"] .queue-card-ref,
-.theme-light .queue-card[data-severity="positive"] .queue-card-time { color: var(--success); }
+html[data-theme="light"] .queue-card[data-severity="positive"] .queue-card-time { color: var(--success); }
 html[data-theme="light"] .queue-card[data-severity="very-positive"] .queue-card-ref,
-html[data-theme="light"] .queue-card[data-severity="very-positive"] .queue-card-time,
-.theme-light .queue-card[data-severity="very-positive"] .queue-card-ref,
-.theme-light .queue-card[data-severity="very-positive"] .queue-card-time { color: var(--success-strong); }
+html[data-theme="light"] .queue-card[data-severity="very-positive"] .queue-card-time { color: var(--success-strong); }
 
 .queue-card-text {
   font-size: var(--text-xs);

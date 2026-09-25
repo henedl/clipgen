@@ -15,8 +15,7 @@
   --co-timeline-grid: rgba(255, 255, 255, 0.09);
 }
 
-html[data-theme="light"],
-html.theme-light {
+html[data-theme="light"] {
   --co-timeline-stripe: rgba(0, 0, 0, 0.03);
   --co-timeline-grid: rgba(0, 0, 0, 0.12);
 }
@@ -116,42 +115,16 @@ body[data-frontend="composer"] {
   vertical-align: 0;
 }
 
-/* Borderless ghost transport buttons (play / mute) — mirror Screenspace's
-   .region-toggle-btn and Transcripts' .player-btn so the source-video players
-   share one player-chrome look. */
-.co-player-btn {
-  background: none;
-  border: none;
-  color: var(--fg-muted);
-  cursor: pointer;
-  padding: var(--space-1);
-  border-radius: var(--radius-sm);
-  transition: background var(--duration-fast), color var(--duration-fast);
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  flex-shrink: 0;
-}
+/* Transport button base and speed variant live in tokens.css. */
 .co-player-btn:hover:not(:disabled) {
   background: var(--bg-hover);
   color: var(--accent);
 }
-.co-player-btn.active { color: var(--accent); }
 .co-player-btn:disabled { opacity: 0.5; cursor: default; }
 .co-player-btn .co-btn-icon {
   width: var(--icon-size-md);
   height: var(--icon-size-md);
   vertical-align: 0;
-}
-
-/* Text variant of the ghost transport button — mirrors Transcripts'
-   .player-speed-btn and Screenspace's .video-speed-btn. */
-.co-speed-btn {
-  font-family: var(--font-mono);
-  font-size: var(--text-xs);
-  font-variant-numeric: tabular-nums;
-  min-width: 2.25rem;
-  padding: var(--space-1) var(--space-2);
 }
 
 .co-icon-play { --co-icon: url("icons/play.svg"); }
@@ -178,7 +151,6 @@ body[data-frontend="composer"] {
 .co-icon-zoom-out { --co-icon: url("icons/magnifying-glass-minus.svg"); }
 .co-icon-eye { --co-icon: url("icons/eye.svg"); }
 .co-icon-eye-slash { --co-icon: url("icons/eye-slash.svg"); }
-.co-icon-eye-dropper { --co-icon: url("icons/eye-dropper.svg"); }
 .co-icon-trash { --co-icon: url("icons/trash.svg"); }
 .co-icon-scissors { --co-icon: url("icons/scissors.svg"); }
 .co-icon-check { --co-icon: url("icons/check.svg"); }
@@ -696,13 +668,7 @@ body[data-frontend="composer"] {
   height: 11px;
   background-color: currentColor;
   mask-image: url("icons/chevron-double-right.svg");
-  mask-size: contain;
-  mask-repeat: no-repeat;
-  mask-position: center;
   -webkit-mask-image: url("icons/chevron-double-right.svg");
-  -webkit-mask-size: contain;
-  -webkit-mask-repeat: no-repeat;
-  -webkit-mask-position: center;
   /* Transition added by `#coCutPanel.tx-ready` rule above. */
 }
 #coCutPanel[data-open="false"] .co-panel-toggle-icon {
@@ -1050,10 +1016,6 @@ body[data-frontend="composer"] {
   pointer-events: none;
 }
 
-.co-tooltip.hidden {
-  display: none;
-}
-
 .co-tooltip .co-tooltip-source {
   font-weight: 600;
   display: flex;
@@ -1085,18 +1047,8 @@ body[data-frontend="composer"] {
  * 12px/0.45 default so the timeline stays legible behind the panel. */
 
 #logOverlay {
-  position: fixed;
-  inset: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  z-index: var(--z-modal);
   --veil-blur-open: 6px;
   --veil-alpha-open: 0.35;
-}
-
-#logOverlay.hidden {
-  display: none;
 }
 
 html[data-theme="dark"] .log-panel {

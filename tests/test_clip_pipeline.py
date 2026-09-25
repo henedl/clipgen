@@ -4,6 +4,7 @@ import pytest
 
 import config
 import pipeline
+import spreadsheet
 import viewer
 
 
@@ -90,9 +91,9 @@ def test_process_clips_no_padding_leaves_timestamps_untouched(monkeypatch, make_
     )
     pipeline.process_clips([raw_clip], output_format="clip")
     _, kwargs = run_ffmpeg.call_args
-    # Default (no-op) path passes the original strings straight through.
-    assert kwargs["start_pos"] == "00:10"
-    assert kwargs["end_pos"] == "00:20"
+    # Default (no-op) path keeps the times, formatted as H:MM:SS.
+    assert kwargs["start_pos"] == "0:00:10"
+    assert kwargs["end_pos"] == "0:00:20"
 
 
 def test_process_clips_gif_fractional_max_duration_floors_to_one(
@@ -345,7 +346,6 @@ def test_run_clip_pipeline_cancel_flag(monkeypatch):
 
     results, _ = pipeline._run_clip_pipeline(
         clips,
-        empty_warning="",
         intro_message="",
         task_label="test",
         per_clip_fn=per_clip_fn,
@@ -1210,15 +1210,15 @@ def test_is_excel_worksheet_true_for_local(make_clip):
     from types import SimpleNamespace
 
     excel = SimpleNamespace(spreadsheet=SimpleNamespace(url=None))
-    assert pipeline.is_excel_worksheet(excel) is True
+    assert spreadsheet.is_excel_worksheet(excel) is True
 
 
 def test_is_excel_worksheet_false_for_gsheet_and_missing(make_clip):
     from types import SimpleNamespace
 
     gsheet = SimpleNamespace(spreadsheet=SimpleNamespace(url="https://x"))
-    assert pipeline.is_excel_worksheet(gsheet) is False
-    assert pipeline.is_excel_worksheet(SimpleNamespace()) is False
+    assert spreadsheet.is_excel_worksheet(gsheet) is False
+    assert spreadsheet.is_excel_worksheet(SimpleNamespace()) is False
 
 
 def test_resolve_clip_workers_explicit_and_auto(monkeypatch):
@@ -1280,7 +1280,6 @@ def test_run_clip_pipeline_cancel_captures_started_clip_results(monkeypatch):
     clips = [{"id": i, "desc": f"c{i}", "participant": "P01"} for i in range(6)]
     results, _missing = pipeline._run_clip_pipeline(
         clips,
-        empty_warning="",
         intro_message="",
         task_label="t",
         per_clip_fn=per_clip,
@@ -1552,5 +1551,5 @@ def test_regenerate_artifact_rounds_fractional_local_times(monkeypatch, tmp_path
     }
     assert pipeline._regenerate_single_artifact(artifact, set()) is True
     _, kwargs = run_ffmpeg.call_args
-    assert kwargs["start_pos"] == "0:11"
-    assert kwargs["end_pos"] == "0:20"
+    assert kwargs["start_pos"] == "0:00:11"
+    assert kwargs["end_pos"] == "0:00:20"

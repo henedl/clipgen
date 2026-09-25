@@ -9,7 +9,7 @@
  * flow supplies named candidate / summary / request / toast functions. Loads
  * last; reads hub state + helpers through window.ClipgenTranscripts (TS) and
  * publishes the three open functions plus initBatchModals for the hub's quick
- * actions and boot. TS.trackOptionLabel (pills) is late-bound. Plain utils.js
+ * actions and boot. TS.trackOptionLabel comes from pills, which loads first. Plain utils.js
  * globals (qs/apiGet/apiPost/apiPostNDJSON/clipgenPluralUnit/openBlockingModal)
  * are reached via the scope chain.
  */
@@ -194,7 +194,7 @@
   // One clip per mark cluster via Studio's generate-intake.
 
   // Mirror Studio's #trIntakeClusterThreshold and pad-0 so both pages cut identical spans.
-  var CLIP_MARKS_DEFAULT_GAP_SECONDS = 10;
+  var CLIP_MARKS_DEFAULT_GAP_SECONDS = window.ClipgenIntakeCluster.DEFAULT_GAP_SECONDS;
   var CLIP_MARKS_DEFAULT_PAD_SECONDS = 0;
 
   // Valid resolved marks, refetched every time the modal opens.
@@ -603,10 +603,7 @@
           var row = document.createElement("label");
           row.className = "param-modal-label";
           var text = document.createElement("span");
-          // Late-bound; transcripts-pills.js publishes the helper after the hub loads.
-          text.textContent = TS.trackOptionLabel
-            ? TS.trackOptionLabel(_normAudioTrackInfo.tracks[i], i)
-            : "Track " + (i + 1);
+          text.textContent = TS.trackOptionLabel(_normAudioTrackInfo.tracks[i], i);
           var box = document.createElement("input");
           box.type = "checkbox";
           box.className = "param-modal-checkbox";

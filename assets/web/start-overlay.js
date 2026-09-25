@@ -1,6 +1,6 @@
 /* Start overlay — Direction B redesign.
  *
- * Two-column launcher mounted by Studio / Screenspace / Transcripts. Drives:
+ * Two-column launcher mounted by all six app pages. Drives:
  *   • brand-mark + wordmark intro (reuses window.clipgenInitBrandMark; cascade
  *     plays once per browser session, gated by the existing sessionStorage flag)
  *   • section cascade-in (220ms base, 80ms stagger)
@@ -15,10 +15,7 @@
  *   • folder + spreadsheet picker (Google / Excel / No spreadsheet)
  *   • persistence via the existing /api/start-settings endpoint
  *
- * Public API on window.ClipgenStartOverlay:
- *   open()    — show the overlay
- *   close()   — hide the overlay
- *   isOpen()  — boolean
+ * Public API on window.ClipgenStartOverlay: open(tab) and checkForUpdates().
  */
 
 (function () {
@@ -59,7 +56,6 @@
   var state = {
     mounted: false,
     open: false,
-    sheetLoaded: false,
     selection: null,        // { type, id_or_path, label } | null
     persistEnabled: true,
     rememberWindow: true,
@@ -172,9 +168,7 @@
         applyIcons();
         bind();
         // Page-level clipgenInitBrandMark ran before the overlay existed; re-run to hydrate the rail mark.
-        if (typeof window.clipgenInitBrandMark === "function") {
-          window.clipgenInitBrandMark();
-        }
+        clipgenInitBrandMark();
         state.mounted = true;
         // A snapshot may have arrived before the tabs existed.
         syncUpdateBadges();
@@ -340,14 +334,14 @@
       });
     });
     on(els.excelRefresh, "click", function () {
-      runPanelRefresh(els.excelRefresh, loadExcelFiles);
+      runPanelRefresh(els.excelRefresh, function () { return loadFileList("excel"); });
     });
     on(els.excelPickerTrigger, "click", function (e) {
       e.stopPropagation();
       togglePicker("excel");
     });
     on(els.mindnodeRefresh, "click", function () {
-      runPanelRefresh(els.mindnodeRefresh, loadMindnodeFiles);
+      runPanelRefresh(els.mindnodeRefresh, function () { return loadFileList("mindnode"); });
     });
     on(els.mindnodePickerTrigger, "click", function (e) {
       e.stopPropagation();
@@ -400,7 +394,7 @@
         setSelection(sel);
         scheduleWorksheetLoad(sel);
       } else if (state.selection && state.selection.type === "excel") {
-        renderExcelList(state.excelFiles || []);
+        renderFileList("excel", state.excelFiles || []);
         hideWorksheetSection();
       }
     });
@@ -411,7 +405,7 @@
         // No worksheets on a mind map: setSelection alone settles it and frees Confirm.
         setSelection({ type: "mindnode", id_or_path: v, label: v.split("/").pop() || v });
       } else if (state.selection && state.selection.type === "mindnode") {
-        renderMindnodeList(state.mindnodeFiles || []);
+        renderFileList("mindnode", state.mindnodeFiles || []);
       }
     });
 
@@ -514,36 +508,20 @@
 
   var PICKER_KINDS = ["google", "excel", "mindnode", "worksheet"];
 
+  var PICKER_PLACEHOLDERS = {
+    google: "Select a Google Sheet…",
+    excel: "Select an Excel file…",
+    mindnode: "Select a MindNode document…",
+    worksheet: "Select a worksheet…",
+  };
+
   function pickerRefs(kind) {
-    if (kind === "google") {
-      return {
-        menu: els.googlePickerMenu,
-        trigger: els.googlePickerTrigger,
-        label: els.googlePickerLabel,
-        placeholder: "Select a Google Sheet…",
-      };
-    }
-    if (kind === "excel") {
-      return {
-        menu: els.excelPickerMenu,
-        trigger: els.excelPickerTrigger,
-        label: els.excelPickerLabel,
-        placeholder: "Select an Excel file…",
-      };
-    }
-    if (kind === "mindnode") {
-      return {
-        menu: els.mindnodePickerMenu,
-        trigger: els.mindnodePickerTrigger,
-        label: els.mindnodePickerLabel,
-        placeholder: "Select a MindNode document…",
-      };
-    }
     return {
-      menu: els.worksheetPickerMenu,
-      trigger: els.worksheetPickerTrigger,
-      label: els.worksheetPickerLabel,
-      placeholder: "Select a worksheet…",
+      root: els[kind + "Picker"],
+      menu: els[kind + "PickerMenu"],
+      trigger: els[kind + "PickerTrigger"],
+      label: els[kind + "PickerLabel"],
+      placeholder: PICKER_PLACEHOLDERS[kind],
     };
   }
 
@@ -582,22 +560,13 @@
   }
 
   function closePickersIfOutside(e) {
-    if (els.googlePicker && !els.googlePicker.contains(e.target) &&
-        els.googlePickerMenu && !els.googlePickerMenu.classList.contains("hidden")) {
-      closePicker("google");
-    }
-    if (els.excelPicker && !els.excelPicker.contains(e.target) &&
-        els.excelPickerMenu && !els.excelPickerMenu.classList.contains("hidden")) {
-      closePicker("excel");
-    }
-    if (els.mindnodePicker && !els.mindnodePicker.contains(e.target) &&
-        els.mindnodePickerMenu && !els.mindnodePickerMenu.classList.contains("hidden")) {
-      closePicker("mindnode");
-    }
-    if (els.worksheetPicker && !els.worksheetPicker.contains(e.target) &&
-        els.worksheetPickerMenu && !els.worksheetPickerMenu.classList.contains("hidden")) {
-      closePicker("worksheet");
-    }
+    PICKER_KINDS.forEach(function (kind) {
+      var refs = pickerRefs(kind);
+      if (refs.root && !refs.root.contains(e.target) &&
+          refs.menu && !refs.menu.classList.contains("hidden")) {
+        closePicker(kind);
+      }
+    });
   }
 
   function updatePickerLabel(kind, label) {
@@ -680,15 +649,9 @@
 
   function setSelection(sel) {
     state.selection = sel;
-    if (sel && sel.type === "google") {
-      highlightGoogleSelection(sel.id_or_path);
-      updatePickerLabel("google", sel.label || sel.id_or_path);
-    } else if (sel && sel.type === "excel") {
-      highlightExcelSelection(sel.id_or_path);
-      updatePickerLabel("excel", sel.label || sel.id_or_path);
-    } else if (sel && sel.type === "mindnode") {
-      highlightMindnodeSelection(sel.id_or_path);
-      updatePickerLabel("mindnode", sel.label || sel.id_or_path);
+    if (sel && (sel.type === "google" || sel.type === "excel" || sel.type === "mindnode")) {
+      highlightSelection(sel.type, sel.id_or_path);
+      updatePickerLabel(sel.type, sel.label || sel.id_or_path);
     }
     loadMindnodePreview(sel);
     // New spreadsheet identity: invalidate in-flight worksheet fetches and reset the dropdown.
@@ -1104,7 +1067,6 @@
     // Shared memoized fetch (utils.js); force=true bypasses the page-load snapshot.
     return clipgenStatus(force).then(function (s) {
       state.statusData = s;
-      state.sheetLoaded = !!s.sheet_loaded;
       // startup_notice is handled in applyCurrentSessionPrefill, whose setTab would wipe a highlight set here.
       if (state.startTab === "about") renderAbout();
       // The installed-version highlight reads statusData too.
@@ -1445,7 +1407,7 @@
       input.classList.remove("is-loaded", "is-dirty");
       input.classList.add("is-error");
     }
-    if (message && typeof showToast === "function") showToast(message);
+    if (message) showToast(message);
   }
 
   function clearFieldError(node) {
@@ -1461,7 +1423,7 @@
     if (!card) return;
     card.classList.add("has-error", "is-error");
     card.classList.remove("is-loaded", "is-dirty");
-    if (message && typeof showToast === "function") showToast(message);
+    if (message) showToast(message);
   }
 
   function clearSheetError() {
@@ -1486,13 +1448,7 @@
         keepPreviousGoogleList("Google: " + g.auth_error);
         return;
       }
-      state.googleSheets = g.sheets || [];
-      els.googleStatus.textContent = state.googleSheets.length
-        ? state.googleSheets.length + " spreadsheets available"
-        : "No spreadsheets found in your account";
-      renderGoogleList(state.googleSheets);
-      setHidden(els.googlePicker, false);
-      setHidden(els.googleRefresh, false);
+      showGoogleSheets(g.sheets);
     }).catch(function (err) {
       // Recover, don't rethrow: nothing downstream restores the panel, and Promise.all must reach applyCurrentSessionPrefill.
       console.error("Google sheet list failed", err);
@@ -1597,7 +1553,7 @@
     }
   }
 
-  function onGooglePollSuccess(sheets) {
+  function showGoogleSheets(sheets) {
     state.googleSheets = sheets || [];
     els.googleStatus.textContent = state.googleSheets.length
       ? state.googleSheets.length + " spreadsheets available"
@@ -1617,7 +1573,7 @@
     apiGet("/api/spreadsheets/google").then(function (g) {
       if (g.authenticated && !g.auth_error) {
         state.googlePollTimer = null;
-        onGooglePollSuccess(g.sheets);
+        showGoogleSheets(g.sheets);
         return;
       }
       if (g.auth_error) {
@@ -1661,44 +1617,69 @@
       els.googlePickerMenu.appendChild(option);
     });
     if (state.selection && state.selection.type === "google") {
-      highlightGoogleSelection(state.selection.id_or_path);
+      highlightSelection("google", state.selection.id_or_path);
     }
   }
 
-  function highlightGoogleSelection(idOrPath) {
-    if (!els.googlePickerMenu) return;
-    var items = els.googlePickerMenu.querySelectorAll(".sheet-picker__option");
+  // Google options key on data-id, file options on data-path.
+  function highlightSelection(kind, idOrPath) {
+    var menu = els[kind + "PickerMenu"];
+    if (!menu) return;
+    var attr = kind === "google" ? "data-id" : "data-path";
+    var items = menu.querySelectorAll(".sheet-picker__option");
     Array.prototype.forEach.call(items, function (item) {
-      item.classList.toggle("is-selected", item.getAttribute("data-id") === idOrPath);
+      item.classList.toggle("is-selected", item.getAttribute(attr) === idOrPath);
     });
   }
+
+  var FILE_PICKERS = {
+    excel: {
+      name: "Excel",
+      url: "/api/spreadsheets/excel",
+      found: function (n, dir) { return n + " .xlsx in " + dir; },
+      none: "No .xlsx files in ",
+      empty: "No .xlsx files in the input folder",
+      select: function (sel) { selectSpreadsheet(sel); },
+    },
+    mindnode: {
+      name: "MindNode",
+      url: "/api/spreadsheets/mindnode",
+      found: function (n, dir) { return n + (n === 1 ? " mind map in " : " mind maps in ") + dir; },
+      none: "No .mindnode documents in ",
+      empty: "No .mindnode documents in the input folder",
+      // No worksheets to fetch, so setSelection is the whole flow.
+      select: function (sel) { setSelection(sel); },
+    },
+  };
 
   // No server cache: the route re-globs each call, so Refresh just re-runs this.
-  function loadExcelFiles() {
-    if (!els.excelStatus) return Promise.resolve();
-    setStatusShimmer(els.excelStatus, "Scanning input folder…");
-    return apiGet("/api/spreadsheets/excel").then(function (r) {
-      state.excelFiles = r.files || [];
-      els.excelStatus.textContent = state.excelFiles.length
-        ? state.excelFiles.length + " .xlsx in " + r.input_dir
-        : "No .xlsx files in " + r.input_dir;
-      renderExcelList(state.excelFiles);
+  function loadFileList(kind) {
+    var cfg = FILE_PICKERS[kind];
+    var status = els[kind + "Status"];
+    var key = kind + "Files";
+    if (!status) return Promise.resolve();
+    setStatusShimmer(status, "Scanning input folder…");
+    return apiGet(cfg.url).then(function (r) {
+      state[key] = r.files || [];
+      status.textContent = state[key].length
+        ? cfg.found(state[key].length, r.input_dir)
+        : cfg.none + r.input_dir;
+      renderFileList(kind, state[key]);
     }).catch(function (err) {
       // Log and continue: never strand the panel on "Scanning…" or break refresh()'s chain.
-      console.error("Excel scan failed", err);
-      els.excelStatus.textContent = (state.excelFiles || []).length
+      console.error(cfg.name + " scan failed", err);
+      status.textContent = (state[key] || []).length
         ? "Couldn't re-scan the input folder. Showing the last list."
         : "Could not scan the input folder.";
     });
   }
 
-  function renderExcelList(files) {
-    if (!els.excelPickerMenu) return;
-    els.excelPickerMenu.innerHTML = "";
+  function renderFileList(kind, files) {
+    var menu = els[kind + "PickerMenu"];
+    if (!menu) return;
+    menu.innerHTML = "";
     if (!files.length) {
-      els.excelPickerMenu.appendChild(
-        el("div", "sheet-picker__empty", "No .xlsx files in the input folder")
-      );
+      menu.appendChild(el("div", "sheet-picker__empty", FILE_PICKERS[kind].empty));
       return;
     }
     files.forEach(function (f) {
@@ -1711,82 +1692,16 @@
       var edited = formatEdited(f.modified);
       if (edited) option.appendChild(el("span", "sheet-picker__option-meta", edited));
       option.addEventListener("click", function () {
-        if (els.excelPaste) els.excelPaste.value = "";
-        selectSpreadsheet({ type: "excel", id_or_path: f.path, label: f.name });
-        closePicker("excel");
+        var paste = els[kind + "Paste"];
+        if (paste) paste.value = "";
+        FILE_PICKERS[kind].select({ type: kind, id_or_path: f.path, label: f.name });
+        closePicker(kind);
       });
-      els.excelPickerMenu.appendChild(option);
+      menu.appendChild(option);
     });
-    if (state.selection && state.selection.type === "excel") {
-      highlightExcelSelection(state.selection.id_or_path);
+    if (state.selection && state.selection.type === kind) {
+      highlightSelection(kind, state.selection.id_or_path);
     }
-  }
-
-  function highlightExcelSelection(path) {
-    if (!els.excelPickerMenu) return;
-    var items = els.excelPickerMenu.querySelectorAll(".sheet-picker__option");
-    Array.prototype.forEach.call(items, function (item) {
-      item.classList.toggle("is-selected", item.getAttribute("data-path") === path);
-    });
-  }
-
-  // Mirrors loadExcelFiles: the route re-globs each call, so Refresh just re-runs this.
-  function loadMindnodeFiles() {
-    if (!els.mindnodeStatus) return Promise.resolve();
-    setStatusShimmer(els.mindnodeStatus, "Scanning input folder…");
-    return apiGet("/api/spreadsheets/mindnode").then(function (r) {
-      state.mindnodeFiles = r.files || [];
-      els.mindnodeStatus.textContent = state.mindnodeFiles.length
-        ? state.mindnodeFiles.length +
-          (state.mindnodeFiles.length === 1 ? " mind map in " : " mind maps in ") +
-          r.input_dir
-        : "No .mindnode documents in " + r.input_dir;
-      renderMindnodeList(state.mindnodeFiles);
-    }).catch(function (err) {
-      console.error("MindNode scan failed", err);
-      els.mindnodeStatus.textContent = (state.mindnodeFiles || []).length
-        ? "Couldn't re-scan the input folder. Showing the last list."
-        : "Could not scan the input folder.";
-    });
-  }
-
-  function renderMindnodeList(files) {
-    if (!els.mindnodePickerMenu) return;
-    els.mindnodePickerMenu.innerHTML = "";
-    if (!files.length) {
-      els.mindnodePickerMenu.appendChild(
-        el("div", "sheet-picker__empty", "No .mindnode documents in the input folder")
-      );
-      return;
-    }
-    files.forEach(function (f) {
-      var option = el("button", "sheet-picker__option");
-      option.type = "button";
-      option.setAttribute("role", "option");
-      option.setAttribute("data-path", f.path);
-      option.appendChild(el("span", "sheet-picker__option-main", f.name));
-      option.appendChild(el("span", "sheet-picker__option-sub", f.path));
-      var edited = formatEdited(f.modified);
-      if (edited) option.appendChild(el("span", "sheet-picker__option-meta", edited));
-      option.addEventListener("click", function () {
-        if (els.mindnodePaste) els.mindnodePaste.value = "";
-        // No worksheets to fetch, so setSelection is the whole flow.
-        setSelection({ type: "mindnode", id_or_path: f.path, label: f.name });
-        closePicker("mindnode");
-      });
-      els.mindnodePickerMenu.appendChild(option);
-    });
-    if (state.selection && state.selection.type === "mindnode") {
-      highlightMindnodeSelection(state.selection.id_or_path);
-    }
-  }
-
-  function highlightMindnodeSelection(path) {
-    if (!els.mindnodePickerMenu) return;
-    var items = els.mindnodePickerMenu.querySelectorAll(".sheet-picker__option");
-    Array.prototype.forEach.call(items, function (item) {
-      item.classList.toggle("is-selected", item.getAttribute("data-path") === path);
-    });
   }
 
   // Mind-map counterpart of the source-video preview, plus the bundle's QuickLook render.
@@ -1931,10 +1846,10 @@
       aboutRow("Update", function (val) { buildUpdateRow(val, u); });
     }
     aboutRow("Author", function (val) {
-      val.textContent = s.author || "Henrik Edlund";
+      val.textContent = s.author || "";
     });
     aboutRow("Repository", function (val) {
-      var repo = s.repo_url || "https://github.com/henedl/clipgen";
+      var repo = s.repo_url || "";
       var label = repo.replace(/^https?:\/\//, "");
       var link = document.createElement("a");
       link.className = "about__link mono";
@@ -1950,8 +1865,8 @@
       val.appendChild(link);
     });
     aboutRow("License", function (val) {
-      val.appendChild(el("span", "about__pill", s.license || "MIT"));
-      val.appendChild(el("span", "about__sub", "© 2017–2026 " + (s.author || "Henrik Edlund")));
+      val.appendChild(el("span", "about__pill", s.license || ""));
+      val.appendChild(el("span", "about__sub", "© 2017–2026 " + (s.author || "")));
     });
   }
 
@@ -2147,6 +2062,25 @@
 
   // ---- Open / dismiss flows ----
 
+  // POST JSON. ok needs HTTP ok and body.ok !== false; unparseable bodies fail.
+  function postForResult(url, body) {
+    return fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }).then(function (r) {
+      return r.json().then(
+        function (j) { return { ok: r.ok && !!j && j.ok !== false, body: j }; },
+        function () { return { ok: false, body: null }; }
+      );
+    });
+  }
+
+  function releaseConfirm() {
+    state.confirmInFlight = false;
+    updateConfirmEnabled();
+  }
+
   function confirm() {
     // Re-entry guard: Cmd/Ctrl+Enter bypasses the disabled button and would race _swap_worksheet.
     if (state.confirmInFlight) return;
@@ -2170,19 +2104,8 @@
     if (outputVal) dirsPayload.output = outputVal;
 
     var dirsPromise = Object.keys(dirsPayload).length
-      ? fetch("/api/dirs", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(dirsPayload),
-        }).then(function (r) {
-          return r.json().then(function (j) { return { ok: r.ok, body: j }; });
-        })
+      ? postForResult("/api/dirs", dirsPayload)
       : Promise.resolve({ ok: true, body: {} });
-
-    function releaseConfirm() {
-      state.confirmInFlight = false;
-      updateConfirmEnabled();
-    }
 
     updateConfirmEnabled();
     dirsPromise.then(function (res) {
@@ -2190,7 +2113,7 @@
         var errors = (res.body && res.body.errors) || {};
         if (errors.input) markFieldError(els.inputField, errors.input);
         if (errors.output) markFieldError(els.outputField, errors.output);
-        if (!errors.input && !errors.output && typeof showToast === "function") {
+        if (!errors.input && !errors.output) {
           showToast((res.body && res.body.error) || "Folder error");
         }
         releaseConfirm();
@@ -2198,60 +2121,7 @@
       }
       var skipSpreadsheet = state.activeTab === "none" || !state.selection;
       if (skipSpreadsheet) {
-        // "No spreadsheet" must close the open source too; nothing else ever posts /api/spreadsheets/close.
-        var st = state.statusData || {};
-        var needsClose = !!(st.sheet_loaded || st.mindnode_loaded);
-        // One call per coexisting source; check r.ok because the route 409s mid-generation.
-        function postClose(body) {
-          return fetch("/api/spreadsheets/close", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(body),
-          }).then(function (r) {
-            return r.json().then(
-              function (j) { return { ok: r.ok && j && j.ok !== false, body: j }; },
-              function () { return { ok: false, body: null }; }
-            );
-          });
-        }
-        var closeStep = Promise.resolve({ ok: true, body: null });
-        function chainClose(prev, payload) {
-          return prev.then(function (res) {
-            if (!res.ok) return res; // first failure wins; don't keep closing
-            return postClose(payload);
-          });
-        }
-        if (st.mindnode_loaded) {
-          closeStep = chainClose(closeStep, { type: "mindnode" });
-        }
-        if (st.sheet_loaded) {
-          closeStep = chainClose(closeStep, {});
-        }
-        closeStep
-          .then(function (res) {
-            if (!res.ok) {
-              releaseConfirm();
-              markSheetError(
-                (res.body && res.body.error) || "Could not close the current source"
-              );
-              return null;
-            }
-            return recordSession(inputVal, outputVal, null, nameVal).finally(
-              function () {
-                releaseConfirm();
-                // Reload only if something unloaded; other frontends hold data for the gone source.
-                if (needsClose) {
-                  window.location.reload();
-                  return;
-                }
-                close();
-              }
-            );
-          })
-          .catch(function (err) {
-            releaseConfirm();
-            markSheetError("Close failed: " + (err && err.message));
-          });
+        confirmNoSheet(inputVal, outputVal, nameVal);
         return;
       }
       // Built explicitly so the name rides along with the session-recording open.
@@ -2262,14 +2132,7 @@
         worksheet: state.selection.worksheet || "",
       };
       if (nameVal !== null) openPayload.project_name = nameVal;
-      fetch("/api/spreadsheets/open", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(openPayload),
-      })
-        .then(function (r) {
-          return r.json().then(function (j) { return { ok: r.ok, body: j }; });
-        })
+      postForResult("/api/spreadsheets/open", openPayload)
         .then(function (res2) {
           if (!res2.ok || !res2.body.ok) {
             releaseConfirm();
@@ -2287,6 +2150,51 @@
       releaseConfirm();
       console.error("Confirm dirs failed", err);
     });
+  }
+
+  // "No spreadsheet" must close the open source too; nothing else posts /api/spreadsheets/close.
+  function confirmNoSheet(inputVal, outputVal, nameVal) {
+    var st = state.statusData || {};
+    var needsClose = !!(st.sheet_loaded || st.mindnode_loaded);
+    // One call per coexisting source; the route 409s mid-generation.
+    var closeStep = Promise.resolve({ ok: true, body: null });
+    function chainClose(prev, payload) {
+      return prev.then(function (res) {
+        if (!res.ok) return res; // first failure wins; don't keep closing
+        return postForResult("/api/spreadsheets/close", payload);
+      });
+    }
+    if (st.mindnode_loaded) {
+      closeStep = chainClose(closeStep, { type: "mindnode" });
+    }
+    if (st.sheet_loaded) {
+      closeStep = chainClose(closeStep, {});
+    }
+    closeStep
+      .then(function (res) {
+        if (!res.ok) {
+          releaseConfirm();
+          markSheetError(
+            (res.body && res.body.error) || "Could not close the current source"
+          );
+          return null;
+        }
+        return recordSession(inputVal, outputVal, null, nameVal).finally(
+          function () {
+            releaseConfirm();
+            // Reload only if something unloaded; other frontends hold data for the gone source.
+            if (needsClose) {
+              window.location.reload();
+              return;
+            }
+            close();
+          }
+        );
+      })
+      .catch(function (err) {
+        releaseConfirm();
+        markSheetError("Close failed: " + (err && err.message));
+      });
   }
 
   function recordSession(input, output, spreadsheet, name) {
@@ -2312,25 +2220,23 @@
     state.open = true;
     show(root, true);
     // Blocking modal. initialFocus is the non-typing panel so letter hotkeys work at once.
-    if (typeof openBlockingModal === "function") {
-      openBlockingModal(root, {
-        // Escape: cancel an inline edit, then fold the recents, then dismiss.
-        onEscape: function () {
-          if (state.cancelPreviewEdit) {
-            state.cancelPreviewEdit();
-            return;
-          }
-          if (state.recentsExpanded) {
-            setRecentsExpanded(false);
-            return;
-          }
-          close();
-        },
-        trapFocus: true,
-        initialFocus: els.panel,
-        restoreFocus: true
-      });
-    }
+    openBlockingModal(root, {
+      // Escape: cancel an inline edit, then fold the recents, then dismiss.
+      onEscape: function () {
+        if (state.cancelPreviewEdit) {
+          state.cancelPreviewEdit();
+          return;
+        }
+        if (state.recentsExpanded) {
+          setRecentsExpanded(false);
+          return;
+        }
+        close();
+      },
+      trapFocus: true,
+      initialFocus: els.panel,
+      restoreFocus: true
+    });
     // Default to the form; the desktop Help menu's "What's New…" passes "updates".
     setStartTab(tab || "open");
     runIntro();
@@ -2356,7 +2262,7 @@
       if (state.open) return;
       show(root, false);
       // Release only once hidden: an early release re-arms page hotkeys during the fade-out.
-      if (typeof closeBlockingModal === "function") closeBlockingModal(root);
+      closeBlockingModal(root);
     }, 460);
   }
 
@@ -2419,8 +2325,8 @@
       loadDirs(),
       loadStartSettings(),
       loadGoogleSheets(),
-      loadExcelFiles(),
-      loadMindnodeFiles(),
+      loadFileList("excel"),
+      loadFileList("mindnode"),
     ])
       .then(applyCurrentSessionPrefill)
       .catch(function (err) {
@@ -2499,7 +2405,6 @@
     mount().then(function () {
       clipgenStatus().then(function (s) {
         state.statusData = s;
-        state.sheetLoaded = !!s.sheet_loaded;
         if (shouldAutoOpen(s)) open();
         // The server decides whether this launch is updatable and honours the cooldown.
         checkForUpdates(false);
@@ -2518,8 +2423,6 @@
 
   window.ClipgenStartOverlay = {
     open: open,
-    close: close,
-    isOpen: function () { return state.open; },
     // macOS "Check for Updates…" menu item: show the About tab and force a check.
     checkForUpdates: function () {
       if (state.open) setStartTab("about"); else open("about");

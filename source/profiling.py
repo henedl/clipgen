@@ -320,14 +320,6 @@ def deep_enable(prof: cProfile.Profile) -> bool:
         return False
 
 
-def _deep_finish(label: str, deep: cProfile.Profile | None, deep_on: bool) -> None:
-    """Disable a span's deep profiler and mark the label as having completed."""
-    if deep_on and deep is not None:
-        deep.disable()
-        with _LOCK:
-            _DEEP_DONE.add(label)
-
-
 @contextmanager
 def span(label: str) -> Iterator[None]:
     """Time the enclosed block under *label*; passthrough when profiling is off."""
@@ -341,7 +333,10 @@ def span(label: str) -> Iterator[None]:
     try:
         yield
     finally:
-        _deep_finish(label, deep, deep_on)
+        if deep_on and deep is not None:
+            deep.disable()
+            with _LOCK:
+                _DEEP_DONE.add(label)
         _end_active(sid)
         add(label, time.perf_counter() - start)
 
@@ -354,17 +349,8 @@ def timed(label: str) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
         def wrapper(*args: Any, **kwargs: Any) -> Any:
             if not config.PROFILING:
                 return fn(*args, **kwargs)
-            # Not span(): the profiler must enable on the executor thread doing the work.
-            deep = deep_profiler(label)
-            deep_on = deep is not None and deep_enable(deep)
-            sid = _begin_active(label)
-            start = time.perf_counter()
-            try:
+            with span(label):
                 return fn(*args, **kwargs)
-            finally:
-                _deep_finish(label, deep, deep_on)
-                _end_active(sid)
-                add(label, time.perf_counter() - start)
 
         return wrapper
 
@@ -620,23 +606,10 @@ def write_export(path: Path, **extra: Any) -> Path | None:
 
 def _deep_report() -> None:
     """Print one pstats block per deep-profiled label; silent when none ran."""
-    with _LOCK:
-        groups: dict[str, list[cProfile.Profile]] = {}
-        for (label, _tid), prof in _DEEP.items():
-            groups.setdefault(label, []).append(prof)
-    for label, profs in sorted(groups.items()):
+    for label, profs in sorted(_deep_groups().items()):
         out = io.StringIO()
-        # One active cProfile per interpreter; losing threads raise here, the winner must survive.
-        stats = None
-        for prof in profs:
-            try:
-                if stats is None:
-                    stats = pstats.Stats(prof, stream=out)
-                else:
-                    stats.add(prof)
-            except (TypeError, ValueError):
-                continue
-        if stats is None or not getattr(stats, "total_calls", 0):
+        stats = _merged_stats(profs, stream=out)
+        if stats is None:
             continue
         stats.strip_dirs().sort_stats("tottime").print_stats(_DEEP_TOP)
         print(f"profile-deep | {label}")  # bare print: see module docstring
@@ -969,13 +942,25 @@ def deep_labels() -> list[dict[str, Any]]:
     ]
 
 
-def _merged_stats(profs: list[cProfile.Profile]) -> pstats.Stats | None:
+def _deep_groups(labels: list[str] | None = None) -> dict[str, list[cProfile.Profile]]:
+    """Per-thread deep profilers grouped by label, optionally limited to *labels*."""
+    groups: dict[str, list[cProfile.Profile]] = {}
+    with _LOCK:
+        for (label, _tid), prof in _DEEP.items():
+            if labels is None or label in labels:
+                groups.setdefault(label, []).append(prof)
+    return groups
+
+
+def _merged_stats(
+    profs: list[cProfile.Profile], stream: io.StringIO | None = None
+) -> pstats.Stats | None:
     """Merge per-thread profilers; losers of the interpreter's slot raise and are skipped."""
     stats: pstats.Stats | None = None
     for prof in profs:
         try:
             if stats is None:
-                stats = pstats.Stats(prof)
+                stats = pstats.Stats(prof, stream=stream)
             else:
                 stats.add(prof)
         except (TypeError, ValueError):
@@ -992,11 +977,8 @@ def deep_dump(directory: Path, labels: list[str] | None = None) -> list[dict[str
     "running"}``): reading a profiler another thread is inside would stop
     it. The files load with ``pstats.Stats(path)`` or snakeviz.
     """
+    groups = _deep_groups(labels)
     with _LOCK:
-        groups: dict[str, list[cProfile.Profile]] = {}
-        for (label, _tid), prof in _DEEP.items():
-            if labels is None or label in labels:
-                groups.setdefault(label, []).append(prof)
         running = {label for label, _start, _tid in _ACTIVE.values()}
     out: list[dict[str, Any]] = []
     for label, profs in sorted(groups.items()):

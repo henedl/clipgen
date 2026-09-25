@@ -13,9 +13,7 @@
  *   generatedViewers           — viewers built this session (not persisted).
  *   cellResults                — per-cell success/error status overlaid
  *                                onto the sheet grid (keyed by cellKey()).
- *   intakeEvents / intakeClusters / intakeSeenIds — Screenspace polling
- *                                snapshot; trIntakeMarks/Clusters mirror
- *                                this for Transcripts.
+ *   intakeEvents / intakeClusters — Screenspace poll snapshot; trIntake* mirror it.
  */
 
 (function () {
@@ -68,7 +66,6 @@
     },
     intakeEvents: [],
     intakeClusters: [],
-    intakeSeenIds: {},
     intakeFilterText: "",
     intakeFilterDetector: "",
     intakeFilterParticipants: [],
@@ -100,8 +97,6 @@
     _mnIntakeFp: null,
     convergenceBaselines: {},
     queuesSeeded: false,
-    convergenceDataVersion: 0,
-    convergenceStale: false,
     sidebarOpen: true,
     sidebarCategories: {},
     sidebarKeywords: {},
@@ -199,10 +194,6 @@
       added = true;
     }
     if (added) renderFn();
-  }
-
-  function intakeAddItem(queue, item, renderFn) {
-    intakeAddItems(queue, [item], renderFn);
   }
 
   function intakeToggleItem(queue, item, renderFn) {
@@ -310,18 +301,23 @@
     return blank;
   }
 
+  // Runs fn on drag end or drop, or when the window loses focus.
+  function onDragFinished(fn) {
+    document.addEventListener("dragend", fn, true);
+    document.addEventListener("drop", fn, true);
+    window.addEventListener("blur", fn);
+    document.addEventListener("visibilitychange", function () {
+      if (document.hidden) fn();
+    });
+  }
+
   // body.dragging lets CSS suspend expensive effects during drags (studio.css, topnav.css, tokens.css).
   function bindDragGate() {
     function clear() { document.body.classList.remove("dragging"); }
     document.addEventListener("dragstart", function () {
       document.body.classList.add("dragging");
     }, true);
-    document.addEventListener("dragend", clear, true);
-    document.addEventListener("drop", clear, true);
-    window.addEventListener("blur", clear);
-    document.addEventListener("visibilitychange", function () {
-      if (document.hidden) clear();
-    });
+    onDragFinished(clear);
   }
 
   // Queue card being dragged, its list, and whether a drop would copy.
@@ -368,12 +364,7 @@
       _cardDrag.copy = copy;
       _cardDrag.card.classList.toggle("queue-card-drag-copy", copy);
     }, true);
-    document.addEventListener("dragend", clear, true);
-    document.addEventListener("drop", clear, true);
-    window.addEventListener("blur", clear);
-    document.addEventListener("visibilitychange", function () {
-      if (document.hidden) clear();
-    });
+    onDragFinished(clear);
   }
 
   // ---- Filtering ----
@@ -526,6 +517,7 @@
   // ---- Sheet sidebar (impl in studio-sidebar.js) ----
   function applySidebarView() { return STUDIO.applySidebarView && STUDIO.applySidebarView.apply(null, arguments); }
   function bindSidebarToggle() { return STUDIO.bindSidebarToggle && STUDIO.bindSidebarToggle.apply(null, arguments); }
+  function commitFilterChange() { return STUDIO.commitFilterChange && STUDIO.commitFilterChange.apply(null, arguments); }
   function isParticipantHidden() { return STUDIO.isParticipantHidden && STUDIO.isParticipantHidden.apply(null, arguments); }
   function persistSidebarFilters() { return STUDIO.persistSidebarFilters && STUDIO.persistSidebarFilters.apply(null, arguments); }
   function renderSidebar() { return STUDIO.renderSidebar && STUDIO.renderSidebar.apply(null, arguments); }
@@ -804,6 +796,21 @@
     });
   }
 
+  // Pushes stampLog(item) for each item whose id (fallback file) target lacks.
+  function appendUnique(target, items) {
+    var seen = {};
+    target.forEach(function (prev) {
+      var k = prev.id || prev.file;
+      if (k) seen[k] = true;
+    });
+    items.forEach(function (item) {
+      var k = item.id || item.file;
+      if (k && seen[k]) return;
+      if (k) seen[k] = true;
+      target.push(stampLog(item));
+    });
+  }
+
   // Mark generated cells green; seedQueue (first load only) also re-queues them.
   function loadManifestState(seedQueue) {
     apiGet("api/manifest")
@@ -848,34 +855,8 @@
         }
 
         // Dedupe by id (fallback file) so a job-status reattach doesn't double-list.
-        var seenArtifact = {};
-        for (var ai = 0; ai < state.generatedArtifacts.length; ai++) {
-          var prev = state.generatedArtifacts[ai];
-          var k = prev.id || prev.file;
-          if (k) seenArtifact[k] = true;
-        }
-        var keep = artifacts.filter(function (a) { return a.type !== "transcript" && a.file; });
-        for (var ki = 0; ki < keep.length; ki++) {
-          var entry = keep[ki];
-          var ek = entry.id || entry.file;
-          if (ek && seenArtifact[ek]) continue;
-          if (ek) seenArtifact[ek] = true;
-          state.generatedArtifacts.push(stampLog(entry));
-        }
-
-        var seenReel = {};
-        for (var rj = 0; rj < state.generatedReels.length; rj++) {
-          var pr = state.generatedReels[rj];
-          var rk = pr.id || pr.file;
-          if (rk) seenReel[rk] = true;
-        }
-        for (var ri = 0; ri < reels.length; ri++) {
-          var reel = reels[ri];
-          var rk2 = reel.id || reel.file;
-          if (rk2 && seenReel[rk2]) continue;
-          if (rk2) seenReel[rk2] = true;
-          state.generatedReels.push(stampLog(reel));
-        }
+        appendUnique(state.generatedArtifacts, artifacts.filter(function (a) { return a.type !== "transcript" && a.file; }));
+        appendUnique(state.generatedReels, reels);
 
         renderArtifactQueue();
         updateCellClasses();
@@ -1185,7 +1166,7 @@
         var sepTd = el(
           "td",
           "",
-          emptyCount === 1 ? "1 empty row" : emptyCount + " empty rows"
+          clipgenPluralUnit(emptyCount, "empty row", "empty rows")
         );
         sepTd.setAttribute("colspan", String(totalCols));
         sepTr.appendChild(sepTd);
@@ -1255,9 +1236,7 @@
       return false;
     }
     // Drop stray native focus so only one focus indicator shows.
-    if (window.ClipgenHotkeys && window.ClipgenHotkeys.blurStrayFocus) {
-      window.ClipgenHotkeys.blurStrayFocus();
-    }
+    window.ClipgenHotkeys.blurStrayFocus();
     _kbRegion = region;
     _kbCursor = { surface: region, idx: 0 };
     kbPaintCursor();
@@ -1407,8 +1386,7 @@
       var td = kbCursorEl();
       if (!isSelectableTimestampCell(td)) return false;
       var info = getCellInfo(td);
-      if (reel) toggleReelCell(info);
-      else toggleArtifactCell(info);
+      toggleCell(reel ? REEL_QUEUE : ARTIFACT_QUEUE, info);
       return true;
     }
     if (KB_LIST_SURFACES[surface]) {
@@ -1518,60 +1496,16 @@
   }
 
   function toggleBottomPanel() {
-    var bottom = qs("#bottomPanel");
-    if (!bottom || bottom._transitioning) return;
-    bottom._transitioning = true;
-
-    if (state.bottomCollapsed) {
-      // --- Restore ---
-      // Animate between pixel endpoints; never `auto` mid-flight.
-      state.bottomCollapsed = false;
-      document.body.classList.add("bottom-animating");
-      document.body.classList.remove("bottom-collapsed");
-      bottom.style.height = "0px";
-      bottom.offsetHeight; // reflow — pin the start frame
-      bottom.style.height = state.bottomH + "px";
-
-      onCollapseTransitionEnd(bottom, function () {
-        document.body.classList.remove("bottom-animating");
-        bottom._transitioning = false;
+    togglePanelCollapse(qs("#bottomPanel"), {
+      isCollapsed: function () { return state.bottomCollapsed; },
+      setCollapsed: function (v) { state.bottomCollapsed = v; },
+      getTargetHeight: function () { return state.bottomH; },
+      onSettled: function (collapsed) {
+        // Collapsed CSS (height: 0) governs the rest state.
+        if (collapsed) qs("#bottomPanel").style.height = "";
         persistBottomHeight();
-      });
-    } else {
-      // --- Collapse ---
-      // Pin the pixel height, then animate to 0; `auto` would hitch.
-      state.bottomCollapsed = true;
-      var currentH = bottom.offsetHeight;
-      document.body.classList.add("bottom-animating");
-      bottom.style.height = currentH + "px";
-      bottom.offsetHeight; // reflow — pin the start frame
-      document.body.classList.add("bottom-collapsed");
-      bottom.style.height = "0px";
-
-      onCollapseTransitionEnd(bottom, function () {
-        bottom._transitioning = false;
-        document.body.classList.remove("bottom-animating");
-        // Drop the inline height so the collapsed CSS (height: 0) governs the
-        // rest state.
-        bottom.style.height = "";
-        persistBottomHeight();
-      });
-    }
-  }
-
-  function onCollapseTransitionEnd(el, cb) {
-    var fired = false;
-    function done() {
-      if (fired) return;
-      fired = true;
-      el.removeEventListener("transitionend", handler);
-      cb();
-    }
-    function handler(e) {
-      if (e.target === el && e.propertyName === "height") done();
-    }
-    el.addEventListener("transitionend", handler);
-    setTimeout(done, 400);
+      },
+    });
   }
 
   function renderDataRow(row, participants, showSeverity) {
@@ -1750,11 +1684,6 @@
     return state.reelGenerating;
   }
 
-  // "3 clip" -> "3 clips" ("GIF" -> "GIFs"). Presentation copy for tooltips.
-  function plural(n, word) {
-    return n + " " + word + (n === 1 ? "" : "s");
-  }
-
   // Singular noun for the currently selected artifact output format.
   function artifactNoun() {
     var sel = qs("#artifactFormat");
@@ -1765,81 +1694,39 @@
     return "artifact";
   }
 
+  // Disables a queue button when locked or empty; the tooltip says which.
+  function setQueueBtn(sel, locked, n, lockedTip, emptyTip, readyTip) {
+    var btn = qs(sel);
+    if (!btn) return;
+    btn.disabled = locked || n === 0;
+    if (readyTip) btn.setAttribute("data-tooltip", locked ? lockedTip : n === 0 ? emptyTip : readyTip);
+  }
+
   function updateArtifactActions() {
     var n = state.artifactQueue.length;
-    var artLocked = isArtifactQueueLocked();
-    var reelLocked = isReelQueueLocked();
-    var genBtn = qs("#generateBtn");
-    if (genBtn) {
-      genBtn.disabled = artLocked || n === 0;
-      genBtn.setAttribute(
-        "data-tooltip",
-        artLocked
-          ? "Generating…"
-          : n === 0
-            ? "Add cells to the work area first"
-            : "Generate " + plural(n, artifactNoun()),
-      );
-    }
-    var clearBtn = qs("#clearArtifactsBtn");
-    if (clearBtn) clearBtn.disabled = artLocked || n === 0;
-    var stashBtn = qs("#stashArtifactsBtn");
-    if (stashBtn) {
-      stashBtn.disabled = artLocked || n === 0;
-      stashBtn.setAttribute(
-        "data-tooltip",
-        artLocked
-          ? "Finish generating first"
-          : n === 0
-            ? "Add cells to the work area first"
-            : "Stash " + plural(n, "artifact") + " to reuse later",
-      );
-    }
-    var addToReelBtn = qs("#addToReelBtn");
-    if (addToReelBtn) {
-      addToReelBtn.disabled = reelLocked || n === 0;
-      addToReelBtn.setAttribute(
-        "data-tooltip",
-        reelLocked
-          ? "Finish generating first"
-          : n === 0
-            ? "Add cells to the work area first"
-            : "Add " + plural(n, "clip") + " to the reel",
-      );
-    }
+    var locked = isArtifactQueueLocked();
+    var noun = artifactNoun();
+    var empty = "Add cells to the work area first";
+    setQueueBtn("#generateBtn", locked, n, "Generating…", empty,
+      "Generate " + clipgenPluralUnit(n, noun, noun + "s"));
+    setQueueBtn("#clearArtifactsBtn", locked, n);
+    setQueueBtn("#stashArtifactsBtn", locked, n, "Finish generating first", empty,
+      "Stash " + clipgenPluralUnit(n, "artifact", "artifacts") + " to reuse later");
+    setQueueBtn("#addToReelBtn", isReelQueueLocked(), n, "Finish generating first", empty,
+      "Add " + clipgenPluralUnit(n, "clip", "clips") + " to the reel");
   }
 
   function updateReelActions() {
     var n = state.reelQueue.length;
-    var reelLocked = isReelQueueLocked();
-    var buildBtn = qs("#buildReelBtn");
-    if (buildBtn) {
-      buildBtn.disabled = reelLocked || n === 0;
-      buildBtn.setAttribute(
-        "data-tooltip",
-        reelLocked
-          ? "Building…"
-          : n === 0
-            ? "Add clips to the reel first"
-            : "Build a reel from " + plural(n, "clip"),
-      );
-    }
-    var clearBtn = qs("#clearReelBtn");
-    if (clearBtn) clearBtn.disabled = reelLocked || n === 0;
-    var stashBtn = qs("#stashReelBtn");
-    if (stashBtn) {
-      stashBtn.disabled = reelLocked || n === 0;
-      stashBtn.setAttribute(
-        "data-tooltip",
-        reelLocked
-          ? "Finish generating first"
-          : n === 0
-            ? "Add clips to the reel first"
-            : "Stash this reel to reuse later",
-      );
-    }
+    var locked = isReelQueueLocked();
+    var empty = "Add clips to the reel first";
+    setQueueBtn("#buildReelBtn", locked, n, "Building…", empty,
+      "Build a reel from " + clipgenPluralUnit(n, "clip", "clips"));
+    setQueueBtn("#clearReelBtn", locked, n);
+    setQueueBtn("#stashReelBtn", locked, n, "Finish generating first", empty,
+      "Stash this reel to reuse later");
     var highlightsBtn = qs("#buildHighlightsBtn");
-    if (highlightsBtn) highlightsBtn.disabled = reelLocked;
+    if (highlightsBtn) highlightsBtn.disabled = locked;
   }
 
   function setArtifactGenerating(active) {
@@ -1856,33 +1743,17 @@
     updateArtifactActions();
   }
 
-  function toggleArtifactCell(info) {
-    if (isArtifactQueueLocked()) return;
-    if (findInQueue(state.artifactQueue, info.participant, info.row) >= 0) {
-      removeAllCellEntries(state.artifactQueue, info.participant, info.row);
-      renderArtifactQueue();
-      updateSingleCellClass(info.participant, info.row);
-      return;
+  function toggleCell(cfg, info) {
+    if (cfg.isLocked()) return;
+    var q = state[cfg.queueKey];
+    if (findInQueue(q, info.participant, info.row) >= 0) {
+      removeAllCellEntries(q, info.participant, info.row);
+    } else {
+      var entries = expandCellToSegments(info);
+      if (entries.length === 0) return;
+      for (var i = 0; i < entries.length; i++) q.push(entries[i]);
     }
-    var entries = expandCellToSegments(info);
-    if (entries.length === 0) return;
-    for (var i = 0; i < entries.length; i++) state.artifactQueue.push(entries[i]);
-    renderArtifactQueue();
-    updateSingleCellClass(info.participant, info.row);
-  }
-
-  function toggleReelCell(info) {
-    if (isReelQueueLocked()) return;
-    if (findInQueue(state.reelQueue, info.participant, info.row) >= 0) {
-      removeAllCellEntries(state.reelQueue, info.participant, info.row);
-      renderReelQueue();
-      updateSingleCellClass(info.participant, info.row);
-      return;
-    }
-    var entries = expandCellToSegments(info);
-    if (entries.length === 0) return;
-    for (var i = 0; i < entries.length; i++) state.reelQueue.push(entries[i]);
-    renderReelQueue();
+    cfg.render();
     updateSingleCellClass(info.participant, info.row);
   }
 
@@ -1956,6 +1827,13 @@
 
   // ---- Grid events ----
 
+  // Shift sends a batch to the reel, else to artifacts.
+  function batchToggle(infos, shift) {
+    if (infos.length === 0) return;
+    var cfg = shift ? REEL_QUEUE : ARTIFACT_QUEUE;
+    if (!cfg.isLocked()) toggleBatchInQueue(state[cfg.queueKey], infos, cfg.render);
+  }
+
   function bindGridEvents() {
     var grid = qs("#sheetGrid");
 
@@ -1967,14 +1845,7 @@
       // Batch select: click # header
       var batchTh = ev.target.closest(".col-row-num-header");
       if (batchTh) {
-        var allInfos = collectCellInfos(function () { return true; });
-        if (allInfos.length > 0) {
-          if (ev.shiftKey) {
-            if (!isReelQueueLocked()) toggleBatchInQueue(state.reelQueue, allInfos, renderReelQueue);
-          } else if (!isArtifactQueueLocked()) {
-            toggleBatchInQueue(state.artifactQueue, allInfos, renderArtifactQueue);
-          }
-        }
+        batchToggle(collectCellInfos(function () { return true; }), ev.shiftKey);
         return;
       }
 
@@ -1983,16 +1854,7 @@
       if (pTh && pTh.tagName === "TH") {
         var pid = pTh.getAttribute("data-participant");
         if (pid) {
-          var colInfos = collectCellInfos(function (info) {
-            return info.participant === pid;
-          });
-          if (colInfos.length > 0) {
-            if (ev.shiftKey) {
-              if (!isReelQueueLocked()) toggleBatchInQueue(state.reelQueue, colInfos, renderReelQueue);
-            } else if (!isArtifactQueueLocked()) {
-              toggleBatchInQueue(state.artifactQueue, colInfos, renderArtifactQueue);
-            }
-          }
+          batchToggle(collectCellInfos(function (info) { return info.participant === pid; }), ev.shiftKey);
         }
         return;
       }
@@ -2001,16 +1863,7 @@
       var rowTd = ev.target.closest("[data-select-row]");
       if (rowTd) {
         var rowNum = parseInt(rowTd.getAttribute("data-select-row"), 10);
-        var rowInfos = collectCellInfos(function (info) {
-          return info.row === rowNum;
-        });
-        if (rowInfos.length > 0) {
-          if (ev.shiftKey) {
-            if (!isReelQueueLocked()) toggleBatchInQueue(state.reelQueue, rowInfos, renderReelQueue);
-          } else if (!isArtifactQueueLocked()) {
-            toggleBatchInQueue(state.artifactQueue, rowInfos, renderArtifactQueue);
-          }
-        }
+        batchToggle(collectCellInfos(function (info) { return info.row === rowNum; }), ev.shiftKey);
         return;
       }
 
@@ -2019,19 +1872,14 @@
       if (!isSelectableTimestampCell(td)) return;
       var info = getCellInfo(td);
 
-      if (ev.shiftKey) {
-        toggleReelCell(info);
-      } else {
-        toggleArtifactCell(info);
-      }
+      toggleCell(ev.shiftKey ? REEL_QUEUE : ARTIFACT_QUEUE, info);
     });
 
     grid.addEventListener("contextmenu", function (ev) {
       var td = ev.target.closest(".ts-cell");
       if (!isSelectableTimestampCell(td)) return;
       ev.preventDefault();
-      var info = getCellInfo(td);
-      toggleReelCell(info);
+      toggleCell(REEL_QUEUE, getCellInfo(td));
     });
 
     // Floating expanded cell for overflowing timestamp cells
@@ -2293,12 +2141,7 @@
 
     document.addEventListener("dragover", onDragOver, true);
     // dragend is the authoritative reset. No mouseup listener: neither engine fires it mid-drag.
-    document.addEventListener("dragend", cleanup, true);
-    document.addEventListener("drop", cleanup, true);
-    window.addEventListener("blur", cleanup);
-    document.addEventListener("visibilitychange", function () {
-      if (document.hidden) cleanup();
-    });
+    onDragFinished(cleanup);
   }
 
   // ---- Drop targets ----
@@ -2319,6 +2162,23 @@
     return data;
   }
 
+  // Drag payload for a queue card; intake items travel whole.
+  function queueDragData(item, source, idx) {
+    if (isIntakeSource(item.source)) return intakeDragData(item, source, idx);
+    return {
+      participant: item.participant,
+      row: item.row,
+      desc: item.desc,
+      timestamp: item.timestamp,
+      severity: item.severity,
+      segIdx: item.segIdx,
+      start: item.start,
+      end: item.end,
+      segTotal: item.segTotal,
+      source: source,
+    };
+  }
+
   // Queue-to-queue drops move unless Option copies; drags from an intake panel copy.
   function takeDragOrigin(info, from, copy) {
     var dragFrom = info.dragFrom;
@@ -2334,45 +2194,31 @@
     else renderArtifactQueue();
   }
 
+  function queueDropHandler(cfg) {
+    return function (info, copy) {
+      if (cfg.isLocked()) return;
+      var q = state[cfg.queueKey];
+      if (info.source === "reel-stash" || info.source === "artifact-stash") {
+        for (var i = 0; i < info.items.length; i++) addToQueue(q, info.items[i], null);
+        cfg.render();
+        return;
+      }
+      if (isIntakeSource(info.source)) {
+        takeDragOrigin(info, cfg.other.dragSource, copy);
+        addToQueue(q, info, cfg.render);
+        return;
+      }
+      if (info.source === cfg.other.dragSource && !copy) {
+        removeFromQueue(state[cfg.other.queueKey], info);
+        cfg.other.render();
+      }
+      addToQueue(q, info, cfg.render);
+    };
+  }
+
   function initDropTargets() {
-    setupDropTarget(qs("#artifactsList"), function (info, copy) {
-      if (isArtifactQueueLocked()) return;
-      if (info.source === "reel-stash" || info.source === "artifact-stash") {
-        for (var i = 0; i < info.items.length; i++)
-          addToQueue(state.artifactQueue, info.items[i], null);
-        renderArtifactQueue();
-        return;
-      }
-      if (isIntakeSource(info.source)) {
-        takeDragOrigin(info, "reel", copy);
-        addToQueue(state.artifactQueue, info, renderArtifactQueue);
-        return;
-      }
-      if (info.source === "reel" && !copy) {
-        removeFromQueue(state.reelQueue, info);
-        renderReelQueue();
-      }
-      addToQueue(state.artifactQueue, info, renderArtifactQueue);
-    });
-    setupDropTarget(qs("#reelList"), function (info, copy) {
-      if (isReelQueueLocked()) return;
-      if (info.source === "reel-stash" || info.source === "artifact-stash") {
-        for (var i = 0; i < info.items.length; i++)
-          addToQueue(state.reelQueue, info.items[i], null);
-        renderReelQueue();
-        return;
-      }
-      if (isIntakeSource(info.source)) {
-        takeDragOrigin(info, "artifact", copy);
-        addToQueue(state.reelQueue, info, renderReelQueue);
-        return;
-      }
-      if (info.source === "artifact" && !copy) {
-        removeFromQueue(state.artifactQueue, info);
-        renderArtifactQueue();
-      }
-      addToQueue(state.reelQueue, info, renderReelQueue);
-    });
+    setupDropTarget(qs(ARTIFACT_QUEUE.listSel), queueDropHandler(ARTIFACT_QUEUE));
+    setupDropTarget(qs(REEL_QUEUE.listSel), queueDropHandler(REEL_QUEUE));
 
     setupDropTarget(qs("#stashedReelsList"), function (info) {
       if (STUDIO.stashDropReel) STUDIO.stashDropReel(info);
@@ -2434,19 +2280,7 @@
       ev.dataTransfer.setData("text/plain", String(_reelDragIdx));
       var reelItem = state.reelQueue[_reelDragIdx];
       if (reelItem) {
-        var data = isIntakeSource(reelItem.source) ? intakeDragData(reelItem, "reel", _reelDragIdx) : {
-          participant: reelItem.participant,
-          row: reelItem.row,
-          desc: reelItem.desc,
-          timestamp: reelItem.timestamp,
-          severity: reelItem.severity,
-          segIdx: reelItem.segIdx,
-          start: reelItem.start,
-          end: reelItem.end,
-          segTotal: reelItem.segTotal,
-          source: "reel",
-        };
-        ev.dataTransfer.setData("application/json", JSON.stringify(data));
+        ev.dataTransfer.setData("application/json", JSON.stringify(queueDragData(reelItem, "reel", _reelDragIdx)));
       }
     });
 
@@ -2492,6 +2326,8 @@
     listSel: "#artifactsList",
     countSel: "#artifactsCount",
     queueKey: "artifactQueue",
+    dragSource: "artifact",
+    render: renderArtifactQueue,
     isLocked: isArtifactQueueLocked,
     emptyGhost: "Click or drag cells here to queue for generation",
     updateActions: updateArtifactActions,
@@ -2505,6 +2341,8 @@
     listSel: "#reelList",
     countSel: "#reelCount",
     queueKey: "reelQueue",
+    dragSource: "reel",
+    render: renderReelQueue,
     isLocked: isReelQueueLocked,
     emptyGhost: "Shift+click or drag cells here to build a reel",
     updateActions: updateReelActions,
@@ -2514,6 +2352,8 @@
     countNoun: "clip",
     countNounPlural: "clips",
   };
+  ARTIFACT_QUEUE.other = REEL_QUEUE;
+  REEL_QUEUE.other = ARTIFACT_QUEUE;
 
   // Composer-trim key or null; sheet keys match composer-markers.js (row:participant:segIdx), intakes key on ids.
   function queueItemTrimKey(item) {
@@ -2532,6 +2372,20 @@
       if (ids[i] && cardKeys[prefix + ids[i]]) return prefix + ids[i];
     }
     return null;
+  }
+
+  // Composer-trim badge; click jumps to the trimmed Intake card.
+  function buildTrimBadge(trimKey) {
+    var badge = el("button", "intake-trim-badge");
+    badge.innerHTML = iconHTML("scissors");
+    badge.type = "button";
+    badge.title = "Trimmed in Composer. Click to view the trimmed version";
+    badge.setAttribute("aria-label", "Show trimmed version in Composer Intake");
+    badge.addEventListener("click", function (ev) {
+      ev.stopPropagation();
+      focusComposerIntakeItem(trimKey);
+    });
+    return badge;
   }
 
   function buildQueueCard(item, idx, cfg, ctx) {
@@ -2562,20 +2416,8 @@
     });
     if (isIntake) thumb.appendChild(buildSourceBadge(item.source));
 
-    // Trim badge: the timestamp has a Composer trim; click jumps to its Intake card.
     var trimKey = queueItemTrimKey(item);
-    if (trimKey) {
-      var trimBadge = el("button", "intake-trim-badge");
-      trimBadge.innerHTML = iconHTML("scissors");
-      trimBadge.type = "button";
-      trimBadge.title = "Trimmed in Composer. Click to view the trimmed version";
-      trimBadge.setAttribute("aria-label", "Show trimmed version in Composer Intake");
-      trimBadge.addEventListener("click", function (ev) {
-        ev.stopPropagation();
-        focusComposerIntakeItem(trimKey);
-      });
-      thumb.appendChild(trimBadge);
-    }
+    if (trimKey) thumb.appendChild(buildTrimBadge(trimKey));
 
     var meta = el("div", "queue-card-meta");
     var refText;
@@ -2685,19 +2527,7 @@
         var idx = parseInt(card.getAttribute("data-queue-idx"), 10);
         var item = state[cfg.queueKey][idx];
         if (!item) return;
-        var data = isIntakeSource(item.source) ? intakeDragData(item, "artifact", idx) : {
-          participant: item.participant,
-          desc: item.desc,
-          start: item.start,
-          end: item.end,
-          source: "artifact",
-          row: item.row,
-          timestamp: item.timestamp,
-          severity: item.severity,
-          segIdx: item.segIdx,
-          segTotal: item.segTotal,
-        };
-        ev.dataTransfer.setData("application/json", JSON.stringify(data));
+        ev.dataTransfer.setData("application/json", JSON.stringify(queueDragData(item, "artifact", idx)));
         ev.dataTransfer.effectAllowed = "copyMove";
         setCardDragImage(ev, card);
       });
@@ -2723,8 +2553,7 @@
         renderQueue(cfg);
         if (removed.row) updateSingleCellClass(removed.participant, removed.row);
       };
-      if (window.ClipgenMotion) ClipgenMotion.animateOut(card, "delete").then(commit);
-      else commit();
+      ClipgenMotion.animateOut(card, "delete").then(commit);
     });
 
     list.addEventListener("mouseover", function (ev) {
@@ -2751,44 +2580,26 @@
   // ---- Buttons ----
 
   // Empty the queue (also the Clear hotkeys); cards animate out before the commit.
-  function clearArtifacts() {
-    if (isArtifactQueueLocked()) return;
-    var cards = qsa("#artifactsList .queue-card");
+  function clearQueue(cfg) {
+    if (cfg.isLocked()) return;
+    var cards = qsa(cfg.listSel + " .queue-card");
     var commit = function () {
-      var cleared = state.artifactQueue.slice();
+      var cleared = state[cfg.queueKey].slice();
       for (var i = 0; i < cleared.length; i++) {
         delete state.cellResults[cellKey(cleared[i].participant, cleared[i].row)];
       }
-      state.artifactQueue = [];
-      renderArtifactQueue();
+      state[cfg.queueKey] = [];
+      cfg.render();
       for (var u = 0; u < cleared.length; u++) {
         if (cleared[u].row) updateSingleCellClass(cleared[u].participant, cleared[u].row);
       }
     };
-    if (cards.length && window.ClipgenMotion) ClipgenMotion.animateOutAll(cards, "delete").then(commit);
-    else commit();
-  }
-
-  function clearReel() {
-    if (isReelQueueLocked()) return;
-    var cards = qsa("#reelList .queue-card");
-    var commit = function () {
-      var cleared = state.reelQueue.slice();
-      for (var i = 0; i < cleared.length; i++) {
-        delete state.cellResults[cellKey(cleared[i].participant, cleared[i].row)];
-      }
-      state.reelQueue = [];
-      renderReelQueue();
-      for (var u = 0; u < cleared.length; u++) {
-        if (cleared[u].row) updateSingleCellClass(cleared[u].participant, cleared[u].row);
-      }
-    };
-    if (cards.length && window.ClipgenMotion) ClipgenMotion.animateOutAll(cards, "delete").then(commit);
+    if (cards.length) ClipgenMotion.animateOutAll(cards, "delete").then(commit);
     else commit();
   }
 
   function bindButtons() {
-    qs("#clearArtifactsBtn").addEventListener("click", clearArtifacts);
+    qs("#clearArtifactsBtn").addEventListener("click", function () { clearQueue(ARTIFACT_QUEUE); });
 
     qs("#addToReelBtn").addEventListener("click", function () {
       for (var i = 0; i < state.artifactQueue.length; i++) {
@@ -2798,7 +2609,7 @@
       renderReelQueue();
     });
 
-    qs("#clearReelBtn").addEventListener("click", clearReel);
+    qs("#clearReelBtn").addEventListener("click", function () { clearQueue(REEL_QUEUE); });
 
     qs("#stashReelBtn").addEventListener("click", stashCurrentReel);
     qs("#stashArtifactsBtn").addEventListener("click", stashCurrentArtifacts);
@@ -2866,12 +2677,12 @@
       {
         id: "studio.clearArtifacts",
         when: function () { return hotkeyBtnEnabled("#clearArtifactsBtn"); },
-        handler: function () { clearArtifacts(); },
+        handler: function () { clearQueue(ARTIFACT_QUEUE); },
       },
       {
         id: "studio.clearReel",
         when: function () { return hotkeyBtnEnabled("#clearReelBtn"); },
-        handler: function () { clearReel(); },
+        handler: function () { clearQueue(REEL_QUEUE); },
       },
       {
         id: "studio.focusFilter",
@@ -3019,7 +2830,7 @@
     if (thumb) {
       var badge = thumb.appendChild(createResultBadge(success));
       // Only a live generation pops; restored results just appear.
-      if (overlay && window.ClipgenMotion) ClipgenMotion.animateIn(badge, "pop");
+      if (overlay) ClipgenMotion.animateIn(badge, "pop");
     }
     var p = card.getAttribute("data-participant");
     var r = card.getAttribute("data-row");
@@ -3372,7 +3183,7 @@
     container.appendChild(frag);
 
     var n = items.length;
-    countEl.textContent = n + " item" + (n !== 1 ? "s" : "");
+    countEl.textContent = clipgenPluralUnit(n, "item", "items");
   }
 
   // ---- Settings (shared modal lives in settings-modal.js) ----
@@ -3443,7 +3254,7 @@
         resetScrubberPrefetch();
         renderArtifactQueue();
         renderReelQueue();
-        renderIntake(false);
+        renderIntake();
       }
     }
     if (applyCrossRefSetting(null, state.settingsData)) rerenderCrossRefs();
@@ -3453,18 +3264,27 @@
   function rerenderCrossRefs() {
     var tooltip = qs("#trIntakeTooltip");
     if (tooltip) tooltip.classList.add("hidden");
-    renderIntake(false);
+    renderIntake();
   }
   window.clipgenRerenderCrossRefs = rerenderCrossRefs;
 
-  function persistTitlecardSettings() {
+  // Inline titlecard controls as request fields; a blank duration takes the setting default.
+  function readTitlecardControls() {
+    var out = {};
     var cb = qs("#titlecardEnabled");
     var dur = qs("#titlecardDuration");
-    if (!cb || !dur) return;
+    var setting = _findSetting("TITLECARD_DURATION_SECONDS");
+    if (cb) out.titlecards_enabled = cb.checked;
+    if (dur) out.titlecard_duration = parseInt(dur.value, 10) || (setting ? setting.default : undefined);
+    return out;
+  }
 
+  function persistTitlecardSettings() {
+    if (!qs("#titlecardEnabled") || !qs("#titlecardDuration")) return;
+    var tc = readTitlecardControls();
     var payload = {
-      TITLECARDS_ENABLED: cb.checked,
-      TITLECARD_DURATION_SECONDS: parseInt(dur.value, 10) || 2,
+      TITLECARDS_ENABLED: tc.titlecards_enabled,
+      TITLECARD_DURATION_SECONDS: tc.titlecard_duration,
     };
 
     apiPut("api/settings", { settings: payload })
@@ -3472,8 +3292,8 @@
         if (data.ok && state.settingsData) {
           var tcE = _findSetting("TITLECARDS_ENABLED");
           var tcD = _findSetting("TITLECARD_DURATION_SECONDS");
-          if (tcE) tcE.value = cb.checked;
-          if (tcD) tcD.value = parseInt(dur.value, 10) || 2;
+          if (tcE) tcE.value = tc.titlecards_enabled;
+          if (tcD) tcD.value = tc.titlecard_duration;
         }
       })
       .catch(function () {});
@@ -3487,18 +3307,12 @@
       .then(function (data) {
         state.desktop = !!data.desktop;
         if (state.desktop) renderLog();
-        if (data.screenspace) {
-          var intakeTab = qs('.preview-tab[data-tab="intake"]');
-          if (intakeTab) intakeTab.classList.remove("hidden");
-        }
-        if (data.transcripts) {
-          var trIntakeTab = qs('.preview-tab[data-tab="transcript-intake"]');
-          if (trIntakeTab) trIntakeTab.classList.remove("hidden");
-        }
-        if (data.composer) {
-          var coIntakeTab = qs('.preview-tab[data-tab="composer-intake"]');
-          if (coIntakeTab) coIntakeTab.classList.remove("hidden");
-        }
+        var intakeTab = qs('.preview-tab[data-tab="intake"]');
+        if (intakeTab) intakeTab.classList.remove("hidden");
+        var trIntakeTab = qs('.preview-tab[data-tab="transcript-intake"]');
+        if (trIntakeTab) trIntakeTab.classList.remove("hidden");
+        var coIntakeTab = qs('.preview-tab[data-tab="composer-intake"]');
+        if (coIntakeTab) coIntakeTab.classList.remove("hidden");
         // This tab only exists once a mind map has been opened.
         if (data.mindnode_loaded) {
           var mnIntakeTab = qs('.preview-tab[data-tab="mindnode-intake"]');
@@ -3652,7 +3466,6 @@
 
   // Command palette additions beyond the auto-ingested quick actions.
   function initCommandPalette() {
-    if (!window.ClipgenCommandPalette) return;
     window.ClipgenCommandPalette.setParticipants(function () {
       return (state.sheetData && state.sheetData.participants) || [];
     });
@@ -3660,12 +3473,6 @@
     function tabCommand(tabKey, title, icon) {
       return palette.selectorCommand("Studio", "studio:tab-" + tabKey, title, icon,
         "tab show switch", '.preview-tab[data-tab="' + tabKey + '"]');
-    }
-    // Mirror the sidebar row's mutate → persist → re-render sequence.
-    function applyFilterChange() {
-      persistSidebarFilters();
-      renderSidebar();
-      renderGrid();
     }
     function viewCommand(viewId, title, icon) {
       return {
@@ -3677,7 +3484,7 @@
         visible: function () {
           return !!(state.sheetData && state.sheetData.rows && state.sheetData.rows.length);
         },
-        run: function () { applySidebarView(viewId); applyFilterChange(); },
+        run: function () { applySidebarView(viewId); commitFilterChange(); },
       };
     }
     window.ClipgenCommandPalette.register("studio", function () {
@@ -3697,7 +3504,7 @@
           keywords: "reset remove sidebar category severity keyword",
           section: "Studio",
           enabled: hasActiveFilters,
-          run: function () { clearAllFilters(); applyFilterChange(); },
+          run: function () { clearAllFilters(); commitFilterChange(); },
         },
         viewCommand("all", "Show all rows", "bars-3"),
         viewCommand("highlights", "Highlights only", "funnel"),
@@ -3737,7 +3544,6 @@
     loadStashes();
     loadArtifactStashes();
     checkNavLinks();
-    initFrontendSwitcher();
     initTopNavActions();
     initCommandPalette();
     initIntake();
@@ -3780,7 +3586,6 @@
   STUDIO.iconHTML = iconHTML;
   STUDIO.isAnyStudioJobRunning = isAnyStudioJobRunning;
   STUDIO.pathBasename = pathBasename;
-  STUDIO.setButtonProgress = setButtonProgress;
   STUDIO.setReelGenerating = setReelGenerating;
   STUDIO.showBuildResult = showBuildResult;
   STUDIO.showBuildStatus = showBuildStatus;
@@ -3790,10 +3595,9 @@
   STUDIO.hasSeverityData = hasSeverityData;
   STUDIO.renderGrid = renderGrid;
   STUDIO.buildQueueCardThumb = buildQueueCardThumb;
-  STUDIO.buildXrefBadges = buildXrefBadges;
+  STUDIO.buildTrimBadge = buildTrimBadge;
   STUDIO.findIntakeInQueue = findIntakeInQueue;
   STUDIO.findOverlappingData = findOverlappingData;
-  STUDIO.intakeAddItem = intakeAddItem;
   STUDIO.intakeAddItems = intakeAddItems;
   STUDIO.intakeToggleItem = intakeToggleItem;
   STUDIO.isIntakeSource = isIntakeSource;
@@ -3819,6 +3623,7 @@
   STUDIO.setCardResult = setCardResult;
   STUDIO.updateGenerateProgress = updateGenerateProgress;
   STUDIO.stampLog = stampLog;
+  STUDIO.readTitlecardControls = readTitlecardControls;
   STUDIO._generateEtaTracker = _generateEtaTracker;
   STUDIO._studioEtaTicker = _studioEtaTicker;
 })();

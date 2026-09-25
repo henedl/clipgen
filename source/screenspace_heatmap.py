@@ -102,11 +102,7 @@ def generate_template_heatmap(
     """
     accumulator = np.zeros((frame_height, frame_width), dtype=np.float32)
     for r in results:
-        for m in r.get("matches", []):
-            x, y, w, h = int(m["x"]), int(m["y"]), int(m["w"]), int(m["h"])
-            y2 = min(y + h, frame_height)
-            x2 = min(x + w, frame_width)
-            accumulator[y:y2, x:x2] += m.get("score", 1.0)
+        _accumulate_heatmap_result(accumulator, r, "template")
 
     if accumulator.max() == 0:
         return None
@@ -219,10 +215,8 @@ def _accumulate_heatmap_result(
 ) -> None:
     """Add a single result's contribution to a heatmap accumulator.
 
-    *mask_out* (uint8, accumulator-shaped) additionally records which pixels
-    the grid branch drew — the geometry, not the values, so a ``mag`` of 0
-    still marks its pixels. The rolling-GIF bucket layers replay overwrites
-    through it (see :func:`generate_rolling_heatmap_gif`).
+    *mask_out* records drawn grid pixels, the replay reference
+    ``build_grid_layers`` is tested against.
     """
     acc_h, acc_w = accumulator.shape[:2]
     if heatmap_type in ("template", "shape"):

@@ -90,6 +90,7 @@ _TREE_LAYERS = {
     "config": 0,
     "profiling": 1,
     "friction": 1,
+    "composer_render": 1,
     "tflite_numpy": 1,
     "utils": 2,
     "hardware": 2,

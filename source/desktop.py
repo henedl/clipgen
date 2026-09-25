@@ -431,26 +431,21 @@ def launch(
     worksheet_factory: Any = None,
 ) -> None:
     """Open a desktop window, falling back to the browser if that is impossible."""
+    kw: dict[str, Any] = {
+        "worksheet": worksheet,
+        "default_page": default_page,
+        "gspread_client": gspread_client,
+        "gspread_client_factory": gspread_client_factory,
+        "worksheet_factory": worksheet_factory,
+    }
     if not is_available():
         utils.warning_print(
             "pywebview is unavailable — falling back to the default browser."
         )
-        server.start_combined_server(
-            worksheet=worksheet,
-            default_page=default_page,
-            gspread_client=gspread_client,
-            gspread_client_factory=gspread_client_factory,
-            worksheet_factory=worksheet_factory,
-        )
+        server.start_combined_server(**kw)
         return
     try:
-        launch_desktop(
-            worksheet=worksheet,
-            default_page=default_page,
-            gspread_client=gspread_client,
-            gspread_client_factory=gspread_client_factory,
-            worksheet_factory=worksheet_factory,
-        )
+        launch_desktop(**kw)
     except KeyboardInterrupt:
         pass
     except Exception as exc:
@@ -458,14 +453,4 @@ def launch(
         # instead.
         utils.error_print(f"Could not open the desktop window: {exc}")
         utils.warning_print("Falling back to the default browser.")
-        server.start_combined_server(
-            worksheet=worksheet,
-            default_page=default_page,
-            gspread_client=gspread_client,
-            gspread_client_factory=gspread_client_factory,
-            worksheet_factory=worksheet_factory,
-        )
-
-
-if __name__ == "__main__":
-    sys.exit(launch())
+        server.start_combined_server(**kw)

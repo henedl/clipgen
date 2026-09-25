@@ -28,18 +28,8 @@
     taskTypeColor = SS.taskTypeColor,
     _overlayEligibleForActiveTool = SS._overlayEligibleForActiveTool;
 
-  // Canvas path for shaped-region contours: points are bbox-relative (0–1), r is the pixel bbox.
-  function traceRegionPolygonPath(ctx, contours, r) {
-    ctx.beginPath();
-    contours.forEach(function (points) {
-      if (points.length < 3) return;
-      ctx.moveTo(r.x + points[0][0] * r.w, r.y + points[0][1] * r.h);
-      for (var i = 1; i < points.length; i++) {
-        ctx.lineTo(r.x + points[i][0] * r.w, r.y + points[i][1] * r.h);
-      }
-      ctx.closePath();
-    });
-  }
+  // Identity bbox for contours already in canvas pixels.
+  var UNIT_RECT = { x: 0, y: 0, w: 1, h: 1 };
 
   // Draw stroke: white for a new region; green/red/amber for shift-add / alt-subtract / shift+alt-intersect.
   var COMBINE_STROKES = { add: "#34d399", subtract: "#f87171", intersect: "#fbbf24" };
@@ -55,8 +45,7 @@
     ctx.clearRect(0, 0, canvas.width, canvas.height);
 
     // Canvas pixels per display pixel, so chrome keeps one physical size at any video resolution.
-    var displayW = canvas.getBoundingClientRect().width || canvas.width;
-    var s = canvas.width / displayW;
+    var s = canvasScale(canvas);
 
     // Draw saved regions (or preview regions when hovering a stash)
     var drawRegions = state.previewRegions || state.regions;
@@ -181,13 +170,7 @@
         ctx.strokeStyle = wcol;
         ctx.lineWidth = 1.5 * s;
         ctx.setLineDash([]);
-        ctx.beginPath();
-        wd.previewPoints.forEach(function (contour) {
-          if (contour.length < 3) return;
-          ctx.moveTo(contour[0][0], contour[0][1]);
-          for (var wi = 1; wi < contour.length; wi++) ctx.lineTo(contour[wi][0], contour[wi][1]);
-          ctx.closePath();
-        });
+        traceRegionPolygonPath(ctx, wd.previewPoints, UNIT_RECT);
         ctx.stroke();
         ctx.fillStyle = hexToRgba(wcol, 0.12);
         ctx.fill();
@@ -238,13 +221,7 @@
       if (p.points && p.points.length > 0) {
         // Pending shaped region: contours are canvas-pixel absolute (not yet
         // normalized by the server).
-        ctx.beginPath();
-        p.points.forEach(function (contour) {
-          if (contour.length < 3) return;
-          ctx.moveTo(contour[0][0], contour[0][1]);
-          for (var pi = 1; pi < contour.length; pi++) ctx.lineTo(contour[pi][0], contour[pi][1]);
-          ctx.closePath();
-        });
+        traceRegionPolygonPath(ctx, p.points, UNIT_RECT);
         ctx.stroke();
         ctx.fillStyle = "rgba(255, 255, 255, 0.08)";
         ctx.fill();

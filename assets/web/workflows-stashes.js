@@ -18,13 +18,7 @@
 
   // ---- Data -----------------------------------------------------------------
 
-  function findStash(id) {
-    var arr = state.stashes || [];
-    for (var i = 0; i < arr.length; i++) {
-      if (arr[i].id === id) return arr[i];
-    }
-    return null;
-  }
+  function findStash(id) { return findById(state.stashes, id); }
 
   // GET returns the read-only built-in recipes first, then the user's stashes.
   function loadStashes() {
@@ -40,7 +34,7 @@
     var host = qs("#wfEmptyRecipes");
     if (!host) return;
     host.innerHTML = "";
-    var builtins = (state.stashes || []).filter(function (s) {
+    var builtins = state.stashes.filter(function (s) {
       return s.builtin;
     });
     if (!builtins.length) return;
@@ -65,7 +59,7 @@
     if (!list) return;
     list.removeAttribute("aria-busy"); // boot skeletons are about to go
     list.innerHTML = "";
-    var stashes = state.stashes || [];
+    var stashes = state.stashes;
     if (!stashes.length) {
       list.appendChild(
         el("div", "wf-stash-empty", "No stashes yet. Select nodes, then Stash them.")
@@ -157,32 +151,10 @@
 
   // ---- Save / instantiate ---------------------------------------------------
 
+  // Induced edges only, so a stash never carries a dangling half-edge.
   function saveSelectionAsStash() {
-    var sel = state.selection || [];
-    if (!sel.length) return;
-    var selSet = {};
-    sel.forEach(function (id) {
-      selSet[id] = true;
-    });
-
-    var nodes = (state.nodes || [])
-      .filter(function (n) {
-        return selSet[n.id];
-      })
-      .map(function (n) {
-        return JSON.parse(JSON.stringify(n));
-      });
-    if (!nodes.length) return;
-
-    // Induced edges only — both endpoints selected, so a stash never carries a
-    // dangling half-edge.
-    var edges = (state.edges || [])
-      .filter(function (e) {
-        return selSet[e.from] && selSet[e.to];
-      })
-      .map(function (e) {
-        return JSON.parse(JSON.stringify(e));
-      });
+    var sub = WF.cloneSelection ? WF.cloneSelection() : null;
+    if (!sub) return;
 
     WF.openPromptDialog({
       title: "Name this stash",
@@ -190,12 +162,12 @@
       confirmLabel: "Save",
       onConfirm: function (name) {
         name = (name || "").trim() || "Stash";
-        apiPost("api/stashes", { name: name, nodes: nodes, edges: edges })
+        apiPost("api/stashes", { name: name, nodes: sub.nodes, edges: sub.edges })
           .then(function (res) {
             if (!res || !res.stash) return;
             // Insert after the leading built-ins so user stashes stay grouped
             // below.
-            var arr = state.stashes || (state.stashes = []);
+            var arr = state.stashes;
             var idx = 0;
             while (idx < arr.length && arr[idx].builtin) idx++;
             arr.splice(idx, 0, res.stash);
@@ -231,7 +203,7 @@
     if (dropWorld) {
       anchor = dropWorld;
     } else {
-      var c = viewportCenterWorld();
+      var c = WF.viewportCenterWorld ? WF.viewportCenterWorld() : { x: 0, y: 0 };
       var step = (_clickCascade++ % 5) * 40;
       anchor = { x: c.x + step, y: c.y + step };
     }
@@ -283,15 +255,6 @@
     }
   }
 
-  function viewportCenterWorld() {
-    var canvas = qs("#wfCanvas");
-    if (canvas && WF.clientToWorld) {
-      var r = canvas.getBoundingClientRect();
-      return WF.clientToWorld(r.left + r.width / 2, r.top + r.height / 2);
-    }
-    return { x: 0, y: 0 };
-  }
-
   // ---- Rename / delete ------------------------------------------------------
 
   function renameStash(id, name) {
@@ -309,7 +272,7 @@
   function deleteStash(id) {
     return apiDelete("api/stashes/" + encodeURIComponent(id))
       .then(function () {
-        state.stashes = (state.stashes || []).filter(function (s) {
+        state.stashes = state.stashes.filter(function (s) {
           return s.id !== id;
         });
         renderStashPalette();
@@ -338,11 +301,8 @@
 
   WF.initStashes = initStashes;
   WF.loadStashes = loadStashes;
-  WF.renderStashPalette = renderStashPalette;
   WF.saveSelectionAsStash = saveSelectionAsStash;
   WF.instantiateStash = instantiateStash;
   WF.instantiateSubgraph = instantiateSubgraph;
-  WF.renameStash = renameStash;
-  WF.deleteStash = deleteStash;
   WF.syncStashButton = syncStashButton;
 })();

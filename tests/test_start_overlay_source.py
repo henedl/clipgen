@@ -232,10 +232,10 @@ def test_failed_listings_leave_the_panels_usable():
     # picker hidden with sheets still in state.
     assert google.count("keepPreviousGoogleList(") == 2
 
-    excel = src[
-        src.index("function loadExcelFiles") : src.index("function renderExcelList")
+    files = src[
+        src.index("function loadFileList") : src.index("function renderFileList")
     ]
-    assert ".catch(" in excel, "loadExcelFiles leaves the status on 'Scanning…'"
+    assert ".catch(" in files, "loadFileList leaves the status on 'Scanning…'"
 
 
 def test_refresh_button_has_its_css():
@@ -271,7 +271,9 @@ def test_no_spreadsheet_actually_closes_the_open_source():
     assert "/api/spreadsheets/close" in src, (
         "the overlay must be able to close what it opened"
     )
-    body = src[src.index("var skipSpreadsheet") :][:1600]
+    skip = src[src.index("var skipSpreadsheet") :][:300]
+    assert "confirmNoSheet(" in skip, "the skipSpreadsheet path must run confirmNoSheet"
+    body = src[src.index("function confirmNoSheet") :][:1600]
     assert "/api/spreadsheets/close" in body, (
         "the close belongs on the skipSpreadsheet path"
     )
@@ -288,8 +290,10 @@ def test_close_failures_do_not_record_a_session_or_reload():
     session and reloads with the source still loaded. The open path right
     below has always checked r.ok; this one must too."""
     src = strip_comments(read("start-overlay.js"))
-    body = src[src.index("var skipSpreadsheet") :][:2200]
-    assert "r.ok" in body, "the close response status must be checked"
+    helper = src[src.index("function postForResult") :][:600]
+    assert "r.ok" in helper, "the close response status must be checked"
+    body = src[src.index("function confirmNoSheet") :][:2200]
+    assert "postForResult(" in body, "the close must go through postForResult"
     assert "markSheetError(" in body, (
         "a refused close has to surface, not fall through to the reload"
     )

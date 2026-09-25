@@ -7,7 +7,7 @@
  * overlay-interaction destructure renderWorkflowParams, refTimeChip and
  * updateParamResetButtons at load time. Functions owned by later satellites
  * (overlay, overlay-interaction, sample-editor, color) are reached late-bound
- * through SS. Function bodies are unchanged from the hub.
+ * through SS.
  */
 (function () {
   "use strict";
@@ -238,10 +238,7 @@
     langControl.appendChild(langSel);
     langRow.appendChild(langControl);
     container.appendChild(langRow);
-    var ppCb = document.createElement("input");
-    ppCb.type = "checkbox";
-    ppCb.id = "paramTextOcrPreprocess";
-    addParamRow(container, "Enhance ROI", ppCb);
+    addParamRow(container, "Enhance ROI", checkboxInput("paramTextOcrPreprocess"));
     addParamRow(container, "Normalize", buildNormalizeControl("paramTextOcrNormalize", "off"));
     addParamRow(container, "Consecutive", numberInput("paramTextConsecutive", 1, 10, 1, 1));
   }
@@ -290,14 +287,8 @@
     numRangeRow.appendChild(rangeCtrl);
     container.appendChild(numRangeRow);
     addParamRow(container, "Min OCR conf.", rangeInput("paramNumOcrConf", 0.00, 1.00, numberOrDefault(CLIPGEN_CONFIG.screenspaceOcrMinConfidence, 0.6), 0.01), "paramNumOcrConfVal");
-    var ppCb = document.createElement("input");
-    ppCb.type = "checkbox";
-    ppCb.id = "paramNumOcrPreprocess";
-    addParamRow(container, "Enhance ROI", ppCb);
-    var ioCb = document.createElement("input");
-    ioCb.type = "checkbox";
-    ioCb.id = "paramNumIntegersOnly";
-    addParamRow(container, "Integers only", ioCb);
+    addParamRow(container, "Enhance ROI", checkboxInput("paramNumOcrPreprocess"));
+    addParamRow(container, "Integers only", checkboxInput("paramNumIntegersOnly"));
     renderIntervalSlot("paramNumInterval", 0.5, 60, 2.0, 0.5);
     addParamRow(container, "Consecutive", numberInput("paramNumConsecutive", 1, 10, 1, 1));
   }
@@ -371,7 +362,7 @@
           regionName: snap.region,
           onApply: function (b64) {
             // An edited capture becomes an upload; the server cannot re-derive its pixels.
-            applyEditedSample((snap.region || "sample") + "-edited.png", b64);
+            installUploadedRef((snap.region || "sample") + "-edited.png", b64);
           },
         });
       });
@@ -381,8 +372,8 @@
     return capInfo;
   }
 
-  // Install an edited sample as the uploaded reference (Template/Shape).
-  function applyEditedSample(name, b64) {
+  // Install a PNG as the uploaded reference (Template/Shape).
+  function installUploadedRef(name, b64) {
     state.uploadedTemplate = { name: name, data: b64 };
     state.referenceTimestamp = null;
     state.capturedRefPreview = null;
@@ -432,17 +423,7 @@
       if (!file) return;
       var reader = new FileReader();
       reader.onload = function (e) {
-        var dataUrl = e.target.result;
-        var b64 = dataUrl.split(",")[1];
-        state.uploadedTemplate = { name: file.name, data: b64 };
-        state.referenceTimestamp = null;
-        state.capturedRefPreview = null;
-        state.templateOverlayPos = null;
-        var previewImg = new Image();
-        previewImg.onload = function () { SS.renderOverlay(); };
-        previewImg.src = dataUrl;
-        state.uploadedTemplateImg = previewImg;
-        renderWorkflowParams();
+        installUploadedRef(file.name, e.target.result.split(",")[1]);
         showToast(labelText + " loaded");
       };
       reader.readAsDataURL(file);
@@ -491,7 +472,7 @@
           title: up.name || "Uploaded " + labelText.toLowerCase(),
           dataUrl: "data:image/png;base64," + up.data,
           onApply: function (b64) {
-            applyEditedSample(up.name || "sample.png", b64);
+            installUploadedRef(up.name || "sample.png", b64);
           },
         });
       });
@@ -544,10 +525,7 @@
     addParamRow(container, "Scale steps", numberInput("paramShapeSteps", 1, 12, 7, 1));
     var rowXSteps = container.lastChild;
     // Unlinked axes: width-only sliders plus a height ladder; the sweep multiplies cost.
-    var linkCb = document.createElement("input");
-    linkCb.type = "checkbox";
-    linkCb.id = "paramShapeLinkAxes";
-    linkCb.checked = true;
+    var linkCb = checkboxInput("paramShapeLinkAxes", true);
     addParamRow(container, "Link axes", linkCb);
     addParamRow(container, "Height scale min", rangeInput("paramShapeScaleYMin", 25, 400, 90, 5), "paramShapeScaleYMinVal");
     var rowYMin = container.lastChild;
@@ -741,8 +719,7 @@
   function _buildParamResetButton(row) {
     var btn = el("button", "param-reset hidden");
     btn.type = "button";
-    var icon = el("span", "param-reset-icon");
-    applyIconMask(icon, "arrow-path", "/screenspace/icons/");
+    var icon = iconMaskSpan("arrow-path", { className: "param-reset-icon" });
     btn.appendChild(icon);
     btn.addEventListener("click", function () {
       var map = {};
@@ -829,27 +806,8 @@
     if (type === "multitool") {
       SS.renderMultitoolParams(container);
       renderIntervalSlot("paramMultitoolInterval", 0.5, 60, 1.0, 0.5);
-      var mtEventLabel = textInput("paramEventLabel", "e.g. low_health");
-      mtEventLabel.className = "param-input-half";
-      addParamRow(container, "Event label", mtEventLabel);
-      var dfCb = document.createElement("input");
-      dfCb.type = "checkbox";
-      dfCb.id = "paramDetectFirst";
-      addParamRow(container, "Detect first", dfCb);
-      // Every multitool mutation lands here; task-import and reorder paths skip
-      // updateRunButton.
-      updateRunButton();
-      _updateOverlayUi();
-      refreshModelView();
-      updateCalibrationVisibility();
-      // Multitool returns early, so mirror the bottom-of-function calibration reset here.
-      state.calibrationResult = null;
-      renderCalibration();
-      if (!state.suppressCalibrationRefresh) refreshCalibration();
-      return;
     }
-
-    if (type === "color") renderColorParams(container);
+    else if (type === "color") renderColorParams(container);
     else if (type === "change") {
       addParamRow(container, "Threshold", rangeInput("paramChangeThresh", 0.01, 0.50, 0.03, 0.01), "paramChangeThreshVal");
       addParamRow(container, "Noise Thr.", rangeInput("paramChangeNoise", 0, 100, 30, 1), "paramChangeNoiseVal");
@@ -911,21 +869,19 @@
       // Boundary and attention emit transitions, not detections, so "Detect first" doesn't
       // apply.
       if (type !== "boundary" && type !== "attention") {
-        var dfCb = document.createElement("input");
-        dfCb.type = "checkbox";
-        dfCb.id = "paramDetectFirst";
-        addParamRow(container, "Detect first", dfCb);
+        addParamRow(container, "Detect first", checkboxInput("paramDetectFirst"));
       }
     }
 
-    var scanPicker = qs("#runScanModePicker");
-    // Timelapse has no scan modes; boundary runs its own coarse pass. Hide for both.
+    // Timelapse has no scan modes; boundary runs its own coarse pass. Multitool skips this.
+    var scanPicker = type === "multitool" ? null : qs("#runScanModePicker");
     if (scanPicker) {
       scanPicker.style.display = toolSupportsFastScan(type) ? "" : "none";
     }
     var scanBtn = scanPicker && scanPicker.querySelector(".scan-toggle-btn");
     if (scanBtn && scanBtn._updateScanState) scanBtn._updateScanState();
 
+    // Every multitool mutation lands here; task-import and reorder paths skip updateRunButton.
     updateRunButton();
     _updateOverlayUi();
     refreshModelView();
@@ -949,8 +905,7 @@
     btn.type = "button";
     btn.setAttribute("data-tooltip", "Jump to this frame");
     btn.setAttribute("aria-label", "Jump to this frame");
-    var icon = el("span", "ref-seek-icon");
-    applyIconMask(icon, "arrow-up-right", "/screenspace/icons/");
+    var icon = iconMaskSpan("arrow-up-right", { className: "ref-seek-icon" });
     btn.appendChild(icon);
     btn.addEventListener("click", function () {
       loadFrame(seconds);
@@ -989,5 +944,6 @@
   SS.initParamResets = initParamResets;
   SS.refTimeChip = refTimeChip;
   SS.renderWorkflowParams = renderWorkflowParams;
+  SS.installUploadedRef = installUploadedRef;
   SS.updateParamResetButtons = updateParamResetButtons;
 })();

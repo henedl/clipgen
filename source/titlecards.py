@@ -363,9 +363,7 @@ def build_titlecard_frame(
     audio_match: dict | None = None,
 ) -> str | None:
     """Generate a short titlecard video segment for a clip."""
-    background_path, allow_color, skip, fill_color = resolve_card_background("title")
-    if skip:
-        return None
+    background_path, allow_color, _skip, fill_color = resolve_card_background("title")
     return _build_card_frame(
         resolution=resolution,
         background_path=background_path,
@@ -405,13 +403,6 @@ def build_endcard_frame(
     )
 
 
-def _audio_match_signature(audio_match: dict | None) -> str:
-    """Cache-key fragment identifying an endcard's silent-audio params (or none)."""
-    if not audio_match:
-        return "noaudio"
-    return f"{audio_match.get('sample_rate')}:{audio_match.get('channel_layout')}"
-
-
 def get_or_build_endcard(
     resolution: str,
     *,
@@ -430,7 +421,11 @@ def get_or_build_endcard(
     endcard_id = config.ENDCARD_IMAGE or "__default__"
     if config.ENDCARD_IMAGE == config.CARD_IMAGE_COLOR:
         endcard_id = endcard_id + config.ENDCARD_COLOR
-    audio_sig = _audio_match_signature(audio_match)
+    audio_sig = (
+        f"{audio_match.get('sample_rate')}:{audio_match.get('channel_layout')}"
+        if audio_match
+        else "noaudio"
+    )
     fps_sig = f"{match_fps:g}" if match_fps else "nofps"
     cache_key = f"{resolution}:{duration}:{endcard_id}:{fps_sig}:{audio_sig}"
     with _endcard_lock:
@@ -469,11 +464,6 @@ def clear_endcard_cache() -> None:
         _endcard_flights.clear()
 
 
-def _input_count(input_args: list[str]) -> int:
-    """Return the number of ffmpeg -i inputs present in *input_args*."""
-    return sum(1 for tok in input_args if tok == "-i")
-
-
 def _build_wrap_filter_and_inputs(
     *,
     titlecard_path: str | None,
@@ -495,7 +485,7 @@ def _build_wrap_filter_and_inputs(
     audio_labels: list[str] = []
 
     def add_input(args: list[str]) -> int:
-        idx = _input_count(input_args)
+        idx = input_args.count("-i")
         input_args.extend(args)
         return idx
 
@@ -568,7 +558,6 @@ def _build_wrap_filter_and_inputs(
 def wrap_clip_with_cards(
     clip: ClipRecord,
     clip_path: str,
-    resolution: str | None = None,
     *,
     cancel_flag: Callable[[], bool] | None = None,
     on_progress: Callable[[float], None] | None = None,
@@ -625,14 +614,13 @@ def wrap_clip_with_cards(
 
     # One probe: audio presence and resolution
     probed = video.probe_video_properties(clip_path)
-    if not resolution and probed:
-        resolution = f"{probed['width']}x{probed['height']}"
-    if not resolution:
+    if not probed:
         utils.warning_print(
             f"Could not determine video resolution for '{clip_path}'. "
             "Skipping title/endcard for this clip."
         )
         return (True, False)
+    resolution = f"{probed['width']}x{probed['height']}"
 
     clip_track = video.first_audio_track(probed)
     has_clip_audio = clip_track is not None
@@ -658,28 +646,34 @@ def wrap_clip_with_cards(
 
     titlecard_temps: list[str] = []
     output_temp_path: str | None = None
+
+    def _build_cards(
+        match_fps: float | None, audio_match: dict | None
+    ) -> tuple[str | None, str | None]:
+        title = build_titlecard_frame(
+            clip,
+            resolution,
+            cancel_flag=cancel_flag,
+            card_duration_seconds=card_duration,
+            match_fps=match_fps,
+            audio_match=audio_match,
+        )
+        if title:
+            titlecard_temps.append(title)
+        end = get_or_build_endcard(
+            resolution,
+            cancel_flag=cancel_flag,
+            card_duration_seconds=card_duration,
+            match_fps=match_fps,
+            audio_match=audio_match,
+        )
+        return (title, end)
+
     try:
         if copy_safe:
-            titlecard_path = build_titlecard_frame(
-                clip,
-                resolution,
-                cancel_flag=cancel_flag,
-                card_duration_seconds=card_duration,
-                match_fps=match_fps,
-                audio_match=audio_match,
-            )
-            if titlecard_path:
-                titlecard_temps.append(titlecard_path)
-            endcard_path = get_or_build_endcard(
-                resolution,
-                cancel_flag=cancel_flag,
-                card_duration_seconds=card_duration,
-                match_fps=match_fps,
-                audio_match=audio_match,
-            )
+            titlecard_path, endcard_path = _build_cards(match_fps, audio_match)
             if not titlecard_path and not endcard_path:
-                # No cards built, keep clip
-                return (True, False)
+                return (True, False)  # No cards built, keep clip
 
             segments = [p for p in (titlecard_path, clip_path, endcard_path) if p]
             with tempfile.NamedTemporaryFile(
@@ -709,22 +703,9 @@ def wrap_clip_with_cards(
             )
 
         # Fallback: re-encode the whole clip
-        titlecard_path = build_titlecard_frame(
-            clip,
-            resolution,
-            cancel_flag=cancel_flag,
-            card_duration_seconds=card_duration,
-        )
-        if titlecard_path:
-            titlecard_temps.append(titlecard_path)
-        endcard_path = get_or_build_endcard(
-            resolution,
-            cancel_flag=cancel_flag,
-            card_duration_seconds=card_duration,
-        )
+        titlecard_path, endcard_path = _build_cards(None, None)
         if not titlecard_path and not endcard_path:
-            # No cards built, keep clip
-            return (True, False)
+            return (True, False)  # No cards built, keep clip
 
         input_args, filter_complex, map_args = _build_wrap_filter_and_inputs(
             titlecard_path=titlecard_path,

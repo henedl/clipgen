@@ -14,19 +14,19 @@
     loadTranscript = TS.loadTranscript,
     loadParticipants = TS.loadParticipants,
     pollTaskStatus = TS.pollTaskStatus,
-    startPolling = TS.startPolling;
+    startPolling = TS.startPolling,
+    _tokenRuns = TS._tokenRuns,
+    segWordTiming = TS.segWordTiming,
+    enabledFor = TS.enabledFor,
+    latestTask = TS.latestTask,
+    _selectedParticipantRow = TS._selectedParticipantRow;
 
   function redactOn() {
     return !!(state.redaction && state.redaction.enabled && state.redaction.detected);
   }
 
-  // Null = no per-participant choice yet; follow the global default.
   function redactEnabledFor(p) {
-    var rd = p.redaction || {};
-    if (rd.enabled === null || rd.enabled === undefined) {
-      return !!CLIPGEN_CONFIG.transcribeRedact;
-    }
-    return !!rd.enabled;
+    return enabledFor(p.redaction, CLIPGEN_CONFIG.transcribeRedact);
   }
 
   // "GIVEN_NAME" -> "Given name"; no table to keep in sync with labels.json.
@@ -35,20 +35,6 @@
     if (!words[0]) return "";
     words[0] = words[0].charAt(0).toUpperCase() + words[0].slice(1);
     return words.join(" ");
-  }
-
-  // Tokens with their UTF-16 ranges, in the hub's split(/(\s+)/) order.
-  function _tokenRuns(text) {
-    var tokens = text.split(/(\s+)/);
-    var runs = [];
-    var pos = 0;
-    for (var i = 0; i < tokens.length; i++) {
-      var tok = tokens[i];
-      if (!tok) continue;
-      runs.push({ text: tok, start: pos, end: pos + tok.length, space: /^\s+$/.test(tok) });
-      pos += tok.length;
-    }
-    return runs;
   }
 
   function _spanFor(spans, run) {
@@ -65,9 +51,7 @@
   function redactedTextHtml(seg) {
     var spans = seg.pii || [];
     var runs = _tokenRuns(seg.text);
-    var wordCount = 0;
-    for (var i = 0; i < runs.length; i++) if (!runs[i].space) wordCount++;
-    var segWords = (!seg.corrected && seg.words && seg.words.length === wordCount) ? seg.words : null;
+    var segWords = segWordTiming(seg, runs);
     var html = "";
     var wi = 0;
     var open = null; // {span, ws, we}
@@ -135,10 +119,14 @@
     pollTaskStatus();
   }
 
+  function _redactFailToast(data, fallback) {
+    showToast(data.reason === "model_missing" ? "Download the Redact model in Settings" : (data.error || fallback));
+  }
+
   function setRedactEnabled(pid, enabled) {
     return apiPut("api/redact/" + pid, { enabled: enabled }).then(function (data) {
       if (!data.ok) {
-        showToast(data.reason === "model_missing" ? "Download the Redact model in Settings" : (data.error || "Failed to update redaction"));
+        _redactFailToast(data, "Failed to update redaction");
         return loadParticipants();
       }
       _adoptTask(data.task);
@@ -154,7 +142,7 @@
   function regenerateRedact(pid) {
     return apiPost("api/redact/" + pid + "/regenerate", {}).then(function (data) {
       if (!data.ok) {
-        showToast(data.reason === "model_missing" ? "Download the Redact model in Settings" : (data.error || "Failed to start redaction"));
+        _redactFailToast(data, "Failed to start redaction");
         return;
       }
       _adoptTask(data.task);
@@ -173,24 +161,6 @@
   }
 
   // ---- Redact tab ----
-
-  function _participantRow() {
-    for (var i = 0; i < state.participants.length; i++) {
-      if (state.participants[i].id === state.selectedParticipant) return state.participants[i];
-    }
-    return null;
-  }
-
-  function _redactTask() {
-    var pid = state.selectedParticipant;
-    var latest = null;
-    for (var i = 0; i < state.tasks.length; i++) {
-      var t = state.tasks[i];
-      if (t.participant !== pid || t.kind !== "redact") continue;
-      if (!latest || t.created_at > latest.created_at) latest = t;
-    }
-    return latest;
-  }
 
   // One row per placeholder: label, surface, occurrences, weakest score, first segment.
   function _items() {
@@ -219,8 +189,8 @@
   function renderRedactPanel() {
     var tab = document.getElementById("redactTab");
     if (!tab) return;
-    var row = _participantRow();
-    var task = _redactTask();
+    var row = _selectedParticipantRow();
+    var task = latestTask(state.selectedParticipant, "redact");
     var live = !!task && (task.status === "running" || task.status === "queued");
     var enabled = row ? redactEnabledFor(row) : false;
     var modelOk = state.redactModel !== false;
@@ -321,24 +291,15 @@
     }
   }
 
-  var _downloadPoller = null;
+  var _downloading = false;
   function _pollDownload() {
-    if (_downloadPoller) return;
-    var misses = 0;
-    _downloadPoller = createPoller(function () {
-      return apiGet("/api/models/redact/download-status").then(function (st) {
-        if (!st || !st.ok || !st.found) {
-          if (++misses >= 20) { _downloadPoller.stop(); _downloadPoller = null; _setDownloadUi({ done: true, succeeded: false }); }
-          return;
-        }
-        misses = 0;
-        _setDownloadUi(st);
-        if (st.done) { _downloadPoller.stop(); _downloadPoller = null; }
-      }).catch(function () {
-        if (++misses >= 20) { _downloadPoller.stop(); _downloadPoller = null; _setDownloadUi({ done: true, succeeded: false }); }
+    if (_downloading) return;
+    _downloading = true;
+    pollDownloadStatus("/api/models/redact/download-status", _setDownloadUi, { label: "transcripts.redactDownload" })
+      .then(function (st) {
+        _downloading = false;
+        if (!st) _setDownloadUi({ done: true, succeeded: false });
       });
-    }, 1000, { runImmediately: true, label: "transcripts.redactDownload" });
-    _downloadPoller.start();
   }
 
   function startModelDownload() {
@@ -389,7 +350,7 @@
     apiGet("/api/models").then(function (data) {
       var rd = data && data.redact;
       if (!rd) return;
-      document.getElementById("redactModelSize").textContent = "(" + (rd.size_mb || 0) + " MB)";
+      document.getElementById("redactModelSize").textContent = "(" + formatModelSize(rd.size_mb || 0) + ")";
       var lic = document.getElementById("redactLicenseLink");
       lic.textContent = rd.license || "model license";
       lic.href = rd.license_url || "#";
@@ -403,14 +364,8 @@
 
   TS.redactOn = redactOn;
   TS.renderRedactPanel = renderRedactPanel;
-  TS.setExcluded = setExcluded;
   TS.initRedact = initRedact;
-  TS.redactEnabledFor = redactEnabledFor;
-  TS.labelTitle = labelTitle;
   TS.redactedTextHtml = redactedTextHtml;
   TS.redactedPlainText = redactedPlainText;
   TS.displayText = displayText;
-  TS.setRedactEnabled = setRedactEnabled;
-  TS.regenerateRedact = regenerateRedact;
-  TS.stopRedact = stopRedact;
 })();

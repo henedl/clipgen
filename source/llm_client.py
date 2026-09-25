@@ -611,10 +611,7 @@ def _fail(message: str, details: list[str] | None = None) -> str:
     multi-line install guidance, not toast material.
     """
     _thread_state.last_error = message
-    if details:
-        utils.warning_print(message, details=details)
-    else:
-        utils.warning_print(message)
+    utils.warning_print(message, details=details)
     return message
 
 
@@ -973,6 +970,48 @@ def _generate_with_load_retry(
             time.sleep(_LOAD_RETRY_INTERVAL)
 
 
+def _generate_attempt(
+    body: dict[str, Any],
+    resolved_model: str,
+    cancel_event: threading.Event | None,
+    on_token: Callable[[str], None] | None,
+    *,
+    retried: bool = False,
+) -> str | None:
+    """One generate try; a first-try connection refusal propagates."""
+    suffix = " after retry" if retried else ""
+    try:
+        text = _generate_with_load_retry(body, cancel_event, on_token)
+        # Only success clears; None means _do_generate already recorded the reason.
+        if text is not None:
+            _record_failure(resolved_model, "")  # it works now; forget any mark
+            # A load retry can fail then succeed; drop that first reason.
+            take_last_error()
+        return text
+    except urllib.error.HTTPError as exc:
+        detail = _http_error_detail(exc)
+        # llama.cpp's wording for an unreadable model; other failures must not brand it.
+        if "failed to load" in detail.lower():
+            _record_failure(resolved_model, detail)
+        _fail(f"AI generate failed{suffix}: {detail}")
+        return None
+    except (urllib.error.URLError, OSError, http.client.HTTPException) as exc:
+        if cancel_event is not None and cancel_event.is_set():
+            return None
+        if retried:
+            _fail(f"AI generate failed after retry: {exc}")
+            return None
+        if _is_connection_refused(exc):
+            raise
+        _fail(f"AI generate failed (connection): {exc}")
+        return None
+    except (json.JSONDecodeError, KeyError, ValueError) as exc:
+        if cancel_event is not None and cancel_event.is_set():
+            return None
+        _fail(f"AI generate failed (response): {exc}")
+        return None
+
+
 def generate(
     prompt: str,
     *,
@@ -1022,65 +1061,17 @@ def generate(
     take_last_error()
 
     try:
-        text = _generate_with_load_retry(body, cancel_event, on_token)
-        # Only success clears; None means _do_generate already recorded the reason
-        # for the toast.
-        if text is not None:
-            _record_failure(resolved_model, "")  # it works now; forget any mark
-            # A load retry can fail then succeed; drop that first reason.
-            take_last_error()
-        return text
-    except urllib.error.HTTPError as exc:
-        detail = _http_error_detail(exc)
-        # llama.cpp's wording for an unreadable model; other failures must not brand
-        # it unusable.
-        if "failed to load" in detail.lower():
-            _record_failure(resolved_model, detail)
-        _fail(f"AI generate failed: {detail}")
-        return None
-    except (urllib.error.URLError, OSError, http.client.HTTPException) as exc:
-        if cancel_event is not None and cancel_event.is_set():
-            return None
-        if not _is_connection_refused(exc):
-            _fail(f"AI generate failed (connection): {exc}")
-            return None
-        # Connection refused — try to start the server and retry once.
+        return _generate_attempt(body, resolved_model, cancel_event, on_token)
+    except (urllib.error.URLError, OSError, http.client.HTTPException):
+        # Connection refused: start the server and retry once.
         if not start_server():
             # start_server records specific reasons; this covers a silent False.
             if not getattr(_thread_state, "last_error", ""):
                 _fail("The AI server is not running and would not start.")
             return None
-        try:
-            text = _generate_with_load_retry(body, cancel_event, on_token)
-            if text is not None:
-                _record_failure(resolved_model, "")
-                take_last_error()
-            return text
-        except urllib.error.HTTPError as retry_exc:
-            detail = _http_error_detail(retry_exc)
-            if "failed to load" in detail.lower():
-                _record_failure(resolved_model, detail)
-            _fail(f"AI generate failed after retry: {detail}")
-            return None
-        except (
-            urllib.error.URLError,
-            OSError,
-            http.client.HTTPException,
-        ) as retry_exc:
-            if cancel_event is not None and cancel_event.is_set():
-                return None
-            _fail(f"AI generate failed after retry: {retry_exc}")
-            return None
-        except (json.JSONDecodeError, KeyError, ValueError) as retry_exc:
-            if cancel_event is not None and cancel_event.is_set():
-                return None
-            _fail(f"AI generate failed (response): {retry_exc}")
-            return None
-    except (json.JSONDecodeError, KeyError, ValueError) as exc:
-        if cancel_event is not None and cancel_event.is_set():
-            return None
-        _fail(f"AI generate failed (response): {exc}")
-        return None
+        return _generate_attempt(
+            body, resolved_model, cancel_event, on_token, retried=True
+        )
 
 
 def _split_hf_ref(ref: str) -> tuple[str, str]:
@@ -1186,8 +1177,8 @@ def download_model(
     if not stream_download(
         url,
         target,
-        sha256=resolved["sha256"] or "",
-        size=int(resolved["size"] or 0),
+        sha256=resolved["sha256"],
+        size=resolved["size"],
         on_progress=on_progress,
     ):
         return False

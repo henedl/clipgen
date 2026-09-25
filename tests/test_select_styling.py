@@ -36,7 +36,7 @@ def test_select_caret_defined_in_both_themes():
     """The caret colour is baked into the data URI, so each theme needs its own."""
     css = read(TOKENS)
     assert "--select-caret:" in _theme_block(css, ":root {")
-    assert "--select-caret:" in _theme_block(css, 'html[data-theme="light"],')
+    assert "--select-caret:" in _theme_block(css, 'html[data-theme="light"] {')
 
 
 def test_select_caret_not_forked_by_page_css():
