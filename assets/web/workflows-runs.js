@@ -874,10 +874,6 @@
 
   // ---- Batch rendering ------------------------------------------------------
 
-  function batchCounts(batch) {
-    return batch.counts || {};
-  }
-
   function buildBatchCard(batch, expanded) {
     var card = el("div", "wf-batch-card");
     card.dataset.batchId = batch.id;
@@ -893,7 +889,7 @@
     ) {
       head.appendChild(el("span", "wf-run-reconnect cg-shimmer", "Reconnecting…"));
     }
-    var counts = batchCounts(batch);
+    var counts = batch.counts || {};
     var total = (batch.children || []).length;
     var done = counts.completed || 0;
     var parts = [done + "/" + total + " done"];

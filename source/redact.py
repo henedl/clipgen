@@ -440,16 +440,12 @@ def _snap(text: str, start: int, end: int) -> tuple[int, int]:
     return start, end
 
 
-def _ordered(spans: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    return sorted(
-        spans, key=lambda s: (s["start"], -(s["end"] - s["start"]), s["label"])
-    )
-
-
 def _merge_spans(spans: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Merge overlaps: same label unions, different labels keep the longer."""
     out: list[dict[str, Any]] = []
-    for span in _ordered(spans):
+    for span in sorted(
+        spans, key=lambda s: (s["start"], -(s["end"] - s["start"]), s["label"])
+    ):
         if not out or span["start"] >= out[-1]["end"]:
             out.append(dict(span))
         elif span["label"] == out[-1]["label"]:

@@ -324,7 +324,7 @@ def prompt_participant_selection(ctx: SheetContext) -> list[str] | None:
         if not selection:
             utils.info_print("Please enter one or more participant numbers or IDs.")
             continue
-        tokens = spreadsheet.parse_participant_selection(selection)
+        tokens = utils.split_selector_tokens(selection)
         if not tokens:
             utils.info_print(
                 "No valid participant(s) entered. Use + or , as separator."

@@ -1281,6 +1281,7 @@ def match_shape(
     threshold: float = 0.0,
     nms_overlap: float = 0.0,
     window: tuple[float, float, float, float] | None = None,
+    executor: Any = None,
 ) -> tuple[list[dict[str, Any]], float]:
     """Match a frame's edge ridge map against a prepared shape reference.
 
@@ -1299,20 +1300,6 @@ def match_shape(
         threshold-independent scalar calibration reads even on a miss
         (``-1.0`` when no scale was matchable).
     """
-    return _match_shape_scales(
-        frame_edges, prepared, threshold, nms_overlap, window=window
-    )
-
-
-def _match_shape_scales(
-    frame_edges: np.ndarray,
-    prepared: _PreparedShape,
-    threshold: float = 0.0,
-    nms_overlap: float = 0.0,
-    window: tuple[float, float, float, float] | None = None,
-    executor: Any = None,
-) -> tuple[list[dict[str, Any]], float]:
-    """Match prepared Shape rungs, optionally through an ordered executor."""
     if threshold <= 0.0:
         threshold = config.SCREENSPACE_SHAPE_MATCH_THRESHOLD
     if nms_overlap <= 0.0:

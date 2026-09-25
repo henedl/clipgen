@@ -24,7 +24,6 @@ from screenspace_primitives import (
     _frame_diff_mask_gray,
     _frame_is_static,
     _is_static_skip,
-    _match_shape_scales,
     blur_gray,
     _frame_edge_map,
     _match_template_prepared,
@@ -32,6 +31,7 @@ from screenspace_primitives import (
     _prepare_shape_reference,
     _prepare_template,
     _scale_template,
+    match_shape,
     region_search_window,
     color_matches,
     color_present,
@@ -933,7 +933,7 @@ def scan_shape(
         # Only matches centered inside the run region count (zero-size means anywhere).
         window = region_search_window(region, _cv_scale / scale_back)
         # The static check already converted the full frame; reuse it unless downscaled.
-        matches, _peak = _match_shape_scales(
+        matches, _peak = match_shape(
             _frame_edge_map(work_frame, curr_gray if scale_back == 1 else None),
             _prepared,
             threshold,

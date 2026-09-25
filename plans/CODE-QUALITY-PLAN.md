@@ -1,6 +1,6 @@
 # Code quality plan
 
-> **Status: Waves 1–2 done (2026-09-25); Wave 3 next.** 363 verified findings from an 11-slice review with adversarial verification (22 agents). About 7,500 lines are removable if every item lands. Each item carries its change and the verifier's note below it. Check items off as each batch lands.
+> **Status: Waves 1–3 done (2026-09-25); Wave 4 next.** 363 verified findings from an 11-slice review with adversarial verification (22 agents). About 7,500 lines are removable if every item lands. Each item carries its change and the verifier's note below it. Check items off as each batch lands.
 
 ## How to work a batch
 
@@ -452,54 +452,56 @@ Stale docstrings, debug leftovers, redundant guards, misplaced magic numbers.
 
 ## Wave 3: Inline single-use helpers (15 items, −139 lines)
 
+Done 2026-09-25: all items, no behavior change.
+
 ### Python
 
-- [ ] `server-11` server.py:345 Single-item append helpers duplicate the extend helpers (−8, low)
+- [x] `server-11` server.py:345 Single-item append helpers duplicate the extend helpers (−8, low)
   - Change: Delete _append_generated_artifact and _append_generated_reel. Call _extend_generated_artifacts([result]) at 2802 and _extend_generated_reels([reel_record]) at 3066. _extend_generated_reels then has two callers.
   - Verifier: _append_generated_artifact has one caller (2802) and _append_generated_reel has one (3066). No test references either. The extend variants have the same lock+index body, and their empty-list early return does not fire for a single-item list.
-- [ ] `server-13` server.py:3213 _derive_sheet_meta is a pure passthrough (−9, low)
+- [x] `server-13` server.py:3213 _derive_sheet_meta is a pure passthrough (−9, low)
   - Change: Delete _derive_sheet_meta and call files.derive_sheet_meta(worksheet) at 3683.
   - Verifier: The body is only `return files.derive_sheet_meta(worksheet)`, with a single caller at 3683 and no test references.
-- [ ] `transcripts-py-28` redact.py:443 Single-use _ordered sort helper (−3, low)
+- [x] `transcripts-py-28` redact.py:443 Single-use _ordered sort helper (−3, low)
   - Change: Inline the sorted(..., key=lambda s: (s['start'], -(s['end'] - s['start']), s['label'])) call into _merge_spans' for statement and delete _ordered.
   - Verifier: _ordered has one caller (redact.py:452, _merge_spans) and no test or registry references. The other grep hits are unrelated names (_parallel_map_ordered, _ordered_columns). Inlining the sorted() into the for statement reads fine.
-- [ ] `pipeline-py-31` files.py:512 _make_synthetic_clip_record has one caller and a stale cross-reference (−18, low)
+- [x] `pipeline-py-31` files.py:512 _make_synthetic_clip_record has one caller and a stale cross-reference (−18, low)
   - Change: Inline the record construction into build_clip_records' loop (605-619), which already passes every field through. Fix utils.py:1402 and 1415, which point readers to '_make_synthetic_clip_record in cli.py'. The function is in files.py.
   - Verifier: The one caller is files.py:607, and no test references the helper. utils.py:1402 and 1415 point to it 'in cli.py', which is wrong. After inlining, point those references at files.build_clip_records. No test matches that ValueError text.
-- [ ] `pipeline-py-26` titlecards.py:472 Tiny single-caller helpers _input_count and _audio_match_signature (−8, low)
+- [x] `pipeline-py-26` titlecards.py:472 Tiny single-caller helpers _input_count and _audio_match_signature (−8, low)
   - Change: In add_input, replace _input_count with a running counter (or `input_args.count('-i')`). Inline _audio_match_signature into get_or_build_endcard's cache-key line.
   - Verifier: _input_count is called only from add_input, and input_args.count('-i') replaces it. _audio_match_signature is called only from get_or_build_endcard at 433. Neither is referenced in tests/.
-- [ ] `screenspace-py-21` screenspace_manifest.py:242 _is_empty_screenspace_manifest is not any(payload.values()) (−10, low)
+- [x] `screenspace-py-21` screenspace_manifest.py:242 _is_empty_screenspace_manifest is not any(payload.values()) (−10, low)
   - Change: Inline at 298 as `if not any(payload.values()):`, since payload is built on 288-297 with exactly these six keys.
   - Verifier: There is one caller (save_screenspace_manifest). The payload literal defines the six keys the helper checks, sanitize_floats keeps the keys, and nothing in tests references the helper.
-- [ ] `screenspace-py-19` screenspace_primitives.py:1287 match_shape is a pure pass-through to _match_shape_scales (−20, low)
+- [x] `screenspace-py-19` screenspace_primitives.py:1287 match_shape is a pure pass-through to _match_shape_scales (−20, low)
   - Change: Give match_shape the executor kwarg and move the body of _match_shape_scales into it; scans.py:936 calls match_shape(..., executor=executor).
   - Verifier: match_shape only forwards to _match_shape_scales without executor. _match_shape_scales has one other source caller (scans.py 936) plus two test calls (test_shape.py 294/298) that pass executor. Moving the body into match_shape with an executor kwarg means updating those two test references and the scans import.
-- [ ] `screenspace-py-25` screenspace_worker.py:543 _generate_events_from_results method only forwards to the module function (−4, low)
+- [x] `screenspace-py-25` screenspace_worker.py:543 _generate_events_from_results method only forwards to the module function (−4, low)
   - Change: Call generate_events_from_results(t, raw) directly at 889 and delete the method; point the tests in test_manifest_events.py at the module function.
   - Verifier: The method body only returns generate_events_from_results(task, raw_results), and its one source caller is worker 889. The test_manifest_events.py calls (11 sites) invoke it directly, never monkeypatch it, and can call the module function instead.
-- [ ] `srv-4` workflows_server.py:450 _prune_run_sidecars: 3-line helper with one caller (−4, low)
+- [x] `srv-4` workflows_server.py:450 _prune_run_sidecars: 3-line helper with one caller (−4, low)
   - Change: Inline the rmtree loop into _persist_run's `if dropped:` block.
   - Verifier: _prune_run_sidecars has one caller (474) and tests do not patch it. It inlines into the existing `if dropped:` block as two lines.
-- [ ] `cli-core-43` spreadsheet.py:281 Pass-through wrappers with one-line bodies (−25, low) (revised)
+- [x] `cli-core-43` spreadsheet.py:281 Pass-through wrappers with one-line bodies (−25, low) (revised)
   - Change: Inline spreadsheet.parse_participant_selection (use utils.split_selector_tokens at spreadsheet.py:918, interactive.py:327, app.py:596, and update the comment at spreadsheet.py:495), utils._use_panels, utils.get_current_time and updater.request_quit (keep the function-local `import desktop` in finish_apply). Keep profiling._slug.
   - Verifier: parse_participant_selection (3 callers, bare return), _use_panels (1 caller), get_current_time (1 caller, a debug_print that finding 18 may delete) and request_quit (1 caller, no test patches it, and the lazy desktop import can move with it) are all safe to inline. profiling._slug is a named regex, and inlining it into an f-string path would read worse.
 
 ### JS
 
-- [ ] `screenspace-js-30` screenspace.js:1619 Frame step buttons reimplement _seekBy (−6, low)
+- [x] `screenspace-js-30` screenspace.js:1619 Frame step buttons reimplement _seekBy (−6, low)
   - Change: Replace the framePrev/frameNext bodies (1620-1622, 1626-1628) with _seekBy(-SEEK_STEP) and _seekBy(SEEK_STEP).
   - Verifier: _seekBy (2384-2387) is a function declaration in the same hub IIFE, so it is hoisted and visible to initFrameControls. Its body is what both framePrev and frameNext compute inline (1619-1629). The hotkey table already calls _seekBy(±SEEK_STEP).
-- [ ] `cwo-53` composer.js:80 Single-caller one-liners in the composer hub (−10, low) (revised)
+- [x] `cwo-53` composer.js:80 Single-caller one-liners in the composer hub (−10, low) (revised)
   - Change: Inline partForGlobal at 107 and onCancelExport at 1001. Keep refreshMarkerViews, publish it as CO.refreshMarkerViews, and replace the three guarded calls at composer-markers.js:59-61 with CO.refreshMarkerViews().
   - Verifier: partForGlobal (one caller at 107) and onCancelExport (one caller at 1001) are single-caller one-liners. refreshMarkerViews has one hub caller, but composer-markers.js:59-61 repeats the same updateTimelineHeight/renderTimeline/renderSidebar sequence, so it has a natural second caller.
-- [ ] `cwo-7` overview-metadata.js:49 parseSheetTimestamps is a pure pass-through wrapper (−4, low)
+- [x] `cwo-7` overview-metadata.js:49 parseSheetTimestamps is a pure pass-through wrapper (−4, low)
   - Change: Delete parseSheetTimestamps and call the parseClipTimestamps alias directly at its five call sites (lines 140, 274, 361, 421, 491).
   - Verifier: parseSheetTimestamps (lines 49-51) only returns parseClipTimestamps(cellValue, participant). parseClipTimestamps is the module var set in activate(), and all five callers run after activation.
-- [ ] `cwo-47` viewer.js:1875 onMarkerHover re-finds an artifact already in scope; pointless color alias (−7, low)
+- [x] `cwo-47` viewer.js:1875 onMarkerHover re-finds an artifact already in scope; pointless color alias (−7, low)
   - Change: In bindMarkerEvents, call showTooltipForArtifact(a, ev) directly and delete onMarkerHover (1875-1879). Replace SS_DETECTOR_COLORS (2150), which has one use at 1912, with DETECTOR_COLORS.
   - Verifier: onMarkerHover has one caller (1153) inside bindMarkerEvents(marker, a) and re-finds `a` by currentTarget.dataset.id, which that closure already holds. SS_DETECTOR_COLORS (2150) is `= DETECTOR_COLORS`, read once at 1912.
-- [ ] `cwo-57` workflows-runs.js:877 batchCounts wraps a single property read (−3, low)
+- [x] `cwo-57` workflows-runs.js:877 batchCounts wraps a single property read (−3, low)
   - Change: Replace the batchCounts(batch) call at 896 with `batch.counts || {}` and delete the helper.
   - Verifier: batchCounts (877) returns batch.counts || {} and has one caller at 896.
 

@@ -78,10 +78,6 @@
   // ---- Multi-part video ----
   // Global-seconds timeline over per-part playback; manifest part-start key is "offset".
 
-  function partForGlobal(g) {
-    return clipgenPartForGlobal(state.parts, g, "offset");
-  }
-
   function videoGlobalTime() {
     var video = qs("#coVideo");
     var part = state.parts[state.activePart];
@@ -104,7 +100,7 @@
     // *time* is GLOBAL; switch parts when needed, then seek the local offset.
     if (!state.parts.length) return;
     var g = clamp(time, 0, Math.max(0, state.duration - 0.001));
-    var i = partForGlobal(g);
+    var i = clipgenPartForGlobal(state.parts, g, "offset");
     var local = g - (state.parts[i].offset || 0);
     state.playhead = g;
     if (i !== state.activePart) {
@@ -494,6 +490,7 @@
     renderTimeline();
     renderSidebar();
   }
+  CO.refreshMarkerViews = refreshMarkerViews;
 
   // null resets the trim. Marker metadata lets Studio's Composer Intake render a card.
   function applyTrim(key, values, sourceSpan) {
@@ -935,12 +932,6 @@
 
   var _exporting = false;
 
-  // Harmless when idle: the next export clears the cancel event.
-  function onCancelExport() {
-    apiPost("api/export/cancel", {}).catch(function () {});
-    showToast("Cancelling export…");
-  }
-
   function exportSpan() {
     // Burn/GIF need a span: the selected cut wins, else the selected
     // annotation's own visibility span.
@@ -991,8 +982,12 @@
 
   function exportBurn(gif) {
     if (!state.participant) return;
-    // Re-click while an export runs = cancel it (the button reads "Cancel").
-    if (_exporting) { onCancelExport(); return; }
+    // A re-click during an export cancels it; the button reads "Cancel".
+    if (_exporting) {
+      apiPost("api/export/cancel", {}).catch(function () {});
+      showToast("Cancelling export…");
+      return;
+    }
     var span = exportSpan();
     if (!span) {
       showToast("Select a cut (or an annotation) to define the export span");

@@ -576,7 +576,7 @@ def _prompt_chronologic_participant_selection(
         if not selection:
             utils.info_print("Please enter one participant.")
             continue
-        tokens = spreadsheet.parse_participant_selection(selection)
+        tokens = utils.split_selector_tokens(selection)
         if len(tokens) != 1:
             utils.info_print("Please provide exactly one participant.")
             continue

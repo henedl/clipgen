@@ -816,7 +816,9 @@ def finish_apply() -> None:
                 else problem
             )
         return
-    request_quit()
+    import desktop
+
+    desktop.request_quit()
 
 
 def skip_version() -> bool:
@@ -830,13 +832,6 @@ def skip_version() -> bool:
         _status.update(phase="idle", skipped=tag, error=None)
     _save_state(skipped=tag)
     return True
-
-
-def request_quit() -> None:
-    """Close the desktop window so the process unwinds and exits."""
-    import desktop
-
-    desktop.request_quit()
 
 
 def reveal_download() -> bool:

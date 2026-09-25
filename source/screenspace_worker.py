@@ -540,11 +540,6 @@ class ScreenspaceWorker:
                 events.extend(t.pop("_generated_events", []))
         return events
 
-    def _generate_events_from_results(
-        self, task: dict[str, Any], raw_results: list[dict[str, Any]]
-    ) -> list[dict[str, Any]]:
-        return generate_events_from_results(task, raw_results)
-
     def _write_heatmap_gifs(
         self,
         task_id: str,
@@ -886,9 +881,7 @@ class ScreenspaceWorker:
                         t.pop("_progress_offset", None)
                         t.pop("_progress_scale", None)
                         raw = t.pop("_raw_results", [])
-                        t["_generated_events"] = self._generate_events_from_results(
-                            t, raw
-                        )
+                        t["_generated_events"] = generate_events_from_results(t, raw)
                         if isinstance(result, list) and result:
                             # Defer heavy heatmap I/O outside the lock so reads
                             # and cancels stay responsive.

@@ -1605,17 +1605,8 @@
       if (e.key === "Enter") input.blur();
     });
 
-    qs("#framePrev").addEventListener("click", function () {
-      if (!state.videoInfo) return;
-      var ts = clamp(state.currentTimestamp - SEEK_STEP, 0, Math.max(0, state.videoInfo.duration - 0.001));
-      loadFrame(ts);
-    });
-
-    qs("#frameNext").addEventListener("click", function () {
-      if (!state.videoInfo) return;
-      var ts = clamp(state.currentTimestamp + SEEK_STEP, 0, Math.max(0, state.videoInfo.duration - 0.001));
-      loadFrame(ts);
-    });
+    qs("#framePrev").addEventListener("click", function () { _seekBy(-SEEK_STEP); });
+    qs("#frameNext").addEventListener("click", function () { _seekBy(SEEK_STEP); });
   }
 
   // ---- Video playback ----

@@ -341,22 +341,11 @@ def _extend_generated_artifacts(artifacts: list[dict[str, Any]]) -> None:
             _index_artifact(a)
 
 
-def _append_generated_artifact(artifact: dict[str, Any]) -> None:
-    with _generated_output_lock:
-        _generated_artifacts.append(artifact)
-        _index_artifact(artifact)
-
-
 def _extend_generated_reels(reels: list[dict[str, Any]]) -> None:
     if not reels:
         return
     with _generated_output_lock:
         _generated_reels.extend(reels)
-
-
-def _append_generated_reel(reel: dict[str, Any]) -> None:
-    with _generated_output_lock:
-        _generated_reels.append(reel)
 
 
 def _release_busy(slot: str, token: str | None = None) -> None:
@@ -2750,7 +2739,7 @@ def api_generate_intake() -> FlaskResponse:
                 pass
             return json.dumps({"index": idx, "ok": False, "error": "cancelled"}) + "\n"
         if ok:
-            _append_generated_artifact(result)
+            _extend_generated_artifacts([result])
             return json.dumps({"index": idx, "ok": True, "artifact": result}) + "\n"
         return json.dumps({"index": idx, "ok": False, "error": error}) + "\n"
 
@@ -3011,7 +3000,7 @@ def api_reel_direct() -> FlaskResponse:
                     "titlecardImage": direct_title_img,
                     "endcardImage": direct_end_img,
                 }
-                _append_generated_reel(reel_record)
+                _extend_generated_reels([reel_record])
                 _save_manifest_quiet()
                 emit_event({"ok": True, "generated": 1, "reels": [reel_record]})
             else:
@@ -3156,16 +3145,6 @@ def _init_studio_state(worksheet: Any) -> None:
 
 
 # ---- Entry point ----
-
-
-def _derive_sheet_meta(worksheet: Any) -> dict[str, str] | None:
-    """Return ``{type, id_or_path, label}`` for a CLI-loaded worksheet.
-
-    Used so the Start overlay's spreadsheet picker can show the currently
-    loaded sheet when the overlay is opened on a session that was launched
-    from the CLI (not via the runtime ``/api/spreadsheets/open`` endpoint).
-    """
-    return files.derive_sheet_meta(worksheet)
 
 
 def _spreadsheet_label() -> str:
@@ -3625,7 +3604,7 @@ def _init_combined_state(
         sys.exit(1)
     # CLI launches seed the meta and recents here; /api/spreadsheets/open does it itself.
     global _active_sheet_meta
-    _active_sheet_meta = _derive_sheet_meta(worksheet)
+    _active_sheet_meta = files.derive_sheet_meta(worksheet)
     # Before the sibling initialisers below, which resolve participants.
     _seed_filename_overrides(_active_sheet_meta)
     if gspread_client is not None:

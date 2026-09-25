@@ -405,13 +405,6 @@ def build_endcard_frame(
     )
 
 
-def _audio_match_signature(audio_match: dict | None) -> str:
-    """Cache-key fragment identifying an endcard's silent-audio params (or none)."""
-    if not audio_match:
-        return "noaudio"
-    return f"{audio_match.get('sample_rate')}:{audio_match.get('channel_layout')}"
-
-
 def get_or_build_endcard(
     resolution: str,
     *,
@@ -430,7 +423,11 @@ def get_or_build_endcard(
     endcard_id = config.ENDCARD_IMAGE or "__default__"
     if config.ENDCARD_IMAGE == config.CARD_IMAGE_COLOR:
         endcard_id = endcard_id + config.ENDCARD_COLOR
-    audio_sig = _audio_match_signature(audio_match)
+    audio_sig = (
+        f"{audio_match.get('sample_rate')}:{audio_match.get('channel_layout')}"
+        if audio_match
+        else "noaudio"
+    )
     fps_sig = f"{match_fps:g}" if match_fps else "nofps"
     cache_key = f"{resolution}:{duration}:{endcard_id}:{fps_sig}:{audio_sig}"
     with _endcard_lock:
@@ -469,11 +466,6 @@ def clear_endcard_cache() -> None:
         _endcard_flights.clear()
 
 
-def _input_count(input_args: list[str]) -> int:
-    """Return the number of ffmpeg -i inputs present in *input_args*."""
-    return sum(1 for tok in input_args if tok == "-i")
-
-
 def _build_wrap_filter_and_inputs(
     *,
     titlecard_path: str | None,
@@ -495,7 +487,7 @@ def _build_wrap_filter_and_inputs(
     audio_labels: list[str] = []
 
     def add_input(args: list[str]) -> int:
-        idx = _input_count(input_args)
+        idx = input_args.count("-i")
         input_args.extend(args)
         return idx
 

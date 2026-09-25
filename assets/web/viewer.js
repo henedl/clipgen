@@ -1149,7 +1149,7 @@
 
   function bindMarkerEvents(marker, a) {
     marker.addEventListener("mouseenter", function (ev) {
-      onMarkerHover(ev);
+      showTooltipForArtifact(a, ev);
       clearTimeout(_hoverDebounce);
       var target = ev.currentTarget;
       var cx = ev.clientX;
@@ -1869,12 +1869,6 @@
 
   // ---- Tooltip ----
 
-  function onMarkerHover(ev) {
-    var id = ev.currentTarget.dataset.id;
-    var a = findArtifact(id);
-    if (a) showTooltipForArtifact(a, ev);
-  }
-
   function showTooltipForArtifact(a, ev) {
     var tip = qs("#tooltip");
     if (!tip) return;
@@ -1906,7 +1900,7 @@
   function showTooltipForScreenspaceCluster(c, ev) {
     var tip = qs("#tooltip");
     if (!tip) return;
-    var color = SS_DETECTOR_COLORS[c.type] || "#888";
+    var color = DETECTOR_COLORS[c.type] || "#888";
     var avgConf = c.count > 0 ? (c.confSum / c.count) : 0;
 
     tip.innerHTML = "";
@@ -2143,8 +2137,6 @@
   }
 
   // ---- Screenspace track ----
-
-  var SS_DETECTOR_COLORS = DETECTOR_COLORS;
 
   var SS_DETECTOR_ICON_PATHS = {
     multitool: { viewBox: "0 0 16 16", paths: [

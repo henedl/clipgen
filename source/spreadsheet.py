@@ -44,6 +44,7 @@ Clip record (returned by generation functions):
 import re
 from collections.abc import Sequence
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Any, Literal, NamedTuple
 
 import config
@@ -192,7 +193,9 @@ def build_sheet_context(sheet: Any) -> SheetContext | None:
     Returns None if validation fails (missing headers, empty sheet, no participants).
     """
     sheet_data = google_api.get_sheet_values(sheet)
-    utils.debug_print(f"Sheet dumped into memory at {utils.get_current_time()}")
+    utils.debug_print(
+        f"Sheet dumped into memory at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+    )
 
     if len(sheet_data) <= 1:
         utils.error_print(
@@ -276,21 +279,6 @@ def get_participant_list(
             if participant_id:
                 participants.append(participant_id)
     return participants
-
-
-def parse_participant_selection(input_str: str) -> list[str]:
-    """Parse a participant selection string into a list of IDs.
-
-    Splits on + or , and returns non-empty stripped tokens.
-
-    Args:
-        input_str: User input (e.g. "P01 + P03" or "P01, P03" or "1, 3")
-
-    Returns:
-        List of participant ID strings (e.g. ['P01', 'P03'])
-    """
-    # Support both + and , as separators
-    return utils.split_selector_tokens(input_str)
 
 
 def parse_cell_specifications(cell_input: str) -> list[tuple[str, int]]:
@@ -473,7 +461,7 @@ def detect_mode_from_input(input_string: str) -> tuple[str | None, dict[str, Any
     if has_cells:
         return ("cell", {"cell_specs": parsed["cells"]})
     if has_participants:
-        # participant_id is a string that parse_participant_selection() will parse
+        # utils.split_selector_tokens() splits this string later.
         participant_id = ",".join(parsed["participants"])
         return ("participant", {"participant_id": participant_id})
 
@@ -858,7 +846,7 @@ def generate_list(
         available_list = get_participant_list(
             ctx.header_row, ctx.id_cell, ctx.num_participants
         )
-        participant_ids = parse_participant_selection(participant_id)
+        participant_ids = utils.split_selector_tokens(participant_id)
         if not participant_ids:
             utils.error_print(
                 "No participant ID(s) provided.",

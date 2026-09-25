@@ -56,9 +56,7 @@
       m.trimmed = true;
     });
     state.markers[source] = markers;
-    if (CO.updateTimelineHeight) CO.updateTimelineHeight();
-    if (CO.renderTimeline) CO.renderTimeline();
-    CO.renderSidebar();
+    CO.refreshMarkerViews();
   }
 
   // Sheet: one marker per timestamp pair, baseline-converted like Studio/Convergence.

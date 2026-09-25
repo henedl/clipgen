@@ -217,11 +217,6 @@ def _use_rich() -> bool:
     return RICH_AVAILABLE and console is not None and config.RICH_COLORS
 
 
-def _use_panels() -> bool:
-    """Check if Rich panels should be used for errors/warnings/success."""
-    return config.RICH_PANELS
-
-
 def use_progress() -> bool:
     """Check if Rich progress bars should be used."""
     return RICH_AVAILABLE and console is not None and config.RICH_PROGRESS
@@ -278,7 +273,7 @@ def _styled_print(
             for detail in details:
                 content.append(f"\n  {detail}", style=details_style)
 
-        if panel_border_style and _use_panels():
+        if panel_border_style and config.RICH_PANELS:
             console.print(
                 Panel(content, border_style=panel_border_style, padding=(0, 1))
             )
@@ -1370,7 +1365,7 @@ def build_artifact_record(
 ) -> dict[str, Any]:
     """Build one artifact dict; its id needs a unique cell (row, col).
 
-    Synthetic records mint negative rows via ``files._make_synthetic_clip_record``.
+    Synthetic records get negative rows from ``files.build_clip_records``.
     """
     cell = clip.get("cell")
     cell_row = getattr(cell, "row", None)
@@ -1379,8 +1374,7 @@ def build_artifact_record(
         raise ValueError(
             "build_artifact_record requires a cell with row and col; "
             "synthetic records must use a unique (row, col) pair — see "
-            "files._make_synthetic_clip_record for the negative-row "
-            "convention."
+            "files.build_clip_records for the negative-row convention."
         )
     # A cell's clip, screenshot and GIF must not share an id.
     type_suffix = "" if artifact_type == "clip" else f"-{artifact_type}"
@@ -2212,15 +2206,6 @@ def format_filesize(size_bytes: float, precision: int = 2) -> str:
         suffix_index += 1
         size_bytes = size_bytes / 1024
     return f"{size_bytes:.{precision}f}{suffixes[suffix_index]}"
-
-
-def get_current_time() -> str:
-    """Get current time as formatted string.
-
-    Returns:
-        Current time in format 'YYYY-MM-DD HH:MM:SS'
-    """
-    return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
 
 # ISO 639-1 -> 639-2/T for every Whisper language. /T deliberately: players want

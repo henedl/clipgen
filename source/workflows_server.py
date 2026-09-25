@@ -446,13 +446,6 @@ def _trim_run_history(runs: list[dict[str, Any]]) -> list[str]:
     return dropped_ids
 
 
-def _prune_run_sidecars(run_ids: list[str]) -> None:
-    """Delete the per-node result sidecar dirs for evicted runs (best-effort)."""
-    base = utils.get_effective_output_dir()
-    for rid in run_ids:
-        shutil.rmtree(workflows.run_results_dir(base, rid), ignore_errors=True)
-
-
 def _persist_run(snapshot: dict[str, Any] | None) -> None:
     """Upsert a run snapshot into the manifest history (capped, most-recent kept)."""
     if not snapshot:
@@ -468,9 +461,11 @@ def _persist_run(snapshot: dict[str, Any] | None) -> None:
             runs[idx] = snapshot
         dropped = _trim_run_history(runs)
         _persist_locked()
-    # Outside the manifest lock — filesystem cleanup mustn't hold it.
+    # Delete evicted runs' sidecar dirs outside the manifest lock.
     if dropped:
-        _prune_run_sidecars(dropped)
+        base = utils.get_effective_output_dir()
+        for rid in dropped:
+            shutil.rmtree(workflows.run_results_dir(base, rid), ignore_errors=True)
 
 
 def _sse_run_payload(run_id: str) -> str:

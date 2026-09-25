@@ -6,6 +6,7 @@ import re
 import threading
 import unicodedata
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import config
@@ -506,47 +507,6 @@ _WORKFLOW_CELL_COL = 3  # synthetic cell column for Workflows clip artifacts
 # Distinct column: 1 = --ss-clips, 2 = --transcript-clips, so ids can't collide.
 
 
-def _make_synthetic_clip_record(
-    *,
-    cluster_idx: int,
-    cell_col: int,
-    study: str,
-    participant: str,
-    desc: str,
-    category: str,
-    severity: str,
-    start_seconds: float,
-    end_seconds: float,
-    source_filename: str,
-) -> ClipRecord:
-    """Build a ClipRecord with synthetic cell + pre-filled times.
-
-    Uses negative cell rows (unreachable for real spreadsheets) and a per-mode
-    column to namespace artifact ids. The pre-filled ``times`` triggers the
-    fast path in :func:`prepare_clip` so the cell value is never read.
-    """
-    from types import SimpleNamespace
-
-    start_ts = utils.seconds_to_timestamp(int(start_seconds), force_hours=True)
-    end_ts = utils.seconds_to_timestamp(
-        max(int(end_seconds), int(start_seconds) + 1), force_hours=True
-    )
-    cell = SimpleNamespace(value="", row=-(cluster_idx + 1), col=cell_col)
-    record: ClipRecord = {
-        "cell": cell,
-        "desc": desc,
-        "study": study,
-        "participant": participant,
-        "category": category,
-        "severity": severity,
-        "times": [(start_ts, end_ts)],
-        "source_filename": source_filename,
-        "cell_annotations": [],
-        "segment_annotations": {},
-    }
-    return record
-
-
 def build_clip_records(
     *,
     participant: str,
@@ -600,19 +560,25 @@ def build_clip_records(
 
     records: list[ClipRecord] = []
     for idx, (start_s, end_s) in enumerate(ranges):
+        # Negative rows never collide with real sheet cells.
+        cell = SimpleNamespace(value="", row=-(cell_row_base + idx + 1), col=cell_col)
+        start_ts = utils.seconds_to_timestamp(int(start_s), force_hours=True)
+        end_ts = utils.seconds_to_timestamp(
+            max(int(end_s), int(start_s) + 1), force_hours=True
+        )
         records.append(
-            _make_synthetic_clip_record(
-                cluster_idx=cell_row_base + idx,
-                cell_col=cell_col,
-                study=study,
-                participant=participant,
-                desc=description,
-                category=category,
-                severity=severity,
-                start_seconds=start_s,
-                end_seconds=end_s,
-                source_filename=source_filename,
-            )
+            {
+                "cell": cell,
+                "desc": description,
+                "study": study,
+                "participant": participant,
+                "category": category,
+                "severity": severity,
+                "times": [(start_ts, end_ts)],
+                "source_filename": source_filename,
+                "cell_annotations": [],
+                "segment_annotations": {},
+            }
         )
     return records
 

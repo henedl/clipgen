@@ -47,10 +47,6 @@
     return (state.sheetData && state.sheetData.study) || "study";
   }
 
-  function parseSheetTimestamps(cellValue, participant) {
-    return parseClipTimestamps(cellValue, participant);
-  }
-
   // --- Participant helpers ---
 
   function getAllParticipants() {
@@ -138,7 +134,7 @@
         var pid = participants[p];
         var cell = rows[r].cells[pid];
         if (cell && cell.valid) {
-          cov[pid].sheet += parseSheetTimestamps(cell.value, pid).length;
+          cov[pid].sheet += parseClipTimestamps(cell.value, pid).length;
         }
       }
     }
@@ -272,7 +268,7 @@
       for (var p = 0; p < participants.length; p++) {
         var cell = row.cells[participants[p]];
         if (!cell || !cell.valid) continue;
-        var segs = parseSheetTimestamps(cell.value, participants[p]);
+        var segs = parseClipTimestamps(cell.value, participants[p]);
         for (var s = 0; s < segs.length; s++) {
           if (segs[s].startSeconds < earliest) earliest = segs[s].startSeconds;
           var endSec = segs[s].startSeconds + segs[s].duration;
@@ -359,7 +355,7 @@
         var cell = rows[r].cells[pid];
         if (cell && cell.valid) {
           sheetValid++;
-          sheetTs += parseSheetTimestamps(cell.value, pid).length;
+          sheetTs += parseClipTimestamps(cell.value, pid).length;
         }
       }
       var ssEvents = 0;
@@ -419,7 +415,7 @@
       for (var p = 0; p < participants.length; p++) {
         var cell = rows[r].cells[participants[p]];
         if (cell && cell.valid) {
-          var segs = parseSheetTimestamps(cell.value, participants[p]);
+          var segs = parseClipTimestamps(cell.value, participants[p]);
           for (var s = 0; s < segs.length; s++) {
             allTimes.push({ time: segs[s].startSeconds, stream: "sheet" });
           }
@@ -489,7 +485,7 @@
         var pid = participants[p];
         var cell = rows[r].cells[pid];
         if (!cell || !cell.valid) continue;
-        var segs = parseSheetTimestamps(cell.value, pid);
+        var segs = parseClipTimestamps(cell.value, pid);
         for (var s = 0; s < segs.length; s++) {
           shByP[pid].push({ start: segs[s].startSeconds, end: segs[s].startSeconds + segs[s].duration });
         }
