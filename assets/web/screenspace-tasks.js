@@ -111,6 +111,17 @@
     crumbEl.style.color = taskTypeColor(task.type);
   }
 
+  // Select a task and show its results, switching participant if needed.
+  function selectTaskResults(task) {
+    if (task.participant && task.participant !== state.selectedParticipant) {
+      selectParticipant(task.participant);
+    }
+    state.selectedTaskId = task.id;
+    setRightPaneTab("results");
+    SS.loadAndShowResults(task.id);
+    renderTaskList();
+  }
+
   function openResultsSwitcher() {
     var panel = qs("#resultsSwitcherPanel");
     if (!panel) return;
@@ -138,17 +149,9 @@
         }
         item.addEventListener("click", function (e) {
           e.stopPropagation();
-          var taskId = t.id;
           closeResultsSwitcher();
-          var task = findTask(taskId);
-          if (!task) return;
-          if (task.participant && task.participant !== state.selectedParticipant) {
-            selectParticipant(task.participant);
-          }
-          state.selectedTaskId = taskId;
-          setRightPaneTab("results");
-          SS.loadAndShowResults(taskId);
-          renderTaskList();
+          var task = findTask(t.id);
+          if (task) selectTaskResults(task);
         });
         frag.appendChild(item);
       });
@@ -256,13 +259,7 @@
           updateResultsCrumb();
           setRightPaneTab("queue");
         } else {
-          if (task.participant && task.participant !== state.selectedParticipant) {
-            selectParticipant(task.participant);
-          }
-          state.selectedTaskId = taskId;
-          setRightPaneTab("results");
-          SS.loadAndShowResults(taskId);
-          renderTaskList();
+          selectTaskResults(task);
         }
       }
     });
@@ -492,6 +489,7 @@
     }
 
     // Select region
+    var regionRestored = true;
     if (task.region_ref) {
       var restoredRef = normalizeRegionRef(task.region_ref);
       state.runRegions = restoredRef ? [restoredRef] : [];
@@ -503,15 +501,15 @@
       } else {
         state.activeRegion = null;
       }
-      renderRegionChips();
-      renderRunRegionPicker();
-      renderOverlay();
-      updateRegionButtons();
     } else if (task.region && state.regions[task.region]) {
       state.activeRegion = task.region;
       state.pendingRegion = null;
       state.runRegions = [activeRegionRef(task.region)];
       state.runRegionsSeeded = false;
+    } else {
+      regionRestored = false;
+    }
+    if (regionRestored) {
       renderRegionChips();
       renderRunRegionPicker();
       renderOverlay();
@@ -559,6 +557,13 @@
     state.suppressCalibrationRefresh = false;
 
     params = task.parameters || {};
+    if ((task.type === "template" || task.type === "shape") && params.reference_timestamp !== undefined) {
+      state.referenceTimestamp = params.reference_timestamp;
+      // Re-arm the capture region (name only) so a re-run samples the same region.
+      state.capturedRefPreview = params.reference_region
+        ? { region: params.reference_region, ts: params.reference_timestamp, dataUrl: null }
+        : null;
+    }
     if (task.type === "multitool") {
       setInputValue("#paramMultitoolInterval", numberOrDefault(params.interval, 1.0));
     } else if (task.type === "color") {
@@ -624,26 +629,12 @@
         setInputValue("#paramTlSampleInterval", params.sample_interval);
       }
     } else if (task.type === "template") {
-      if (params.reference_timestamp !== undefined) {
-        state.referenceTimestamp = params.reference_timestamp;
-        // Re-arm the capture region (name only) so a re-run samples the same region.
-        state.capturedRefPreview = params.reference_region
-          ? { region: params.reference_region, ts: params.reference_timestamp, dataUrl: null }
-          : null;
-      }
       setInputValue("#paramTemplateThresh", numberOrDefault(params.threshold, 0.70));
       setInputValue("#paramTemplateInterval", numberOrDefault(params.interval, 1.0));
       if (params.template_scale) {
         setInputValue("#paramTemplateScale", Math.round(params.template_scale * 100));
       }
     } else if (task.type === "shape") {
-      if (params.reference_timestamp !== undefined) {
-        state.referenceTimestamp = params.reference_timestamp;
-        // Re-arm the capture region (name only) so a re-run samples the same region.
-        state.capturedRefPreview = params.reference_region
-          ? { region: params.reference_region, ts: params.reference_timestamp, dataUrl: null }
-          : null;
-      }
       setInputValue("#paramShapeThresh", numberOrDefault(params.threshold, 0.55));
       if (params.scale_min) {
         setInputValue("#paramShapeScaleMin", Math.round(params.scale_min * 100));

@@ -186,6 +186,12 @@ def get_num_participants(header_row: list[str], id_cell: Any, col_count: int) ->
     return num_participants
 
 
+def is_excel_worksheet(worksheet: Any) -> bool:
+    """Return True if worksheet is the Excel adapter (local file, no URL)."""
+    spread = getattr(worksheet, "spreadsheet", None)
+    return spread is not None and getattr(spread, "url", None) is None
+
+
 def build_sheet_context(sheet: Any) -> SheetContext | None:
     """Validate headers, load sheet data, and build a SheetContext.
 
@@ -731,6 +737,25 @@ def _data_rows(
     first = ctx.first_data_row_idx if start is None else start
     last = len(ctx.sheet_data) if end is None else end
     return (i for i in range(first, last) if i != ctx.filename_row_idx)
+
+
+def iter_data_rows(ctx: SheetContext) -> Iterator[tuple[int, list[str], str, str]]:
+    """Yield (row_idx, row_data, observation, severity), skipping baseline and filename rows."""
+    obs_col = ctx.observation_cell.col - 1
+    sev_col = ctx.severity_cell.col - 1 if ctx.severity_cell else None
+    for row_idx in _data_rows(ctx):
+        if row_idx == ctx.baseline_row_idx:
+            continue
+        row_data = ctx.sheet_data[row_idx]
+        observation = row_data[obs_col] if obs_col < len(row_data) else ""
+        severity = ""
+        if (
+            sev_col is not None
+            and sev_col < len(row_data)
+            and row_data[sev_col].strip()
+        ):
+            severity = utils.normalize_severity(row_data[sev_col])
+        yield row_idx, row_data, observation, severity
 
 
 def collect_annotations(ctx: SheetContext) -> tuple[list[str], dict[str, int]]:

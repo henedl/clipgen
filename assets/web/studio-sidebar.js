@@ -4,7 +4,7 @@
  * keyword / severity filters, the view switcher, the collapse toggle, and
  * their persistence. Loads right after the hub and destructures its grid
  * helpers at load; the hub keeps same-named delegators for its own call
- * sites. Function bodies are unchanged from the hub.
+ * sites.
  */
 (function () {
   "use strict";
@@ -147,6 +147,13 @@
     return n;
   }
 
+  // The tail every sidebar filter click ends with.
+  function commitFilterChange() {
+    persistSidebarFilters();
+    renderSidebar();
+    renderGrid();
+  }
+
   function renderSidebar() {
     var sidebar = qs("#studioSidebar");
     if (!sidebar) return;
@@ -178,6 +185,26 @@
         if (c && c.valid) partCounts[participants[j]] += 1;
       }
     }
+
+    renderViews(sidebar, d);
+    renderCategories(sidebar, catCounts);
+    renderSeverity(sidebar, d, sevCounts);
+    renderKeywords(sidebar, kwCounts);
+
+    // FUNCTION — min/max inputs gated on the header's activeFunction picker.
+    var fnBody = sidebar.querySelector('[data-target="function"]');
+    if (fnBody) {
+      fnBody.innerHTML = "";
+      fnBody.appendChild(buildSidebarFunctionRange());
+    }
+
+    renderParticipants(sidebar, participants);
+  }
+
+  // VIEWS rows; active derives from state.filters.severities so pills re-highlight views.
+  function renderViews(sidebar, d) {
+    var viewsBody = sidebar.querySelector('[data-target="views"]');
+    if (!viewsBody) return;
     function countRowsBySeverities(severities) {
       if (!severities || severities.length === 0) return d.rows.length;
       var n = 0;
@@ -196,151 +223,124 @@
       return true;
     }
 
-    // VIEWS rows; active derives from state.filters.severities so pills re-highlight views.
-    var viewsBody = sidebar.querySelector('[data-target="views"]');
-    if (viewsBody) {
-      viewsBody.innerHTML = "";
-      SIDEBAR_VIEWS.forEach(function (view) {
-        var viewSevs = view.severities || [];
-        var count = view.id === "all" ? d.rows.length : countRowsBySeverities(viewSevs);
-        viewsBody.appendChild(createSidebarRow({
-          label: view.label,
-          count: count,
-          active: severitiesEqual(viewSevs, state.filters.severities),
-          onClick: function () {
-            applySidebarView(view.id);
-            persistSidebarFilters();
-            renderSidebar();
-            renderGrid();
-          },
-        }));
-      });
-    }
+    viewsBody.innerHTML = "";
+    SIDEBAR_VIEWS.forEach(function (view) {
+      var viewSevs = view.severities || [];
+      var count = view.id === "all" ? d.rows.length : countRowsBySeverities(viewSevs);
+      viewsBody.appendChild(createSidebarRow({
+        label: view.label,
+        count: count,
+        active: severitiesEqual(viewSevs, state.filters.severities),
+        onClick: function () {
+          applySidebarView(view.id);
+          commitFilterChange();
+        },
+      }));
+    });
+  }
 
-    // CATEGORIES — vertical-list rows with counts and category-hue dots.
+  // CATEGORIES — vertical-list rows with counts and category-hue dots.
+  function renderCategories(sidebar, catCounts) {
     var catsBody = sidebar.querySelector('[data-target="categories"]');
-    if (catsBody) {
-      catsBody.innerHTML = "";
-      var cats = Object.keys(catCounts).sort();
-      cats.forEach(function (cat) {
-        catsBody.appendChild(createSidebarRow({
-          label: cat,
-          count: catCounts[cat],
-          active: !!state.sidebarCategories[cat],
-          dotColor: "oklch(0.7 0.16 " + categoryHue(cat) + ")",
-          onClick: function () {
-            state.sidebarCategories[cat] = !state.sidebarCategories[cat];
-            applySidebarCategories();
-            persistSidebarFilters();
-            renderSidebar();
-            renderGrid();
-          },
-        }));
-      });
-      if (cats.length === 0) {
-        var empty = el("span", "studio-sidebar-row-label", "(no categories)");
-        empty.style.padding = "6px 16px";
-        empty.style.color = "var(--fg-faint)";
-        catsBody.appendChild(empty);
-      }
-    }
+    if (!catsBody) return;
+    catsBody.innerHTML = "";
+    var cats = Object.keys(catCounts).sort();
+    cats.forEach(function (cat) {
+      catsBody.appendChild(createSidebarRow({
+        label: cat,
+        count: catCounts[cat],
+        active: !!state.sidebarCategories[cat],
+        dotColor: categoryColor(cat),
+        onClick: function () {
+          state.sidebarCategories[cat] = !state.sidebarCategories[cat];
+          applySidebarCategories();
+          commitFilterChange();
+        },
+      }));
+    });
+    if (cats.length === 0) catsBody.appendChild(makeSidebarEmpty("(no categories)"));
+  }
 
-    // SEVERITY pills: "Any severity" clears; each pill toggles its label.
+  // SEVERITY pills: "Any severity" clears; each pill toggles its label.
+  function renderSeverity(sidebar, d, sevCounts) {
     var sevBody = sidebar.querySelector('[data-target="severity"]');
-    if (sevBody) {
-      sevBody.innerHTML = "";
-      if (!hasSeverityData(d.rows)) {
-        sevBody.appendChild(makeSidebarEmpty("(no severity data)"));
-      } else {
-        sevBody.appendChild(createSidebarRow({
-          label: "Any severity",
-          count: d.rows.length,
-          active: state.filters.severities.length === 0,
-          onClick: function () {
-            state.filters.severities = [];
-            persistSidebarFilters();
-            renderSidebar();
-            renderGrid();
-          },
-        }));
-        for (var si = 0; si < CLIPGEN_CONFIG.severity.length; si++) {
-          var sevLabel = CLIPGEN_CONFIG.severity[si].label;
-          var sevCount = sevCounts[sevLabel] || 0;
-          if (sevCount === 0) continue;
-          (function (label) {
-            sevBody.appendChild(createSidebarRow({
-              label: label,
-              count: sevCount,
-              active: state.filters.severities.indexOf(label) >= 0,
-              dotClass: severityClass(label),
-              onClick: function () {
-                state.filters.severities = toggleInArray(state.filters.severities, label);
-                persistSidebarFilters();
-                renderSidebar();
-                renderGrid();
-              },
-            }));
-          })(sevLabel);
-        }
-      }
+    if (!sevBody) return;
+    sevBody.innerHTML = "";
+    if (!hasSeverityData(d.rows)) {
+      sevBody.appendChild(makeSidebarEmpty("(no severity data)"));
+      return;
     }
+    sevBody.appendChild(createSidebarRow({
+      label: "Any severity",
+      count: d.rows.length,
+      active: state.filters.severities.length === 0,
+      onClick: function () {
+        state.filters.severities = [];
+        commitFilterChange();
+      },
+    }));
+    CLIPGEN_CONFIG.severity.forEach(function (s) {
+      var label = s.label;
+      var sevCount = sevCounts[label] || 0;
+      if (sevCount === 0) return;
+      sevBody.appendChild(createSidebarRow({
+        label: label,
+        count: sevCount,
+        active: state.filters.severities.indexOf(label) >= 0,
+        dotClass: severityClass(label),
+        onClick: function () {
+          state.filters.severities = toggleInArray(state.filters.severities, label);
+          commitFilterChange();
+        },
+      }));
+    });
+  }
 
-    // KEYWORDS: filter is row-level; cell-level emphasis happens in grid render.
+  // KEYWORDS: filter is row-level; cell-level emphasis happens in grid render.
+  function renderKeywords(sidebar, kwCounts) {
     var kwBody = sidebar.querySelector('[data-target="keywords"]');
-    if (kwBody) {
-      kwBody.innerHTML = "";
-      var annotations = (CLIPGEN_CONFIG && CLIPGEN_CONFIG.annotations) || [];
-      var anyKw = false;
-      for (var ak = 0; ak < annotations.length; ak++) {
-        if (kwCounts[annotations[ak].id]) { anyKw = true; break; }
-      }
-      if (annotations.length === 0 || !anyKw) {
-        kwBody.appendChild(makeSidebarEmpty("(no keywords)"));
-      } else {
-        annotations.forEach(function (ann) {
-          var count = kwCounts[ann.id] || 0;
-          if (count === 0) return;
-          kwBody.appendChild(createSidebarRow({
-            label: keywordLabel(ann.id),
-            count: count,
-            active: !!state.sidebarKeywords[ann.id],
-            onClick: function () {
-              state.sidebarKeywords[ann.id] = !state.sidebarKeywords[ann.id];
-              applySidebarKeywords();
-              persistSidebarFilters();
-              renderSidebar();
-              renderGrid();
-            },
-          }));
-        });
-      }
+    if (!kwBody) return;
+    kwBody.innerHTML = "";
+    var annotations = (CLIPGEN_CONFIG && CLIPGEN_CONFIG.annotations) || [];
+    var anyKw = false;
+    for (var ak = 0; ak < annotations.length; ak++) {
+      if (kwCounts[annotations[ak].id]) { anyKw = true; break; }
     }
-
-    // FUNCTION — min/max numeric inputs gated on the activeFunction picker
-    // in the table header.
-    var fnBody = sidebar.querySelector('[data-target="function"]');
-    if (fnBody) {
-      fnBody.innerHTML = "";
-      fnBody.appendChild(buildSidebarFunctionRange());
+    if (annotations.length === 0 || !anyKw) {
+      kwBody.appendChild(makeSidebarEmpty("(no keywords)"));
+      return;
     }
+    annotations.forEach(function (ann) {
+      var count = kwCounts[ann.id] || 0;
+      if (count === 0) return;
+      kwBody.appendChild(createSidebarRow({
+        label: keywordLabel(ann.id),
+        count: count,
+        active: !!state.sidebarKeywords[ann.id],
+        onClick: function () {
+          state.sidebarKeywords[ann.id] = !state.sidebarKeywords[ann.id];
+          applySidebarKeywords();
+          commitFilterChange();
+        },
+      }));
+    });
+  }
 
-    // PARTICIPANTS — compact 6-col grid of mono pills.
+  // PARTICIPANTS — compact 6-col grid of mono pills.
+  function renderParticipants(sidebar, participants) {
     var partsBody = sidebar.querySelector('[data-target="participants"]');
-    if (partsBody) {
-      partsBody.innerHTML = "";
-      participants.forEach(function (pid) {
-        var pill = el("button", "studio-sidebar-pill cg-mono", pid);
-        pill.type = "button";
-        if (state.sidebarParticipants[pid]) pill.classList.add("is-active");
-        pill.addEventListener("click", function () {
-          state.sidebarParticipants[pid] = !state.sidebarParticipants[pid];
-          persistSidebarFilters();
-          renderSidebar();
-          renderGrid();
-        });
-        partsBody.appendChild(pill);
+    if (!partsBody) return;
+    partsBody.innerHTML = "";
+    participants.forEach(function (pid) {
+      var pill = el("button", "studio-sidebar-pill cg-mono", pid);
+      pill.type = "button";
+      if (state.sidebarParticipants[pid]) pill.classList.add("is-active");
+      pill.addEventListener("click", function () {
+        state.sidebarParticipants[pid] = !state.sidebarParticipants[pid];
+        commitFilterChange();
       });
-    }
+      partsBody.appendChild(pill);
+    });
   }
 
   function buildSidebarFunctionRange() {
@@ -446,6 +446,7 @@
 
   STUDIO.applySidebarView = applySidebarView;
   STUDIO.bindSidebarToggle = bindSidebarToggle;
+  STUDIO.commitFilterChange = commitFilterChange;
   STUDIO.isParticipantHidden = isParticipantHidden;
   STUDIO.persistSidebarFilters = persistSidebarFilters;
   STUDIO.renderSidebar = renderSidebar;

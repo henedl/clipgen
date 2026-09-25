@@ -660,9 +660,13 @@
   // ---- Init ----
 
   function initAnnotate() {
-    var canvas = canvasEl();
-    var video = qs("#coVideo");
+    initPalette();
+    initGestures();
+    CO.syncAnnotationDefaults();
+  }
 
+  // Swatch pair, style chips, and the config-driven defaults sync.
+  function initPalette() {
     // ---- Two-color swatch pair; color model in the file header ----
     var pairHost = qs("#coSwatchPair");
 
@@ -835,6 +839,12 @@
       paintSwatches();
       updateChipPreviews();
     };
+  }
+
+  // Tool buttons, canvas sizing, text input, and pointer gestures.
+  function initGestures() {
+    var canvas = canvasEl();
+    var video = qs("#coVideo");
 
     // Tool buttons ([data-tool] excludes the independent #coToolHide toggle).
     qsa(".co-tool-btn[data-tool]").forEach(function (btn) {
@@ -1082,7 +1092,6 @@
     }
     canvas.addEventListener("pointerup", endGesture);
     canvas.addEventListener("pointercancel", endGesture);
-    CO.syncAnnotationDefaults();
   }
 
   CO.initAnnotate = initAnnotate;

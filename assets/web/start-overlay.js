@@ -2062,6 +2062,25 @@
 
   // ---- Open / dismiss flows ----
 
+  // POST JSON. ok needs HTTP ok and body.ok !== false; unparseable bodies fail.
+  function postForResult(url, body) {
+    return fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }).then(function (r) {
+      return r.json().then(
+        function (j) { return { ok: r.ok && !!j && j.ok !== false, body: j }; },
+        function () { return { ok: false, body: null }; }
+      );
+    });
+  }
+
+  function releaseConfirm() {
+    state.confirmInFlight = false;
+    updateConfirmEnabled();
+  }
+
   function confirm() {
     // Re-entry guard: Cmd/Ctrl+Enter bypasses the disabled button and would race _swap_worksheet.
     if (state.confirmInFlight) return;
@@ -2085,19 +2104,8 @@
     if (outputVal) dirsPayload.output = outputVal;
 
     var dirsPromise = Object.keys(dirsPayload).length
-      ? fetch("/api/dirs", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(dirsPayload),
-        }).then(function (r) {
-          return r.json().then(function (j) { return { ok: r.ok, body: j }; });
-        })
+      ? postForResult("/api/dirs", dirsPayload)
       : Promise.resolve({ ok: true, body: {} });
-
-    function releaseConfirm() {
-      state.confirmInFlight = false;
-      updateConfirmEnabled();
-    }
 
     updateConfirmEnabled();
     dirsPromise.then(function (res) {
@@ -2113,60 +2121,7 @@
       }
       var skipSpreadsheet = state.activeTab === "none" || !state.selection;
       if (skipSpreadsheet) {
-        // "No spreadsheet" must close the open source too; nothing else ever posts /api/spreadsheets/close.
-        var st = state.statusData || {};
-        var needsClose = !!(st.sheet_loaded || st.mindnode_loaded);
-        // One call per coexisting source; check r.ok because the route 409s mid-generation.
-        function postClose(body) {
-          return fetch("/api/spreadsheets/close", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(body),
-          }).then(function (r) {
-            return r.json().then(
-              function (j) { return { ok: r.ok && j && j.ok !== false, body: j }; },
-              function () { return { ok: false, body: null }; }
-            );
-          });
-        }
-        var closeStep = Promise.resolve({ ok: true, body: null });
-        function chainClose(prev, payload) {
-          return prev.then(function (res) {
-            if (!res.ok) return res; // first failure wins; don't keep closing
-            return postClose(payload);
-          });
-        }
-        if (st.mindnode_loaded) {
-          closeStep = chainClose(closeStep, { type: "mindnode" });
-        }
-        if (st.sheet_loaded) {
-          closeStep = chainClose(closeStep, {});
-        }
-        closeStep
-          .then(function (res) {
-            if (!res.ok) {
-              releaseConfirm();
-              markSheetError(
-                (res.body && res.body.error) || "Could not close the current source"
-              );
-              return null;
-            }
-            return recordSession(inputVal, outputVal, null, nameVal).finally(
-              function () {
-                releaseConfirm();
-                // Reload only if something unloaded; other frontends hold data for the gone source.
-                if (needsClose) {
-                  window.location.reload();
-                  return;
-                }
-                close();
-              }
-            );
-          })
-          .catch(function (err) {
-            releaseConfirm();
-            markSheetError("Close failed: " + (err && err.message));
-          });
+        confirmNoSheet(inputVal, outputVal, nameVal);
         return;
       }
       // Built explicitly so the name rides along with the session-recording open.
@@ -2177,14 +2132,7 @@
         worksheet: state.selection.worksheet || "",
       };
       if (nameVal !== null) openPayload.project_name = nameVal;
-      fetch("/api/spreadsheets/open", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(openPayload),
-      })
-        .then(function (r) {
-          return r.json().then(function (j) { return { ok: r.ok, body: j }; });
-        })
+      postForResult("/api/spreadsheets/open", openPayload)
         .then(function (res2) {
           if (!res2.ok || !res2.body.ok) {
             releaseConfirm();
@@ -2202,6 +2150,51 @@
       releaseConfirm();
       console.error("Confirm dirs failed", err);
     });
+  }
+
+  // "No spreadsheet" must close the open source too; nothing else posts /api/spreadsheets/close.
+  function confirmNoSheet(inputVal, outputVal, nameVal) {
+    var st = state.statusData || {};
+    var needsClose = !!(st.sheet_loaded || st.mindnode_loaded);
+    // One call per coexisting source; the route 409s mid-generation.
+    var closeStep = Promise.resolve({ ok: true, body: null });
+    function chainClose(prev, payload) {
+      return prev.then(function (res) {
+        if (!res.ok) return res; // first failure wins; don't keep closing
+        return postForResult("/api/spreadsheets/close", payload);
+      });
+    }
+    if (st.mindnode_loaded) {
+      closeStep = chainClose(closeStep, { type: "mindnode" });
+    }
+    if (st.sheet_loaded) {
+      closeStep = chainClose(closeStep, {});
+    }
+    closeStep
+      .then(function (res) {
+        if (!res.ok) {
+          releaseConfirm();
+          markSheetError(
+            (res.body && res.body.error) || "Could not close the current source"
+          );
+          return null;
+        }
+        return recordSession(inputVal, outputVal, null, nameVal).finally(
+          function () {
+            releaseConfirm();
+            // Reload only if something unloaded; other frontends hold data for the gone source.
+            if (needsClose) {
+              window.location.reload();
+              return;
+            }
+            close();
+          }
+        );
+      })
+      .catch(function (err) {
+        releaseConfirm();
+        markSheetError("Close failed: " + (err && err.message));
+      });
   }
 
   function recordSession(input, output, spreadsheet, name) {

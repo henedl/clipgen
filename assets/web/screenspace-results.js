@@ -580,6 +580,13 @@
   var RESULTS_RENDER_ALL = 150;
   var RESULTS_CHUNK = 120;
 
+  // False when the result's confidence sits below the certainty cutoff.
+  function passesCutoff(r, task, hasConf) {
+    if (!hasConf || state.certaintyCutoff <= 0) return true;
+    var conf = resultConfidence(r, task);
+    return !(conf !== null && conf < state.certaintyCutoff);
+  }
+
   function renderResults() {
     return clipgenPerf.span("screenspace.renderResults", renderResultsImpl);
   }
@@ -616,10 +623,7 @@
           var appendFrag = document.createDocumentFragment();
           for (var ai = prev.rawLen; ai < results.length; ai++) {
             var ar = results[ai];
-            if (hasConfFast && state.certaintyCutoff > 0) {
-              var acv = resultConfidence(ar, task);
-              if (acv !== null && acv < state.certaintyCutoff) continue;
-            }
+            if (!passesCutoff(ar, task, hasConfFast)) continue;
             appendFrag.appendChild(buildResultRow(ar, ai, null, false, task));
           }
           container.appendChild(appendFrag);
@@ -719,7 +723,6 @@
         vid.muted = true;
         wrapper.appendChild(vid);
       }
-      container.innerHTML = "";
       container.appendChild(wrapper);
       return;
     }
@@ -850,11 +853,7 @@
         }
       }
 
-      // Certainty filtering
-      if (hasConf && state.certaintyCutoff > 0) {
-        var confValue = resultConfidence(r, task);
-        if (confValue !== null && confValue < state.certaintyCutoff) return;
-      }
+      if (!passesCutoff(r, task, hasConf)) return;
 
       var isExcluded = matchedEvent && matchedEvent.excluded;
       if (isExcluded && !state.showExcluded) return;

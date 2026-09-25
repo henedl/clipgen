@@ -79,6 +79,69 @@
     return !!(err && err.name === "AbortError");
   }
 
+  // Sheet and intake halves; each card list stays parallel to its item list.
+  function partitionQueue(items, cards) {
+    var out = { sheetItems: [], sheetCards: [], intakeItems: [], intakeCards: [] };
+    for (var i = 0; i < items.length; i++) {
+      if (isIntakeSource(items[i].source)) {
+        out.intakeItems.push(items[i]);
+        out.intakeCards.push(cards[i]);
+      } else {
+        out.sheetItems.push(items[i]);
+        out.sheetCards.push(cards[i]);
+      }
+    }
+    return out;
+  }
+
+  function clearQueuedCards(cardEls) {
+    for (var i = 0; i < cardEls.length; i++) {
+      var card = cardEls[i];
+      if (card && card.classList.contains("queue-card-queued")) clearCardStatus(card);
+    }
+  }
+
+  // Returns {msg, err} for showResult; appends up to 3 distinct fail reasons.
+  function buildGenerateSummary(cancelled, totalSuccess, totalFail, failReasons) {
+    var msg;
+    var err = null;
+    if (cancelled) {
+      msg = totalSuccess > 0
+        ? "Cancelled after " + clipgenPluralUnit(totalSuccess, "artifact", "artifacts")
+        : null;
+      err = totalSuccess > 0 ? null : "Generation cancelled";
+    } else if (totalSuccess === 0 && totalFail === 0) {
+      // No per-item results at all is an error, not "Generated 0 artifacts".
+      msg = null;
+      err = "No artifacts were generated";
+    } else {
+      msg = "Generated " + clipgenPluralUnit(totalSuccess, "artifact", "artifacts");
+      if (totalFail > 0) msg += ", " + totalFail + " failed";
+      if (totalSuccess === 0 && totalFail > 0) {
+        msg = null;
+        err = "All generations failed";
+      }
+    }
+    // Each card title holds the full reason.
+    if (totalFail > 0 && failReasons.length) {
+      var seenReason = {};
+      var uniqReasons = [];
+      for (var fr = 0; fr < failReasons.length; fr++) {
+        var rsn = failReasons[fr];
+        if (!rsn || seenReason[rsn]) continue;
+        seenReason[rsn] = true;
+        uniqReasons.push(rsn);
+        if (uniqReasons.length >= 3) break;
+      }
+      if (uniqReasons.length) {
+        var suffix = " (" + uniqReasons.join("; ") + ")";
+        if (err) err += suffix;
+        else if (msg) msg += suffix;
+      }
+    }
+    return { msg: msg, err: err };
+  }
+
   function onGenerate() {
     if (state.artifactGenerating || state.artifactQueue.length === 0) return;
     state.generateCancelledByUser = false;
@@ -103,20 +166,11 @@
       setCardQueued(allCards[i]);
     }
 
-    // Each split keeps its card list parallel to its item list.
-    var sheetItems = [];
-    var sheetCardEls = [];
-    var intakeItems = [];
-    var intakeCardEls = [];
-    for (var ci = 0; ci < items.length; ci++) {
-      if (isIntakeSource(items[ci].source)) {
-        intakeItems.push(items[ci]);
-        intakeCardEls.push(allCards[ci]);
-      } else {
-        sheetItems.push(items[ci]);
-        sheetCardEls.push(allCards[ci]);
-      }
-    }
+    var split = partitionQueue(items, allCards);
+    var sheetItems = split.sheetItems;
+    var sheetCardEls = split.sheetCards;
+    var intakeItems = split.intakeItems;
+    var intakeCardEls = split.intakeCards;
 
     var totalSuccess = 0;
     var totalFail = 0;
@@ -149,44 +203,25 @@
       // After setArtifactGenerating(false), or _paintGenerateProgress keeps the readout up.
       updateGenerateProgress(0, 0);
       qs("#cancelGenerateBtn").classList.add("hidden");
-      var msg;
-      var err = null;
-      if (cancelled) {
-        msg = totalSuccess > 0
-          ? "Cancelled after " + clipgenPluralUnit(totalSuccess, "artifact", "artifacts")
-          : null;
-        err = totalSuccess > 0 ? null : "Generation cancelled";
-      } else if (totalSuccess === 0 && totalFail === 0) {
-        // No per-item results at all is an error, not "Generated 0 artifacts".
-        msg = null;
-        err = "No artifacts were generated";
-      } else {
-        msg = "Generated " + clipgenPluralUnit(totalSuccess, "artifact", "artifacts");
-        if (totalFail > 0) msg += ", " + totalFail + " failed";
-        if (totalSuccess === 0 && totalFail > 0) {
-          msg = null;
-          err = "All generations failed";
-        }
-      }
-      // Up to 3 distinct reasons; each card title holds the full one.
-      if (totalFail > 0 && failReasons.length) {
-        var seenReason = {};
-        var uniqReasons = [];
-        for (var fr = 0; fr < failReasons.length; fr++) {
-          var rsn = failReasons[fr];
-          if (!rsn || seenReason[rsn]) continue;
-          seenReason[rsn] = true;
-          uniqReasons.push(rsn);
-          if (uniqReasons.length >= 3) break;
-        }
-        if (uniqReasons.length) {
-          var suffix = " (" + uniqReasons.join("; ") + ")";
-          if (err) err += suffix;
-          else if (msg) msg += suffix;
-        }
-      }
-      showResult(msg, err);
+      var summary = buildGenerateSummary(cancelled, totalSuccess, totalFail, failReasons);
+      showResult(summary.msg, summary.err);
       revealStatusOverlay();
+    }
+
+    // Abort clears queued cards; any other error fails every card in the branch.
+    function failBranch(cardEls, err) {
+      if (isGenerateFetchAborted(err)) {
+        cancelled = true;
+        clearQueuedCards(cardEls);
+      } else {
+        var reason = requestFailReason(err);
+        for (var j = 0; j < cardEls.length; j++) {
+          if (cardEls[j]) setCardResult(cardEls[j], false, reason);
+        }
+        failReasons.push(reason);
+        totalFail += cardEls.length;
+      }
+      finishBranch();
     }
 
     // Handle spreadsheet items via streaming api/generate
@@ -211,10 +246,7 @@
         if (!data) return;
         if (data.cancelled) {
           cancelled = true;
-          var queuedCards = list.querySelectorAll(".queue-card-queued");
-          for (var qi = 0; qi < queuedCards.length; qi++) {
-            clearCardStatus(queuedCards[qi]);
-          }
+          clearQueuedCards(list.querySelectorAll(".queue-card-queued"));
           return;
         }
         if (!data.cell) return;
@@ -254,25 +286,7 @@
         onLine: handleLine,
       })
         .then(finishBranch)
-        .catch(function (err) {
-          if (isGenerateFetchAborted(err)) {
-            cancelled = true;
-            for (var sq = 0; sq < sheetCardEls.length; sq++) {
-              var sc = sheetCardEls[sq];
-              if (sc && sc.classList.contains("queue-card-queued")) clearCardStatus(sc);
-            }
-            finishBranch();
-            return;
-          }
-          // Fail every captured sheet card; finishBranch reports the tally.
-          var sheetReason = requestFailReason(err);
-          for (var j = 0; j < sheetCardEls.length; j++) {
-            if (sheetCardEls[j]) setCardResult(sheetCardEls[j], false, sheetReason);
-          }
-          failReasons.push(sheetReason);
-          totalFail += sheetItems.length;
-          finishBranch();
-        });
+        .catch(function (err) { failBranch(sheetCardEls, err); });
     }
 
     // Handle intake items via api/generate-intake
@@ -301,12 +315,7 @@
         if (data.cancelled) {
           cancelled = true;
           // Cancel short-circuits the server; clear cards still marked queued.
-          for (var qi = 0; qi < intakeCardEls.length; qi++) {
-            var qcard = intakeCardEls[qi];
-            if (qcard && qcard.classList.contains("queue-card-queued")) {
-              clearCardStatus(qcard);
-            }
-          }
+          clearQueuedCards(intakeCardEls);
           return;
         }
         if (typeof data.index !== "number") return;
@@ -334,24 +343,7 @@
         { signal: intakeAbort.signal, onLine: handleIntakeLine }
       )
         .then(finishBranch)
-        .catch(function (err) {
-          if (isGenerateFetchAborted(err)) {
-            cancelled = true;
-            for (var iq = 0; iq < intakeCardEls.length; iq++) {
-              var ic = intakeCardEls[iq];
-              if (ic && ic.classList.contains("queue-card-queued")) clearCardStatus(ic);
-            }
-            finishBranch();
-            return;
-          }
-          var intakeReason = requestFailReason(err);
-          for (var j = 0; j < intakeCardEls.length; j++) {
-            if (intakeCardEls[j]) setCardResult(intakeCardEls[j], false, intakeReason);
-          }
-          failReasons.push(intakeReason);
-          totalFail += intakeItems.length;
-          finishBranch();
-        });
+        .catch(function (err) { failBranch(intakeCardEls, err); });
     }
   }
 
@@ -369,4 +361,6 @@
 
   STUDIO.onGenerate = onGenerate;
   STUDIO.onCancelGenerate = onCancelGenerate;
+  // studio-reel.js (loads later) shares the HTTP-error reason.
+  STUDIO.requestFailReason = requestFailReason;
 })();

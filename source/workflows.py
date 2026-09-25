@@ -1433,8 +1433,6 @@ def _exec_post_process(
     if op == "normalize_audio":
         # In-place per part, sharing the .orig slot and already-rewritten skip
         # with remux.
-        import transcripts_server
-
         failures: list[str] = []
         done = 0
         already = 0
@@ -1449,7 +1447,7 @@ def _exec_post_process(
             if props is None:
                 failures.append(f"{Path(path).name}: could not probe the file")
                 continue
-            indices = transcripts_server._resolve_normalize_indices(props, "auto")
+            indices = video_mod.resolve_normalize_indices(props, "auto")
             if isinstance(indices, str):
                 failures.append(f"{Path(path).name}: {indices}")
                 continue

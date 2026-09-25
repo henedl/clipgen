@@ -7,6 +7,7 @@ import pytest
 
 Flask = pytest.importorskip("flask").Flask
 
+import composer_render
 import composer_server
 import config
 import files
@@ -737,7 +738,7 @@ def test_annotation_shape_crud_and_validation(co_client):
 
 
 def test_render_annotation_overlay_draws_shapes():
-    overlay = composer_server._render_annotation_overlay(
+    overlay = composer_render.render_annotation_overlay(
         [
             {
                 "type": "shape",
@@ -778,7 +779,7 @@ def test_render_annotation_overlay_draws_shapes():
 
 
 def test_render_annotation_overlay_draws_pixels():
-    overlay = composer_server._render_annotation_overlay(
+    overlay = composer_render.render_annotation_overlay(
         [
             {
                 "type": "freehand",
@@ -804,7 +805,7 @@ def test_render_annotation_overlay_draws_pixels():
 
 
 def test_render_annotation_overlay_dashed_freehand_has_gaps():
-    overlay = composer_server._render_annotation_overlay(
+    overlay = composer_render.render_annotation_overlay(
         [
             {
                 "type": "freehand",
@@ -827,7 +828,7 @@ def test_render_annotation_overlay_dashed_freehand_has_gaps():
 def test_render_annotation_overlay_dashed_dotted_shapes_draw():
     # Rotated dashed rect + rotated dotted ellipse must render without error and
     # put down some pixels (the dash/perimeter-polygon paths, not the solid ones).
-    overlay = composer_server._render_annotation_overlay(
+    overlay = composer_render.render_annotation_overlay(
         [
             {
                 "type": "shape",

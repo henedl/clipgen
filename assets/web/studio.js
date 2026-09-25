@@ -517,6 +517,7 @@
   // ---- Sheet sidebar (impl in studio-sidebar.js) ----
   function applySidebarView() { return STUDIO.applySidebarView && STUDIO.applySidebarView.apply(null, arguments); }
   function bindSidebarToggle() { return STUDIO.bindSidebarToggle && STUDIO.bindSidebarToggle.apply(null, arguments); }
+  function commitFilterChange() { return STUDIO.commitFilterChange && STUDIO.commitFilterChange.apply(null, arguments); }
   function isParticipantHidden() { return STUDIO.isParticipantHidden && STUDIO.isParticipantHidden.apply(null, arguments); }
   function persistSidebarFilters() { return STUDIO.persistSidebarFilters && STUDIO.persistSidebarFilters.apply(null, arguments); }
   function renderSidebar() { return STUDIO.renderSidebar && STUDIO.renderSidebar.apply(null, arguments); }
@@ -3473,12 +3474,6 @@
       return palette.selectorCommand("Studio", "studio:tab-" + tabKey, title, icon,
         "tab show switch", '.preview-tab[data-tab="' + tabKey + '"]');
     }
-    // Mirror the sidebar row's mutate → persist → re-render sequence.
-    function applyFilterChange() {
-      persistSidebarFilters();
-      renderSidebar();
-      renderGrid();
-    }
     function viewCommand(viewId, title, icon) {
       return {
         id: "studio:view-" + viewId,
@@ -3489,7 +3484,7 @@
         visible: function () {
           return !!(state.sheetData && state.sheetData.rows && state.sheetData.rows.length);
         },
-        run: function () { applySidebarView(viewId); applyFilterChange(); },
+        run: function () { applySidebarView(viewId); commitFilterChange(); },
       };
     }
     window.ClipgenCommandPalette.register("studio", function () {
@@ -3509,7 +3504,7 @@
           keywords: "reset remove sidebar category severity keyword",
           section: "Studio",
           enabled: hasActiveFilters,
-          run: function () { clearAllFilters(); applyFilterChange(); },
+          run: function () { clearAllFilters(); commitFilterChange(); },
         },
         viewCommand("all", "Show all rows", "bars-3"),
         viewCommand("highlights", "Highlights only", "funnel"),

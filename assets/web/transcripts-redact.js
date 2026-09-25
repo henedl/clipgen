@@ -350,7 +350,7 @@
     apiGet("/api/models").then(function (data) {
       var rd = data && data.redact;
       if (!rd) return;
-      document.getElementById("redactModelSize").textContent = "(" + (rd.size_mb || 0) + " MB)";
+      document.getElementById("redactModelSize").textContent = "(" + formatModelSize(rd.size_mb || 0) + ")";
       var lic = document.getElementById("redactLicenseLink");
       lic.textContent = rd.license || "model license";
       lic.href = rd.license_url || "#";

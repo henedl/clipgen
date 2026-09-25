@@ -663,17 +663,6 @@ def find_friction_moments(
     return moments[: config.FRICTION_MOMENT_LIMIT]
 
 
-def _segments_duration(segments: list[dict[str, Any]]) -> float:
-    """Return the transcript duration (largest segment end time), or 0.0."""
-    end = 0.0
-    for seg in segments:
-        try:
-            end = max(end, float(seg.get("end", 0.0)))
-        except (TypeError, ValueError):
-            continue
-    return end
-
-
 def _run_friction(
     entry: dict[str, Any],
     cancel_event: threading.Event | None,
@@ -694,7 +683,7 @@ def _run_friction(
 
     model = friction_model()
     scored = friction.score_segments(segments)
-    stats = friction.compute_stats(scored, _segments_duration(segments))
+    stats = friction.compute_stats(scored, friction.segments_duration(segments))
     candidates = friction.select_candidates(scored, config.FRICTION_CANDIDATE_LIMIT)
 
     if cancel_event is not None and cancel_event.is_set():

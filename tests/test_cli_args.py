@@ -779,13 +779,14 @@ def test_licenses_notice_is_only_read_when_the_flag_is_passed(monkeypatch):
 def test_settings_rejected_with_no_input(monkeypatch, capsys):
     import os
 
+    import interactive
     import utils
 
     monkeypatch.setattr("sys.argv", ["clipgen.py", "--settings", "--no-input"])
     monkeypatch.setattr(os, "chdir", lambda _p: None)
     monkeypatch.setattr(utils, "validate_runtime_directories", lambda: None)
     monkeypatch.setattr(
-        utils,
+        interactive,
         "set_program_settings",
         lambda: pytest.fail("settings editor must not open under --no-input"),
     )

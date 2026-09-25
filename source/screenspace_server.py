@@ -351,13 +351,7 @@ def api_participant_notes_set(pid: str) -> FlaskResponse:
 
 @screenspace_bp.route("/api/participants/<pid>/issues")
 def api_participant_issues(pid: str) -> FlaskResponse:
-    """Return up to five Sheet rows tagged to a participant, ranked by severity.
-
-    Returns an empty list when Screenspace runs without a Sheet (no Studio).
-    Mirrors the row construction in ``server.api_sheet`` so the participant
-    column lookup, baseline/filename row skipping, and severity normalization
-    match Studio's view.
-    """
+    """Return up to five Sheet rows for a participant, ranked by severity; empty without a Sheet."""
     if not _participant_exists(pid):
         return err(f"Unknown participant {pid}", 404)
 
@@ -375,29 +369,13 @@ def api_participant_issues(pid: str) -> FlaskResponse:
     p_idx = participants.index(pid)
     col_idx = ctx.id_cell.col + p_idx
 
-    obs_col = ctx.observation_cell.col - 1
-    sev_col = ctx.severity_cell.col - 1 if ctx.severity_cell else None
-
     candidates: list[dict[str, Any]] = []
-    for row_idx in range(ctx.first_data_row_idx, len(ctx.sheet_data)):
-        if ctx.baseline_row_idx is not None and row_idx == ctx.baseline_row_idx:
-            continue
-        if ctx.filename_row_idx is not None and row_idx == ctx.filename_row_idx:
-            continue
-        row_data = ctx.sheet_data[row_idx]
+    for row_idx, row_data, observation, severity in spreadsheet.iter_data_rows(ctx):
         if col_idx >= len(row_data) or not row_data[col_idx].strip():
             continue
         raw_cell = row_data[col_idx].strip()
         ts_pairs = utils.parse_timestamps(raw_cell)
         ts_seconds = utils.timestamp_to_seconds(ts_pairs[0][0]) if ts_pairs else None
-        observation = row_data[obs_col] if obs_col < len(row_data) else ""
-        severity = ""
-        if (
-            sev_col is not None
-            and sev_col < len(row_data)
-            and row_data[sev_col].strip()
-        ):
-            severity = utils.normalize_severity(row_data[sev_col])
         candidates.append(
             {
                 "rowNum": row_idx + 1,

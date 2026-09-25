@@ -39,12 +39,14 @@ from screenspace_manifest import (
     TASK_STATUS_PAUSED,
     TASK_STATUS_QUEUED,
     TASK_STATUS_RUNNING,
-    _SENTINEL,
     _offset_result_times,
     generate_events_from_results,
 )
 from screenspace_multitool import _multitool_has_offset
 from screenspace_frames import _probe_video_meta
+
+# Shutdown marker put on the task queue.
+_SENTINEL = object()
 
 # Heatmap-only per-frame grids; stripped from reads and dropped after heatmaps write.
 _SERVER_ONLY_GRID_KEYS = ("change_grid", "saliency_grid")

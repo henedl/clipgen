@@ -35,11 +35,11 @@ from utils import ClipRecord
 
 # Re-exported so cli.py and tests/test_cli_args.py can reach app.process_clips.
 from pipeline import (
-    is_excel_worksheet as _is_excel_worksheet,
     process_clips,
     process_reel,
     regenerate_from_manifest,
 )
+from spreadsheet import is_excel_worksheet as _is_excel_worksheet
 
 # ---- Mode configuration ----
 
@@ -327,7 +327,7 @@ def _handle_spreadsheet_command(
         )
     # Handle 'settings' command
     if input_name.startswith(config.COMMAND_SETTINGS):
-        utils.set_program_settings()
+        interactive.set_program_settings()
         return None
     # Handle name search
     return open_spreadsheet_by_name(
@@ -1092,7 +1092,7 @@ def _dispatch_interactive_mode(
             )
         return None
     if mode == "settings":
-        utils.set_program_settings()
+        interactive.set_program_settings()
         return None
     if mode == "reel":
         clips, confirmed, reel_file = _run_reel_mode_interactive(worksheet)

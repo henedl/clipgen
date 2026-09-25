@@ -8,6 +8,7 @@ from typing import Any
 
 import manifest
 import utils
+from screenspace_heatmap import _GRID_KEYS
 from screenspace_primitives import attach_capture_mask, extract_region
 from screenspace_tools import TOOLS, _extract_confidence
 
@@ -32,8 +33,6 @@ TASK_BINARY_KEYS = (
     "shape_mask",
     "reference_scenes",
 )
-
-_SENTINEL = object()
 
 
 def strip_task_param_binaries(params: dict[str, Any]) -> dict[str, Any]:
@@ -261,7 +260,7 @@ def save_screenspace_manifest(
             ct["parameters"] = strip_task_param_binaries(ct["parameters"])
         # Strip large per-frame heatmap grids from results (not needed on disk)
         if isinstance(ct.get("result"), list):
-            _grid_keys = ("flow_grid", "change_grid", "saliency_grid")
+            _grid_keys = tuple(_GRID_KEYS.values())
             ct["result"] = [
                 {k: v for k, v in r.items() if k not in _grid_keys}
                 for r in ct["result"]

@@ -328,7 +328,7 @@ def test_build_artifact_record_ids_differ_by_type():
         "times": [("00:10", "00:20")],
     }
     ids = [
-        utils.build_artifact_record(
+        viewer.build_artifact_record(
             clip, "study_P01.mp4", "out", "00:10", "00:20", artifact_type=t, seg_idx=0
         )["id"]
         for t in ("clip", "screen", "gif")
@@ -350,7 +350,7 @@ def test_build_artifact_record_raises_when_cell_missing():
         "times": [("00:10", "00:20")],
     }
     with pytest.raises(ValueError, match="cell with row and col"):
-        utils.build_artifact_record(
+        viewer.build_artifact_record(
             clip_no_cell,
             "study_P01.mp4",
             "out_1.mp4",
@@ -365,7 +365,7 @@ def test_build_artifact_record_raises_when_cell_missing():
         "cell": SimpleNamespace(row=3),
     }
     with pytest.raises(ValueError, match="cell with row and col"):
-        utils.build_artifact_record(
+        viewer.build_artifact_record(
             clip_partial_cell,
             "study_P01.mp4",
             "out_1.mp4",

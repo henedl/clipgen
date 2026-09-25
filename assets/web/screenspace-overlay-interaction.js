@@ -67,6 +67,9 @@
   var _wandFrame = null;
   var WAND_SCRUB_SENSITIVITY = 0.4; // tolerance units per horizontal px
 
+  // The overlay canvas, set once by initRegionDrawing.
+  var overlay = null;
+
   function invalidateOverlayRect() {
     _cachedOverlayRect = null;
   }
@@ -286,10 +289,242 @@
     showToast(COMBINE_VERBS[op] + " region");
   }
 
+  // Simplify a raw point trail toward <=100 vertices with growing epsilon.
+  function simplifyForRegion(pts, s) {
+    var simplified = simplifyPolygon(pts, 2 * s);
+    var epsilon = 2 * s;
+    while (simplified.length > 100) {
+      epsilon *= 1.5;
+      simplified = simplifyPolygon(simplified, epsilon);
+    }
+    return simplified;
+  }
+
+  // Wand: press caches frame pixels + seed (canvases share dimensions), drag scrubs tolerance, release commits.
+
+  // Flood the cached frame at the scrub tolerance; stash the outer contour for the painter.
+  function computeWandPreview() {
+    var f = _wandFrame;
+    if (!f || !state.wandDragging) return;
+    var mask = floodFillMask(f.data, f.w, f.h, f.seedX, f.seedY, state.wandDragging.tolerance);
+    var pts = mask ? simplifyForRegion(traceMaskContour(mask, f.w, f.h), f.s) : [];
+    state.wandDragging.previewPoints = pts.length >= 3 ? [pts] : null;
+  }
+
+  // floodFillMask is O(w*h); coalesce the many per-frame mousemoves onto one RAF.
+  function scheduleWandRecompute() {
+    if (_wandRaf) return;
+    _wandRaf = requestAnimationFrame(function () {
+      _wandRaf = 0;
+      if (!state.wandDragging) { _wandFrame = null; return; }
+      computeWandPreview();
+      renderOverlay();
+    });
+  }
+
+  function beginWandDrag(e, pos, s, combine) {
+    var frameCanvas = qs("#frameCanvas");
+    // Gate on frameImage, not canvas width: an unsized canvas reports 300x150 and would flood blank.
+    if (!frameCanvas || !state.frameImage) {
+      flushOverlayRender(); // caller cleared the region; repaint or the UI goes stale
+      renderRegionChips();
+      updateRegionButtons();
+      return;
+    }
+    var w = frameCanvas.width, h = frameCanvas.height;
+    _wandFrame = {
+      data: frameCanvas.getContext("2d").getImageData(0, 0, w, h).data,
+      w: w, h: h, seedX: pos.x, seedY: pos.y, s: s,
+    };
+    // seedX/seedY/headOffsetPx feed the painter's drag chrome; it can't see _wandFrame.
+    state.wandDragging = {
+      startClientX: e.clientX,
+      startTolerance: state.wandTolerance,
+      tolerance: state.wandTolerance,
+      combine: combine || null,
+      previewPoints: null,
+      seedX: pos.x,
+      seedY: pos.y,
+      headOffsetPx: 0,
+    };
+    // Set on the overlay too; its crosshair rule and inline hover cursor beat body's.
+    overlay.style.cursor = "ew-resize";
+    document.body.style.cursor = "ew-resize";
+    document.body.style.userSelect = "none";
+    computeWandPreview();
+    flushOverlayRender();
+    updateRegionButtons();
+  }
+
+  function updateWandDragFromEvent(e) {
+    if (!state.wandDragging) return;
+    var inp = qs("#wandToleranceInput");
+    var lo = parseInt(inp.min, 10) || 4;
+    var hi = parseInt(inp.max, 10) || 120;
+    var delta = e.clientX - state.wandDragging.startClientX;
+    var tol = clamp(Math.round(state.wandDragging.startTolerance + delta * WAND_SCRUB_SENSITIVITY), lo, hi);
+    state.wandDragging.tolerance = tol;
+    // Clamped tolerance so the track stops at min/max; CSS px so the painter scales live.
+    var wd = state.wandDragging;
+    wd.headOffsetPx = (tol - wd.startTolerance) / WAND_SCRUB_SENSITIVITY;
+    state.wandTolerance = tol;
+    inp.value = String(tol);
+    qs("#wandToleranceValue").textContent = String(tol);
+    scheduleWandRecompute();
+  }
+
+  function endWandDrag() {
+    if (_wandRaf) { cancelAnimationFrame(_wandRaf); _wandRaf = 0; }
+    // The hover pass re-establishes the overlay cursor on the next move.
+    overlay.style.cursor = "";
+    document.body.style.cursor = "";
+    document.body.style.userSelect = "";
+    _wandFrame = null;
+    _cachedOverlayRect = null;
+  }
+
+  function commitWandDrag() {
+    var wd = state.wandDragging;
+    if (!wd) return;
+    // A quick release can beat the RAF; re-flood synchronously so the commit matches the readout.
+    if (_wandRaf) { cancelAnimationFrame(_wandRaf); _wandRaf = 0; }
+    computeWandPreview();
+    var contour = wd.previewPoints && wd.previewPoints[0];
+    var combine = wd.combine;
+    endWandDrag();
+    state.wandDragging = null;
+    if (combine) {
+      if (contour && contour.length >= 3 && polygonArea(contour) >= 8) {
+        applyRegionCombine(combine, { contours: [contour] });
+      } else {
+        showToast("No contiguous area found. Adjust tolerance and try again");
+      }
+    } else {
+      var pending = contour ? pendingShapedRegion([contour], "wand") : null;
+      if (pending) state.pendingRegion = pending;
+      else showToast("No contiguous area found. Adjust tolerance and try again");
+    }
+    flushOverlayRender();
+    updateRegionButtons();
+  }
+
+  function cancelWandDrag() {
+    if (!state.wandDragging) return;
+    endWandDrag();
+    state.wandDragging = null;
+    flushOverlayRender();
+    updateRegionButtons();
+  }
+
+  // ---- Shape-draw mode ----
+  // Strokes fill an offscreen mask; Apply uploads its bbox crop.
+
+  // The draw button lives in the re-rendered params panel; sync by class.
+  function syncDrawButton() {
+    var btn = qs(".ss-template-icon-btn--draw");
+    if (btn) btn.classList.toggle("active", !!state.shapeDraw);
+  }
+
+  function toggleShapeDraw() {
+    if (state.shapeDraw) { cancelShapeDraw(); return; }
+    if (!state.frameImage) { showToast("Load a frame first"); return; }
+    var mask = document.createElement("canvas");
+    mask.width = overlay.width;
+    mask.height = overlay.height;
+    state.shapeDraw = {
+      canvas: mask, ctx: mask.getContext("2d"),
+      stroking: false, erasing: false, lastX: 0, lastY: 0,
+    };
+    qs("#shapeDrawWrap").classList.remove("collapsed");
+    syncDrawButton();
+    flushOverlayRender();
+    showToast("Paint over the shape — Shift-drag erases");
+  }
+
+  function cancelShapeDraw() {
+    if (!state.shapeDraw) return;
+    state.shapeDraw = null; // releases the mask canvas
+    qs("#shapeDrawWrap").classList.add("collapsed");
+    syncDrawButton();
+    flushOverlayRender();
+  }
+
+  function beginShapeStroke(e, pos, s) {
+    var sd = state.shapeDraw;
+    sd.stroking = true;
+    sd.erasing = e.shiftKey;
+    var mctx = sd.ctx;
+    mctx.globalCompositeOperation = sd.erasing ? "destination-out" : "source-over";
+    // Opaque accent strokes; the painter applies the highlighter alpha.
+    mctx.strokeStyle = getThemeColors().accent;
+    mctx.fillStyle = mctx.strokeStyle;
+    mctx.lineCap = "round";
+    mctx.lineJoin = "round";
+    mctx.lineWidth = Math.max(1, state.shapeBrushSize * s);
+    mctx.beginPath();
+    mctx.arc(pos.x, pos.y, mctx.lineWidth / 2, 0, Math.PI * 2);
+    mctx.fill();
+    sd.lastX = pos.x;
+    sd.lastY = pos.y;
+    scheduleOverlayRender();
+  }
+
+  function extendShapeStroke(pos) {
+    var sd = state.shapeDraw;
+    var mctx = sd.ctx;
+    mctx.beginPath();
+    mctx.moveTo(sd.lastX, sd.lastY);
+    mctx.lineTo(pos.x, pos.y);
+    mctx.stroke();
+    sd.lastX = pos.x;
+    sd.lastY = pos.y;
+    scheduleOverlayRender();
+  }
+
+  function endShapeStroke() {
+    if (state.shapeDraw) state.shapeDraw.stroking = false;
+  }
+
+  // Crop the painted bbox from the frame; hand it to the upload path.
+  function commitShapeDraw() {
+    var sd = state.shapeDraw;
+    if (!sd) return;
+    var w = sd.canvas.width, h = sd.canvas.height;
+    var data = sd.ctx.getImageData(0, 0, w, h).data;
+    var minX = w, minY = h, maxX = -1, maxY = -1;
+    for (var y = 0; y < h; y++) {
+      var rowBase = y * w * 4;
+      for (var x = 0; x < w; x++) {
+        if (data[rowBase + x * 4 + 3] > 0) {
+          if (x < minX) minX = x;
+          if (x > maxX) maxX = x;
+          if (y < minY) minY = y;
+          if (y > maxY) maxY = y;
+        }
+      }
+    }
+    // The backend erodes the alpha and needs enough surviving edge pixels.
+    if (maxX - minX < 16 || maxY - minY < 16) {
+      showToast("Painted shape too small. Draw a larger area");
+      return;
+    }
+    var bw = maxX - minX + 1, bh = maxY - minY + 1;
+    var crop = document.createElement("canvas");
+    crop.width = bw;
+    crop.height = bh;
+    var cctx = crop.getContext("2d");
+    cctx.drawImage(state.frameImage, minX, minY, bw, bh, 0, 0, bw, bh);
+    cctx.globalCompositeOperation = "destination-in";
+    cctx.drawImage(sd.canvas, minX, minY, bw, bh, 0, 0, bw, bh);
+    cancelShapeDraw();
+    installUploadedRef("drawn-shape.png", crop.toDataURL("image/png").split(",")[1]);
+    showToast("Shape captured from drawing");
+  }
+
   // ---- Overlay interaction state machine ----
   // Document-level listeners keep drags alive off-canvas.
   function initRegionDrawing() {
-    var overlay = qs("#overlayCanvas");
+    overlay = qs("#overlayCanvas");
 
     function finishDrawingRegion(e) {
       if (!state.drawingRegion) return false;
@@ -331,17 +566,6 @@
       }
     }
 
-    // Simplify a raw point trail toward <=100 vertices with growing epsilon.
-    function simplifyForRegion(pts, s) {
-      var simplified = simplifyPolygon(pts, 2 * s);
-      var epsilon = 2 * s;
-      while (simplified.length > 100) {
-        epsilon *= 1.5;
-        simplified = simplifyPolygon(simplified, epsilon);
-      }
-      return simplified;
-    }
-
     // Close and simplify the trail into a pending polygon, or boolean-apply a combine draw.
     function finishDrawingLasso() {
       if (!state.drawingLasso) return false;
@@ -370,232 +594,6 @@
       flushOverlayRender();
       updateRegionButtons();
       return true;
-    }
-
-    // Wand: press caches frame pixels + seed (canvases share dimensions), drag scrubs tolerance, release commits.
-
-    // Flood the cached frame at the scrub tolerance; stash the outer contour for the painter.
-    function computeWandPreview() {
-      var f = _wandFrame;
-      if (!f || !state.wandDragging) return;
-      var mask = floodFillMask(f.data, f.w, f.h, f.seedX, f.seedY, state.wandDragging.tolerance);
-      var pts = mask ? simplifyForRegion(traceMaskContour(mask, f.w, f.h), f.s) : [];
-      state.wandDragging.previewPoints = pts.length >= 3 ? [pts] : null;
-    }
-
-    // floodFillMask is O(w*h); coalesce the many per-frame mousemoves onto one RAF.
-    function scheduleWandRecompute() {
-      if (_wandRaf) return;
-      _wandRaf = requestAnimationFrame(function () {
-        _wandRaf = 0;
-        if (!state.wandDragging) { _wandFrame = null; return; }
-        computeWandPreview();
-        renderOverlay();
-      });
-    }
-
-    function beginWandDrag(e, pos, s, combine) {
-      var frameCanvas = qs("#frameCanvas");
-      // Gate on frameImage, not canvas width: an unsized canvas reports 300x150 and would flood blank.
-      if (!frameCanvas || !state.frameImage) {
-        flushOverlayRender(); // caller cleared the region; repaint or the UI goes stale
-        renderRegionChips();
-        updateRegionButtons();
-        return;
-      }
-      var w = frameCanvas.width, h = frameCanvas.height;
-      _wandFrame = {
-        data: frameCanvas.getContext("2d").getImageData(0, 0, w, h).data,
-        w: w, h: h, seedX: pos.x, seedY: pos.y, s: s,
-      };
-      // seedX/seedY/headOffsetPx feed the painter's drag chrome; it can't see _wandFrame.
-      state.wandDragging = {
-        startClientX: e.clientX,
-        startTolerance: state.wandTolerance,
-        tolerance: state.wandTolerance,
-        combine: combine || null,
-        previewPoints: null,
-        seedX: pos.x,
-        seedY: pos.y,
-        headOffsetPx: 0,
-      };
-      // Set on the overlay too; its crosshair rule and inline hover cursor beat body's.
-      overlay.style.cursor = "ew-resize";
-      document.body.style.cursor = "ew-resize";
-      document.body.style.userSelect = "none";
-      computeWandPreview();
-      flushOverlayRender();
-      updateRegionButtons();
-    }
-
-    function updateWandDragFromEvent(e) {
-      if (!state.wandDragging) return;
-      var inp = qs("#wandToleranceInput");
-      var lo = parseInt(inp.min, 10) || 4;
-      var hi = parseInt(inp.max, 10) || 120;
-      var delta = e.clientX - state.wandDragging.startClientX;
-      var tol = clamp(Math.round(state.wandDragging.startTolerance + delta * WAND_SCRUB_SENSITIVITY), lo, hi);
-      state.wandDragging.tolerance = tol;
-      // Clamped tolerance so the track stops at min/max; CSS px so the painter scales live.
-      var wd = state.wandDragging;
-      wd.headOffsetPx = (tol - wd.startTolerance) / WAND_SCRUB_SENSITIVITY;
-      state.wandTolerance = tol;
-      inp.value = String(tol);
-      qs("#wandToleranceValue").textContent = String(tol);
-      scheduleWandRecompute();
-    }
-
-    function endWandDrag() {
-      if (_wandRaf) { cancelAnimationFrame(_wandRaf); _wandRaf = 0; }
-      // The hover pass re-establishes the overlay cursor on the next move.
-      overlay.style.cursor = "";
-      document.body.style.cursor = "";
-      document.body.style.userSelect = "";
-      _wandFrame = null;
-      _cachedOverlayRect = null;
-    }
-
-    function commitWandDrag() {
-      var wd = state.wandDragging;
-      if (!wd) return;
-      // A quick release can beat the RAF; re-flood synchronously so the commit matches the readout.
-      if (_wandRaf) { cancelAnimationFrame(_wandRaf); _wandRaf = 0; }
-      computeWandPreview();
-      var contour = wd.previewPoints && wd.previewPoints[0];
-      var combine = wd.combine;
-      endWandDrag();
-      state.wandDragging = null;
-      if (combine) {
-        if (contour && contour.length >= 3 && polygonArea(contour) >= 8) {
-          applyRegionCombine(combine, { contours: [contour] });
-        } else {
-          showToast("No contiguous area found. Adjust tolerance and try again");
-        }
-      } else {
-        var pending = contour ? pendingShapedRegion([contour], "wand") : null;
-        if (pending) state.pendingRegion = pending;
-        else showToast("No contiguous area found. Adjust tolerance and try again");
-      }
-      flushOverlayRender();
-      updateRegionButtons();
-    }
-
-    function cancelWandDrag() {
-      if (!state.wandDragging) return;
-      endWandDrag();
-      state.wandDragging = null;
-      flushOverlayRender();
-      updateRegionButtons();
-    }
-    // Published here since the wand cluster is local; Escape and the frame loader abort scrubs.
-    SS.cancelWandDrag = cancelWandDrag;
-
-    // ---- Shape-draw mode ----
-    // Strokes fill an offscreen mask; Apply uploads its bbox crop.
-
-    // The draw button lives in the re-rendered params panel; sync by class.
-    function syncDrawButton() {
-      var btn = qs(".ss-template-icon-btn--draw");
-      if (btn) btn.classList.toggle("active", !!state.shapeDraw);
-    }
-
-    function toggleShapeDraw() {
-      if (state.shapeDraw) { cancelShapeDraw(); return; }
-      if (!state.frameImage) { showToast("Load a frame first"); return; }
-      var mask = document.createElement("canvas");
-      mask.width = overlay.width;
-      mask.height = overlay.height;
-      state.shapeDraw = {
-        canvas: mask, ctx: mask.getContext("2d"),
-        stroking: false, erasing: false, lastX: 0, lastY: 0,
-      };
-      qs("#shapeDrawWrap").classList.remove("collapsed");
-      syncDrawButton();
-      flushOverlayRender();
-      showToast("Paint over the shape — Shift-drag erases");
-    }
-
-    function cancelShapeDraw() {
-      if (!state.shapeDraw) return;
-      state.shapeDraw = null; // releases the mask canvas
-      qs("#shapeDrawWrap").classList.add("collapsed");
-      syncDrawButton();
-      flushOverlayRender();
-    }
-    // Published like cancelWandDrag: Escape, the frame loader, and tool switches abort sessions.
-    SS.toggleShapeDraw = toggleShapeDraw;
-    SS.cancelShapeDraw = cancelShapeDraw;
-
-    function beginShapeStroke(e, pos, s) {
-      var sd = state.shapeDraw;
-      sd.stroking = true;
-      sd.erasing = e.shiftKey;
-      var mctx = sd.ctx;
-      mctx.globalCompositeOperation = sd.erasing ? "destination-out" : "source-over";
-      // Opaque accent strokes; the painter applies the highlighter alpha.
-      mctx.strokeStyle = getThemeColors().accent;
-      mctx.fillStyle = mctx.strokeStyle;
-      mctx.lineCap = "round";
-      mctx.lineJoin = "round";
-      mctx.lineWidth = Math.max(1, state.shapeBrushSize * s);
-      mctx.beginPath();
-      mctx.arc(pos.x, pos.y, mctx.lineWidth / 2, 0, Math.PI * 2);
-      mctx.fill();
-      sd.lastX = pos.x;
-      sd.lastY = pos.y;
-      scheduleOverlayRender();
-    }
-
-    function extendShapeStroke(pos) {
-      var sd = state.shapeDraw;
-      var mctx = sd.ctx;
-      mctx.beginPath();
-      mctx.moveTo(sd.lastX, sd.lastY);
-      mctx.lineTo(pos.x, pos.y);
-      mctx.stroke();
-      sd.lastX = pos.x;
-      sd.lastY = pos.y;
-      scheduleOverlayRender();
-    }
-
-    function endShapeStroke() {
-      if (state.shapeDraw) state.shapeDraw.stroking = false;
-    }
-
-    // Crop the painted bbox from the frame; hand it to the upload path.
-    function commitShapeDraw() {
-      var sd = state.shapeDraw;
-      if (!sd) return;
-      var w = sd.canvas.width, h = sd.canvas.height;
-      var data = sd.ctx.getImageData(0, 0, w, h).data;
-      var minX = w, minY = h, maxX = -1, maxY = -1;
-      for (var y = 0; y < h; y++) {
-        var rowBase = y * w * 4;
-        for (var x = 0; x < w; x++) {
-          if (data[rowBase + x * 4 + 3] > 0) {
-            if (x < minX) minX = x;
-            if (x > maxX) maxX = x;
-            if (y < minY) minY = y;
-            if (y > maxY) maxY = y;
-          }
-        }
-      }
-      // The backend erodes the alpha and needs enough surviving edge pixels.
-      if (maxX - minX < 16 || maxY - minY < 16) {
-        showToast("Painted shape too small. Draw a larger area");
-        return;
-      }
-      var bw = maxX - minX + 1, bh = maxY - minY + 1;
-      var crop = document.createElement("canvas");
-      crop.width = bw;
-      crop.height = bh;
-      var cctx = crop.getContext("2d");
-      cctx.drawImage(state.frameImage, minX, minY, bw, bh, 0, 0, bw, bh);
-      cctx.globalCompositeOperation = "destination-in";
-      cctx.drawImage(sd.canvas, minX, minY, bw, bh, 0, 0, bw, bh);
-      cancelShapeDraw();
-      installUploadedRef("drawn-shape.png", crop.toDataURL("image/png").split(",")[1]);
-      showToast("Shape captured from drawing");
     }
 
     qs("#shapeDrawApplyBtn").addEventListener("click", commitShapeDraw);
@@ -1220,6 +1218,9 @@
 
   // ---- Publish to the hub + sibling satellites ----
   SS.initRegionDrawing = initRegionDrawing;
+  SS.cancelWandDrag = cancelWandDrag;
+  SS.toggleShapeDraw = toggleShapeDraw;
+  SS.cancelShapeDraw = cancelShapeDraw;
   SS.renderRegionChips = renderRegionChips;
   SS.updateRegionButtons = updateRegionButtons;
   SS.refreshRegionUi = refreshRegionUi;

@@ -4,6 +4,7 @@ import pytest
 
 import config
 import pipeline
+import spreadsheet
 import viewer
 
 
@@ -1209,15 +1210,15 @@ def test_is_excel_worksheet_true_for_local(make_clip):
     from types import SimpleNamespace
 
     excel = SimpleNamespace(spreadsheet=SimpleNamespace(url=None))
-    assert pipeline.is_excel_worksheet(excel) is True
+    assert spreadsheet.is_excel_worksheet(excel) is True
 
 
 def test_is_excel_worksheet_false_for_gsheet_and_missing(make_clip):
     from types import SimpleNamespace
 
     gsheet = SimpleNamespace(spreadsheet=SimpleNamespace(url="https://x"))
-    assert pipeline.is_excel_worksheet(gsheet) is False
-    assert pipeline.is_excel_worksheet(SimpleNamespace()) is False
+    assert spreadsheet.is_excel_worksheet(gsheet) is False
+    assert spreadsheet.is_excel_worksheet(SimpleNamespace()) is False
 
 
 def test_resolve_clip_workers_explicit_and_auto(monkeypatch):

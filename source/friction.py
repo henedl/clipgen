@@ -171,6 +171,17 @@ def select_candidates(
     return candidates[:n]
 
 
+def segments_duration(segments: list[dict[str, Any]]) -> float:
+    """Return the transcript duration (largest segment end time), or 0.0."""
+    end = 0.0
+    for seg in segments:
+        try:
+            end = max(end, float(seg.get("end", 0.0)))
+        except (TypeError, ValueError):
+            continue
+    return end
+
+
 def compute_stats(
     scored: list[dict[str, Any]], duration_seconds: float
 ) -> dict[str, Any]:

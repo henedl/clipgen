@@ -421,4 +421,4 @@ class TestHeatmapDisableSetting:
             assert meta["tab"] == "Screenspace"
             assert meta["group"] == "Heatmaps"
             assert meta["type"] == "bool"
-            assert config.SETTINGS_DESCRIPTIONS.get(name)
+            assert meta["description"]

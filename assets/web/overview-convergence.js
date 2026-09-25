@@ -180,15 +180,20 @@
     var participantSet = {};
 
     // start/end are display time (raw + offsetFor); rawStart/rawEnd keep source video time.
-    function applyOffset(pid, source, rawStart, rawEnd) {
+    function pushEvent(pid, source, rawStart, rawEnd, extra) {
       var off = offsetFor(pid, source);
-      return {
-        rawStart: Math.max(0, rawStart),
-        rawEnd: Math.max(0, rawEnd),
+      var ev = {
+        participant: pid,
         // Never clamp to 0: negative offsets legitimately go off-edge; clamping fakes zones at t=0.
         start: rawStart + off,
         end: rawEnd + off,
+        rawStart: Math.max(0, rawStart),
+        rawEnd: Math.max(0, rawEnd),
+        source: source,
       };
+      Object.keys(extra).forEach(function (key) { ev[key] = extra[key]; });
+      events.push(ev);
+      participantSet[pid] = true;
     }
 
     // Sheet events
@@ -204,21 +209,12 @@
           var segs = parseClipSegmentsForCell(cell.value, baselineOffset, CLIPGEN_CONFIG.defaultDuration);
           for (var s = 0; s < segs.length; s++) {
             var rawStartSh = segs[s].startSeconds;
-            var rawEndSh = rawStartSh + segs[s].duration;
-            var tSh = applyOffset(pid, "sheet", rawStartSh, rawEndSh);
-            events.push({
-              participant: pid,
-              start: tSh.start,
-              end: tSh.end,
-              rawStart: tSh.rawStart,
-              rawEnd: tSh.rawEnd,
-              source: "sheet",
+            pushEvent(pid, "sheet", rawStartSh, rawStartSh + segs[s].duration, {
               eventType: row.category || "uncategorized",
               label: row.observation || "",
               id: "sh_" + row.rowNum + "_" + pid + "_" + s,
               rawData: row,
             });
-            participantSet[pid] = true;
           }
         }
       }
@@ -237,14 +233,7 @@
         sStart = cl.events[0].time_in;
         sEnd = cl.events[cl.events.length - 1].time_out;
       }
-      var tSs = applyOffset(cl.participant, "screenspace", sStart, sEnd);
-      events.push({
-        participant: cl.participant,
-        start: tSs.start,
-        end: tSs.end,
-        rawStart: tSs.rawStart,
-        rawEnd: tSs.rawEnd,
-        source: "screenspace",
+      pushEvent(cl.participant, "screenspace", sStart, sEnd, {
         eventType: cl.event_type || cl.detector || "unknown",
         label: (cl.event_type || cl.detector || "") + " detection"
           + (clCount > 1 ? " (" + clCount + " events)" : ""),
@@ -253,7 +242,6 @@
         clusterCount: clCount,
         navigational: !!cl.navigational,
       });
-      participantSet[cl.participant] = true;
     }
 
     // Transcript marks (clustered)
@@ -261,14 +249,7 @@
     for (var j = 0; j < trClusters.length; j++) {
       var tc = trClusters[j];
       var tcCount = tc.marks ? tc.marks.length : 1;
-      var tTr = applyOffset(tc.participant, "transcript", tc.start, tc.end);
-      events.push({
-        participant: tc.participant,
-        start: tTr.start,
-        end: tTr.end,
-        rawStart: tTr.rawStart,
-        rawEnd: tTr.rawEnd,
-        source: "transcript",
+      pushEvent(tc.participant, "transcript", tc.start, tc.end, {
         eventType: tc.category || "bookmark",
         label: (tc.label || tc.text || "")
           + (tcCount > 1 ? " (" + tcCount + " marks)" : ""),
@@ -276,7 +257,6 @@
         rawData: tc,
         clusterCount: tcCount,
       });
-      participantSet[tc.participant] = true;
     }
 
     // Composer cuts render as spans (like sheet ranges) and seed convergence zones.
@@ -285,37 +265,39 @@
       var cut = composerCuts[ci];
       if (!cut || !cut.participant) continue;
       if (typeof cut.start !== "number" || typeof cut.end !== "number") continue;
-      var tCo = applyOffset(cut.participant, "composer", cut.start, cut.end);
       var cutLabel = cut.label || "cut";
-      events.push({
-        participant: cut.participant,
-        start: tCo.start,
-        end: tCo.end,
-        rawStart: tCo.rawStart,
-        rawEnd: tCo.rawEnd,
-        source: "composer",
+      pushEvent(cut.participant, "composer", cut.start, cut.end, {
         eventType: cutLabel,
         label: cutLabel,
         id: "co_" + (cut.id || ci),
         rawData: cut,
       });
-      participantSet[cut.participant] = true;
     }
 
-    // Max of raw and offset ends: a negative offset must not shrink the timeline.
+    cvState.duration = computeDuration(events);
+    cvState.participants = orderParticipants(participantSet);
+    cvState.events = events;
+    tracker.take();
+  }
+
+  // Max of raw and offset ends: a negative offset must not shrink the timeline.
+  function computeDuration(events) {
     var maxEnd = 0;
     for (var k = 0; k < events.length; k++) {
       if (events[k].end > maxEnd) maxEnd = events[k].end;
       var rawE = (typeof events[k].rawEnd === "number") ? events[k].rawEnd : events[k].end;
       if (rawE > maxEnd) maxEnd = rawE;
     }
-    cvState.duration = Math.max(maxEnd * 1.05, 60);
+    return Math.max(maxEnd * 1.05, 60);
+  }
 
-    // Participants: spreadsheet order first, then others alphabetically
+  // Spreadsheet order first, then others alphabetically.
+  function orderParticipants(participantSet) {
+    var sheetData = getState().sheetData;
     var ordered = [];
-    if (state.sheetData && state.sheetData.participants) {
-      for (var pi = 0; pi < state.sheetData.participants.length; pi++) {
-        ordered.push(state.sheetData.participants[pi]);
+    if (sheetData && sheetData.participants) {
+      for (var pi = 0; pi < sheetData.participants.length; pi++) {
+        ordered.push(sheetData.participants[pi]);
       }
     }
     var others = [];
@@ -324,13 +306,7 @@
       if (ordered.indexOf(pids[qi]) < 0) others.push(pids[qi]);
     }
     others.sort();
-    cvState.participants = ordered.concat(others);
-
-    cvState.events = events;
-
-    // Staleness snapshot: the hub's data version, which only advances when
-    // OV.refreshData() actually refetched (see checkStaleness).
-    cvState._snapshot = { version: state.dataVersion };
+    return ordered.concat(others);
   }
 
   // --- Convergence Algorithm ---
@@ -863,7 +839,8 @@
 
   // --- Data Freshness ---
 
-  var checkStaleness = window.ClipgenOverview.createStalenessTracker(cvState).check;
+  var tracker = window.ClipgenOverview.createStalenessTracker(cvState);
+  var checkStaleness = tracker.check;
 
   // --- Selection ---
 

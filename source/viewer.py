@@ -61,6 +61,174 @@ def _export_config() -> dict[str, Any]:
     return cfg
 
 
+def _resolve_segment_source_fields(
+    clip: utils.ClipRecord,
+    base_video: str,
+    start_str: str,
+    end_str: str,
+    *,
+    allow_split: bool,
+) -> dict[str, Any]:
+    """Resolve the source-video fields for one persisted segment record.
+
+    ``sourceVideo`` is always a **basename** (matching ``pipeline.cut_global_range``);
+    regeneration resolves it against the input dir via ``resolve_input_path``.
+    Single-video (no ``source_timeline``): ``sourceVideo`` is *base_video*'s
+    basename and the local times equal the global times. Multi-video: the global
+    ``[start, end]`` is mapped onto ``clip['source_timeline']`` into the owning
+    sub-video plus local offsets. When *allow_split* is True (video clips) and the
+    range straddles a recording boundary, a ``parts`` list describes each piece so
+    it can be re-cut and stitched; ``sourceVideo``/``localStart``/``localEnd``
+    carry the first piece. When *allow_split* is False (screenshots/GIFs/
+    transcripts) a single frame's position maps by start only — never split.
+
+    ``start``/``end`` (global seconds) stay on the record for the timeline
+    viewer; these fields drive regeneration, which re-cuts from ``sourceVideo``.
+    """
+    global_start = utils.timestamp_to_seconds(start_str) or 0.0
+    global_end = utils.timestamp_to_seconds(end_str) or 0.0
+    fallback: dict[str, Any] = {
+        "sourceVideo": Path(base_video).name,
+        "localStart": global_start,
+        "localEnd": global_end,
+    }
+    timeline = clip.get("source_timeline")
+    if not timeline or len(timeline) < 2:
+        return fallback
+
+    if allow_split:
+        pieces = utils.map_global_range_to_segments(timeline, global_start, global_end)
+        if pieces:
+            parts = [
+                {
+                    "sourceVideo": Path(timeline[index][0]).name,
+                    "localStart": local_start,
+                    "localEnd": local_end,
+                }
+                for index, local_start, local_end in pieces
+            ]
+            first = parts[0]
+            fields: dict[str, Any] = {
+                "sourceVideo": first["sourceVideo"],
+                "localStart": first["localStart"],
+                "localEnd": first["localEnd"],
+            }
+            if len(parts) > 1:
+                fields["parts"] = parts
+            return fields
+        return fallback
+
+    mapped = utils.map_global_to_segment(timeline, global_start)
+    if mapped is None:
+        return fallback
+    index, local_start = mapped
+    seg_duration = timeline[index][1]
+    local_end = min(float(seg_duration), local_start + (global_end - global_start))
+    return {
+        "sourceVideo": Path(timeline[index][0]).name,
+        "localStart": local_start,
+        "localEnd": local_end,
+    }
+
+
+def _clip_metadata_fields(
+    clip: utils.ClipRecord,
+    base_video: str,
+    start_str: str,
+    end_str: str,
+    *,
+    allow_split: bool = False,
+) -> dict[str, Any]:
+    """Extract the shared per-segment metadata that every persisted record needs.
+
+    Used by both ``build_artifact_record`` (manifest artifacts) and
+    ``build_reel_component`` (reel-component records). The two shapes only differ
+    by file-specific fields (id/file/type/thumbnail), so the body of every
+    persisted record flows from one place.
+
+    ``start``/``end`` are GLOBAL seconds (the timeline viewer positions artifacts
+    by them). ``sourceVideo``/``localStart``/``localEnd`` (and ``parts`` for a
+    boundary-spanning clip) describe where the segment was actually cut from and
+    drive regeneration — see :func:`_resolve_segment_source_fields`.
+    """
+    cell = clip.get("cell")
+    cell_row = getattr(cell, "row", None)
+    cell_col = getattr(cell, "col", None)
+    fields: dict[str, Any] = {
+        "start": utils.timestamp_to_seconds(start_str),
+        "end": utils.timestamp_to_seconds(end_str),
+        "study": clip.get("study", ""),
+        "participant": clip.get("participant", ""),
+        "category": clip.get("category", ""),
+        "severity": clip.get("severity", ""),
+        "description": clip.get("desc", ""),
+        "cellRow": cell_row,
+        "cellCol": cell_col,
+        "cellA1": utils.safe_cell_a1(cell_row, cell_col),
+        "annotations": list(clip.get("cell_annotations", [])),
+    }
+    fields.update(
+        _resolve_segment_source_fields(
+            clip, base_video, start_str, end_str, allow_split=allow_split
+        )
+    )
+    return fields
+
+
+def build_artifact_record(
+    clip: utils.ClipRecord,
+    base_video: str,
+    out_path: str,
+    start_str: str,
+    end_str: str,
+    *,
+    artifact_type: str,
+    seg_idx: int,
+) -> dict[str, Any]:
+    """Build one artifact dict; its id needs a unique cell (row, col).
+
+    Synthetic records get negative rows from ``files.build_clip_records``.
+    """
+    cell = clip.get("cell")
+    cell_row = getattr(cell, "row", None)
+    cell_col = getattr(cell, "col", None)
+    if cell_row is None or cell_col is None:
+        raise ValueError(
+            "build_artifact_record requires a cell with row and col; "
+            "synthetic records must use a unique (row, col) pair — see "
+            "files.build_clip_records for the negative-row convention."
+        )
+    # A cell's clip, screenshot and GIF must not share an id.
+    type_suffix = "" if artifact_type == "clip" else f"-{artifact_type}"
+    return {
+        "id": f"a{cell_row}c{cell_col}s{seg_idx}{type_suffix}",
+        "type": artifact_type,
+        "file": Path(out_path).name,
+        "thumbnail": "",
+        # Only video clips may span a recording boundary; screenshots and GIFs map
+        # by start.
+        **_clip_metadata_fields(
+            clip, base_video, start_str, end_str, allow_split=(artifact_type == "clip")
+        ),
+    }
+
+
+def build_reel_component(
+    clip: utils.ClipRecord,
+    base_video: str,
+    start_str: str,
+    end_str: str,
+) -> dict[str, Any]:
+    """Build one reel-component dict from a clip record + one segment.
+
+    Reel components describe an input segment used to assemble a reel — they
+    share the artifact record's per-segment metadata shape but omit the
+    file/id/type fields (the rendered output is the reel itself, not the
+    component). Stored in the ``components`` list of a reel manifest entry.
+    """
+    return _clip_metadata_fields(clip, base_video, start_str, end_str, allow_split=True)
+
+
 def build_artifact_records_for_clip(
     clip: utils.ClipRecord,
     base_video: str,
@@ -95,7 +263,7 @@ def build_artifact_records_for_clip(
     )
     times = clip.get("times", [])
     records = [
-        utils.build_artifact_record(
+        build_artifact_record(
             clip,
             base_video,
             out_path,

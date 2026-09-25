@@ -88,12 +88,6 @@ def _resolve_titlecard_images(cards_enabled: bool) -> tuple[str, str]:
     return _card_image_identity("title"), _card_image_identity("end")
 
 
-def is_excel_worksheet(worksheet: Any) -> bool:
-    """Return True if worksheet is the Excel adapter (local file, no URL)."""
-    spread = getattr(worksheet, "spreadsheet", None)
-    return spread is not None and getattr(spread, "url", None) is None
-
-
 # ---- Clip processing pipeline ----
 
 
@@ -1010,7 +1004,7 @@ def _transcribe_segments(
         )
         t_path = files.get_unique_filename(Path(out_path).stem + ext, file_format=ext)
         if transcripts.write_transcript(clipped, t_path):
-            artifact = utils.build_artifact_record(
+            artifact = viewer.build_artifact_record(
                 clip,
                 base_video,
                 t_path,
@@ -1476,7 +1470,7 @@ def _process_reel(
         )
         times = clip.get("times", [])
         clip_components = [
-            utils.build_reel_component(clip, base_video, *times[time_idx])
+            viewer.build_reel_component(clip, base_video, *times[time_idx])
             for _out_path, time_idx in segment_paths
         ]
         # Per part, so the reel transcript offsets only cards that landed.

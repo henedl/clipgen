@@ -814,15 +814,12 @@ def api_edit_segment(participant: str) -> FlaskResponse:
 # ---- WebVTT ----
 
 
-@transcripts_bp.route("/api/vtt/<participant>")
-def api_vtt(participant: str) -> FlaskResponse:
-    """Serve transcript as WebVTT for <track> subtitle support."""
+def _formatted_result(participant: str) -> transcripts.TranscriptResult | None:
+    """Snapshot one corrected transcript under the lock; None when it has no segments."""
     with _manifest_lock:
         entry = _manifest.get("source_transcripts", {}).get(participant)
         if not entry or not entry.get("segments"):
-            return Response("WEBVTT\n", content_type="text/vtt")
-        # Snapshot under the lock so a concurrent edit/transcribe can't mutate
-        # corrections or segments mid-iteration.
+            return None
         segments_snapshot = list(entry["segments"])
         corrections_snapshot = list(_manifest.get("corrections", []))
         language = entry.get("language", "")
@@ -839,7 +836,7 @@ def api_vtt(participant: str) -> FlaskResponse:
         corrections_snapshot,
         version=version_snapshot,
     )
-    result = transcripts.TranscriptResult(
+    return transcripts.TranscriptResult(
         segments=corrected,
         language=language,
         source_file=source_file,
@@ -848,8 +845,17 @@ def api_vtt(participant: str) -> FlaskResponse:
         redact=redact_on,
         redact_excluded=excluded,
     )
-    vtt_text = transcripts._format_vtt(result)
-    return Response(vtt_text, content_type="text/vtt")
+
+
+@transcripts_bp.route("/api/vtt/<participant>")
+def api_vtt(participant: str) -> FlaskResponse:
+    """Serve transcript as WebVTT for <track> subtitle support."""
+    result = _formatted_result(participant)
+    if result is None:
+        return Response("WEBVTT\n", content_type="text/vtt")
+    return Response(
+        transcripts.format_transcript(result, "vtt"), content_type="text/vtt"
+    )
 
 
 @transcripts_bp.route("/api/speakers/<participant>", methods=["PUT"])
@@ -1165,22 +1171,13 @@ def _embed_subtitle_for_participant(
     Snapshots manifest state under the lock so concurrent edits cannot mutate
     segments or corrections mid-format.
     """
-    with _manifest_lock:
-        entry = _manifest.get("source_transcripts", {}).get(participant)
-        if not entry or not entry.get("segments"):
-            return {
-                "participant": participant,
-                "ok": False,
-                "error": "No transcript for participant",
-            }
-        segments_snapshot = list(entry["segments"])
-        corrections_snapshot = list(_manifest.get("corrections", []))
-        language = entry.get("language", "")
-        source_file = entry.get("source_file", "")
-        model = entry.get("model", "")
-        redact_on = _redact_wanted(entry)
-        excluded = _redact_excluded(entry)
-        version_snapshot = _corrections_version
+    result = _formatted_result(participant)
+    if result is None:
+        return {
+            "participant": participant,
+            "ok": False,
+            "error": "No transcript for participant",
+        }
 
     video_paths = _video_paths_for_participant(participant)
     if not video_paths or not Path(video_paths[0]).is_file():
@@ -1199,21 +1196,7 @@ def _embed_subtitle_for_participant(
         }
     video_path = video_paths[0]
 
-    corrected = _corrected_segments(
-        participant,
-        segments_snapshot,
-        corrections_snapshot,
-        version=version_snapshot,
-    )
-    result = transcripts.TranscriptResult(
-        segments=corrected,
-        language=language,
-        source_file=source_file,
-        model=model,
-        redact=redact_on,
-        redact_excluded=excluded,
-    )
-    srt_text = transcripts._format_srt(result)
+    srt_text = transcripts.format_transcript(result, "srt")
     if not srt_text:
         return {
             "participant": participant,
@@ -1241,7 +1224,7 @@ def _embed_subtitle_for_participant(
             str(video_path),
             tmp_path,
             output_path,
-            track_language=language or "und",
+            track_language=result["language"] or "und",
             set_default=default_track,
         )
     finally:
@@ -1329,32 +1312,6 @@ def api_embed_subtitles_cancel() -> FlaskResponse:
 _normalize_slot = JobSlot()
 
 
-def _resolve_normalize_indices(
-    props: dict[str, Any], tracks: str | list[int]
-) -> list[int] | str:
-    """Resolve a tracks spec against one file's probed layout.
-
-    Returns the audio-relative indices to normalize, or an error string.
-    Single-track files always normalize track 0 whatever the spec — there is
-    nothing to choose. An explicit list is intersected with the file's real
-    range rather than failed outright: it comes from the current-participant
-    checkbox UI, and on a multi-part participant part 2 may legitimately have
-    fewer tracks than the part the dialog was built from.
-    """
-    count = int(props.get("audio_track_count") or 0)
-    if count <= 1:
-        return [0]
-    # isinstance so ty narrows tracks to list[int]; the route validated the strings.
-    if isinstance(tracks, str):
-        if tracks == "all":
-            return list(range(count))
-        return [video.pick_speech_audio_track(props.get("audio_tracks") or [])]
-    valid = [i for i in tracks if 0 <= i < count]
-    if not valid:
-        return "None of the selected tracks exist in this file."
-    return valid
-
-
 def _normalize_audio_for_participant(
     participant: str,
     tracks: str | list[int],
@@ -1402,7 +1359,7 @@ def _normalize_audio_for_participant(
         if props is None:
             failures.append(f"{Path(path).name}: could not probe the file")
             continue
-        indices = _resolve_normalize_indices(props, tracks)
+        indices = video.resolve_normalize_indices(props, tracks)
         if isinstance(indices, str):
             failures.append(f"{Path(path).name}: {indices}")
             continue
@@ -1546,7 +1503,7 @@ def _deterministic_friction(
         participant, raw_segments, corrections, version=version
     )
     scored = friction.score_segments(segments)
-    stats = friction.compute_stats(scored, thinking_agents._segments_duration(segments))
+    stats = friction.compute_stats(scored, friction.segments_duration(segments))
     payload = {
         "segments": scored,
         "moments": [],
@@ -2109,6 +2066,25 @@ def marks_for_participant(pid: str) -> list[dict[str, Any]]:
     out = [m for m in resolved if m.get("valid") and m.get("participant") == pid]
     out.sort(key=lambda m: m.get("start", 0))
     return out
+
+
+def intake_transcript(pid: str, mark_ids: list[str]) -> tuple[str, str]:
+    """Return (transcribed_at, joined text of the segments *mark_ids* name)."""
+    mark_set = set(mark_ids)
+    with _manifest_lock:
+        entry = _manifest.get("source_transcripts", {}).get(pid, {})
+        wanted = {
+            m.get("segment_id")
+            for m in _manifest.get("marks", []) or []
+            if isinstance(m, dict) and m.get("id") in mark_set
+        }
+        parts: list[str] = []
+        for seg in entry.get("segments", []) or []:
+            if seg.get("id") in wanted:
+                t = (seg.get("text") or "").strip()
+                if t:
+                    parts.append(t)
+        return entry.get("transcribed_at", ""), " ".join(parts)
 
 
 @transcripts_bp.route("/api/marks")

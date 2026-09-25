@@ -19,6 +19,7 @@ import cli_event_clips
 import cli_screenspace
 import config
 import files
+import interactive
 import profiling
 import spreadsheet
 import transcripts
@@ -1525,7 +1526,7 @@ def main() -> None:
             )
             sys.exit(1)
         # Reopen the grid after each change; empty input exits.
-        while utils.set_program_settings():
+        while interactive.set_program_settings():
             pass
 
     if not video.check_ffmpeg_tools_available():

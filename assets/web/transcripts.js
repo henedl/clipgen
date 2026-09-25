@@ -2446,12 +2446,6 @@
   // ---- Local-model install confirmation ----
   // confirmModelInstall() gates every Whisper and GGUF download behind a dialog.
 
-  function _trFormatModelSize(mb) {
-    if (!mb || mb <= 0) return "";
-    if (mb >= 1024) return (mb / 1024).toFixed(1) + " GB";
-    return Math.round(mb) + " MB";
-  }
-
   // Resolves true on success. Dismissal stops the poll only; the server download continues.
   function downloadLlmModel(model, onProgress, isCancelled) {
     return apiPost("api/models/llm/download", { model: model }).then(function (data) {
@@ -2516,7 +2510,7 @@
         }
       } else if (opts.kind === "whisper") {
         titleEl.textContent = "Download transcription model?";
-        var size = opts.sizeMb ? " (~" + _trFormatModelSize(opts.sizeMb) + ")" : "";
+        var size = opts.sizeMb ? " (~" + formatModelSize(opts.sizeMb) + ")" : "";
         if (opts.prewarm) {
           msgEl.textContent = 'The "' + opts.model + '" transcription model' + size +
             " isn't downloaded yet. Download it now so transcription is ready to start? It will be stored locally.";

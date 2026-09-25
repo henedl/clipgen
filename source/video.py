@@ -195,6 +195,25 @@ def pick_speech_audio_track(audio_tracks: list[dict[str, Any]]) -> int:
     return best_index
 
 
+def resolve_normalize_indices(
+    props: dict[str, Any], tracks: str | list[int]
+) -> list[int] | str:
+    """Audio-relative indices to normalize for one probed file, or an error string."""
+    count = int(props.get("audio_track_count") or 0)
+    if count <= 1:
+        return [0]
+    # isinstance so ty narrows tracks to list[int]; the route validated the strings.
+    if isinstance(tracks, str):
+        if tracks == "all":
+            return list(range(count))
+        return [pick_speech_audio_track(props.get("audio_tracks") or [])]
+    # Intersect, not fail: a later multi-part file may have fewer tracks.
+    valid = [i for i in tracks if 0 <= i < count]
+    if not valid:
+        return "None of the selected tracks exist in this file."
+    return valid
+
+
 def _resolved_path_and_mtime(filepath: str) -> tuple[str, int] | None:
     """Return ``(resolved_path_str, mtime_ns)`` or ``None`` if the file is missing.
 

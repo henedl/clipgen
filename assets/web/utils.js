@@ -656,6 +656,12 @@ var formatDuration = function (sec) {
   return m + ":" + pad2(s);
 };
 
+// Model download sizes: whole MB below 1 GB, one decimal above.
+var formatModelSize = function (mb) {
+  if (mb >= 1024) return (mb / 1024).toFixed(1) + " GB";
+  return Math.round(mb) + " MB";
+};
+
 // ---- Elapsed-time / ETA estimation for long-running operations ----
 
 // Null unless 0 < progress < 1 and elapsed > 0; callers show elapsed only.
@@ -2141,91 +2147,6 @@ var setStoredUIMapEntry = function (page, field, key, value) {
   setStoredUIStateField(page, field, map);
 };
 
-// ---- Canvas helpers (timeline overlays) ----
-
-// Stacked per-series bands normalized to their own peaks; dimKey paints last; colors are #rrggbb.
-var drawAmplitudeBands = function (ctx, opts) {
-  var x = opts.x, y = opts.y, w = opts.w, h = opts.h;
-  var visStart = opts.visStart, visEnd = opts.visEnd;
-  var series = opts.series || [];
-  var binPx = opts.binPx || 2;
-  var dimKey = opts.dimKey;
-
-  if (w <= 0 || h <= 0 || series.length === 0) return;
-  var visLen = visEnd - visStart;
-  if (!(visLen > 0)) return;
-
-  var numBins = Math.max(1, Math.ceil(w / binPx));
-  var binSec = visLen / numBins;
-
-  // Bin each series and remember its own max
-  var binned = [];
-  for (var s = 0; s < series.length; s++) {
-    var ts = series[s].timestamps || [];
-    var bins = new Array(numBins);
-    for (var b = 0; b < numBins; b++) bins[b] = 0;
-    var maxCount = 0;
-    for (var i = 0; i < ts.length; i++) {
-      var t = ts[i];
-      if (t < visStart || t >= visEnd) continue;
-      var idx = Math.floor((t - visStart) / binSec);
-      if (idx < 0) idx = 0;
-      else if (idx >= numBins) idx = numBins - 1;
-      var c = bins[idx] + 1;
-      bins[idx] = c;
-      if (c > maxCount) maxCount = c;
-    }
-    binned.push({ key: series[s].key, color: series[s].color, bins: bins, max: maxCount });
-  }
-
-  // Order: dimmed series first, focused series last (paints on top)
-  var order = [];
-  for (var k = 0; k < binned.length; k++) {
-    if (dimKey && binned[k].key !== dimKey) order.push(k);
-  }
-  for (var k2 = 0; k2 < binned.length; k2++) {
-    if (!dimKey || binned[k2].key === dimKey) order.push(k2);
-  }
-
-  var baselineY = y + h;
-  for (var oi = 0; oi < order.length; oi++) {
-    var ser = binned[order[oi]];
-    if (ser.max <= 0) continue;
-    var dimmed = dimKey && ser.key !== dimKey;
-    var fillAlpha = dimmed ? 0.05 : 0.18;
-    var strokeAlpha = dimmed ? 0.25 : 1.0;
-
-    // Build the area path along bin tops
-    ctx.beginPath();
-    ctx.moveTo(x, baselineY);
-    for (var bi = 0; bi < numBins; bi++) {
-      var norm = ser.bins[bi] / ser.max;
-      var py = baselineY - norm * h;
-      var px = x + bi * binPx;
-      ctx.lineTo(px, py);
-      ctx.lineTo(px + binPx, py);
-    }
-    ctx.lineTo(x + numBins * binPx, baselineY);
-    ctx.closePath();
-    ctx.fillStyle = hexToRgba(ser.color, fillAlpha);
-    ctx.fill();
-
-    ctx.beginPath();
-    var started = false;
-    for (var bi2 = 0; bi2 < numBins; bi2++) {
-      var n2 = ser.bins[bi2] / ser.max;
-      var py2 = baselineY - n2 * h;
-      var px2 = x + bi2 * binPx;
-      if (!started) { ctx.moveTo(px2, py2); started = true; }
-      else ctx.lineTo(px2, py2);
-      ctx.lineTo(px2 + binPx, py2);
-    }
-    ctx.lineWidth = 1.5;
-    ctx.strokeStyle = strokeAlpha === 1.0 ? ser.color : hexToRgba(ser.color, strokeAlpha);
-    ctx.stroke();
-  }
-};
-
 // ---- Timeline ruler core (shared by canvas timeline surfaces) ----
 
 // "Nice" tick intervals (seconds) for a timeline ruler, coarse → fine.
@@ -2277,62 +2198,6 @@ var drawTimelineRuler = function (ctx, opts) {
   }
   ctx.textAlign = "start";
 };
-
-// ---- Video helpers ----
-
-// Hidden tabs drop paused <video> frames; snapshot to canvas until repaint. Positioned parent required.
-var clipgenInstallPausedFrameOverlay = function (video) {
-  if (!video || video._clipgenPausedOverlay) return;
-  var parent = video.parentNode;
-  if (!parent) return;
-
-  var canvas = document.createElement("canvas");
-  canvas.className = "video-paused-overlay";
-  // Inline styles so the helper works without page-specific CSS.
-  canvas.style.position = "absolute";
-  canvas.style.inset = "0";
-  canvas.style.width = "100%";
-  canvas.style.height = "100%";
-  canvas.style.objectFit = "contain";
-  canvas.style.pointerEvents = "none";
-  canvas.style.display = "none";
-  parent.appendChild(canvas);
-  video._clipgenPausedOverlay = canvas;
-
-  var hide = function () { canvas.style.display = "none"; };
-
-  var snapshot = function () {
-    if (!video.src || !video.paused) return;
-    var w = video.videoWidth, h = video.videoHeight;
-    // videoWidth/Height are zero until the first frame decodes.
-    if (!w || !h) return;
-    canvas.width = w;
-    canvas.height = h;
-    try {
-      canvas.getContext("2d").drawImage(video, 0, 0, w, h);
-      canvas.style.display = "";
-    } catch (_) {
-      // Cross-origin or other draw failure: leave the overlay hidden.
-    }
-  };
-
-  // The live video reasserts itself: drop the snapshot.
-  video.addEventListener("play", hide);
-  video.addEventListener("seeked", hide);
-  video.addEventListener("emptied", hide);
-  video.addEventListener("loadedmetadata", hide);
-
-  document.addEventListener("visibilitychange", function () {
-    if (document.hidden) {
-      snapshot();
-    } else if (video.paused && video.src) {
-      // Nudge currentTime so `seeked` hides the snapshot; same-value assignment may be optimized away.
-      var t = video.currentTime;
-      video.currentTime = t > 0.001 ? t - 0.001 : 0.001;
-    }
-  });
-};
-
 
 // ---- Drag-to-resize handles ----
 

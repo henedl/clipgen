@@ -599,24 +599,9 @@ def _build_sheet_payload(ctx: spreadsheet.SheetContext) -> dict[str, Any]:
     )
 
     rows: list[dict[str, Any]] = []
-    for row_idx in range(ctx.first_data_row_idx, len(ctx.sheet_data)):
-        if ctx.baseline_row_idx is not None and row_idx == ctx.baseline_row_idx:
-            continue
-        if ctx.filename_row_idx is not None and row_idx == ctx.filename_row_idx:
-            continue
-
-        row_data = ctx.sheet_data[row_idx]
-        obs_col = ctx.observation_cell.col - 1
-        cat_col = ctx.category_cell.col - 1
-
-        observation = row_data[obs_col] if obs_col < len(row_data) else ""
+    cat_col = ctx.category_cell.col - 1
+    for row_idx, row_data, observation, severity in spreadsheet.iter_data_rows(ctx):
         category = row_data[cat_col] if cat_col < len(row_data) else ""
-
-        severity = ""
-        if ctx.severity_cell:
-            sev_col = ctx.severity_cell.col - 1
-            if sev_col < len(row_data) and row_data[sev_col].strip():
-                severity = utils.normalize_severity(row_data[sev_col])
 
         cells: dict[str, dict[str, Any]] = {}
         row_keywords: set[str] = set()
@@ -882,7 +867,9 @@ def _save_manifest_quiet() -> None:
             removed_ids=removed_ids,
             study=study,
             worksheet_title=getattr(_worksheet, "title", ""),
-            is_excel=pipeline.is_excel_worksheet(_worksheet) if _worksheet else False,
+            is_excel=spreadsheet.is_excel_worksheet(_worksheet)
+            if _worksheet
+            else False,
             mode="studio",
         )
     except (OSError, TypeError, ValueError) as e:
@@ -1065,28 +1052,11 @@ def _process_intake_item(
     if source == "transcript":
         import transcripts_server
 
-        with transcripts_server._manifest_lock:
-            src_entry = transcripts_server._manifest.get("source_transcripts", {}).get(
-                participant, {}
-            )
-            transcript_text = item_text
-            if not transcript_text and mark_ids:
-                # Fallback: marks name segments; join those segments' text.
-                mark_set = set(mark_ids)
-                wanted = {
-                    m.get("segment_id")
-                    for m in transcripts_server._manifest.get("marks", []) or []
-                    if isinstance(m, dict) and m.get("id") in mark_set
-                }
-                parts: list[str] = []
-                for seg in src_entry.get("segments", []) or []:
-                    if seg.get("id") in wanted:
-                        t = (seg.get("text") or "").strip()
-                        if t:
-                            parts.append(t)
-                transcript_text = " ".join(parts)
-        artifact["transcript_version"] = src_entry.get("transcribed_at", "")
-        artifact["transcriptText"] = transcript_text
+        version, joined = transcripts_server.intake_transcript(
+            participant, [] if item_text else mark_ids
+        )
+        artifact["transcript_version"] = version
+        artifact["transcriptText"] = item_text or joined
         if item_label:
             artifact["transcriptLabel"] = item_label
     return artifact
@@ -1849,7 +1819,7 @@ def api_reel() -> FlaskResponse:
                     files.prepare_clip(clip)
                     for start_str, end_str in clip.get("times", []):
                         components.append(
-                            utils.build_reel_component(clip, "", start_str, end_str)
+                            viewer.build_reel_component(clip, "", start_str, end_str)
                         )
                 req_cards, req_dur = pipeline._resolve_titlecard_options(
                     titlecards_enabled, titlecard_duration_seconds
@@ -2000,7 +1970,7 @@ def api_timeline_viewer() -> FlaskResponse:
             artifacts,
             study=study,
             worksheet_title=getattr(_worksheet, "title", ""),
-            is_excel=pipeline.is_excel_worksheet(_worksheet),
+            is_excel=spreadsheet.is_excel_worksheet(_worksheet),
             mode="timeline-viewer",
             screenspace_events=ss_events or None,
         )
@@ -2251,7 +2221,7 @@ def _settings_records() -> list[dict[str, Any]]:
                 "name": name,
                 "value": getattr(config, name),
                 "default": _settings_defaults.get(name),
-                "description": config.SETTINGS_DESCRIPTIONS.get(name, ""),
+                "description": meta["description"],
                 "tab": meta.get("tab", "General"),
                 "group": meta.get("group", ""),
                 "type": meta.get("type", "str"),
@@ -2730,6 +2700,20 @@ def api_reel_direct() -> FlaskResponse:
             emit_event({"phase": "start", "total_clips": total})
 
             completed = 0
+
+            def advance(failure_label: str | None = None) -> None:
+                nonlocal completed
+                if failure_label is not None:
+                    failed_segments.append(failure_label)
+                completed += 1
+                emit_event(
+                    {
+                        "phase": "clip_done",
+                        "clip_index": completed - 1,
+                        "total_clips": total,
+                    }
+                )
+
             for seg in segments:
                 if _reel_cancel_event.is_set():
                     break
@@ -2741,29 +2725,13 @@ def api_reel_direct() -> FlaskResponse:
                     seg.get("event_type") or seg.get("desc") or ""
                 ).strip() or f"segment {completed + 1}"
                 if end <= start:
-                    failed_segments.append(f"{seg_label} — empty time span")
-                    completed += 1
-                    emit_event(
-                        {
-                            "phase": "clip_done",
-                            "clip_index": completed - 1,
-                            "total_clips": total,
-                        }
-                    )
+                    advance(f"{seg_label} — empty time span")
                     continue
 
                 video_paths = _resolve_intake_video_paths(participant)
 
                 if not video_paths:
-                    failed_segments.append(f"{seg_label} — no video for {participant}")
-                    completed += 1
-                    emit_event(
-                        {
-                            "phase": "clip_done",
-                            "clip_index": completed - 1,
-                            "total_clips": total,
-                        }
-                    )
+                    advance(f"{seg_label} — no video for {participant}")
                     continue
                 timeline = video.timeline_or_none(video_paths)
 
@@ -2807,16 +2775,7 @@ def api_reel_direct() -> FlaskResponse:
                         all_cards_applied = False
                 if ok:
                     clip_paths.append(tmp_path)
-                else:
-                    failed_segments.append(seg_label)
-                completed += 1
-                emit_event(
-                    {
-                        "phase": "clip_done",
-                        "clip_index": completed - 1,
-                        "total_clips": total,
-                    }
-                )
+                advance(None if ok else seg_label)
 
             if _reel_cancel_event.is_set():
                 emit_event(

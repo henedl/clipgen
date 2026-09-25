@@ -36,7 +36,8 @@
     showOverlay = STUDIO.showOverlay,
     showResult = STUDIO.showResult,
     stampLog = STUDIO.stampLog,
-    updateSingleCellClass = STUDIO.updateSingleCellClass;
+    updateSingleCellClass = STUDIO.updateSingleCellClass,
+    requestFailReason = STUDIO.requestFailReason;
   var setButtonProgress = ClipgenPrimitives.setButtonProgress;
 
 
@@ -170,19 +171,7 @@
     apiPostNDJSON(endpoint, reelBody, { onLine: handleLine })
       .then(finish)
       .catch(function (err) {
-        // 4xx/5xx (e.g. 409 in-progress) arrive as JSON in err.bodyText; parse into the payload.
-        if (err && err.status >= 400) {
-          try {
-            finalPayload = JSON.parse(err.bodyText);
-          } catch (_) {
-            finalPayload = {
-              ok: false,
-              error: err.bodyText || ("HTTP " + err.status),
-            };
-          }
-        } else {
-          finalPayload = { ok: false, error: "Request failed: " + err };
-        }
+        finalPayload = { ok: false, error: requestFailReason(err) };
         finish();
       });
   }

@@ -48,11 +48,6 @@
   // Settings and models live at the combined-app root, not a page prefix.
   var API_ROOT = "/api";
 
-  function _formatSize(mb) {
-    if (mb >= 1024) return (mb / 1024).toFixed(1) + " GB";
-    return mb + " MB";
-  }
-
   var FIT_LABELS = { fits: "Fits", tight: "Tight", too_big: "Too large" };
 
   // Memory-fit chip from the server's verdict; the recommended model wins the label.
@@ -62,8 +57,8 @@
     var chip = el("span", "settings-llm-model-fit", isReco ? "Recommended" : FIT_LABELS[fit.level]);
     if (isReco) chip.classList.add("settings-llm-model-fit--reco");
     else if (fit.level === "too_big") chip.classList.add("settings-llm-model-fit--warn");
-    chip.title = "Needs about " + _formatSize(fit.need_mb) + ", " +
-      _formatSize(fit.usable_mb) + " usable";
+    chip.title = "Needs about " + formatModelSize(fit.need_mb) + ", " +
+      formatModelSize(fit.usable_mb) + " usable";
     return chip;
   }
 
@@ -78,7 +73,7 @@
     var parts = [];
     if (hw.chip) parts.push(hw.chip);
     if (hw.memory_mb) {
-      parts.push(_formatSize(hw.memory_mb).replace(".0 GB", " GB") +
+      parts.push(formatModelSize(hw.memory_mb).replace(".0 GB", " GB") +
         (hw.unified_memory ? " unified memory" : " RAM"));
     }
     if (hw.cpu_count) parts.push(hw.cpu_count + " cores");
@@ -215,7 +210,7 @@
         if (!st.succeeded) {
           bar.remove();
           dlBtn.disabled = false;
-          size.textContent = _formatSize(sizeMb);
+          size.textContent = formatModelSize(sizeMb);
           _setStatus(st.error || "Download failed");
         }
         return;
@@ -223,8 +218,8 @@
       if (st.total > 0) {
         var pct = Math.max(0, Math.min(100, Math.round((st.completed / st.total) * 100)));
         fill.style.width = pct + "%";
-        size.textContent = _formatSize(Math.round(st.completed / 1048576)) +
-          " / " + _formatSize(sizeMb);
+        size.textContent = formatModelSize(Math.round(st.completed / 1048576)) +
+          " / " + formatModelSize(sizeMb);
       }
     }
     function startWatching() {
@@ -276,7 +271,7 @@
       lic.appendChild(document.createTextNode("."));
       name.appendChild(lic);
       row.appendChild(name);
-      var size = el("span", "settings-llm-model-size", _formatSize(rd.size_mb || 0));
+      var size = el("span", "settings-llm-model-size", formatModelSize(rd.size_mb || 0));
       row.appendChild(size);
       row.appendChild(_modelLinkSlot(rd));
       var action = el("span", "settings-llm-model-action");
@@ -441,7 +436,7 @@
         row.classList.add("settings-llm-model-row--unusable");
       }
       row.appendChild(name);
-      var size = el("span", "settings-llm-model-size", _formatSize(model.size_mb));
+      var size = el("span", "settings-llm-model-size", formatModelSize(model.size_mb));
       row.appendChild(size);
       var chip = _fitChip(model, model.name === recommended);
       if (chip) row.appendChild(chip);
@@ -476,7 +471,7 @@
       }
       row.appendChild(name);
       row.appendChild(
-        el("span", "settings-llm-model-size", model.size_mb ? _formatSize(model.size_mb) : "")
+        el("span", "settings-llm-model-size", model.size_mb ? formatModelSize(model.size_mb) : "")
       );
       row.appendChild(_modelLinkSlot(model));
 
@@ -563,7 +558,7 @@
         opt.value = refByStem[m.name] || m.name;
         // No room for the raw id in an option; it goes in the tooltip.
         var label = m.label || m.name;
-        if (m.size_mb) label += " (" + _formatSize(m.size_mb) + ")";
+        if (m.size_mb) label += " (" + formatModelSize(m.size_mb) + ")";
         if (m.description) label += " \u2014 " + m.description;
         // Still selectable: a llama.cpp upgrade may fix it; the mark warns.
         if (m.unusable) label += " \u2014 won't load";
@@ -587,7 +582,7 @@
         }
         var sopt = document.createElement("option");
         sopt.value = sm.name;
-        sopt.textContent = (sm.label || sm.name) + " (" + _formatSize(sm.size_mb) +
+        sopt.textContent = (sm.label || sm.name) + " (" + formatModelSize(sm.size_mb) +
           ") \u2014 not downloaded" + _fitSuffix(sm, sm.name === data.llm.recommended);
         sopt.title = sm.name + " \u2014 " + sm.description;
         if (sm.name === currentValue) {

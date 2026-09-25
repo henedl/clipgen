@@ -1818,22 +1818,7 @@
     tip.appendChild(el("p", "tool-info-body", text));
 
     tip.classList.remove("hidden");
-    positionToolInfoTooltip(tip, anchorEl);
-  }
-
-  function positionToolInfoTooltip(tip, anchorEl) {
-    var rect = anchorEl.getBoundingClientRect();
-    var x = rect.left;
-    var y = rect.bottom + 6;
-    tip.style.left = x + "px";
-    tip.style.top = y + "px";
-    var tipRect = tip.getBoundingClientRect();
-    if (tipRect.right > window.innerWidth - 8) {
-      tip.style.left = (window.innerWidth - tipRect.width - 8) + "px";
-    }
-    if (tipRect.bottom > window.innerHeight - 8) {
-      tip.style.top = (rect.top - tipRect.height - 6) + "px";
-    }
+    positionPopoverAnchored(tip, anchorEl.getBoundingClientRect());
   }
 
   function pinToolInfoTooltip() {

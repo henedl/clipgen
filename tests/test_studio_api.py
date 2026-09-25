@@ -1423,7 +1423,7 @@ def test_api_timeline_viewer_without_intake(client, monkeypatch):
     ]
     monkeypatch.setattr(spreadsheet, "generate_list", lambda *a, **kw: fake_clips)
     monkeypatch.setattr(pipeline, "process_clips", lambda *a, **kw: (1, fake_artifacts))
-    monkeypatch.setattr(pipeline, "is_excel_worksheet", lambda ws: False)
+    monkeypatch.setattr(spreadsheet, "is_excel_worksheet", lambda ws: False)
     monkeypatch.setattr(viewer, "load_screenspace_events_for_viewer", list)
     monkeypatch.setattr(viewer, "finalize_timeline_data", lambda *a, **kw: {"meta": {}})
     monkeypatch.setattr(
@@ -1472,7 +1472,7 @@ def test_api_timeline_viewer_with_intake(client, monkeypatch):
     monkeypatch.setattr(
         pipeline, "process_clips", lambda *a, **kw: (1, sheet_artifacts)
     )
-    monkeypatch.setattr(pipeline, "is_excel_worksheet", lambda ws: False)
+    monkeypatch.setattr(spreadsheet, "is_excel_worksheet", lambda ws: False)
     monkeypatch.setattr(viewer, "load_screenspace_events_for_viewer", list)
     monkeypatch.setattr(server, "_save_manifest_quiet", lambda: None)
 
@@ -1623,7 +1623,7 @@ def test_api_timeline_viewer_passes_cancel_flag(client, monkeypatch):
 
     monkeypatch.setattr(spreadsheet, "generate_list", lambda *a, **kw: [{"desc": "x"}])
     monkeypatch.setattr(pipeline, "process_clips", fake_process_clips)
-    monkeypatch.setattr(pipeline, "is_excel_worksheet", lambda ws: False)
+    monkeypatch.setattr(spreadsheet, "is_excel_worksheet", lambda ws: False)
     monkeypatch.setattr(viewer, "load_screenspace_events_for_viewer", list)
     monkeypatch.setattr(viewer, "finalize_timeline_data", lambda *a, **kw: {"meta": {}})
     monkeypatch.setattr(
@@ -1656,7 +1656,7 @@ def test_api_timeline_viewer_short_circuits_after_cancel(client, monkeypatch):
 
     monkeypatch.setattr(spreadsheet, "generate_list", lambda *a, **kw: [{"desc": "x"}])
     monkeypatch.setattr(pipeline, "process_clips", fake_process_clips)
-    monkeypatch.setattr(pipeline, "is_excel_worksheet", lambda ws: False)
+    monkeypatch.setattr(spreadsheet, "is_excel_worksheet", lambda ws: False)
     monkeypatch.setattr(
         viewer,
         "generate_timeline_viewer",
@@ -1732,7 +1732,7 @@ def test_api_timeline_viewer_discards_sheet_clips_on_cancel_during_intake(
     monkeypatch.setattr(
         pipeline, "process_clips", lambda *a, **kw: (1, sheet_artifacts)
     )
-    monkeypatch.setattr(pipeline, "is_excel_worksheet", lambda ws: False)
+    monkeypatch.setattr(spreadsheet, "is_excel_worksheet", lambda ws: False)
 
     def fake_intake(items, **kw):
         # Cancel arrives while the intake clips are being generated.
@@ -2880,7 +2880,7 @@ def test_api_settings_includes_transcription_settings(client):
     assert cap["group"] == "Speakers"
     assert (cap["min"], cap["max"], cap["step"]) == (2, 8, 1)
     for name in ("TRANSCRIBE_SPEAKERS", "TRANSCRIBE_SPEAKER_MAX"):
-        assert name in config.SETTINGS_DESCRIPTIONS
+        assert config.STUDIO_SETTINGS[name]["description"]
 
 
 def test_api_settings_includes_cli_settings(client):
@@ -2914,7 +2914,7 @@ def test_api_settings_includes_grouped_tool_nav(client):
     import config
 
     assert config.SCREENSPACE_GROUPED_TOOL_NAV is True
-    assert "SCREENSPACE_GROUPED_TOOL_NAV" in config.SETTINGS_DESCRIPTIONS
+    assert config.STUDIO_SETTINGS["SCREENSPACE_GROUPED_TOOL_NAV"]["description"]
     resp = client.get("/studio/api/settings")
     data = resp.get_json()
     by_name = {s["name"]: s for s in data["settings"]}
@@ -2930,7 +2930,7 @@ def test_api_settings_includes_source_filename_pattern(client):
     """GET /api/settings exposes the source-video filename pattern."""
     import config
 
-    assert "SOURCE_FILENAME_PATTERN" in config.SETTINGS_DESCRIPTIONS
+    assert config.STUDIO_SETTINGS["SOURCE_FILENAME_PATTERN"]["description"]
     resp = client.get("/studio/api/settings")
     by_name = {s["name"]: s for s in resp.get_json()["settings"]}
     s = by_name["SOURCE_FILENAME_PATTERN"]
@@ -3757,7 +3757,7 @@ def test_api_reel_releases_slot_on_cached_match(client, monkeypatch, tmp_path):
     monkeypatch.setattr(server, "_generated_reels", [cached])
     monkeypatch.setattr("pipeline.compute_reel_id", lambda components: "cached-id")
     monkeypatch.setattr(
-        "utils.build_reel_component", lambda clip, src, s, e: {"start": s, "end": e}
+        "viewer.build_reel_component", lambda clip, src, s, e: {"start": s, "end": e}
     )
 
     resp = client.post("/studio/api/reel", json={"cells": ["P01.5"]})

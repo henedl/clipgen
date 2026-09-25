@@ -12,6 +12,7 @@ import files
 import pipeline
 import transcripts
 import utils
+import viewer
 import video
 from utils import ClipRecord
 
@@ -395,7 +396,7 @@ def test_multi_video_gif_duration_clamped_to_segment_end(monkeypatch, make_clip)
 def test_artifact_record_single_video_local_equals_global(make_clip):
     clip = cast(ClipRecord, dict(make_clip()))
     clip["cell_annotations"] = []
-    record = utils.build_artifact_record(
+    record = viewer.build_artifact_record(
         clip,
         "study_P01.mp4",
         "out.mp4",
@@ -413,7 +414,7 @@ def test_artifact_record_single_video_local_equals_global(make_clip):
 def test_artifact_record_multi_video_maps_local(make_clip):
     clip = _multi_clip(make_clip, [("2:04", "2:10")])
     clip["cell_annotations"] = []
-    record = utils.build_artifact_record(
+    record = viewer.build_artifact_record(
         clip,
         "video1.mp4",
         "out.mp4",
@@ -431,7 +432,7 @@ def test_artifact_record_multi_video_maps_local(make_clip):
 def test_artifact_record_boundary_clip_has_parts(make_clip):
     clip = _multi_clip(make_clip, [("1:00", "1:30")])
     clip["cell_annotations"] = []
-    record = utils.build_artifact_record(
+    record = viewer.build_artifact_record(
         clip,
         "video1.mp4",
         "out.mp4",
@@ -453,7 +454,7 @@ def test_artifact_record_screenshot_never_splits(make_clip):
     # frame must map by start only — never split.
     clip = _multi_clip(make_clip, [("1:00", "1:30")])
     clip["cell_annotations"] = []
-    record = utils.build_artifact_record(
+    record = viewer.build_artifact_record(
         clip,
         "video1.mp4",
         "out.png",
@@ -473,7 +474,7 @@ def test_artifact_record_full_path_base_video_normalized_to_basename(make_clip):
     # manifests share one shape. Regression for the path-shape alignment fix.
     clip = cast(ClipRecord, dict(make_clip()))
     clip["cell_annotations"] = []
-    record = utils.build_artifact_record(
+    record = viewer.build_artifact_record(
         clip,
         "/srv/input/study_P01.mp4",
         "out.mp4",
@@ -496,7 +497,7 @@ def test_artifact_record_full_path_timeline_normalized_to_basenames(make_clip):
         ("/srv/input/video1.mp4", 80, 0),
         ("/srv/input/video2.mp4", 120, 80),
     ]
-    record = utils.build_artifact_record(
+    record = viewer.build_artifact_record(
         clip,
         "/srv/input/video1.mp4",
         "out.mp4",

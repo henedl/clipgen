@@ -1449,6 +1449,11 @@ def get_transcript_extension(fmt: str | None = None) -> str:
     return _FORMATS.get(fmt or config.TRANSCRIBE_FORMAT, _FORMATS["md"])[0]
 
 
+def format_transcript(result: TranscriptResult, fmt: str) -> str:
+    """Render *result* as *fmt* (md, srt or vtt); unknown formats render md."""
+    return _FORMATS.get(fmt, _FORMATS["md"])[1](result)
+
+
 def write_transcript(
     result: TranscriptResult,
     output_path: str,
@@ -1459,11 +1464,8 @@ def write_transcript(
 
     Returns True on success, False on failure.
     """
-    fmt = fmt or config.TRANSCRIBE_FORMAT
-    formatter = _FORMATS.get(fmt, _FORMATS["md"])[1]
-
     try:
-        text = formatter(result)
+        text = format_transcript(result, fmt or config.TRANSCRIBE_FORMAT)
         Path(output_path).write_text(text, encoding="utf-8")
         utils.verbose_print(f"  Transcript written: {Path(output_path).name}")
         return True

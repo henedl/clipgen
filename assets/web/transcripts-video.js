@@ -9,7 +9,7 @@
  * used to poke directly through cancelPendingSeek / clearTimelineMarkers /
  * hasTimelineHover. Plain utils.js globals (qs/el/formatTime/MARK_CATEGORIES/
  * getCanvasThemeColors/drawTimelineRuler/niceTimeInterval/getCSSVar/hexToRgba/
- * getStoredUIState/setStoredUIStateField/clipgenInstallPausedFrameOverlay) and
+ * getStoredUIState/setStoredUIStateField) and
  * window.ClipgenVideoControls are reached via the scope chain.
  */
 (function () {
@@ -832,10 +832,63 @@
       });
     });
 
-    // Keep the paused frame visible across tab switches. See utils.js.
-    clipgenInstallPausedFrameOverlay(video);
+    // Keep the paused frame visible across tab switches.
+    installPausedOverlay(video);
 
     updatePlayerButtons();
+  }
+
+  // Hidden tabs drop paused <video> frames; snapshot to canvas until repaint. Positioned parent required.
+  function installPausedOverlay(video) {
+    if (!video || video._clipgenPausedOverlay) return;
+    var parent = video.parentNode;
+    if (!parent) return;
+
+    var canvas = document.createElement("canvas");
+    canvas.className = "video-paused-overlay";
+    // Inline styles so the helper works without page-specific CSS.
+    canvas.style.position = "absolute";
+    canvas.style.inset = "0";
+    canvas.style.width = "100%";
+    canvas.style.height = "100%";
+    canvas.style.objectFit = "contain";
+    canvas.style.pointerEvents = "none";
+    canvas.style.display = "none";
+    parent.appendChild(canvas);
+    video._clipgenPausedOverlay = canvas;
+
+    var hide = function () { canvas.style.display = "none"; };
+
+    var snapshot = function () {
+      if (!video.src || !video.paused) return;
+      var w = video.videoWidth, h = video.videoHeight;
+      // videoWidth/Height are zero until the first frame decodes.
+      if (!w || !h) return;
+      canvas.width = w;
+      canvas.height = h;
+      try {
+        canvas.getContext("2d").drawImage(video, 0, 0, w, h);
+        canvas.style.display = "";
+      } catch (_) {
+        // Cross-origin or other draw failure: leave the overlay hidden.
+      }
+    };
+
+    // The live video reasserts itself: drop the snapshot.
+    video.addEventListener("play", hide);
+    video.addEventListener("seeked", hide);
+    video.addEventListener("emptied", hide);
+    video.addEventListener("loadedmetadata", hide);
+
+    document.addEventListener("visibilitychange", function () {
+      if (document.hidden) {
+        snapshot();
+      } else if (video.paused && video.src) {
+        // Nudge currentTime so `seeked` hides the snapshot; same-value assignment may be optimized away.
+        var t = video.currentTime;
+        video.currentTime = t > 0.001 ? t - 0.001 : 0.001;
+      }
+    });
   }
 
   function initTimelineCanvas() {

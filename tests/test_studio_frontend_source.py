@@ -122,9 +122,12 @@ def test_sheet_branch_catch_marks_failures():
     """A fetch failure on the sheet branch must mark captured sheet cards as
     failed (not leave them visually queued) and tally totalFail."""
     src = _studio_js()
-    assert "var sheetCardEls = [];" in src
-    assert "setCardResult(sheetCardEls[j], false, sheetReason)" in src
-    assert "totalFail += sheetItems.length;" in src
+    assert "failBranch(sheetCardEls, err)" in src
+    assert "failBranch(intakeCardEls, err)" in src
+    start = src.index("function failBranch(cardEls, err)")
+    body = src[start : src.index("finishBranch();", start)]
+    assert "setCardResult(cardEls[j], false, reason)" in body
+    assert "totalFail += cardEls.length;" in body
 
 
 def test_generate_abort_treated_as_cancel_not_failure():
@@ -141,9 +144,10 @@ def test_generate_abort_treated_as_cancel_not_failure():
     assert "cancelled = true" in body
     # Abort path clears queued cards; real failures still use setCardResult(..., false).
     abort_blocks = body.split("if (isGenerateFetchAborted(err))")
-    assert len(abort_blocks) >= 3
+    assert len(abort_blocks) >= 2
     for block in abort_blocks[1:]:
-        abort_section = block.split("finishBranch();")[0]
+        abort_section = block.split("} else {")[0]
+        assert "clearQueuedCards(" in abort_section
         assert "setCardResult" not in abort_section
         assert "totalFail +=" not in abort_section
 

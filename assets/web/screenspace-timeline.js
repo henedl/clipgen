@@ -10,7 +10,7 @@
  * findTask / focusedTaskId live in screenspace-tasks.js, which loads AFTER this
  * file, so they are called late-bound as SS.findTask(...) / SS.focusedTaskId(...)
  * rather than destructured. formatTime/formatDuration/clamp/hexToRgba/el/qs and
- * the drawTimelineRuler/niceTimeInterval/drawAmplitudeBands canvas helpers are
+ * the drawTimelineRuler/niceTimeInterval canvas helpers are
  * ambient utils.js globals (scope chain); sizeCanvasToDisplay comes from
  * screenspace-utils.js the same way.
  *
@@ -535,6 +535,89 @@
     renderBoundaryFlags(visStart, visLen, w, excludedByTask, focused);
     renderTimelineLegend();
     renderPlayhead();
+  }
+
+  // Stacked per-series bands normalized to their own peaks; dimKey paints last; colors are #rrggbb.
+  function drawAmplitudeBands(ctx, opts) {
+    var x = opts.x, y = opts.y, w = opts.w, h = opts.h;
+    var visStart = opts.visStart, visEnd = opts.visEnd;
+    var series = opts.series || [];
+    var binPx = opts.binPx || 2;
+    var dimKey = opts.dimKey;
+
+    if (w <= 0 || h <= 0 || series.length === 0) return;
+    var visLen = visEnd - visStart;
+    if (!(visLen > 0)) return;
+
+    var numBins = Math.max(1, Math.ceil(w / binPx));
+    var binSec = visLen / numBins;
+
+    // Bin each series and remember its own max
+    var binned = [];
+    for (var s = 0; s < series.length; s++) {
+      var ts = series[s].timestamps || [];
+      var bins = new Array(numBins);
+      for (var b = 0; b < numBins; b++) bins[b] = 0;
+      var maxCount = 0;
+      for (var i = 0; i < ts.length; i++) {
+        var t = ts[i];
+        if (t < visStart || t >= visEnd) continue;
+        var idx = Math.floor((t - visStart) / binSec);
+        if (idx < 0) idx = 0;
+        else if (idx >= numBins) idx = numBins - 1;
+        var c = bins[idx] + 1;
+        bins[idx] = c;
+        if (c > maxCount) maxCount = c;
+      }
+      binned.push({ key: series[s].key, color: series[s].color, bins: bins, max: maxCount });
+    }
+
+    // Order: dimmed series first, focused series last (paints on top)
+    var order = [];
+    for (var k = 0; k < binned.length; k++) {
+      if (dimKey && binned[k].key !== dimKey) order.push(k);
+    }
+    for (var k2 = 0; k2 < binned.length; k2++) {
+      if (!dimKey || binned[k2].key === dimKey) order.push(k2);
+    }
+
+    var baselineY = y + h;
+    for (var oi = 0; oi < order.length; oi++) {
+      var ser = binned[order[oi]];
+      if (ser.max <= 0) continue;
+      var dimmed = dimKey && ser.key !== dimKey;
+      var fillAlpha = dimmed ? 0.05 : 0.18;
+      var strokeAlpha = dimmed ? 0.25 : 1.0;
+
+      // Build the area path along bin tops
+      ctx.beginPath();
+      ctx.moveTo(x, baselineY);
+      for (var bi = 0; bi < numBins; bi++) {
+        var norm = ser.bins[bi] / ser.max;
+        var py = baselineY - norm * h;
+        var px = x + bi * binPx;
+        ctx.lineTo(px, py);
+        ctx.lineTo(px + binPx, py);
+      }
+      ctx.lineTo(x + numBins * binPx, baselineY);
+      ctx.closePath();
+      ctx.fillStyle = hexToRgba(ser.color, fillAlpha);
+      ctx.fill();
+
+      ctx.beginPath();
+      var started = false;
+      for (var bi2 = 0; bi2 < numBins; bi2++) {
+        var n2 = ser.bins[bi2] / ser.max;
+        var py2 = baselineY - n2 * h;
+        var px2 = x + bi2 * binPx;
+        if (!started) { ctx.moveTo(px2, py2); started = true; }
+        else ctx.lineTo(px2, py2);
+        ctx.lineTo(px2 + binPx, py2);
+      }
+      ctx.lineWidth = 1.5;
+      ctx.strokeStyle = strokeAlpha === 1.0 ? ser.color : hexToRgba(ser.color, strokeAlpha);
+      ctx.stroke();
+    }
   }
 
   // Boundary flags in #boundaryFlagRail, above the result band; rebuilt on every pan/zoom/resize/focus.
