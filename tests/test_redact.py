@@ -184,6 +184,33 @@ def test_detect_spans_splits_at_segment_boundaries(monkeypatch):
     assert [(s["label"], s["text"]) for s in out[1]] == [("PHONE", "123")]
 
 
+def test_detect_spans_drops_the_runtime_after_a_pass(monkeypatch):
+    monkeypatch.setattr(config, "DEBUGGING", False)
+    monkeypatch.setattr(redact, "_runtime", ("graph", _WordTokenizer(), {0: "O"}))
+    monkeypatch.setattr(
+        redact, "_run_window", lambda ids: (["O"] * len(ids), [1.0] * len(ids))
+    )
+    redact.detect_spans(["a b"], min_score=0.6, org=False)
+    assert redact._runtime is None
+
+
+@pytest.mark.parametrize(
+    "inputs",
+    [
+        {"serving_default_input_ids": 0},
+        {"serving_default_ids": 0, "serving_default_attention_mask": 1},
+        {"input_ids": 0, "attention_mask": 1, "token_type_ids": 2},
+    ],
+)
+def test_run_window_rejects_unexpected_inputs(monkeypatch, inputs):
+    graph = {"inputs": inputs}
+    monkeypatch.setattr(
+        redact, "_load_runtime", lambda: (graph, _WordTokenizer(), {0: "O"})
+    )
+    with pytest.raises(ValueError, match="unexpected Redact model inputs"):
+        redact._run_window([5, 6])
+
+
 def test_enabled_labels_drop_org_unless_asked():
     fams = redact.label_families({0: "O", 1: "B-ORG", 2: "S-EMAIL", 3: "S-IMEI"})
     assert fams == {"ORG", "EMAIL"}

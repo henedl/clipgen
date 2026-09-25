@@ -93,7 +93,6 @@ SEGMENT_JOIN = "\n"
 
 _runtime_lock = threading.Lock()
 _runtime: tuple[dict[str, Any], Tokenizer, dict[int, str]] | None = None
-_infer_lock = threading.Lock()
 
 
 class RedactCancelled(Exception):
@@ -156,12 +155,10 @@ def download(on_progress: Callable[[dict[str, Any]], None] | None = None) -> boo
 
 def remove() -> None:
     """Delete the downloaded assets and drop the cached runtime."""
-    global _runtime
     base = models_dir()
     for asset in ASSETS:
         (base / asset["filename"]).unlink(missing_ok=True)
-    with _runtime_lock:
-        _runtime = None
+    _drop_runtime()
 
 
 def redaction_block(count: int, *, min_score: float, org: bool) -> dict[str, Any]:
@@ -290,7 +287,7 @@ def _reconstruct_offsets(
 
 
 def _load_runtime() -> tuple[dict[str, Any], Tokenizer, dict[int, str]]:
-    """Model graph, tokenizer and id→label map, loaded once."""
+    """Model graph, tokenizer and id→label map, cached until ``_drop_runtime``."""
     global _runtime
     if _runtime is not None:
         return _runtime
@@ -307,6 +304,13 @@ def _load_runtime() -> tuple[dict[str, Any], Tokenizer, dict[int, str]]:
             id2label = {int(k): str(v) for k, v in labels["id2label"].items()}
         _runtime = (graph, tokenizer, id2label)
         return _runtime
+
+
+def _drop_runtime() -> None:
+    """Free the ~90 MB of float weights; a reload takes ~60 ms."""
+    global _runtime
+    with _runtime_lock:
+        _runtime = None
 
 
 def label_families(id2label: dict[int, str]) -> set[str]:
@@ -335,11 +339,13 @@ def _run_window(ids: list[int]) -> tuple[list[str], list[float]]:
     mask = np.zeros((1, SEQ), dtype=np.int32)
     padded[0, : len(seq)] = seq
     mask[0, : len(seq)] = 1
-    feeds = {
-        i: padded if "input_ids" in n else mask for n, i in graph["inputs"].items()
-    }
-    with _infer_lock:
-        logits = tflite_numpy.run_graph(graph, feeds)[0]
+    inputs = graph["inputs"]
+    ids_index = next((i for n, i in inputs.items() if "input_ids" in n), None)
+    mask_index = next((i for n, i in inputs.items() if "attention_mask" in n), None)
+    if len(inputs) != 2 or ids_index is None or mask_index is None:
+        raise ValueError(f"unexpected Redact model inputs: {sorted(inputs)}")
+    feeds = {ids_index: padded, mask_index: mask}
+    logits = tflite_numpy.run_graph(graph, feeds)[0]
     logits = logits[0, : len(seq)].astype(np.float32)
     shifted = logits - logits.max(axis=-1, keepdims=True)
     probs = np.exp(shifted)
@@ -529,7 +535,7 @@ def _document_spans(
     on_progress: Callable[[float], None] | None,
 ) -> list[dict[str, Any]]:
     """Windowed inference over one document; spans carry code-point offsets."""
-    _interp, tokenizer, _id2label = _load_runtime()
+    _graph, tokenizer, _id2label = _load_runtime()
     tokens = tokenizer.tokenize(text)
     offsets = _reconstruct_offsets(text, tokens)
     ids = [tid for tid, _ in tokens]
@@ -592,17 +598,19 @@ def detect_spans(
         return _stub_spans(texts)
     if not texts:
         return []
-    _interp, _tokenizer, id2label = _load_runtime()
-    labels = enabled_labels(label_families(id2label), org=org)
-    document = SEGMENT_JOIN.join(texts)
-    with profiling.span("redact.detect"):
-        spans = _document_spans(
-            document,
-            min_score=min_score,
-            labels=labels,
-            cancel_flag=cancel_flag,
-            on_progress=on_progress,
-        )
+    try:
+        _graph, _tokenizer, id2label = _load_runtime()
+        labels = enabled_labels(label_families(id2label), org=org)
+        with profiling.span("redact.detect"):
+            spans = _document_spans(
+                SEGMENT_JOIN.join(texts),
+                min_score=min_score,
+                labels=labels,
+                cancel_flag=cancel_flag,
+                on_progress=on_progress,
+            )
+    finally:
+        _drop_runtime()
     out: list[list[dict[str, Any]]] = [[] for _ in texts]
     starts: list[int] = []
     pos = 0

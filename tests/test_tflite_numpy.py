@@ -8,9 +8,7 @@ import pytest
 
 import tflite_numpy
 
-flatbuffers = pytest.importorskip("flatbuffers")
-
-_ADD, _FC = 0, 9
+_ADD, _FC, _GELU = 0, 9, 150
 _F32, _I8 = 0, 9
 
 
@@ -30,11 +28,12 @@ def _offsets(b: Any, offsets: list[int]) -> int:
 
 def _build(
     tensors: list[dict[str, Any]],
-    ops: list[tuple[int, list[int], list[int], int | None]],
+    ops: list[tuple[int, list[int], list[int], dict[int, int] | None]],
     buffers: list[bytes],
     external: dict[int, int] | None = None,
 ) -> bytes:
-    """A one-subgraph model; ``ops`` hold (builtin code, inputs, outputs, fused act)."""
+    """A one-subgraph model; ``ops`` hold (code, inputs, outputs, {slot: int8 option})."""
+    flatbuffers = pytest.importorskip("flatbuffers")
     b = flatbuffers.Builder(1024)
     codes = sorted({op[0] for op in ops})
     code_tables = []
@@ -78,13 +77,14 @@ def _build(
             b.PrependUOffsetTRelativeSlot(4, quant, 0)
         tensor_tables.append(b.EndObject())
     op_tables = []
-    for code, ins, outs, act in ops:
+    for code, ins, outs, opts in ops:
         in_vec = _vector(b, ins, "PrependInt32")
         out_vec = _vector(b, outs, "PrependInt32")
         options = None
-        if act is not None:
-            b.StartObject(1)
-            b.PrependInt8Slot(0, act, 0)
+        if opts is not None:
+            b.StartObject(max(opts, default=0) + 1)
+            for slot, value in opts.items():
+                b.PrependInt8Slot(slot, value, 0)
             options = b.EndObject()
         b.StartObject(5)
         b.PrependUint32Slot(0, codes.index(code), 0)
@@ -119,7 +119,7 @@ def _build(
     return bytes(b.Output())
 
 
-def _fc_model(tmp_path, act: int | None = None):
+def _fc_model(tmp_path, opts: dict[int, int] | None = None, bias: bool = True):
     weights = np.array([[10, -20, 30], [-40, 50, -60]], dtype=np.int8)
     tensors = [
         {"name": "x", "shape": [1, 3], "type": _F32, "io": "in"},
@@ -128,8 +128,9 @@ def _fc_model(tmp_path, act: int | None = None):
         {"name": "y", "shape": [1, 2], "type": _F32, "io": "out"},
     ]
     buffers = [b"", weights.tobytes(), np.array([1.0, -1.0], np.float32).tobytes()]
+    ins = [0, 1, 2] if bias else [0, 1]
     path = tmp_path / "fc.tflite"
-    path.write_bytes(_build(tensors, [(_FC, [0, 1, 2], [3], act)], buffers))
+    path.write_bytes(_build(tensors, [(_FC, ins, [3], opts)], buffers))
     return path, weights
 
 
@@ -144,10 +145,66 @@ def test_load_graph_parses_and_dequantizes_per_channel(tmp_path):
     np.testing.assert_allclose(y, x @ graph["consts"][1].T + [1.0, -1.0], rtol=1e-6)
 
 
-def test_load_graph_rejects_fused_activation(tmp_path):
-    path, _ = _fc_model(tmp_path, act=1)
-    with pytest.raises(ValueError, match="fused activation"):
+def test_fully_connected_without_bias_input(tmp_path):
+    path, _ = _fc_model(tmp_path, bias=False)
+    graph = tflite_numpy.load_graph(path)
+    x = np.array([[1.0, 2.0, 3.0]], np.float32)
+    (y,) = tflite_numpy.run_graph(graph, {0: x})
+    np.testing.assert_allclose(y, x @ graph["consts"][1].T, rtol=1e-6)
+
+
+@pytest.mark.parametrize(
+    ("opts", "message"),
+    [({0: 1}, "fused activation"), ({1: 1}, "shuffled weights")],
+)
+def test_load_graph_rejects_unsupported_fc_options(tmp_path, opts, message):
+    path, _ = _fc_model(tmp_path, opts=opts)
+    with pytest.raises(ValueError, match=message):
         tflite_numpy.load_graph(path)
+
+
+def test_load_graph_rejects_int8_activations(tmp_path):
+    tensors = [
+        {"name": "x", "shape": [2], "type": _F32, "io": "in"},
+        {"name": "y", "shape": [2], "type": _I8, "io": "out"},
+    ]
+    path = tmp_path / "q.tflite"
+    path.write_bytes(_build(tensors, [(_ADD, [0, 0], [1], None)], [b""]))
+    with pytest.raises(ValueError, match="int8 activations"):
+        tflite_numpy.load_graph(path)
+
+
+@pytest.mark.parametrize("opts", [None, {}])
+def test_gelu_defaults_to_exact_without_options(tmp_path, opts):
+    tensors = [
+        {"name": "x", "shape": [3], "type": _F32, "io": "in"},
+        {"name": "y", "shape": [3], "type": _F32, "io": "out"},
+    ]
+    path = tmp_path / "gelu.tflite"
+    path.write_bytes(_build(tensors, [(_GELU, [0], [1], opts)], [b""]))
+    graph = tflite_numpy.load_graph(path)
+    assert graph["ops"][0][3] == {"approximate": False}
+    x = np.array([-1.0, 0.0, 2.0], np.float32)
+    (y,) = tflite_numpy.run_graph(graph, {0: x})
+    exact = [0.5 * v * (1 + math.erf(v / math.sqrt(2))) for v in x]
+    np.testing.assert_allclose(y, exact, atol=1e-6)
+
+
+def test_run_graph_keeps_tensors_until_last_reader():
+    x = np.array([1.0, 2.0], np.float32)
+    graph = {
+        "ops": [
+            ("ADD", (0, 0), (1,), {}),
+            ("MUL", (1, 1), (2,), {}),
+            ("SUB", (2, 1), (3,), {}),
+        ],
+        "specs": [("", (2,), np.float32)] * 4,
+        "consts": {},
+        "inputs": {"x": 0},
+        "outputs": {"y": 3},
+    }
+    (y,) = tflite_numpy.run_graph(graph, {0: x})
+    np.testing.assert_allclose(y, (2 * x) ** 2 - 2 * x)
 
 
 def test_load_graph_rejects_unknown_op(tmp_path):

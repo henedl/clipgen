@@ -97,19 +97,20 @@ def _string(buf: bytes, table: int, slot: int) -> str:
 def _options(buf: bytes, op: int, name: str) -> dict[str, Any]:
     """The builtin options the evaluator honours; unsupported values raise."""
     table = _ref(buf, op, 4)
-    if table is None:
-        return {"beta": 1.0} if name == "SOFTMAX" else {}
-    if name in _FUSED_ACTIVATION and _scalar(buf, table, 0, "<b", 0):
+
+    def read(slot: int, fmt: str, default: Any) -> Any:
+        return default if table is None else _scalar(buf, table, slot, fmt, default)
+
+    if name in _FUSED_ACTIVATION and read(0, "<b", 0):
         raise ValueError(f"{name} with a fused activation is unsupported")
+    if name == "FULLY_CONNECTED" and read(1, "<b", 0):
+        raise ValueError("FULLY_CONNECTED with shuffled weights is unsupported")
     if name == "SOFTMAX":
-        return {"beta": _scalar(buf, table, 0, "<f", 0.0)}
+        return {"beta": 1.0 if table is None else read(0, "<f", 0.0)}
     if name == "GELU":
-        return {"approximate": bool(_scalar(buf, table, 0, "<B", 0))}
+        return {"approximate": bool(read(0, "<B", 0))}
     if name == "BATCH_MATMUL":
-        return {
-            "adj_x": bool(_scalar(buf, table, 0, "<B", 0)),
-            "adj_y": bool(_scalar(buf, table, 1, "<B", 0)),
-        }
+        return {"adj_x": bool(read(0, "<B", 0)), "adj_y": bool(read(1, "<B", 0))}
     return {}
 
 
@@ -167,6 +168,8 @@ def load_graph(path: str | Path) -> dict[str, Any]:
         data = buffers[_scalar(buf, tensor, 2, "<I", 0)]
         if data.size:
             consts[index] = _constant(buf, tensor, data, dtype, shape)
+        elif dtype is np.int8:
+            raise ValueError("int8 activations are unsupported")
 
     ops = []
     for op in _tables(buf, subgraph, 3):
@@ -241,7 +244,7 @@ def _apply(name: str, a: list[Any], opts: dict[str, Any]) -> np.ndarray:
         return a[1][a[0]]
     if name == "FULLY_CONNECTED":
         out = a[0] @ a[1].T
-        return out if a[2] is None else out + a[2]
+        return out if len(a) < 3 or a[2] is None else out + a[2]
     if name == "BATCH_MATMUL":
         x = a[0].swapaxes(-1, -2) if opts["adj_x"] else a[0]
         y = a[1].swapaxes(-1, -2) if opts["adj_y"] else a[1]
@@ -264,9 +267,15 @@ def run_graph(graph: dict[str, Any], feeds: dict[int, np.ndarray]) -> list[np.nd
     values: dict[int, Any] = dict(graph["consts"])
     values.update(feeds)
     specs = graph["specs"]
-    for name, ins, outs, opts in graph["ops"]:
+    keep = set(graph["consts"]) | set(graph["outputs"].values())
+    last_use = {i: n for n, op in enumerate(graph["ops"]) for i in op[1]}
+    for n, (name, ins, outs, opts) in enumerate(graph["ops"]):
         args = [values[i] if i >= 0 else None for i in ins]
         _, shape, dtype = specs[outs[0]]
         result = np.asarray(_apply(name, args, opts))
         values[outs[0]] = result.astype(dtype, copy=False).reshape(shape)
+        # Free intermediates after their last reader; a window otherwise holds ~190 MB.
+        for i in ins:
+            if i >= 0 and i not in keep and last_use[i] == n:
+                values.pop(i, None)
     return [values[i] for i in graph["outputs"].values()]
