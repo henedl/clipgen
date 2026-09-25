@@ -43,10 +43,8 @@ def _ss_resolve_videos_for_participant(participant_id: str) -> list[str]:
     A multi-video participant (numbered parts) returns all parts in timeline order;
     a normal participant returns a single-element list. Returns [] when unknown.
     """
-    for entry in files.resolve_participant_videos():
-        if entry["id"] == participant_id and entry.get("has_video"):
-            return list(entry["video_paths"])
-    return []
+    record = files.find_participant_record(None, participant_id)
+    return list(record["video_paths"]) if record and record.get("has_video") else []
 
 
 def _ss_frame_extractor(video_paths: list[str]) -> Callable[[float], Any | None]:
@@ -139,11 +137,7 @@ def _ss_build_params(
 ) -> dict[str, Any]:
     """Build a `parameters` dict for create_task() from per-tool CLI flags.
 
-    Validates that the required flags for ``task_type`` are present. For
-    ``similarity`` and ``template`` extracts the reference frame at
-    ``--ss-reference-timestamp`` via *frame_at* (which maps a global timestamp
-    into the owning sub-video for multi-video participants; mirrors the
-    server-side path in screenspace_server._extract_tool_media).
+    Validates the flags ``task_type`` needs, then extracts reference media via *frame_at*.
     """
     import screenspace
 
@@ -184,12 +178,6 @@ def _ss_build_params(
             raise ValueError("similarity task requires --ss-threshold FLOAT")
         params["reference_timestamp"] = args.ss_reference_timestamp
         params["threshold"] = args.ss_threshold
-        frame = frame_at(float(args.ss_reference_timestamp))
-        if frame is None:
-            raise ValueError(
-                f"Could not extract reference frame at {args.ss_reference_timestamp}s"
-            )
-        params["reference_frame"] = screenspace.extract_region(frame, region_coords)
 
     elif task_type == "text":
         if not args.ss_text:
@@ -231,12 +219,6 @@ def _ss_build_params(
             raise ValueError("template task requires --ss-threshold FLOAT")
         params["reference_timestamp"] = args.ss_reference_timestamp
         params["threshold"] = args.ss_threshold
-        frame = frame_at(float(args.ss_reference_timestamp))
-        if frame is None:
-            raise ValueError(
-                f"Could not extract template frame at {args.ss_reference_timestamp}s"
-            )
-        params["template_image"] = screenspace.extract_region(frame, region_coords)
 
     elif task_type == "shape":
         if args.ss_reference_timestamp is None:
@@ -244,24 +226,16 @@ def _ss_build_params(
         params["reference_timestamp"] = args.ss_reference_timestamp
         if args.ss_threshold is not None:
             params["threshold"] = args.ss_threshold
-        if args.ss_scale_min is not None:
-            params["scale_min"] = args.ss_scale_min
-        if args.ss_scale_max is not None:
-            params["scale_max"] = args.ss_scale_max
-        if args.ss_scale_steps is not None:
-            params["scale_steps"] = args.ss_scale_steps
-        if args.ss_scale_y_min is not None:
-            params["scale_y_min"] = args.ss_scale_y_min
-        if args.ss_scale_y_max is not None:
-            params["scale_y_max"] = args.ss_scale_y_max
-        if args.ss_scale_y_steps is not None:
-            params["scale_y_steps"] = args.ss_scale_y_steps
-        frame = frame_at(float(args.ss_reference_timestamp))
-        if frame is None:
-            raise ValueError(
-                f"Could not extract shape frame at {args.ss_reference_timestamp}s"
-            )
-        params["shape_image"] = screenspace.extract_region(frame, region_coords)
+        for key in (
+            "scale_min",
+            "scale_max",
+            "scale_steps",
+            "scale_y_min",
+            "scale_y_max",
+            "scale_y_steps",
+        ):
+            if getattr(args, f"ss_{key}") is not None:
+                params[key] = getattr(args, f"ss_{key}")
 
     elif task_type == "scene":
         raw_refs = getattr(args, "ss_scene_ref", None) or []
@@ -269,26 +243,8 @@ def _ss_build_params(
             raise ValueError(
                 "scene task requires at least one --ss-scene-ref NAME:TIMESTAMP[:THRESHOLD]"
             )
-        parsed = [_ss_parse_scene_ref(r) for r in raw_refs]
-        reference_scenes = []
-        for ref in parsed:
-            frame = frame_at(float(ref["timestamp"]))
-            if frame is None:
-                raise ValueError(
-                    f"Could not extract scene frame for {ref['name']!r} "
-                    f"at {ref['timestamp']}s"
-                )
-            entry: dict[str, Any] = {
-                "name": ref["name"],
-                "frame": screenspace.extract_region(frame, region_coords),
-            }
-            if "threshold" in ref:
-                entry["threshold"] = ref["threshold"]
-            reference_scenes.append(entry)
-        params["reference_scenes"] = reference_scenes
-        # Frames are stripped on manifest save; the input form keeps --ss-run-task
-        # working.
-        params["scene_references"] = parsed
+        # Frames are stripped on manifest save; this input form keeps --ss-run-task working.
+        params["scene_references"] = [_ss_parse_scene_ref(r) for r in raw_refs]
         if args.ss_threshold is not None:
             params["threshold"] = args.ss_threshold
 
@@ -309,6 +265,7 @@ def _ss_build_params(
             params["shift_threshold"] = args.ss_threshold
 
     params.setdefault("cv_resolution_scale", config.SCREENSPACE_CV_RESOLUTION_SCALE)
+    screenspace.extract_tool_media(params, task_type, frame_at, region_coords)
     return params
 
 
@@ -316,11 +273,10 @@ def _print_ss_table(
     title: str,
     columns: list[tuple[str, dict[str, Any]]],
     rows: list[list[str]],
-    fallback_lines: list[str],
 ) -> None:
-    """Render a Rich table when available, else fall back to plain info_print lines.
+    """Render a Rich table, else plain 'Col=value' lines.
 
-    columns is a list of (name, kwargs) tuples passed to Table.add_column.
+    columns holds (name, kwargs) tuples passed to Table.add_column.
     """
     if utils._use_rich() and utils.console is not None:
         from rich.table import Table
@@ -339,8 +295,10 @@ def _print_ss_table(
             table.add_row(*row)
         utils.console.print(table)
     else:
-        for line in fallback_lines:
-            utils.info_print(line)
+        utils.info_print(f"{title}:")
+        for row in rows:
+            cells = (f"{name}={value}" for (name, _), value in zip(columns, row))
+            utils.info_print("  " + "  ".join(cells))
 
 
 def _run_ss_list_regions(args: argparse.Namespace) -> None:
@@ -354,11 +312,8 @@ def _run_ss_list_regions(args: argparse.Namespace) -> None:
         return
 
     rows: list[list[str]] = []
-    fallback: list[str] = [f"Active regions ({len(regions)}):"]
     for name in sorted(regions.keys()):
         rd = regions[name]
-        sw = rd.get("source_width", "?")
-        sh = rd.get("source_height", "?")
         rows.append(
             [
                 name,
@@ -366,12 +321,8 @@ def _run_ss_list_regions(args: argparse.Namespace) -> None:
                 f"{rd.get('y', 0):.3f}",
                 f"{rd.get('w', 0):.3f}",
                 f"{rd.get('h', 0):.3f}",
-                f"{sw}x{sh}",
+                f"{rd.get('source_width', '?')}x{rd.get('source_height', '?')}",
             ]
-        )
-        fallback.append(
-            f"  {name}: x={rd.get('x', 0):.3f} y={rd.get('y', 0):.3f} "
-            f"w={rd.get('w', 0):.3f} h={rd.get('h', 0):.3f}  source={sw}x{sh}"
         )
 
     _print_ss_table(
@@ -385,7 +336,6 @@ def _run_ss_list_regions(args: argparse.Namespace) -> None:
             ("Source", {"justify": "right"}),
         ],
         rows,
-        fallback,
     )
 
 
@@ -400,21 +350,15 @@ def _run_ss_list_stashes(args: argparse.Namespace) -> None:
         return
 
     rows: list[list[str]] = []
-    fallback: list[str] = [f"Stashes ({len(stashes)}):"]
     for stash in stashes:
         regions = stash.get("regions", {})
-        names = ", ".join(sorted(regions.keys())) or "(empty)"
         rows.append(
             [
                 str(stash.get("id", "?")),
                 str(stash.get("name", "(unnamed)")),
                 str(len(regions)),
-                names,
+                ", ".join(sorted(regions.keys())) or "(empty)",
             ]
-        )
-        fallback.append(
-            f"  {stash.get('id', '?')}  {stash.get('name', '(unnamed)')}: "
-            f"{len(regions)} region(s) — {names}"
         )
 
     _print_ss_table(
@@ -426,7 +370,6 @@ def _run_ss_list_stashes(args: argparse.Namespace) -> None:
             ("Names", {"overflow": "fold"}),
         ],
         rows,
-        fallback,
     )
 
 
@@ -448,10 +391,8 @@ def _run_ss_list_tasks(args: argparse.Namespace) -> None:
 
     label = f" (status={status_filter})" if status_filter else ""
     rows: list[list[str]] = []
-    fallback: list[str] = [f"Tasks{label}: {len(tasks)}"]
     for t in tasks:
         result = t.get("result")
-        result_count = len(result) if isinstance(result, list) else 0
         rows.append(
             [
                 str(t.get("id", "?")),
@@ -459,13 +400,8 @@ def _run_ss_list_tasks(args: argparse.Namespace) -> None:
                 str(t.get("participant", "?")),
                 str(t.get("region", "?")),
                 str(t.get("status", "?")),
-                str(result_count),
+                str(len(result) if isinstance(result, list) else 0),
             ]
-        )
-        fallback.append(
-            f"  {t.get('id', '?')}  {t.get('type', '?'):10s}  "
-            f"{t.get('participant', '?'):8s}  region={t.get('region', '?'):16s}  "
-            f"status={t.get('status', '?'):10s}  results={result_count}"
         )
 
     _print_ss_table(
@@ -479,7 +415,6 @@ def _run_ss_list_tasks(args: argparse.Namespace) -> None:
             ("Results", {"justify": "right"}),
         ],
         rows,
-        fallback,
     )
 
 
@@ -668,39 +603,6 @@ def _ss_run_and_persist_task(task: dict[str, Any], manifest: dict[str, Any]) -> 
         utils.info_print(f"Task ended with status={status}.")
 
 
-def _ss_extract_scene_frames(
-    scene_refs: list[dict[str, Any]],
-    frame_at: Callable[[float], Any | None],
-    region_coords: dict[str, int],
-    *,
-    context: str = "",
-) -> list[dict[str, Any]]:
-    """Build reference_scenes (with cropped frames) from saved scene_references.
-
-    Mirrors the scene path of screenspace_server._extract_tool_media. *frame_at*
-    maps a global timestamp into the owning sub-video for multi-video
-    participants. Raises ValueError when a frame cannot be read.
-    """
-    import screenspace
-
-    reference_scenes: list[dict[str, Any]] = []
-    for ref in scene_refs:
-        frame = frame_at(float(ref["timestamp"]))
-        if frame is None:
-            raise ValueError(
-                f"{context}could not read frame for scene {ref.get('name')!r} "
-                f"at {ref.get('timestamp')}s"
-            )
-        entry: dict[str, Any] = {
-            "name": ref["name"],
-            "frame": screenspace.extract_region(frame, region_coords),
-        }
-        if "threshold" in ref:
-            entry["threshold"] = ref["threshold"]
-        reference_scenes.append(entry)
-    return reference_scenes
-
-
 def _ss_reference_coords(
     parameters: dict[str, Any],
     region_coords: dict[str, Any],
@@ -731,74 +633,20 @@ def _ss_rehydrate_task_media(
     manifest: dict[str, Any],
     dims: tuple[int, int] | None,
 ) -> None:
-    """Re-extract reference frames/templates/scenes into a saved task's parameters.
-
-    Mirrors screenspace_server._extract_tool_media and _prepare_multitool_steps so a
-    manifest task (whose binary frame data was stripped on save) can be re-run.
-    *frame_at* maps a global reference timestamp into the owning sub-video for
-    multi-video participants. Mutates ``parameters`` in place; raises ValueError
-    when a reference cannot be recovered (e.g. a multitool step built from an
-    uploaded template image, which has no timestamp to re-extract from).
-    """
+    """Re-extract a saved task's stripped reference media in place; ValueError if unrecoverable."""
     import screenspace
 
-    def _extract_frame(ref_ts: float, coords: dict[str, Any], label: str) -> Any:
-        frame = frame_at(float(ref_ts))
-        if frame is None:
-            raise ValueError(f"{label}: could not read reference frame")
-        return screenspace.extract_region(frame, coords)
-
-    if task_type == "similarity":
-        if parameters.get("reference_timestamp") is None:
-            raise ValueError("similarity task has no reference_timestamp to re-extract")
-        parameters["reference_frame"] = _extract_frame(
-            parameters["reference_timestamp"], region_coords, "similarity"
-        )
-
-    elif task_type == "template":
-        if parameters.get("reference_timestamp") is None:
-            raise ValueError(
-                "template task built from an uploaded image cannot be re-run from the "
-                "manifest (no reference timestamp was saved)"
-            )
+    coords = region_coords
+    if task_type in ("template", "shape"):
         coords = _ss_reference_coords(parameters, region_coords, manifest, dims)
-        parameters["template_image"] = _extract_frame(
-            parameters["reference_timestamp"],
-            coords,
-            "template",
-        )
-        screenspace.attach_capture_mask(
-            parameters, "template_image", "template_mask", coords
-        )
+    screenspace.extract_tool_media(parameters, task_type, frame_at, coords)
 
-    elif task_type == "shape":
-        if parameters.get("reference_timestamp") is None:
-            raise ValueError(
-                "shape task built from an uploaded image cannot be re-run from the "
-                "manifest (no reference timestamp was saved)"
-            )
-        coords = _ss_reference_coords(parameters, region_coords, manifest, dims)
-        parameters["shape_image"] = _extract_frame(
-            parameters["reference_timestamp"],
-            coords,
-            "shape",
-        )
-        screenspace.attach_capture_mask(parameters, "shape_image", "shape_mask", coords)
-
-    elif task_type == "scene":
-        scene_refs = parameters.get("scene_references")
-        if not scene_refs:
-            raise ValueError("scene task has no scene_references to re-extract")
-        parameters["reference_scenes"] = _ss_extract_scene_frames(
-            scene_refs, frame_at, region_coords
-        )
-
-    elif task_type == "multitool":
+    if task_type == "multitool":
         steps: list[dict[str, Any]] = parameters.get("steps", [])
         for i, step in enumerate(steps):
-            stype = step.get("type", "")
             step_region_name = (step.get("region") or "").strip()
             step_region_ref = step.get("region_ref")
+            step_coords = region_coords
             if step_region_name or step_region_ref is not None:
                 resolved_name, resolved_region = screenspace.resolve_region_request(
                     step_region_name, step_region_ref, manifest
@@ -808,37 +656,10 @@ def _ss_rehydrate_task_media(
                     step_coords = screenspace.denormalize_region(
                         resolved_region, dims[0], dims[1]
                     )
-                else:
-                    step_coords = region_coords
-            else:
-                step_coords = region_coords
             step["region_coords"] = step_coords
-
-            if stype == "similarity":
-                if step.get("reference_timestamp") is None:
-                    raise ValueError(f"Step {i}: no reference_timestamp to re-extract")
-                step["reference_frame"] = _extract_frame(
-                    step["reference_timestamp"], step_coords, f"Step {i}"
-                )
-            elif stype == "template":
-                if step.get("reference_timestamp") is None:
-                    raise ValueError(
-                        f"Step {i}: template step built from an uploaded image cannot "
-                        "be re-run from the manifest (no reference timestamp saved)"
-                    )
-                step["template_image"] = _extract_frame(
-                    step["reference_timestamp"], step_coords, f"Step {i}"
-                )
-                screenspace.attach_capture_mask(
-                    step, "template_image", "template_mask", step_coords
-                )
-            elif stype == "scene":
-                step_refs = step.get("scene_references")
-                if not step_refs:
-                    raise ValueError(f"Step {i}: no scene_references to re-extract")
-                step["reference_scenes"] = _ss_extract_scene_frames(
-                    step_refs, frame_at, step_coords, context=f"Step {i}: "
-                )
+            screenspace.extract_tool_media(
+                step, step.get("type", ""), frame_at, step_coords, context=f"Step {i}: "
+            )
 
 
 def _run_ss_rerun_task(args: argparse.Namespace) -> None:

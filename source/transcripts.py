@@ -264,6 +264,11 @@ def _stdin_is_interactive() -> bool:
         return False
 
 
+def whisper_size_mb(name: str) -> int | None:
+    """Download size (MB) for a Whisper model name, or None if unknown."""
+    return next((m["size_mb"] for m in WHISPER_MODELS if m["name"] == name), None)
+
+
 def _confirm_model_download(model_name: str) -> bool:
     """Gate a first-time Whisper model download on the terminal.
 
@@ -281,7 +286,7 @@ def _confirm_model_download(model_name: str) -> bool:
     """
     if is_whisper_model_cached(model_name):
         return True
-    size_mb = next((m["size_mb"] for m in WHISPER_MODELS if m["name"] == model_name), 0)
+    size_mb = whisper_size_mb(model_name) or 0
     size = f" (~{size_mb / 1000:.1f} GB)" if size_mb >= 1000 else f" (~{size_mb} MB)"
     if not size_mb:
         size = ""
@@ -883,11 +888,11 @@ def transcribe_video(
 
 def _shift_segment(segment: TranscriptSegment, offset: float) -> TranscriptSegment:
     """Return a copy of *segment* with start/end (and any words) shifted by *offset*."""
-    shifted = TranscriptSegment(
-        start=segment["start"] + offset,
-        end=segment["end"] + offset,
-        text=segment["text"],
-    )
+    shifted: TranscriptSegment = {
+        **segment,
+        "start": segment["start"] + offset,
+        "end": segment["end"] + offset,
+    }
     words = segment.get("words")
     if words:
         shifted["words"] = [
@@ -898,12 +903,6 @@ def _shift_segment(segment: TranscriptSegment, offset: float) -> TranscriptSegme
             )
             for w in words
         ]
-    if "speaker" in segment:
-        shifted["speaker"] = segment["speaker"]
-    if "pii" in segment:
-        shifted["pii"] = segment["pii"]
-    if "pii_crc" in segment:
-        shifted["pii_crc"] = segment["pii_crc"]
     return shifted
 
 
@@ -1120,6 +1119,44 @@ def save_transcripts_manifest(
     return manifest_io.save_manifest_section("transcripts", data)
 
 
+def upsert_marks(
+    marks: list[dict[str, Any]],
+    segment_ids: list[str],
+    category: str | None,
+    label: str | None,
+    severity: str | None = None,
+) -> tuple[list[dict[str, Any]], int]:
+    """Mark each segment once in place; None fields keep old values. Returns (touched, created)."""
+    existing_by_seg = {m.get("segment_id", ""): m for m in marks}
+    now = datetime.now(UTC).isoformat()
+    touched: list[dict[str, Any]] = []
+    created = 0
+    for sid in segment_ids:
+        m = existing_by_seg.get(sid)
+        if m is None:
+            m = {
+                "id": f"m_{uuid.uuid4().hex[:8]}",
+                "segment_id": sid,
+                "category": category,
+                "label": label,
+                "severity": severity,
+                "created": now,
+            }
+            marks.append(m)
+            existing_by_seg[sid] = m
+            created += 1
+        else:
+            for key, value in (
+                ("category", category),
+                ("label", label),
+                ("severity", severity),
+            ):
+                if value is not None:
+                    m[key] = value
+        touched.append(m)
+    return touched, created
+
+
 # ---------------------------------------------------------------------------
 # Corrections
 # ---------------------------------------------------------------------------
@@ -1166,17 +1203,8 @@ def apply_corrections(
                 text = new_text
                 seg_applied += count
         total_applied += seg_applied
-        new_seg = TranscriptSegment(start=seg["start"], end=seg["end"], text=text)
         # Word timings stay; the frontend falls back to row-level highlight on corrected rows.
-        if "words" in seg:
-            new_seg["words"] = seg["words"]
-        if "speaker" in seg:
-            new_seg["speaker"] = seg["speaker"]
-        if "pii" in seg:
-            new_seg["pii"] = seg["pii"]
-        if "pii_crc" in seg:
-            new_seg["pii_crc"] = seg["pii_crc"]
-        corrected.append(new_seg)
+        corrected.append({**seg, "text": text})
 
     if total_applied > 0:
         utils.verbose_print(
@@ -1314,19 +1342,7 @@ def filter_segments(
                     w["end"] = max(w["start"], w["end"])
             shifted.append(new_seg)
         filtered = shifted
-    out = TranscriptResult(
-        segments=filtered,
-        language=result["language"],
-        source_file=result["source_file"],
-        model=result["model"],
-    )
-    if "speaker_labels" in result:
-        out["speaker_labels"] = result["speaker_labels"]
-    if "redact" in result:
-        out["redact"] = result["redact"]
-    if "redact_excluded" in result:
-        out["redact_excluded"] = result["redact_excluded"]
-    return out
+    return {**result, "segments": filtered}
 
 
 # ---------------------------------------------------------------------------
@@ -1481,6 +1497,34 @@ class _TranscriptionCancelled(Exception):
     """Raised inside the on_segment callback to abort a running transcription."""
 
 
+def _new_task(
+    kind: str, prefix: str, participant: str, **fields: Any
+) -> dict[str, Any]:
+    """Queued task skeleton; *fields* override the defaults."""
+    return {
+        "id": f"{prefix}_{uuid.uuid4().hex[:8]}",
+        "kind": kind,
+        "participant": participant,
+        "video_paths": [],
+        "audio_index": None,
+        "model": None,
+        "language": None,
+        "start_seconds": None,
+        "end_seconds": None,
+        "status": TASK_STATUS_QUEUED,
+        # Running sub-state: "loading_model" (~10s cold), then "transcribing".
+        "phase": "queued",
+        "progress": 0.0,
+        "partial_segments": [],
+        "result": None,
+        "error": None,
+        "created_at": datetime.now(UTC).isoformat(),
+        "completed_at": None,
+        "_cancelled": False,
+        **fields,
+    }
+
+
 def create_transcript_task(
     participant: str,
     video_paths: list[str],
@@ -1504,28 +1548,18 @@ def create_transcript_task(
     means unbounded on that side. *diarize* runs the speaker pass after a
     successful transcription (phase ``diarizing``).
     """
-    return {
-        "id": f"tr_{uuid.uuid4().hex[:8]}",
-        "kind": "transcribe",
-        "participant": participant,
-        "video_paths": video_paths,
-        "diarize": diarize,
-        "model": model,
-        "language": language,
-        "audio_index": audio_index,
-        "start_seconds": start_seconds,
-        "end_seconds": end_seconds,
-        "status": TASK_STATUS_QUEUED,
-        # Sub-state of running: "loading_model" (~10s cold, invisible to progress), then "transcribing".
-        "phase": "queued",
-        "progress": 0.0,
-        "partial_segments": [],
-        "result": None,
-        "error": None,
-        "created_at": datetime.now(UTC).isoformat(),
-        "completed_at": None,
-        "_cancelled": False,
-    }
+    return _new_task(
+        "transcribe",
+        "tr",
+        participant,
+        video_paths=video_paths,
+        diarize=diarize,
+        model=model,
+        language=language,
+        audio_index=audio_index,
+        start_seconds=start_seconds,
+        end_seconds=end_seconds,
+    )
 
 
 def create_speakers_task(
@@ -1540,27 +1574,14 @@ def create_speakers_task(
     *segments* is snapshotted; the server merges labels back by segment id so
     edits made while the task ran are never clobbered.
     """
-    return {
-        "id": f"sp_{uuid.uuid4().hex[:8]}",
-        "kind": "speakers",
-        "participant": participant,
-        "video_paths": video_paths,
-        "segments": copy.deepcopy(segments),
-        "audio_index": audio_index,
-        "model": None,
-        "language": None,
-        "start_seconds": None,
-        "end_seconds": None,
-        "status": TASK_STATUS_QUEUED,
-        "phase": "queued",
-        "progress": 0.0,
-        "partial_segments": [],
-        "result": None,
-        "error": None,
-        "created_at": datetime.now(UTC).isoformat(),
-        "completed_at": None,
-        "_cancelled": False,
-    }
+    return _new_task(
+        "speakers",
+        "sp",
+        participant,
+        video_paths=video_paths,
+        segments=copy.deepcopy(segments),
+        audio_index=audio_index,
+    )
 
 
 def create_redact_task(
@@ -1571,27 +1592,7 @@ def create_redact_task(
     *segments* is the corrected snapshot the readers show; the server merges
     the spans back by segment id.
     """
-    return {
-        "id": f"rd_{uuid.uuid4().hex[:8]}",
-        "kind": "redact",
-        "participant": participant,
-        "video_paths": [],
-        "segments": copy.deepcopy(segments),
-        "audio_index": None,
-        "model": None,
-        "language": None,
-        "start_seconds": None,
-        "end_seconds": None,
-        "status": TASK_STATUS_QUEUED,
-        "phase": "queued",
-        "progress": 0.0,
-        "partial_segments": [],
-        "result": None,
-        "error": None,
-        "created_at": datetime.now(UTC).isoformat(),
-        "completed_at": None,
-        "_cancelled": False,
-    }
+    return _new_task("redact", "rd", participant, segments=copy.deepcopy(segments))
 
 
 class TranscriptWorker:
@@ -1777,6 +1778,20 @@ class TranscriptWorker:
             task["partial_segments"] = []
             task["completed_at"] = datetime.now(UTC).isoformat()
 
+    def _mark_cancelled(self, task: dict[str, Any]) -> None:
+        with self._lock:
+            task["status"] = TASK_STATUS_CANCELLED
+            task["partial_segments"] = []
+            task["completed_at"] = datetime.now(UTC).isoformat()
+
+    def _complete(self, task: dict[str, Any], result: dict[str, Any]) -> None:
+        with self._lock:
+            task["status"] = TASK_STATUS_COMPLETED
+            task["progress"] = 1.0
+            task["partial_segments"] = []
+            task["result"] = result
+            task["completed_at"] = datetime.now(UTC).isoformat()
+
     def _run_diarize_phase(
         self, task: dict[str, Any], segments: list[Any], audio_index: int | None
     ) -> dict[str, Any] | None:
@@ -1854,17 +1869,9 @@ class TranscriptWorker:
             if block is None:
                 self._fail(task, "Speaker detection failed.")
                 return
-            with self._lock:
-                task["status"] = TASK_STATUS_COMPLETED
-                task["progress"] = 1.0
-                task["partial_segments"] = []
-                task["result"] = {"segments": segments, "speakers": block}
-                task["completed_at"] = datetime.now(UTC).isoformat()
+            self._complete(task, {"segments": segments, "speakers": block})
         except speakers.DiarizationCancelled:
-            with self._lock:
-                task["status"] = TASK_STATUS_CANCELLED
-                task["partial_segments"] = []
-                task["completed_at"] = datetime.now(UTC).isoformat()
+            self._mark_cancelled(task)
         except Exception as exc:
             self._fail(task, str(exc))
 
@@ -1897,27 +1904,17 @@ class TranscriptWorker:
             if block is None:
                 self._fail(task, "Redaction failed.")
                 return
-            with self._lock:
-                task["status"] = TASK_STATUS_COMPLETED
-                task["progress"] = 1.0
-                task["partial_segments"] = []
-                task["result"] = {
-                    "segments": [
-                        {
-                            "id": s.get("id"),
-                            "pii": s.get("pii", []),
-                            "pii_crc": s.get("pii_crc"),
-                        }
-                        for s in segments
-                    ],
-                    "redaction": block,
+            pii = [
+                {
+                    "id": s.get("id"),
+                    "pii": s.get("pii", []),
+                    "pii_crc": s.get("pii_crc"),
                 }
-                task["completed_at"] = datetime.now(UTC).isoformat()
+                for s in segments
+            ]
+            self._complete(task, {"segments": pii, "redaction": block})
         except redact.RedactCancelled:
-            with self._lock:
-                task["status"] = TASK_STATUS_CANCELLED
-                task["partial_segments"] = []
-                task["completed_at"] = datetime.now(UTC).isoformat()
+            self._mark_cancelled(task)
         except Exception as exc:
             self._fail(task, str(exc))
 
@@ -1934,11 +1931,7 @@ class TranscriptWorker:
 
         video_paths = task["video_paths"]
         if not video_paths:
-            with self._lock:
-                task["status"] = TASK_STATUS_FAILED
-                task["error"] = "No video files — nothing to transcribe."
-                task["partial_segments"] = []
-                task["completed_at"] = datetime.now(UTC).isoformat()
+            self._fail(task, "No video files — nothing to transcribe.")
             return
 
         # Multi-video participants form one timeline: transcribe each part, merge with shifted times.
@@ -1948,26 +1941,19 @@ class TranscriptWorker:
         props = video_mod.probe_video_properties(video_paths[0])
         tracks: list[dict[str, Any]] = (props or {}).get("audio_tracks") or []
         if props is not None and not tracks:
-            with self._lock:
-                task["status"] = TASK_STATUS_FAILED
-                task["error"] = (
-                    "No audio stream — this video has no audio track to transcribe."
-                )
-                task["partial_segments"] = []
-                task["completed_at"] = datetime.now(UTC).isoformat()
+            self._fail(
+                task, "No audio stream — this video has no audio track to transcribe."
+            )
             return
 
         # Resolve here, not inside transcribe_video, so the task records which track was used.
         audio_index = _resolve_audio_index(video_paths[0], task.get("audio_index"))
         if tracks and not 0 <= audio_index < len(tracks):
-            with self._lock:
-                task["status"] = TASK_STATUS_FAILED
-                task["error"] = (
-                    f"Audio track {audio_index + 1} does not exist — "
-                    f"this video has {len(tracks)}."
-                )
-                task["partial_segments"] = []
-                task["completed_at"] = datetime.now(UTC).isoformat()
+            self._fail(
+                task,
+                f"Audio track {audio_index + 1} does not exist — "
+                f"this video has {len(tracks)}.",
+            )
             return
 
         if timeline is not None:
@@ -1985,11 +1971,7 @@ class TranscriptWorker:
             assert win_end is not None  # duration fallback above
             win_end = min(win_end, duration)
         if win_end is not None and win_end - win_start <= 0:
-            with self._lock:
-                task["status"] = TASK_STATUS_FAILED
-                task["error"] = "Marker range is outside the video."
-                task["partial_segments"] = []
-                task["completed_at"] = datetime.now(UTC).isoformat()
+            self._fail(task, "Marker range is outside the video.")
             return
         window_len = win_end - win_start if win_end is not None else 0.0
 
@@ -2012,11 +1994,7 @@ class TranscriptWorker:
             else:
                 load_error = "Transcription model failed to load."
             if loaded is None:
-                with self._lock:
-                    task["status"] = TASK_STATUS_FAILED
-                    task["error"] = load_error
-                    task["partial_segments"] = []
-                    task["completed_at"] = datetime.now(UTC).isoformat()
+                self._fail(task, load_error)
                 return
         with self._lock:
             task["phase"] = "transcribing"
@@ -2068,11 +2046,7 @@ class TranscriptWorker:
                     end_seconds=dispatch_end,
                 )
             if result is None:
-                with self._lock:
-                    task["status"] = TASK_STATUS_FAILED
-                    task["error"] = "Transcription returned None"
-                    task["partial_segments"] = []
-                    task["completed_at"] = datetime.now(UTC).isoformat()
+                self._fail(task, "Transcription returned None")
                 return
 
             # A failed or stopped speaker pass never fails the transcript.
@@ -2082,40 +2056,29 @@ class TranscriptWorker:
                     task, result["segments"], audio_index
                 )
 
-            with self._lock:
-                task["status"] = TASK_STATUS_COMPLETED
-                task["progress"] = 1.0
-                task["partial_segments"] = []
-                task["result"] = {
-                    "segments": result["segments"],
-                    "language": result["language"],
-                    "model": result["model"],
-                    "source_file": result["source_file"],
-                    # Recorded so an auto-detect deviation can be explained (the pill's "Last run: Track 2" hint).
-                    "audio_index": audio_index,
-                    "audio_track_label": (
-                        tracks[audio_index].get("label", "")
-                        if audio_index < len(tracks)
-                        else ""
-                    ),
-                    # Always present (None = unbounded) so a later full run's `existing.update(...)` overwrites a stale window.
-                    "start_seconds": dispatch_start,
-                    "end_seconds": dispatch_end,
-                    "transcribed_at": datetime.now(UTC).isoformat(),
-                }
-                if speakers_block is not None:
-                    task["result"]["speakers"] = speakers_block
-                task["completed_at"] = datetime.now(UTC).isoformat()
+            done: dict[str, Any] = {
+                "segments": result["segments"],
+                "language": result["language"],
+                "model": result["model"],
+                "source_file": result["source_file"],
+                # Recorded so an auto-detect deviation can be explained (the pill's "Last run: Track 2" hint).
+                "audio_index": audio_index,
+                "audio_track_label": (
+                    tracks[audio_index].get("label", "")
+                    if audio_index < len(tracks)
+                    else ""
+                ),
+                # Always present (None = unbounded) so a later full run's `existing.update(...)` overwrites a stale window.
+                "start_seconds": dispatch_start,
+                "end_seconds": dispatch_end,
+                "transcribed_at": datetime.now(UTC).isoformat(),
+            }
+            if speakers_block is not None:
+                done["speakers"] = speakers_block
+            self._complete(task, done)
 
         except (_TranscriptionCancelled, speakers.DiarizationCancelled):
-            with self._lock:
-                task["status"] = TASK_STATUS_CANCELLED
-                task["partial_segments"] = []
-                task["completed_at"] = datetime.now(UTC).isoformat()
+            self._mark_cancelled(task)
 
         except Exception as exc:
-            with self._lock:
-                task["status"] = TASK_STATUS_FAILED
-                task["error"] = str(exc)
-                task["partial_segments"] = []
-                task["completed_at"] = datetime.now(UTC).isoformat()
+            self._fail(task, str(exc))

@@ -38,6 +38,17 @@ def prompt_batch_confirm(ctx: SheetContext) -> bool:
     return yn.strip().lower() == "y"
 
 
+def _confirm_items(
+    items: list[str], confirm_label: str, confirm_display: Callable[[str], str]
+) -> bool:
+    """List *items* under *confirm_label* and ask for a yes/no confirmation."""
+    utils.info_print(confirm_label)
+    for item in items:
+        utils.info_print(f"  - {confirm_display(item)}")
+    yn = utils.read_user_input("\nIs this correct? [y/n]\n>> ")
+    return yn.strip().lower() == "y"
+
+
 def prompt_multi_selection(
     items: list[str],
     *,
@@ -84,11 +95,7 @@ def prompt_multi_selection(
                     f"  Invalid index(es): {', '.join(str(i) for i in invalid_indices)}"
                 )
             if selected:
-                utils.info_print(confirm_label)
-                for item in selected:
-                    utils.info_print(f"  - {confirm_display(item)}")
-                yn = utils.read_user_input("\nIs this correct? [y/n]\n>> ")
-                if yn.strip().lower() == "y":
+                if _confirm_items(selected, confirm_label, confirm_display):
                     return selected
             else:
                 utils.info_print("No valid selections. Please try again.")
@@ -116,11 +123,7 @@ def prompt_multi_selection(
             if unmatched:
                 utils.info_print(f"Could not match: {', '.join(unmatched)}")
             if matched:
-                utils.info_print(confirm_label)
-                for item in matched:
-                    utils.info_print(f"  - {confirm_display(item)}")
-                yn = utils.read_user_input("\nIs this correct? [y/n]\n>> ")
-                if yn.strip().lower() == "y":
+                if _confirm_items(matched, confirm_label, confirm_display):
                     return matched
             else:
                 utils.info_print(no_match_msg)
@@ -333,25 +336,11 @@ def prompt_participant_selection(ctx: SheetContext) -> list[str] | None:
         chosen_ids = []
         invalid_tokens = []
         for token in tokens:
-            if token.isdigit():
-                idx = int(token)
-                if 1 <= idx <= len(available_list):
-                    chosen_ids.append(available_list[idx - 1])
-                else:
-                    invalid_tokens.append(token)
+            pid = spreadsheet.resolve_participant_token(ctx, available_list, token)
+            if pid is None:
+                invalid_tokens.append(token)
             else:
-                col_idx = spreadsheet.find_participant_column(
-                    ctx.header_row, ctx.id_cell, token
-                )
-                if col_idx is not None:
-                    if col_idx < len(ctx.header_row):
-                        chosen_ids.append(
-                            utils.normalize_participant_id(ctx.header_row[col_idx])
-                        )
-                    else:
-                        chosen_ids.append(token)
-                else:
-                    invalid_tokens.append(token)
+                chosen_ids.append(pid)
         if invalid_tokens:
             still_invalid = []
             for token in invalid_tokens:
@@ -365,12 +354,7 @@ def prompt_participant_selection(ctx: SheetContext) -> list[str] | None:
                     f"Not found: {', '.join(still_invalid)}. Available: {', '.join(available_list)}"
                 )
                 continue
-        seen = set()
-        unique_ids = []
-        for pid in chosen_ids:
-            if pid not in seen:
-                seen.add(pid)
-                unique_ids.append(pid)
+        unique_ids = list(dict.fromkeys(chosen_ids))
         utils.info_print(f"Selected participant(s): {', '.join(unique_ids)}")
         yn = utils.read_user_input(
             "Generate all clips for these participants? [y/n]\n>> "
@@ -747,16 +731,7 @@ def browse_spreadsheet(sheet: Any, *, process_fn=None) -> None:
         """
         if process_fn is not None:
             parsed = spreadsheet.parse_reel_input(raw)
-            has_selectors = (
-                parsed.get("batch")
-                or parsed.get("keyword")
-                or parsed["lines"]
-                or parsed["ranges"]
-                or parsed["cells"]
-                or parsed["participants"]
-                or parsed["categories"]
-            )
-            if has_selectors:
+            if spreadsheet.clip_selector_names(parsed):
                 if parsed.get("chronologic"):
                     utils.info_print(
                         "Chronologic selector is not supported in browse mode."

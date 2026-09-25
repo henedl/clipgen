@@ -35,6 +35,19 @@ def _morph_kernel(size: int) -> np.ndarray:
     return np.ones((size, size), np.uint8)
 
 
+def fit_within(
+    img: np.ndarray, max_dim: int, interpolation: int = cv2.INTER_AREA
+) -> np.ndarray:
+    """Downscale so neither side exceeds *max_dim*; no-op when it already fits."""
+    h, w = img.shape[:2]
+    if h <= max_dim and w <= max_dim:
+        return img
+    scale = max_dim / max(h, w)
+    return cv2.resize(
+        img, (int(w * scale), int(h * scale)), interpolation=interpolation
+    )
+
+
 ScanCallback = Callable[[float, np.ndarray], bool | None]
 """Per-frame callback signature for scan_video_frames and friends.
 
@@ -100,9 +113,7 @@ def _is_static_skip(
     buf: _ConsecutiveBuffer,
     results: list[dict[str, Any]],
     on_result: Callable[[dict[str, Any]], None] | None,
-    on_progress: Callable[[float], None] | None,
-    start_seconds: float,
-    total_range: float,
+    report: Callable[[float], None],
 ) -> bool:
     """Decide whether *pixels* is a near-duplicate of the previous frame.
 
@@ -123,8 +134,7 @@ def _is_static_skip(
                 results.append(emitted)
                 if on_result:
                     on_result(emitted)
-            if on_progress and total_range > 0:
-                on_progress((ts - start_seconds) / total_range)
+            report(ts)
             return True
     prev_gray[0] = gray
     return False
@@ -610,18 +620,18 @@ def blur_gray(region: np.ndarray) -> np.ndarray:
     return cv2.cvtColor(cv2.GaussianBlur(region, (k, k), 0), cv2.COLOR_BGR2GRAY)
 
 
-def _frame_diff_mask_gray(
+def _frame_diff_layers(
     a_gray: np.ndarray,
     b_gray: np.ndarray,
     noise_threshold: int = 0,
-) -> np.ndarray:
-    """Diff back-end: absdiff, threshold and morph-open two ``blur_gray`` outputs."""
+) -> tuple[np.ndarray, np.ndarray]:
+    """Diff back-end on two ``blur_gray`` outputs: (absdiff, thresholded morph-opened mask)."""
     if noise_threshold <= 0:
         noise_threshold = config.SCREENSPACE_NOISE_THRESHOLD
     diff = cv2.absdiff(a_gray, b_gray)
     _, mask = cv2.threshold(diff, noise_threshold, 255, cv2.THRESH_BINARY)
     kernel = _morph_kernel(config.SCREENSPACE_MORPH_KERNEL)
-    return cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel)
+    return diff, cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel)
 
 
 def compute_frame_diff(
@@ -651,7 +661,7 @@ def compute_frame_diff_gray(
     mask: np.ndarray | None = None,
 ) -> float:
     """``compute_frame_diff`` on precomputed ``blur_gray`` outputs (hot paths)."""
-    diff = _frame_diff_mask_gray(a_gray, b_gray, noise_threshold)
+    _, diff = _frame_diff_layers(a_gray, b_gray, noise_threshold)
     if diff.size == 0:
         return 0.0
     if mask is not None and np.any(mask):
@@ -677,10 +687,7 @@ def _ssim_preprocess(
         new_w, new_h = int(w * scale), int(h * scale)
         region_a = cv2.resize(region_a, (new_w, new_h), interpolation=cv2.INTER_AREA)
         region_b = cv2.resize(region_b, (new_w, new_h), interpolation=cv2.INTER_AREA)
-    k = config.SCREENSPACE_BLUR_KERNEL
-    a_gray = cv2.cvtColor(cv2.GaussianBlur(region_a, (k, k), 0), cv2.COLOR_BGR2GRAY)
-    b_gray = cv2.cvtColor(cv2.GaussianBlur(region_b, (k, k), 0), cv2.COLOR_BGR2GRAY)
-    return a_gray, b_gray
+    return blur_gray(region_a), blur_gray(region_b)
 
 
 def structural_similarity(
@@ -807,6 +814,15 @@ def compute_phash(region_pixels: np.ndarray, gray: np.ndarray | None = None) -> 
 # (blurred gray template, binarized mask or None, degenerate flag); see _prepare_template.
 _PreparedTemplate = tuple[np.ndarray, "np.ndarray | None", bool]
 
+# Low-variance templates flood candidates; cap by score or O(n^2) NMS freezes.
+_MAX_CANDIDATES = 5000
+
+
+def _cv_scale() -> float:
+    """The global CV resolution scale, 1.0 when unset."""
+    scale = config.SCREENSPACE_CV_RESOLUTION_SCALE
+    return scale if scale > 0 else 1.0
+
 
 def _scale_template(
     template: np.ndarray,
@@ -822,11 +838,7 @@ def _scale_template(
     than its in-video rendering (e.g. a 50x50 icon appearing as 24x24 on
     screen). Returns the pair unchanged when the effective scale is ~1.0.
     """
-    cv_scale = (
-        config.SCREENSPACE_CV_RESOLUTION_SCALE
-        if config.SCREENSPACE_CV_RESOLUTION_SCALE > 0
-        else 1.0
-    )
+    cv_scale = _cv_scale()
     effective = template_scale * cv_scale
     if not (effective > 0 and abs(effective - 1.0) > 1e-6):
         return template, mask
@@ -852,8 +864,7 @@ def _prepare_template(
     template against many frames (scan_template, evaluate_region) can pay
     the blur+cvtColor cost a single time instead of per-frame.
     """
-    k = config.SCREENSPACE_BLUR_KERNEL
-    tmpl_gray = cv2.cvtColor(cv2.GaussianBlur(template, (k, k), 0), cv2.COLOR_BGR2GRAY)
+    tmpl_gray = blur_gray(template)
     # Binarize, don't blur: soft edges inflate TM_CCOEFF_NORMED for mostly-transparent PNG icons.
     if mask is not None:
         _, gray_mask = cv2.threshold(mask, 127, 255, cv2.THRESH_BINARY)
@@ -904,12 +915,6 @@ def _neutralize_nonfinite(result: np.ndarray) -> np.ndarray:
     return result
 
 
-def _template_frame_gray(frame: np.ndarray) -> np.ndarray:
-    """Blur and grayscale a frame for template correlation."""
-    k = config.SCREENSPACE_BLUR_KERNEL
-    return cv2.cvtColor(cv2.GaussianBlur(frame, (k, k), 0), cv2.COLOR_BGR2GRAY)
-
-
 def _template_is_evaluable(frame: np.ndarray, prepared: _PreparedTemplate) -> bool:
     """Whether correlation is defined: a non-degenerate template that fits the frame."""
     tmpl_gray, _gray_mask, degenerate = prepared
@@ -931,7 +936,7 @@ def _template_correlation_map(
     # Degenerate or oversized: see _prepare_template's degeneracy note.
     if not _template_is_evaluable(frame, prepared):
         return None
-    frame_gray = _template_frame_gray(frame)
+    frame_gray = blur_gray(frame)
     result = cv2.matchTemplate(
         frame_gray, tmpl_gray, cv2.TM_CCOEFF_NORMED, mask=gray_mask
     )
@@ -947,7 +952,7 @@ def _template_corr_window(
     tmpl_gray, gray_mask, degenerate = prepared
     if degenerate or gray_mask is not None:
         return None
-    packed = _match_corr_window(_template_frame_gray(frame), tmpl_gray, window)
+    packed = _match_corr_window(blur_gray(frame), tmpl_gray, window)
     if packed is None:
         return None
     result, x_offset, y_offset = packed
@@ -994,8 +999,6 @@ def _match_template_prepared(
     if len(locs[0]) == 0:
         return []
 
-    # Low-variance templates can yield thousands of candidates; cap by score or O(n^2) NMS freezes.
-    _MAX_CANDIDATES = 5000
     scores = result[locs]
     if len(locs[0]) > _MAX_CANDIDATES:
         top_idx = np.argpartition(scores, -_MAX_CANDIDATES)[-_MAX_CANDIDATES:]
@@ -1142,11 +1145,7 @@ def _prepare_shape_reference(
         scale_max = config.SCREENSPACE_SHAPE_SCALE_MAX
     if scale_steps <= 0:
         scale_steps = config.SCREENSPACE_SHAPE_SCALE_STEPS
-    cv_scale = (
-        config.SCREENSPACE_CV_RESOLUTION_SCALE
-        if config.SCREENSPACE_CV_RESOLUTION_SCALE > 0
-        else 1.0
-    )
+    cv_scale = _cv_scale()
     scales_x = _scale_ladder(scale_min, scale_max, scale_steps)
     if scale_y_min > 0 and scale_y_max > 0:
         scales_y = _scale_ladder(scale_y_min, scale_y_max, scale_y_steps or scale_steps)
@@ -1304,7 +1303,6 @@ def match_shape(
         threshold = config.SCREENSPACE_SHAPE_MATCH_THRESHOLD
     if nms_overlap <= 0.0:
         nms_overlap = config.SCREENSPACE_TEMPLATE_NMS_OVERLAP
-    _MAX_CANDIDATES = 5000
     best_peak = -1.0
     candidates: list[dict[str, Any]] = []
 
@@ -1359,16 +1357,20 @@ def flow_downscale(
     is INTER_AREA-resized twice (as curr at step N, as prev at step N+1).
     No-op (returns the inputs) when *gray* already fits.
     """
-    max_dim = 256
-    h, w = gray.shape[:2]
-    if h <= max_dim and w <= max_dim:
-        return gray, mask
-    scale = max_dim / max(h, w)
-    new_w, new_h = int(w * scale), int(h * scale)
-    small = cv2.resize(gray, (new_w, new_h), interpolation=cv2.INTER_AREA)
-    if mask is not None:
-        mask = cv2.resize(mask, (new_w, new_h), interpolation=cv2.INTER_NEAREST)
+    small = fit_within(gray, 256)
+    if mask is not None and small is not gray:
+        mask = cv2.resize(mask, small.shape[1::-1], interpolation=cv2.INTER_NEAREST)
     return small, mask
+
+
+def farneback_flow(
+    prev_gray: np.ndarray, curr_gray: np.ndarray, pyr_scale: float
+) -> np.ndarray:
+    """Dense Farneback flow with the scan's fixed levels, window and iterations."""
+    flow_out = np.zeros((*prev_gray.shape[:2], 2), dtype=np.float32)
+    return cv2.calcOpticalFlowFarneback(
+        prev_gray, curr_gray, flow_out, pyr_scale, 3, 15, 3, 5, 1.2, 0
+    )
 
 
 def compute_optical_flow(
@@ -1403,10 +1405,7 @@ def compute_optical_flow(
     if mask is not None and not np.any(mask):
         mask = None
 
-    flow_out = np.zeros((*prev_gray.shape[:2], 2), dtype=np.float32)
-    flow = cv2.calcOpticalFlowFarneback(
-        prev_gray, curr_gray, flow_out, pyr_scale, 3, 15, 3, 5, 1.2, 0
-    )
+    flow = farneback_flow(prev_gray, curr_gray, pyr_scale)
     dx, dy = flow[..., 0], flow[..., 1]
     inside = mask > 0 if mask is not None else None
 
@@ -1486,19 +1485,10 @@ def compute_scene_fingerprint(
     scan crops may be rescaled).
     """
     # Resize to standardize
-    max_dim = 128
-    h, w = region_pixels.shape[:2]
-    if h > max_dim or w > max_dim:
-        scale = max_dim / max(h, w)
-        region_pixels = cv2.resize(
-            region_pixels,
-            (int(w * scale), int(h * scale)),
-            interpolation=cv2.INTER_AREA,
-        )
-        if mask is not None:
-            mask = cv2.resize(
-                mask, region_pixels.shape[1::-1], interpolation=cv2.INTER_NEAREST
-            )
+    small = fit_within(region_pixels, 128)
+    if mask is not None and small is not region_pixels:
+        mask = cv2.resize(mask, small.shape[1::-1], interpolation=cv2.INTER_NEAREST)
+    region_pixels = small
     if mask is not None and not np.any(mask):
         mask = None
 

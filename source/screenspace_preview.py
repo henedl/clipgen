@@ -162,9 +162,7 @@ def build_overlay_layer(
         return _overlay_change(pixels, prev_frame, region, layer, params)
 
     if tool == "similarity" and layer == "gray":
-        k = config.SCREENSPACE_BLUR_KERNEL
-        gray = cv2.cvtColor(cv2.GaussianBlur(pixels, (k, k), 0), cv2.COLOR_BGR2GRAY)
-        return _gray_to_bgr(gray)
+        return _gray_to_bgr(screenspace_primitives.blur_gray(pixels))
 
     if tool == "similarity" and layer == "ssim_diff":
         return _overlay_ssim_diff(pixels, params)
@@ -211,42 +209,23 @@ def _overlay_change(
     layer: str,
     params: dict[str, Any],
 ) -> "np.ndarray | None":
-    k = config.SCREENSPACE_BLUR_KERNEL
-    curr_gray = cv2.cvtColor(cv2.GaussianBlur(pixels, (k, k), 0), cv2.COLOR_BGR2GRAY)
+    curr_gray = screenspace_primitives.blur_gray(pixels)
     if layer == "gray_blur":
         return _gray_to_bgr(curr_gray)
-    if prev_frame is None:
+    prev_pixels = _prev_region_pixels(prev_frame, region, pixels)
+    if prev_pixels is None:
         return None
-    prev_pixels = _clip_region_pixels(prev_frame, region)
-    if prev_pixels is None or prev_pixels.shape[:2] != pixels.shape[:2]:
-        return None
-    prev_gray = cv2.cvtColor(
-        cv2.GaussianBlur(prev_pixels, (k, k), 0), cv2.COLOR_BGR2GRAY
-    )
-    diff = cv2.absdiff(prev_gray, curr_gray)
+    diff, mask_clean, _ = _change_layers(curr_gray, prev_pixels, region, params)
     if layer == "abs_diff":
         # Colorize so faint change reads; zero pixels stay black to blend.
         return _colorize_diff(diff, keep_zero_black=True)
-    if layer in ("mask", "changes"):
-        noise = int(params.get("noise_threshold", config.SCREENSPACE_NOISE_THRESHOLD))
-        _, mask = cv2.threshold(diff, noise, 255, cv2.THRESH_BINARY)
-        mk = config.SCREENSPACE_MORPH_KERNEL
-        mask_clean = cv2.morphologyEx(mask, cv2.MORPH_OPEN, np.ones((mk, mk), np.uint8))
-        # Shaped region: zero changes outside the polygon, as the scan does.
-        if region is not None:
-            region_mask = screenspace_primitives.region_mask_for(
-                region, *mask_clean.shape[:2]
-            )
-            if region_mask is not None:
-                mask_clean = cv2.bitwise_and(mask_clean, region_mask)
-        if layer == "mask":
-            # Cyan-on-black reads against any frame content when alpha-blended.
-            out = np.zeros(
-                (mask_clean.shape[0], mask_clean.shape[1], 3), dtype=np.uint8
-            )
-            out[mask_clean > 0] = (220, 220, 0)  # BGR cyan-ish
-            return out
-        # "changes": tint changed pixels; unchanged pixels keep the live frame.
+    if layer == "mask":
+        # Cyan-on-black reads against any frame content when alpha-blended.
+        out = np.zeros((mask_clean.shape[0], mask_clean.shape[1], 3), dtype=np.uint8)
+        out[mask_clean > 0] = (220, 220, 0)  # BGR cyan-ish
+        return out
+    if layer == "changes":
+        # Tint changed pixels; unchanged pixels keep the live frame.
         return _tint_changes(pixels, diff, mask_clean)
     return None
 
@@ -339,45 +318,14 @@ def _overlay_flow(
     prev_frame: "np.ndarray | None",
     region: dict[str, Any] | None,
 ) -> "np.ndarray | None":
-    if prev_frame is None:
-        return None
-    prev_pixels = _clip_region_pixels(prev_frame, region)
-    if prev_pixels is None or prev_pixels.shape[:2] != pixels.shape[:2]:
+    prev_pixels = _prev_region_pixels(prev_frame, region, pixels)
+    if prev_pixels is None:
         return None
     curr_gray = cv2.cvtColor(pixels, cv2.COLOR_BGR2GRAY)
     prev_gray = cv2.cvtColor(prev_pixels, cv2.COLOR_BGR2GRAY)
-
-    # Match compute_optical_flow's downscale so arrows show the scored vectors;
-    # coords rescale via coord_scale.
-    h, w = prev_gray.shape[:2]
-    max_dim = 256
-    if h > max_dim or w > max_dim:
-        scale = max_dim / max(h, w)
-        small_w, small_h = int(w * scale), int(h * scale)
-        prev_small = cv2.resize(
-            prev_gray, (small_w, small_h), interpolation=cv2.INTER_AREA
-        )
-        curr_small = cv2.resize(
-            curr_gray, (small_w, small_h), interpolation=cv2.INTER_AREA
-        )
-        coord_scale = w / float(small_w)
-    else:
-        prev_small, curr_small = prev_gray, curr_gray
-        coord_scale = 1.0
-
-    flow_out = np.zeros((*prev_small.shape[:2], 2), dtype=np.float32)
-    flow = cv2.calcOpticalFlowFarneback(
-        prev_small,
-        curr_small,
-        flow_out,
-        config.SCREENSPACE_FLOW_PYR_SCALE,
-        3,
-        15,
-        3,
-        5,
-        1.2,
-        0,
-    )
+    # Arrows show the scored (downscaled) vectors; coords rescale to native.
+    curr_small, flow = _flow_field(prev_gray, curr_gray)
+    coord_scale = curr_gray.shape[1] / float(curr_small.shape[1])
     vis = cv2.cvtColor(curr_gray, cv2.COLOR_GRAY2BGR)
     _draw_flow_arrows(
         vis,
@@ -413,23 +361,8 @@ def _overlay_template_heatmap(
         )
         if result is None:
             return None
-    norm = np.empty_like(result)
-    cv2.normalize(result, norm, 0, 255, cv2.NORM_MINMAX)
-    heat = cv2.applyColorMap(norm.astype(np.uint8), cv2.COLORMAP_JET)
-    # matchTemplate anchors top-left: offset by half the template; replicate
-    # edges to fill the frame.
-    fh, fw = frame.shape[:2]
-    hh, hw = heat.shape[:2]
-    if (hh, hw) == (fh, fw):
-        return heat
     th, tw = tmpl_gray.shape[:2]
-    top = th // 2
-    left = tw // 2
-    bottom = fh - hh - top
-    right = fw - hw - left
-    return cv2.copyMakeBorder(
-        heat, top, bottom, left, right, borderType=cv2.BORDER_REPLICATE
-    )
+    return _pad_to_frame(_corr_heat(result), frame, tw, th)
 
 
 def _shape_prepared(params: dict[str, Any]) -> "list[dict[str, Any]] | None":
@@ -492,21 +425,7 @@ def _overlay_shape_heatmap(
     if best is None:
         return None
     _peak, result, entry = best
-    norm = np.empty_like(result)
-    cv2.normalize(result, norm, 0, 255, cv2.NORM_MINMAX)
-    heat = cv2.applyColorMap(norm.astype(np.uint8), cv2.COLORMAP_JET)
-    # Center like the template overlay: half-size offset, replicated edges.
-    fh, fw = frame.shape[:2]
-    hh, hw = heat.shape[:2]
-    if (hh, hw) == (fh, fw):
-        return heat
-    top = entry["h"] // 2
-    left = entry["w"] // 2
-    bottom = fh - hh - top
-    right = fw - hw - left
-    return cv2.copyMakeBorder(
-        heat, top, bottom, left, right, borderType=cv2.BORDER_REPLICATE
-    )
+    return _pad_to_frame(_corr_heat(result), frame, entry["w"], entry["h"])
 
 
 # ---------------------------------------------------------------------------
@@ -528,6 +447,66 @@ def _placeholder(message: str, w: int = 320, h: int = 120) -> "np.ndarray":
         cv2.LINE_AA,
     )
     return img
+
+
+def _corr_heat(result: "np.ndarray") -> "np.ndarray":
+    """Min-max normalize a correlation map into a JET heatmap."""
+    norm = np.empty_like(result)
+    cv2.normalize(result, norm, 0, 255, cv2.NORM_MINMAX)
+    return cv2.applyColorMap(norm.astype(np.uint8), cv2.COLORMAP_JET)
+
+
+def _pad_to_frame(
+    heat: "np.ndarray", frame: "np.ndarray", tw: int, th: int
+) -> "np.ndarray":
+    """Offset a top-left-anchored match map by half the template; replicate edges to frame size."""
+    fh, fw = frame.shape[:2]
+    hh, hw = heat.shape[:2]
+    if (hh, hw) == (fh, fw):
+        return heat
+    top = th // 2
+    left = tw // 2
+    return cv2.copyMakeBorder(
+        heat,
+        top,
+        fh - hh - top,
+        left,
+        fw - hw - left,
+        borderType=cv2.BORDER_REPLICATE,
+    )
+
+
+def _change_layers(
+    curr_gray: "np.ndarray",
+    prev_pixels: "np.ndarray",
+    region: dict[str, Any] | None,
+    params: dict[str, Any],
+) -> "tuple[np.ndarray, np.ndarray, np.ndarray | None]":
+    """The scan's diff and cleaned mask, zeroed outside a shaped region; plus that region mask."""
+    noise = int(params.get("noise_threshold", config.SCREENSPACE_NOISE_THRESHOLD))
+    diff, mask_clean = screenspace_primitives._frame_diff_layers(
+        screenspace_primitives.blur_gray(prev_pixels), curr_gray, noise
+    )
+    region_mask = (
+        screenspace_primitives.region_mask_for(region, *mask_clean.shape[:2])
+        if region is not None
+        else None
+    )
+    if region_mask is not None:
+        mask_clean = cv2.bitwise_and(mask_clean, region_mask)
+    return diff, mask_clean, region_mask
+
+
+def _flow_field(
+    prev_gray: "np.ndarray", curr_gray: "np.ndarray"
+) -> "tuple[np.ndarray, np.ndarray]":
+    """The scan's downscaled current gray and its Farneback flow."""
+    prev_small, _ = screenspace_primitives.flow_downscale(prev_gray)
+    curr_small, _ = screenspace_primitives.flow_downscale(curr_gray)
+    flow = screenspace_primitives.farneback_flow(
+        prev_small, curr_small, config.SCREENSPACE_FLOW_PYR_SCALE
+    )
+    return curr_small, flow
 
 
 def _gray_to_bgr(gray: "np.ndarray") -> "np.ndarray":
@@ -649,6 +628,20 @@ def _clip_region_pixels(
     return pixels
 
 
+def _prev_region_pixels(
+    prev_frame: "np.ndarray | None",
+    region: dict[str, Any] | None,
+    pixels: "np.ndarray",
+) -> "np.ndarray | None":
+    """The previous frame's region crop, or None when absent or differently sized."""
+    if prev_frame is None:
+        return None
+    prev_pixels = _clip_region_pixels(prev_frame, region)
+    if prev_pixels is None or prev_pixels.shape[:2] != pixels.shape[:2]:
+        return None
+    return prev_pixels
+
+
 # ---------------------------------------------------------------------------
 # Per-tool previews
 # ---------------------------------------------------------------------------
@@ -719,34 +712,16 @@ def _preview_change(
     pixels = _clip_region_pixels(frame, region)
     if pixels is None:
         return _placeholder("Select a region to preview")
-    k = config.SCREENSPACE_BLUR_KERNEL
-    curr_blur = cv2.GaussianBlur(pixels, (k, k), 0)
-    curr_gray = cv2.cvtColor(curr_blur, cv2.COLOR_BGR2GRAY)
-
-    if prev_frame is None:
+    curr_gray = screenspace_primitives.blur_gray(pixels)
+    prev_pixels = _prev_region_pixels(prev_frame, region, pixels)
+    if prev_pixels is None:
         return _label_panel(_fit_width(curr_gray, 200), "gray-blur (no prev)")
 
-    prev_pixels = _clip_region_pixels(prev_frame, region)
-    if prev_pixels is None or prev_pixels.shape[:2] != pixels.shape[:2]:
-        return _label_panel(_fit_width(curr_gray, 200), "gray-blur (no prev)")
-
-    prev_blur = cv2.GaussianBlur(prev_pixels, (k, k), 0)
-    prev_gray = cv2.cvtColor(prev_blur, cv2.COLOR_BGR2GRAY)
-
-    noise = int(params.get("noise_threshold", config.SCREENSPACE_NOISE_THRESHOLD))
-    diff = cv2.absdiff(prev_gray, curr_gray)
-    _, mask = cv2.threshold(diff, noise, 255, cv2.THRESH_BINARY)
-    mk = config.SCREENSPACE_MORPH_KERNEL
-    mask_clean = cv2.morphologyEx(mask, cv2.MORPH_OPEN, np.ones((mk, mk), np.uint8))
-
-    # Shaped region: count and normalize inside the polygon only, like scan_changes.
-    region_mask = (
-        screenspace_primitives.region_mask_for(region, *mask_clean.shape[:2])
-        if region is not None
-        else None
+    diff, mask_clean, region_mask = _change_layers(
+        curr_gray, prev_pixels, region, params
     )
+    # Shaped region: normalize inside the polygon only, like scan_changes.
     if region_mask is not None:
-        mask_clean = cv2.bitwise_and(mask_clean, region_mask)
         denom = float(np.count_nonzero(region_mask))
     else:
         denom = float(mask_clean.size)
@@ -773,38 +748,13 @@ def _preview_similarity(
     if pixels is None:
         return _placeholder("Select a region to preview")
 
-    max_dim = 256
-    h, w = pixels.shape[:2]
-    if h > max_dim or w > max_dim:
-        scale = max_dim / max(h, w)
-        pixels_small = cv2.resize(
-            pixels,
-            (int(w * scale), int(h * scale)),
-            interpolation=cv2.INTER_AREA,
-        )
-    else:
-        pixels_small = pixels
-    k = config.SCREENSPACE_BLUR_KERNEL
-    curr_gray = cv2.cvtColor(
-        cv2.GaussianBlur(pixels_small, (k, k), 0), cv2.COLOR_BGR2GRAY
-    )
+    fit_within = screenspace_primitives.fit_within
+    curr_gray = screenspace_primitives.blur_gray(fit_within(pixels, 256))
 
     ref_frame = params.get("reference_frame")
     panels = [_label_panel(_fit_width(curr_gray, 200), "current gray (≤256)")]
     if isinstance(ref_frame, np.ndarray) and ref_frame.size > 0:
-        rh, rw = ref_frame.shape[:2]
-        if rh > max_dim or rw > max_dim:
-            rs = max_dim / max(rh, rw)
-            ref_small = cv2.resize(
-                ref_frame,
-                (int(rw * rs), int(rh * rs)),
-                interpolation=cv2.INTER_AREA,
-            )
-        else:
-            ref_small = ref_frame
-        ref_gray = cv2.cvtColor(
-            cv2.GaussianBlur(ref_small, (k, k), 0), cv2.COLOR_BGR2GRAY
-        )
+        ref_gray = screenspace_primitives.blur_gray(fit_within(ref_frame, 256))
         panels.append(_label_panel(_fit_width(ref_gray, 200), "reference gray"))
 
         # SSIM difference map, warm = dissimilar; reuses the scan's preprocessing.
@@ -853,8 +803,7 @@ def _preview_template(
     region: dict[str, Any] | None,
     params: dict[str, Any],
 ) -> "np.ndarray":
-    k = config.SCREENSPACE_BLUR_KERNEL
-    frame_gray = cv2.cvtColor(cv2.GaussianBlur(frame, (k, k), 0), cv2.COLOR_BGR2GRAY)
+    frame_gray = screenspace_primitives.blur_gray(frame)
     panels = [_label_panel(_fit_width(frame_gray, 240), "frame gray-blur")]
 
     template = params.get("template_image")
@@ -873,9 +822,7 @@ def _preview_template(
                 result, tw_t, th_t, window
             )
         if result is not None:
-            norm = np.empty_like(result)
-            cv2.normalize(result, norm, 0, 255, cv2.NORM_MINMAX)
-            heat = cv2.applyColorMap(norm.astype(np.uint8), cv2.COLORMAP_JET)
+            heat = _corr_heat(result)
             panels.append(_label_panel(_fit_width(heat, 240), "match heatmap"))
     else:
         panels.append(_label_panel(_placeholder("no template", 120, 80), "template"))
@@ -917,9 +864,7 @@ def _preview_shape(
     if entry.get("scale_y") not in (None, entry["scale"]):
         scale_label = f"reference x{entry['scale']:.2f}/{entry['scale_y']:.2f}"
     panels.append(_label_panel(_fit_width(ref_u8, 120), scale_label))
-    norm = np.empty_like(result)
-    cv2.normalize(result, norm, 0, 255, cv2.NORM_MINMAX)
-    heat = cv2.applyColorMap(norm.astype(np.uint8), cv2.COLORMAP_JET)
+    heat = _corr_heat(result)
     panels.append(_label_panel(_fit_width(heat, 240), "match heatmap"))
     return _hstack_panels(panels)
 
@@ -934,28 +879,12 @@ def _preview_flow(
     if pixels is None:
         return _placeholder("Select a region to preview")
     curr_gray = cv2.cvtColor(pixels, cv2.COLOR_BGR2GRAY)
-
-    if prev_frame is None:
-        return _label_panel(_fit_width(curr_gray, 200), "current gray (no prev)")
-    prev_pixels = _clip_region_pixels(prev_frame, region)
-    if prev_pixels is None or prev_pixels.shape[:2] != pixels.shape[:2]:
+    prev_pixels = _prev_region_pixels(prev_frame, region, pixels)
+    if prev_pixels is None:
         return _label_panel(_fit_width(curr_gray, 200), "current gray (no prev)")
     prev_gray = cv2.cvtColor(prev_pixels, cv2.COLOR_BGR2GRAY)
 
-    max_dim = 256
-    h, w = prev_gray.shape[:2]
-    if h > max_dim or w > max_dim:
-        scale = max_dim / max(h, w)
-        new_w, new_h = int(w * scale), int(h * scale)
-        prev_r = cv2.resize(prev_gray, (new_w, new_h), interpolation=cv2.INTER_AREA)
-        curr_r = cv2.resize(curr_gray, (new_w, new_h), interpolation=cv2.INTER_AREA)
-    else:
-        prev_r, curr_r = prev_gray, curr_gray
-
-    flow_out = np.zeros((*prev_r.shape[:2], 2), dtype=np.float32)
-    flow = cv2.calcOpticalFlowFarneback(
-        prev_r, curr_r, flow_out, config.SCREENSPACE_FLOW_PYR_SCALE, 3, 15, 3, 5, 1.2, 0
-    )
+    curr_r, flow = _flow_field(prev_gray, curr_gray)
     mag, _ = cv2.cartToPolar(flow[..., 0], flow[..., 1], angleInDegrees=True)
 
     vis = cv2.cvtColor(curr_r, cv2.COLOR_GRAY2BGR)
@@ -998,17 +927,7 @@ def _preview_scene(
     if pixels is None:
         return _placeholder("Select a region to preview")
 
-    max_dim = 128
-    h, w = pixels.shape[:2]
-    if h > max_dim or w > max_dim:
-        scale = max_dim / max(h, w)
-        pixels_small = cv2.resize(
-            pixels,
-            (int(w * scale), int(h * scale)),
-            interpolation=cv2.INTER_AREA,
-        )
-    else:
-        pixels_small = pixels
+    pixels_small = screenspace_primitives.fit_within(pixels, 128)
 
     # Canny at native resolution (as compute_scene_fingerprint), then downscale
     # the edge map for display.
@@ -1102,14 +1021,9 @@ def _attention_working_frames(
     frame: "np.ndarray", prev_frame: "np.ndarray | None"
 ) -> "tuple[np.ndarray, np.ndarray | None]":
     """Downscale to the scan's working size; prev gray only when comparable."""
-    max_dim = config.SCREENSPACE_ATTENTION_WORKING_DIM
-    h, w = frame.shape[:2]
-    if h > max_dim or w > max_dim:
-        scale = max_dim / max(h, w)
-        size = (int(w * scale), int(h * scale))
-        small = cv2.resize(frame, size, interpolation=cv2.INTER_AREA)
-    else:
-        small = frame
+    small = screenspace_primitives.fit_within(
+        frame, config.SCREENSPACE_ATTENTION_WORKING_DIM
+    )
     prev_gray = None
     if prev_frame is not None and prev_frame.shape[:2] == frame.shape[:2]:
         prev_small = cv2.resize(

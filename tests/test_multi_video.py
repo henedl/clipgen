@@ -267,8 +267,8 @@ def test_single_video_cut_unchanged_and_no_mapping(monkeypatch, make_clip):
     assert generated == 1
     _, kwargs = run_ffmpeg.call_args
     assert kwargs["input_file"] == "study_P01.mp4"
-    assert kwargs["start_pos"] == "2:04"
-    assert kwargs["end_pos"] == "2:10"
+    assert kwargs["start_pos"] == "0:02:04"
+    assert kwargs["end_pos"] == "0:02:10"
 
 
 def test_multi_video_clip_maps_into_second_video(monkeypatch, make_clip):

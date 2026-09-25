@@ -3858,9 +3858,9 @@ def test_api_reel_direct_cleans_temp_clips_after_disconnect(
     # Track every tempfile that run_ffmpeg "produces".
     created_temps: list[str] = []
 
-    def fake_run_ffmpeg(src, dst, *a, **kw):
-        Path(dst).write_bytes(b"clip")
-        created_temps.append(dst)
+    def fake_run_ffmpeg(*a, output_file, **kw):
+        Path(output_file).write_bytes(b"clip")
+        created_temps.append(output_file)
         return True
 
     monkeypatch.setattr("video.run_ffmpeg", fake_run_ffmpeg)
@@ -3916,7 +3916,7 @@ def test_api_reel_direct_explicit_cancel_still_works(client, monkeypatch, tmp_pa
 
     started = threading.Event()
 
-    def slow_ffmpeg(src, dst, *a, **kw):
+    def slow_ffmpeg(*a, **kw):
         started.set()
         for _ in range(500):
             if kw.get("cancel_flag") and kw["cancel_flag"]():

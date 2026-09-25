@@ -102,23 +102,14 @@ _verified: dict[str, Any] | None = None
 
 
 def install_shape() -> Shape:
-    """Classify this process's install; mirrors cli.get_runtime_working_dir."""
+    """Classify this process's install on top of utils.frozen_layout."""
     if not getattr(sys, "frozen", False):
         return "unsupported"
-    exe_dir = Path(sys.executable).resolve().parent
-    if exe_dir.name == "MacOS" and exe_dir.parent.name == "Contents":
-        if exe_dir.parent.parent.suffix == ".app":
-            return "mac-app"
-        return "unsupported"
-    meipass = getattr(sys, "_MEIPASS", None)
-    if (
-        sys.platform == "win32"
-        and meipass
-        and Path(meipass).resolve().parent == exe_dir
-    ):
-        if (exe_dir / "unins000.exe").is_file():
-            return "win-inno"
-        return "win-zip"
+    kind, root = utils.frozen_layout()
+    if kind == "mac-app":
+        return "mac-app"
+    if kind == "one-dir" and sys.platform == "win32":
+        return "win-inno" if (root / "unins000.exe").is_file() else "win-zip"
     return "unsupported"
 
 

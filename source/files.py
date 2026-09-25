@@ -111,6 +111,13 @@ def release_reservation(path: str | os.PathLike[str] | None) -> None:
         pass
 
 
+def default_reel_filename(study: str, kind: str, participant: str = "") -> str:
+    """Build ``{study}_{participant}_{kind}.mp4``; a chronologic reel without participant drops study."""
+    if kind == "chronologic" and not participant:
+        study = ""
+    return "_".join(p for p in (study, participant, kind) if p) + config.FILEFORMAT
+
+
 def _apply_default_extension(name: str) -> str:
     """Return *name* unchanged if it has an extension, else append FILEFORMAT."""
     return name if Path(name).suffix else name + config.FILEFORMAT
@@ -291,20 +298,29 @@ def resolve_participant_videos(sheet_context: Any = None) -> list[dict[str, Any]
     input_dir = Path(utils.get_effective_input_dir())
     entries: list[dict[str, Any]] = []
     seen: set[str] = set()
-    for pid in sheet_ids:
-        if pid in seen:  # a sheet with a duplicated column header
-            continue
-        seen.add(pid)
-        paths = resolve_source_video_paths(study, pid, overrides.get(pid), input_dir)
+
+    def _entry(pid: str, paths: list, in_sheet: bool, has_video: bool | None = None):
         path_strs = [str(p) for p in paths]
+        if has_video is None:
+            has_video = Path(path_strs[0]).is_file()
         entries.append(
             {
                 "id": pid,
                 "video_paths": path_strs,
-                "has_video": paths[0].is_file(),
-                "in_sheet": True,
+                "has_video": has_video,
+                "in_sheet": in_sheet,
                 "browser_seekable": _browser_seekable(path_strs),
             }
+        )
+
+    for pid in sheet_ids:
+        if pid in seen:  # a sheet with a duplicated column header
+            continue
+        seen.add(pid)
+        _entry(
+            pid,
+            resolve_source_video_paths(study, pid, overrides.get(pid), input_dir),
+            True,
         )
     for found in utils.discover_participant_videos():  # already sorted by id
         if found["id"] in seen:
@@ -316,20 +332,10 @@ def resolve_participant_videos(sheet_context: Any = None) -> list[dict[str, Any]
             paths = resolve_source_video_paths(
                 "", found["id"], user_override, input_dir
             )
-            found_paths = [str(p) for p in paths]
-            has_video = paths[0].is_file()
+            _entry(found["id"], paths, False)
         else:
-            found_paths = list(found["video_paths"])  # copy — source is memoized
-            has_video = found["has_video"]
-        entries.append(
-            {
-                "id": found["id"],
-                "video_paths": found_paths,
-                "has_video": has_video,
-                "in_sheet": False,
-                "browser_seekable": _browser_seekable(found_paths),
-            }
-        )
+            # Copied by _entry: the source list is memoized.
+            _entry(found["id"], found["video_paths"], False, found["has_video"])
     for pid in sorted(config.FILENAME_OVERRIDES):
         if pid in seen:
             continue
@@ -338,17 +344,7 @@ def resolve_participant_videos(sheet_context: Any = None) -> list[dict[str, Any]
             continue
         # study is irrelevant here: resolve_source_video_paths ignores it when
         # an override is present.
-        paths = resolve_source_video_paths("", pid, override, input_dir)
-        path_strs = [str(p) for p in paths]
-        entries.append(
-            {
-                "id": pid,
-                "video_paths": path_strs,
-                "has_video": paths[0].is_file(),
-                "in_sheet": False,
-                "browser_seekable": _browser_seekable(path_strs),
-            }
-        )
+        _entry(pid, resolve_source_video_paths("", pid, override, input_dir), False)
     return entries
 
 
@@ -419,68 +415,56 @@ def prepare_clip(clip: ClipRecord) -> ClipRecord:
     if config.DEBUGGING:
         config.debug_ic(clip)
 
-    # Pre-parsed fast path: synthetic clips arrive with times resolved, so only sanitize.
+    # Pre-parsed fast path: synthetic clips arrive with times resolved.
     if clip.get("times"):
         clip["cell_annotations"] = list(clip.get("cell_annotations") or [])
         clip["segment_annotations"] = dict(clip.get("segment_annotations") or {})
-        raw_desc = clip.get("desc", "")
-        bracket_pos = raw_desc.rfind("]")
-        cleaned_desc = (
-            raw_desc[bracket_pos + 1 :].strip()
-            if bracket_pos >= 0
-            else raw_desc.strip()
+    else:
+        utils.debug_print(
+            f"prepare_clip() received clip with cell contents {clip['cell'].value}"
         )
-        clip["desc"] = utils.sanitize_filename(cleaned_desc)
-        clip["category"] = (
-            utils.sanitize_filename(clip["category"])
-            if clip.get("category")
-            else "uncategorized"
+        utils.debug_print("Will attempt to split the cell contents")
+
+        cell_ref = utils.safe_cell_a1(clip["cell"].row, clip["cell"].col)
+
+        cleaned_cell_value, segment_annotations, cell_annotations = (
+            utils.parse_cell_annotations(clip["cell"].value)
         )
-        return clip
-
-    utils.debug_print(
-        f"prepare_clip() received clip with cell contents {clip['cell'].value}"
-    )
-    utils.debug_print("Will attempt to split the cell contents")
-
-    cell_ref = utils.safe_cell_a1(clip["cell"].row, clip["cell"].col)
-
-    cleaned_cell_value, segment_annotations, cell_annotations = (
-        utils.parse_cell_annotations(clip["cell"].value)
-    )
-    clip["cell_annotations"] = sorted(cell_annotations)
-    clip["segment_annotations"] = {
-        key: sorted(indexes) for key, indexes in segment_annotations.items()
-    }
-    clip["times"] = utils.parse_timestamps(cleaned_cell_value, cell_ref=cell_ref)
-    # Select before the baseline conversion: it drops pairs and shifts indexes.
-    selected_segment_indexes = clip.get("selected_segment_indexes")
-    if selected_segment_indexes is not None:
-        selected_set = set(selected_segment_indexes)
-        clip["times"] = [
-            pair for index, pair in enumerate(clip["times"]) if index in selected_set
-        ]
-    timestamp_baseline = clip.get("timestamp_baseline")
-    if timestamp_baseline:
-        clip["times"] = utils.convert_clock_pairs_to_relative(
-            clip["times"], timestamp_baseline, cell_ref=cell_ref
-        )
-    if config.DEBUGGING:
-        config.debug_ic(clip["times"])
-
-    # Warn if no valid timestamps were parsed, except cells with only ignored tokens (e.g. "x").
-    if not clip["times"] and utils.has_non_ignored_timestamp_content(  # noqa: SIM102 - the comment below belongs to the inner branch
-        cleaned_cell_value
-    ):
-        # Only show this detailed per-cell warning at verbose verbosity.
-        if getattr(config, "VERBOSITY", config.STANDARD) >= config.VERBOSE:
-            utils.warning_print(
-                f"No valid timestamps found in cell {cell_ref}",
-                [
-                    f"Cell contents: '{clip['cell'].value}'",
-                    f"Participant: {clip['participant']}, Description: {(clip.get('desc') or '')[:50]}...",
-                ],
+        clip["cell_annotations"] = sorted(cell_annotations)
+        clip["segment_annotations"] = {
+            key: sorted(indexes) for key, indexes in segment_annotations.items()
+        }
+        clip["times"] = utils.parse_timestamps(cleaned_cell_value, cell_ref=cell_ref)
+        # Select before the baseline conversion: it drops pairs and shifts indexes.
+        selected_segment_indexes = clip.get("selected_segment_indexes")
+        if selected_segment_indexes is not None:
+            selected_set = set(selected_segment_indexes)
+            clip["times"] = [
+                pair
+                for index, pair in enumerate(clip["times"])
+                if index in selected_set
+            ]
+        timestamp_baseline = clip.get("timestamp_baseline")
+        if timestamp_baseline:
+            clip["times"] = utils.convert_clock_pairs_to_relative(
+                clip["times"], timestamp_baseline, cell_ref=cell_ref
             )
+        if config.DEBUGGING:
+            config.debug_ic(clip["times"])
+
+        # Warn if no valid timestamps were parsed, except cells with only ignored tokens (e.g. "x").
+        if not clip["times"] and utils.has_non_ignored_timestamp_content(  # noqa: SIM102 - the comment below belongs to the inner branch
+            cleaned_cell_value
+        ):
+            # Only show this detailed per-cell warning at verbose verbosity.
+            if getattr(config, "VERBOSITY", config.STANDARD) >= config.VERBOSE:
+                utils.warning_print(
+                    f"No valid timestamps found in cell {cell_ref}",
+                    [
+                        f"Cell contents: '{clip['cell'].value}'",
+                        f"Participant: {clip['participant']}, Description: {(clip.get('desc') or '')[:50]}...",
+                    ],
+                )
 
     # Strip bracketed prefix, sanitize for filename. `.get`: desc/category may be absent.
     raw_desc = clip.get("desc") or ""

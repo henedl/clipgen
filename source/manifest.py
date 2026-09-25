@@ -75,10 +75,12 @@ def _sections_locked() -> dict[str, str]:
     stamp = _manifest_stamp(path)
     if _manifest_cache["path"] != str(path) or _manifest_cache["stamp"] != stamp:
         sections = _read_sections(path) if stamp else {}
-        _manifest_cache["path"] = str(path)
-        _manifest_cache["stamp"] = stamp
-        _manifest_cache["sections"] = sections or {}
-        _manifest_cache["broken"] = sections is None
+        _manifest_cache.update(
+            path=str(path),
+            stamp=stamp,
+            sections=sections or {},
+            broken=sections is None,
+        )
     return _manifest_cache["sections"]
 
 
@@ -105,10 +107,7 @@ def _write_sections_locked(sections: dict[str, str]) -> Path | None:
                 candidate.unlink(missing_ok=True)
             except OSError:
                 pass
-        _manifest_cache["path"] = str(path)
-        _manifest_cache["stamp"] = None
-        _manifest_cache["sections"] = {}
-        _manifest_cache["broken"] = False
+        _manifest_cache.update(path=str(path), stamp=None, sections={}, broken=False)
         _manifest_indent_cache.clear()
         return None
     # Sections are already indent=2; json.dumps escapes newlines, so nesting is a
@@ -132,10 +131,9 @@ def _write_sections_locked(sections: dict[str, str]) -> Path | None:
             pass
         warning_print(f"Could not write {path.name}: {exc}")
         return None
-    _manifest_cache["path"] = str(path)
-    _manifest_cache["stamp"] = _manifest_stamp(path)
-    _manifest_cache["sections"] = sections
-    _manifest_cache["broken"] = False
+    _manifest_cache.update(
+        path=str(path), stamp=_manifest_stamp(path), sections=sections, broken=False
+    )
     return path
 
 
@@ -244,11 +242,8 @@ def manifest_mtime() -> int:
 def _reset_manifest_cache() -> None:
     """Drop the in-memory section cache. Intended for test fixtures."""
     with _MANIFEST_LOCK:
-        _manifest_cache["path"] = None
-        _manifest_cache["stamp"] = None
-        _manifest_cache["sections"] = {}
+        _manifest_cache.update(path=None, stamp=None, sections={}, broken=False)
         _manifest_indent_cache.clear()
-        _manifest_cache["broken"] = False
 
 
 def sweep_stale_temp_artifacts() -> None:

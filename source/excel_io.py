@@ -190,30 +190,33 @@ def select_excel_file() -> ExcelSheetAdapter | None:
         ).strip()
         if not choice:
             return None
-        # Try as index
-        if choice.isdigit():
-            idx = int(choice)
-            if 1 <= idx <= len(paths):
-                return open_excel_workbook(paths[idx - 1])
-            utils.info_print(
-                f"Invalid index. Enter a number between 1 and {len(paths)}."
-            )
+        match = _match_excel_choice(choice, paths)
+        if match == _BAD_INDEX:
             continue
-        # Try as filename
-        for p in paths:
-            if Path(p).name == choice:
-                return open_excel_workbook(p)
+        if match is not None:
+            return open_excel_workbook(match)
         utils.info_print(f'No file named "{choice}". Enter an index or exact filename.')
+
+
+_BAD_INDEX = "bad-index"
+
+
+def _match_excel_choice(choice: str, paths: list[str]) -> str | None:
+    """Match an index or exact filename; a bad index warns and returns _BAD_INDEX."""
+    if choice.isdigit() and paths:
+        idx = int(choice)
+        if 1 <= idx <= len(paths):
+            return paths[idx - 1]
+        utils.info_print(f"Invalid index. Enter a number between 1 and {len(paths)}.")
+        return _BAD_INDEX
+    return next((p for p in paths if Path(p).name == choice), None)
 
 
 def _print_credentials_help() -> None:
     """Print troubleshooting steps for setting up Google credentials."""
-    utils.info_print(
-        "Google Sheets access requires a 'credentials.json' file in the working directory."
-    )
-    utils.info_print(f"Working directory: {Path.cwd()}")
+    utils.info_print("Google Sheets access requires a 'credentials.json' file.")
     utils.info_print("Troubleshooting steps:")
-    utils.info_print("  1. Ensure 'credentials.json' exists in the working directory")
+    utils.info_print("  1. Put 'credentials.json' in a location listed above")
     utils.info_print("  2. Verify the credentials file is valid JSON")
     utils.info_print(
         "  3. Check that the service account has access to Google Sheets API"
@@ -259,27 +262,11 @@ def prompt_for_excel_fallback() -> ExcelSheetAdapter | None:
         if choice.lower() == "help":
             _print_credentials_help()
             continue
-        if choice.isdigit() and paths:
-            idx = int(choice)
-            if 1 <= idx <= len(paths):
-                adapter = open_excel_workbook(paths[idx - 1])
-                if adapter is not None:
-                    return adapter
-                continue
-            utils.info_print(
-                f"Invalid index. Enter a number between 1 and {len(paths)}."
-            )
-            continue
-        # Exact filename match inside cwd.
-        matched = False
-        for p in paths:
-            if Path(p).name == choice:
-                adapter = open_excel_workbook(p)
-                if adapter is not None:
-                    return adapter
-                matched = True
-                break
-        if matched:
+        match = _match_excel_choice(choice, paths)
+        if match is not None:
+            adapter = None if match == _BAD_INDEX else open_excel_workbook(match)
+            if adapter is not None:
+                return adapter
             continue
         # Treat as a path (absolute or relative to cwd).
         candidate = Path(choice).expanduser()

@@ -1,13 +1,15 @@
 """Screenspace task + manifest helpers."""
 
 import uuid
+from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 import manifest
 import utils
-from screenspace_tools import _extract_confidence
+from screenspace_primitives import attach_capture_mask, extract_region
+from screenspace_tools import TOOLS, _extract_confidence
 
 
 # ---------------------------------------------------------------------------
@@ -303,6 +305,32 @@ def _offset_result_times(result: dict[str, Any], offset: int) -> None:
             result[key] = value + offset
 
 
+_MATCH_KEYS = (("match_count", "match_count", 0), ("best_score", "best_score", 0.0))
+
+# (metadata key, result key, default) copied into each event, per task type.
+_EVENT_METADATA_KEYS: dict[str, tuple[tuple[str, str, Any], ...]] = {
+    "change": (("magnitude", "magnitude", 0.0),),
+    "similarity": (("score", "score", 0.0),),
+    "text": (("text_found", "text_found", ""),),
+    "numbers": (("value", "number_found", 0),),
+    "template": _MATCH_KEYS,
+    "shape": _MATCH_KEYS,
+    "flow": (("magnitude", "magnitude", 0.0), ("angle", "angle", 0.0)),
+    "scene": (("scene_name", "scene_name", ""), ("score", "score", 0.0)),
+    "inactivity": (
+        ("duration", "duration", 0.0),
+        ("avg_distance", "avg_distance", 0.0),
+    ),
+    "attention": (
+        ("shift_distance", "shift_distance", 0.0),
+        ("from_x", "from_x", 0.0),
+        ("from_y", "from_y", 0.0),
+        ("peak_value", "peak_value", 0.0),
+    ),
+    "boundary": (("distance", "distance", 0.0),),
+}
+
+
 def generate_events_from_results(
     task: dict[str, Any], raw_results: list[dict[str, Any]]
 ) -> list[dict[str, Any]]:
@@ -317,47 +345,22 @@ def generate_events_from_results(
     for r in raw_results:
         ts = r.get("timestamp", r.get("start", 0.0))
         confidence = _extract_confidence(task_type, r)
-        metadata: dict[str, Any] = {}
-        if task_type == "change":
-            metadata["magnitude"] = r.get("magnitude", 0.0)
-        elif task_type == "similarity":
-            metadata["score"] = r.get("score", 0.0)
-        elif task_type == "text":
-            metadata["text_found"] = r.get("text_found", "")
-        elif task_type == "numbers":
-            metadata["value"] = r.get("number_found", 0)
-        elif task_type in ("template", "shape"):
-            metadata["match_count"] = r.get("match_count", 0)
-            metadata["best_score"] = r.get("best_score", 0.0)
-        elif task_type == "flow":
-            metadata["magnitude"] = r.get("magnitude", 0.0)
-            metadata["angle"] = r.get("angle", 0.0)
-        elif task_type == "scene":
-            metadata["scene_name"] = r.get("scene_name", "")
-            metadata["score"] = r.get("score", 0.0)
-        elif task_type == "multitool":
-            metadata["tool_types"] = r.get("tool_types", [])
-            metadata["steps"] = r.get("steps", [])
-        elif task_type == "inactivity":
-            metadata["duration"] = r.get("duration", 0.0)
-            metadata["avg_distance"] = r.get("avg_distance", 0.0)
+        metadata: dict[str, Any] = {
+            key: r.get(src, default)
+            for key, src, default in _EVENT_METADATA_KEYS.get(task_type, ())
+        }
+        if task_type == "multitool":
+            # Copy so events never share a list with the result.
+            metadata["tool_types"] = list(r.get("tool_types", ()))
+            metadata["steps"] = list(r.get("steps", ()))
         elif task_type == "attention":
-            metadata["shift_distance"] = r.get("shift_distance", 0.0)
-            metadata["from_x"] = r.get("from_x", 0.0)
-            metadata["from_y"] = r.get("from_y", 0.0)
             metadata["to_x"] = r.get("to_x", r.get("peak_x", 0.0))
             metadata["to_y"] = r.get("to_y", r.get("peak_y", 0.0))
-            metadata["peak_value"] = r.get("peak_value", 0.0)
         elif task_type == "boundary":
-            metadata["distance"] = r.get("distance", 0.0)
-            # Scene/hybrid boundaries carry a period (phash does not) so viewers
-            # render segments.
-            if "period_start" in r:
-                metadata["period_start"] = r.get("period_start")
-            if "period_end" in r:
-                metadata["period_end"] = r.get("period_end")
-            if "scene_label" in r:
-                metadata["scene_label"] = r.get("scene_label")
+            # Scene/hybrid boundaries carry a period (phash does not) so viewers render segments.
+            for key in ("period_start", "period_end", "scene_label"):
+                if key in r:
+                    metadata[key] = r[key]
         ev = create_event(task, ts, confidence, metadata)
         # Multi-video scans tag each result with the sub-video it came from.
         source_override = r.get("_source_video")
@@ -397,3 +400,107 @@ def create_event(
         "task_id": task["id"],
         "region": task.get("region", ""),
     }
+
+
+# ---------------------------------------------------------------------------
+# Reference media
+# ---------------------------------------------------------------------------
+
+
+def decode_reference_image(upload_b64: str) -> tuple[Any, Any]:
+    """Decode a base64 image into BGR plus an optional alpha mask; ValueError if bad."""
+    import base64
+    import binascii
+
+    import cv2
+    import numpy as np
+
+    try:
+        img_bytes = base64.b64decode(upload_b64)
+    except (ValueError, binascii.Error) as exc:
+        raise ValueError("Could not decode uploaded image") from exc
+    img_arr = np.frombuffer(img_bytes, dtype=np.uint8)
+    img = cv2.imdecode(img_arr, cv2.IMREAD_UNCHANGED)
+    if img is None:
+        raise ValueError("Invalid image data")
+    if len(img.shape) == 2:
+        return cv2.cvtColor(img, cv2.COLOR_GRAY2BGR), None
+    if img.shape[2] == 4:
+        return cv2.cvtColor(img, cv2.COLOR_BGRA2BGR), img[:, :, 3]
+    return img, None
+
+
+def _reference_frame(
+    spec: dict[str, Any], frame_at: Callable[[float], Any | None], missing: str
+) -> Any | None:
+    """Frame at the spec's reference_timestamp; ValueError *missing* when unset."""
+    ref_ts = spec.get("reference_timestamp")
+    if ref_ts is None:
+        raise ValueError(missing)
+    return frame_at(float(ref_ts))
+
+
+def extract_tool_media(
+    spec: dict[str, Any],
+    tool_type: str,
+    frame_at: Callable[[float], Any | None],
+    region_coords: dict[str, Any],
+    context: str = "",
+) -> None:
+    """Fill *spec* with the tool's reference media; ValueError messages start with *context*.
+
+    *frame_at* maps a global timestamp into the owning sub-video.
+    """
+    tool_spec = TOOLS.get(tool_type)
+    if tool_spec is not None and tool_spec.reference_region_param:
+        frame = _reference_frame(
+            spec,
+            frame_at,
+            f"{context}{tool_type} has no reference_timestamp to re-extract",
+        )
+        if frame is None:
+            raise ValueError(f"{context}could not read reference frame")
+        spec[tool_spec.reference_region_param] = extract_region(frame, region_coords)
+
+    elif tool_spec is not None and tool_spec.reference is not None:
+        body_key, image_param, mask_param = tool_spec.reference
+        upload_b64 = spec.pop(body_key, None)
+        if upload_b64:
+            try:
+                bgr, mask = decode_reference_image(upload_b64)
+            except ValueError as exc:
+                raise ValueError(f"{context}could not decode uploaded image") from exc
+            spec[image_param] = bgr
+            if mask is not None:
+                spec[mask_param] = mask
+        else:
+            frame = _reference_frame(
+                spec,
+                frame_at,
+                f"{context}{tool_type} built from an uploaded image cannot be "
+                "re-run (no reference timestamp saved)",
+            )
+            if frame is None:
+                raise ValueError(f"{context}could not read {tool_type} reference frame")
+            spec[image_param] = extract_region(frame, region_coords)
+            attach_capture_mask(spec, image_param, mask_param, region_coords)
+
+    elif tool_type == "scene":
+        scene_refs = spec.get("scene_references")
+        if not scene_refs:
+            raise ValueError(f"{context}scene has no scene_references to re-extract")
+        reference_scenes = []
+        for ref in scene_refs:
+            frame = frame_at(float(ref["timestamp"]))
+            if frame is None:
+                raise ValueError(
+                    f"{context}could not read frame for scene '{ref['name']}'"
+                )
+            scene_entry: dict[str, Any] = {
+                "name": ref["name"],
+                "frame": extract_region(frame, region_coords),
+            }
+            if "threshold" in ref:
+                scene_entry["threshold"] = float(ref["threshold"])
+            reference_scenes.append(scene_entry)
+        spec["reference_scenes"] = reference_scenes

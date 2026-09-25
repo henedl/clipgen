@@ -4090,14 +4090,8 @@ def test_search_results_carry_speaker_names(tr_client, monkeypatch, tmp_path):
 
 
 def test_transcribe_status_reports_task_kind(tr_client, monkeypatch, tmp_path):
-    live = {
-        "id": "sp_live",
-        "kind": "speakers",
-        "participant": "P01",
-        "status": transcripts.TASK_STATUS_RUNNING,
-        "progress": 0.4,
-        "phase": "diarizing",
-    }
+    live = transcripts.create_speakers_task("P01", ["/v.mp4"], [])
+    live.update(status=transcripts.TASK_STATUS_RUNNING, progress=0.4, phase="diarizing")
     _seed_speakers(monkeypatch, tmp_path, _labelled_entry(), _SpeakersWorker([live]))
     body = tr_client.get("/transcripts/api/transcribe/status").get_json()
     assert body["tasks"][0]["kind"] == "speakers"

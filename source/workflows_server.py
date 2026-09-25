@@ -35,6 +35,7 @@ import server_utils
 import utils
 import workflows
 from server_utils import (
+    ApiError,
     err,
     find_by_id,
     json_endpoint,
@@ -362,10 +363,8 @@ def _run_snapshot(run_id: str) -> dict[str, Any] | None:
     if runner is not None:
         return runner.snapshot()
     with _manifest_lock:
-        for record in _manifest.get("runs", []):
-            if record.get("id") == run_id:
-                return copy.deepcopy(record)
-    return None
+        record = find_by_id(_manifest.get("runs", []), run_id)
+        return copy.deepcopy(record) if record else None
 
 
 def _run_meta_index() -> dict[str, dict[str, Any]]:
@@ -468,10 +467,23 @@ def _persist_run(snapshot: dict[str, Any] | None) -> None:
             shutil.rmtree(workflows.run_results_dir(base, rid), ignore_errors=True)
 
 
-def _sse_run_payload(run_id: str) -> str:
-    """SSE ``data:`` line carrying the current run snapshot."""
-    snap = _run_snapshot(run_id)
-    return "data: " + json.dumps({"ok": snap is not None, "run": snap}) + "\n\n"
+def _sse_data(key: str, value: Any) -> str:
+    """SSE ``data:`` line carrying one run or batch snapshot."""
+    return "data: " + json.dumps({"ok": value is not None, key: value}) + "\n\n"
+
+
+def _load_blueprint(bp_id: Any) -> dict[str, Any]:
+    """Deep copy of a stored blueprint; ApiError when missing or cyclic."""
+    with _manifest_lock:
+        blueprint = find_by_id(_manifest.get("blueprints", []), bp_id)
+        blueprint = copy.deepcopy(blueprint) if blueprint else None
+    if blueprint is None:
+        raise ApiError("Blueprint not found", 404)
+    try:
+        workflows.topo_order(blueprint.get("nodes", []), blueprint.get("edges", []))
+    except workflows.WorkflowCycleError as exc:
+        raise ApiError(str(exc)) from exc
+    return blueprint
 
 
 def _launch_run(
@@ -534,19 +546,11 @@ def _launch_run(
 
 
 @workflows_bp.route("/api/runs", methods=["POST"])
+@json_endpoint
 def api_run_create() -> Any:
     """Validate a blueprint's DAG, spawn a runner thread, return the run snapshot."""
     data = request.get_json(silent=True) or {}
-    bp_id = data.get("blueprintId")
-    with _manifest_lock:
-        blueprint = find_by_id(_manifest.get("blueprints", []), bp_id)
-        blueprint = copy.deepcopy(blueprint) if blueprint else None
-    if blueprint is None:
-        return err("Blueprint not found", 404)
-    try:
-        workflows.topo_order(blueprint.get("nodes", []), blueprint.get("edges", []))
-    except workflows.WorkflowCycleError as exc:
-        return err(str(exc))
+    blueprint = _load_blueprint(data.get("blueprintId"))
     # Optional partial run (target + ancestors); an unknown id errors rather than running everything.
     target = str(data.get("targetNodeId") or "")
     if target and not any(n.get("id") == target for n in blueprint.get("nodes", [])):
@@ -576,20 +580,10 @@ def api_run_create() -> Any:
         participant = str(prior.get("participant") or "")
         if participant:
             blueprint = workflows.bind_participant(blueprint, participant)
-        results_dir = workflows.run_results_dir(
-            utils.get_effective_output_dir(), resume_from
-        )
+        output_dir = utils.get_effective_output_dir()
 
         def _load_sidecar(node_id: str) -> dict[str, Any] | None:
-            if node_id != os.path.basename(node_id) or node_id in (".", ".."):
-                return None
-            try:
-                loaded = json.loads(
-                    (results_dir / f"{node_id}.json").read_text(encoding="utf-8")
-                )
-            except (OSError, ValueError):
-                return None
-            return loaded if isinstance(loaded, dict) else None
+            return workflows.read_node_sidecar(output_dir, resume_from, node_id)
 
         seed_results, plan_notes = workflows.compute_resume_plan(
             blueprint, prior.get("nodeStates") or {}, _load_sidecar, sample_window
@@ -650,21 +644,11 @@ def api_run_node_result(run_id: str, node_id: str) -> Any:
     Lazily fetched by the run-history UI on row-expand. Returns the raw stored
     payload (already JSON-sanitized at write time). 404 when no sidecar exists.
     """
-    # Both ids are path segments — reject anything that could escape the run dir.
-    safe_node = node_id == os.path.basename(node_id) and node_id not in (".", "..")
-    safe_run = run_id == os.path.basename(run_id) and run_id not in (".", "..")
-    if not (safe_node and safe_run):
-        return err("Invalid id", 404)
-    path = (
-        workflows.run_results_dir(utils.get_effective_output_dir(), run_id)
-        / f"{node_id}.json"
+    payload = workflows.read_node_sidecar(
+        utils.get_effective_output_dir(), run_id, node_id
     )
-    try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return err("No result for node", 404)
     # Sidecars keep every port for resume; the inspector shows only the inspectable subset.
-    view = workflows.inspectable_sidecar_view(payload)
+    view = workflows.inspectable_sidecar_view(payload) if payload else None
     if not view:
         return err("No result for node", 404)
     return ok(result=view)
@@ -684,7 +668,7 @@ def api_run_cancel(run_id: str) -> Any:
 @workflows_bp.route("/api/runs/<run_id>/stream")
 def api_run_stream(run_id: str) -> Response:
     """SSE stream of one run's snapshot (mirrors screenspace_server.api_tasks_stream)."""
-    return _run_stream(lambda: _sse_run_payload(run_id), key=run_id)
+    return _run_stream(lambda: _sse_data("run", _run_snapshot(run_id)), key=run_id)
 
 
 # ---- Batch lifecycle (whole-study fan-out) ----
@@ -761,12 +745,6 @@ def _batch_summary(batch_id: str) -> dict[str, Any] | None:
         "counts": counts,
         "children": children,
     }
-
-
-def _sse_batch_payload(batch_id: str) -> str:
-    """SSE ``data:`` line carrying the current batch summary."""
-    summary = _batch_summary(batch_id)
-    return "data: " + json.dumps({"ok": summary is not None, "batch": summary}) + "\n\n"
 
 
 # Participant-independent sources computed once per batch; sheet_selection hits the rate-limited Sheets API.
@@ -924,22 +902,14 @@ def _run_batch(batch_id: str, blueprint: dict[str, Any]) -> None:
 
 
 @workflows_bp.route("/api/batches", methods=["POST"])
+@json_endpoint
 def api_batch_create() -> Any:
     """Fan a blueprint out across participants, one run each."""
     data = request.get_json(silent=True) or {}
-    bp_id = data.get("blueprintId")
-    with _manifest_lock:
-        blueprint = find_by_id(_manifest.get("blueprints", []), bp_id)
-        blueprint = copy.deepcopy(blueprint) if blueprint else None
-    if blueprint is None:
-        return err("Blueprint not found", 404)
+    blueprint = _load_blueprint(data.get("blueprintId"))
     bp_id = str(blueprint.get("id", "") or "")
     if not workflows.blueprint_participant_nodes(blueprint):
         return err("Blueprint has no Video Source to fan out over")
-    try:
-        workflows.topo_order(blueprint.get("nodes", []), blueprint.get("edges", []))
-    except workflows.WorkflowCycleError as exc:
-        return err(str(exc))
 
     available = [
         v["id"] for v in utils.discover_participant_videos() if v.get("has_video")
@@ -1029,7 +999,9 @@ def api_batch_cancel(batch_id: str) -> Any:
 @workflows_bp.route("/api/batches/<batch_id>/stream")
 def api_batch_stream(batch_id: str) -> Response:
     """SSE stream of one batch's summary (mirrors :func:`api_run_stream`)."""
-    return _batch_stream(lambda: _sse_batch_payload(batch_id), key=batch_id)
+    return _batch_stream(
+        lambda: _sse_data("batch", _batch_summary(batch_id)), key=batch_id
+    )
 
 
 # ---- Auto-run trigger watcher ----

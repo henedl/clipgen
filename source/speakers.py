@@ -157,12 +157,12 @@ def _mel_filterbank() -> np.ndarray:
     """Kaldi triangular mel bins as a ``(N_FFT // 2 + 1, N_MELS)`` matrix."""
     import numpy as np
 
-    def mel(hz: float) -> float:
+    def mel(hz: Any) -> Any:
         return 1127.0 * np.log(1.0 + hz / 700.0)
 
     n_bins = N_FFT // 2 + 1
     fft_hz = np.arange(n_bins) * SAMPLE_RATE / N_FFT
-    fft_mel = 1127.0 * np.log(1.0 + fft_hz / 700.0)
+    fft_mel = mel(fft_hz)
     mel_low, mel_high = mel(LOW_FREQ_HZ), mel(HIGH_FREQ_HZ)
     delta = (mel_high - mel_low) / (N_MELS + 1)
     bank = np.zeros((n_bins, N_MELS), dtype=np.float32)

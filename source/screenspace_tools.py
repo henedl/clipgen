@@ -151,13 +151,9 @@ def _cached_crop(
     cache: dict[Any, Any] | None, frame: np.ndarray, region: dict[str, int]
 ) -> np.ndarray:
     """Region crop of *frame*, memoized on *cache* (shared across chain steps)."""
-    if cache is None:
-        return extract_region(frame, region)
-    key = _region_key("crop", region)
-    value = cache.get(key, _MISSING)
-    if value is _MISSING:
-        value = cache[key] = extract_region(frame, region)
-    return value
+    return _memo(
+        cache, _region_key("crop", region), lambda: extract_region(frame, region)
+    )
 
 
 @functools.lru_cache(maxsize=64)
@@ -189,15 +185,11 @@ def _cached_gray(
     cache: dict[Any, Any] | None, frame: np.ndarray, region: dict[str, int]
 ) -> np.ndarray:
     """Grayscale of the region crop, memoized on *cache* (reuses the cached crop)."""
-    if cache is None:
-        return cv2.cvtColor(_cached_crop(cache, frame, region), cv2.COLOR_BGR2GRAY)
-    key = _region_key("gray", region)
-    value = cache.get(key, _MISSING)
-    if value is _MISSING:
-        value = cache[key] = cv2.cvtColor(
-            _cached_crop(cache, frame, region), cv2.COLOR_BGR2GRAY
-        )
-    return value
+    return _memo(
+        cache,
+        _region_key("gray", region),
+        lambda: cv2.cvtColor(_cached_crop(cache, frame, region), cv2.COLOR_BGR2GRAY),
+    )
 
 
 def _cached_blur_gray(
@@ -209,26 +201,22 @@ def _cached_blur_gray(
     frame's ``prev_cache``, so ChangeTool's previous-side blur+grayscale is a
     dict hit rather than a recompute.
     """
-    if cache is None:
-        return blur_gray(_cached_crop(cache, frame, region))
-    key = _region_key("blurgray", region)
-    value = cache.get(key, _MISSING)
-    if value is _MISSING:
-        value = cache[key] = blur_gray(_cached_crop(cache, frame, region))
-    return value
+    return _memo(
+        cache,
+        _region_key("blurgray", region),
+        lambda: blur_gray(_cached_crop(cache, frame, region)),
+    )
 
 
 def _cached_phash(
     cache: dict[Any, Any] | None, frame: np.ndarray, region: dict[str, int]
 ) -> "Any":
     """Perceptual hash of the region crop, memoized on *cache* (reuses the crop)."""
-    if cache is None:
-        return compute_phash(_cached_crop(cache, frame, region))
-    key = _region_key("phash", region)
-    value = cache.get(key, _MISSING)
-    if value is _MISSING:
-        value = cache[key] = compute_phash(_cached_crop(cache, frame, region))
-    return value
+    return _memo(
+        cache,
+        _region_key("phash", region),
+        lambda: compute_phash(_cached_crop(cache, frame, region)),
+    )
 
 
 def _cached_ocr(
@@ -247,23 +235,30 @@ def _cached_ocr(
     (fuzzy match, numeric operators, integers_only) is applied at scoring time.
     """
     langs = tuple(languages)
-    if cache is None:
-        return _ocr_region_readings(
+    return _memo(
+        cache,
+        _region_key("ocr", region) + (langs, preprocess),
+        lambda: _ocr_region_readings(
             _cached_crop(cache, frame, region),
             languages=list(langs),
             preprocess=preprocess,
             mask_points=region.get("mask_points"),
-        )
-    key = _region_key("ocr", region) + (langs, preprocess)
-    value = cache.get(key, _MISSING)
-    if value is _MISSING:
-        value = cache[key] = _ocr_region_readings(
-            _cached_crop(cache, frame, region),
-            languages=list(langs),
-            preprocess=preprocess,
-            mask_points=region.get("mask_points"),
-        )
-    return value
+        ),
+    )
+
+
+def _halve_reference(
+    img: np.ndarray, mask: np.ndarray | None
+) -> tuple[np.ndarray, np.ndarray | None]:
+    """Fast-scan halving of a reference image and its optional mask."""
+    h, w = img.shape[:2]
+    nw, nh = w // 2, h // 2
+    if nw <= 0 or nh <= 0:
+        return img, mask
+    img = cv2.resize(img, (nw, nh), interpolation=cv2.INTER_AREA)
+    if mask is not None:
+        mask = cv2.resize(mask, (nw, nh), interpolation=cv2.INTER_AREA)
+    return img, mask
 
 
 def check_frame_for_tool(
@@ -440,6 +435,12 @@ class AnalysisTool:
             kwargs[key] = value
         return kwargs
 
+    def _prepare_scan(
+        self, params: dict[str, Any], fast_opts: dict[str, Any] | None
+    ) -> dict[str, Any] | None:
+        """Pre-dispatch hook: validate *params* (raise ValueError) or adjust *fast_opts*."""
+        return fast_opts
+
     def scan(
         self,
         video_path: str,
@@ -460,6 +461,7 @@ class AnalysisTool:
         differs structurally (template's downscale, timelapse's output file,
         multitool's chaining) override this outright.
         """
+        fast_opts = self._prepare_scan(params, fast_opts)
         if not self.scan_fn_name:
             raise NotImplementedError
         scan_fn = globals()[self.scan_fn_name]
@@ -506,33 +508,11 @@ class ColorTool(AnalysisTool):
             matched, conf = color_matches(pixels, target, tol, mask=mask)
         return matched, {"_confidence": conf}
 
-    def scan(
-        self,
-        video_path,
-        region,
-        params,
-        *,
-        task_id,
-        scan_mode,
-        on_progress,
-        cancel_flag,
-        on_result,
-        fast_opts,
-    ):
+    def _prepare_scan(self, params, fast_opts):
         # Presence needs full resolution: INTER_AREA downscaling erases small color patches.
         if params.get("color_mode", "average") == "presence":
-            fast_opts = None
-        return super().scan(
-            video_path,
-            region,
-            params,
-            task_id=task_id,
-            scan_mode=scan_mode,
-            on_progress=on_progress,
-            cancel_flag=cancel_flag,
-            on_result=on_result,
-            fast_opts=fast_opts,
-        )
+            return None
+        return fast_opts
 
 
 class ChangeTool(AnalysisTool):
@@ -593,33 +573,11 @@ class SimilarityTool(AnalysisTool):
         is_sim, score = regions_are_similar(pixels, ref, threshold)
         return is_sim, {"score": round(score, 4)}
 
-    def scan(
-        self,
-        video_path,
-        region,
-        params,
-        *,
-        task_id,
-        scan_mode,
-        on_progress,
-        cancel_flag,
-        on_result,
-        fast_opts,
-    ):
+    def _prepare_scan(self, params, fast_opts):
         # `is None`, not falsy: the reference is an ndarray with ambiguous truthiness.
         if params.get("reference_frame") is None:
             raise ValueError("Similarity scan requires a reference_frame parameter")
-        return super().scan(
-            video_path,
-            region,
-            params,
-            task_id=task_id,
-            scan_mode=scan_mode,
-            on_progress=on_progress,
-            cancel_flag=cancel_flag,
-            on_result=on_result,
-            fast_opts=fast_opts,
-        )
+        return fast_opts
 
 
 class TextTool(AnalysisTool):
@@ -778,16 +736,7 @@ class TemplateTool(AnalysisTool):
         tmpl_mask = params.get("template_mask")
         # Fast scan halves template + mask; the template_downscale fast_opts flag halves frames.
         if scan_mode == "fast":
-            th, tw = template_img.shape[:2]
-            ntw, nth = tw // 2, th // 2
-            if ntw > 0 and nth > 0:
-                template_img = cv2.resize(
-                    template_img, (ntw, nth), interpolation=cv2.INTER_AREA
-                )
-                if tmpl_mask is not None:
-                    tmpl_mask = cv2.resize(
-                        tmpl_mask, (ntw, nth), interpolation=cv2.INTER_AREA
-                    )
+            template_img, tmpl_mask = _halve_reference(template_img, tmpl_mask)
         return scan_template(
             video_path,
             region,
@@ -880,16 +829,7 @@ class ShapeTool(AnalysisTool):
         shape_mask = params.get("shape_mask")
         # Fast scan halves reference + mask like TemplateTool; template_downscale halves frames.
         if scan_mode == "fast":
-            sh, sw = shape_img.shape[:2]
-            nsw, nsh = sw // 2, sh // 2
-            if nsw > 0 and nsh > 0:
-                shape_img = cv2.resize(
-                    shape_img, (nsw, nsh), interpolation=cv2.INTER_AREA
-                )
-                if shape_mask is not None:
-                    shape_mask = cv2.resize(
-                        shape_mask, (nsw, nsh), interpolation=cv2.INTER_AREA
-                    )
+            shape_img, shape_mask = _halve_reference(shape_img, shape_mask)
         return scan_shape(
             video_path,
             region,
@@ -997,33 +937,11 @@ class SceneTool(AnalysisTool):
             "score": round(best_score, 4),
         }
 
-    def scan(
-        self,
-        video_path,
-        region,
-        params,
-        *,
-        task_id,
-        scan_mode,
-        on_progress,
-        cancel_flag,
-        on_result,
-        fast_opts,
-    ):
+    def _prepare_scan(self, params, fast_opts):
         # Falsy on purpose: an empty list is as unusable as None. Contrast Similarity's `is None`.
         if not params.get("reference_scenes"):
             raise ValueError("Scene scan requires reference_scenes parameter")
-        return super().scan(
-            video_path,
-            region,
-            params,
-            task_id=task_id,
-            scan_mode=scan_mode,
-            on_progress=on_progress,
-            cancel_flag=cancel_flag,
-            on_result=on_result,
-            fast_opts=fast_opts,
-        )
+        return fast_opts
 
 
 class InactivityTool(AnalysisTool):

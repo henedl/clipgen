@@ -278,73 +278,47 @@ def _generate_viewer_html(
         utils.warning_print(f"Could not read {viewer_label.lower()} assets: {e}")
         return None
 
-    # Prepend design tokens so standalone viewers have the full token set
-    tokens_path = assets_dir / "tokens.css"
-    if tokens_path.is_file():
+    def _optional_asset(name: str) -> str | None:
+        path = assets_dir / name
+        if not path.is_file():
+            return None
         try:
-            css_text = _read_bundled_asset(str(tokens_path)) + "\n" + css_text
+            return _read_bundled_asset(str(path))
         except OSError:
-            pass
+            return None
 
-    # Inline the hotkey registry; exports run the default keymap (see _export_config).
-    hk_css_tag = '<link rel="stylesheet" href="hotkeys.css">'
-    hk_js_tag = '<script src="hotkeys.js" defer></script>'
-    if hk_css_tag in template_html:
-        hk_css_path = assets_dir / "hotkeys.css"
-        if hk_css_path.is_file():
-            try:
-                css_text = css_text + "\n" + _read_bundled_asset(str(hk_css_path))
-            except OSError:
-                pass
-        template_html = template_html.replace(hk_css_tag, "")
-    if hk_js_tag in template_html:
-        hk_js_path = assets_dir / "hotkeys.js"
-        if hk_js_path.is_file():
-            try:
-                # utils.js is prepended later, so the order stays utils -> hotkeys -> page.
-                js_text = _read_bundled_asset(str(hk_js_path)) + "\n" + js_text
-            except OSError:
-                pass
-        template_html = template_html.replace(hk_js_tag, "")
+    # Prepend design tokens so standalone viewers have the full token set
+    tokens_css = _optional_asset("tokens.css")
+    if tokens_css is not None:
+        css_text = tokens_css + "\n" + css_text
 
-    # Inline motion.js (JS-only) or the export's toast fade no-ops; consumers read ClipgenMotion lazily.
-    mo_js_tag = '<script src="motion.js" defer></script>'
-    if mo_js_tag in template_html:
-        mo_js_path = assets_dir / "motion.js"
-        if mo_js_path.is_file():
-            try:
-                js_text = _read_bundled_asset(str(mo_js_path)) + "\n" + js_text
-            except OSError:
-                pass
-        template_html = template_html.replace(mo_js_tag, "")
-
-    # Inline card-scrubber where referenced (timeline only); external tags are stripped below.
-    cs_css_tag = '<link rel="stylesheet" href="card-scrubber.css">'
-    cs_js_tag = '<script src="card-scrubber.js" defer></script>'
-    if cs_css_tag in template_html:
-        cs_css_path = assets_dir / "card-scrubber.css"
-        if cs_css_path.is_file():
-            try:
-                css_text = css_text + "\n" + _read_bundled_asset(str(cs_css_path))
-            except OSError:
-                pass
-        template_html = template_html.replace(cs_css_tag, "")
-    if cs_js_tag in template_html:
-        cs_js_path = assets_dir / "card-scrubber.js"
-        if cs_js_path.is_file():
-            try:
-                js_text = _read_bundled_asset(str(cs_js_path)) + "\n" + js_text
-            except OSError:
-                pass
-        template_html = template_html.replace(cs_js_tag, "")
+    # Prepend order keeps JS as utils -> card-scrubber -> motion -> hotkeys -> page.
+    for name in (
+        "hotkeys.css",
+        "hotkeys.js",
+        "motion.js",
+        "card-scrubber.css",
+        "card-scrubber.js",
+    ):
+        is_css = name.endswith(".css")
+        tag = (
+            f'<link rel="stylesheet" href="{name}">'
+            if is_css
+            else f'<script src="{name}" defer></script>'
+        )
+        if tag not in template_html:
+            continue
+        text = _optional_asset(name)
+        if text is not None and is_css:
+            css_text = css_text + "\n" + text
+        elif text is not None:
+            js_text = text + "\n" + js_text
+        template_html = template_html.replace(tag, "")
 
     # Prepend shared utilities so standalone viewers have them
-    utils_js_path = assets_dir / "utils.js"
-    if utils_js_path.is_file():
-        try:
-            js_text = _read_bundled_asset(str(utils_js_path)) + "\n" + js_text
-        except OSError:
-            pass
+    utils_js = _optional_asset("utils.js")
+    if utils_js is not None:
+        js_text = utils_js + "\n" + js_text
 
     # Inline CSS
     css_link_tag = f'<link rel="stylesheet" href="{css_name}">'

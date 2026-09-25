@@ -10,14 +10,13 @@ from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
-import cv2
 import numpy as np
 
 import config
 import profiling
 import utils
 import video
-from screenspace_primitives import PHash, ScanCallback, compute_phash
+from screenspace_primitives import PHash, ScanCallback, compute_phash, fit_within
 
 # Long-GOP codecs where keyframe-only decode pays off; intra-only formats gain nothing.
 _NONKEY_SKIP_CODECS = frozenset({"h264", "hevc"})
@@ -361,14 +360,7 @@ def _scan_via_ffmpeg_pipe(
                     continue
                 prev_phash = fh
                 if _max_dim > 0:
-                    rh, rw = frame.shape[:2]
-                    if rh > _max_dim or rw > _max_dim:
-                        sc = _max_dim / max(rh, rw)
-                        frame = cv2.resize(
-                            frame,
-                            (int(rw * sc), int(rh * sc)),
-                            interpolation=cv2.INTER_AREA,
-                        )
+                    frame = fit_within(frame, _max_dim)
 
             if _prof:
                 _t_cb = time.perf_counter()

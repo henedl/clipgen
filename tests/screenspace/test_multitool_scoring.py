@@ -717,7 +717,7 @@ class TestScanMultitool:
     @staticmethod
     def _setup_stubs(monkeypatch, check_fn):
         monkeypatch.setattr(
-            screenspace_multitool, "_probe_video_meta", lambda _p: (30.0, 10.0)
+            screenspace_frames, "_probe_video_meta", lambda _p: (30.0, 10.0)
         )
 
         def fake_scan(
@@ -824,7 +824,7 @@ class TestScanMultitool:
         injects the live ts that ``scan_video_full_frames`` is replaying.
         """
         monkeypatch.setattr(
-            screenspace_multitool,
+            screenspace_frames,
             "_probe_video_meta",
             lambda _p: (30.0, max(frames_ts) + 1.0),
         )

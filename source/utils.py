@@ -856,6 +856,20 @@ def get_bundled_assets_root() -> Path:
     return Path(__file__).resolve().parent.parent
 
 
+def frozen_layout() -> tuple[str | None, Path]:
+    """Classify a frozen build: ("mac-app", bundle), ("one-dir", exe_dir), or (None, exe_dir)."""
+    exe_dir = Path(sys.executable).resolve().parent
+    if exe_dir.name == "MacOS" and exe_dir.parent.name == "Contents":
+        bundle = exe_dir.parent.parent
+        if bundle.suffix == ".app":
+            return "mac-app", bundle
+    # One-dir: _MEIPASS is lib/ under the exe dir; one-file's temp dir never matches.
+    meipass = getattr(sys, "_MEIPASS", None)
+    if meipass and Path(meipass).resolve().parent == exe_dir:
+        return "one-dir", exe_dir
+    return None, exe_dir
+
+
 @functools.cache
 def get_version() -> str:
     """Return the project version, read from the `VERSION` file in `build/`.
@@ -1609,6 +1623,17 @@ def timestamp_to_seconds(ts_str: str) -> float | None:
     )
 
 
+def times_to_spans(pairs: Any) -> list[tuple[float, float]]:
+    """Timestamp string pairs to ``(start, end)`` seconds; unparseable pairs are skipped."""
+    spans: list[tuple[float, float]] = []
+    for start_str, end_str in pairs:
+        start = timestamp_to_seconds(start_str)
+        end = timestamp_to_seconds(end_str)
+        if start is not None and end is not None:
+            spans.append((start, max(start, end)))
+    return spans
+
+
 def parse_timestamps(
     cell_value: str, cell_ref: str | None = None
 ) -> list[tuple[str, str]]:
@@ -2051,6 +2076,13 @@ def suggest_close_match(
     return None
 
 
+def coerce_bool(value: Any) -> bool:
+    """Bools pass through; strings like 'true'/'1'/'yes'/'on' are True."""
+    if isinstance(value, bool):
+        return value
+    return str(value).strip().lower() in ("true", "1", "yes", "on")
+
+
 def set_program_settings() -> bool:
     """Interactive settings screen with grid display and type-safe value changes.
 
@@ -2116,7 +2148,7 @@ def set_program_settings() -> bool:
     current_type = type(current_value)
     try:
         if current_type is bool:
-            converted = new_raw.strip().lower() in ("true", "1", "yes", "on")
+            converted = coerce_bool(new_raw)
         elif current_type is int:
             converted = int(new_raw)
         elif current_type is float:

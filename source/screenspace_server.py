@@ -54,7 +54,7 @@ API endpoints (all under /screenspace/):
 """
 
 import atexit
-import binascii
+import contextlib
 import copy
 import json
 import math
@@ -104,26 +104,30 @@ def _preview_ref_rect(
     region; without it the run region doubles as the sample rect — the
     CLI/workflows single-region semantics.
     """
-    ref_region_str = request.args.get("ref_region", "").strip()
-    if ref_region_str:
-        rr_parts = ref_region_str.split(",")
-        if len(rr_parts) == 4:
-            try:
-                rrx, rry, rrw, rrh = (float(p) for p in rr_parts)
-            except ValueError:
-                pass
-            else:
-                region_coords = {
-                    "x": round(rrx * frame_w),
-                    "y": round(rry * frame_h),
-                    "w": round(rrw * frame_w),
-                    "h": round(rrh * frame_h),
-                }
+    with contextlib.suppress(ValueError):
+        region_coords = (
+            _parse_norm_rect(request.args.get("ref_region", ""), frame_w, frame_h)
+            or region_coords
+        )
     ref_mask = _parse_mask_points(request.args.get("ref_mask", "").strip())
     if region_coords is not None and ref_mask:
         region_coords = dict(region_coords)
         region_coords["mask_points"] = ref_mask
     return region_coords
+
+
+def _parse_norm_rect(raw: str, frame_w: int, frame_h: int) -> dict[str, Any] | None:
+    """Pixel rect from normalized "x,y,w,h"; None unless four parts, ValueError if non-numeric."""
+    parts = raw.strip().split(",")
+    if len(parts) != 4:
+        return None
+    x, y, w, h = (float(p) for p in parts)
+    return {
+        "x": round(x * frame_w),
+        "y": round(y * frame_h),
+        "w": round(w * frame_w),
+        "h": round(h * frame_h),
+    }
 
 
 def _parse_mask_points(raw: str) -> list[list[list[float]]]:
@@ -158,34 +162,6 @@ _VALID_STEP_TYPES = (
     "flow",
     "scene",
 )
-
-
-def _template_bgr_and_mask_from_b64(upload_b64: str) -> tuple[Any, Any]:
-    """Decode a base64-encoded image file into a BGR template and optional uint8 mask.
-
-    RGBA inputs yield ``(bgr, alpha_mask)``; RGB/gray yield ``(bgr, None)``.
-
-    Raises:
-        ValueError: invalid base64 or undecodable image bytes.
-    """
-    import base64
-
-    import cv2
-    import numpy as np
-
-    try:
-        img_bytes = base64.b64decode(upload_b64)
-    except (ValueError, binascii.Error) as exc:
-        raise ValueError("Could not decode uploaded image") from exc
-    img_arr = np.frombuffer(img_bytes, dtype=np.uint8)
-    img = cv2.imdecode(img_arr, cv2.IMREAD_UNCHANGED)
-    if img is None:
-        raise ValueError("Invalid image data")
-    if len(img.shape) == 2:
-        return cv2.cvtColor(img, cv2.COLOR_GRAY2BGR), None
-    if img.shape[2] == 4:
-        return cv2.cvtColor(img, cv2.COLOR_BGRA2BGR), img[:, :, 3]
-    return img, None
 
 
 # ---- Module-level state (set once by _init_screenspace_state) ----
@@ -247,17 +223,19 @@ def _notify_sse_clients(event_type: str = "update") -> None:
     _sse_notify(marker=event_type)
 
 
+def _task_state() -> dict[str, Any]:
+    """Slim task list plus worker flags; clients pull results via /api/tasks/<id>/results."""
+    tasks = _worker.get_all_tasks(include_results=False) if _worker else []
+    return {
+        "tasks": [_clean_task(t) for t in tasks],
+        "paused": _worker.is_paused if _worker else False,
+        "worker_alive": _worker.is_alive if _worker else False,
+    }
+
+
 def _sse_task_payload() -> str:
     """Build an SSE data line with current task state."""
-    # Slim ticks: no result lists (clients pull tails via /api/tasks/<id>/results).
-    tasks = _worker.get_all_tasks(include_results=False) if _worker else []
-    clean = [_clean_task(t) for t in tasks]
-    paused = _worker.is_paused if _worker else False
-    alive = _worker.is_alive if _worker else False
-    data = json.dumps(
-        {"ok": True, "tasks": clean, "paused": paused, "worker_alive": alive}
-    )
-    return f"data: {data}\n\n"
+    return f"data: {json.dumps({'ok': True, **_task_state()})}\n\n"
 
 
 # ---- Blueprint ----
@@ -1092,7 +1070,7 @@ def _preview_reference_params(
                 upload_b64 = raw.strip()
     if upload_b64:
         try:
-            bgr, mask = _template_bgr_and_mask_from_b64(upload_b64)
+            bgr, mask = screenspace.decode_reference_image(upload_b64)
         except ValueError:
             return "Could not decode uploaded image"
         params[image_param] = bgr
@@ -1155,26 +1133,17 @@ def api_preview(participant: str, timestamp: str) -> FlaskResponse:
         return err("Could not read frame")
     frame_h, frame_w = frame.shape[:2]
 
-    region_coords: dict[str, Any] | None = None
-    region_str = request.args.get("region", "").strip()
-    if region_str:
-        parts = region_str.split(",")
-        if len(parts) == 4:
-            try:
-                rx, ry, rw, rh = (float(p) for p in parts)
-            except ValueError:
-                return err("Invalid region")
-            region_coords = {
-                "x": round(rx * frame_w),
-                "y": round(ry * frame_h),
-                "w": round(rw * frame_w),
-                "h": round(rh * frame_h),
-            }
-            # Optional contours "u1,v1;u2,v2|..." as bbox-relative fractions; malformed
-            # values fall back to the plain rect.
-            mask_points = _parse_mask_points(request.args.get("mask", "").strip())
-            if mask_points:
-                region_coords["mask_points"] = mask_points
+    region_coords: dict[str, Any] | None
+    try:
+        region_coords = _parse_norm_rect(
+            request.args.get("region", ""), frame_w, frame_h
+        )
+    except ValueError:
+        return err("Invalid region")
+    # Optional bbox-relative contours "u1,v1;u2,v2|..."; malformed values keep the plain rect.
+    mask_points = _parse_mask_points(request.args.get("mask", "").strip())
+    if region_coords is not None and mask_points:
+        region_coords["mask_points"] = mask_points
 
     tool_spec = screenspace.TOOLS.get(tool)
     # Prev frame for temporal-pair tools; the tool names its own gap setting.
@@ -1241,26 +1210,23 @@ def api_preview(participant: str, timestamp: str) -> FlaskResponse:
         layer_img = screenspace_preview.build_overlay_layer(
             frame, prev_frame, region_coords, tool, layer, params
         )
-        if layer_img is None or getattr(layer_img, "size", 0) == 0:
-            return err("Could not build overlay layer", 500)
-        png_bytes = screenspace_preview.encode_png(layer_img, cap_width=False)
-        if not png_bytes:
-            return err("Could not encode overlay", 500)
-        return Response(
-            png_bytes,
-            mimetype="image/png",
-            headers={"Cache-Control": "no-cache"},
-        )
+        return _png_response(layer_img, "overlay layer", cap_width=False)
 
     img = screenspace_preview.build_preview(
         frame, prev_frame, region_coords, tool, params
     )
-    if img is None or getattr(img, "size", 0) == 0:
-        return err("Could not build preview", 500)
+    return _png_response(img, "preview")
 
-    png_bytes = screenspace_preview.encode_png(img)
+
+def _png_response(img: Any, label: str, cap_width: bool = True) -> FlaskResponse:
+    """Uncached PNG response for *img*, or a 500 naming *label*."""
+    import screenspace_preview
+
+    if img is None or getattr(img, "size", 0) == 0:
+        return err(f"Could not build {label}", 500)
+    png_bytes = screenspace_preview.encode_png(img, cap_width=cap_width)
     if not png_bytes:
-        return err("Could not encode preview", 500)
+        return err(f"Could not encode {label}", 500)
     return Response(
         png_bytes,
         mimetype="image/png",
@@ -1359,6 +1325,12 @@ def api_video_info(participant: str) -> FlaskResponse:
     return ok(info=utils.sanitize_floats(info))
 
 
+def _part_path(paths: list[str]) -> str:
+    """Sub-video picked by ``?part=N``; part 0 when absent or out of range."""
+    part = request.args.get("part", type=int)
+    return paths[part] if part is not None and 0 <= part < len(paths) else paths[0]
+
+
 @screenspace_bp.route("/api/video/stream/<participant>")
 def api_video_stream(participant: str) -> FlaskResponse:
     """Stream the source video file for a participant (range-request aware).
@@ -1373,11 +1345,7 @@ def api_video_stream(participant: str) -> FlaskResponse:
     paths = _participant_video_paths(participant)
     if not paths:
         return err_no_video(participant)
-    # ?part=N selects the sub-video for multi-video participants; defaults to part 0.
-    part = request.args.get("part", type=int)
-    video_path = (
-        paths[part] if part is not None and 0 <= part < len(paths) else paths[0]
-    )
+    video_path = _part_path(paths)
     response = send_file(video_path, mimetype="video/mp4", conditional=True)
     response.headers["Cache-Control"] = "no-cache"
     return response
@@ -1389,10 +1357,7 @@ def api_video_audio_track(participant: str, idx: int) -> FlaskResponse:
     paths = _participant_video_paths(participant)
     if not paths:
         return err_no_video(participant)
-    part = request.args.get("part", type=int)
-    video_path = (
-        paths[part] if part is not None and 0 <= part < len(paths) else paths[0]
-    )
+    video_path = _part_path(paths)
     out = video.extract_audio_track(video_path, idx)
     if out is None:
         return err("Could not extract audio track", 500)
@@ -1765,12 +1730,8 @@ def api_tasks_stream() -> FlaskResponse:
 @screenspace_bp.route("/api/tasks")
 def api_tasks_list() -> FlaskResponse:
     """List all tasks with status and progress."""
-    # Polling fallback for the SSE stream — slim, same as _sse_task_payload.
-    tasks = _worker.get_all_tasks(include_results=False) if _worker else []
-    clean = [_clean_task(t) for t in tasks]
-    paused = _worker.is_paused if _worker else False
-    alive = _worker.is_alive if _worker else False
-    return ok(tasks=clean, paused=paused, worker_alive=alive)
+    # Polling fallback for the SSE stream.
+    return ok(**_task_state())
 
 
 @screenspace_bp.route("/api/tasks/<task_id>")
@@ -1945,68 +1906,6 @@ def _coerce_task_params(task_type: str, parameters: dict[str, Any]) -> dict[str,
     return parameters
 
 
-def _extract_tool_media(
-    spec: dict[str, Any],
-    tool_type: str,
-    frame_at: Callable[[float], "Any | None"],
-    region_coords: dict[str, Any],
-    context: str = "",
-) -> None:
-    """Extract the reference frame / template image into one spec.
-
-    Mutates *spec* in place (task params or a multitool step). *frame_at* maps a
-    GLOBAL reference timestamp into the owning sub-video. *context* prefixes error
-    messages (e.g. ``"Step 0: "``). Raises ``ApiError`` (400) on failure. Shared
-    by the task-level and per-step multitool paths.
-    """
-    tool_spec = screenspace.TOOLS.get(tool_type)
-    if tool_spec is not None and tool_spec.reference_region_param:
-        ref_ts = cast(float, spec["reference_timestamp"])
-        frame = frame_at(float(ref_ts))
-        if frame is None:
-            raise ApiError(f"{context}could not read reference frame")
-        spec[tool_spec.reference_region_param] = screenspace.extract_region(
-            frame, region_coords
-        )
-
-    elif tool_spec is not None and tool_spec.reference is not None:
-        body_key, image_param, mask_param = tool_spec.reference
-        upload_b64 = spec.pop(body_key, None)
-        if upload_b64:
-            try:
-                bgr, mask = _template_bgr_and_mask_from_b64(upload_b64)
-            except ValueError as exc:
-                raise ApiError(f"{context}could not decode uploaded image") from exc
-            spec[image_param] = bgr
-            if mask is not None:
-                spec[mask_param] = mask
-        else:
-            ref_ts = cast(float, spec["reference_timestamp"])
-            frame = frame_at(float(ref_ts))
-            if frame is None:
-                raise ApiError(f"{context}could not read {tool_type} reference frame")
-            spec[image_param] = screenspace.extract_region(frame, region_coords)
-            screenspace.attach_capture_mask(
-                spec, image_param, mask_param, region_coords
-            )
-
-    elif tool_type == "scene":
-        scene_refs = cast(list[dict[str, Any]], spec["scene_references"])
-        reference_scenes = []
-        for ref in scene_refs:
-            frame = frame_at(float(ref["timestamp"]))
-            if frame is None:
-                raise ApiError(
-                    f"{context}could not read frame for scene '{ref['name']}'"
-                )
-            ref_region = screenspace.extract_region(frame, region_coords)
-            scene_entry: dict = {"name": ref["name"], "frame": ref_region}
-            if "threshold" in ref:
-                scene_entry["threshold"] = float(ref["threshold"])
-            reference_scenes.append(scene_entry)
-        spec["reference_scenes"] = reference_scenes
-
-
 def _prepare_multitool_steps(
     parameters: dict[str, Any],
     frame_at: Callable[[float], "Any | None"],
@@ -2034,9 +1933,12 @@ def _prepare_multitool_steps(
         else:
             step["region_coords"] = region_coords  # fallback to top-level
 
-        step_rc = step["region_coords"]
-
-        _extract_tool_media(step, stype, frame_at, step_rc, context=f"Step {i}: ")
+        try:
+            screenspace.extract_tool_media(
+                step, stype, frame_at, step["region_coords"], context=f"Step {i}: "
+            )
+        except ValueError as exc:
+            raise ApiError(str(exc)) from exc
 
     return parameters
 
@@ -2100,7 +2002,10 @@ def _prepare_task_media(
             extract_coords = resolve_region_fn(ref_region, ref_norm)
         else:
             parameters.pop("reference_region", None)
-    _extract_tool_media(parameters, task_type, frame_at, extract_coords)
+    try:
+        screenspace.extract_tool_media(parameters, task_type, frame_at, extract_coords)
+    except ValueError as exc:
+        raise ApiError(str(exc)) from exc
 
     if task_type == "multitool":
         parameters = _prepare_multitool_steps(
@@ -2346,14 +2251,13 @@ def api_intake_poll() -> FlaskResponse:
     polls into a single request. Both reads are the same slim, in-memory ones
     those routes do (no results, no disk I/O). ``?events_version=N`` skips the
     events payload when nothing changed since the client's last tick."""
-    tasks = [
-        _clean_task(t)
-        for t in (_worker.get_all_tasks(include_results=False) if _worker else [])
-    ]
-    running = any(t.get("status") == "running" for t in tasks)
-    queued = any(t.get("status") == "queued" for t in tasks)
-    alive = _worker.is_alive if _worker else False
-    status = {"running": running, "worker_alive": alive, "queued": queued}
+    state = _task_state()
+    statuses = {t.get("status") for t in state["tasks"]}
+    status = {
+        "running": "running" in statuses,
+        "worker_alive": state["worker_alive"],
+        "queued": "queued" in statuses,
+    }
     version, events = _events_payload(
         request.args, _client_events_version(request.args)
     )

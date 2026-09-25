@@ -111,6 +111,34 @@ def _drop_missing_heatmaps(task: dict[str, Any], out_dir: Path) -> None:
             task.pop(f"{key}_sprite", None)
 
 
+def _strip_server_grids(seq: list[Any]) -> list[Any]:
+    """Result rows without the server-only grid keys."""
+    return [
+        {k: v for k, v in r.items() if k not in _SERVER_ONLY_GRID_KEYS}
+        if isinstance(r, dict)
+        else r
+        for r in seq
+    ]
+
+
+def _fire(callback: Callable[[], None] | None, label: str) -> None:
+    """Call an optional worker callback; warn instead of raising on failure."""
+    if not callback:
+        return
+    try:
+        callback()
+    except Exception as exc:
+        utils.warning_print(f"{label} callback failed: {exc}")
+
+
+def _frame_size(video_paths: list[str]) -> tuple[int, int]:
+    """First video's frame size, 1920x1080 when unprobeable."""
+    props = video.probe_video_properties(video_paths[0])
+    if not props:
+        return 1920, 1080
+    return props.get("width", 1920), props.get("height", 1080)
+
+
 def _copy_task_for_read(
     task: dict[str, Any], include_results: bool = True
 ) -> dict[str, Any]:
@@ -133,12 +161,7 @@ def _copy_task_for_read(
         for key in ("result", "_raw_results"):
             seq = task.get(key)
             if isinstance(seq, list) and seq:
-                slim[key] = [
-                    {k: v for k, v in r.items() if k not in _SERVER_ONLY_GRID_KEYS}
-                    if isinstance(r, dict)
-                    else r
-                    for r in seq
-                ]
+                slim[key] = _strip_server_grids(seq)
     else:
         res = task.get("result")
         # Old frontend count: list → len, truthy non-list → 1, else 0.
@@ -341,8 +364,12 @@ class ScreenspaceWorker:
                 "participant": task.get("participant", ""),
             },
         )
-        self._queue.put((task.get("priority", 100), task["created_at"], task_id))
+        self._requeue(task)
         return task_id
+
+    def _requeue(self, task: dict[str, Any]) -> None:
+        """Put *task* on the queue at its priority."""
+        self._queue.put((task.get("priority", 100), task["created_at"], task["id"]))
 
     def cancel(self, task_id: str) -> bool:
         """Cancel a queued, running, or paused task. Returns True if cancelled."""
@@ -401,13 +428,7 @@ class ScreenspaceWorker:
             total = len(res)
             start = max(since, 0)
             tail = res[start:] if start < total else []
-            stripped = [
-                {k: v for k, v in r.items() if k not in _SERVER_ONLY_GRID_KEYS}
-                if isinstance(r, dict)
-                else r
-                for r in tail
-            ]
-            return copy.deepcopy(stripped), total
+            return copy.deepcopy(_strip_server_grids(tail)), total
 
     def reorder(self, task_ids: list[str]) -> bool:
         """Reorder queued tasks by the given ID sequence.
@@ -482,9 +503,7 @@ class ScreenspaceWorker:
                     task["result"] = []
                     task["progress"] = 0.0
                     task["status"] = TASK_STATUS_QUEUED
-                self._queue.put(
-                    (task.get("priority", 100), task["created_at"], task["id"])
-                )
+                self._requeue(task)
                 continue
 
             start = params.get("start_seconds", 0.0)
@@ -515,7 +534,7 @@ class ScreenspaceWorker:
                 params["start_seconds"] = resume_at
                 task["status"] = TASK_STATUS_QUEUED
 
-            self._queue.put((task.get("priority", 100), task["created_at"], task["id"]))
+            self._requeue(task)
 
     def remove_task(self, task_id: str) -> bool:
         """Cancel (if active) and fully remove a task."""
@@ -638,60 +657,32 @@ class ScreenspaceWorker:
         if task_type in ("template", "shape"):
             # Shape rows share template's {matches, best_score} contract, so the
             # box-accumulation heatmap applies unchanged.
-            props = video.probe_video_properties(video_paths[0])
-            fw = props.get("width", 1920) if props else 1920
-            fh = props.get("height", 1080) if props else 1080
-            hp = _published_name(
-                generate_template_heatmap(results, fw, fh, heatmap_path)
-            )
-            if hp:
-                attachments["heatmap"] = hp
-            attachments.update(
-                self._write_heatmap_gifs(
-                    task_id, results, fw, fh, task_type, rolling=True
-                )
-            )
+            w, h = _frame_size(video_paths)
+            png = generate_template_heatmap(results, w, h, heatmap_path)
+            rolling, gif_layers = True, None
         elif task_type == "attention":
             # Full-frame tool: region_coords is zero, so size to the video frame.
-            props = video.probe_video_properties(video_paths[0])
-            fw = props.get("width", 1920) if props else 1920
-            fh = props.get("height", 1080) if props else 1080
-            hp = _published_name(
-                generate_attention_heatmap(results, fw, fh, heatmap_path, layers=layers)
+            w, h = _frame_size(video_paths)
+            png = generate_attention_heatmap(results, w, h, heatmap_path, layers=layers)
+            rolling, gif_layers = True, layers
+        else:  # flow or change
+            w = region_coords.get("w", 256)
+            h = region_coords.get("h", 256)
+            generate = (
+                generate_flow_heatmap
+                if task_type == "flow"
+                else generate_change_heatmap
             )
-            if hp:
-                attachments["heatmap"] = hp
-            attachments.update(
-                self._write_heatmap_gifs(
-                    task_id, results, fw, fh, "attention", rolling=True, layers=layers
-                )
+            png = generate(results, w, h, heatmap_path, layers=layers)
+            rolling, gif_layers = task_type == "change", layers
+        hp = _published_name(png)
+        if hp:
+            attachments["heatmap"] = hp
+        attachments.update(
+            self._write_heatmap_gifs(
+                task_id, results, w, h, task_type, rolling=rolling, layers=gif_layers
             )
-        elif task_type in ("flow", "change"):
-            rw = region_coords.get("w", 256)
-            rh = region_coords.get("h", 256)
-            if task_type == "flow":
-                hp = _published_name(
-                    generate_flow_heatmap(results, rw, rh, heatmap_path, layers=layers)
-                )
-            else:
-                hp = _published_name(
-                    generate_change_heatmap(
-                        results, rw, rh, heatmap_path, layers=layers
-                    )
-                )
-            if hp:
-                attachments["heatmap"] = hp
-            attachments.update(
-                self._write_heatmap_gifs(
-                    task_id,
-                    results,
-                    rw,
-                    rh,
-                    task_type,
-                    rolling=task_type == "change",
-                    layers=layers,
-                )
-            )
+        )
         return attachments
 
     def _run(self) -> None:
@@ -710,20 +701,8 @@ class ScreenspaceWorker:
                             future.result()
                         except Exception as exc:
                             utils.warning_print(f"Worker task {tid} raised: {exc}")
-                        if self.on_task_complete:
-                            try:
-                                self.on_task_complete()
-                            except Exception as exc:
-                                utils.warning_print(
-                                    f"on_task_complete callback failed: {exc}"
-                                )
-                        if self.on_progress_update:
-                            try:
-                                self.on_progress_update()
-                            except Exception as exc:
-                                utils.warning_print(
-                                    f"on_progress_update callback failed: {exc}"
-                                )
+                        _fire(self.on_task_complete, "on_task_complete")
+                        _fire(self.on_progress_update, "on_progress_update")
 
                     # 2. If paused, wait
                     if self._paused.is_set():
@@ -750,13 +729,7 @@ class ScreenspaceWorker:
                                 utils.debug_print(
                                     f"Task {drain_tid} raised during shutdown: {exc}"
                                 )
-                        if self.on_task_complete:
-                            try:
-                                self.on_task_complete()
-                            except Exception as exc:
-                                utils.warning_print(
-                                    f"on_task_complete callback failed during shutdown: {exc}"
-                                )
+                        _fire(self.on_task_complete, "Shutdown on_task_complete")
                         break
 
                     if self._paused.is_set():

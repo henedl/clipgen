@@ -182,13 +182,8 @@ def _participant_parts(video_paths: list[str]) -> list[dict[str, Any]] | None:
 
 def _participant_duration(participant: str) -> float | None:
     """Total stitched duration for a participant, or None when unknown."""
-    p = files.find_participant_record(_sheet_context, participant)
-    if not p or not p.get("has_video"):
-        return None
-    parts = _participant_parts(p["video_paths"])
-    if parts is None:
-        return None
-    return float(sum(part["duration"] for part in parts))
+    parts = _find_participant_parts(participant)
+    return None if parts is None else float(sum(p["duration"] for p in parts))
 
 
 @composer_bp.route("/api/participants")
@@ -245,15 +240,10 @@ def api_manifest() -> Any:
         return ok(manifest=copy.deepcopy(_manifest))
 
 
-def _clamp_span(participant: str, start: float, end: float) -> tuple[float, float]:
-    """Clamp a cut span to ``0 <= start < end <= duration`` at MIN_CUT_SECONDS."""
-    return _clamp_times(_participant_duration(participant), start, end)
-
-
 def _clamp_times(
     duration: float | None, start: float, end: float
 ) -> tuple[float, float]:
-    """Pure half of _clamp_span; safe to call under _manifest_lock."""
+    """Clamp a span to ``0 <= start < end <= duration`` at MIN_CUT_SECONDS."""
     start = max(0.0, start)
     if duration is not None:
         start = min(start, max(0.0, duration - MIN_CUT_SECONDS))
@@ -273,7 +263,7 @@ def api_cut_create() -> Any:
     end = parse_number_arg(data.get("end", 0), "end", finite=True)
     if end <= start:
         return err("end must be after start")
-    start, end = _clamp_span(participant, start, end)
+    start, end = _clamp_times(_participant_duration(participant), start, end)
     cut: dict[str, Any] = {
         "id": "cut_" + uuid.uuid4().hex[:8],
         "participant": participant,
@@ -397,16 +387,12 @@ def api_ui_update() -> Any:
     data = request.get_json(silent=True) or {}
     sources = data.get("markerSources")
     folds = data.get("laneFolds")
-    thumbs = data.get("markerThumbnails")
-    scrub = data.get("markerAudioScrub")
-    follow = data.get("followPlayhead")
-    if (
-        not isinstance(sources, dict)
-        and not isinstance(folds, dict)
-        and not isinstance(thumbs, bool)
-        and not isinstance(scrub, bool)
-        and not isinstance(follow, bool)
-    ):
+    toggles = {
+        key: data[key]
+        for key in ("markerThumbnails", "markerAudioScrub", "followPlayhead")
+        if isinstance(data.get(key), bool)
+    }
+    if not isinstance(sources, dict) and not isinstance(folds, dict) and not toggles:
         return err(
             "markerSources, laneFolds, markerThumbnails, markerAudioScrub, "
             "or followPlayhead is required"
@@ -423,15 +409,8 @@ def api_ui_update() -> Any:
             fold_lanes = (*_MARKER_SOURCES, "annotations")
             ui["laneFolds"] = {lane: bool(folds.get(lane, True)) for lane in fold_lanes}
             response["laneFolds"] = ui["laneFolds"]
-        if isinstance(thumbs, bool):
-            ui["markerThumbnails"] = thumbs
-            response["markerThumbnails"] = thumbs
-        if isinstance(scrub, bool):
-            ui["markerAudioScrub"] = scrub
-            response["markerAudioScrub"] = scrub
-        if isinstance(follow, bool):
-            ui["followPlayhead"] = follow
-            response["followPlayhead"] = follow
+        ui.update(toggles)
+        response.update(toggles)
         _persist_locked()
     return ok(**response)
 
@@ -716,6 +695,13 @@ def _dash_polyline(
         draw.line([a, b], fill=color, width=width, joint="curve")
 
 
+def _rotate(
+    cx: float, cy: float, dx: float, dy: float, cos_r: float, sin_r: float
+) -> tuple[float, float]:
+    """Rotate offset (dx, dy) about (cx, cy)."""
+    return cx + dx * cos_r - dy * sin_r, cy + dx * sin_r + dy * cos_r
+
+
 def _render_annotation_overlay(
     annotations: list[dict[str, Any]], width: int, height: int
 ) -> Any:
@@ -733,23 +719,14 @@ def _render_annotation_overlay(
         style = ann.get("style") or {}
         color = _parse_hex_color(style.get("color", ""))
         geometry = ann.get("geometry") or {}
+        stroke_width = style.get("strokeWidth", config.COMPOSER_ANNOTATION_STROKE_WIDTH)
+        stroke = max(1, round(float(stroke_width) * width))
+        stroke_style = str(style.get("strokeStyle") or "solid")
         if ann.get("type") == "freehand":
             points = [
                 (float(p[0]) * width, float(p[1]) * height)
                 for p in geometry.get("points", [])
             ]
-            stroke = max(
-                1,
-                round(
-                    float(
-                        style.get(
-                            "strokeWidth", config.COMPOSER_ANNOTATION_STROKE_WIDTH
-                        )
-                    )
-                    * width
-                ),
-            )
-            stroke_style = str(style.get("strokeStyle") or "solid")
             if len(points) == 1:
                 x, y = points[0]
                 r = max(stroke, 2)
@@ -767,25 +744,13 @@ def _render_annotation_overlay(
             rotation = float(geometry.get("rotation", 0) or 0.0)
             if sw < 1 or sh < 1:
                 continue
-            stroke = max(
-                1,
-                round(
-                    float(
-                        style.get(
-                            "strokeWidth", config.COMPOSER_ANNOTATION_STROKE_WIDTH
-                        )
-                    )
-                    * width
-                ),
-            )
-            stroke_style = str(style.get("strokeStyle") or "solid")
+            # Match the browser's ctx.rotate (y-down, positive = clockwise).
+            rad = math.radians(rotation)
+            cos_r, sin_r = math.cos(rad), math.sin(rad)
             if geometry.get("shape") == "rect":
-                # Match the browser's ctx.rotate (y-down, positive = clockwise).
                 # Repeating a corner fills the start joint.
-                rad = math.radians(rotation)
-                cos_r, sin_r = math.cos(rad), math.sin(rad)
                 corners = [
-                    (cx + dx * cos_r - dy * sin_r, cy + dx * sin_r + dy * cos_r)
+                    _rotate(cx, cy, dx, dy, cos_r, sin_r)
                     for dx, dy in (
                         (-sw / 2, -sh / 2),
                         (sw / 2, -sh / 2),
@@ -812,15 +777,11 @@ def _render_annotation_overlay(
                     3 * (a + b) - math.sqrt(max(0.0, (3 * a + b) * (a + 3 * b)))
                 )
                 n = max(48, int(perim / max(1.0, stroke * 2)))
-                rad = math.radians(rotation)
-                cos_r, sin_r = math.cos(rad), math.sin(rad)
                 poly = []
                 for k in range(n + 1):
                     th = 2 * math.pi * k / n
                     ex, ey = a * math.cos(th), b * math.sin(th)
-                    poly.append(
-                        (cx + ex * cos_r - ey * sin_r, cy + ex * sin_r + ey * cos_r)
-                    )
+                    poly.append(_rotate(cx, cy, ex, ey, cos_r, sin_r))
                 _dash_polyline(draw, poly, color, stroke, stroke_style)
             else:  # solid ellipse
                 box = [cx - sw / 2, cy - sh / 2, cx + sw / 2, cy + sh / 2]

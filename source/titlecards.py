@@ -363,9 +363,7 @@ def build_titlecard_frame(
     audio_match: dict | None = None,
 ) -> str | None:
     """Generate a short titlecard video segment for a clip."""
-    background_path, allow_color, skip, fill_color = resolve_card_background("title")
-    if skip:
-        return None
+    background_path, allow_color, _skip, fill_color = resolve_card_background("title")
     return _build_card_frame(
         resolution=resolution,
         background_path=background_path,
@@ -648,28 +646,34 @@ def wrap_clip_with_cards(
 
     titlecard_temps: list[str] = []
     output_temp_path: str | None = None
+
+    def _build_cards(
+        match_fps: float | None, audio_match: dict | None
+    ) -> tuple[str | None, str | None]:
+        title = build_titlecard_frame(
+            clip,
+            resolution,
+            cancel_flag=cancel_flag,
+            card_duration_seconds=card_duration,
+            match_fps=match_fps,
+            audio_match=audio_match,
+        )
+        if title:
+            titlecard_temps.append(title)
+        end = get_or_build_endcard(
+            resolution,
+            cancel_flag=cancel_flag,
+            card_duration_seconds=card_duration,
+            match_fps=match_fps,
+            audio_match=audio_match,
+        )
+        return (title, end)
+
     try:
         if copy_safe:
-            titlecard_path = build_titlecard_frame(
-                clip,
-                resolution,
-                cancel_flag=cancel_flag,
-                card_duration_seconds=card_duration,
-                match_fps=match_fps,
-                audio_match=audio_match,
-            )
-            if titlecard_path:
-                titlecard_temps.append(titlecard_path)
-            endcard_path = get_or_build_endcard(
-                resolution,
-                cancel_flag=cancel_flag,
-                card_duration_seconds=card_duration,
-                match_fps=match_fps,
-                audio_match=audio_match,
-            )
+            titlecard_path, endcard_path = _build_cards(match_fps, audio_match)
             if not titlecard_path and not endcard_path:
-                # No cards built, keep clip
-                return (True, False)
+                return (True, False)  # No cards built, keep clip
 
             segments = [p for p in (titlecard_path, clip_path, endcard_path) if p]
             with tempfile.NamedTemporaryFile(
@@ -699,22 +703,9 @@ def wrap_clip_with_cards(
             )
 
         # Fallback: re-encode the whole clip
-        titlecard_path = build_titlecard_frame(
-            clip,
-            resolution,
-            cancel_flag=cancel_flag,
-            card_duration_seconds=card_duration,
-        )
-        if titlecard_path:
-            titlecard_temps.append(titlecard_path)
-        endcard_path = get_or_build_endcard(
-            resolution,
-            cancel_flag=cancel_flag,
-            card_duration_seconds=card_duration,
-        )
+        titlecard_path, endcard_path = _build_cards(None, None)
         if not titlecard_path and not endcard_path:
-            # No cards built, keep clip
-            return (True, False)
+            return (True, False)  # No cards built, keep clip
 
         input_args, filter_complex, map_args = _build_wrap_filter_and_inputs(
             titlecard_path=titlecard_path,

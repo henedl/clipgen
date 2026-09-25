@@ -761,6 +761,7 @@ class _FakeWorker:
 def _install_ss_stubs(monkeypatch, fake_manifest):
     """Wire up the common Screenspace stubs (manifest, video, media, worker, save)."""
     import screenspace
+    import screenspace_manifest
     import video as video_mod
 
     monkeypatch.setattr(screenspace, "load_screenspace_manifest", lambda: fake_manifest)
@@ -773,7 +774,9 @@ def _install_ss_stubs(monkeypatch, fake_manifest):
         video_mod, "probe_video_properties", lambda p: {"width": 100, "height": 100}
     )
     monkeypatch.setattr(video_mod, "extract_frame_at_timestamp", lambda p, ts: [[0]])
-    monkeypatch.setattr(screenspace, "extract_region", lambda frame, coords: [[1]])
+    monkeypatch.setattr(
+        screenspace_manifest, "extract_region", lambda frame, coords: [[1]]
+    )
     monkeypatch.setattr(screenspace, "ScreenspaceWorker", _FakeWorker)
 
     saved_tasks: list[dict] = []

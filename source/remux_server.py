@@ -31,11 +31,14 @@ _jobs = JobRegistry(
 
 
 def _participant_paths(sheet_context_getter: Any, pid: str) -> list[str]:
-    """Existing source files for ``pid``, or [] when it has none."""
+    """Existing source files for ``pid``; raises 404 when it has none."""
     record = files.find_participant_record(sheet_context_getter(), pid)
-    if record is None:
-        return []
-    return [str(p) for p in record["video_paths"] if Path(p).is_file()]
+    paths = (
+        [str(p) for p in record["video_paths"] if Path(p).is_file()] if record else []
+    )
+    if not paths:
+        raise ApiError(f"No source video found for {pid}.", 404)
+    return paths
 
 
 def _media_state(sheet_context_getter: Any) -> tuple[dict[str, list[str]], list[str]]:
@@ -54,11 +57,10 @@ def _media_state(sheet_context_getter: Any) -> tuple[dict[str, list[str]], list[
     kept: dict[str, list[str]] = {}
     unseekable: list[str] = []
     for participant in files.resolve_participant_videos(sheet_context_getter()):
-        names = [
-            video.original_backup_path(str(p)).name
-            for p in participant["video_paths"]
-            if video.original_backup_path(str(p)).is_file()
+        backups = [
+            video.original_backup_path(str(p)) for p in participant["video_paths"]
         ]
+        names = [b.name for b in backups if b.is_file()]
         if names:
             kept[participant["id"]] = names
         if participant.get("browser_seekable") is False:
@@ -124,8 +126,6 @@ def register_remux_routes(bp: Any, sheet_context_getter: Any) -> None:
     @json_endpoint
     def api_remux_start(pid: str):
         paths = _participant_paths(sheet_context_getter, pid)
-        if not paths:
-            raise ApiError(f"No source video found for {pid}.", 404)
         # Check-and-set inside the registry: two clicks, one ffmpeg run.
         token = _jobs.start(
             pid, lambda token: _run_remux(pid, paths, token), name=f"remux-{pid}"
@@ -155,8 +155,6 @@ def register_remux_routes(bp: Any, sheet_context_getter: Any) -> None:
 def _apply_to_parts(sheet_context_getter: Any, pid: str, action: Any):
     """Run a discard/restore over every part, failing loudly if any part fails."""
     paths = _participant_paths(sheet_context_getter, pid)
-    if not paths:
-        raise ApiError(f"No source video found for {pid}.", 404)
     failures = []
     applied = 0
     for path in paths:

@@ -8,6 +8,7 @@ Reads ``NODE_TYPES[...]["execute"]`` and ``ADAPTERS`` only at call time — afte
 from __future__ import annotations
 
 import copy
+import json
 import os
 import threading
 import time
@@ -301,6 +302,29 @@ def node_exec_definition(
     }
 
 
+def _safe_segment(segment: str) -> bool:
+    """True when *segment* is one bare path segment that cannot escape its dir."""
+    return (
+        bool(segment)
+        and segment == os.path.basename(segment)
+        and segment not in (".", "..")
+    )
+
+
+def read_node_sidecar(
+    output_dir: Path | str, run_id: str, node_id: str
+) -> dict[str, Any] | None:
+    """A node's stored sidecar, or None when unsafe, missing, or unreadable."""
+    if not (_safe_segment(run_id) and _safe_segment(node_id)):
+        return None
+    path = run_results_dir(output_dir, run_id) / f"{node_id}.json"
+    try:
+        loaded = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    return loaded if isinstance(loaded, dict) else None
+
+
 def write_node_sidecar(
     output_dir: Path | str,
     run_id: str,
@@ -322,7 +346,7 @@ def write_node_sidecar(
     because no sidecar exists to seed from. JSON-sanitizes via
     :func:`utils.sanitize_floats` (non-finite floats / numpy scalars).
     """
-    if not node_id or node_id != os.path.basename(node_id) or node_id in (".", ".."):
+    if not _safe_segment(node_id):
         return "empty"
     payload = _filter_result_ports(node_type_id, result, _SIDECAR_PORT_TYPES)
     if not payload:
@@ -549,6 +573,36 @@ class WorkflowRunner:
             stack.extend(self._deps(nid))
         return seen
 
+    def _record_result(
+        self, node: dict[str, Any], result: Any, notes: list[str], degraded: bool
+    ) -> None:
+        """Store a node's result, persist its sidecar, and mark it finished."""
+        node_id = node["id"]
+        with self._lock:
+            self._results[node_id] = result
+        # Sidecars outlive this runner (resume, inspector); only "written" means one exists.
+        sidecar = write_node_sidecar(
+            self.ctx.output_dir,
+            self.run_id,
+            node_id,
+            node["type"],
+            result,
+            self._exec_definition(node),
+        )
+        if sidecar == "written" and _inspectable_result(node["type"], result):
+            with self._lock:
+                self._sidecars.add(node_id)
+        if sidecar == "failed":
+            notes.append("Result sidecar could not be written")
+            degraded = True
+        self._set_node(
+            node_id,
+            status=NODE_STATUS_DEGRADED if degraded else NODE_STATUS_COMPLETED,
+            progress=1.0,
+            completed_at=_now_iso(),
+            note="; ".join(notes) if notes else None,
+        )
+
     def _exec_definition(self, node: dict[str, Any]) -> dict[str, Any]:
         return node_exec_definition(node, self.edges, self.sample_window)
 
@@ -733,48 +787,16 @@ class WorkflowRunner:
                 )
                 continue
             # Mute and gate checks precede the seed check: a seed never bypasses either.
-            if node.get("disabled"):
-                self._set_node(
-                    node_id, status=NODE_STATUS_SKIPPED, completed_at=_now_iso()
-                )
-                self._notify(force=True)
-                continue
-            if self._should_skip(node_id):
+            if node.get("disabled") or self._should_skip(node_id):
                 self._set_node(
                     node_id, status=NODE_STATUS_SKIPPED, completed_at=_now_iso()
                 )
                 self._notify(force=True)
                 continue
             if node_id in self._seed_results:
-                seeded = self._seed_results[node_id]
-                with self._lock:
-                    self._results[node_id] = seeded
-                # Every write_node_sidecar return is a truthy string; only "written"
-                # means a sidecar exists.
-                sidecar = write_node_sidecar(
-                    self.ctx.output_dir,
-                    self.run_id,
-                    node_id,
-                    node["type"],
-                    seeded,
-                    self._exec_definition(node),
-                )
-                if sidecar == "written" and _inspectable_result(node["type"], seeded):
-                    with self._lock:
-                        self._sidecars.add(node_id)
                 seed_notes = [self._seed_note] if self._seed_note else []
-                if sidecar == "failed":
-                    seed_notes.append("Result sidecar could not be written")
-                self._set_node(
-                    node_id,
-                    status=(
-                        NODE_STATUS_DEGRADED
-                        if sidecar == "failed"
-                        else NODE_STATUS_COMPLETED
-                    ),
-                    progress=1.0,
-                    completed_at=_now_iso(),
-                    note="; ".join(seed_notes) if seed_notes else None,
+                self._record_result(
+                    node, self._seed_results[node_id], seed_notes, False
                 )
                 self._notify(force=True)
                 continue
@@ -812,33 +834,8 @@ class WorkflowRunner:
                 exec_degraded = result.pop("__degraded__", None)
                 if exec_degraded:
                     notes.append(str(exec_degraded))
-                with self._lock:
-                    self._results[node_id] = result
-                # Persist JSON-safe ports for resume and the inspector, outliving
-                # this runner; ``hasResult`` only when renderable.
-                sidecar = write_node_sidecar(
-                    self.ctx.output_dir,
-                    self.run_id,
-                    node_id,
-                    node["type"],
-                    result,
-                    self._exec_definition(node),
-                )
-                if sidecar == "written" and _inspectable_result(node["type"], result):
-                    with self._lock:
-                        self._sidecars.add(node_id)
-                if sidecar == "failed":
-                    notes.append("Result sidecar could not be written")
-                degraded = bool(exec_degraded) or inputs_degraded or sidecar == "failed"
-                self._set_node(
-                    node_id,
-                    status=(
-                        NODE_STATUS_DEGRADED if degraded else NODE_STATUS_COMPLETED
-                    ),
-                    progress=1.0,
-                    completed_at=_now_iso(),
-                    note="; ".join(notes) if notes else None,
-                )
+                degraded = bool(exec_degraded) or inputs_degraded
+                self._record_result(node, result, notes, degraded)
             except Exception as exc:
                 self._set_node(
                     node_id,

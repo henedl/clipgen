@@ -90,9 +90,9 @@ def test_process_clips_no_padding_leaves_timestamps_untouched(monkeypatch, make_
     )
     pipeline.process_clips([raw_clip], output_format="clip")
     _, kwargs = run_ffmpeg.call_args
-    # Default (no-op) path passes the original strings straight through.
-    assert kwargs["start_pos"] == "00:10"
-    assert kwargs["end_pos"] == "00:20"
+    # Default (no-op) path keeps the times, formatted as H:MM:SS.
+    assert kwargs["start_pos"] == "0:00:10"
+    assert kwargs["end_pos"] == "0:00:20"
 
 
 def test_process_clips_gif_fractional_max_duration_floors_to_one(

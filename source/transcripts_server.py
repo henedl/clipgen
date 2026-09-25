@@ -131,30 +131,28 @@ _orchestrator: "AgentOrchestrator"
 _pending_model_unloads: dict[str, threading.Timer] = {}
 _pending_model_unloads_lock = threading.Lock()
 
-# The one Redact model download; the UI polls /api/models/redact/download-status.
-_REDACT_JOB = "redact"
-_redact_downloads = JobRegistry(
-    fresh=lambda: {
+
+def _download_state() -> dict[str, Any]:
+    return {
         "status": "starting",
         "completed": 0,
         "total": 0,
         "done": False,
         "succeeded": False,
         "error": None,
-    },
+    }
+
+
+# The one Redact model download; the UI polls /api/models/redact/download-status.
+_REDACT_JOB = "redact"
+_redact_downloads = JobRegistry(
+    fresh=_download_state,
     running=lambda token: not token["done"],
 )
 # In-flight GGUF downloads by model value; the UI polls
 # /api/models/llm/download-status.
 _llm_downloads = JobRegistry(
-    fresh=lambda: {
-        "status": "starting",
-        "completed": 0,
-        "total": 0,
-        "done": False,
-        "succeeded": False,
-        "error": None,
-    },
+    fresh=_download_state,
     running=lambda token: not token["done"],
 )
 
@@ -243,25 +241,37 @@ def _speaker_model_ready() -> bool:
     return config.DEBUGGING or speakers.is_speaker_model_available()
 
 
-def _active_speakers_tasks(pid: str) -> list[dict[str, Any]]:
-    """Queued or running speakers-kind tasks for *pid*."""
+def _active_tasks(kind: str, pid: str | None = None) -> list[dict[str, Any]]:
+    """Queued or running *kind* tasks, for *pid* or for everyone."""
     if not _worker:
         return []
     live = (transcripts.TASK_STATUS_QUEUED, transcripts.TASK_STATUS_RUNNING)
     return [
         t
         for t in _worker.get_all_tasks(include_partials=False)
-        if t.get("kind") == "speakers"
-        and t["participant"] == pid
+        if t.get("kind") == kind
+        and (pid is None or t["participant"] == pid)
         and t["status"] in live
     ]
 
 
-def _cancel_speakers_tasks(pid: str) -> bool:
+def _cancel_tasks(kind: str, pid: str) -> bool:
     cancelled = False
-    for t in _active_speakers_tasks(pid):
+    for t in _active_tasks(kind, pid):
         cancelled = bool(_worker and _worker.cancel(t["id"])) or cancelled
     return cancelled
+
+
+def _speakers_on_block(old: dict[str, Any]) -> dict[str, Any]:
+    """Enabled speakers block keeping *old*'s labels, count and stash."""
+    block = {
+        "enabled": True,
+        "labels": dict(old.get("labels") or {}),
+        "count": int(old.get("count") or 0),
+    }
+    if old.get("stash"):
+        block["stash"] = old["stash"]
+    return block
 
 
 def _task_info(task: dict[str, Any]) -> dict[str, Any]:
@@ -283,7 +293,7 @@ def _task_info(task: dict[str, Any]) -> dict[str, Any]:
 
 def _enqueue_speakers_task(pid: str, entry: dict[str, Any]) -> dict[str, Any] | None:
     """Replace any live speakers run for *pid*; caller holds _manifest_lock."""
-    _cancel_speakers_tasks(pid)
+    _cancel_tasks("speakers", pid)
     video_paths = _video_paths_for_participant(pid)
     if not _worker or not video_paths:
         return None
@@ -335,25 +345,14 @@ def _redact_model_ready() -> bool:
     return config.DEBUGGING or redact.is_redact_model_available()
 
 
-def _active_redact_tasks(pid: str | None = None) -> list[dict[str, Any]]:
-    """Queued or running redact-kind tasks, for *pid* or for everyone."""
-    if not _worker:
-        return []
-    live = (transcripts.TASK_STATUS_QUEUED, transcripts.TASK_STATUS_RUNNING)
-    return [
-        t
-        for t in _worker.get_all_tasks(include_partials=False)
-        if t.get("kind") == "redact"
-        and (pid is None or t["participant"] == pid)
-        and t["status"] in live
-    ]
-
-
-def _cancel_redact_tasks(pid: str) -> bool:
-    cancelled = False
-    for t in _active_redact_tasks(pid):
-        cancelled = bool(_worker and _worker.cancel(t["id"])) or cancelled
-    return cancelled
+def _redaction_on_block(old: dict[str, Any]) -> dict[str, Any]:
+    """Enabled redaction block keeping *old*'s count, min_score and exclusions."""
+    return {
+        "enabled": True,
+        "count": int(old.get("count") or 0),
+        "min_score": old.get("min_score"),
+        "excluded": list(old.get("excluded") or []),
+    }
 
 
 def _enqueue_redact_task(pid: str, entry: dict[str, Any]) -> dict[str, Any] | None:
@@ -362,7 +361,7 @@ def _enqueue_redact_task(pid: str, entry: dict[str, Any]) -> dict[str, Any] | No
     The snapshot is the corrected text readers see, so the spans it yields
     index that text.
     """
-    _cancel_redact_tasks(pid)
+    _cancel_tasks("redact", pid)
     if not _worker or not entry.get("segments"):
         return None
     transcripts.assign_segment_ids(pid, entry["segments"])
@@ -630,6 +629,15 @@ def _bump_corrections_version() -> None:
         _friction_cache.clear()
 
 
+def _new_correction(frm: str, to: str) -> dict[str, Any]:
+    return {
+        "id": f"c_{uuid.uuid4().hex[:8]}",
+        "from": frm,
+        "to": to,
+        "created": datetime.now(UTC).isoformat(),
+    }
+
+
 def _corrected_segments(
     participant: str,
     raw_segments: list[Any],
@@ -793,12 +801,7 @@ def api_edit_segment(participant: str) -> FlaskResponse:
             return ok(correction=None)
 
         # Create correction
-        correction = {
-            "id": f"c_{uuid.uuid4().hex[:8]}",
-            "from": original_text,
-            "to": new_text,
-            "created": datetime.now(UTC).isoformat(),
-        }
+        correction = _new_correction(original_text, new_text)
         corrections.append(correction)
         _bump_corrections_version()  # new correction invalidates corrected cache
         _mark_friction_stale(entry)  # edited segment text invalidates friction scores
@@ -874,19 +877,12 @@ def api_speakers_set(participant: str) -> FlaskResponse:
         entry = src.setdefault(participant, {})
         task = None
         if enabled:
-            block = entry.get("speakers") or {}
-            entry["speakers"] = {
-                "enabled": True,
-                "labels": dict(block.get("labels") or {}),
-                "count": int(block.get("count") or 0),
-            }
-            if block.get("stash"):
-                entry["speakers"]["stash"] = block["stash"]
+            entry["speakers"] = _speakers_on_block(entry.get("speakers") or {})
             segs = entry.get("segments") or []
             if segs and not any(s.get("speaker") for s in segs):
                 task = _enqueue_speakers_task(participant, entry)
         else:
-            _cancel_speakers_tasks(participant)
+            _cancel_tasks("speakers", participant)
             segs = entry.get("segments") or []
             # The stripped ids anchor the renames when the next pass permutes them.
             stash = {
@@ -928,14 +924,7 @@ def api_speakers_regenerate(participant: str) -> FlaskResponse:
         entry = _manifest.get("source_transcripts", {}).get(participant)
         if not entry or not entry.get("segments"):
             raise ApiError("No transcript for participant", 404)
-        block = entry.get("speakers") or {}
-        entry["speakers"] = {
-            "enabled": True,
-            "labels": dict(block.get("labels") or {}),
-            "count": int(block.get("count") or 0),
-        }
-        if block.get("stash"):
-            entry["speakers"]["stash"] = block["stash"]
+        entry["speakers"] = _speakers_on_block(entry.get("speakers") or {})
         task = _enqueue_speakers_task(participant, entry)
         if task is None:
             raise ApiError("No video for participant", 404)
@@ -946,7 +935,7 @@ def api_speakers_regenerate(participant: str) -> FlaskResponse:
 @transcripts_bp.route("/api/speakers/<participant>/stop", methods=["POST"])
 @json_endpoint
 def api_speakers_stop(participant: str) -> FlaskResponse:
-    return ok(stopped=_cancel_speakers_tasks(participant))
+    return ok(stopped=_cancel_tasks("speakers", participant))
 
 
 @transcripts_bp.route("/api/redact/<participant>", methods=["PUT"])
@@ -971,20 +960,15 @@ def api_redact_set(participant: str) -> FlaskResponse:
         entry = src.setdefault(participant, {})
         task = None
         block = entry.get("redaction") or {}
-        excluded = list(block.get("excluded") or [])
         if enabled:
-            entry["redaction"] = {
-                "enabled": True,
-                "count": int(block.get("count") or 0),
-                "min_score": block.get("min_score"),
-                "excluded": excluded,
-            }
+            entry["redaction"] = _redaction_on_block(block)
             segs = entry.get("segments") or []
             if segs and not any(s.get("pii") for s in segs):
                 task = _enqueue_redact_task(participant, entry)
         else:
-            _cancel_redact_tasks(participant)
+            _cancel_tasks("redact", participant)
             redact.strip_entry(entry.get("segments") or [])
+            excluded = list(block.get("excluded") or [])
             entry["redaction"] = {"enabled": False, "count": 0, "excluded": excluded}
         _bump_corrections_version()
         summary = _redaction_summary(entry)
@@ -1002,13 +986,7 @@ def api_redact_regenerate(participant: str) -> FlaskResponse:
         entry = _manifest.get("source_transcripts", {}).get(participant)
         if not entry or not entry.get("segments"):
             raise ApiError("No transcript for participant", 404)
-        block = entry.get("redaction") or {}
-        entry["redaction"] = {
-            "enabled": True,
-            "count": int(block.get("count") or 0),
-            "min_score": block.get("min_score"),
-            "excluded": list(block.get("excluded") or []),
-        }
+        entry["redaction"] = _redaction_on_block(entry.get("redaction") or {})
         task = _enqueue_redact_task(participant, entry)
         if task is None:
             raise ApiError("No transcript for participant", 404)
@@ -1019,7 +997,7 @@ def api_redact_regenerate(participant: str) -> FlaskResponse:
 @transcripts_bp.route("/api/redact/<participant>/stop", methods=["POST"])
 @json_endpoint
 def api_redact_stop(participant: str) -> FlaskResponse:
-    return ok(stopped=_cancel_redact_tasks(participant))
+    return ok(stopped=_cancel_tasks("redact", participant))
 
 
 @transcripts_bp.route("/api/redact/<participant>/exclude", methods=["PUT"])
@@ -1824,12 +1802,7 @@ def api_corrections_add() -> FlaskResponse:
         )
         pure_revert = bool(removed) and not updated
         if not pure_revert and not exists:
-            correction = {
-                "id": f"c_{uuid.uuid4().hex[:8]}",
-                "from": from_text,
-                "to": to_text,
-                "created": datetime.now(UTC).isoformat(),
-            }
+            correction = _new_correction(from_text, to_text)
             corrections.append(correction)
 
         _bump_corrections_version()  # add/update/remove invalidates corrected cache
@@ -1933,14 +1906,7 @@ def _merge_dictionary_locked(
         if key in seen:
             continue
         seen.add(key)
-        existing.append(
-            {
-                "id": f"c_{uuid.uuid4().hex[:8]}",
-                "from": c["from"],
-                "to": c["to"],
-                "created": datetime.now(UTC).isoformat(),
-            }
-        )
+        existing.append(_new_correction(c["from"], c["to"]))
         added_corrections += 1
 
     known = _manifest.setdefault("known_terms", [])
@@ -2059,18 +2025,25 @@ def _resolve_mark(
     running transcription tasks, allowing marks made during streaming to
     resolve before the transcript is persisted.
     """
+
+    def _view(
+        valid: bool, pid: str, seg: dict[str, Any] | None = None, text: str = ""
+    ) -> dict[str, Any]:
+        start, end = (seg["start"], seg["end"]) if seg is not None else (0, 0)
+        return {
+            **mark,
+            "valid": valid,
+            "participant": pid,
+            "start": start,
+            "end": end,
+            "text": text,
+        }
+
     seg_id = mark.get("segment_id", "")
     # segment IDs are "{participant}:{index}"
     parts = seg_id.split(":", 1)
     if len(parts) != 2:
-        return {
-            **mark,
-            "valid": False,
-            "participant": "",
-            "start": 0,
-            "end": 0,
-            "text": "",
-        }
+        return _view(False, "")
     pid, idx_str = parts
 
     # Resolve by stable segment id, never by position, so marks survive list edits.
@@ -2087,14 +2060,7 @@ def _resolve_mark(
         pii_view = _redacted_view(pid, segments, corrected, entry)
         if pii_view is not None:
             text = redact.render_text(text, pii_view[idx])
-        return {
-            **mark,
-            "valid": True,
-            "participant": pid,
-            "start": seg["start"],
-            "end": seg["end"],
-            "text": text,
-        }
+        return _view(True, pid, seg, text)
 
     # Running-task partials carry no ids, so their suffix is a positional index.
     if partial_lookup:
@@ -2105,23 +2071,9 @@ def _resolve_mark(
             partial_idx = -1
         if 0 <= partial_idx < len(partial_segs):
             seg = partial_segs[partial_idx]
-            return {
-                **mark,
-                "valid": True,
-                "participant": pid,
-                "start": seg["start"],
-                "end": seg["end"],
-                "text": seg["text"],
-            }
+            return _view(True, pid, seg, seg["text"])
 
-    return {
-        **mark,
-        "valid": False,
-        "participant": pid,
-        "start": 0,
-        "end": 0,
-        "text": "",
-    }
+    return _view(False, pid)
 
 
 def _build_partial_lookup() -> dict[str, list]:
@@ -2137,6 +2089,14 @@ def _build_partial_lookup() -> dict[str, list]:
     return lookup
 
 
+def _resolved_marks() -> list[dict[str, Any]]:
+    """Every mark resolved; the partial lookup runs outside _manifest_lock."""
+    # get_all_tasks takes the worker lock, so never nest it inside ours.
+    partial_lookup = _build_partial_lookup()
+    with _manifest_lock:
+        return [_resolve_mark(m, partial_lookup) for m in _manifest.get("marks", [])]
+
+
 def marks_for_participant(pid: str) -> list[dict[str, Any]]:
     """Resolved, valid marks for one participant, sorted by start time.
 
@@ -2145,11 +2105,7 @@ def marks_for_participant(pid: str) -> list[dict[str, Any]]:
     resolution in ``api_marks_list``; filters to marks whose resolved
     participant equals *pid* and drops any that no longer resolve.
     """
-    # Build partial lookup outside _manifest_lock (get_all_tasks acquires worker lock)
-    partial_lookup = _build_partial_lookup()
-    with _manifest_lock:
-        raw_marks = list(_manifest.get("marks", []))
-        resolved = [_resolve_mark(m, partial_lookup) for m in raw_marks]
+    resolved = _resolved_marks()
     out = [m for m in resolved if m.get("valid") and m.get("participant") == pid]
     out.sort(key=lambda m: m.get("start", 0))
     return out
@@ -2158,11 +2114,7 @@ def marks_for_participant(pid: str) -> list[dict[str, Any]]:
 @transcripts_bp.route("/api/marks")
 def api_marks_list() -> FlaskResponse:
     """List all marks, enriched with resolved segment data."""
-    # Build partial lookup outside _manifest_lock (get_all_tasks acquires worker lock)
-    partial_lookup = _build_partial_lookup()
-    with _manifest_lock:
-        raw_marks = list(_manifest.get("marks", []))
-        resolved = [_resolve_mark(m, partial_lookup) for m in raw_marks]
+    resolved = _resolved_marks()
     return ok(
         marks=resolved,
         categories=config.MARK_CATEGORIES,
@@ -2190,11 +2142,7 @@ def api_intake_poll() -> FlaskResponse:
         or _orchestrator.is_generating(p["id"], "citations")
         for p in _participants
     )
-    # Same resolve path as /api/marks (partial lookup outside _manifest_lock).
-    partial_lookup = _build_partial_lookup()
-    with _manifest_lock:
-        raw_marks = list(_manifest.get("marks", []))
-        resolved = [_resolve_mark(m, partial_lookup) for m in raw_marks]
+    resolved = _resolved_marks()
     return ok(
         status={
             "tasks_running": tasks_running,
@@ -2218,39 +2166,14 @@ def api_marks_add() -> FlaskResponse:
     category = data.get("category") or None
     label = data.get("label") or None
     severity = data.get("severity") or None
-    now = datetime.now(UTC).isoformat()
 
-    created = []
     with _manifest_lock:
-        marks = _manifest.setdefault("marks", [])
-        existing_by_seg = {m.get("segment_id", ""): m for m in marks}
-
-        for sid in segment_ids:
-            if sid in existing_by_seg:
-                # Update existing mark
-                m = existing_by_seg[sid]
-                if category is not None:
-                    m["category"] = category
-                if label is not None:
-                    m["label"] = label
-                if severity is not None:
-                    m["severity"] = severity
-                created.append(m)
-            else:
-                m = {
-                    "id": f"m_{uuid.uuid4().hex[:8]}",
-                    "segment_id": sid,
-                    "category": category,
-                    "label": label,
-                    "severity": severity,
-                    "created": now,
-                }
-                marks.append(m)
-                existing_by_seg[sid] = m
-                created.append(m)
+        touched, _ = transcripts.upsert_marks(
+            _manifest.setdefault("marks", []), segment_ids, category, label, severity
+        )
 
     _schedule_persist()
-    return ok(marks=created)
+    return ok(marks=touched)
 
 
 @transcripts_bp.route("/api/marks/<mark_id>", methods=["PUT"])
@@ -2383,14 +2306,6 @@ def api_search() -> FlaskResponse:
 # ---- Transcription queue ----
 
 
-def _whisper_model_size_mb(model: str) -> int | None:
-    """Download size (MB) for a Whisper model name, or None if unknown."""
-    return next(
-        (m["size_mb"] for m in transcripts.WHISPER_MODELS if m["name"] == model),
-        None,
-    )
-
-
 @transcripts_bp.route("/api/transcribe/warmup", methods=["POST"])
 def api_transcribe_warmup() -> FlaskResponse:
     """Background-load the Whisper model when automatic prewarm is not ``off``.
@@ -2417,7 +2332,7 @@ def api_transcribe_warmup() -> FlaskResponse:
             skipped=True,
             reason="model_not_cached",
             model=model,
-            size_mb=_whisper_model_size_mb(model),
+            size_mb=transcripts.whisper_size_mb(model),
         )
 
     global _transcript_model_warming
@@ -2457,6 +2372,35 @@ def api_transcribe_model_status() -> FlaskResponse:
     )
 
 
+def _download_job(
+    registry: JobRegistry, job_key: str, fn: Callable[..., bool]
+) -> Callable[[dict[str, Any]], None]:
+    """Job body relaying *fn*'s progress into *registry*, then its outcome."""
+
+    def _run_download(token: dict[str, Any]) -> None:
+        def _on_progress(chunk: dict[str, Any]) -> None:
+            fields: dict[str, Any] = {}
+            if chunk.get("status"):
+                fields["status"] = chunk["status"]
+            for key in ("total", "completed"):
+                if isinstance(chunk.get(key), (int, float)):
+                    fields[key] = int(chunk[key])
+            registry.publish(job_key, token, **fields)
+
+        succeeded = False
+        try:
+            succeeded = fn(on_progress=_on_progress)
+        finally:
+            fields = {"done": True, "succeeded": succeeded}
+            if succeeded:
+                fields["status"] = "success"
+            elif not token.get("error"):
+                fields["error"] = "Download failed"
+            registry.publish(job_key, token, **fields)
+
+    return _run_download
+
+
 @transcripts_bp.route("/api/models/llm/download", methods=["POST"])
 def api_llm_download() -> FlaskResponse:
     """Download a GGUF model in the background, tracking progress.
@@ -2469,28 +2413,12 @@ def api_llm_download() -> FlaskResponse:
     if not model:
         return err("Missing model")
 
-    def _run_download(token: dict[str, Any]) -> None:
-        def _on_progress(chunk: dict[str, Any]) -> None:
-            fields: dict[str, Any] = {}
-            if chunk.get("status"):
-                fields["status"] = chunk["status"]
-            for key in ("total", "completed"):
-                if isinstance(chunk.get(key), (int, float)):
-                    fields[key] = int(chunk[key])
-            _llm_downloads.publish(model, token, **fields)
-
-        succeeded = False
-        try:
-            succeeded = llm_client.download_model(model, on_progress=_on_progress)
-        finally:
-            fields = {"done": True, "succeeded": succeeded}
-            if succeeded:
-                fields["status"] = "success"
-            elif not token.get("error"):
-                fields["error"] = "Download failed"
-            _llm_downloads.publish(model, token, **fields)
-
-    if _llm_downloads.start(model, _run_download, name=f"llm-download-{model}") is None:
+    run = _download_job(
+        _llm_downloads,
+        model,
+        lambda on_progress: llm_client.download_model(model, on_progress=on_progress),
+    )
+    if _llm_downloads.start(model, run, name=f"llm-download-{model}") is None:
         return ok(already_downloading=True)
     return ok(started=True)
 
@@ -2544,31 +2472,8 @@ def api_redact_download() -> FlaskResponse:
     if redact.is_redact_model_available():
         return ok(installed=True)
 
-    def _run_download(token: dict[str, Any]) -> None:
-        def _on_progress(chunk: dict[str, Any]) -> None:
-            fields: dict[str, Any] = {}
-            if chunk.get("status"):
-                fields["status"] = chunk["status"]
-            for key in ("total", "completed"):
-                if isinstance(chunk.get(key), (int, float)):
-                    fields[key] = int(chunk[key])
-            _redact_downloads.publish(_REDACT_JOB, token, **fields)
-
-        succeeded = False
-        try:
-            succeeded = redact.download(on_progress=_on_progress)
-        finally:
-            fields = {"done": True, "succeeded": succeeded}
-            if succeeded:
-                fields["status"] = "success"
-            elif not token.get("error"):
-                fields["error"] = "Download failed"
-            _redact_downloads.publish(_REDACT_JOB, token, **fields)
-
-    if (
-        _redact_downloads.start(_REDACT_JOB, _run_download, name="redact-download")
-        is None
-    ):
+    run = _download_job(_redact_downloads, _REDACT_JOB, redact.download)
+    if _redact_downloads.start(_REDACT_JOB, run, name="redact-download") is None:
         return ok(already_downloading=True)
     return ok(started=True)
 
@@ -2588,7 +2493,7 @@ def api_redact_delete() -> FlaskResponse:
     """Delete the downloaded Redact model; refused while a redact task runs."""
     if not redact.is_redact_model_available():
         return err("Model not found", 404)
-    if _active_redact_tasks():
+    if _active_tasks("redact"):
         return err("Model is in use")
     try:
         redact.remove()
@@ -2722,7 +2627,7 @@ def api_transcribe() -> FlaskResponse:
                 return refused(
                     "model_not_cached",
                     uncached=[
-                        {"model": m, "size_mb": _whisper_model_size_mb(m)}
+                        {"model": m, "size_mb": transcripts.whisper_size_mb(m)}
                         for m in uncached
                     ],
                 )
@@ -2754,25 +2659,13 @@ def api_transcribe_status() -> FlaskResponse:
         # include_partials=False keeps the poll cheap; clients pull segments via
         # /api/transcribe/<task_id>/segments?since=N.
         for t in _worker.get_all_tasks(include_partials=False):
-            task_info = {
-                "id": t["id"],
-                "kind": t.get("kind", "transcribe"),
-                "participant": t["participant"],
-                "status": t["status"],
-                "progress": t["progress"],
-                "error": t.get("error"),
-                "created_at": t.get("created_at"),
-                "completed_at": t.get("completed_at"),
-                # Marker window (None = unbounded); the frontend clips the
-                # progress band to it.
-                "start_seconds": t.get("start_seconds"),
-                "end_seconds": t.get("end_seconds"),
-            }
+            task_info = _task_info(t)
             if t["status"] == transcripts.TASK_STATUS_RUNNING:
                 task_info["partial_count"] = t.get("partial_count", 0)
-                # "loading_model" vs "transcribing" — what the 0% wait is.
-                task_info["phase"] = t.get("phase", "transcribing")
                 task_info["transcribe_started_at"] = t.get("transcribe_started_at")
+            else:
+                # A finished task's stale phase would relabel pills.
+                task_info.pop("phase")
             tasks.append(task_info)
     return ok(
         tasks=tasks,

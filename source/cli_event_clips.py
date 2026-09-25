@@ -8,8 +8,7 @@ stays fast.
 from __future__ import annotations
 
 import argparse
-import uuid
-from datetime import UTC, datetime
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -300,9 +299,57 @@ def _truncate_for_filename(text: str, *, limit: int = 60) -> str:
     return files.safe_truncate(text, limit).rstrip() + "…"
 
 
+def _cut_clusters(
+    clusters: list[dict[str, Any]],
+    label_fn: Callable[[dict[str, Any]], tuple[str, str]],
+    *,
+    cell_col: int,
+    mode: str,
+    summary: str,
+) -> None:
+    """Cut one clip per cluster, append to the manifest, and print the tally."""
+    import pipeline
+
+    clips_list: list[ClipRecord] = []
+    last_study = ""
+    for idx, cluster in enumerate(clusters):
+        source_video = cluster.get("source_video") or ""
+        parsed = utils.parse_source_video_name(source_video) if source_video else None
+        study = parsed[0] if parsed else ""
+        desc, category = label_fn(cluster)
+        clips_list.extend(
+            files.build_clip_records(
+                participant=cluster.get("participant") or "",
+                source_filename=source_video,
+                time_ranges=[(cluster["start"], cluster["end"])],
+                description=desc,
+                category=category,
+                study=study,
+                cell_col=cell_col,
+                cell_row_base=idx,
+            )
+        )
+        last_study = study or last_study
+
+    count, artifacts = pipeline.process_clips(
+        clips_list, output_format="clip", include_severity=False
+    )
+    if artifacts:
+        viewer.save_manifest(
+            artifacts,
+            study=last_study,
+            participant="",
+            worksheet_title="",
+            is_excel=False,
+            mode=mode,
+        )
+    utils.info_print(
+        f"Generated {count} clip(s) from {summary} in {len(clusters)} cluster(s)."
+    )
+
+
 def _run_ss_clips(args: argparse.Namespace) -> None:
     """Cut clips from existing Screenspace events and append to the manifest."""
-    import pipeline
     import screenspace
 
     manifest = screenspace.load_screenspace_manifest()
@@ -342,56 +389,23 @@ def _run_ss_clips(args: argparse.Namespace) -> None:
         utils.warning_print("No clusters produced from filtered events.")
         return
 
-    clips_list: list[ClipRecord] = []
-    last_study = ""
-    for idx, cluster in enumerate(clusters):
-        source_video = cluster.get("source_video") or ""
-        parsed = utils.parse_source_video_name(source_video) if source_video else None
-        study = parsed[0] if parsed else ""
-        participant = cluster.get("participant") or ""
+    def label(cluster: dict[str, Any]) -> tuple[str, str]:
         detector = cluster.get("detector") or ""
-        region = cluster.get("region") or ""
-        desc_parts = [detector]
-        if region:
-            desc_parts.append(region)
-        desc = " ".join(p for p in desc_parts if p).strip() or "event"
+        desc = " ".join(p for p in (detector, cluster.get("region") or "") if p)
         category = f"screenspace-{detector}" if detector else "screenspace"
-        clips_list.extend(
-            files.build_clip_records(
-                participant=participant,
-                source_filename=source_video,
-                time_ranges=[(cluster["start"], cluster["end"])],
-                description=desc,
-                category=category,
-                study=study,
-                cell_col=_SS_CLIPS_CELL_COL,
-                cell_row_base=idx,
-            )
-        )
-        last_study = study or last_study
+        return desc.strip() or "event", category
 
-    count, artifacts = pipeline.process_clips(
-        clips_list, output_format="clip", include_severity=False
-    )
-    if artifacts:
-        viewer.save_manifest(
-            artifacts,
-            study=last_study,
-            participant="",
-            worksheet_title="",
-            is_excel=False,
-            mode="ss-clips",
-        )
-    utils.info_print(
-        f"Generated {count} clip(s) from {len(filtered)} event(s) "
-        f"in {len(clusters)} cluster(s)."
+    _cut_clusters(
+        clusters,
+        label,
+        cell_col=_SS_CLIPS_CELL_COL,
+        mode="ss-clips",
+        summary=f"{len(filtered)} event(s)",
     )
 
 
 def _run_transcript_clips(args: argparse.Namespace) -> None:
     """Cut clips from transcript segments/marks and append to the manifest."""
-    import pipeline
-
     manifest = transcripts.load_transcripts_manifest()
     if not manifest.get("source_transcripts"):
         utils.warning_print(
@@ -428,49 +442,20 @@ def _run_transcript_clips(args: argparse.Namespace) -> None:
         return
 
     mark_filter = _split_csv_set(args.transcript_clips_mark)
-    clips_list: list[ClipRecord] = []
-    last_study = ""
-    for idx, cluster in enumerate(clusters):
-        source_video = cluster.get("source_video") or ""
-        parsed = utils.parse_source_video_name(source_video) if source_video else None
-        study = parsed[0] if parsed else ""
-        participant = cluster.get("participant") or ""
+
+    def label(cluster: dict[str, Any]) -> tuple[str, str]:
         text = cluster.get("text") or ""
         desc = _truncate_for_filename(text) if text else "transcript"
         if mark_filter and cluster.get("mark_categories"):
-            primary = cluster["mark_categories"][0]
-            category = f"mark-{primary}"
-        else:
-            category = "transcript"
-        clips_list.extend(
-            files.build_clip_records(
-                participant=participant,
-                source_filename=source_video,
-                time_ranges=[(cluster["start"], cluster["end"])],
-                description=desc,
-                category=category,
-                study=study,
-                cell_col=_TRANSCRIPT_CLIPS_CELL_COL,
-                cell_row_base=idx,
-            )
-        )
-        last_study = study or last_study
+            return desc, f"mark-{cluster['mark_categories'][0]}"
+        return desc, "transcript"
 
-    count, artifacts = pipeline.process_clips(
-        clips_list, output_format="clip", include_severity=False
-    )
-    if artifacts:
-        viewer.save_manifest(
-            artifacts,
-            study=last_study,
-            participant="",
-            worksheet_title="",
-            is_excel=False,
-            mode="transcript-clips",
-        )
-    utils.info_print(
-        f"Generated {count} clip(s) from {len(rows)} segment(s) "
-        f"in {len(clusters)} cluster(s)."
+    _cut_clusters(
+        clusters,
+        label,
+        cell_col=_TRANSCRIPT_CLIPS_CELL_COL,
+        mode="transcript-clips",
+        summary=f"{len(rows)} segment(s)",
     )
 
 
@@ -555,20 +540,13 @@ def _run_transcript_mark(args: argparse.Namespace) -> None:
         )
         return
 
-    needle = term.lower()
-    matching_seg_ids: list[tuple[str, str]] = []  # (participant, segment_id)
-    for pid, entry in source_transcripts.items():
-        if participants_filter and pid not in participants_filter:
-            continue
-        raw_segments = entry.get("segments") or []
-        if not raw_segments:
-            continue
-        corrected = transcripts.apply_corrections(raw_segments, corrections)
-        for raw, seg in zip(raw_segments, corrected, strict=True):
-            if needle in str(seg.get("text", "")).lower():
-                seg_id = raw.get("id") or ""
-                if seg_id:
-                    matching_seg_ids.append((pid, seg_id))
+    rows = _filter_transcript_segments(
+        manifest,
+        participants=participants_filter,
+        mark_categories=None,
+        text_substr=term,
+    )
+    matching_seg_ids = [(pid, row["id"]) for pid, row, _ in rows if row.get("id")]
 
     if not matching_seg_ids:
         utils.warning_print(f"No transcript segments contain {term!r}.")
@@ -589,28 +567,8 @@ def _run_transcript_mark(args: argparse.Namespace) -> None:
         utils.error_print("The running Transcripts server rejected the marks.")
         return
 
-    existing_by_seg = {m["segment_id"]: m for m in marks if m.get("segment_id")}
-    now = datetime.now(UTC).isoformat()
-    created = 0
-    updated = 0
-    for sid in seg_id_list:
-        existing = existing_by_seg.get(sid)
-        if existing is not None:
-            existing["category"] = category
-            if label is not None:
-                existing["label"] = label
-            updated += 1
-        else:
-            new_mark = {
-                "id": f"m_{uuid.uuid4().hex[:8]}",
-                "segment_id": sid,
-                "category": category,
-                "label": label,
-                "created": now,
-            }
-            marks.append(new_mark)
-            existing_by_seg[sid] = new_mark
-            created += 1
+    _, created = transcripts.upsert_marks(marks, seg_id_list, category, label)
+    updated = total - created
 
     transcripts.save_transcripts_manifest(source_transcripts, corrections, marks=marks)
     utils.info_print(
