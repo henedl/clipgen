@@ -67,6 +67,23 @@ jobs:
           uv venv
           uv pip install ".[dev]" pytest-cov pytest-xdist
 
+      - name: Cache Redact model
+        # Keyed on the LiteRT-verified fixture, whose hashes test_redact.py pins to redact.ASSETS.
+        id: redact-model
+        uses: actions/cache@v6
+        with:
+          path: ${{ runner.temp }}/redact-model
+          key: redact-model-${{ hashFiles('tests/fixtures/redact_reference.json') }}
+
+      - name: Fetch Redact model
+        # No model means skipped replay tests, so a failed fetch warns and deletes partial files.
+        if: steps.redact-model.outputs.cache-hit != 'true'
+        env:
+          REDACT_DIR: ${{ runner.temp }}/redact-model
+        run: >-
+          uv run --no-sync python build/redact_parity.py --fetch "$REDACT_DIR"
+          || { rm -rf "$REDACT_DIR"; echo "::warning::Redact model fetch failed; its reference tests skip"; }
+
       - name: Run tests with coverage gate
         # Always run the full suite. It finishes in well under a minute, and a
         # scoped subset risks false-green PRs when a change breaks an untested
@@ -84,6 +101,8 @@ jobs:
           # future coverage release regresses this, dropping the var is the whole
           # rollback — it only selects a measurement backend.
           COVERAGE_CORE: sysmon
+          # Lets test_redact.py replay the LiteRT-verified reference on the real model.
+          CLIPGEN_REDACT_MODEL_DIR: ${{ runner.temp }}/redact-model
         run: >-
           uv run --no-sync pytest -c tests/pytest.ini
           -n auto --randomly-seed=20240601 --cov=. --cov-report=term

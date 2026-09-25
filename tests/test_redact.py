@@ -1,5 +1,6 @@
 """redact.py: tokenizer, BIOES decode, windowing, numbering, download."""
 
+import json
 import os
 import struct
 from pathlib import Path
@@ -184,6 +185,33 @@ def test_detect_spans_splits_at_segment_boundaries(monkeypatch):
     assert [(s["label"], s["text"]) for s in out[1]] == [("PHONE", "123")]
 
 
+def test_detect_spans_drops_the_runtime_after_a_pass(monkeypatch):
+    monkeypatch.setattr(config, "DEBUGGING", False)
+    monkeypatch.setattr(redact, "_runtime", ("graph", _WordTokenizer(), {0: "O"}))
+    monkeypatch.setattr(
+        redact, "_run_window", lambda ids: (["O"] * len(ids), [1.0] * len(ids))
+    )
+    redact.detect_spans(["a b"], min_score=0.6, org=False)
+    assert redact._runtime is None
+
+
+@pytest.mark.parametrize(
+    "inputs",
+    [
+        {"serving_default_input_ids": 0},
+        {"serving_default_ids": 0, "serving_default_attention_mask": 1},
+        {"input_ids": 0, "attention_mask": 1, "token_type_ids": 2},
+    ],
+)
+def test_run_window_rejects_unexpected_inputs(monkeypatch, inputs):
+    graph = {"inputs": inputs}
+    monkeypatch.setattr(
+        redact, "_load_runtime", lambda: (graph, _WordTokenizer(), {0: "O"})
+    )
+    with pytest.raises(ValueError, match="unexpected Redact model inputs"):
+        redact._run_window([5, 6])
+
+
 def test_enabled_labels_drop_org_unless_asked():
     fams = redact.label_families({0: "O", 1: "B-ORG", 2: "S-EMAIL", 3: "S-IMEI"})
     assert fams == {"ORG", "EMAIL"}
@@ -361,3 +389,47 @@ def test_real_model_finds_name_email_and_city(monkeypatch):
     assert labels["SURNAME"] == "Lindqvist"
     assert labels["CITY"] == "Umeå"
     assert labels["EMAIL"] == "anna.lindqvist@example.se"
+
+
+# ---- LiteRT-verified reference (build/redact_parity.py) ---------------------
+
+_REFERENCE = Path(__file__).resolve().parent / "fixtures" / "redact_reference.json"
+
+
+def test_reference_fixture_matches_pinned_assets():
+    """A model bump fails here until it is re-verified against LiteRT."""
+    ref = json.loads(_REFERENCE.read_text(encoding="utf-8"))
+    pinned = {a["filename"]: a["sha256"] for a in redact.ASSETS}
+    assert (ref["model_tag"], ref["assets"]) == (redact.MODEL_TAG, pinned), (
+        "redact.ASSETS changed; run `uv run --with ai-edge-litert==2.2.0 "
+        "build/redact_parity.py --write` and commit the fixture it writes"
+    )
+
+
+@pytest.mark.skipif(_real_model_dir() is None, reason="Redact model not downloaded")
+def test_real_model_reproduces_reference(monkeypatch):
+    """The numpy runtime replays LiteRT's tags and spans on the pinned model."""
+    ref = json.loads(_REFERENCE.read_text(encoding="utf-8"))
+    monkeypatch.setattr(config, "DEBUGGING", False)
+    monkeypatch.setattr(redact, "models_dir", _real_model_dir)
+    monkeypatch.setattr(redact, "_runtime", None)
+    windows: list[list[str]] = []
+    real_window = redact._run_window
+
+    def recording(ids):
+        tags, probs = real_window(ids)
+        windows.append(tags)
+        return tags, probs
+
+    monkeypatch.setattr(redact, "_run_window", recording)
+    spans = redact.detect_spans(ref["texts"], min_score=ref["min_score"], org=True)
+    assert len(windows) == len(ref["windows"])
+    pairs = [
+        (a, b)
+        for got, want in zip(windows, ref["windows"], strict=True)
+        for a, b in zip(got, want, strict=True)
+    ]
+    # Another BLAS may flip a near-tie token; the spans themselves must not move.
+    assert sum(a == b for a, b in pairs) >= 0.995 * len(pairs)
+    got_spans = [[[s["label"], s["start"], s["end"]] for s in seg] for seg in spans]
+    assert got_spans == ref["spans"]

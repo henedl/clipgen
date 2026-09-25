@@ -1,5 +1,6 @@
 # Security keys
 *.json
+!tests/fixtures/redact_reference.json
 
 # Language server settings
 pyrightconfig.json
@@ -33,6 +34,7 @@ build/*
 !build/render_icons.py
 !build/fetch_binaries.py
 !build/release_notes.py
+!build/redact_parity.py
 dist/
 
 # Working docs

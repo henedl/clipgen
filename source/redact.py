@@ -11,7 +11,7 @@ same surface gets the same ``[GIVEN_NAME_1]`` across a participant.
 
 The model (``ASSETS``) is an opt-in download into ``models_dir()``: a 23M
 parameter 6-layer BERT token classifier over 89 BIOES tags (int8 TFLite),
-run with ``ai_edge_litert``. Text is tokenized by the model's own unigram
+evaluated in numpy by ``tflite_numpy``. Text is tokenized by the model's own unigram
 tokenizer (``redact_tokenizer.bin``: ``RDTK`` magic, one version byte,
 ``<4i`` unk/bos/eos/count, ``count`` float32 scores, ``count`` uint16 piece
 lengths, UTF-8 pieces; Viterbi over NFKC text with runs of spaces squeezed
@@ -22,7 +22,7 @@ windows, name hysteresis, overlap resolution, word snapping) follows the
 vendor SDK; the deterministic checksum layer (IBAN, Luhn, IMEI) and the
 US-address regexes are not ported — spoken transcripts rarely carry them.
 
-Module-level imports stay light on purpose: numpy and the LiteRT runtime
+Module-level imports stay light on purpose: numpy and ``tflite_numpy``
 load inside functions, so ``data_export`` and the server can import the
 read-time helpers for free.
 """
@@ -30,7 +30,6 @@ read-time helpers for free.
 from __future__ import annotations
 
 import json
-import os
 import struct
 import threading
 import unicodedata
@@ -93,8 +92,7 @@ _TRIM = " \t\n\r.,;:!?()[]{}\"'«»‘’“”"
 SEGMENT_JOIN = "\n"
 
 _runtime_lock = threading.Lock()
-_runtime: tuple[Any, Tokenizer, dict[int, str]] | None = None
-_infer_lock = threading.Lock()
+_runtime: tuple[dict[str, Any], Tokenizer, dict[int, str]] | None = None
 
 
 class RedactCancelled(Exception):
@@ -157,12 +155,10 @@ def download(on_progress: Callable[[dict[str, Any]], None] | None = None) -> boo
 
 def remove() -> None:
     """Delete the downloaded assets and drop the cached runtime."""
-    global _runtime
     base = models_dir()
     for asset in ASSETS:
         (base / asset["filename"]).unlink(missing_ok=True)
-    with _runtime_lock:
-        _runtime = None
+    _drop_runtime()
 
 
 def redaction_block(count: int, *, min_score: float, org: bool) -> dict[str, Any]:
@@ -290,28 +286,31 @@ def _reconstruct_offsets(
 # ---------------------------------------------------------------------------
 
 
-def _load_runtime() -> tuple[Any, Tokenizer, dict[int, str]]:
-    """Interpreter, tokenizer and id→label map, loaded once."""
+def _load_runtime() -> tuple[dict[str, Any], Tokenizer, dict[int, str]]:
+    """Model graph, tokenizer and id→label map, cached until ``_drop_runtime``."""
     global _runtime
     if _runtime is not None:
         return _runtime
     with _runtime_lock:
         if _runtime is not None:
             return _runtime
-        from ai_edge_litert.interpreter import Interpreter
+        import tflite_numpy
 
         base = models_dir()
         with profiling.span("redact.runtime_load"):
-            interp = Interpreter(
-                model_path=str(base / MODEL_FILENAME),
-                num_threads=max(1, min(4, os.cpu_count() or 1)),
-            )
-            interp.allocate_tensors()
+            graph = tflite_numpy.load_graph(base / MODEL_FILENAME)
             tokenizer = Tokenizer((base / TOKENIZER_FILENAME).read_bytes())
             labels = json.loads((base / LABELS_FILENAME).read_text(encoding="utf-8"))
             id2label = {int(k): str(v) for k, v in labels["id2label"].items()}
-        _runtime = (interp, tokenizer, id2label)
+        _runtime = (graph, tokenizer, id2label)
         return _runtime
+
+
+def _drop_runtime() -> None:
+    """Free the ~90 MB of float weights; a reload takes ~60 ms."""
+    global _runtime
+    with _runtime_lock:
+        _runtime = None
 
 
 def label_families(id2label: dict[int, str]) -> set[str]:
@@ -332,20 +331,21 @@ def _run_window(ids: list[int]) -> tuple[list[str], list[float]]:
     """Tags and confidences for one content window (bos/eos stripped)."""
     import numpy as np
 
-    interp, tokenizer, id2label = _load_runtime()
+    import tflite_numpy
+
+    graph, tokenizer, id2label = _load_runtime()
     seq = [tokenizer.bos_id, *ids, tokenizer.eos_id]
     padded = np.full((1, SEQ), PAD_ID, dtype=np.int32)
     mask = np.zeros((1, SEQ), dtype=np.int32)
     padded[0, : len(seq)] = seq
     mask[0, : len(seq)] = 1
-    with _infer_lock:
-        inputs = {d["name"]: d["index"] for d in interp.get_input_details()}
-        ids_index = next(i for n, i in inputs.items() if "input_ids" in n)
-        mask_index = next(i for n, i in inputs.items() if "attention_mask" in n)
-        interp.set_tensor(ids_index, padded)
-        interp.set_tensor(mask_index, mask)
-        interp.invoke()
-        logits = np.asarray(interp.get_tensor(interp.get_output_details()[0]["index"]))
+    inputs = graph["inputs"]
+    ids_index = next((i for n, i in inputs.items() if "input_ids" in n), None)
+    mask_index = next((i for n, i in inputs.items() if "attention_mask" in n), None)
+    if len(inputs) != 2 or ids_index is None or mask_index is None:
+        raise ValueError(f"unexpected Redact model inputs: {sorted(inputs)}")
+    feeds = {ids_index: padded, mask_index: mask}
+    logits = tflite_numpy.run_graph(graph, feeds)[0]
     logits = logits[0, : len(seq)].astype(np.float32)
     shifted = logits - logits.max(axis=-1, keepdims=True)
     probs = np.exp(shifted)
@@ -535,7 +535,7 @@ def _document_spans(
     on_progress: Callable[[float], None] | None,
 ) -> list[dict[str, Any]]:
     """Windowed inference over one document; spans carry code-point offsets."""
-    _interp, tokenizer, _id2label = _load_runtime()
+    _graph, tokenizer, _id2label = _load_runtime()
     tokens = tokenizer.tokenize(text)
     offsets = _reconstruct_offsets(text, tokens)
     ids = [tid for tid, _ in tokens]
@@ -598,17 +598,19 @@ def detect_spans(
         return _stub_spans(texts)
     if not texts:
         return []
-    _interp, _tokenizer, id2label = _load_runtime()
-    labels = enabled_labels(label_families(id2label), org=org)
-    document = SEGMENT_JOIN.join(texts)
-    with profiling.span("redact.detect"):
-        spans = _document_spans(
-            document,
-            min_score=min_score,
-            labels=labels,
-            cancel_flag=cancel_flag,
-            on_progress=on_progress,
-        )
+    try:
+        _graph, _tokenizer, id2label = _load_runtime()
+        labels = enabled_labels(label_families(id2label), org=org)
+        with profiling.span("redact.detect"):
+            spans = _document_spans(
+                SEGMENT_JOIN.join(texts),
+                min_score=min_score,
+                labels=labels,
+                cancel_flag=cancel_flag,
+                on_progress=on_progress,
+            )
+    finally:
+        _drop_runtime()
     out: list[list[dict[str, Any]]] = [[] for _ in texts]
     starts: list[int] = []
     pos = 0
