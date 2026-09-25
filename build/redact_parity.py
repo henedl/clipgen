@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import importlib
 import importlib.metadata
 import json
 import sys
@@ -84,11 +85,12 @@ def run_reference(window: Any = None) -> tuple[list[list[str]], list[list[list[A
         windows.append(list(tags))
         return tags, probs
 
-    redact._run_window = recording
+    # setattr: ty rejects assigning a closure over a module function.
+    setattr(redact, "_run_window", recording)  # noqa: B010
     try:
         spans = redact.detect_spans(REFERENCE_TEXTS, min_score=MIN_SCORE, org=True)
     finally:
-        redact._run_window = real_window
+        setattr(redact, "_run_window", real_window)  # noqa: B010
     return windows, [[[s["label"], s["start"], s["end"]] for s in seg] for seg in spans]
 
 
@@ -126,8 +128,9 @@ def verify(model_dir: Path, write: bool) -> int:
         if not path.is_file() or _sha256(path) != asset["sha256"]:
             print(f"{path}: missing or not the pinned sha256; run --fetch first")
             return 1
+    # A string import: LiteRT is absent from the typecheck environment by design.
     try:
-        from ai_edge_litert.interpreter import Interpreter, OpResolverType
+        litert = importlib.import_module("ai_edge_litert.interpreter")
     except ImportError:
         print(
             "LiteRT is missing: uv run --with ai-edge-litert==2.2.0 build/redact_parity.py"
@@ -135,13 +138,13 @@ def verify(model_dir: Path, write: bool) -> int:
         return 2
 
     config.DEBUGGING = False
-    redact.models_dir = lambda: model_dir
+    setattr(redact, "models_dir", lambda: model_dir)  # noqa: B010
     model_path = str(model_dir / redact.MODEL_FILENAME)
 
     ours = [(op[0], op[1], op[2]) for op in tflite_numpy.load_graph(model_path)["ops"]]
-    plain = Interpreter(
+    plain = litert.Interpreter(
         model_path=model_path,
-        experimental_op_resolver_type=OpResolverType.BUILTIN_WITHOUT_DEFAULT_DELEGATES,
+        experimental_op_resolver_type=litert.OpResolverType.BUILTIN_WITHOUT_DEFAULT_DELEGATES,
     )
     theirs = [
         (
@@ -156,7 +159,7 @@ def verify(model_dir: Path, write: bool) -> int:
         f"graph: {len(ours)} ops, {'identical' if graph_ok else 'DIFFERENT'} to LiteRT's"
     )
 
-    interpreter = Interpreter(model_path=model_path, num_threads=4)
+    interpreter = litert.Interpreter(model_path=model_path, num_threads=4)
     interpreter.allocate_tensors()
     ref_windows, ref_spans = run_reference(_litert_window(interpreter))
     np_windows, np_spans = run_reference()
@@ -213,7 +216,7 @@ def main() -> int:
     )
     args = parser.parse_args()
     if args.fetch:
-        redact.models_dir = lambda: args.fetch
+        setattr(redact, "models_dir", lambda: args.fetch)  # noqa: B010
         args.fetch.mkdir(parents=True, exist_ok=True)
         return 0 if redact.download() else 1
     return verify(args.model_dir or redact.models_dir(), args.write)
