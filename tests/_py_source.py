@@ -12,7 +12,8 @@ from typing import NamedTuple
 
 ROOT = Path(__file__).resolve().parent.parent
 SOURCE = sorted((ROOT / "source").glob("*.py"))
-PRODUCTION = SOURCE + sorted((ROOT / "build").rglob("*.py")) + [ROOT / "clipgen.py"]
+# Top level only: build/lib/ holds setuptools copies of source/ after an install.
+PRODUCTION = SOURCE + sorted((ROOT / "build").glob("*.py")) + [ROOT / "clipgen.py"]
 
 _NESTED = ("body", "orelse", "finalbody", "handlers", "cases")
 
