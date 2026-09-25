@@ -459,7 +459,9 @@ def extract_tool_media(
             f"{context}{tool_type} has no reference_timestamp to re-extract",
         )
         if frame is None:
-            raise ValueError(f"{context}could not read reference frame")
+            raise ValueError(
+                f"{context}could not read reference frame at {spec['reference_timestamp']}s"
+            )
         spec[tool_spec.reference_region_param] = extract_region(frame, region_coords)
 
     elif tool_spec is not None and tool_spec.reference is not None:
@@ -481,7 +483,10 @@ def extract_tool_media(
                 "re-run (no reference timestamp saved)",
             )
             if frame is None:
-                raise ValueError(f"{context}could not read {tool_type} reference frame")
+                raise ValueError(
+                    f"{context}could not read {tool_type} reference frame "
+                    f"at {spec['reference_timestamp']}s"
+                )
             spec[image_param] = extract_region(frame, region_coords)
             attach_capture_mask(spec, image_param, mask_param, region_coords)
 

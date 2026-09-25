@@ -547,9 +547,9 @@
 
   // Load `pid`'s markers into state (nulls when it has none). Callers repaint.
   function restoreMarkers(pid) {
-    var entry = pid ? _readStoredMarkers()[pid] : null;
-    state.inMarker = entry && typeof entry.in === "number" ? entry.in : null;
-    state.outMarker = entry && typeof entry.out === "number" ? entry.out : null;
+    var m = getStoredMarkersFor(pid);
+    state.inMarker = m.in;
+    state.outMarker = m.out;
   }
 
   // Drop markers past the video end; a stale one would reach the transcription out-of-
@@ -639,6 +639,18 @@
     if (TS._hideFrictionTooltip) TS._hideFrictionTooltip();
   }
 
+  // Place a shown tooltip above-right of the cursor, clamped to the viewport.
+  function placeCursorTooltip(tip, clientX, clientY) {
+    var tipRect = tip.getBoundingClientRect();
+    var x = clientX + 12;
+    var y = clientY - tipRect.height - 12;
+    if (x + tipRect.width > window.innerWidth - 8) x = window.innerWidth - tipRect.width - 8;
+    if (y < 8) y = clientY + 16;
+    if (y + tipRect.height > window.innerHeight - 8) y = Math.max(8, window.innerHeight - tipRect.height - 8);
+    tip.style.left = x + "px";
+    tip.style.top = y + "px";
+  }
+
   function showTimelineTooltip(hit, clientX, clientY) {
     var tip = qs("#trTooltip");
     if (!tip) return;
@@ -670,14 +682,7 @@
     tip.appendChild(document.createElement("br"));
     tip.appendChild(document.createTextNode(snippet));
     tip.classList.remove("hidden");
-    var tipRect = tip.getBoundingClientRect();
-    var x = clientX + 12;
-    var y = clientY - tipRect.height - 12;
-    if (x + tipRect.width > window.innerWidth - 8) x = window.innerWidth - tipRect.width - 8;
-    if (y < 8) y = clientY + 16;
-    if (y + tipRect.height > window.innerHeight - 8) y = Math.max(8, window.innerHeight - tipRect.height - 8);
-    tip.style.left = x + "px";
-    tip.style.top = y + "px";
+    placeCursorTooltip(tip, clientX, clientY);
   }
 
   function hideTimelineTooltip() {
@@ -697,14 +702,15 @@
     _markerHitRects = [];
   }
 
-  function onMarkerClick(hit) {
-    var seg = state.segments[hit.segIndex];
+  // Seek to a segment and scroll its row into view; agents' moment chips share it.
+  function seekToSegmentIndex(idx) {
+    var seg = state.segments[idx];
     if (!seg) return;
     seekVideo(seg.start);
     if (!state.cachedSegmentRows) {
       state.cachedSegmentRows = qs("#segmentList").querySelectorAll(".segment-row");
     }
-    var row = state.cachedSegmentRows[hit.segIndex];
+    var row = state.cachedSegmentRows[idx];
     if (row) scrollToSegment(row);
   }
 
@@ -856,7 +862,7 @@
     canvas.addEventListener("click", function (e) {
       var hit = hitTestTimeline(e.clientX, e.clientY);
       if (hit) {
-        onMarkerClick(hit);
+        seekToSegmentIndex(hit.segIndex);
         return;
       }
       var t = timelineXToTime(e);
@@ -1384,6 +1390,8 @@
   TS.updateTranscribeFill = updateTranscribeFill;
   TS.seekVideo = seekVideo;
   TS.scrollToSegment = scrollToSegment;
+  TS.seekToSegmentIndex = seekToSegmentIndex;
+  TS.placeCursorTooltip = placeCursorTooltip;
   TS.ignoreNextScroll = ignoreNextScroll;
   TS.applyCaptionMode = applyCaptionMode;
   TS._partMediaUrl = _partMediaUrl;

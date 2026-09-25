@@ -18,13 +18,7 @@
 
   // ---- Data -----------------------------------------------------------------
 
-  function findStash(id) {
-    var arr = state.stashes;
-    for (var i = 0; i < arr.length; i++) {
-      if (arr[i].id === id) return arr[i];
-    }
-    return null;
-  }
+  function findStash(id) { return findById(state.stashes, id); }
 
   // GET returns the read-only built-in recipes first, then the user's stashes.
   function loadStashes() {
@@ -157,32 +151,10 @@
 
   // ---- Save / instantiate ---------------------------------------------------
 
+  // Induced edges only, so a stash never carries a dangling half-edge.
   function saveSelectionAsStash() {
-    var sel = state.selection;
-    if (!sel.length) return;
-    var selSet = {};
-    sel.forEach(function (id) {
-      selSet[id] = true;
-    });
-
-    var nodes = state.nodes
-      .filter(function (n) {
-        return selSet[n.id];
-      })
-      .map(function (n) {
-        return JSON.parse(JSON.stringify(n));
-      });
-    if (!nodes.length) return;
-
-    // Induced edges only — both endpoints selected, so a stash never carries a
-    // dangling half-edge.
-    var edges = state.edges
-      .filter(function (e) {
-        return selSet[e.from] && selSet[e.to];
-      })
-      .map(function (e) {
-        return JSON.parse(JSON.stringify(e));
-      });
+    var sub = WF.cloneSelection ? WF.cloneSelection() : null;
+    if (!sub) return;
 
     WF.openPromptDialog({
       title: "Name this stash",
@@ -190,7 +162,7 @@
       confirmLabel: "Save",
       onConfirm: function (name) {
         name = (name || "").trim() || "Stash";
-        apiPost("api/stashes", { name: name, nodes: nodes, edges: edges })
+        apiPost("api/stashes", { name: name, nodes: sub.nodes, edges: sub.edges })
           .then(function (res) {
             if (!res || !res.stash) return;
             // Insert after the leading built-ins so user stashes stay grouped
@@ -231,7 +203,7 @@
     if (dropWorld) {
       anchor = dropWorld;
     } else {
-      var c = viewportCenterWorld();
+      var c = WF.viewportCenterWorld ? WF.viewportCenterWorld() : { x: 0, y: 0 };
       var step = (_clickCascade++ % 5) * 40;
       anchor = { x: c.x + step, y: c.y + step };
     }
@@ -281,15 +253,6 @@
         break;
       }
     }
-  }
-
-  function viewportCenterWorld() {
-    var canvas = qs("#wfCanvas");
-    if (canvas && WF.clientToWorld) {
-      var r = canvas.getBoundingClientRect();
-      return WF.clientToWorld(r.left + r.width / 2, r.top + r.height / 2);
-    }
-    return { x: 0, y: 0 };
   }
 
   // ---- Rename / delete ------------------------------------------------------

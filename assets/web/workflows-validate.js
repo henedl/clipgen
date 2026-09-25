@@ -349,12 +349,6 @@
 
   // ---- Aggregate + render ----
 
-  function nodeLabel(node) {
-    if (node.name) return node.name;
-    var type = state.catalogById[node.type];
-    return (type && type.label) || node.type;
-  }
-
   function compute() {
     var errors = [];
     var warnings = [];
@@ -363,7 +357,7 @@
     if (cyc.length) {
       var cycLabels = cyc.slice(0, 3).map(function (id) {
         var n = WF.findNode ? WF.findNode(id) : null;
-        return n ? nodeLabel(n) : id;
+        return n ? WF.nodeLabel(n) : id;
       });
       if (cyc.length > 3) cycLabels.push("+" + (cyc.length - 3) + " more");
       errors.push({
@@ -374,7 +368,7 @@
     }
     state.nodes.forEach(function (node) {
       var issues = nodeIssues(node);
-      var label = nodeLabel(node);
+      var label = WF.nodeLabel(node);
       issues.errors.forEach(function (m) {
         errors.push({ message: m, nodeId: node.id, label: label });
       });

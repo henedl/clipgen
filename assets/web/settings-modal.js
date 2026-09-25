@@ -31,8 +31,8 @@
   var _opts = {};
   var _modelsCache = null;
   var _modelsCachePromise = null;
-  // Running GGUF downloads by model ref; a rebuilt row joins the existing poll.
-  var _llmDownloadWatch = {};
+  // Running model downloads by key; a rebuilt row joins the existing poll.
+  var _downloadWatch = {};
   // The Summaries tab's model block refresh, set when the block is built.
   var _llmBlockRefresh = null;
   var _redactBlockRefresh = null;
@@ -128,52 +128,117 @@
     }
   }
 
-  // Start or join a GGUF download; one shared poll per model survives modal reopen.
-  function _watchLlmDownload(model, onProgress) {
-    var watch = _llmDownloadWatch[model];
+  // Start or join a download; spec is {key, startUrl, body, statusUrl, label}.
+  function _watchDownload(spec, onProgress) {
+    var watch = _downloadWatch[spec.key];
     if (watch) { watch.listeners.push(onProgress); return; }
     watch = { listeners: [onProgress] };
-    _llmDownloadWatch[model] = watch;
+    _downloadWatch[spec.key] = watch;
 
     function emit(st) {
       for (var i = 0; i < watch.listeners.length; i++) watch.listeners[i](st);
     }
     function finish(st) {
-      delete _llmDownloadWatch[model];
+      delete _downloadWatch[spec.key];
       emit(st);
       if (st.succeeded) _refreshLlmViews();
     }
+    function fail(error) {
+      finish({ done: true, succeeded: false, error: error || "Download failed" });
+    }
 
-    apiPost(API_ROOT + "/models/llm/download", { model: model }).then(function (data) {
-      if (!data || !data.ok) {
-        finish({ done: true, succeeded: false, error: (data && data.error) || "Download failed" });
-        return;
-      }
+    apiPost(spec.startUrl, spec.body).then(function (data) {
+      if (!data || !data.ok) { fail(data && data.error); return; }
+      if (data.installed) { finish({ done: true, succeeded: true }); return; }
       var misses = 0;
+      function miss() {
+        if (++misses < 20) return;
+        poller.stop();
+        fail();
+      }
       var poller = createPoller(function () {
-        return apiGet(API_ROOT + "/models/llm/download-status?model=" + encodeURIComponent(model))
+        return apiGet(spec.statusUrl)
           .then(function (st) {
-            if (!st || !st.ok || !st.found) {
-              if (++misses >= 20) {
-                poller.stop();
-                finish({ done: true, succeeded: false, error: "Download failed" });
-              }
-              return;
-            }
+            if (!st || !st.ok || !st.found) { miss(); return; }
             misses = 0;
             if (st.done) { poller.stop(); finish(st); } else emit(st);
           })
-          .catch(function () {
-            if (++misses >= 20) {
-              poller.stop();
-              finish({ done: true, succeeded: false, error: "Download failed" });
-            }
-          });
-      }, 1000, { runImmediately: true, label: "settings.llmDownload" });
+          .catch(miss);
+      }, 1000, { runImmediately: true, label: spec.label });
       poller.start();
-    }).catch(function () {
-      finish({ done: true, succeeded: false, error: "Download failed" });
-    });
+    }).catch(function () { fail(); });
+  }
+
+  // Only catalog models carry a source page; the rest get no link at all.
+  function _modelLinkButton(model) {
+    if (!model.model_url) return null;
+    var link = el("a", "settings-llm-model-reveal");
+    link.href = model.model_url;
+    link.target = "_blank";
+    link.rel = "noopener noreferrer";
+    link.title = "View this model on Hugging Face";
+    link.setAttribute("aria-label", "View this model on Hugging Face");
+    link.appendChild(
+      el("span", "settings-llm-model-icon settings-llm-model-icon--link")
+    );
+    return link;
+  }
+
+  // Same width with or without a link, so the columns to its right line up.
+  function _modelLinkSlot(model) {
+    var slot = el("span", "settings-llm-model-link-slot");
+    var link = _modelLinkButton(model);
+    if (link) slot.appendChild(link);
+    return slot;
+  }
+
+  function _downloadedState() {
+    var done = el("span", "settings-llm-model-state");
+    done.appendChild(el("span", "settings-llm-model-icon settings-llm-model-icon--done"));
+    done.appendChild(document.createTextNode("Downloaded"));
+    return done;
+  }
+
+  // Download button plus in-row progress bar; rejoins a download started before reopen.
+  function _downloadAction(name, size, action, sizeMb, spec) {
+    var bar = el("div", "settings-llm-model-bar");
+    var fill = el("div", "settings-llm-model-bar-fill");
+    bar.appendChild(fill);
+    var dlBtn = el("button", "btn btn-small btn-icon");
+    dlBtn.type = "button";
+    dlBtn.appendChild(el("span", "settings-llm-model-icon settings-llm-model-icon--download"));
+    dlBtn.appendChild(document.createTextNode("Download"));
+    action.appendChild(dlBtn);
+
+    function onProgress(st) {
+      if (st.done) {
+        if (!st.succeeded) {
+          bar.remove();
+          dlBtn.disabled = false;
+          size.textContent = _formatSize(sizeMb);
+          _setStatus(st.error || "Download failed");
+        }
+        return;
+      }
+      if (st.total > 0) {
+        var pct = Math.max(0, Math.min(100, Math.round((st.completed / st.total) * 100)));
+        fill.style.width = pct + "%";
+        size.textContent = _formatSize(Math.round(st.completed / 1048576)) +
+          " / " + _formatSize(sizeMb);
+      }
+    }
+    function startWatching() {
+      dlBtn.disabled = true;
+      name.appendChild(bar);
+      _watchDownload(spec, onProgress);
+    }
+    dlBtn.addEventListener("click", startWatching);
+    apiGet(spec.statusUrl)
+      .then(function (st) {
+        if (st && st.ok && st.found && !st.done) startWatching();
+      })
+      .catch(function () {});
+    return dlBtn;
   }
 
   // The Redact model: one optional download under Transcription → Redaction.
@@ -213,26 +278,12 @@
       row.appendChild(name);
       var size = el("span", "settings-llm-model-size", _formatSize(rd.size_mb || 0));
       row.appendChild(size);
-      var slot = el("span", "settings-llm-model-link-slot");
-      if (rd.model_url) {
-        var link = el("a", "settings-llm-model-reveal");
-        link.href = rd.model_url;
-        link.target = "_blank";
-        link.rel = "noopener noreferrer";
-        link.title = "View this model on Hugging Face";
-        link.setAttribute("aria-label", "View this model on Hugging Face");
-        link.appendChild(el("span", "settings-llm-model-icon settings-llm-model-icon--link"));
-        slot.appendChild(link);
-      }
-      row.appendChild(slot);
+      row.appendChild(_modelLinkSlot(rd));
       var action = el("span", "settings-llm-model-action");
       row.appendChild(action);
 
       if (rd.installed) {
-        var done = el("span", "settings-llm-model-state");
-        done.appendChild(el("span", "settings-llm-model-icon settings-llm-model-icon--done"));
-        done.appendChild(document.createTextNode("Downloaded"));
-        action.appendChild(done);
+        action.appendChild(_downloadedState());
         var delBtn = el("button", "btn btn-small btn-icon", "Remove");
         delBtn.type = "button";
         delBtn.addEventListener("click", function () {
@@ -253,98 +304,19 @@
         return row;
       }
 
-      var bar = el("div", "settings-llm-model-bar");
-      var fill = el("div", "settings-llm-model-bar-fill");
-      bar.appendChild(fill);
-      var dlBtn = el("button", "btn btn-small btn-icon");
-      dlBtn.type = "button";
-      dlBtn.appendChild(el("span", "settings-llm-model-icon settings-llm-model-icon--download"));
-      dlBtn.appendChild(document.createTextNode("Download"));
-      action.appendChild(dlBtn);
-
-      function onProgress(st) {
-        if (st.done) {
-          if (!st.succeeded) {
-            bar.remove();
-            dlBtn.disabled = false;
-            size.textContent = _formatSize(rd.size_mb || 0);
-            _setStatus(st.error || "Download failed");
-          }
-          return;
-        }
-        if (st.total > 0) {
-          var pct = Math.max(0, Math.min(100, Math.round((st.completed / st.total) * 100)));
-          fill.style.width = pct + "%";
-          size.textContent = _formatSize(Math.round(st.completed / 1048576)) +
-            " / " + _formatSize(rd.size_mb || 0);
-        }
-      }
-      function startWatching() {
-        dlBtn.disabled = true;
-        name.appendChild(bar);
-        _watchRedactDownload(onProgress);
-      }
-      dlBtn.addEventListener("click", startWatching);
-      apiGet(API_ROOT + "/models/redact/download-status")
-        .then(function (st) {
-          if (st && st.ok && st.found && !st.done) startWatching();
-        })
-        .catch(function () {});
+      _downloadAction(name, size, action, rd.size_mb || 0, {
+        key: "redact",
+        startUrl: API_ROOT + "/models/redact/download",
+        body: {},
+        statusUrl: API_ROOT + "/models/redact/download-status",
+        label: "settings.redactDownload",
+      });
       return row;
     }
 
     _redactBlockRefresh = refresh;
     refresh();
     return wrap;
-  }
-
-  // Start or join the Redact download; the poll survives modal reopen like the GGUF one.
-  var _redactDownloadWatch = null;
-  function _watchRedactDownload(onProgress) {
-    if (_redactDownloadWatch) { _redactDownloadWatch.listeners.push(onProgress); return; }
-    var watch = { listeners: [onProgress] };
-    _redactDownloadWatch = watch;
-
-    function emit(st) {
-      for (var i = 0; i < watch.listeners.length; i++) watch.listeners[i](st);
-    }
-    function finish(st) {
-      _redactDownloadWatch = null;
-      emit(st);
-      if (st.succeeded) _refreshLlmViews();
-    }
-
-    apiPost(API_ROOT + "/models/redact/download", {}).then(function (data) {
-      if (!data || !data.ok) {
-        finish({ done: true, succeeded: false, error: (data && data.error) || "Download failed" });
-        return;
-      }
-      if (data.installed) { finish({ done: true, succeeded: true }); return; }
-      var misses = 0;
-      var poller = createPoller(function () {
-        return apiGet(API_ROOT + "/models/redact/download-status")
-          .then(function (st) {
-            if (!st || !st.ok || !st.found) {
-              if (++misses >= 20) {
-                poller.stop();
-                finish({ done: true, succeeded: false, error: "Download failed" });
-              }
-              return;
-            }
-            misses = 0;
-            if (st.done) { poller.stop(); finish(st); } else emit(st);
-          })
-          .catch(function () {
-            if (++misses >= 20) {
-              poller.stop();
-              finish({ done: true, succeeded: false, error: "Download failed" });
-            }
-          });
-      }, 1000, { runImmediately: true, label: "settings.redactDownload" });
-      poller.start();
-    }).catch(function () {
-      finish({ done: true, succeeded: false, error: "Download failed" });
-    });
   }
 
   // Recommendation, catalog, then the downloaded models with show/delete.
@@ -459,29 +431,6 @@
       return name;
     }
 
-    // Only catalog models carry a source page; the rest get no link at all.
-    function _modelLinkButton(model) {
-      if (!model.model_url) return null;
-      var link = el("a", "settings-llm-model-reveal");
-      link.href = model.model_url;
-      link.target = "_blank";
-      link.rel = "noopener noreferrer";
-      link.title = "View this model on Hugging Face";
-      link.setAttribute("aria-label", "View this model on Hugging Face");
-      link.appendChild(
-        el("span", "settings-llm-model-icon settings-llm-model-icon--link")
-      );
-      return link;
-    }
-
-    // Same width with or without a link, so the columns to its right line up.
-    function _modelLinkSlot(model) {
-      var slot = el("span", "settings-llm-model-link-slot");
-      var link = _modelLinkButton(model);
-      if (link) slot.appendChild(link);
-      return slot;
-    }
-
     // A curated model: Download with an in-row progress bar, or "Downloaded".
     function _buildSuggestedRow(model, recommended) {
       var row = el("div", "settings-llm-model-row");
@@ -501,53 +450,19 @@
       row.appendChild(action);
 
       if (model.installed) {
-        var done = el("span", "settings-llm-model-state");
-        done.appendChild(el("span", "settings-llm-model-icon settings-llm-model-icon--done"));
-        done.appendChild(document.createTextNode("Downloaded"));
-        action.appendChild(done);
+        action.appendChild(_downloadedState());
         return row;
       }
 
-      var bar = el("div", "settings-llm-model-bar");
-      var fill = el("div", "settings-llm-model-bar-fill");
-      bar.appendChild(fill);
-      var dlBtn = el("button", "btn btn-small btn-icon");
-      dlBtn.type = "button";
+      var dlBtn = _downloadAction(name, size, action, model.size_mb, {
+        key: "llm:" + model.name,
+        startUrl: API_ROOT + "/models/llm/download",
+        body: { model: model.name },
+        statusUrl: API_ROOT + "/models/llm/download-status?model=" + encodeURIComponent(model.name),
+        label: "settings.llmDownload",
+      });
       // The recommendation widget's "Use recommended" clicks this by model.
       dlBtn.setAttribute("data-model", model.name);
-      dlBtn.appendChild(el("span", "settings-llm-model-icon settings-llm-model-icon--download"));
-      dlBtn.appendChild(document.createTextNode("Download"));
-      action.appendChild(dlBtn);
-
-      function onProgress(st) {
-        if (st.done) {
-          if (!st.succeeded) {
-            bar.remove();
-            dlBtn.disabled = false;
-            size.textContent = _formatSize(model.size_mb);
-            _setStatus(st.error || "Download failed");
-          }
-          return;
-        }
-        if (st.total > 0) {
-          var pct = Math.max(0, Math.min(100, Math.round((st.completed / st.total) * 100)));
-          fill.style.width = pct + "%";
-          size.textContent = _formatSize(Math.round(st.completed / 1048576)) +
-            " / " + _formatSize(model.size_mb);
-        }
-      }
-      function startWatching() {
-        dlBtn.disabled = true;
-        name.appendChild(bar);
-        _watchLlmDownload(model.name, onProgress);
-      }
-      dlBtn.addEventListener("click", startWatching);
-      // A download started before the modal was closed is still running.
-      apiGet(API_ROOT + "/models/llm/download-status?model=" + encodeURIComponent(model.name))
-        .then(function (st) {
-          if (st && st.ok && st.found && !st.done) startWatching();
-        })
-        .catch(function () {});
       return row;
     }
 
@@ -940,36 +855,28 @@
       });
   }
 
-  function _resetTab(tabName) {
-    apiPut(API_ROOT + "/settings", { reset: "tab:" + tabName })
+  function _reset(payload, okLabel, scope) {
+    apiPut(API_ROOT + "/settings", { reset: payload })
       .then(function (data) {
         if (!data.ok) {
           _setStatus("Reset failed");
           return;
         }
-        _setStatus("Reset " + tabName);
+        _setStatus(okLabel);
         setTimeout(function () { _setStatus(""); }, 2000);
-        _reloadAfterReset(tabName);
+        _reloadAfterReset(scope);
       })
       .catch(function () {
         _setStatus("Reset failed");
       });
   }
 
+  function _resetTab(tabName) {
+    _reset("tab:" + tabName, "Reset " + tabName, tabName);
+  }
+
   function _resetAll() {
-    apiPut(API_ROOT + "/settings", { reset: "all" })
-      .then(function (data) {
-        if (!data.ok) {
-          _setStatus("Reset failed");
-          return;
-        }
-        _setStatus("Reset to defaults");
-        setTimeout(function () { _setStatus(""); }, 2000);
-        _reloadAfterReset("all");
-      })
-      .catch(function () {
-        _setStatus("Reset failed");
-      });
+    _reset("all", "Reset to defaults", "all");
   }
 
   function _reloadAfterReset(scope) {
@@ -1005,18 +912,19 @@
 
     var controlDiv = el("div", "settings-control");
     var settingName = s.name;
+    function commit(v) {
+      var setting = _findSetting(settingName);
+      if (setting) setting.value = v;
+      _updateChanged(settingName);
+      _scheduleSave();
+    }
 
     if (s.type === "bool") {
       var toggle = document.createElement("input");
       toggle.type = "checkbox";
       toggle.className = "settings-toggle";
       toggle.checked = !!s.value;
-      toggle.addEventListener("change", function () {
-        var setting = _findSetting(settingName);
-        if (setting) setting.value = this.checked;
-        _updateChanged(settingName);
-        _scheduleSave();
-      });
+      toggle.addEventListener("change", function () { commit(this.checked); });
       controlDiv.appendChild(toggle);
     } else if (s.type === "select" && s.options) {
       var sel = document.createElement("select");
@@ -1027,12 +935,7 @@
         if (s.options[oi] === s.value) opt.selected = true;
         sel.appendChild(opt);
       }
-      sel.addEventListener("change", function () {
-        var setting = _findSetting(settingName);
-        if (setting) setting.value = this.value;
-        _updateChanged(settingName);
-        _scheduleSave();
-      });
+      sel.addEventListener("change", function () { commit(this.value); });
       controlDiv.appendChild(sel);
     } else if (s.type === "model_select") {
       var msel = document.createElement("select");
@@ -1044,12 +947,7 @@
       curOpt.selected = true;
       msel.appendChild(curOpt);
       msel.disabled = true;
-      msel.addEventListener("change", function () {
-        var setting = _findSetting(settingName);
-        if (setting) setting.value = this.value;
-        _updateChanged(settingName);
-        _scheduleSave();
-      });
+      msel.addEventListener("change", function () { commit(this.value); });
       controlDiv.appendChild(msel);
       _loadModelsForSelect(msel, s.provider, s.value, s.emptyLabel);
     } else if (s.type === "str") {
@@ -1058,12 +956,7 @@
       txtInput.autocomplete = "off";
       txtInput.value = s.value || "";
       txtInput.placeholder = String(s.default || "");
-      txtInput.addEventListener("change", function () {
-        var setting = _findSetting(settingName);
-        if (setting) setting.value = this.value;
-        _updateChanged(settingName);
-        _scheduleSave();
-      });
+      txtInput.addEventListener("change", function () { commit(this.value); });
       controlDiv.appendChild(txtInput);
     } else if (s.type === "float") {
       var fInput = document.createElement("input");
@@ -1075,16 +968,14 @@
       fInput.placeholder = String(s.default);
       fInput.addEventListener("change", function () {
         var setting = _findSetting(settingName);
+        var n = parseFloat(this.value);
         if (setting) {
-          var n = parseFloat(this.value);
           if (isNaN(n)) n = setting.default;
           if (setting.min !== undefined && setting.min !== null && n < setting.min) n = setting.min;
           if (setting.max !== undefined && setting.max !== null && n > setting.max) n = setting.max;
-          setting.value = n;
           this.value = n;
         }
-        _updateChanged(settingName);
-        _scheduleSave();
+        commit(n);
       });
       controlDiv.appendChild(fInput);
     } else if (s.type === "mark_categories") {
@@ -1120,12 +1011,7 @@
       ta.spellcheck = false;
       ta.rows = 8;
       ta.value = s.value || "";
-      ta.addEventListener("change", function () {
-        var setting = _findSetting(settingName);
-        if (setting) setting.value = this.value;
-        _updateChanged(settingName);
-        _scheduleSave();
-      });
+      ta.addEventListener("change", function () { commit(this.value); });
       controlDiv.appendChild(ta);
 
       var resetBtn = el("button", "btn btn-small settings-prompt-reset", "Reset to default");
@@ -1133,10 +1019,8 @@
       resetBtn.addEventListener("click", function () {
         var setting = _findSetting(settingName);
         if (!setting) return;
-        setting.value = setting.default;
         ta.value = setting.default || "";
-        _updateChanged(settingName);
-        _scheduleSave();
+        commit(setting.default);
       });
       controlDiv.appendChild(resetBtn);
     } else {
@@ -1147,12 +1031,7 @@
       if (s.step !== undefined && s.step !== null) input.step = s.step;
       input.value = s.value;
       input.placeholder = String(s.default);
-      input.addEventListener("change", function () {
-        var setting = _findSetting(settingName);
-        if (setting) setting.value = parseInt(this.value, 10) || 0;
-        _updateChanged(settingName);
-        _scheduleSave();
-      });
+      input.addEventListener("change", function () { commit(parseInt(this.value, 10) || 0); });
       controlDiv.appendChild(input);
     }
 

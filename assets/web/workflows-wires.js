@@ -44,13 +44,7 @@
     return node;
   }
 
-  function findEdge(id) {
-    var edges = state.edges;
-    for (var i = 0; i < edges.length; i++) {
-      if (edges[i].id === id) return edges[i];
-    }
-    return null;
-  }
+  function findEdge(id) { return findById(state.edges, id); }
 
   // ---- Geometry ----
 

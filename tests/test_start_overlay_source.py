@@ -232,10 +232,10 @@ def test_failed_listings_leave_the_panels_usable():
     # picker hidden with sheets still in state.
     assert google.count("keepPreviousGoogleList(") == 2
 
-    excel = src[
-        src.index("function loadExcelFiles") : src.index("function renderExcelList")
+    files = src[
+        src.index("function loadFileList") : src.index("function renderFileList")
     ]
-    assert ".catch(" in excel, "loadExcelFiles leaves the status on 'Scanning…'"
+    assert ".catch(" in files, "loadFileList leaves the status on 'Scanning…'"
 
 
 def test_refresh_button_has_its_css():

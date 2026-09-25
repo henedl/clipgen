@@ -65,15 +65,19 @@
   // One-shot: the matching card animates in once, then nulls this.
   var _justStashedId = null;
 
-  function loadStashes() {
-    apiGet("api/stashes")
+  function loadStashList(cfg) {
+    apiGet(cfg.apiPath)
       .then(function (data) {
         if (data.ok) {
-          state.stashes = data.stashes || [];
-          renderStashedReels();
+          state[cfg.stateKey] = data.stashes || [];
+          renderStashes(cfg);
         }
       })
       .catch(toastError("Failed to load stashes"));
+  }
+
+  function loadStashes() {
+    loadStashList(REEL_STASH);
   }
 
   function renderStashes(cfg) {
@@ -95,10 +99,6 @@
     for (var i = 0; i < n; i++) {
       list.appendChild(buildStashCard(arr[i], cfg.apiPath, arr, rerender, cfg.dragSource, onRecall));
     }
-  }
-
-  function renderStashedReels() {
-    renderStashes(REEL_STASH);
   }
 
   function makeStashFolderIcon(stash) {
@@ -158,13 +158,7 @@
 
     card.appendChild(makeStashFolderIcon(stash));
 
-    var nameEl = el("span", "stash-card-name", truncate(stash.name, 18));
-    nameEl.title = stash.name;
-    nameEl.addEventListener("click", function (ev) {
-      ev.stopPropagation();
-      startStashRename(stash, nameEl, apiPath);
-    });
-    card.appendChild(nameEl);
+    card.appendChild(buildStashName(stash, apiPath));
 
     var info = el("span", "stash-card-info");
     info.appendChild(el("span", "", String(stash.count)));
@@ -255,6 +249,17 @@
       .catch(toastError("Failed to delete stash"));
   }
 
+  // Click-to-rename name label for a stash card.
+  function buildStashName(stash, endpoint) {
+    var span = el("span", "stash-card-name", truncate(stash.name, 18));
+    span.title = stash.name;
+    span.addEventListener("click", function (ev) {
+      ev.stopPropagation();
+      startStashRename(stash, span, endpoint);
+    });
+    return span;
+  }
+
   function startStashRename(stash, nameNode, endpoint) {
     var parent = nameNode.parentNode;
     var input = document.createElement("input");
@@ -266,13 +271,7 @@
     function commit() {
       var newName = input.value.trim() || stash.name;
       stash.name = newName;
-      var span = el("span", "stash-card-name", truncate(newName, 20));
-      span.title = newName;
-      span.addEventListener("click", function (ev) {
-        ev.stopPropagation();
-        startStashRename(stash, span, endpoint);
-      });
-      parent.replaceChild(span, input);
+      parent.replaceChild(buildStashName(stash, endpoint), input);
 
       apiPost(endpoint, { action: "update", id: stash.id, name: newName }).catch(toastError("Failed to rename stash"));
     }
@@ -301,18 +300,7 @@
   // ---- Stashed artifacts ----
 
   function loadArtifactStashes() {
-    apiGet("api/artifact-stashes")
-      .then(function (data) {
-        if (data.ok) {
-          state.artifactStashes = data.stashes || [];
-          renderStashedArtifacts();
-        }
-      })
-      .catch(toastError("Failed to load stashes"));
-  }
-
-  function renderStashedArtifacts() {
-    renderStashes(ARTIFACT_STASH);
+    loadStashList(ARTIFACT_STASH);
   }
 
   function stashCurrentArtifacts() {

@@ -123,21 +123,25 @@
     return out;
   }
 
+  // Calls fn(pid, seg) for every parsed timestamp in the sheet's valid cells.
+  function forEachSheetSegment(rows, participants, fn) {
+    for (var r = 0; r < rows.length; r++) {
+      for (var p = 0; p < participants.length; p++) {
+        var pid = participants[p];
+        var cell = rows[r].cells[pid];
+        if (!cell || !cell.valid) continue;
+        var segs = parseClipTimestamps(cell.value, pid);
+        for (var s = 0; s < segs.length; s++) fn(pid, segs[s]);
+      }
+    }
+  }
+
   function computeCoverage(participants, rows, events, marks) {
     var cov = {};
     for (var i = 0; i < participants.length; i++) {
       cov[participants[i]] = { sheet: 0, screenspace: 0, transcript: 0 };
     }
-    // Sheet
-    for (var r = 0; r < rows.length; r++) {
-      for (var p = 0; p < participants.length; p++) {
-        var pid = participants[p];
-        var cell = rows[r].cells[pid];
-        if (cell && cell.valid) {
-          cov[pid].sheet += parseClipTimestamps(cell.value, pid).length;
-        }
-      }
-    }
+    forEachSheetSegment(rows, participants, function (pid) { cov[pid].sheet++; });
     // Screenspace
     for (var e = 0; e < events.length; e++) {
       var ep = events[e].participant;
@@ -410,18 +414,9 @@
   function computeHistogramData(participants, rows, events, marks) {
     // Collect all timestamps with stream labels
     var allTimes = [];
-    // Sheet
-    for (var r = 0; r < rows.length; r++) {
-      for (var p = 0; p < participants.length; p++) {
-        var cell = rows[r].cells[participants[p]];
-        if (cell && cell.valid) {
-          var segs = parseClipTimestamps(cell.value, participants[p]);
-          for (var s = 0; s < segs.length; s++) {
-            allTimes.push({ time: segs[s].startSeconds, stream: "sheet" });
-          }
-        }
-      }
-    }
+    forEachSheetSegment(rows, participants, function (pid, seg) {
+      allTimes.push({ time: seg.startSeconds, stream: "sheet" });
+    });
     // Screenspace
     for (var e = 0; e < events.length; e++) {
       allTimes.push({ time: events[e].time_in, stream: "screenspace" });
@@ -480,17 +475,9 @@
       var tc = trClusters[b];
       if (trByP[tc.participant]) trByP[tc.participant].push({ start: tc.start, end: tc.end });
     }
-    for (var r = 0; r < rows.length; r++) {
-      for (var p = 0; p < participants.length; p++) {
-        var pid = participants[p];
-        var cell = rows[r].cells[pid];
-        if (!cell || !cell.valid) continue;
-        var segs = parseClipTimestamps(cell.value, pid);
-        for (var s = 0; s < segs.length; s++) {
-          shByP[pid].push({ start: segs[s].startSeconds, end: segs[s].startSeconds + segs[s].duration });
-        }
-      }
-    }
+    forEachSheetSegment(rows, participants, function (pid, seg) {
+      shByP[pid].push({ start: seg.startSeconds, end: seg.startSeconds + seg.duration });
+    });
 
     // Sort each list by start time
     function sortIntervals(arr) {
@@ -563,18 +550,23 @@
     return true;
   }
 
+  // Sheet rows where at least one of *participants* has text.
+  function nonEmptyRows(participants) {
+    var allRows = state.sheetData ? state.sheetData.rows : [];
+    return allRows.filter(function (row) { return !isRowEmpty(row, participants); });
+  }
+
+  function streamCount(cache) {
+    return (cache.hasScreenspace ? 1 : 0) + (cache.hasSheet ? 1 : 0) + (cache.hasTranscript ? 1 : 0);
+  }
+
   function computeAllStats(participants) {
     var allP = getAllParticipants();
     var activeP = participants.length ? participants : allP;
     var events = getFilteredEvents(participants);
     var boundaryCounts = getBoundaryCounts(participants);
     var marks = getFilteredMarks(participants);
-    var allRows = state.sheetData ? state.sheetData.rows : [];
-    // Filter out empty rows (no participant has text) for stats
-    var rows = [];
-    for (var i = 0; i < allRows.length; i++) {
-      if (!isRowEmpty(allRows[i], activeP)) rows.push(allRows[i]);
-    }
+    var rows = nonEmptyRows(activeP);
 
     // Clustered mode collapses dense Screenspace runs; collisions keep raw events (they cluster internally).
     var clusterMode = state.metadataClusterScreenspace !== false;
@@ -679,9 +671,8 @@
     body.appendChild(renderSection("cat-breakdown", "Category Breakdown \u2014 Spreadsheet",
       null, renderCategoryBreakdownBody, cache, !cache.hasSheet,
       "No spreadsheet data available."));
-    var streamCount = (cache.hasScreenspace ? 1 : 0) + (cache.hasSheet ? 1 : 0) + (cache.hasTranscript ? 1 : 0);
     body.appendChild(renderSection("collisions", "Cross-Stream Collisions",
-      null, renderCollisionBody, cache, streamCount < 2,
+      null, renderCollisionBody, cache, streamCount(cache) < 2,
       "Cross-stream collisions require data from at least two streams."));
     body.appendChild(renderSection("sessions", "Session-Level Summary",
       cache.sessionSummary.length + " participants", renderSessionSummaryBody, cache, false, null));
@@ -1194,9 +1185,6 @@
       if (data[i].total_count > maxCount) maxCount = data[i].total_count;
     }
 
-    var table = el("table", "md-table md-sortable-table");
-    var thead = el("thead");
-    var hrow = el("tr");
     var cols = [
       { key: "event_type", label: "Event Type" },
       { key: "detector", label: "Detector" },
@@ -1208,19 +1196,8 @@
       { key: "mean_confidence", label: "Confidence" },
       { key: "mean_duration", label: "Duration" },
     ];
-    for (var c = 0; c < cols.length; c++) {
-      var th = el("th", "", cols[c].label);
-      th.dataset.sort = cols[c].key;
-      hrow.appendChild(th);
-    }
-    thead.appendChild(hrow);
-    table.appendChild(thead);
 
-    var tbody = el("tbody");
-    table.appendChild(tbody);
-    body.appendChild(table);
-
-    function renderRows(sortedData) {
+    function renderRows(sortedData, tbody) {
       tbody.innerHTML = "";
       for (var i = 0; i < sortedData.length; i++) {
         var d = sortedData[i];
@@ -1252,18 +1229,31 @@
       }
     }
 
-    renderRows(data);
-    makeSortable(table, data, renderRows);
+    buildSortableTable(body, cols, data, renderRows);
   }
 
   // --- Sortable table mechanism ---
 
-  function makeSortable(table, data, renderRowsFn) {
-    var headers = table.querySelectorAll("th[data-sort]");
+  // Header from cols; renderRowsFn(rows, tbody) fills the body, re-run on each sort.
+  function buildSortableTable(body, cols, data, renderRowsFn) {
+    var table = el("table", "md-table md-sortable-table");
+    var hrow = el("tr");
+    var headers = cols.map(function (col) {
+      var th = el("th", "md-sortable", col.label);
+      th.dataset.sort = col.key;
+      hrow.appendChild(th);
+      return th;
+    });
+    var thead = el("thead");
+    thead.appendChild(hrow);
+    table.appendChild(thead);
+    var tbody = el("tbody");
+    table.appendChild(tbody);
+    body.appendChild(table);
+    renderRowsFn(data, tbody);
     var currentSort = { col: null, asc: true };
 
     for (var i = 0; i < headers.length; i++) {
-      headers[i].classList.add("md-sortable");
       headers[i].addEventListener("click", function () {
         var col = this.dataset.sort;
         if (currentSort.col === col) {
@@ -1291,7 +1281,7 @@
           }
           return currentSort.asc ? va - vb : vb - va;
         });
-        renderRowsFn(sorted);
+        renderRowsFn(sorted, tbody);
       });
     }
   }
@@ -1376,9 +1366,6 @@
       return;
     }
 
-    var table = el("table", "md-table md-sortable-table");
-    var thead = el("thead");
-    var hrow = el("tr");
     var cols = [
       { key: "observation", label: "Observation" },
       { key: "category", label: "Category" },
@@ -1388,19 +1375,8 @@
       { key: "earliest_sec", label: "Earliest" },
       { key: "latest_sec", label: "Latest" },
     ];
-    for (var c = 0; c < cols.length; c++) {
-      var th = el("th", "", cols[c].label);
-      th.dataset.sort = cols[c].key;
-      hrow.appendChild(th);
-    }
-    thead.appendChild(hrow);
-    table.appendChild(thead);
 
-    var tbody = el("tbody");
-    table.appendChild(tbody);
-    body.appendChild(table);
-
-    function renderRows(sortedData) {
+    function renderRows(sortedData, tbody) {
       tbody.innerHTML = "";
       for (var i = 0; i < sortedData.length; i++) {
         var d = sortedData[i];
@@ -1438,8 +1414,7 @@
       }
     }
 
-    renderRows(data);
-    makeSortable(table, data, renderRows);
+    buildSortableTable(body, cols, data, renderRows);
   }
 
   // --- Section 5: Severity Distribution ---
@@ -1866,22 +1841,15 @@
     if (!mdState.cache) return;
     var events = getFilteredEvents(mdState.filterParticipants);
     var marks = getFilteredMarks(mdState.filterParticipants);
-    var allRows = state.sheetData ? state.sheetData.rows : [];
-    var rows = [];
-    for (var i = 0; i < allRows.length; i++) {
-      if (!isRowEmpty(allRows[i], mdState.cache.participants)) rows.push(allRows[i]);
-    }
-    mdState.cache.collisionStats = computeCollisions(
-      mdState.cache.participants, rows, events, marks, mdState.collisionWindow);
+    mdState.cache.collisionStats = computeCollisions(mdState.cache.participants,
+      nonEmptyRows(mdState.cache.participants), events, marks, mdState.collisionWindow);
     // Re-render only the collision section
     var section = qs('.md-section[data-section="collisions"]');
     if (section) {
       var body = section.querySelector(".md-section-body");
       if (body) {
         body.innerHTML = "";
-        var streamCount = (mdState.cache.hasScreenspace ? 1 : 0) +
-          (mdState.cache.hasSheet ? 1 : 0) + (mdState.cache.hasTranscript ? 1 : 0);
-        if (streamCount < 2) {
+        if (streamCount(mdState.cache) < 2) {
           body.appendChild(el("div", "drop-target-empty",
             "Cross-stream collisions require data from at least two streams."));
         } else {

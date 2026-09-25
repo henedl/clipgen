@@ -222,7 +222,7 @@ def test_load_manifest_state_hydrates_reels_without_artifacts():
     body = src[start:end]
     assert "var reels = data.reels || [];" in body
     assert "artifacts.length === 0 && reels.length === 0" in body
-    assert "state.generatedReels.push(stampLog(reel))" in body
+    assert "appendUnique(state.generatedReels, reels)" in body
     assert "renderLog();" in body
     assert "if (artifacts.length === 0) return;" not in body
 
@@ -261,14 +261,19 @@ def test_add_to_queue_handles_intake_sources():
 def test_intake_drop_targets_route_through_add_to_queue():
     """Intake drag/drop must use addToQueue(), not duplicate push+render blocks."""
     src = _studio_js()
-    start = src.index("function initDropTargets()")
+    start = src.index("function queueDropHandler(cfg)")
     end = src.index("\n  function setupDropTarget(", start)
     body = src[start:end]
-    assert "state.artifactQueue.push(info)" not in body
-    assert "state.reelQueue.push(info)" not in body
-    assert body.count("if (isIntakeSource(info.source))") == 2
-    assert body.count("addToQueue(state.artifactQueue, info, renderArtifactQueue)") >= 1
-    assert body.count("addToQueue(state.reelQueue, info, renderReelQueue)") >= 2
+    assert ".push(info)" not in body
+    assert body.count("if (isIntakeSource(info.source))") == 1
+    assert body.count("addToQueue(q, info, cfg.render)") == 2
+    assert (
+        "setupDropTarget(qs(ARTIFACT_QUEUE.listSel), queueDropHandler(ARTIFACT_QUEUE))"
+        in body
+    )
+    assert (
+        "setupDropTarget(qs(REEL_QUEUE.listSel), queueDropHandler(REEL_QUEUE))" in body
+    )
 
 
 def test_card_drag_image_loads_thumbnail_eagerly():
@@ -287,13 +292,14 @@ def test_queue_drops_copy_on_option():
     """Option at release copies a card between queues instead of moving it."""
     src = _studio_js()
     assert "onDrop(info, hasCopyModifier(ev))" in src
-    start = src.index("function initDropTargets()")
+    start = src.index("function queueDropHandler(cfg)")
     end = src.index("\n  function setupDropTarget(", start)
     body = src[start:end]
-    assert 'takeDragOrigin(info, "reel", copy)' in body
-    assert 'takeDragOrigin(info, "artifact", copy)' in body
-    assert 'if (info.source === "reel" && !copy)' in body
-    assert 'if (info.source === "artifact" && !copy)' in body
+    assert "takeDragOrigin(info, cfg.other.dragSource, copy)" in body
+    assert "if (info.source === cfg.other.dragSource && !copy)" in body
+    assert 'dragSource: "artifact"' in src and 'dragSource: "reel"' in src
+    assert "ARTIFACT_QUEUE.other = REEL_QUEUE;" in src
+    assert "REEL_QUEUE.other = ARTIFACT_QUEUE;" in src
 
 
 def test_studio_card_scrubber_wiring():

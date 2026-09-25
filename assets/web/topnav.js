@@ -131,45 +131,15 @@
     right.appendChild(makeDivider());
 
     // Start overlay opener — keeps the first-run picker reachable after dismissal.
-    var startBtn = document.createElement("button");
-    startBtn.type = "button";
-    startBtn.id = "startBtn";
-    startBtn.className = "topnav-icon-btn";
-    startBtn.setAttribute("data-tooltip", "Start panel");
-    startBtn.setAttribute("aria-label", "Start panel");
-    var startIcon = document.createElement("span");
-    startIcon.className = "topnav-icon";
-    startIcon.style.cssText = iconMaskStyle("home");
-    startBtn.appendChild(startIcon);
-    right.appendChild(startBtn);
+    right.appendChild(makeIconButton("startBtn", "Start panel", "home"));
 
     // Log button only where an artifact log exists (studio.js #logOverlay, composer.js log panel).
     if (state.activeFrontend === "studio" || state.activeFrontend === "composer") {
-      var logBtn = document.createElement("button");
-      logBtn.type = "button";
-      logBtn.id = "logBtn";
-      logBtn.className = "topnav-icon-btn";
-      logBtn.setAttribute("data-tooltip", "Artifact Log");
-      logBtn.setAttribute("aria-label", "Artifact Log");
-      var logIcon = document.createElement("span");
-      logIcon.className = "topnav-icon";
-      logIcon.style.cssText = iconMaskStyle("list-bullet");
-      logBtn.appendChild(logIcon);
-      right.appendChild(logBtn);
+      right.appendChild(makeIconButton("logBtn", "Artifact Log", "list-bullet"));
     }
 
     // Settings button — keeps existing #settingsBtn id.
-    var settingsBtn = document.createElement("button");
-    settingsBtn.type = "button";
-    settingsBtn.id = "settingsBtn";
-    settingsBtn.className = "topnav-icon-btn";
-    settingsBtn.setAttribute("data-tooltip", "Settings");
-    settingsBtn.setAttribute("aria-label", "Settings");
-    var settingsIcon = document.createElement("span");
-    settingsIcon.className = "topnav-icon";
-    settingsIcon.style.cssText = iconMaskStyle("cog-6-tooth");
-    settingsBtn.appendChild(settingsIcon);
-    right.appendChild(settingsBtn);
+    right.appendChild(makeIconButton("settingsBtn", "Settings", "cog-6-tooth"));
 
     // Theme toggle. Keeps #themeToggle and .theme-toggle-icon for initThemeToggle() in utils.js.
     var themeBtn = document.createElement("button");
@@ -181,6 +151,20 @@
     right.appendChild(themeBtn);
 
     return right;
+  }
+
+  function makeIconButton(id, label, icon) {
+    var btn = document.createElement("button");
+    btn.type = "button";
+    btn.id = id;
+    btn.className = "topnav-icon-btn";
+    btn.setAttribute("data-tooltip", label);
+    btn.setAttribute("aria-label", label);
+    var span = document.createElement("span");
+    span.className = "topnav-icon";
+    span.style.cssText = iconMaskStyle(icon);
+    btn.appendChild(span);
+    return btn;
   }
 
   function makeDivider() {
@@ -214,10 +198,14 @@
     else openQuickActions();
   }
 
-  function openQuickActions() {
+  function runBeforeOpen() {
     for (var i = 0; i < beforeOpenCallbacks.length; i++) {
       try { beforeOpenCallbacks[i](); } catch (_) {}
     }
+  }
+
+  function openQuickActions() {
+    runBeforeOpen();
     state.quickActionsOpen = true;
     els.qaTrigger.classList.add("is-open");
     els.qaTrigger.setAttribute("aria-expanded", "true");
@@ -233,11 +221,7 @@
 
   function getQuickActions(opts) {
     // refresh:true re-runs the menu's open-time gating so the palette sees the same snapshot.
-    if (opts && opts.refresh) {
-      for (var i = 0; i < beforeOpenCallbacks.length; i++) {
-        try { beforeOpenCallbacks[i](); } catch (_) {}
-      }
-    }
+    if (opts && opts.refresh) runBeforeOpen();
     return state.quickActions.slice();
   }
 

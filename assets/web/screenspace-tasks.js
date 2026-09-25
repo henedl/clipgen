@@ -7,9 +7,8 @@
  * findTask / restoreTaskToWorkflow / setInputValue / syncValueDisplays off SS at
  * load time). Reads the hub's shared state + helpers through
  * window.ClipgenScreenspace and publishes its entry points back onto it. The hub
- * delegates only the names it calls itself. Function
- * bodies are unchanged from when they lived inline in screenspace.js — the locals
- * below stand in for the closure. renderResults / loadAndShowResults (results
+ * delegates only the names it calls itself. The locals below stand in for the
+ * hub closure. renderResults / loadAndShowResults (results
  * surface) and setTargetColor (color satellite) are reached via SS.* late-binding
  * because their owners load/register after this file.
  */
@@ -49,23 +48,6 @@
       return state.tasks.some(taskIsRunning);
     },
   });
-
-  var TASK_TYPE_ICON_FILES = {
-    multitool: "link",
-    color: "eye-dropper",
-    change: "bolt",
-    similarity: "photo",
-    text: "language",
-    numbers: "hashtag",
-    timelapse: "forward",
-    template: "viewfinder-circle",
-    shape: "star",
-    flow: "arrows-right-left",
-    scene: "squares-2x2",
-    inactivity: "pause-circle",
-    boundary: "flag",
-    attention: "eye",
-  };
 
   function sortTasks() {
     // completed/failed at top (oldest first), then running, then queued (by priority), cancelled last
@@ -335,7 +317,7 @@
         _taskListDragOverRaf = null;
       }
       _taskListPendingDragOver = null;
-      clearDragIndicators(taskListEl);
+      clearDropIndicators(taskListEl, ".task-card");
       _taskDragCache = null;
     });
 
@@ -375,7 +357,7 @@
         if (!pending) return;
         var idx = pending.insertIdx;
         var cardsNow = taskListEl.querySelectorAll(".task-card:not(.dragging)");
-        clearDragIndicators(taskListEl);
+        clearDropIndicators(taskListEl, ".task-card");
         if (idx < cardsNow.length) {
           cardsNow[idx].classList.add("drag-over");
         } else {
@@ -394,7 +376,7 @@
 
     taskListEl.addEventListener("drop", function (e) {
       e.preventDefault();
-      clearDragIndicators(taskListEl);
+      clearDropIndicators(taskListEl, ".task-card");
       var draggedId = e.dataTransfer.getData("text/plain");
       if (!draggedId) return;
 
@@ -411,7 +393,7 @@
         var fromIdx = queuedIds.indexOf(draggedId);
         if (fromIdx < 0) return;
         queuedIds.splice(fromIdx, 1);
-        var toIdx = getDropIndexAmongStatus(taskListEl, e.clientY, "queued");
+        var toIdx = getDropIndex(taskListEl, e.clientY, "queued");
         queuedIds.splice(toIdx, 0, draggedId);
 
         apiPut("api/tasks/reorder", { task_ids: queuedIds }).catch(function () {
@@ -433,7 +415,7 @@
         }
         if (fromIdx2 < 0) return;
         finishedTasks.splice(fromIdx2, 1);
-        var toIdx2 = getDropIndexAmongStatus(taskListEl, e.clientY, "finished");
+        var toIdx2 = getDropIndex(taskListEl, e.clientY, "finished");
         finishedTasks.splice(toIdx2, 0, draggedTask);
         // Reassign created_at to maintain the visual order across polls
         var timestamps = finishedTasks.map(function (t) { return t.created_at; });
@@ -470,28 +452,10 @@
     _taskDragCache = { all: all, queued: queued, finished: finished };
   }
 
-  function getDropIndex(container, clientY) {
+  // group: "all", "queued" or "finished".
+  function getDropIndex(container, clientY, group) {
     if (!_taskDragCache) _cacheTaskDragMidpoints(container);
-    var mids = _taskDragCache.all;
-    for (var i = 0; i < mids.length; i++) {
-      if (clientY < mids[i]) return i;
-    }
-    return mids.length;
-  }
-
-  function getDropIndexAmongStatus(container, clientY, group) {
-    if (!_taskDragCache) _cacheTaskDragMidpoints(container);
-    var mids = group === "queued" ? _taskDragCache.queued : _taskDragCache.finished;
-    for (var i = 0; i < mids.length; i++) {
-      if (clientY < mids[i]) return i;
-    }
-    return mids.length;
-  }
-
-  function clearDragIndicators(container) {
-    var cards = container.querySelectorAll(".task-card.drag-over");
-    for (var i = 0; i < cards.length; i++) cards[i].classList.remove("drag-over");
-    container.classList.remove("drag-over-append");
+    return indexBefore(_taskDragCache[group || "all"], clientY);
   }
 
   // Sets value without dispatching input; callers needing listeners must dispatch it themselves.
@@ -567,9 +531,7 @@
     // For scene, restore references into state before rendering so the list shows them.
     if (task.type === "scene") {
       var sceneParams = task.parameters || {};
-      state.sceneReferences = (sceneParams.scene_references || []).map(function (ref) {
-        return { name: ref.name, timestamp: ref.timestamp, threshold: numberOrDefault(ref.threshold, 0.75) };
-      });
+      state.sceneReferences = (sceneParams.scene_references || []).map(sceneRefPayload);
     }
 
     // Rebuild multitool steps first; step._initial lets _mtRender* set values at creation.
@@ -585,9 +547,7 @@
         if (s.region) step.region = s.region;
         if (s.region_ref) step.region_ref = s.region_ref;
         if (s.reference_timestamp !== undefined) step._refTs = s.reference_timestamp;
-        if (s.scene_references) step._scenes = s.scene_references.map(function (ref) {
-          return { name: ref.name, timestamp: ref.timestamp, threshold: numberOrDefault(ref.threshold, 0.75) };
-        });
+        if (s.scene_references) step._scenes = s.scene_references.map(sceneRefPayload);
         step._initial = s;
         return step;
       });
@@ -606,7 +566,7 @@
       var ch = numberOrDefault(tc.h, 90);
       var cs = numberOrDefault(tc.s, 200);
       var cv = numberOrDefault(tc.v, 200);
-      var savedTol = params.tolerance ? Math.round(params.tolerance.h * 100 / 90) : 30;
+      var savedTol = colorTolPct(params.tolerance);
       setInputValue("#paramColorTol", savedTol);
       setInputValue("#paramColorInterval", numberOrDefault(params.interval, 1.0));
       var savedColorMode = _colorMode(params.color_mode);
@@ -756,6 +716,19 @@
     showToast("Restored " + task.type + " task parameters");
   }
 
+  // POST a task and list it once; failMsg toasts failures (or the server error).
+  function enqueueTask(body, failMsg) {
+    return apiPost("api/tasks", body).then(function (data) {
+      if (data.ok && data.task) {
+        if (!findTask(data.task.id)) state.tasks.push(data.task);
+        renderTaskList();
+      } else if (failMsg) {
+        showToast(data.error || failMsg);
+      }
+      return data;
+    });
+  }
+
   function findTask(id) {
     for (var i = 0; i < state.tasks.length; i++) {
       if (state.tasks[i].id === id) return state.tasks[i];
@@ -874,7 +847,7 @@
       var badge = el("span", "task-card-type");
       badge.style.color = taskTypeColor(task.type);
       badge.title = task.type;
-      var iconFile = TASK_TYPE_ICON_FILES[task.type] || "squares-2x2";
+      var iconFile = SS.TOOL_ICON_NAMES[task.type] || "squares-2x2";
       var typeIconEl = iconMaskSpan(iconFile, { className: "task-card-type-icon" });
       badge.appendChild(typeIconEl);
       card.appendChild(badge);
@@ -1062,12 +1035,6 @@
 
   // ---- SSE (Server-Sent Events) with polling fallback ----
 
-  // Heatmap filenames land after completion (outside the worker lock); signature catches late arrival.
-  function _heatmapSig(t) {
-    if (!t) return "";
-    return (t.heatmap || "") + "|" + (t.heatmap_gif || "") + "|" + (t.heatmap_rolling_gif || "");
-  }
-
   // Results are append-only during a scan, so result_count is a safe tail cursor for _syncTaskResults.
   var _resultFetching = {};
   var _taskStatusSeen = {};
@@ -1138,7 +1105,7 @@
     var oldSelected = state.selectedTaskId;
     var oldTask = oldSelected ? findTask(oldSelected) : null;
     var wasRunning = oldTask && (oldTask.status === "queued" || oldTask.status === "running");
-    var oldHeatmapSig = _heatmapSig(oldTask);
+    var oldHeatmapSig = taskHeatmapSig(oldTask);
     state.tasks = data.tasks;
     _reconcileResultCache(data.tasks);
     // Rebuild the pause icon only on flips; every push (~2/s) would refetch its svg.
@@ -1148,7 +1115,7 @@
     }
     // Rebuild only on status/heatmap transitions; progress and result_count update in place (tickTaskProgress, _syncTaskResults).
     var taskFp = JSON.stringify(data.tasks.map(function (t) {
-      return t.id + ":" + t.status + ":" + _heatmapSig(t);
+      return t.id + ":" + t.status + ":" + taskHeatmapSig(t);
     }));
     var taskChanged = taskFp !== _lastTaskFp;
     _lastTaskFp = taskFp;
@@ -1169,7 +1136,7 @@
     } else if (oldSelected) {
       // Late heatmap arrival on a completed task: re-render so the section appears.
       var curTask = findTask(oldSelected);
-      if (curTask && curTask.status === "completed" && _heatmapSig(curTask) !== oldHeatmapSig) {
+      if (curTask && curTask.status === "completed" && taskHeatmapSig(curTask) !== oldHeatmapSig) {
         if (state.selectedTaskResults) SS.renderResults();
         else SS.loadAndShowResults(oldSelected);
       }
@@ -1241,9 +1208,9 @@
     }
     _taskListPendingDragOver = null;
     var stepsDiv = document.querySelector(".multitool-steps");
-    if (stepsDiv) SS.clearMultitoolDragIndicators(stepsDiv);
+    if (stepsDiv) clearDropIndicators(stepsDiv, ".multitool-step");
     var taskListEl = qs("#taskList");
-    if (taskListEl) clearDragIndicators(taskListEl);
+    if (taskListEl) clearDropIndicators(taskListEl, ".task-card");
   });
 
   document.addEventListener("visibilitychange", function () {
@@ -1260,6 +1227,7 @@
   // ---- Satellite interface (window.ClipgenScreenspace) ----
   // Consumed by hub delegators and later-loading satellites.
   SS.findTask = findTask;
+  SS.enqueueTask = enqueueTask;
   SS.focusedTaskId = focusedTaskId;
   SS.renderTaskList = renderTaskList;
   SS.startSSE = startSSE;

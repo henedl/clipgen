@@ -363,12 +363,6 @@
   background-color: var(--fg-faint);
   mask-image: url("icons/lock-closed.svg");
   -webkit-mask-image: url("icons/lock-closed.svg");
-  mask-size: contain;
-  -webkit-mask-size: contain;
-  mask-repeat: no-repeat;
-  -webkit-mask-repeat: no-repeat;
-  mask-position: center;
-  -webkit-mask-position: center;
   border: 0;
   padding: 0;
   cursor: pointer;
@@ -394,12 +388,6 @@
   background-color: var(--fg-faint);
   mask-image: url("icons/link.svg");
   -webkit-mask-image: url("icons/link.svg");
-  mask-size: contain;
-  -webkit-mask-size: contain;
-  mask-repeat: no-repeat;
-  -webkit-mask-repeat: no-repeat;
-  mask-position: center;
-  -webkit-mask-position: center;
   border: 0;
   padding: 0;
   cursor: pointer;

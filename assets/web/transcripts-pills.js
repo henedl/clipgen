@@ -38,6 +38,7 @@
     _confirmUncachedWhisperModels = TS._confirmUncachedWhisperModels,
     _isSpeakerTask = TS._isSpeakerTask,
     _isRedactTask = TS._isRedactTask,
+    participantById = TS.participantById,
     speakersEnabledFor = TS.speakersEnabledFor, // speakers satellite (loads before this one)
     setSpeakersEnabled = TS.setSpeakersEnabled,
     regenerateSpeakers = TS.regenerateSpeakers,
@@ -261,10 +262,7 @@
   function _refreshPillOptionsContent(pid, idx) {
     var floating = document.querySelector("body > .pill-options[data-pid='" + pid + "']");
     if (!floating) return;
-    var p = null;
-    for (var i = 0; i < state.participants.length; i++) {
-      if (state.participants[i].id === pid) { p = state.participants[i]; break; }
-    }
+    var p = participantById(pid);
     if (!p) return;
     var s = pillState(p, idx);
     // Captured before the swap: a rebuild may add the audio-track row.
@@ -694,6 +692,25 @@
     return group;
   }
 
+  // Sets an LLM agent row's run/stop handlers; `after` runs once either POST lands.
+  function _withAgentHandlers(opts, after) {
+    function post(action, verb) {
+      apiPost("api/agent/" + opts.agent + "/" + opts.pid + "/" + action, {}).then(function () {
+        _refreshAgentStateNow();
+        if (after) after();
+      }).catch(function () {
+        showToast("Failed to " + verb + " " + opts.agent);
+      });
+    }
+    opts.onStart = function () {
+      ensureAgentModelInstalled(opts.agent).then(function (ok) {
+        if (ok) post("regenerate", "start");
+      });
+    };
+    opts.onStop = function () { post("stop", "stop"); };
+    return opts;
+  }
+
   function buildPillAgentsSection(p, s) {
     var section = document.createElement("div");
     section.className = "pill-options-agents";
@@ -714,7 +731,7 @@
     }));
 
     // 2. Summary
-    section.appendChild(buildAgentRow({
+    section.appendChild(buildAgentRow(_withAgentHandlers({
       pid: p.id,
       label: "Summary",
       agent: "summary",
@@ -724,27 +741,10 @@
       agentState: s.agents.summary,
       hasResult: !!(p.agents && p.agents.summary === "done"),
       cascadeWarning: !!(p.agents && p.agents.citations === "done"),
-      onStart: function () {
-        ensureAgentModelInstalled("summary").then(function (ok) {
-          if (!ok) return;
-          apiPost("api/agent/summary/" + p.id + "/regenerate", {}).then(function () {
-            _refreshAgentStateNow();
-          }).catch(function () {
-            showToast("Failed to start summary");
-          });
-        });
-      },
-      onStop: function () {
-        apiPost("api/agent/summary/" + p.id + "/stop", {}).then(function () {
-          _refreshAgentStateNow();
-        }).catch(function () {
-          showToast("Failed to stop summary");
-        });
-      },
-    }));
+    })));
 
     // 3. Citations
-    section.appendChild(buildAgentRow({
+    section.appendChild(buildAgentRow(_withAgentHandlers({
       pid: p.id,
       label: "Citations",
       agent: "citations",
@@ -754,27 +754,10 @@
       agentState: s.agents.citations,
       hasResult: !!(p.agents && p.agents.citations === "done"),
       cascadeWarning: false,
-      onStart: function () {
-        ensureAgentModelInstalled("citations").then(function (ok) {
-          if (!ok) return;
-          apiPost("api/agent/citations/" + p.id + "/regenerate", {}).then(function () {
-            _refreshAgentStateNow();
-          }).catch(function () {
-            showToast("Failed to start citations");
-          });
-        });
-      },
-      onStop: function () {
-        apiPost("api/agent/citations/" + p.id + "/stop", {}).then(function () {
-          _refreshAgentStateNow();
-        }).catch(function () {
-          showToast("Failed to stop citations");
-        });
-      },
-    }));
+    })));
 
     // 4. Friction — depends on summary only (independent of citations).
-    section.appendChild(buildAgentRow({
+    section.appendChild(buildAgentRow(_withAgentHandlers({
       pid: p.id,
       label: "Friction",
       agent: "friction",
@@ -784,27 +767,10 @@
       agentState: s.agents.friction,
       hasResult: !!(p.agents && p.agents.friction === "done"),
       cascadeWarning: false,
-      onStart: function () {
-        ensureAgentModelInstalled("friction").then(function (ok) {
-          if (!ok) return;
-          apiPost("api/agent/friction/" + p.id + "/regenerate", {}).then(function () {
-            _refreshAgentStateNow();
-            // loadFriction lives in the agents satellite (loads after this one).
-            if (state.selectedParticipant === p.id && TS.loadFriction) TS.loadFriction(p.id);
-          }).catch(function () {
-            showToast("Failed to start friction");
-          });
-        });
-      },
-      onStop: function () {
-        apiPost("api/agent/friction/" + p.id + "/stop", {}).then(function () {
-          _refreshAgentStateNow();
-          if (state.selectedParticipant === p.id && TS.loadFriction) TS.loadFriction(p.id);
-        }).catch(function () {
-          showToast("Failed to stop friction");
-        });
-      },
-    }));
+    }, function () {
+      // loadFriction lives in the agents satellite (loads after this one).
+      if (state.selectedParticipant === p.id && TS.loadFriction) TS.loadFriction(p.id);
+    })));
 
     // 5. Speakers — only while switched on; needs a finished transcript.
     if (speakersEnabledFor(p)) {
@@ -956,10 +922,7 @@
 
     var wrap = _findPillWrap(pid);
     if (!wrap) return;
-    var p = null;
-    for (var i = 0; i < state.participants.length; i++) {
-      if (state.participants[i].id === pid) { p = state.participants[i]; break; }
-    }
+    var p = participantById(pid);
     if (!p) return;
     var s = pillState(p, _indexTasks());
 

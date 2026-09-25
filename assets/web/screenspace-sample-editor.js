@@ -29,15 +29,7 @@
     ctx.save();
     ctx.globalCompositeOperation = "destination-in";
     // Default (opaque) fill is fine: only alpha survives destination-in.
-    ctx.beginPath();
-    r.points.forEach(function (contour) {
-      if (contour.length < 3) return;
-      ctx.moveTo(contour[0][0] * w, contour[0][1] * h);
-      for (var i = 1; i < contour.length; i++) {
-        ctx.lineTo(contour[i][0] * w, contour[i][1] * h);
-      }
-      ctx.closePath();
-    });
+    traceRegionPolygonPath(ctx, r.points, { x: 0, y: 0, w: w, h: h });
     ctx.fill();
     ctx.restore();
   }

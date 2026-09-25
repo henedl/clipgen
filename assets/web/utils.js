@@ -72,113 +72,19 @@ var CLIPGEN_CONFIG = {
 
 var clipgenApplyConfig = function (payload) {
   if (!payload || typeof payload !== "object") return;
-  if (typeof payload.defaultDuration === "number") {
-    CLIPGEN_CONFIG.defaultDuration = payload.defaultDuration;
+  // Copy each payload key whose type matches the offline default.
+  Object.keys(CLIPGEN_CONFIG).forEach(function (k) {
+    var def = CLIPGEN_CONFIG[k];
+    var val = payload[k];
+    var ok = Array.isArray(def) ? Array.isArray(val) : typeof val === typeof def && val !== null;
+    if (ok) CLIPGEN_CONFIG[k] = val;
+  });
+  var hk = payload.hotkeyOverrides;
+  if (hk && typeof hk === "object" && window.ClipgenHotkeys) {
+    window.ClipgenHotkeys.applyOverrides(hk);
   }
-  if (Array.isArray(payload.severity)) {
-    CLIPGEN_CONFIG.severity = payload.severity;
-  }
-  if (Array.isArray(payload.annotationKeyphrases)) {
-    CLIPGEN_CONFIG.annotationKeyphrases = payload.annotationKeyphrases;
-  }
-  if (Array.isArray(payload.annotations)) {
-    CLIPGEN_CONFIG.annotations = payload.annotations;
-  }
-  if (Array.isArray(payload.ignoredTimestampTokens)) {
-    CLIPGEN_CONFIG.ignoredTimestampTokens = payload.ignoredTimestampTokens;
-  }
-  if (typeof payload.screenspaceOcrMinConfidence === "number") {
-    CLIPGEN_CONFIG.screenspaceOcrMinConfidence = payload.screenspaceOcrMinConfidence;
-  }
-  if (typeof payload.screenspaceOcrFuzzyThreshold === "number") {
-    CLIPGEN_CONFIG.screenspaceOcrFuzzyThreshold = payload.screenspaceOcrFuzzyThreshold;
-  }
-  if (typeof payload.screenspaceMultitoolMaxOffset === "number") {
-    CLIPGEN_CONFIG.screenspaceMultitoolMaxOffset = payload.screenspaceMultitoolMaxOffset;
-  }
-  if (Array.isArray(payload.screenspaceMaskFallbackTools)) {
-    CLIPGEN_CONFIG.screenspaceMaskFallbackTools = payload.screenspaceMaskFallbackTools;
-  }
-  if (Array.isArray(payload.frictionCategories)) {
-    CLIPGEN_CONFIG.frictionCategories = payload.frictionCategories;
-  }
-  if (typeof payload.frictionColorToken === "string") {
-    CLIPGEN_CONFIG.frictionColorToken = payload.frictionColorToken;
-  }
-  if (typeof payload.frictionMomentLimit === "number") {
-    CLIPGEN_CONFIG.frictionMomentLimit = payload.frictionMomentLimit;
-  }
-  if (Array.isArray(payload.convergenceSources)) {
-    CLIPGEN_CONFIG.convergenceSources = payload.convergenceSources;
-  }
-  if (typeof payload.cardScrubberSpriteCols === "number") {
-    CLIPGEN_CONFIG.cardScrubberSpriteCols = payload.cardScrubberSpriteCols;
-  }
-  if (typeof payload.cardScrubberSpriteRows === "number") {
-    CLIPGEN_CONFIG.cardScrubberSpriteRows = payload.cardScrubberSpriteRows;
-  }
-  if (typeof payload.clipFormat === "string") {
-    CLIPGEN_CONFIG.clipFormat = payload.clipFormat;
-  }
-  if (typeof payload.screenshotFormat === "string") {
-    CLIPGEN_CONFIG.screenshotFormat = payload.screenshotFormat;
-  }
-  if (typeof payload.gifFormat === "string") {
-    CLIPGEN_CONFIG.gifFormat = payload.gifFormat;
-  }
-  if (typeof payload.composerAnnotationColor === "string") {
-    CLIPGEN_CONFIG.composerAnnotationColor = payload.composerAnnotationColor;
-  }
-  if (typeof payload.composerAnnotationColorSecondary === "string") {
-    CLIPGEN_CONFIG.composerAnnotationColorSecondary = payload.composerAnnotationColorSecondary;
-  }
-  if (typeof payload.composerAnnotationStrokeWidth === "number") {
-    CLIPGEN_CONFIG.composerAnnotationStrokeWidth = payload.composerAnnotationStrokeWidth;
-  }
-  if (typeof payload.composerAnnotationStrokeStyle === "string") {
-    CLIPGEN_CONFIG.composerAnnotationStrokeStyle = payload.composerAnnotationStrokeStyle;
-  }
-  if (typeof payload.composerAnnotationFontSize === "number") {
-    CLIPGEN_CONFIG.composerAnnotationFontSize = payload.composerAnnotationFontSize;
-  }
-  if (typeof payload.composerAnnotationSpanSeconds === "number") {
-    CLIPGEN_CONFIG.composerAnnotationSpanSeconds = payload.composerAnnotationSpanSeconds;
-  }
-  if (typeof payload.composerScrubMaxAudioSeconds === "number") {
-    CLIPGEN_CONFIG.composerScrubMaxAudioSeconds = payload.composerScrubMaxAudioSeconds;
-  }
-  if (typeof payload.composerDoubleClickCuts === "boolean") {
-    CLIPGEN_CONFIG.composerDoubleClickCuts = payload.composerDoubleClickCuts;
-  }
-  if (typeof payload.crossReferences === "boolean") {
-    CLIPGEN_CONFIG.crossReferences = payload.crossReferences;
-  }
-  if (typeof payload.mediaContainerWarning === "boolean") {
-    CLIPGEN_CONFIG.mediaContainerWarning = payload.mediaContainerWarning;
-  }
-  if (typeof payload.transcribeSpeakers === "boolean") {
-    CLIPGEN_CONFIG.transcribeSpeakers = payload.transcribeSpeakers;
-  }
-  if (typeof payload.speakerLabelMaxLen === "number") {
-    CLIPGEN_CONFIG.speakerLabelMaxLen = payload.speakerLabelMaxLen;
-  }
-  if (typeof payload.transcribeRedact === "boolean") {
-    CLIPGEN_CONFIG.transcribeRedact = payload.transcribeRedact;
-  }
-  if (payload.subtitleContainers && typeof payload.subtitleContainers === "object") {
-    CLIPGEN_CONFIG.subtitleContainers = payload.subtitleContainers;
-  }
-  if (payload.hotkeyOverrides && typeof payload.hotkeyOverrides === "object") {
-    CLIPGEN_CONFIG.hotkeyOverrides = payload.hotkeyOverrides;
-    if (window.ClipgenHotkeys) {
-      window.ClipgenHotkeys.applyOverrides(payload.hotkeyOverrides);
-    }
-  }
-  if (typeof payload.profiling === "boolean") {
-    CLIPGEN_CONFIG.profiling = payload.profiling;
-    if (payload.profiling && window.clipgenPerf) {
-      window.clipgenPerf.observe();
-    }
+  if (payload.profiling === true && window.clipgenPerf) {
+    window.clipgenPerf.observe();
   }
 };
 
@@ -863,6 +769,15 @@ var artifactDurationSec = function (a) {
   return d;
 };
 
+// Returns a copy of arr with v removed if present, else appended.
+var toggleInArray = function (arr, v) {
+  var out = arr.slice();
+  var idx = out.indexOf(v);
+  if (idx >= 0) out.splice(idx, 1);
+  else out.push(v);
+  return out;
+};
+
 var truncate = function (str, max) {
   if (!str) return "";
   return str.length > max ? str.slice(0, max) + "\u2026" : str;
@@ -890,19 +805,10 @@ var parseTimestamp = function (str) {
 // Clock semantics: 2-part is HH:MM. Mirrors Python utils._clock_to_seconds.
 var parseClockTimestamp = function (str) {
   str = (str == null ? "" : String(str)).trim();
-  if (!str) return null;
-  var parts = str.split(":");
-  if (parts.length === 3) {
-    var h = parseFloat(parts[0]), m = parseFloat(parts[1]), s = parseFloat(parts[2]);
-    if (isNaN(h) || isNaN(m) || isNaN(s)) return null;
-    return h * 3600 + m * 60 + s;
-  }
-  if (parts.length === 2) {
-    var h2 = parseFloat(parts[0]), m2 = parseFloat(parts[1]);
-    if (isNaN(h2) || isNaN(m2)) return null;
-    return h2 * 3600 + m2 * 60;
-  }
-  return null;
+  var n = str.split(":").length;
+  if (n === 2) str += ":00";
+  else if (n !== 3) return null;
+  return parseTimestamp(str);
 };
 
 // Mirrors files.prepare_clip + utils.convert_clock_pairs_to_relative. A baseline makes tokens clock times; defaultDuration is required.
@@ -1002,6 +908,17 @@ var positionTooltipAnchored = function (tooltipEl, anchorRect) {
   tooltipEl.style.top = top + "px";
 };
 
+// Below-right of the cursor, flipping to the other side near viewport edges.
+var positionTooltipAtCursor = function (tip, clientX, clientY) {
+  var x = clientX + 12;
+  var y = clientY + 12;
+  var rect = tip.getBoundingClientRect();
+  if (x + rect.width > window.innerWidth - 8) x = clientX - rect.width - 12;
+  if (y + rect.height > window.innerHeight - 8) y = clientY - rect.height - 12;
+  tip.style.left = x + "px";
+  tip.style.top = y + "px";
+};
+
 // Below the anchor, flipping above when cramped; popover must be visible to measure.
 var positionPopoverAnchored = function (popoverEl, anchorRect) {
   var w = popoverEl.offsetWidth;
@@ -1025,6 +942,28 @@ var debounce = function (fn, ms) {
     clearTimeout(timer);
     timer = setTimeout(function () { fn.apply(ctx, args); }, ms);
   };
+};
+
+// Runs fn at most once per frame, with the latest call's arguments.
+var rafThrottle = function (fn) {
+  var raf = 0;
+  var lastArgs = null;
+  return function () {
+    lastArgs = arguments;
+    if (raf) return;
+    raf = requestAnimationFrame(function () {
+      raf = 0;
+      fn.apply(null, lastArgs);
+    });
+  };
+};
+
+// First item whose .id matches, or null (ES5 has no Array.prototype.find).
+var findById = function (list, id) {
+  for (var i = 0; i < list.length; i++) {
+    if (list[i].id === id) return list[i];
+  }
+  return null;
 };
 
 var escapeHtml = function (str) {
@@ -1147,27 +1086,25 @@ var showToast = function (msg, opts) {
 // ---- Severity ----
 // CLIPGEN_CONFIG.severity mirrors config.py SEVERITY_NUMERIC_TO_LABEL (tests/test_shared_constants.py).
 
+var severityEntry = function (raw) {
+  var k = String(raw || "").trim().toLowerCase();
+  if (!k) return null;
+  for (var i = 0; i < CLIPGEN_CONFIG.severity.length; i++) {
+    if (CLIPGEN_CONFIG.severity[i].label.toLowerCase() === k) return CLIPGEN_CONFIG.severity[i];
+  }
+  return null;
+};
+
 var severityClass = function (raw) {
   if (!raw || !String(raw).trim()) return "";
-  var k = String(raw).trim().toLowerCase();
-  for (var i = 0; i < CLIPGEN_CONFIG.severity.length; i++) {
-    if (CLIPGEN_CONFIG.severity[i].label.toLowerCase() === k) {
-      return CLIPGEN_CONFIG.severity[i].cssClass;
-    }
-  }
-  return "sev-unknown";
+  var e = severityEntry(raw);
+  return e ? e.cssClass : "sev-unknown";
 };
 
 // Lowest = most severe (Critical -4). Null for unknown; callers decide how to treat it.
 var severityRank = function (raw) {
-  if (!raw || !String(raw).trim()) return null;
-  var k = String(raw).trim().toLowerCase();
-  for (var i = 0; i < CLIPGEN_CONFIG.severity.length; i++) {
-    if (CLIPGEN_CONFIG.severity[i].label.toLowerCase() === k) {
-      return CLIPGEN_CONFIG.severity[i].rank;
-    }
-  }
-  return null;
+  var e = severityEntry(raw);
+  return e ? e.rank : null;
 };
 
 // Vertical wheel scrolls an overflowing strip horizontally; passive:false so preventDefault works.
@@ -1216,29 +1153,19 @@ var apiGet = function (path) {
   return fetch(path).then(_apiJson);
 };
 
-var apiPost = function (path, body) {
-  return fetch(path, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-  }).then(_apiJson);
+var _apiSend = function (method) {
+  return function (path, body) {
+    return fetch(path, {
+      method: method,
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }).then(_apiJson);
+  };
 };
 
-var apiPut = function (path, body) {
-  return fetch(path, {
-    method: "PUT",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-  }).then(_apiJson);
-};
-
-var apiPatch = function (path, body) {
-  return fetch(path, {
-    method: "PATCH",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-  }).then(_apiJson);
-};
+var apiPost = _apiSend("POST");
+var apiPut = _apiSend("PUT");
+var apiPatch = _apiSend("PATCH");
 
 var apiDelete = function (path) {
   return fetch(path, { method: "DELETE" }).then(_apiJson);
@@ -1417,6 +1344,27 @@ var createManagedPoller = function (fn, intervalMs, opts) {
       poller = null;
     },
   };
+};
+
+// Polls a model download status; resolves the final status, or null after 20 misses.
+var pollDownloadStatus = function (url, onProgress, opts) {
+  opts = opts || {};
+  return new Promise(function (resolve) {
+    var misses = 0;
+    function miss() {
+      if (++misses >= 20) { poller.stop(); resolve(null); }
+    }
+    var poller = createPoller(function () {
+      if (opts.isCancelled && opts.isCancelled()) { poller.stop(); resolve(null); return; }
+      return apiGet(url).then(function (st) {
+        if (!st || !st.ok || !st.found) { miss(); return; }
+        misses = 0;
+        if (onProgress) onProgress(st);
+        if (st.done) { poller.stop(); resolve(st); }
+      }).catch(miss);
+    }, 1000, { runImmediately: true, label: opts.label });
+    poller.start();
+  });
 };
 
 // ---- SSE stream ----
@@ -2469,4 +2417,46 @@ function initPanelDivider(cfg) {
     },
     onToggle: cfg.onToggle,
   });
+}
+
+// Animates a bottom panel between pixel heights; `auto` mid-flight would hitch.
+function togglePanelCollapse(panel, cfg) {
+  if (!panel || panel._transitioning) return;
+  panel._transitioning = true;
+  var collapse = !cfg.isCollapsed();
+  var targetH = 0;
+  cfg.setCollapsed(collapse);
+  document.body.classList.add("bottom-animating");
+  if (collapse) {
+    panel.style.height = panel.offsetHeight + "px";
+    panel.offsetHeight; // reflow — pin the start frame
+    document.body.classList.add("bottom-collapsed");
+    panel.style.height = "0px";
+  } else {
+    targetH = cfg.getTargetHeight();
+    document.body.classList.remove("bottom-collapsed");
+    panel.style.height = "0px";
+    panel.offsetHeight; // reflow — pin the start frame
+    panel.style.height = targetH + "px";
+  }
+  onCollapseTransitionEnd(panel, function () {
+    panel._transitioning = false;
+    document.body.classList.remove("bottom-animating");
+    cfg.onSettled(collapse, targetH);
+  });
+}
+
+function onCollapseTransitionEnd(el, cb) {
+  var fired = false;
+  function done() {
+    if (fired) return;
+    fired = true;
+    el.removeEventListener("transitionend", handler);
+    cb();
+  }
+  function handler(e) {
+    if (e.target === el && e.propertyName === "height") done();
+  }
+  el.addEventListener("transitionend", handler);
+  setTimeout(done, 400);
 }

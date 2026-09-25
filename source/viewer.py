@@ -287,10 +287,11 @@ def _generate_viewer_html(
         except OSError:
             return None
 
-    # Prepend design tokens so standalone viewers have the full token set
-    tokens_css = _optional_asset("tokens.css")
-    if tokens_css is not None:
-        css_text = tokens_css + "\n" + css_text
+    # Prepend tokens, then the shared export shell, ahead of page CSS.
+    for name in ("export-chrome.css", "tokens.css"):
+        text = _optional_asset(name)
+        if text is not None:
+            css_text = text + "\n" + css_text
 
     # Prepend order keeps JS as utils -> card-scrubber -> motion -> hotkeys -> page.
     for name in (

@@ -62,14 +62,7 @@
 
   // ---- Data helpers ----
 
-  function rec() {
-    for (var i = 0; i < rpState.participants.length; i++) {
-      if (rpState.participants[i].id === rpState.selected) {
-        return rpState.participants[i];
-      }
-    }
-    return null;
-  }
+  function rec() { return findById(rpState.participants, rpState.selected); }
 
   function agentState(r, key) {
     return (r && r.agents && r.agents[key]) || "idle";
@@ -581,19 +574,19 @@
     }
   }
 
+  function applyParticipants(list) {
+    rpState.participants = mergeSheetParticipants(list);
+    ensureSelection();
+    renderAll();
+  }
+
   function loadParticipants() {
     return apiGet("../transcripts/api/participants")
       .then(function (data) {
-        if (!rpState.active) return;
-        rpState.participants = mergeSheetParticipants((data && data.participants) || []);
-        ensureSelection();
-        renderAll();
+        if (rpState.active) applyParticipants((data && data.participants) || []);
       })
       .catch(function () {
-        if (!rpState.active) return;
-        rpState.participants = mergeSheetParticipants([]);
-        ensureSelection();
-        renderAll();
+        if (rpState.active) applyParticipants([]);
       });
   }
 
@@ -999,9 +992,7 @@
       apiGet("../transcripts/api/participants")
         .then(function (data) {
           if (!rpState.active) return;
-          rpState.participants = mergeSheetParticipants((data && data.participants) || []);
-          ensureSelection();
-          renderAll();
+          applyParticipants((data && data.participants) || []);
           if (anyUpstreamRunning()) {
             rpState.taskIdleTicks = 0;
           } else {

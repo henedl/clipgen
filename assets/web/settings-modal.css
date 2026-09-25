@@ -833,12 +833,6 @@ html[data-theme="dark"] .settings-panel {
   width: var(--icon-size-md);
   height: var(--icon-size-md);
   background-color: currentColor;
-  -webkit-mask-size: contain;
-  mask-size: contain;
-  -webkit-mask-repeat: no-repeat;
-  mask-repeat: no-repeat;
-  -webkit-mask-position: center;
-  mask-position: center;
 }
 
 .settings-llm-model-icon--reveal {

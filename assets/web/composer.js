@@ -35,11 +35,11 @@
     annotations: [],        // all annotation records (all participants)
     selectedAnnotationIds: [], // multi-select: ids of the selected annotations
     annTool: "select",      // "select" | "text" | "draw"
-    annColor: "",           // palette's PRIMARY slot — the live annotation color (boot)
-    annColorSecondary: "",  // palette's parked second slot; X swaps the two (boot)
-    annStrokeWidth: 0,      // default stroke width for new shapes/strokes (boot)
-    annStrokeStyle: "solid", // default stroke style: solid | dashed | dotted (boot)
-    annFontSize: 0,         // default text size for new text annotations (boot)
+    annColor: "",           // palette's PRIMARY slot — the live annotation color (initAnnotate)
+    annColorSecondary: "",  // palette's parked second slot; X swaps the two (initAnnotate)
+    annStrokeWidth: 0,      // default stroke width for new shapes/strokes (initAnnotate)
+    annStrokeStyle: "solid", // default stroke style: solid | dashed | dotted (initAnnotate)
+    annFontSize: 0,         // default text size for new text annotations (initAnnotate)
     annHidden: false,       // hide the annotation layer (B: hold to peek, tap to toggle)
     selectedCutId: null,
     pendingIn: null,        // in-point awaiting its out-point (global seconds)
@@ -229,7 +229,11 @@
       state.playing = false;
       updatePlayButton();
     });
-    var _playheadRaf = 0;
+    var paintPlayhead = rafThrottle(function () {
+      if (state.followPlayhead) revealTime(state.playhead);
+      renderPlayhead();
+      renderAnnotations(); // spans gate visibility against the playhead
+    });
     video.addEventListener("timeupdate", function () {
       // Hand off to the next part as playback nears the boundary.
       var i = state.activePart;
@@ -240,13 +244,7 @@
       }
       state.playhead = videoGlobalTime();
       updateTimeLabel();
-      if (_playheadRaf) return;
-      _playheadRaf = requestAnimationFrame(function () {
-        _playheadRaf = 0;
-        if (state.followPlayhead) revealTime(state.playhead);
-        renderPlayhead();
-        renderAnnotations(); // spans gate visibility against the playhead
-      });
+      paintPlayhead();
     });
     // No probed duration (ffprobe failed): fall back to the element's metadata.
     video.addEventListener("loadedmetadata", function () {
@@ -294,12 +292,7 @@
 
   // ---- Participant selection ----
 
-  function findParticipant(pid) {
-    for (var i = 0; i < state.participants.length; i++) {
-      if (state.participants[i].id === pid) return state.participants[i];
-    }
-    return null;
-  }
+  function findParticipant(pid) { return findById(state.participants, pid); }
 
   function selectParticipant(pid) {
     var p = findParticipant(pid);
@@ -400,12 +393,7 @@
   }
   CO.sortedCuts = sortedCuts;
 
-  function findCut(id) {
-    for (var i = 0; i < state.cuts.length; i++) {
-      if (state.cuts[i].id === id) return state.cuts[i];
-    }
-    return null;
-  }
+  function findCut(id) { return findById(state.cuts, id); }
 
   function updatePendingInfo() {
     var info = qs("#coPendingInfo");
@@ -708,12 +696,7 @@
   }
   CO.participantAnnotations = participantAnnotations;
 
-  function findAnnotation(id) {
-    for (var i = 0; i < state.annotations.length; i++) {
-      if (state.annotations[i].id === id) return state.annotations[i];
-    }
-    return null;
-  }
+  function findAnnotation(id) { return findById(state.annotations, id); }
 
   function refreshAnnotationViews() {
     updateTimelineHeight();
@@ -777,25 +760,24 @@
 
   // The caller already mutated *ann*; a rejected edit rolls it back to *before*.
   function commitAnnotationField(ann, field, before) {
-    var payload = {};
-    payload[field] = ann[field];
-    applyAnnPatch(ann.id, payload).then(function (saved) {
-      recordOp({
-        type: "ann-edit",
-        id: ann.id,
-        field: field,
-        before: before,
-        after: JSON.parse(JSON.stringify(saved[field])),
-      });
-    }).catch(function (error) {
-      if (before) {
-        ann[field] = JSON.parse(JSON.stringify(before));
-        refreshAnnotationViews();
-      }
-      opFailed(error);
-    });
+    commitAnnotationFieldGroup(field, [{ ann: ann, before: before }]);
   }
   CO.commitAnnotationField = commitAnnotationField;
+
+  // Records landed ops as one undo step; returns the first failure's error.
+  function recordLandedOps(results, onFailure) {
+    var ops = [];
+    var firstError = null;
+    results.forEach(function (r) {
+      if (r.op) { ops.push(r.op); return; }
+      if (onFailure) onFailure(r);
+      if (!firstError) firstError = r.error;
+    });
+    if (ops.length) {
+      recordOp(ops.length === 1 ? ops[0] : { type: "ann-group", ops: ops });
+    }
+    return firstError;
+  }
 
   // One undo step per group. *after* is the PATCH response; only rejected edits roll back.
   function commitAnnotationFieldGroup(field, edits) {
@@ -818,17 +800,10 @@
       });
     });
     return Promise.all(patches).then(function (results) {
-      var ops = [];
-      var firstError = null;
-      results.forEach(function (r) {
-        if (r.op) { ops.push(r.op); return; }
+      var firstError = recordLandedOps(results, function (r) {
         var ann = findAnnotation(r.edit.ann.id);
         if (ann) ann[field] = JSON.parse(JSON.stringify(r.edit.before));
-        if (!firstError) firstError = r.error;
       });
-      if (ops.length) {
-        recordOp(ops.length === 1 ? ops[0] : { type: "ann-group", ops: ops });
-      }
       if (firstError) {
         refreshAnnotationViews();
         opFailed(firstError);
@@ -850,15 +825,7 @@
         return { error: error };
       });
     })).then(function (results) {
-      var ops = [];
-      var firstError = null;
-      results.forEach(function (r) {
-        if (r.op) ops.push(r.op);
-        else if (!firstError) firstError = r.error;
-      });
-      if (ops.length) {
-        recordOp(ops.length === 1 ? ops[0] : { type: "ann-group", ops: ops });
-      }
+      var firstError = recordLandedOps(results);
       if (firstError) opFailed(firstError);
     });
   }
@@ -1125,16 +1092,8 @@
         }
       }
       _shownGenStatus[cut.id] = cut._genStatus || "";
-      var del = el("button", "co-cut-delete");
-      del.type = "button";
-      del.setAttribute("data-tooltip", "Delete cut");
-      del.setAttribute("aria-label", "Delete cut");
-      del.appendChild(el("span", "co-btn-icon co-icon-trash"));
-      del.addEventListener("click", function (e) {
-        e.stopPropagation();
-        deleteCut(cut.id);
-      });
-      nameRow.appendChild(del);
+      nameRow.appendChild(iconButton("co-icon-trash", "Delete cut", "Delete cut",
+        function () { deleteCut(cut.id); }));
       item.appendChild(nameRow);
 
       // Row 2: span + duration.
@@ -1154,6 +1113,20 @@
   }
 
   // ---- Sidebar tabs (cuts + one list per marker source) ----
+
+  // Sidebar row icon button; clicks stay off the row's own handler.
+  function iconButton(iconCls, tooltip, ariaLabel, onClick) {
+    var btn = el("button", "co-cut-delete");
+    btn.type = "button";
+    btn.setAttribute("data-tooltip", tooltip);
+    btn.setAttribute("aria-label", ariaLabel);
+    btn.appendChild(el("span", "co-btn-icon " + iconCls));
+    btn.addEventListener("click", function (e) {
+      e.stopPropagation();
+      onClick();
+    });
+    return btn;
+  }
 
   function renderMarkerList(source) {
     var list = qs("#coCutList");
@@ -1176,16 +1149,8 @@
       labelRow.appendChild(dot);
       labelRow.appendChild(el("span", "co-marker-label",
         m.label || m.eventType || source));
-      var copyBtn = el("button", "co-cut-delete");
-      copyBtn.type = "button";
-      copyBtn.setAttribute("data-tooltip", "Copy to cuts");
-      copyBtn.setAttribute("aria-label", "Copy to cuts");
-      copyBtn.appendChild(el("span", "co-btn-icon co-icon-scissors"));
-      copyBtn.addEventListener("click", function (e) {
-        e.stopPropagation();
-        copyMarkerToCut(m);
-      });
-      labelRow.appendChild(copyBtn);
+      labelRow.appendChild(iconButton("co-icon-scissors", "Copy to cuts", "Copy to cuts",
+        function () { copyMarkerToCut(m); }));
       item.appendChild(labelRow);
 
       var timeRow = el("div", "co-cut-row");
@@ -1201,16 +1166,8 @@
           "Original: " + formatTime(m.origStart, { decimals: 1 }) +
           " – " + formatTime(m.origEnd, { decimals: 1 }));
         timeRow.appendChild(trimBadge);
-        var resetBtn = el("button", "co-cut-delete");
-        resetBtn.type = "button";
-        resetBtn.setAttribute("data-tooltip", "Reset trim to the source span");
-        resetBtn.setAttribute("aria-label", "Reset trim");
-        resetBtn.appendChild(el("span", "co-btn-icon co-icon-undo"));
-        resetBtn.addEventListener("click", function (e) {
-          e.stopPropagation();
-          resetTrim(m);
-        });
-        timeRow.appendChild(resetBtn);
+        timeRow.appendChild(iconButton("co-icon-undo", "Reset trim to the source span",
+          "Reset trim", function () { resetTrim(m); }));
       }
       item.appendChild(timeRow);
 
@@ -1636,11 +1593,6 @@
       });
     }
 
-    state.annColor = CLIPGEN_CONFIG.composerAnnotationColor;
-    state.annColorSecondary = CLIPGEN_CONFIG.composerAnnotationColorSecondary;
-    state.annStrokeWidth = CLIPGEN_CONFIG.composerAnnotationStrokeWidth;
-    state.annStrokeStyle = CLIPGEN_CONFIG.composerAnnotationStrokeStyle;
-    state.annFontSize = CLIPGEN_CONFIG.composerAnnotationFontSize;
     updateTimelineHint();
     initCommandPalette();
     initParticipantSelect();

@@ -39,8 +39,10 @@
   // CSS-pixel canvas size (set by sizeTimelineCanvas); the backing store is dpr× larger.
   var _timelineCss = { w: 0, h: 0, dpr: 1 };
 
-  // Cached results from state.taskResults (filled by _syncTaskResults), or null until loaded.
-  function _taskResults(task) {
+  // Cached results (filled by _syncTaskResults) for this participant's live tasks, else null.
+  function _visibleResults(task) {
+    if (task.status === "cancelled") return null;
+    if (task.participant && task.participant !== state.selectedParticipant) return null;
     var r = state.taskResults[task.id];
     return Array.isArray(r) ? r : null;
   }
@@ -203,9 +205,7 @@
     qs("#clearMarkersBtn").addEventListener("click", function () {
       state.inMarker = null;
       state.outMarker = null;
-      persistMarkers();
-      updateMarkerInfo();
-      renderTimeline();
+      _commitMarkers();
     });
     qs("#amplitudeGraphBtn").addEventListener("click", function () {
       state.amplitudeGraphEnabled = !state.amplitudeGraphEnabled;
@@ -267,6 +267,12 @@
     } catch (_) { /* sessionStorage may be unavailable */ }
   }
 
+  function _commitMarkers() {
+    persistMarkers();
+    updateMarkerInfo();
+    renderTimeline();
+  }
+
   // Load `pid`'s markers into state (nulls when it has none). Callers repaint.
   function restoreMarkers(pid) {
     var entry = pid ? _readStoredMarkers()[pid] : null;
@@ -283,26 +289,20 @@
     if (state.inMarker !== null && state.inMarker > duration) { state.inMarker = null; changed = true; }
     if (state.outMarker !== null && state.outMarker > duration) { state.outMarker = null; changed = true; }
     if (changed) {
-      persistMarkers();
-      updateMarkerInfo();
-      renderTimeline();
+      _commitMarkers();
     }
   }
 
   function setInMark() {
     state.inMarker = state.currentTimestamp;
     if (state.outMarker !== null && state.inMarker > state.outMarker) state.outMarker = null;
-    persistMarkers();
-    updateMarkerInfo();
-    renderTimeline();
+    _commitMarkers();
   }
 
   function setOutMark() {
     state.outMarker = state.currentTimestamp;
     if (state.inMarker !== null && state.outMarker < state.inMarker) state.inMarker = null;
-    persistMarkers();
-    updateMarkerInfo();
-    renderTimeline();
+    _commitMarkers();
   }
 
   function updateMarkerInfo() {
@@ -406,9 +406,8 @@
     if (ampOn) {
       var seriesByType = {};
       state.tasks.forEach(function (task) {
-        var ampRes = _taskResults(task);
-        if (!ampRes || task.status === "cancelled") return;
-        if (task.participant && task.participant !== state.selectedParticipant) return;
+        var ampRes = _visibleResults(task);
+        if (!ampRes) return;
         if (task.type === "timelapse") return;
         // Boundaries are orientation scaffolding, not events; they render as flags instead.
         if (task.type === "boundary") return;
@@ -419,7 +418,7 @@
         var results = ampRes;
         for (var ri = 0; ri < results.length; ri++) {
           var r = results[ri];
-          var ts = r.timestamp !== undefined ? r.timestamp : r.start;
+          var ts = resultTime(r);
           if (ts !== undefined) dst.push(ts);
         }
       });
@@ -450,9 +449,8 @@
     });
 
     state.tasks.forEach(function (task) {
-      var taskRes = _taskResults(task);
-      if (!taskRes || task.status === "cancelled") return;
-      if (task.participant && task.participant !== state.selectedParticipant) return;
+      var taskRes = _visibleResults(task);
+      if (!taskRes) return;
       var color = taskTypeColor(task.type);
       var dimmed = focused && task.id !== focused;
       var taskExcluded = excludedByTask[task.id] || {};
@@ -476,7 +474,7 @@
         ctx.lineWidth = 1.5;
         var results = taskRes;
         results.forEach(function (r) {
-          var ts = r.timestamp !== undefined ? r.timestamp : r.start;
+          var ts = resultTime(r);
           if (ts === undefined) return;
           var isExcluded = taskExcluded[ts.toFixed(2)];
           var sceneDimmed = task.type === "scene" && state.hoveredResultSceneName !== null
@@ -549,13 +547,12 @@
     var frag = document.createDocumentFragment();
     state.tasks.forEach(function (task) {
       if (task.type !== "boundary") return;
-      var bRes = _taskResults(task);
-      if (!bRes || task.status === "cancelled") return;
-      if (task.participant && task.participant !== state.selectedParticipant) return;
+      var bRes = _visibleResults(task);
+      if (!bRes) return;
       var dimmed = focused && task.id !== focused;
       var taskExcluded = excludedByTask[task.id] || {};
       bRes.forEach(function (r) {
-        var ts = r.timestamp !== undefined ? r.timestamp : r.start;
+        var ts = resultTime(r);
         if (ts === undefined) return;
         var x = ((ts - visStart) / visLen) * w;
         if (x < 0 || x > w) return;
@@ -667,8 +664,7 @@
       icon.style.flexShrink = "0";
       header.appendChild(icon);
     }
-    var label = (hit.task.parameters || {}).event_label || hit.task.name ||
-      hit.task.type.charAt(0).toUpperCase() + hit.task.type.slice(1);
+    var label = (hit.task.parameters || {}).event_label || hit.task.name || toolLabel(hit.task.type);
     header.appendChild(el("strong", "", label));
     tip.appendChild(header);
 
@@ -677,7 +673,7 @@
     if (r.start !== undefined && r.end !== undefined) {
       timeStr = formatTime(r.start, { decimals: 1 }) + " \u2013 " + formatTime(r.end, { decimals: 1 });
     } else {
-      var ts = r.timestamp !== undefined ? r.timestamp : r.start;
+      var ts = resultTime(r);
       timeStr = formatTime(ts, { decimals: 1 });
     }
     tip.appendChild(el("span", "ss-tooltip-time", timeStr));
@@ -720,21 +716,7 @@
     tip.appendChild(details);
 
     tip.classList.remove("hidden");
-    positionSsTooltip(tip, clientX, clientY);
-  }
-
-  function positionSsTooltip(tip, clientX, clientY) {
-    var x = clientX + 12;
-    var y = clientY + 12;
-    var rect = tip.getBoundingClientRect();
-    if (x + rect.width > window.innerWidth - 8) {
-      x = clientX - rect.width - 12;
-    }
-    if (y + rect.height > window.innerHeight - 8) {
-      y = clientY - rect.height - 12;
-    }
-    tip.style.left = x + "px";
-    tip.style.top = y + "px";
+    positionTooltipAtCursor(tip, clientX, clientY);
   }
 
   function hideSsTooltip() {

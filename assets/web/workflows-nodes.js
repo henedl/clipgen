@@ -86,6 +86,19 @@
     return out;
   }
 
+  // A select over values; labelFn(v) names each option, else the value itself.
+  function buildSelect(cls, values, current, labelFn) {
+    var sel = el("select", cls);
+    values.forEach(function (v) {
+      var o = el("option");
+      o.value = v;
+      o.textContent = labelFn ? labelFn(v) : v;
+      if (v === current) o.selected = true;
+      sel.appendChild(o);
+    });
+    return sel;
+  }
+
   // Detect node: a detector dropdown plus that detector's ss_<tool> params, swapped in place.
   function buildDetectEditor(node) {
     if (!node.params) node.params = {};
@@ -99,14 +112,7 @@
 
     var row = el("div", "wf-param");
     row.appendChild(el("label", "wf-param-label", "Detector"));
-    var sel = el("select", "wf-param-input");
-    types.forEach(function (t) {
-      var o = el("option");
-      o.value = t;
-      o.textContent = t;
-      if (t === node.params.detector) o.selected = true;
-      sel.appendChild(o);
-    });
+    var sel = buildSelect("wf-param-input", types, node.params.detector);
     var body = el("div", "wf-detect-body");
     function renderBody() {
       body.innerHTML = "";
@@ -200,14 +206,7 @@
         WF.scheduleSave();
       });
     } else if (spec.type === "enum") {
-      input = el("select", "wf-param-input");
-      (spec.choices || []).forEach(function (choice) {
-        var opt = el("option");
-        opt.value = choice;
-        opt.textContent = choice;
-        if (choice === value) opt.selected = true;
-        input.appendChild(opt);
-      });
+      input = buildSelect("wf-param-input", spec.choices || [], value);
       input.addEventListener("change", function () {
         store[spec.name] = input.value;
         WF.scheduleSave();
@@ -229,18 +228,12 @@
       ((state.context && state.context.regions) || []).length
     ) {
       // Saved regions become a picker so typos can't full-frame the scan; missing names stay selectable.
-      input = el("select", "wf-param-input");
       var regions = state.context.regions;
       var names = [""].concat(regions);
       if (value && names.indexOf(value) < 0) names.push(value);
-      names.forEach(function (name) {
-        var opt = el("option");
-        opt.value = name;
-        if (name === "") opt.textContent = "(none)";
-        else if (regions.indexOf(name) < 0) opt.textContent = name + " (missing)";
-        else opt.textContent = name;
-        if (name === value) opt.selected = true;
-        input.appendChild(opt);
+      input = buildSelect("wf-param-input", names, value, function (name) {
+        if (name === "") return "(none)";
+        return regions.indexOf(name) < 0 ? name + " (missing)" : name;
       });
       input.addEventListener("change", function () {
         store[spec.name] = input.value;
@@ -521,14 +514,7 @@
     var card = el("div", "wf-step");
     var head = el("div", "wf-step-head");
 
-    var typeSel = el("select", "wf-param-input");
-    multitoolStepTypes().forEach(function (t) {
-      var o = el("option");
-      o.value = t;
-      o.textContent = t;
-      if (t === step.type) o.selected = true;
-      typeSel.appendChild(o);
-    });
+    var typeSel = buildSelect("wf-param-input", multitoolStepTypes(), step.type);
     typeSel.addEventListener("change", function () {
       step.type = typeSel.value;
       WF.scheduleSave();
@@ -538,14 +524,8 @@
 
     // Steps after the first carry a chain logic (AND / NOT).
     if (idx > 0) {
-      var logicSel = el("select", "wf-param-input wf-step-logic");
-      ["AND", "NOT"].forEach(function (l) {
-        var o = el("option");
-        o.value = l;
-        o.textContent = l;
-        if (l === (step.logic || "AND")) o.selected = true;
-        logicSel.appendChild(o);
-      });
+      var logicSel = buildSelect("wf-param-input wf-step-logic", ["AND", "NOT"],
+        step.logic || "AND");
       logicSel.addEventListener("change", function () {
         step.logic = logicSel.value;
         WF.scheduleSave();

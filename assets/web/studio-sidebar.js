@@ -274,10 +274,7 @@
               active: state.filters.severities.indexOf(label) >= 0,
               dotClass: severityClass(label),
               onClick: function () {
-                var arr = state.filters.severities.slice();
-                var idx = arr.indexOf(label);
-                if (idx >= 0) arr.splice(idx, 1); else arr.push(label);
-                state.filters.severities = arr;
+                state.filters.severities = toggleInArray(state.filters.severities, label);
                 persistSidebarFilters();
                 renderSidebar();
                 renderGrid();

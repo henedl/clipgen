@@ -107,9 +107,6 @@
     opts = opts || {};
     close(); // single active instance
 
-    var rgb = hexToRgb(opts.value) || { r: 0, g: 0, b: 0 };
-    var hsv = rgbToHsv(rgb.r, rgb.g, rgb.b);
-
     var root = document.createElement("div");
     root.className = "cgcp-popover";
 
@@ -150,14 +147,25 @@
     var swatches = opts.swatches || DEFAULT_SWATCHES;
     root.appendChild(swatchWrap);
 
-    var st = { root: root, opts: opts, h: hsv.h, s: hsv.s, v: hsv.v, cleanup: function () {} };
+    var st = { root: root, opts: opts, h: 0, s: 0, v: 0, cleanup: function () {} };
+    setFromHex(opts.value);
+
+    // Parses hex into st's HSV; returns false when hex is invalid.
+    function setFromHex(hex) {
+      var c = hexToRgb(hex);
+      if (!c) return false;
+      var hsv = rgbToHsv(c.r, c.g, c.b);
+      st.h = hsv.h; st.s = hsv.s; st.v = hsv.v;
+      return true;
+    }
 
     function emitInput() {
       if (opts.onInput) opts.onInput(_currentHex(st));
     }
 
     function renderFromState(updateHexField) {
-      sv.style.backgroundColor = rgbToHexHue(st.h);
+      var hueRgb = hsvToRgb(st.h, 1, 1);
+      sv.style.backgroundColor = rgbToHex(hueRgb.r, hueRgb.g, hueRgb.b);
       svThumb.style.left = st.s * 100 + "%";
       svThumb.style.top = (1 - st.v) * 100 + "%";
       hueThumb.style.top = (st.h / 360) * 100 + "%";
@@ -165,11 +173,6 @@
       preview.style.background = hex;
       svThumb.style.background = hex;
       if (updateHexField) hexInput.value = hex;
-    }
-
-    function rgbToHexHue(h) {
-      var c = hsvToRgb(h, 1, 1);
-      return rgbToHex(c.r, c.g, c.b);
     }
 
     _dragRegion(sv, function (x, y) {
@@ -185,10 +188,7 @@
     });
 
     hexInput.addEventListener("input", function () {
-      var c = hexToRgb(hexInput.value);
-      if (!c) return;
-      var hsv2 = rgbToHsv(c.r, c.g, c.b);
-      st.h = hsv2.h; st.s = hsv2.s; st.v = hsv2.v;
+      if (!setFromHex(hexInput.value)) return;
       renderFromState(false);
       emitInput();
     });
@@ -207,10 +207,7 @@
         sw.style.background = hex;
         sw.title = hex;
         sw.addEventListener("click", function () {
-          var c = hexToRgb(hex);
-          if (!c) return;
-          var hsv2 = rgbToHsv(c.r, c.g, c.b);
-          st.h = hsv2.h; st.s = hsv2.s; st.v = hsv2.v;
+          if (!setFromHex(hex)) return;
           renderFromState(true);
           emitInput();
           if (opts.onChange) opts.onChange(_currentHex(st));

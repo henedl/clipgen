@@ -24,9 +24,6 @@
   var OV = {};
   window.ClipgenOverview = OV;
 
-  // Same default the Studio intake threshold input uses.
-  var CLUSTER_THRESHOLD_SEC = 10;
-
   var state = {
     sheetData: null,          // ../studio/api/sheet payload (null until loaded)
     convergenceBaselines: {}, // participant -> baseline seconds
@@ -60,8 +57,9 @@
     var cluster = window.ClipgenIntakeCluster;
     if (!cluster) return;
     var nonNav = state.intakeEvents.filter(function (ev) { return !ev.navigational; });
-    state.intakeClusters = cluster.clusterIntakeEvents(nonNav, CLUSTER_THRESHOLD_SEC);
-    state.trIntakeClusters = cluster.clusterTranscriptMarks(state.trIntakeMarks, CLUSTER_THRESHOLD_SEC);
+    var gap = cluster.DEFAULT_GAP_SECONDS;
+    state.intakeClusters = cluster.clusterIntakeEvents(nonNav, gap);
+    state.trIntakeClusters = cluster.clusterTranscriptMarks(state.trIntakeMarks, gap);
   }
 
   function loadAll() {

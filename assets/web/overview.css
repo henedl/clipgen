@@ -22,32 +22,6 @@ body {
   text-overflow: ellipsis;
 }
 
-/* Sub-tab underline-on-active styling (same visuals as Studio's sub-tabs;
- * the shared .subheader container strip lives in tokens.css). */
-.preview-tab {
-  display: inline-flex;
-  align-items: center;
-  height: 100%;
-  padding: 0 2px;
-  font-size: var(--subheader-font-size);
-  font-weight: 400;
-  background: none;
-  border: none;
-  border-bottom: 1px solid transparent;
-  margin-bottom: -1px; /* sits on subheader's bottom border */
-  color: var(--fg-muted);
-  cursor: pointer;
-  transition: color var(--duration-fast);
-  font-family: inherit;
-}
-
-.preview-tab:hover { color: var(--fg); }
-
-.preview-tab.active {
-  color: var(--fg);
-  border-bottom-color: var(--fg);
-}
-
 /* The "WIP" pill on the Reports tab is the shared .cg-wip-badge in
  * tokens.css — Transcripts' Friction tab uses it too. */
 
@@ -71,19 +45,10 @@ body {
   transition: opacity 180ms ease-out, transform 220ms var(--ease-out-soft);
 }
 
-.tab-slide-enter {
-  opacity: 0 !important;
-  transform: translateX(12px);
-}
-
 @media (prefers-reduced-motion: reduce) {
   #convergencePanel,
   #metadataPanel,
   #reportsPanel { transition: none; }
-  .tab-slide-enter {
-    opacity: 1 !important;
-    transform: none;
-  }
 }
 
 /* Convergence + Metadata panels: full-viewport containers below the chrome.

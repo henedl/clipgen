@@ -16,6 +16,7 @@
  *   clusterTranscriptMarks(marks, thresholdSec)  — group Transcript marks by
  *                                                  participant, merging runs closer
  *                                                  than thresholdSec.
+ *   DEFAULT_GAP_SECONDS                          — every page's default threshold.
  */
 (function () {
   "use strict";
@@ -115,6 +116,7 @@
   }
 
   window.ClipgenIntakeCluster = {
+    DEFAULT_GAP_SECONDS: 10, // studio.html's threshold inputs still hardcode value="10"
     clusterIntakeEvents: clusterIntakeEvents,
     clusterTranscriptMarks: clusterTranscriptMarks,
   };

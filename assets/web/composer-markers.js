@@ -98,10 +98,6 @@
     });
   }
 
-  // Merge gap mirroring Studio's #intakeClusterThreshold; clustering makes point
-  // events grabbable by the edge.
-  var SS_CLUSTER_SECONDS = 10;
-
   function loadScreenspaceMarkers(pid, version, offsets) {
     var off = offsetFor(offsets, pid, "screenspace");
     apiGet("../screenspace/api/events?excluded=false&participant=" + encodeURIComponent(pid))
@@ -111,8 +107,9 @@
           // same default as Studio's intake (intakeClusterSource).
           return !ev.navigational;
         });
+        // Clustering makes point events grabbable by the edge.
         var clusters = window.ClipgenIntakeCluster.clusterIntakeEvents(
-          events, SS_CLUSTER_SECONDS);
+          events, window.ClipgenIntakeCluster.DEFAULT_GAP_SECONDS);
         var markers = clusters.map(function (cl) {
           var n = cl.events.length;
           var type = cl.event_type || cl.detector || "";

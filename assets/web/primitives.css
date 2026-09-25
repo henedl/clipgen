@@ -249,12 +249,6 @@
   width: 14px;
   height: 14px;
   background-color: currentColor;
-  mask-size: contain;
-  mask-repeat: no-repeat;
-  mask-position: center;
-  -webkit-mask-size: contain;
-  -webkit-mask-repeat: no-repeat;
-  -webkit-mask-position: center;
   flex-shrink: 0;
 }
 

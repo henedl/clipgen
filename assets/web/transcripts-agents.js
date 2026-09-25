@@ -26,7 +26,6 @@
     reportAgentError = TS.reportAgentError,
     renderTimeline = TS.renderTimeline,
     seekVideo = TS.seekVideo,
-    scrollToSegment = TS.scrollToSegment,
     loadTranscript = TS.loadTranscript,
     ensureAgentModelInstalled = TS.ensureAgentModelInstalled,
     _trFetchModels = TS._trFetchModels,
@@ -36,7 +35,11 @@
     _citationsEtaTracker = TS._citationsEtaTracker,
     _frictionEtaTracker = TS._frictionEtaTracker,
     _updateAgentElapsed = TS._updateAgentElapsed,
-    _currentParticipantHasTranscript = TS._currentParticipantHasTranscript;
+    _currentParticipantHasTranscript = TS._currentParticipantHasTranscript,
+    _segmentIndexById = TS._segmentIndexById,
+    seekToSegmentIndex = TS.seekToSegmentIndex,
+    placeCursorTooltip = TS.placeCursorTooltip,
+    _selectedParticipantRow = TS._selectedParticipantRow;
 
   // ---- Thinking-agent plumbing (shared poll factory) ----
   // A new agent is one descriptor plus hooks.
@@ -725,16 +728,8 @@
   // ---- Friction detection ----
   // A control surface over #segmentList; everything reads one derived map (_recomputeFrictionMatches).
 
-  function _currentParticipant() {
-    var pid = state.selectedParticipant;
-    for (var i = 0; i < state.participants.length; i++) {
-      if (state.participants[i].id === pid) return state.participants[i];
-    }
-    return null;
-  }
-
   function _frictionDepMet() {
-    var p = _currentParticipant();
+    var p = _selectedParticipantRow();
     if (!p) return false;
     // state.summaryText lands before /api/participants catches up, so trust it too.
     if (state.summaryText) return true;
@@ -1499,36 +1494,6 @@
     return !(f && f[_frictionMomentCategory(m)] === false);
   }
 
-  // id->index map, rebuilt when segments are replaced; the per-frame drag recompute needs dict hits.
-  var _segIndexMap = null;
-  var _segIndexMapFor = null;
-
-  function _segmentIndexById(id) {
-    if (_segIndexMapFor !== state.segments) {
-      _segIndexMap = {};
-      for (var i = 0; i < state.segments.length; i++) {
-        // First occurrence wins, matching the scan this replaced.
-        if (!(state.segments[i].id in _segIndexMap)) {
-          _segIndexMap[state.segments[i].id] = i;
-        }
-      }
-      _segIndexMapFor = state.segments;
-    }
-    var idx = _segIndexMap[id];
-    return idx === undefined ? -1 : idx;
-  }
-
-  function _seekToSegmentIndex(idx) {
-    var seg = state.segments[idx];
-    if (!seg) return;
-    seekVideo(seg.start);
-    if (!state.cachedSegmentRows) {
-      state.cachedSegmentRows = qs("#segmentList").querySelectorAll(".segment-row");
-    }
-    var row = state.cachedSegmentRows[idx];
-    if (row) scrollToSegment(row);
-  }
-
   // Resolved segment indices a moment cites, in order, valid only.
   function _momentSegmentIndices(m) {
     var idxs = [];
@@ -1608,7 +1573,7 @@
     state.frictionMomentIndex = i;
     renderFrictionJumpStrip();
     // Seek to the FIRST cited segment; the callout closes the passage below.
-    _seekToSegmentIndex(moments[i].idxs[0]);
+    seekToSegmentIndex(moments[i].idxs[0]);
   }
 
   function _stepFrictionMoment(dir) {
@@ -1887,14 +1852,7 @@
       (seg ? formatTime(seg.start) + " · " : "") +
       (scoreParts.length ? scoreParts.join(" · ") : "score 0.00")));
     tip.classList.remove("hidden");
-    var tipRect = tip.getBoundingClientRect();
-    var x = clientX + 12;
-    var y = clientY - tipRect.height - 12;
-    if (x + tipRect.width > window.innerWidth - 8) x = window.innerWidth - tipRect.width - 8;
-    if (y < 8) y = clientY + 16;
-    if (y + tipRect.height > window.innerHeight - 8) y = Math.max(8, window.innerHeight - tipRect.height - 8);
-    tip.style.left = x + "px";
-    tip.style.top = y + "px";
+    placeCursorTooltip(tip, clientX, clientY);
     state.frictionTooltipShown = true;
   }
 
@@ -1922,7 +1880,6 @@
   TS._stopSummaryPoll = _stopSummaryPoll;
   TS._stopCitationsPoll = _stopCitationsPoll;
   TS._stopFrictionPoll = _stopFrictionPoll;
-  TS._currentParticipant = _currentParticipant;
   TS._frictionDepMet = _frictionDepMet;
   TS._showFrictionTooltip = _showFrictionTooltip;
   TS._hideFrictionTooltip = _hideFrictionTooltip;

@@ -12,11 +12,6 @@
   var WF = window.ClipgenWorkflows;
   var state = WF.state;
 
-  // Transport handles stay module-local; run and batch pairs stream concurrently during batches.
-  var _stream = null; // EventSource for the active/focused run
-  var _poller = null; // createPoller fallback when run SSE drops
-  var _batchStream = null; // EventSource for the active batch
-  var _batchPoller = null; // createPoller fallback when batch SSE drops
   var _discoverPoller = null; // low-freq poll surfacing runs THIS client didn't start
   var _reconnecting = false; // an SSE stream dropped; polling is covering the gap
 
@@ -26,130 +21,90 @@
     return !!TERMINAL[status];
   }
 
-  // "All participants" or a subset of ≥2 ids launches a batch; else one run.
-  function blueprintWantsBatch() {
+  // Batch participants: null for "all", an id array, or undefined for one run.
+  function batchSelection() {
     var nodes = state.nodes;
     for (var i = 0; i < nodes.length; i++) {
       var n = nodes[i];
       if (n.type !== "video_source" || !n.params) continue;
       var p = n.params.participant;
-      if (p === WF.ALL_PARTICIPANTS) return true;
-      if (Array.isArray(p) && p.length >= 2) return true;
+      if (p === WF.ALL_PARTICIPANTS) return null;
+      if (Array.isArray(p) && p.length >= 2) return p.slice();
     }
-    return false;
+    return undefined;
+  }
+
+  function blueprintWantsBatch() {
+    return batchSelection() !== undefined;
   }
 
   // ---- Transport ------------------------------------------------------------
 
-  function stopStream() {
-    if (_stream) {
-      _stream.close();
-      _stream = null;
+  // SSE plus polling fallback for one run or batch; a drop sets the shared _reconnecting.
+  function createStreamChannel(base, key, onData) {
+    var stream = null;
+    var poller = null;
+
+    function stopStream() {
+      if (stream) {
+        stream.close();
+        stream = null;
+      }
     }
-  }
 
-  function stopPolling() {
-    if (_poller) {
-      _poller.stop();
-      _poller = null;
+    function stop() {
+      stopStream();
+      if (poller) {
+        poller.stop();
+        poller = null;
+      }
     }
-  }
 
-  function stopTransport() {
-    stopStream();
-    stopPolling();
-  }
-
-  function subscribeRun(runId) {
-    stopTransport();
-    _reconnecting = false; // fresh subscription — clear any stale gap state
-    _stream = createSSEStream("api/runs/" + encodeURIComponent(runId) + "/stream", {
-      onUnsupported: function () { startPolling(runId); },
-      onMessage: function (data) {
-        if (data && data.run) handleRunData(data.run);
-      },
-      onError: function () {
-        // SSE dropped: show "Reconnecting…", poll instead; the next poll clears the flag.
-        _reconnecting = true;
-        _stream = null;
-        startPolling(runId);
-        renderRuns();
-      },
-    });
-  }
-
-  function startPolling(runId) {
-    if (_poller) return;
-    _poller = createPoller(
-      function () {
-        apiGet("api/runs/" + encodeURIComponent(runId))
-          .then(function (res) {
-            if (res && res.run) handleRunData(res.run);
-          })
-          .catch(function () {});
-      },
-      POLL_INTERVAL,
-      { runImmediately: true, label: "workflows.run" },
-    );
-    _poller.start();
-  }
-
-  // ---- Batch transport ------------------------------------------------------
-
-  function stopBatchStream() {
-    if (_batchStream) {
-      _batchStream.close();
-      _batchStream = null;
+    function startPolling(id) {
+      if (poller) return;
+      poller = createPoller(
+        function () {
+          apiGet(base + encodeURIComponent(id))
+            .then(function (res) {
+              if (res && res[key]) onData(res[key]);
+            })
+            .catch(function () {});
+        },
+        POLL_INTERVAL,
+        { runImmediately: true, label: "workflows." + key },
+      );
+      poller.start();
     }
-  }
 
-  function stopBatchPolling() {
-    if (_batchPoller) {
-      _batchPoller.stop();
-      _batchPoller = null;
-    }
-  }
-
-  function stopBatchTransport() {
-    stopBatchStream();
-    stopBatchPolling();
-  }
-
-  function subscribeBatch(batchId) {
-    stopBatchTransport();
-    _reconnecting = false; // fresh subscription — clear any stale gap state
-    _batchStream = createSSEStream(
-      "api/batches/" + encodeURIComponent(batchId) + "/stream",
-      {
-        onUnsupported: function () { startBatchPolling(batchId); },
+    function subscribe(id) {
+      stop();
+      _reconnecting = false; // fresh subscription — clear any stale gap state
+      stream = createSSEStream(base + encodeURIComponent(id) + "/stream", {
+        onUnsupported: function () { startPolling(id); },
         onMessage: function (data) {
-          if (data && data.batch) handleBatchData(data.batch);
+          if (data && data[key]) onData(data[key]);
         },
         onError: function () {
+          // SSE dropped: show "Reconnecting…", poll instead; the next poll clears the flag.
           _reconnecting = true;
-          _batchStream = null;
-          startBatchPolling(batchId);
+          stream = null;
+          startPolling(id);
           renderRuns();
         },
-      },
-    );
+      });
+    }
+
+    return {
+      subscribe: subscribe,
+      stop: stop,
+      stopStream: stopStream,
+      active: function () { return !!(stream || poller); },
+    };
   }
 
-  function startBatchPolling(batchId) {
-    if (_batchPoller) return;
-    _batchPoller = createPoller(
-      function () {
-        apiGet("api/batches/" + encodeURIComponent(batchId))
-          .then(function (res) {
-            if (res && res.batch) handleBatchData(res.batch);
-          })
-          .catch(function () {});
-      },
-      POLL_INTERVAL,
-      { runImmediately: true, label: "workflows.batch" },
-    );
-    _batchPoller.start();
-  }
+  // Run and batch channels stream concurrently during batches.
+  var _runChannel = createStreamChannel("api/runs/", "run", handleRunData);
+  var _batchChannel = createStreamChannel("api/batches/", "batch", handleBatchData);
 
   // ---- Run lifecycle --------------------------------------------------------
 
@@ -198,7 +153,7 @@
         upsertRun(res.run);
         state.activeRunId = res.run.id;
         renderRuns();
-        subscribeRun(res.run.id);
+        _runChannel.subscribe(res.run.id);
       })
       .catch(function (err) {
         setRunningUI(false);
@@ -224,19 +179,6 @@
     // UI flips to idle when the stream/poll reports the cancelled status.
   }
 
-  // Explicit subset from the first Video Source, or null for "all" (field omitted).
-  function batchParticipants() {
-    var nodes = state.nodes;
-    for (var i = 0; i < nodes.length; i++) {
-      var n = nodes[i];
-      if (n.type !== "video_source" || !n.params) continue;
-      var p = n.params.participant;
-      if (p === WF.ALL_PARTICIPANTS) return null;
-      if (Array.isArray(p) && p.length >= 2) return p.slice();
-    }
-    return null;
-  }
-
   // One sequential run per selected participant, grouped under one batch card.
   function startBatch() {
     if (!state.ready || !state.activeBlueprintId) return;
@@ -248,7 +190,7 @@
     Promise.resolve(WF.flushSave())
       .then(function () {
         var body = { blueprintId: state.activeBlueprintId };
-        var subset = batchParticipants();
+        var subset = batchSelection(); // null ("all") omits the field
         if (subset) body.participants = subset;
         return apiPost("api/batches", body);
       })
@@ -262,7 +204,7 @@
         state.activeBatchId = res.batch.id;
         state.activeRunId = null;
         renderRuns();
-        subscribeBatch(res.batch.id);
+        _batchChannel.subscribe(res.batch.id);
       })
       .catch(function (err) {
         setRunningUI(false);
@@ -276,8 +218,8 @@
     if (!bpId) return;
     // The discover poller is blueprint-scoped, so refresh the "All" list here too.
     if (state.runScope === "all") fetchAllRuns();
-    stopTransport();
-    stopBatchTransport();
+    _runChannel.stop();
+    _batchChannel.stop();
     state.activeRunId = null;
     state.activeBatchId = null;
     var q = encodeURIComponent(bpId);
@@ -298,7 +240,7 @@
         if (liveBatch) {
           state.activeBatchId = liveBatch.id;
           setRunningUI(true);
-          subscribeBatch(liveBatch.id);
+          _batchChannel.subscribe(liveBatch.id);
           var runningChild = (liveBatch.children || []).filter(function (c) {
             return c.status === "running";
           })[0];
@@ -324,7 +266,7 @@
           : (looseRuns[0] && looseRuns[0].id) || null;
         if (live) {
           setRunningUI(true);
-          subscribeRun(live.id);
+          _runChannel.subscribe(live.id);
         } else {
           setRunningUI(false);
         }
@@ -389,12 +331,7 @@
     });
   }
 
-  function findRun(id) {
-    for (var i = 0; i < state.runs.length; i++) {
-      if (state.runs[i].id === id) return state.runs[i];
-    }
-    return null;
-  }
+  function findRun(id) { return findById(state.runs, id); }
 
   function upsertRun(run) {
     var existing = findRun(run.id);
@@ -411,7 +348,7 @@
     _reconnecting = false; // data flowed (live SSE or a successful poll)
     upsertRun(run);
     if (run.id === state.activeRunId && isTerminal(run.status)) {
-      stopTransport();
+      _runChannel.stop();
       // The batch summary owns Run/Stop; a finished child must not reset them.
       if (!activeBatchInFlight()) setRunningUI(false);
     }
@@ -421,12 +358,7 @@
 
   // ---- Batch data handling --------------------------------------------------
 
-  function findBatch(id) {
-    for (var i = 0; i < state.batches.length; i++) {
-      if (state.batches[i].id === id) return state.batches[i];
-    }
-    return null;
-  }
+  function findBatch(id) { return findById(state.batches, id); }
 
   function upsertBatch(batch) {
     var existing = findBatch(batch.id);
@@ -442,7 +374,7 @@
     _reconnecting = false; // data flowed (live SSE or a successful poll)
     upsertBatch(batch);
     if (batch.id === state.activeBatchId && isTerminal(batch.status)) {
-      stopBatchTransport();
+      _batchChannel.stop();
       setRunningUI(false);
     }
     if (runsFingerprint() !== _lastRunsFp) renderRuns();
@@ -455,7 +387,7 @@
     var existing = findRun(runId);
     if (existing) annotateCanvas(existing);
     renderRuns();
-    subscribeRun(runId); // live per-node updates if the child is still running
+    _runChannel.subscribe(runId); // live per-node updates if the child is still running
   }
 
   // ---- Canvas tinting -------------------------------------------------------
@@ -514,17 +446,10 @@
 
   // ---- Rendering ------------------------------------------------------------
 
-  // Rename, else catalog label, else the id; renames disambiguate duplicate node types.
+  // A deleted node (run history) falls back to its id.
   function nodeLabel(nodeId) {
-    var nodes = state.nodes;
-    for (var i = 0; i < nodes.length; i++) {
-      if (nodes[i].id === nodeId) {
-        if (nodes[i].name) return nodes[i].name;
-        var type = state.catalogById[nodes[i].type];
-        return (type && type.label) || nodes[i].type;
-      }
-    }
-    return nodeId;
+    var node = WF.findNode(nodeId);
+    return node ? WF.nodeLabel(node) : nodeId;
   }
 
   // Status glyph for detail rows; CSS keyed on data-status sets icon and colour.
@@ -942,14 +867,7 @@
 
   // Cross-blueprint history row; click opens the blueprint and drills in. Deleted blueprints render inert.
   function buildHistoryRow(run) {
-    var bp = null;
-    var bps = state.blueprints || [];
-    for (var i = 0; i < bps.length; i++) {
-      if (bps[i].id === run.blueprintId) {
-        bp = bps[i];
-        break;
-      }
-    }
+    var bp = findById(state.blueprints || [], run.blueprintId);
     var row = el("div", "wf-history-row");
     row.appendChild(
       el("span", "wf-run-status wf-run-status-" + run.status, run.status),
@@ -1210,7 +1128,7 @@
     if (document.hidden || !state.activeBlueprintId) return;
     // An active stream already keeps us current; don't disrupt it.
     if (activeRunInFlight() || activeBatchInFlight()) return;
-    if (_stream || _poller || _batchStream || _batchPoller) return;
+    if (_runChannel.active() || _batchChannel.active()) return;
     apiGet("api/runs?blueprintId=" + encodeURIComponent(state.activeBlueprintId))
       .then(function (res) {
         var latest = (res && res.runs) || [];
@@ -1228,15 +1146,15 @@
   // Hidden tab closes streams; on return, reopen them if work is in flight.
   function onVisibility() {
     if (document.hidden) {
-      stopStream();
-      stopBatchStream();
+      _runChannel.stopStream();
+      _batchChannel.stopStream();
       return;
     }
-    if (activeBatchInFlight() && !_batchStream && !_batchPoller) {
-      subscribeBatch(state.activeBatchId);
+    if (activeBatchInFlight() && !_batchChannel.active()) {
+      _batchChannel.subscribe(state.activeBatchId);
     }
-    if (activeRunInFlight() && !_stream && !_poller) {
-      subscribeRun(state.activeRunId);
+    if (activeRunInFlight() && !_runChannel.active()) {
+      _runChannel.subscribe(state.activeRunId);
     }
   }
 

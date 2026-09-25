@@ -1312,8 +1312,7 @@ def test_speaker_rename_is_delegated_and_routed():
         hub, "function _ensureSegmentListDelegation()"
     )
     sat = read("transcripts-speakers.js")
-    assert 'apiPut("api/speakers/" + pid' in sat
-    assert '"/labels"' in sat
+    assert 'apiPut("api/speakers/" + open.pid + "/labels"' in sat
     assert "TS.showSpeakerPopover = showSpeakerPopover" in sat
     assert "function showSpeakerPopover() { return TS.showSpeakerPopover" in hub
     assert "registerEscape(" in sat, "Escape must cancel through the shared registry"

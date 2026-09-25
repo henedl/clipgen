@@ -360,25 +360,13 @@
     return !!t && t.kind === "redact";
   }
 
-  function _redactTaskForSelected() {
-    var pid = state.selectedParticipant;
+  // Newest task of `kind` for `pid`; null if none.
+  function latestTask(pid, kind) {
     if (!pid) return null;
     var latest = null;
     for (var i = 0; i < state.tasks.length; i++) {
       var t = state.tasks[i];
-      if (t.participant !== pid || !_isRedactTask(t)) continue;
-      if (!latest || t.created_at > latest.created_at) latest = t;
-    }
-    return latest;
-  }
-
-  function _speakerTaskForSelected() {
-    var pid = state.selectedParticipant;
-    if (!pid) return null;
-    var latest = null;
-    for (var i = 0; i < state.tasks.length; i++) {
-      var t = state.tasks[i];
-      if (t.participant !== pid || !_isSpeakerTask(t)) continue;
+      if (t.participant !== pid || t.kind !== kind) continue;
       if (!latest || t.created_at > latest.created_at) latest = t;
     }
     return latest;
@@ -389,13 +377,16 @@
     return !!(task && state.cancellingTasks[task.id]);
   }
 
-  function _selectedParticipantRow() {
-    var pid = state.selectedParticipant;
+  function participantById(pid) {
     if (!pid) return null;
     for (var i = 0; i < state.participants.length; i++) {
       if (state.participants[i].id === pid) return state.participants[i];
     }
     return null;
+  }
+
+  function _selectedParticipantRow() {
+    return participantById(state.selectedParticipant);
   }
 
   function _modelLine() {
@@ -421,8 +412,8 @@
   function computeIndicatorState() {
     var pid = state.selectedParticipant;
     var task = _taskForSelectedParticipant();
-    var spk = _speakerTaskForSelected();
-    var red = _redactTaskForSelected();
+    var spk = latestTask(pid, "speakers");
+    var red = latestTask(pid, "redact");
     var row = _selectedParticipantRow();
     var cls = "status-indicator--ready";
     var taskLine;
@@ -544,8 +535,8 @@
     }
   }
 
-  // Call once a download attempt has concluded; never mid-download (would re-prompt).
-  function _forgetWhisperDownloadAgreements() {
+  // Drop the cached models reply; never mid-download (would re-prompt).
+  function _invalidateModelsCache() {
     _trModelsCache = null;
     _trModelsCachePromise = null;
   }
@@ -566,7 +557,7 @@
           // Loaded, or warmup ended without loading; the next attempt re-confirms.
           if (data.loaded || !data.warming) {
             stopModelHintPoll();
-            _forgetWhisperDownloadAgreements();
+            _invalidateModelsCache();
           }
         })
         .catch(function () {});
@@ -765,11 +756,7 @@
     renderPills();
     refreshTopNavActions();
 
-    // Find participant info
-    var p = null;
-    for (var i = 0; i < state.participants.length; i++) {
-      if (state.participants[i].id === pid) { p = state.participants[i]; break; }
-    }
+    var p = participantById(pid);
     if (!p) return;
 
     // Fragmented-MP4 warning + remux action, above the player.
@@ -862,11 +849,8 @@
     // Load transcript
     if (p.has_transcript) {
       state.streamingParticipant = null;
-      _setAnalysisReady(true);
-      _restoreActiveTab(pid);
       loadTranscript(pid);
-      loadSummary(pid);
-      loadFriction(pid);
+      _loadAnalysis(pid);
     } else if (taskForPid && taskForPid.status === "running" && taskForPid.partial_count > 0) {
       state.streamingParticipant = pid;
       clearAnalysisPanel();
@@ -937,23 +921,26 @@
     var ver = state.participantReqVer;
     return apiGet("api/transcript/" + pid).then(function (data) {
       if (ver !== state.participantReqVer) return;
-      if (!data.ok) {
-        state.segments = [];
-        state.speakers = null;
-        state.redaction = null;
-        renderSegments();
-        renderTimeline();
-        renderRedactPanel();
-        return;
-      }
-      state.segments = data.segments;
-      state.speakers = data.speakers || null;
-      state.redaction = data.redaction || null;
-      state.activeSegmentIndex = -1;
-      renderSegments();
-      renderTimeline();
-      renderRedactPanel();
+      _applyTranscript(data.ok ? data : { segments: [] });
     });
+  }
+
+  function _applyTranscript(data) {
+    state.segments = data.segments;
+    state.speakers = data.speakers || null;
+    state.redaction = data.redaction || null;
+    state.activeSegmentIndex = -1;
+    renderSegments();
+    renderTimeline();
+    renderRedactPanel();
+  }
+
+  // Show the analysis panel and fetch its summary and friction.
+  function _loadAnalysis(pid) {
+    _setAnalysisReady(true);
+    _restoreActiveTab(pid);
+    loadSummary(pid);
+    loadFriction(pid);
   }
 
   // ---- Redaction delegators; implementation in transcripts-redact.js ----
@@ -986,7 +973,6 @@
   function _stopSummaryPoll() { return TS._stopSummaryPoll && TS._stopSummaryPoll(); }
   function _stopCitationsPoll() { return TS._stopCitationsPoll && TS._stopCitationsPoll(); }
   function _stopFrictionPoll() { return TS._stopFrictionPoll && TS._stopFrictionPoll(); }
-  function _currentParticipant() { return TS._currentParticipant && TS._currentParticipant(); }
   function _frictionDepMet() { return TS._frictionDepMet && TS._frictionDepMet(); }
   function _showFrictionTooltip() { return TS._showFrictionTooltip && TS._showFrictionTooltip.apply(null, arguments); }
   function _hideFrictionTooltip() { return TS._hideFrictionTooltip && TS._hideFrictionTooltip(); }
@@ -1034,20 +1020,13 @@
       var markLabel = markObj && markObj.label ? ' data-tooltip="' + escapeHtml(markObj.label) + '"' : "";
       var annoBadgeHtml = "";
       if (markObj && markObj.label && markColor) {
-        var bgMix = "color-mix(in oklch, " + markColor + " 18%, transparent)";
-        var borderMix = "color-mix(in oklch, " + markColor + " 50%, transparent)";
-        var badgeStyle = "--anno-badge-fg:" + markColor + ";--anno-badge-bg:" + bgMix + ";--anno-badge-border:" + borderMix;
-        annoBadgeHtml = '<span class="segment-anno-badge" style="' + badgeStyle + '">' + escapeHtml(markObj.label) + '</span>';
-      }
-      var sevDotHtml = "";
-      if (markObj && markObj.severity) {
-        sevDotHtml = '<span class="segment-sev-dot ' + severityClass(markObj.severity) + '" data-tooltip="' + escapeHtml(markObj.severity) + '"></span>';
+        annoBadgeHtml = '<span class="segment-anno-badge" style="--anno-badge-fg:' + markColor + '">' + escapeHtml(markObj.label) + '</span>';
       }
 
       // No friction markup here; applyFrictionDecorations() owns it all.
       html += '<div class="segment-row' + activeClass + correctedClass + '" data-index="' + i + '" data-start="' + seg.start + '">';
       html += '<span class="' + markClass + '" data-segment-id="' + escapeHtml(seg.id) + '"' + markStyle + markLabel + '></span>';
-      html += sevDotHtml;
+      html += _sevDotHtml(markObj && markObj.severity);
       html += '<span class="segment-timestamp">' + formatTime(seg.start);
       // Cross-reference badges in gutter (inside timestamp, positioned at right edge)
       if (CLIPGEN_CONFIG.crossReferences) {
@@ -1080,19 +1059,15 @@
       if (redOn && seg.pii && seg.pii.length) {
         wordHtml = redactedTextHtml(seg);
       } else {
-        var tokens = seg.text.split(/(\s+)/);
-        var wordCount = 0;
-        for (var w = 0; w < tokens.length; w++) {
-          if (tokens[w] && !/^\s+$/.test(tokens[w])) wordCount++;
-        }
-        var segWords = (!seg.corrected && seg.words && seg.words.length === wordCount) ? seg.words : null;
+        var runs = _tokenRuns(seg.text);
+        var segWords = segWordTiming(seg, runs);
         var wi = 0;
-        for (var w = 0; w < tokens.length; w++) {
-          if (/^\s+$/.test(tokens[w])) {
-            wordHtml += tokens[w];
-          } else if (tokens[w]) {
+        for (var w = 0; w < runs.length; w++) {
+          if (runs[w].space) {
+            wordHtml += runs[w].text;
+          } else {
             var timing = segWords ? ' data-ws="' + segWords[wi].start + '" data-we="' + segWords[wi].end + '"' : "";
-            wordHtml += '<span class="segment-word"' + timing + '>' + escapeHtml(tokens[w]) + '</span>';
+            wordHtml += '<span class="segment-word"' + timing + '>' + escapeHtml(runs[w].text) + '</span>';
             wi++;
           }
         }
@@ -1113,6 +1088,27 @@
     _partialRender.pid = null;
     _partialRender.segments = null;
     _partialRender.marksVersion = _streamingMarksVersion;
+  }
+
+  // Whitespace-split tokens with UTF-16 ranges; redact maps PII spans onto them.
+  function _tokenRuns(text) {
+    var tokens = text.split(/(\s+)/);
+    var runs = [];
+    var pos = 0;
+    for (var i = 0; i < tokens.length; i++) {
+      var tok = tokens[i];
+      if (!tok) continue;
+      runs.push({ text: tok, start: pos, end: pos + tok.length, space: /^\s+$/.test(tok) });
+      pos += tok.length;
+    }
+    return runs;
+  }
+
+  // Word timings when uncorrected and word counts match; else null.
+  function segWordTiming(seg, runs) {
+    var wordCount = 0;
+    for (var i = 0; i < runs.length; i++) if (!runs[i].space) wordCount++;
+    return (!seg.corrected && seg.words && seg.words.length === wordCount) ? seg.words : null;
   }
 
   // Participant #segmentList shows; renderPartialSegments keeps it current too.
@@ -1163,19 +1159,20 @@
     );
   }
 
+  function _sevDotHtml(sev) {
+    if (!sev) return "";
+    return '<span class="segment-sev-dot ' + severityClass(sev) + '" data-tooltip="' + escapeHtml(sev) + '"></span>';
+  }
+
   function _renderPartialSegmentRow(seg, i, pid) {
     var segId = pid + ":" + i;
     var cachedMark = _streamingMarks[segId];
     var cachedColor = cachedMark ? cachedMark.color : null;
     var markClass = "segment-mark" + (cachedColor ? " marked" : "");
     var markStyle = cachedColor ? ' style="background:' + cachedColor + '"' : "";
-    var sevDotHtml = "";
-    if (cachedMark && cachedMark.severity) {
-      sevDotHtml = '<span class="segment-sev-dot ' + severityClass(cachedMark.severity) + '" data-tooltip="' + escapeHtml(cachedMark.severity) + '"></span>';
-    }
     var html = '<div class="segment-row segment-streaming" data-index="' + i + '" data-start="' + seg.start + '">';
     html += '<span class="' + markClass + '" data-segment-id="' + escapeHtml(segId) + '"' + markStyle + '></span>';
-    html += sevDotHtml;
+    html += _sevDotHtml(cachedMark && cachedMark.severity);
     html += '<span class="segment-timestamp">' + formatTime(seg.start) + '</span>';
     html += '<span class="segment-text">' + escapeHtml(seg.text) + '</span>';
     html += '<span class="segment-copy" data-tooltip="Copy text"><span class="segment-copy-icon"></span></span>';
@@ -1736,12 +1733,24 @@
 
   // ---- Marks ----
 
-  // Find the loaded (non-streaming) segment index for an id; -1 if absent.
-  function _segmentIndexById(segmentId) {
-    for (var i = 0; i < state.segments.length; i++) {
-      if (state.segments[i].id === segmentId) return i;
+  // id->index map, rebuilt when segments are replaced; the per-frame drag recompute needs dict hits.
+  var _segIndexMap = null;
+  var _segIndexMapFor = null;
+
+  // Loaded (non-streaming) segment index for an id; -1 if absent.
+  function _segmentIndexById(id) {
+    if (_segIndexMapFor !== state.segments) {
+      _segIndexMap = {};
+      for (var i = 0; i < state.segments.length; i++) {
+        // First occurrence wins, matching the scan this replaced.
+        if (!(state.segments[i].id in _segIndexMap)) {
+          _segIndexMap[state.segments[i].id] = i;
+        }
+      }
+      _segIndexMapFor = state.segments;
     }
-    return -1;
+    var idx = _segIndexMap[id];
+    return idx === undefined ? -1 : idx;
   }
 
   // Find the loaded segment carrying a mark id; null if absent.
@@ -1781,12 +1790,9 @@
       if (markObj.label) {
         dot.setAttribute("data-tooltip", markObj.label);
         if (textEl) {
-          var bgMix = "color-mix(in oklch, " + cat.color + " 18%, transparent)";
-          var borderMix = "color-mix(in oklch, " + cat.color + " 50%, transparent)";
           var badge = document.createElement("span");
           badge.className = "segment-anno-badge";
-          badge.style.cssText =
-            "--anno-badge-fg:" + cat.color + ";--anno-badge-bg:" + bgMix + ";--anno-badge-border:" + borderMix;
+          badge.style.setProperty("--anno-badge-fg", cat.color);
           badge.textContent = markObj.label;
           textEl.insertBefore(badge, textEl.firstChild);
         }
@@ -1855,6 +1861,28 @@
     }).catch(toastError("Could not add mark"));
   }
 
+  // Key of the streaming-cache mark with this id; null if absent.
+  function _streamingMarkKey(markId) {
+    for (var key in _streamingMarks) {
+      if (_streamingMarks[key].id === markId) return key;
+    }
+    return null;
+  }
+
+  // Set a loaded mark's field and repaint now; PUT it and restore on failure.
+  function _optimisticMarkPut(found, field, value, sent) {
+    var prev = found.mark[field];
+    found.mark[field] = value;
+    _paintSegmentMark(found.idx, found.mark);
+    var body = {};
+    body[field] = sent === undefined ? value : sent;
+    apiPut("api/marks/" + found.mark.id, body).catch(function () {
+      found.mark[field] = prev;
+      _paintSegmentMark(found.idx, found.mark);
+      showToast("Failed to update mark");
+    });
+  }
+
   function removeMark(markId) {
     hideMarkPopover();
     // Streaming participant: keep the existing reload-on-success path.
@@ -1862,12 +1890,10 @@
       apiDelete("api/marks/" + markId).then(function (data) {
         if (data.ok) {
           showToast("Mark removed");
-          for (var key in _streamingMarks) {
-            if (_streamingMarks[key].id === markId) {
-              delete _streamingMarks[key];
-              _bumpStreamingMarksVersion();
-              break;
-            }
+          var key = _streamingMarkKey(markId);
+          if (key !== null) {
+            delete _streamingMarks[key];
+            _bumpStreamingMarksVersion();
           }
           pollTaskStatus();
         }
@@ -1909,14 +1935,11 @@
     if (state.streamingParticipant) {
       apiPut("api/marks/" + markId, { category: category }).then(function (data) {
         if (data.ok) {
-          var cat = MARK_CATEGORIES[category] || MARK_CATEGORIES.bookmark;
-          for (var key in _streamingMarks) {
-            if (_streamingMarks[key].id === markId) {
-              _streamingMarks[key].category = category;
-              _streamingMarks[key].color = cat.color;
-              _bumpStreamingMarksVersion();
-              break;
-            }
+          var key = _streamingMarkKey(markId);
+          if (key !== null) {
+            _streamingMarks[key].category = category;
+            _streamingMarks[key].color = (MARK_CATEGORIES[category] || MARK_CATEGORIES.bookmark).color;
+            _bumpStreamingMarksVersion();
           }
           pollTaskStatus();
         }
@@ -1931,14 +1954,7 @@
       }).catch(toastError("Could not change category"));
       return;
     }
-    var prevCategory = found.mark.category;
-    found.mark.category = category;
-    _paintSegmentMark(found.idx, found.mark);
-    apiPut("api/marks/" + markId, { category: category }).catch(function () {
-      found.mark.category = prevCategory;
-      _paintSegmentMark(found.idx, found.mark);
-      showToast("Failed to update mark");
-    });
+    _optimisticMarkPut(found, "category", category);
   }
 
   function updateMarkLabel(markId, label) {
@@ -1946,12 +1962,8 @@
       apiPut("api/marks/" + markId, { label: label || null }).catch(function () {
         showToast("Failed to update mark");
       });
-      for (var key in _streamingMarks) {
-        if (_streamingMarks[key].id === markId) {
-          _streamingMarks[key].label = label || "";
-          break;
-        }
-      }
+      var key = _streamingMarkKey(markId);
+      if (key !== null) _streamingMarks[key].label = label || "";
       return;
     }
     // Write state and repaint optimistically, like updateMarkCategory; restore on failure.
@@ -1962,14 +1974,7 @@
       });
       return;
     }
-    var prevLabel = found.mark.label;
-    found.mark.label = label || "";
-    _paintSegmentMark(found.idx, found.mark);
-    apiPut("api/marks/" + markId, { label: label || null }).catch(function () {
-      found.mark.label = prevLabel;
-      _paintSegmentMark(found.idx, found.mark);
-      showToast("Failed to update mark");
-    });
+    _optimisticMarkPut(found, "label", label || "", label || null);
   }
 
   function updateMarkSeverity(markId, severity) {
@@ -1978,12 +1983,10 @@
     if (state.streamingParticipant) {
       apiPut("api/marks/" + markId, { severity: sev }).then(function (data) {
         if (data.ok) {
-          for (var key in _streamingMarks) {
-            if (_streamingMarks[key].id === markId) {
-              _streamingMarks[key].severity = severity || "";
-              _bumpStreamingMarksVersion();
-              break;
-            }
+          var key = _streamingMarkKey(markId);
+          if (key !== null) {
+            _streamingMarks[key].severity = severity || "";
+            _bumpStreamingMarksVersion();
           }
           pollTaskStatus();
         }
@@ -1998,14 +2001,7 @@
       }).catch(toastError("Could not change severity"));
       return;
     }
-    var prevSeverity = found.mark.severity;
-    found.mark.severity = sev;
-    _paintSegmentMark(found.idx, found.mark);
-    apiPut("api/marks/" + markId, { severity: sev }).catch(function () {
-      found.mark.severity = prevSeverity;
-      _paintSegmentMark(found.idx, found.mark);
-      showToast("Failed to update mark");
-    });
+    _optimisticMarkPut(found, "severity", sev);
   }
 
   function showMarkPopover(anchorEl, segmentId, markObj) {
@@ -2157,8 +2153,7 @@
           sizeMb: m.size_mb,
         }).then(function (ok) {
           if (ok) {
-            _trModelsCache = null;
-            _trModelsCachePromise = null;
+            _invalidateModelsCache();
           }
           return ok;
         });
@@ -2219,7 +2214,7 @@
   function _rearmSelectedAgentPanels() {
     var pid = state.selectedParticipant;
     if (!pid) return;
-    var p = _currentParticipant();
+    var p = _selectedParticipantRow();
     var summaryRunning = !!(p && p.agents && p.agents.summary === "running");
     // The agents satellite owns the summary poll; ask it via TS.isSummaryPolling.
     if (summaryRunning && !(TS.isSummaryPolling && TS.isSummaryPolling()) && !state.summaryText) loadSummary(pid);
@@ -2265,17 +2260,8 @@
       // Not merged yet: keep the flag so the next poll retries.
       if (!(data.ok && data.segments && data.segments.length > 0)) return;
       state.streamingParticipant = null;
-      state.segments = data.segments;
-      state.speakers = data.speakers || null;
-      state.redaction = data.redaction || null;
-      state.activeSegmentIndex = -1;
-      renderRedactPanel();
-      renderSegments();
-      renderTimeline();
-      _setAnalysisReady(true);
-      _restoreActiveTab(pid);
-      loadSummary(pid);
-      loadFriction(pid);
+      _applyTranscript(data);
+      _loadAnalysis(pid);
     });
   }
 
@@ -2349,11 +2335,8 @@
               newlyCompleted.indexOf(state.selectedParticipant) >= 0 &&
               !wasStreamingSelected) {
             // Completed while not streaming; the streaming case belongs to _finalizeStreamingIfComplete.
-            _setAnalysisReady(true);
-            _restoreActiveTab(state.selectedParticipant);
             loadTranscript(state.selectedParticipant);
-            loadSummary(state.selectedParticipant);
-            loadFriction(state.selectedParticipant);
+            _loadAnalysis(state.selectedParticipant);
           } else if (state.selectedParticipant &&
               newlySpeakers.indexOf(state.selectedParticipant) >= 0) {
             loadTranscript(state.selectedParticipant);
@@ -2381,7 +2364,7 @@
       if (!hasActive && _hadActiveTranscriptionLastPoll) {
         refreshTranscriptionModelHintOnce();
         // Transcription finished; re-read real cache state before the next gate.
-        _forgetWhisperDownloadAgreements();
+        _invalidateModelsCache();
       }
       _hadActiveTranscriptionLastPoll = hasActive;
 
@@ -2473,34 +2456,9 @@
   function downloadLlmModel(model, onProgress, isCancelled) {
     return apiPost("api/models/llm/download", { model: model }).then(function (data) {
       if (!data || !data.ok) return false;
-      return new Promise(function (resolve) {
-        // createPoller pauses in a backgrounded tab; a raw setInterval would not.
-        var misses = 0;
-        var poller = createPoller(function () {
-          if (isCancelled && isCancelled()) {
-            poller.stop();
-            resolve(false);
-            return;
-          }
-          apiGet("api/models/llm/download-status?model=" + encodeURIComponent(model))
-            .then(function (st) {
-              if (!st || !st.ok || !st.found) {
-                if (++misses >= 20) { poller.stop(); resolve(false); }
-                return;
-              }
-              misses = 0;
-              if (onProgress) onProgress(st);
-              if (st.done) {
-                poller.stop();
-                resolve(!!st.succeeded);
-              }
-            })
-            .catch(function () {
-              if (++misses >= 20) { poller.stop(); resolve(false); }
-            });
-        }, 1000, { runImmediately: true, label: "transcripts.llmDownload" });
-        poller.start();
-      });
+      return pollDownloadStatus("api/models/llm/download-status?model=" + encodeURIComponent(model), onProgress,
+        { isCancelled: isCancelled, label: "transcripts.llmDownload" })
+        .then(function (st) { return !!(st && st.succeeded); });
     }).catch(function () { return false; });
   }
 
@@ -2606,8 +2564,7 @@
           cancelBtn.textContent = "Close";
         }
 
-        _trModelsCache = null;
-        _trModelsCachePromise = null;
+        _invalidateModelsCache();
         _trFetchModels().then(function (data) {
           if (cancelled) return;
           // clipgenLlmStatus(null) reads "ok"; here a failed check is not a yes.
@@ -2649,8 +2606,7 @@
         }, function () { return cancelled; }).then(function (ok) {
           if (cancelled) return; // dismissed mid-download: no toast, no re-close
           if (ok) {
-            _trModelsCache = null;
-            _trModelsCachePromise = null;
+            _invalidateModelsCache();
             showToast("Model downloaded");
             close(true);
           } else {
@@ -2705,8 +2661,7 @@
     showToast("Starting AI server…");
     return apiPost("api/models/llm/start", {})
       .then(function () {
-        _trModelsCache = null;
-        _trModelsCachePromise = null;
+        _invalidateModelsCache();
         return _trFetchModels();
       })
       .then(function (fresh) {
@@ -2741,24 +2696,18 @@
     });
   }
 
-  function _applySettingsSnapshot(applied, settings) {
-    var nextCats = null;
-    if (applied && applied.MARK_CATEGORIES) {
-      nextCats = applied.MARK_CATEGORIES;
-    } else if (settings) {
-      for (var i = 0; i < settings.length; i++) {
-        if (settings[i].name === "MARK_CATEGORIES") {
-          nextCats = settings[i].value;
-          break;
-        }
-      }
+  // Swap in mark categories; a vanished last-used category falls back to the first.
+  function _adoptMarkCategories(cats) {
+    setMarkCategories(cats);
+    if (!MARK_CATEGORIES[state.lastMarkCategory]) {
+      state.lastMarkCategory = Object.keys(MARK_CATEGORIES)[0] || "bookmark";
     }
+  }
+
+  function _applySettingsSnapshot(applied, settings) {
+    var nextCats = _settingValue(applied, settings, "MARK_CATEGORIES");
     if (nextCats) {
-      setMarkCategories(nextCats);
-      if (!MARK_CATEGORIES[state.lastMarkCategory]) {
-        var firstKey = Object.keys(MARK_CATEGORIES)[0];
-        state.lastMarkCategory = firstKey || "bookmark";
-      }
+      _adoptMarkCategories(nextCats);
       // Refresh streaming mark colors and re-render the visible transcript.
       for (var sid in _streamingMarks) {
         var sm = _streamingMarks[sid];
@@ -2770,18 +2719,14 @@
       if (state.selectedParticipant) loadTranscript(state.selectedParticipant);
     }
     if (applyCrossRefSetting(applied, settings)) rerenderCrossRefs();
-    var spk = applied && applied.TRANSCRIBE_SPEAKERS !== undefined
-      ? applied.TRANSCRIBE_SPEAKERS
-      : _settingValueFromRecords(settings, "TRANSCRIBE_SPEAKERS");
+    var spk = _settingValue(applied, settings, "TRANSCRIBE_SPEAKERS");
     if (spk !== undefined && !!spk !== CLIPGEN_CONFIG.transcribeSpeakers) {
       CLIPGEN_CONFIG.transcribeSpeakers = !!spk;
       // Unset pill switches follow the global; the transcript re-reads chip visibility.
       renderPills();
       if (state.selectedParticipant) loadTranscript(state.selectedParticipant);
     }
-    var red = applied && applied.TRANSCRIBE_REDACT !== undefined
-      ? applied.TRANSCRIBE_REDACT
-      : _settingValueFromRecords(settings, "TRANSCRIBE_REDACT");
+    var red = _settingValue(applied, settings, "TRANSCRIBE_REDACT");
     if (red !== undefined && !!red !== CLIPGEN_CONFIG.transcribeRedact) {
       CLIPGEN_CONFIG.transcribeRedact = !!red;
       renderPills();
@@ -2808,7 +2753,9 @@
     _lastTranscribeModel = newModel;
   }
 
-  function _settingValueFromRecords(settings, name) {
+  // applied[name] when present, else the value from the settings records.
+  function _settingValue(applied, settings, name) {
+    if (applied && applied[name] !== undefined) return applied[name];
     if (!settings) return undefined;
     for (var i = 0; i < settings.length; i++) {
       if (settings[i].name === name) return settings[i].value;
@@ -2821,13 +2768,8 @@
     window.wireSettingsButton({
       initialTab: "Transcription",
       onApply: function (applied, settings) {
-        _trModelsCache = null;
-        _trModelsCachePromise = null;
-        _onTranscribeModelMaybeChanged(
-          applied && applied.TRANSCRIBE_MODEL !== undefined
-            ? applied.TRANSCRIBE_MODEL
-            : _settingValueFromRecords(settings, "TRANSCRIBE_MODEL")
-        );
+        _invalidateModelsCache();
+        _onTranscribeModelMaybeChanged(_settingValue(applied, settings, "TRANSCRIBE_MODEL"));
         _applySettingsSnapshot(applied, settings);
       },
     });
@@ -2867,12 +2809,8 @@
 
   // Published on TS; transcripts-agents.js gates panel refreshes on it.
   function _currentParticipantHasTranscript() {
-    var pid = state.selectedParticipant;
-    if (!pid || !state.participants) return false;
-    for (var i = 0; i < state.participants.length; i++) {
-      if (state.participants[i].id === pid) return !!state.participants[i].has_transcript;
-    }
-    return false;
+    var p = _selectedParticipantRow();
+    return !!(p && p.has_transcript);
   }
 
   function refreshTopNavActions() {
@@ -3079,13 +3017,7 @@
 
     // Fetch live mark categories so the popover/pill renders match overrides.
     apiGet("api/marks").then(function (data) {
-      if (data && data.ok && data.categories) {
-        setMarkCategories(data.categories);
-        if (!MARK_CATEGORIES[state.lastMarkCategory]) {
-          var firstKey = Object.keys(MARK_CATEGORIES)[0];
-          state.lastMarkCategory = firstKey || "bookmark";
-        }
-      }
+      if (data && data.ok && data.categories) _adoptMarkCategories(data.categories);
     });
 
     // Check for active tasks on load
@@ -3116,6 +3048,9 @@
   TS.showMarkPopover = showMarkPopover; // video (keyboard marking on already-marked segment)
   TS.maybeWarmOnPillHover = maybeWarmOnPillHover; // pills
   TS.tryPostTranscriptionWarmup = tryPostTranscriptionWarmup; // pills
+  TS.latestTask = latestTask; // redact
+  TS.participantById = participantById; // pills
+  TS._selectedParticipantRow = _selectedParticipantRow; // agents, redact
   TS.pollTaskStatus = pollTaskStatus; // pills
   TS.refreshTranscribeWording = refreshTranscribeWording; // pills (cancel repaints before the next poll)
   TS.startPolling = startPolling; // pills
@@ -3134,5 +3069,8 @@
   TS._frictionEtaTracker = _frictionEtaTracker; // agents
   TS._updateAgentElapsed = _updateAgentElapsed; // agents
   TS._currentParticipantHasTranscript = _currentParticipantHasTranscript; // agents (panel-visible guard)
+  TS._segmentIndexById = _segmentIndexById; // agents (friction moments)
+  TS._tokenRuns = _tokenRuns; // redact (PII chips)
+  TS.segWordTiming = segWordTiming; // redact
 
 })();

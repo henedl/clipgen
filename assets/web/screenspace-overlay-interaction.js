@@ -39,6 +39,7 @@
     renderRunRegionPicker = SS.renderRunRegionPicker,
     updateRunButton = SS.updateRunButton,
     renderWorkflowParams = SS.renderWorkflowParams,
+    installUploadedRef = SS.installUploadedRef,
     getThemeColors = SS.getThemeColors,
     deactivatePipette = SS.deactivatePipette,
     refreshCalibration = SS.refreshCalibration,
@@ -225,8 +226,7 @@
     var w = overlay.width, h = overlay.height;
     var mask = rasterizeShapesMask([baseShape], w, h);
     combineShapeMasks(mask, rasterizeShapesMask([shape], w, h), op);
-    var displayW = overlay.getBoundingClientRect().width || w;
-    var s = w / displayW;
+    var s = canvasScale(overlay);
     // Drop <8px² specks, then simplify toward the server's 400-vertex cap.
     var contours = simplifyContours(maskToContours(mask, w, h, 8), 2 * s, 400);
     if (!contours.length || contoursArea(contours) < 64) return null;
@@ -349,8 +349,7 @@
       var combine = state.drawingLasso.combine;
       state.drawingLasso = null;
       _cachedOverlayRect = null;
-      var displayW = overlay.getBoundingClientRect().width || overlay.width;
-      var s = overlay.width / displayW;
+      var s = canvasScale(overlay);
       var simplified = simplifyForRegion(pts, s);
       if (combine) {
         if (simplified.length >= 3 && polygonArea(simplified) >= 8) {
@@ -594,19 +593,8 @@
       cctx.drawImage(state.frameImage, minX, minY, bw, bh, 0, 0, bw, bh);
       cctx.globalCompositeOperation = "destination-in";
       cctx.drawImage(sd.canvas, minX, minY, bw, bh, 0, 0, bw, bh);
-      var dataUrl = crop.toDataURL("image/png");
-      state.uploadedTemplate = { name: "drawn-shape.png", data: dataUrl.split(",")[1] };
-      state.referenceTimestamp = null;
-      state.capturedRefPreview = null;
-      state.templateOverlayPos = null;
-      var previewImg = new Image();
-      previewImg.onload = function () { renderOverlay(); };
-      previewImg.src = dataUrl;
-      state.uploadedTemplateImg = previewImg;
       cancelShapeDraw();
-      renderWorkflowParams();
-      updateRunButton();
-      refreshModelView({ debounce: true });
+      installUploadedRef("drawn-shape.png", crop.toDataURL("image/png").split(",")[1]);
       showToast("Shape captured from drawing");
     }
 
@@ -648,10 +636,9 @@
       }
       _cachedOverlayRect = overlay.getBoundingClientRect();
       pos = canvasCoords(overlay, e, _cachedOverlayRect);
-      var displayW = _cachedOverlayRect.width || overlay.width;
       // Hidden overlay: no size, and `s` would go NaN into hit tests and stored coords.
-      if (!displayW || !overlay.width) return;
-      var s = overlay.width / displayW;
+      if (!overlay.width) return;
+      var s = canvasScale(overlay, _cachedOverlayRect);
       var ctx = overlay.getContext("2d");
       // Shape-draw mode swallows every canvas press: paint, or Shift-erase.
       if (state.shapeDraw) {
@@ -734,8 +721,7 @@
       if (state.wandDragging) { updateWandDragFromEvent(e); return; }
       var rect = _cachedOverlayRect || overlay.getBoundingClientRect();
       var pos = canvasCoords(overlay, e, rect);
-      var displayW = rect.width || overlay.width;
-      var s = overlay.width / displayW;
+      var s = canvasScale(overlay, rect);
       if (state.shapeDraw) {
         if (state.shapeDraw.stroking) {
           extendShapeStroke(pos);
@@ -746,35 +732,8 @@
         }
         return;
       }
-      if (state.draggingTemplate) {
-        var tImg = state.uploadedTemplateImg;
-        var tw = Math.max(1, Math.round(tImg.naturalWidth * (state.templateScalePreview || 1.0)));
-        var thh = Math.max(1, Math.round(tImg.naturalHeight * (state.templateScalePreview || 1.0)));
-        var nx = clamp(pos.x - state.draggingTemplate.offsetX, 0, overlay.width - tw);
-        var ny = clamp(pos.y - state.draggingTemplate.offsetY, 0, overlay.height - thh);
-        state.templateOverlayPos = { x: nx, y: ny };
-        scheduleOverlayRender();
-        return;
-      }
-      if (state.resizingRegion) {
-        var rName = state.resizingRegion.name;
-        var rPx = regionToPixels(state.regions[rName]);
-        var minSize = Math.round(20 * s);
-        var newW = clamp(pos.x - rPx.x, minSize, overlay.width - rPx.x);
-        var newH = clamp(pos.y - rPx.y, minSize, overlay.height - rPx.y);
-        state.regions[rName] = Object.assign({}, state.regions[rName], { w: newW / overlay.width, h: newH / overlay.height });
-        scheduleOverlayRender();
-        return;
-      }
-      if (state.draggingRegion) {
-        var d = state.draggingRegion;
-        var dPx = regionToPixels(state.regions[d.name]);
-        var newX = clamp(pos.x - d.offsetX, 0, overlay.width - dPx.w);
-        var newY = clamp(pos.y - d.offsetY, 0, overlay.height - dPx.h);
-        state.regions[d.name] = Object.assign({}, state.regions[d.name], { x: newX / overlay.width, y: newY / overlay.height });
-        scheduleOverlayRender();
-        return;
-      }
+      // The document listener moves drags; this event bubbles there next.
+      if (state.draggingTemplate || state.resizingRegion || state.draggingRegion) return;
       if (state.drawingLasso) {
         appendLassoPoint(pos, s);
         return;
@@ -814,36 +773,7 @@
       if (e.button !== 0) return;
       if (state.wandDragging) { commitWandDrag(); return; }
       if (state.shapeDraw) { endShapeStroke(); return; }
-      if (state.draggingTemplate) {
-        _cachedOverlayRect = null;
-        state.draggingTemplate = null;
-        document.body.style.cursor = "";
-        document.body.style.userSelect = "";
-        flushOverlayRender();
-        return;
-      }
-      if (state.resizingRegion) {
-        _cachedOverlayRect = null;
-        var rName = state.resizingRegion.name;
-        state.resizingRegion = null;
-        document.body.style.cursor = "";
-        document.body.style.userSelect = "";
-        saveRegionUpdate(rName);
-        flushOverlayRender();
-        updateRegionButtons();
-        return;
-      }
-      if (state.draggingRegion) {
-        _cachedOverlayRect = null;
-        var dName = state.draggingRegion.name;
-        state.draggingRegion = null;
-        document.body.style.cursor = "";
-        document.body.style.userSelect = "";
-        saveRegionUpdate(dName);
-        flushOverlayRender();
-        updateRegionButtons();
-        return;
-      }
+      // Drags end in the document mouseup; finishDrawing* return false for them.
       if (finishDrawingLasso()) return;
       finishDrawingRegion(e);
     });
@@ -871,14 +801,13 @@
       if (state.drawingLasso) {
         var lassoRect = _cachedOverlayRect || overlay.getBoundingClientRect();
         var lassoPos = canvasCoords(overlay, e, lassoRect);
-        appendLassoPoint(lassoPos, overlay.width / (lassoRect.width || overlay.width));
+        appendLassoPoint(lassoPos, canvasScale(overlay, lassoRect));
         return;
       }
       if (!state.resizingRegion && !state.draggingRegion && !state.draggingTemplate) return;
       var rect = _cachedOverlayRect || overlay.getBoundingClientRect();
       var pos = canvasCoords(overlay, e, rect);
-      var displayW = rect.width || overlay.width;
-      var s = overlay.width / displayW;
+      var s = canvasScale(overlay, rect);
       if (state.draggingTemplate) {
         var tImg = state.uploadedTemplateImg;
         var tw = Math.max(1, Math.round(tImg.naturalWidth * (state.templateScalePreview || 1.0)));
@@ -969,10 +898,7 @@
           var commit = function () {
             delete state.regions[name];
             state.activeRegion = null;
-            renderRegionChips();
-            renderOverlay();
-            updateRegionButtons();
-            updateRunButton();
+            refreshRegionUi();
             showToast("Region '" + name + "' deleted");
           };
           if (chip) ClipgenMotion.animateOut(chip, "delete").then(commit);
@@ -992,10 +918,7 @@
             state.regions = {};
             state.activeRegion = null;
             state.pendingRegion = null;
-            renderRegionChips();
-            renderOverlay();
-            updateRegionButtons();
-            updateRunButton();
+            refreshRegionUi();
             showToast("All regions deleted");
           };
           if (chips.length) ClipgenMotion.animateOutAll(chips, "delete").then(commit);
@@ -1105,10 +1028,7 @@
             state.regions[name] = saved;
             state.pendingRegion = null;
             state.activeRegion = name;
-            renderRegionChips();
-            renderOverlay();
-            updateRegionButtons();
-            updateRunButton();
+            refreshRegionUi();
             hideRegionNameModal();
             showToast("Region '" + name + "' saved");
           } else {
@@ -1168,8 +1088,7 @@
     var w = overlay.width, h = overlay.height;
     var shapes = [target].concat(others).map(function (n) { return regionShapeAbs(state.regions[n]); });
     var mask = rasterizeShapesMask(shapes, w, h);
-    var displayW = overlay.getBoundingClientRect().width || w;
-    var contours = simplifyContours(maskToContours(mask, w, h, 8), 2 * (w / displayW), 400);
+    var contours = simplifyContours(maskToContours(mask, w, h, 8), 2 * canvasScale(overlay), 400);
     if (!contours.length) return;
     saveRegionShape(target, contours, null, function () {
       Promise.all(others.map(function (n) {
@@ -1178,10 +1097,7 @@
         .then(function () {
           others.forEach(function (n) { delete state.regions[n]; });
           _mergeSelection = [];
-          renderRegionChips();
-          renderOverlay();
-          updateRegionButtons();
-          updateRunButton();
+          refreshRegionUi();
           showToast("Merged " + (others.length + 1) + " regions into '" + target + "'");
         })
         .catch(function () { showToast("Merged shapes, but failed to delete a source region"); });
@@ -1271,10 +1187,7 @@
           state.activeRegion = name;
           state.pendingRegion = null;
         }
-        renderRegionChips();
-        renderOverlay();
-        updateRegionButtons();
-        updateRunButton();
+        refreshRegionUi();
       });
       container.appendChild(chip);
       // Animate in only pills new since the last render; reuses the stash-card landing animation.
@@ -1292,6 +1205,13 @@
     refreshCalibration({ debounce: true });
   }
 
+  function refreshRegionUi() {
+    renderRegionChips();
+    renderOverlay();
+    updateRegionButtons();
+    updateRunButton();
+  }
+
   function updateRegionChipsOverflow() {
     var chips = qs("#regionChips");
     var wrapper = qs("#regionChipsScroll");
@@ -1302,6 +1222,7 @@
   SS.initRegionDrawing = initRegionDrawing;
   SS.renderRegionChips = renderRegionChips;
   SS.updateRegionButtons = updateRegionButtons;
+  SS.refreshRegionUi = refreshRegionUi;
   SS.computeLabelRect = computeLabelRect;
   SS.invalidateOverlayRect = invalidateOverlayRect;
   SS.hideRegionNameModal = hideRegionNameModal;

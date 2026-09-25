@@ -50,12 +50,14 @@
   }
 
   // Null = no per-participant choice yet; follow the global default.
+  function enabledFor(entry, globalDefault) {
+    var e = entry || {};
+    if (e.enabled === null || e.enabled === undefined) return !!globalDefault;
+    return !!e.enabled;
+  }
+
   function speakersEnabledFor(p) {
-    var sp = p.speakers || {};
-    if (sp.enabled === null || sp.enabled === undefined) {
-      return !!CLIPGEN_CONFIG.transcribeSpeakers;
-    }
-    return !!sp.enabled;
+    return enabledFor(p.speakers, CLIPGEN_CONFIG.transcribeSpeakers);
   }
 
   function _refreshAfterSpeakerChange(pid) {
@@ -66,28 +68,24 @@
     });
   }
 
-  function setSpeakersEnabled(pid, enabled) {
-    return apiPut("api/speakers/" + pid, { enabled: enabled })
+  function _speakersCall(send, pid, path, body, failMsg) {
+    return send("api/speakers/" + pid + path, body)
       .then(function (data) {
         if (!data.ok) throw new Error(data.error || "speakers");
         return _refreshAfterSpeakerChange(pid);
       })
       .catch(function (err) {
-        showToast(err && err.message ? err.message : "Failed to update speakers");
+        showToast(err && err.message ? err.message : failMsg);
         if (TS.renderPills) TS.renderPills();
       });
   }
 
+  function setSpeakersEnabled(pid, enabled) {
+    return _speakersCall(apiPut, pid, "", { enabled: enabled }, "Failed to update speakers");
+  }
+
   function regenerateSpeakers(pid) {
-    return apiPost("api/speakers/" + pid + "/regenerate", {})
-      .then(function (data) {
-        if (!data.ok) throw new Error(data.error || "speakers");
-        return _refreshAfterSpeakerChange(pid);
-      })
-      .catch(function (err) {
-        showToast(err && err.message ? err.message : "Failed to start speakers");
-        if (TS.renderPills) TS.renderPills();
-      });
+    return _speakersCall(apiPost, pid, "/regenerate", {}, "Failed to start speakers");
   }
 
   function stopSpeakers(pid) {
@@ -247,6 +245,7 @@
   TS.speakersOn = speakersOn;
   TS.speakerName = speakerName;
   TS.speakerChipHtml = speakerChipHtml;
+  TS.enabledFor = enabledFor; // redact
   TS.speakersEnabledFor = speakersEnabledFor;
   TS.setSpeakersEnabled = setSpeakersEnabled;
   TS.regenerateSpeakers = regenerateSpeakers;

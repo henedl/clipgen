@@ -86,12 +86,6 @@
   width: 14px;
   height: 14px;
   background-color: currentColor;
-  mask-size: contain;
-  -webkit-mask-size: contain;
-  mask-repeat: no-repeat;
-  -webkit-mask-repeat: no-repeat;
-  mask-position: center;
-  -webkit-mask-position: center;
   flex-shrink: 0;
 }
 
@@ -675,8 +669,7 @@
   gap: 18px;
 }
 
-/* Same idea as overview.css .tab-slide-enter: the newly revealed panel eases
- * in, so switching tabs reads as a move rather than a repaint. */
+/* Like tokens.css .tab-slide-enter: the new panel eases in, reading as a move. */
 .start-overlay .start-tabpanel.is-entering .start-tabpanel__scroll {
   animation: so-tab-enter 220ms var(--ease-out);
 }

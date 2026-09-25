@@ -42,7 +42,7 @@
       eventTypes: [],
       minParticipants: 2,
       windowSec: 10,
-      clusterSec: 10,
+      clusterSec: window.ClipgenIntakeCluster.DEFAULT_GAP_SECONDS,
       timeRange: null,
     },
     dataVersion: 0,
@@ -652,7 +652,8 @@
     var inputs = controls.querySelectorAll("input[type=number]");
     if (inputs[0]) cvState.filters.minParticipants = Math.max(2, parseInt(inputs[0].value, 10) || 2);
     if (inputs[1]) cvState.filters.windowSec = Math.max(1, parseInt(inputs[1].value, 10) || 10);
-    if (inputs[2]) cvState.filters.clusterSec = Math.max(1, parseInt(inputs[2].value, 10) || 10);
+    if (inputs[2]) cvState.filters.clusterSec = Math.max(1, parseInt(inputs[2].value, 10) ||
+      window.ClipgenIntakeCluster.DEFAULT_GAP_SECONDS);
   }
 
   var debouncedRecalculate = debounce(function () {
@@ -1110,8 +1111,7 @@
   }
 
   // source null writes every lane (coupled). Sub-0.05s values clear the lane.
-  function commitOffset(pid, source, seconds) {
-    if (!pid) return;
+  function writeOffset(pid, source, seconds) {
     var num = clampOffset(seconds);
     var sources = source ? [source] : CLIPGEN_CONFIG.convergenceSources;
     if (!cvState.offsets[pid]) cvState.offsets[pid] = {};
@@ -1121,6 +1121,11 @@
       else cvState.offsets[pid][s] = num;
     }
     pruneParticipant(pid);
+  }
+
+  function commitOffset(pid, source, seconds) {
+    if (!pid) return;
+    writeOffset(pid, source, seconds);
     recalculate();
     cvSaveOffsets();
   }
@@ -1385,15 +1390,7 @@
     document.body.style.userSelect = "";
     var deltaSec = (_cvDragLastX - tx.startX) / tx.pxPerSec;
     if (Math.abs(deltaSec) >= 0.05) {
-      var num = clampOffset(tx.baseOffset + deltaSec);
-      var sources = tx.source ? [tx.source] : CLIPGEN_CONFIG.convergenceSources;
-      if (!cvState.offsets[tx.pid]) cvState.offsets[tx.pid] = {};
-      for (var i = 0; i < sources.length; i++) {
-        var s = sources[i];
-        if (Math.abs(num) < 0.05) delete cvState.offsets[tx.pid][s];
-        else cvState.offsets[tx.pid][s] = num;
-      }
-      pruneParticipant(tx.pid);
+      writeOffset(tx.pid, tx.source, tx.baseOffset + deltaSec);
       cvSaveOffsets();
       // Runs inside recalculate() via renderTimeline(); defer the re-render.
       setTimeout(recalculate, 0);

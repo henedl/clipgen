@@ -30,12 +30,6 @@
   width: var(--icon-size-sm);
   height: var(--icon-size-sm);
   background-color: currentColor;
-  mask-size: contain;
-  mask-repeat: no-repeat;
-  mask-position: center;
-  -webkit-mask-size: contain;
-  -webkit-mask-repeat: no-repeat;
-  -webkit-mask-position: center;
 }
 
 /* min-width: 0 so a long ffmpeg error truncates instead of collapsing the

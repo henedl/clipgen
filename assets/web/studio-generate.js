@@ -38,6 +38,7 @@
     stampLog = STUDIO.stampLog,
     isIntakeSource = STUDIO.isIntakeSource,
     buildCellOverrides = STUDIO.buildCellOverrides,
+    readTitlecardControls = STUDIO.readTitlecardControls,
     _generateEtaTracker = STUDIO._generateEtaTracker,
     _studioEtaTicker = STUDIO._studioEtaTicker;
 
@@ -246,12 +247,7 @@
       var genBody = { cells: cells, format: format };
       var genOverrides = buildCellOverrides(sheetItems);
       if (Object.keys(genOverrides).length > 0) genBody.overrides = genOverrides;
-      if (format === "clip") {
-        var tcCb = qs("#titlecardEnabled");
-        var tcDur = qs("#titlecardDuration");
-        if (tcCb) genBody.titlecards_enabled = tcCb.checked;
-        if (tcDur) genBody.titlecard_duration = parseInt(tcDur.value, 10) || 2;
-      }
+      if (format === "clip") Object.assign(genBody, readTitlecardControls());
 
       apiPostNDJSON("api/generate", genBody, {
         signal: sheetAbort.signal,

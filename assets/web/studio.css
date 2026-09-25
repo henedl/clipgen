@@ -27,12 +27,6 @@ html {
 .cg-icon {
   display: inline-block;
   background-color: currentColor;
-  mask-size: contain;
-  mask-repeat: no-repeat;
-  mask-position: center;
-  -webkit-mask-size: contain;
-  -webkit-mask-repeat: no-repeat;
-  -webkit-mask-position: center;
 }
 .cg-icon--x-mark      { mask-image: url(icons/x-mark.svg);      -webkit-mask-image: url(icons/x-mark.svg); }
 .cg-icon--folder-open { mask-image: url(icons/folder-open.svg); -webkit-mask-image: url(icons/folder-open.svg); }
@@ -189,13 +183,7 @@ body {
   height: 11px;
   background-color: currentColor;
   mask-image: url("icons/chevron-double-left.svg");
-  mask-size: contain;
-  mask-repeat: no-repeat;
-  mask-position: center;
   -webkit-mask-image: url("icons/chevron-double-left.svg");
-  -webkit-mask-size: contain;
-  -webkit-mask-repeat: no-repeat;
-  -webkit-mask-position: center;
   /* Transition added by `#studioSidebar.tx-ready` rule above. */
 }
 #studioSidebar[data-open="false"] .studio-sidebar-toggle-icon {
@@ -335,34 +323,6 @@ body[data-active-tab]:not([data-active-tab="sheet"]) #studioSidebar {
   padding-top: var(--space-2);
 }
 
-/* Sub-tab underline-on-active styling (matches the prototype). */
-
-.preview-tab {
-  display: inline-flex;
-  align-items: center;
-  height: 100%;
-  padding: 0 2px;
-  font-size: 12.5px;
-  font-weight: 400;
-  background: none;
-  border: none;
-  border-bottom: 1px solid transparent;
-  margin-bottom: -1px; /* sits on subheader's bottom border */
-  color: var(--fg-muted);
-  cursor: pointer;
-  transition: color var(--duration-fast);
-  font-family: inherit;
-}
-
-.preview-tab:hover {
-  color: var(--fg);
-}
-
-.preview-tab.active {
-  color: var(--fg);
-  border-bottom-color: var(--fg);
-}
-
 /* Slide-fade transition for sub-tab content. Matches prototype TabSlide
  * (lines 1766–1793): translateX 12 → 0 + opacity 0 → 1 over ~180ms.
  * studio.js applies .tab-slide-enter on the newly-shown panel, then removes
@@ -374,10 +334,6 @@ body[data-active-tab]:not([data-active-tab="sheet"]) #studioSidebar {
 #mnIntakePanel {
   transition: opacity 180ms ease-out, transform 220ms var(--ease-out-soft);
 }
-.tab-slide-enter {
-  opacity: 0 !important;
-  transform: translateX(12px);
-}
 @media (prefers-reduced-motion: reduce) {
   #sheetGrid,
   #intakePanel,
@@ -385,10 +341,6 @@ body[data-active-tab]:not([data-active-tab="sheet"]) #studioSidebar {
   #coIntakePanel,
   #mnIntakePanel {
     transition: none;
-  }
-  .tab-slide-enter {
-    opacity: 1 !important;
-    transform: none;
   }
 }
 
@@ -1989,15 +1941,6 @@ html[data-theme="dark"] .queue-card-error .queue-card-thumb {
 
 /* Gallery configuration dialog — triggered from TopNav Quick Actions. */
 
-#galleryOverlay {
-  position: fixed;
-  inset: 0;
-  z-index: var(--z-modal);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
 .gallery-card {
   background: var(--bg-elevated);
   border: 1px solid var(--border);
@@ -2193,7 +2136,8 @@ html[data-theme="dark"] .queue-card-error .queue-card-thumb {
  * prefers-reduced-motion fallback. #buildStatus is the exception: a non-blocking
  * corner card, so no veil and only its card animates. */
 
-#statusOverlay {
+#statusOverlay,
+#confirmOverlay {
   position: fixed;
   inset: 0;
   z-index: var(--z-dropdown);
@@ -2290,17 +2234,6 @@ html[data-theme="dark"] .queue-card-error .queue-card-thumb {
   gap: var(--space-2);
 }
 
-/* Confirm overlay */
-
-#confirmOverlay {
-  position: fixed;
-  inset: 0;
-  z-index: var(--z-dropdown);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
 /* Shell comes from .cg-modal-card (tokens.css) — which normalizes the old
  * hand-rolled shadow onto --shadow-xl and adds the shared 1px border. This
  * rule owns the centered layout; its gap out-cascades the base's space-3
@@ -2369,17 +2302,6 @@ html[data-theme="dark"] .queue-card-error .queue-card-thumb {
 }
 
 /* ---- Artifact Log overlay ---- */
-
-/* Backdrop + the `position: relative` that lifts .log-panel above it both come
- * from .cg-modal-veil (tokens.css). */
-#logOverlay {
-  position: fixed;
-  inset: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  z-index: var(--z-modal);
-}
 
 .log-type-badge[data-type="clip"] {
   background: #dbeafe;

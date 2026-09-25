@@ -730,11 +730,6 @@
     resetBtn.setAttribute("aria-label", "Reset to the default colors");
     resetBtn.setAttribute("data-tooltip", "Reset to the default colors");
     var resetGlyph = el("span", "co-swatch-reset-glyph");
-    resetGlyph.style.setProperty(
-      "--co-swatch-default", CLIPGEN_CONFIG.composerAnnotationColor);
-    resetGlyph.style.setProperty(
-      "--co-swatch-default-secondary",
-      CLIPGEN_CONFIG.composerAnnotationColorSecondary);
     resetBtn.appendChild(resetGlyph);
     resetBtn.addEventListener("click", function () {
       state.annColorSecondary = CLIPGEN_CONFIG.composerAnnotationColorSecondary;
@@ -764,22 +759,14 @@
       if (fp) fp.textContent = String(Math.round(state.annFontSize * 1000));
     }
 
-    function applyAnnStrokeWidth(v) {
-      state.annStrokeWidth = v;
-      updateChipPreviews();
-      applyStyleToSelection({ strokeWidth: v });
-    }
-
-    function applyAnnStrokeStyle(s) {
-      state.annStrokeStyle = s;
-      updateChipPreviews();
-      applyStyleToSelection({ strokeStyle: s });
-    }
-
-    function applyAnnFontSize(v) {
-      state.annFontSize = v;
-      updateChipPreviews();
-      applyStyleToSelection({ fontSize: v });
+    function chipSetter(stateKey, patchKey) {
+      return function (v) {
+        state[stateKey] = v;
+        updateChipPreviews();
+        var patch = {};
+        patch[patchKey] = v;
+        applyStyleToSelection(patch);
+      };
     }
 
     var widthBtn = qs("#coStrokeWidthBtn");
@@ -795,7 +782,7 @@
             line.style.borderTopStyle = "solid";
           },
         };
-      }), state.annStrokeWidth, applyAnnStrokeWidth);
+      }), state.annStrokeWidth, chipSetter("annStrokeWidth", "strokeWidth"));
     });
 
     var styleBtn = qs("#coStrokeStyleBtn");
@@ -810,7 +797,7 @@
             line.style.borderTopStyle = s;
           },
         };
-      }), state.annStrokeStyle, applyAnnStrokeStyle);
+      }), state.annStrokeStyle, chipSetter("annStrokeStyle", "strokeStyle"));
     });
 
     var fontBtn = qs("#coFontSizeBtn");
@@ -827,7 +814,7 @@
             cell.style.fontSize = fontDisplayPx(v) + "px";
           },
         };
-      }), state.annFontSize, applyAnnFontSize);
+      }), state.annFontSize, chipSetter("annFontSize", "fontSize"));
     });
 
     updateChipPreviews();
@@ -936,16 +923,7 @@
     });
 
     // One update per frame: pointer events arrive at 120–240 Hz and each branch renders.
-    var _moveRaf = 0;
-    var _lastMove = null;
-    canvas.addEventListener("pointermove", function (e) {
-      _lastMove = e;
-      if (_moveRaf) return;
-      _moveRaf = requestAnimationFrame(function () {
-        _moveRaf = 0;
-        handlePointerMove(_lastMove);
-      });
-    });
+    canvas.addEventListener("pointermove", rafThrottle(handlePointerMove));
 
     function handlePointerMove(e) {
       var pos = eventToNormalized(e);
@@ -1104,6 +1082,7 @@
     }
     canvas.addEventListener("pointerup", endGesture);
     canvas.addEventListener("pointercancel", endGesture);
+    CO.syncAnnotationDefaults();
   }
 
   CO.initAnnotate = initAnnotate;

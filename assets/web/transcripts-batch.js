@@ -194,7 +194,7 @@
   // One clip per mark cluster via Studio's generate-intake.
 
   // Mirror Studio's #trIntakeClusterThreshold and pad-0 so both pages cut identical spans.
-  var CLIP_MARKS_DEFAULT_GAP_SECONDS = 10;
+  var CLIP_MARKS_DEFAULT_GAP_SECONDS = window.ClipgenIntakeCluster.DEFAULT_GAP_SECONDS;
   var CLIP_MARKS_DEFAULT_PAD_SECONDS = 0;
 
   // Valid resolved marks, refetched every time the modal opens.

@@ -17,9 +17,6 @@
   var ZOOM_MAX = 2.5;
   var _gridBase = 24; // px at zoom 1; synced from --wf-grid-size in initCanvas
   var _bound = false;
-  var _vpRaf = 0;
-  var _moveRaf = 0;
-  var _minimapRaf = 0;
   // Node-drag / auto-pan state (set in startNodeDrag, cleared on mouseup).
   var _draggingNode = false;
   var _dragRect = null; // canvas getBoundingClientRect cached at drag start
@@ -36,12 +33,7 @@
     return Math.random().toString(36).slice(2, 10);
   }
 
-  function findNode(id) {
-    for (var i = 0; i < state.nodes.length; i++) {
-      if (state.nodes[i].id === id) return state.nodes[i];
-    }
-    return null;
-  }
+  function findNode(id) { return findById(state.nodes, id); }
 
   function typesHas(types, t) {
     if (!types) return false;
@@ -55,13 +47,7 @@
 
   // Write the world transform + grid offset, RAF-throttled (cf. screenspace's
   // scheduleOverlayRender).
-  function applyViewport() {
-    if (_vpRaf) return;
-    _vpRaf = requestAnimationFrame(function () {
-      _vpRaf = 0;
-      writeViewport();
-    });
-  }
+  var applyViewport = rafThrottle(writeViewport);
 
   // Synchronous twin of applyViewport: the drag flush must pan and place cards in one frame.
   function writeViewport() {
@@ -311,51 +297,47 @@
   }
 
   // RAF-throttled card style update; recomputes dragged positions from the live cursor so they track auto-pan.
-  function scheduleNodePositionFlush() {
-    if (_moveRaf) return;
-    _moveRaf = requestAnimationFrame(function () {
-      _moveRaf = 0;
-      var panned = autoPanWhileDragging();
-      // Write the panned transform now: applyViewport would lag the world a frame behind.
-      if (panned) writeViewport();
-      if (_dragRect && _dragOffsets) {
-        var vp = state.viewport;
-        // Cursor world point after the pan; cached rect avoids a layout read (cf. clientToWorld).
-        var curX = (_dragCursorX - _dragRect.left - vp.x) / vp.zoom;
-        var curY = (_dragCursorY - _dragRect.top - vp.y) / vp.zoom;
-        // Snap the grabbed node's corner, then move the whole selection by the same delta.
-        var anchor = _dragAnchorId && _dragOffsets[_dragAnchorId];
-        if (_snapEnabled && anchor) {
-          var snap = applySnap(curX + anchor.x, curY + anchor.y);
-          curX += snap.x - (curX + anchor.x);
-          curY += snap.y - (curY + anchor.y);
-          if (snap.gx !== null || snap.gy !== null) {
-            updateAlignGuides(snap.gx, snap.gy);
-          } else {
-            hideAlignGuides();
-          }
+  var scheduleNodePositionFlush = rafThrottle(function () {
+    var panned = autoPanWhileDragging();
+    // Write the panned transform now: applyViewport would lag the world a frame behind.
+    if (panned) writeViewport();
+    if (_dragRect && _dragOffsets) {
+      var vp = state.viewport;
+      // Cursor world point after the pan; cached rect avoids a layout read (cf. clientToWorld).
+      var curX = (_dragCursorX - _dragRect.left - vp.x) / vp.zoom;
+      var curY = (_dragCursorY - _dragRect.top - vp.y) / vp.zoom;
+      // Snap the grabbed node's corner, then move the whole selection by the same delta.
+      var anchor = _dragAnchorId && _dragOffsets[_dragAnchorId];
+      if (_snapEnabled && anchor) {
+        var snap = applySnap(curX + anchor.x, curY + anchor.y);
+        curX += snap.x - (curX + anchor.x);
+        curY += snap.y - (curY + anchor.y);
+        if (snap.gx !== null || snap.gy !== null) {
+          updateAlignGuides(snap.gx, snap.gy);
+        } else {
+          hideAlignGuides();
         }
-        state.selection.forEach(function (sid) {
-          var n = findNode(sid);
-          var o = _dragOffsets[sid];
-          var card = qs('.wf-node[data-node-id="' + sid + '"]');
-          if (n && o) {
-            n.position.x = curX + o.x;
-            n.position.y = curY + o.y;
-          }
-          if (n && card) {
-            card.style.left = (n.position.x || 0) + "px";
-            card.style.top = (n.position.y || 0) + "px";
-          }
-        });
       }
-      // Wires read live node.position; a moved node's wires track without a full re-render.
-      if (WF.renderWires) WF.renderWires();
-      renderMinimap();
-      // Keep panning while held still in the edge band; move() won't re-fire.
-      if (panned && _draggingNode) scheduleNodePositionFlush();
-    });
-  }
+      state.selection.forEach(function (sid) {
+        var n = findNode(sid);
+        var o = _dragOffsets[sid];
+        var card = qs('.wf-node[data-node-id="' + sid + '"]');
+        if (n && o) {
+          n.position.x = curX + o.x;
+          n.position.y = curY + o.y;
+        }
+        if (n && card) {
+          card.style.left = (n.position.x || 0) + "px";
+          card.style.top = (n.position.y || 0) + "px";
+        }
+      });
+    }
+    // Wires read live node.position; a moved node's wires track without a full re-render.
+    if (WF.renderWires) WF.renderWires();
+    renderMinimap();
+    // Keep panning while held still in the edge band; move() won't re-fire.
+    if (panned && _draggingNode) scheduleNodePositionFlush();
+  });
 
   function startMarquee(e) {
     var canvas = qs("#wfCanvas");
@@ -565,15 +547,20 @@
     ArrowDown: [0, 1],
   };
 
+  // World point at the canvas centre; the origin when there is no canvas.
+  function viewportCenterWorld() {
+    var canvas = qs("#wfCanvas");
+    if (!canvas) return { x: 0, y: 0 };
+    var r = canvas.getBoundingClientRect();
+    return clientToWorld(r.left + r.width / 2, r.top + r.height / 2);
+  }
+
   // ---- Sticky notes ----
 
   // Add a note pseudo-node at the viewport centre. Notes are plain state.nodes the runner ignores.
   function addNote() {
-    if (!state.ready) return;
-    var canvas = qs("#wfCanvas");
-    if (!canvas) return;
-    var rect = canvas.getBoundingClientRect();
-    var w = clientToWorld(rect.left + rect.width / 2, rect.top + rect.height / 2);
+    if (!state.ready || !qs("#wfCanvas")) return;
+    var w = viewportCenterWorld();
     var node = {
       id: "n_" + randomId(),
       type: "note",
@@ -603,36 +590,27 @@
       WF.scheduleViewportSave();
       return;
     }
-    var canvas = qs("#wfCanvas");
-    var rect = canvas.getBoundingClientRect();
-    var mx = e.clientX - rect.left;
-    var my = e.clientY - rect.top;
-    // World point under the cursor before the zoom.
-    var wx = (mx - vp.x) / vp.zoom;
-    var wy = (my - vp.y) / vp.zoom;
-    var factor = e.deltaY < 0 ? 1.1 : 1 / 1.1;
-    vp.zoom = clamp(vp.zoom * factor, ZOOM_MIN, ZOOM_MAX);
-    // Re-pin (wx,wy) under the cursor: x = mx - wx*zoom.
-    vp.x = mx - wx * vp.zoom;
-    vp.y = my - wy * vp.zoom;
-    applyViewport();
-    WF.scheduleViewportSave();
+    var rect = qs("#wfCanvas").getBoundingClientRect();
+    zoomAbout(e.clientX - rect.left, e.clientY - rect.top, e.deltaY < 0 ? 1.1 : 1 / 1.1);
   }
 
-  // Zoom about the canvas centre (minimap +/- buttons); onWheel's re-pin math, clamped.
+  // Zoom about the canvas centre (minimap +/- buttons).
   function zoomAtCenter(factor) {
     if (!state.ready) return;
     var canvas = qs("#wfCanvas");
     if (!canvas) return;
     var rect = canvas.getBoundingClientRect();
+    zoomAbout(rect.width / 2, rect.height / 2, factor);
+  }
+
+  // Clamped zoom that re-pins the world point under canvas-local (px, py).
+  function zoomAbout(px, py, factor) {
     var vp = state.viewport;
-    var cx = rect.width / 2;
-    var cy = rect.height / 2;
-    var wx = (cx - vp.x) / vp.zoom;
-    var wy = (cy - vp.y) / vp.zoom;
+    var wx = (px - vp.x) / vp.zoom;
+    var wy = (py - vp.y) / vp.zoom;
     vp.zoom = clamp(vp.zoom * factor, ZOOM_MIN, ZOOM_MAX);
-    vp.x = cx - wx * vp.zoom;
-    vp.y = cy - wy * vp.zoom;
+    vp.x = px - wx * vp.zoom;
+    vp.y = py - wy * vp.zoom;
     applyViewport();
     WF.scheduleViewportSave();
   }
@@ -644,12 +622,10 @@
   // In-memory clipboard, not the system one: no permission dance, and graphs aren't text.
   var _clipboard = null;
 
-  // Deep-clone the selection plus edges with both endpoints selected. False when nothing is selected.
-  function copySelection() {
-    var sel = state.selection;
-    if (!sel.length) return false;
+  // Deep-clones selected nodes plus edges with both ends selected; null when empty.
+  function cloneSelection() {
     var selSet = {};
-    sel.forEach(function (id) {
+    state.selection.forEach(function (id) {
       selSet[id] = true;
     });
     var nodes = state.nodes
@@ -659,7 +635,7 @@
       .map(function (n) {
         return JSON.parse(JSON.stringify(n));
       });
-    if (!nodes.length) return false;
+    if (!nodes.length) return null;
     var edges = state.edges
       .filter(function (ed) {
         return selSet[ed.from] && selSet[ed.to];
@@ -667,8 +643,14 @@
       .map(function (ed) {
         return JSON.parse(JSON.stringify(ed));
       });
-    _clipboard = { nodes: nodes, edges: edges };
-    return true;
+    return { nodes: nodes, edges: edges };
+  }
+
+  // False when nothing is selected; the old clipboard survives.
+  function copySelection() {
+    var sub = cloneSelection();
+    if (sub) _clipboard = sub;
+    return !!sub;
   }
 
   // Paste with fresh ids and a cascaded offset; the stashes satellite owns the id-remap.
@@ -836,18 +818,22 @@
     var canvas = qs("#wfCanvas");
     if (!canvas) return;
     var rect = canvas.getBoundingClientRect();
-    var card = qs('.wf-node[data-node-id="' + id + '"]');
     var vp = state.viewport;
-    var w = card ? card.offsetWidth : 200;
-    var h = card ? card.offsetHeight : 120;
-    var cx = (node.position.x || 0) + w / 2;
-    var cy = (node.position.y || 0) + h / 2;
+    var size = cardSize(id);
+    var cx = (node.position.x || 0) + size.w / 2;
+    var cy = (node.position.y || 0) + size.h / 2;
     vp.x = rect.width / 2 - cx * vp.zoom;
     vp.y = rect.height / 2 - cy * vp.zoom;
     applyViewport();
   }
 
   // ---- Fit to view ----
+
+  // Rendered card size; 200×120 for a card not in the DOM yet.
+  function cardSize(id) {
+    var card = qs('.wf-node[data-node-id="' + id + '"]');
+    return card ? { w: card.offsetWidth, h: card.offsetHeight } : { w: 200, h: 120 };
+  }
 
   // World-space bounding box of all cards (unrendered cards count as 200×120). Null when empty.
   function nodesBoundingBox() {
@@ -861,13 +847,11 @@
       var n = nodes[i];
       var x = (n.position && n.position.x) || 0;
       var y = (n.position && n.position.y) || 0;
-      var card = qs('.wf-node[data-node-id="' + n.id + '"]');
-      var w = card ? card.offsetWidth : 200;
-      var h = card ? card.offsetHeight : 120;
+      var size = cardSize(n.id);
       if (x < minX) minX = x;
       if (y < minY) minY = y;
-      if (x + w > maxX) maxX = x + w;
-      if (y + h > maxY) maxY = y + h;
+      if (x + size.w > maxX) maxX = x + size.w;
+      if (y + size.h > maxY) maxY = y + size.h;
     }
     return {
       minX: minX,
@@ -909,80 +893,74 @@
   // Minimap spanning OVERVIEW_FACTOR viewports so nearby off-screen nodes show. RAF-throttled; hidden when empty or backgrounded.
   var OVERVIEW_FACTOR = 2.5; // how many viewports the minimap spans (zoom-out)
   var GRAPH_MARGIN = 60; // world px of breathing room kept around the graph
-  function renderMinimap() {
-    if (_minimapRaf) return;
-    _minimapRaf = requestAnimationFrame(function () {
-      _minimapRaf = 0;
-      var mm = qs("#wfMinimap");
-      if (!mm) return;
-      // The wrap (minimap + zoom controls) owns visibility; fall back to the canvas alone.
-      var hideEl = qs("#wfMinimapWrap") || mm;
-      var canvas = qs("#wfCanvas");
-      var nodes = state.nodes;
-      var box = nodesBoundingBox();
-      if (!canvas || !box || document.hidden) {
-        hideEl.classList.add("hidden");
-        return;
-      }
-      var rect = canvas.getBoundingClientRect();
-      if (!rect.width || !rect.height) {
-        hideEl.classList.add("hidden");
-        return;
-      }
-      hideEl.classList.remove("hidden");
-      var ctx = mm.getContext("2d");
-      if (!ctx) return;
-      var mmW = mm.width;
-      var mmH = mm.height;
-      ctx.clearRect(0, 0, mmW, mmH);
+  var renderMinimap = rafThrottle(function () {
+    var mm = qs("#wfMinimap");
+    if (!mm) return;
+    // The wrap (minimap + zoom controls) owns visibility; fall back to the canvas alone.
+    var hideEl = qs("#wfMinimapWrap") || mm;
+    var canvas = qs("#wfCanvas");
+    var nodes = state.nodes;
+    var box = nodesBoundingBox();
+    if (!canvas || !box || document.hidden) {
+      hideEl.classList.add("hidden");
+      return;
+    }
+    var rect = canvas.getBoundingClientRect();
+    if (!rect.width || !rect.height) {
+      hideEl.classList.add("hidden");
+      return;
+    }
+    hideEl.classList.remove("hidden");
+    var ctx = mm.getContext("2d");
+    if (!ctx) return;
+    var mmW = mm.width;
+    var mmH = mm.height;
+    ctx.clearRect(0, 0, mmW, mmH);
 
-      var vp = state.viewport;
-      var pad = 8;
-      // world → minimap scale: ∝ vp.zoom so node rects zoom too, divided by OVERVIEW_FACTOR.
-      var mFit = Math.min((mmW - pad * 2) / rect.width, (mmH - pad * 2) / rect.height);
-      var scale = (vp.zoom * mFit) / OVERVIEW_FACTOR;
+    var vp = state.viewport;
+    var pad = 8;
+    // world → minimap scale: ∝ vp.zoom so node rects zoom too, divided by OVERVIEW_FACTOR.
+    var mFit = Math.min((mmW - pad * 2) / rect.width, (mmH - pad * 2) / rect.height);
+    var scale = (vp.zoom * mFit) / OVERVIEW_FACTOR;
 
-      // Camera: clampCenter keeps the window over the graph (soft); clampFrameInside keeps the frame on-screen (hard).
-      var halfWx = mmW / (2 * scale);
-      var halfWy = mmH / (2 * scale);
-      var viewCx = (rect.width / 2 - vp.x) / vp.zoom;
-      var viewCy = (rect.height / 2 - vp.y) / vp.zoom;
-      var frameWW = rect.width / vp.zoom; // view frame world size
-      var frameWH = rect.height / vp.zoom;
-      var framePad = pad / scale; // keep the frame `pad` minimap-px from the edge
-      var camX = clampCenter(viewCx, box.minX - GRAPH_MARGIN, box.maxX + GRAPH_MARGIN, halfWx);
-      var camY = clampCenter(viewCy, box.minY - GRAPH_MARGIN, box.maxY + GRAPH_MARGIN, halfWy);
-      camX = clampFrameInside(camX, viewCx, frameWW, halfWx, framePad);
-      camY = clampFrameInside(camY, viewCy, frameWH, halfWy, framePad);
-      var offX = mmW / 2 - camX * scale;
-      var offY = mmH / 2 - camY * scale;
-      // Stash the transform so click/drag can invert it back to world coords.
-      _mmTransform = { scale: scale, offX: offX, offY: offY };
+    // Camera: clampCenter keeps the window over the graph (soft); clampFrameInside keeps the frame on-screen (hard).
+    var halfWx = mmW / (2 * scale);
+    var halfWy = mmH / (2 * scale);
+    var viewCx = (rect.width / 2 - vp.x) / vp.zoom;
+    var viewCy = (rect.height / 2 - vp.y) / vp.zoom;
+    var frameWW = rect.width / vp.zoom; // view frame world size
+    var frameWH = rect.height / vp.zoom;
+    var framePad = pad / scale; // keep the frame `pad` minimap-px from the edge
+    var camX = clampCenter(viewCx, box.minX - GRAPH_MARGIN, box.maxX + GRAPH_MARGIN, halfWx);
+    var camY = clampCenter(viewCy, box.minY - GRAPH_MARGIN, box.maxY + GRAPH_MARGIN, halfWy);
+    camX = clampFrameInside(camX, viewCx, frameWW, halfWx, framePad);
+    camY = clampFrameInside(camY, viewCy, frameWH, halfWy, framePad);
+    var offX = mmW / 2 - camX * scale;
+    var offY = mmH / 2 - camY * scale;
+    // Stash the transform so click/drag can invert it back to world coords.
+    _mmTransform = { scale: scale, offX: offX, offY: offY };
 
-      var styles = getComputedStyle(document.documentElement);
-      var nodeFill = (styles.getPropertyValue("--color-text-muted") || "#888").trim();
-      var vpStroke = (styles.getPropertyValue("--color-accent") || "#4a9").trim();
+    var styles = getComputedStyle(document.documentElement);
+    var nodeFill = (styles.getPropertyValue("--color-text-muted") || "#888").trim();
+    var vpStroke = (styles.getPropertyValue("--color-accent") || "#4a9").trim();
 
-      // Node rects (any falling outside the minimap are clipped by the canvas).
-      ctx.fillStyle = nodeFill;
-      for (var i = 0; i < nodes.length; i++) {
-        var n = nodes[i];
-        var nx = ((n.position && n.position.x) || 0) * scale + offX;
-        var ny = ((n.position && n.position.y) || 0) * scale + offY;
-        var card = qs('.wf-node[data-node-id="' + n.id + '"]');
-        var nw = (card ? card.offsetWidth : 200) * scale;
-        var nh = (card ? card.offsetHeight : 120) * scale;
-        ctx.fillRect(nx, ny, Math.max(2, nw), Math.max(2, nh));
-      }
+    // Node rects (any falling outside the minimap are clipped by the canvas).
+    ctx.fillStyle = nodeFill;
+    for (var i = 0; i < nodes.length; i++) {
+      var n = nodes[i];
+      var nx = ((n.position && n.position.x) || 0) * scale + offX;
+      var ny = ((n.position && n.position.y) || 0) * scale + offY;
+      var size = cardSize(n.id);
+      ctx.fillRect(nx, ny, Math.max(2, size.w * scale), Math.max(2, size.h * scale));
+    }
 
-      // View frame: the visible world rect in minimap coords; the camera clamp keeps it on-screen.
-      var wx = -vp.x / vp.zoom;
-      var wy = -vp.y / vp.zoom;
-      ctx.strokeStyle = vpStroke;
-      ctx.lineWidth = 1.5;
-      ctx.strokeRect(wx * scale + offX, wy * scale + offY, frameWW * scale, frameWH * scale);
-    });
-  }
+    // View frame: the visible world rect in minimap coords; the camera clamp keeps it on-screen.
+    var wx = -vp.x / vp.zoom;
+    var wy = -vp.y / vp.zoom;
+    ctx.strokeStyle = vpStroke;
+    ctx.lineWidth = 1.5;
+    ctx.strokeRect(wx * scale + offX, wy * scale + offY, frameWW * scale, frameWH * scale);
+  });
 
   // Clamp `c` so a ±`half` window stays in [lo, hi]; if wider, centre the span.
   function clampCenter(c, lo, hi, half) {
@@ -1083,6 +1061,8 @@
   // Consumed by the wires satellite (cursor→world for the in-flight wire; node
   // lookup for port endpoints).
   WF.clientToWorld = clientToWorld;
+  WF.viewportCenterWorld = viewportCenterWorld;
+  WF.cloneSelection = cloneSelection; // stashes satellite saves selections
   WF.findNode = findNode;
   // Consumed by the stashes satellite (fresh node ids on instantiate).
   WF.randomId = randomId;

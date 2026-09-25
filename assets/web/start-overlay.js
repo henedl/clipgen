@@ -334,14 +334,14 @@
       });
     });
     on(els.excelRefresh, "click", function () {
-      runPanelRefresh(els.excelRefresh, loadExcelFiles);
+      runPanelRefresh(els.excelRefresh, function () { return loadFileList("excel"); });
     });
     on(els.excelPickerTrigger, "click", function (e) {
       e.stopPropagation();
       togglePicker("excel");
     });
     on(els.mindnodeRefresh, "click", function () {
-      runPanelRefresh(els.mindnodeRefresh, loadMindnodeFiles);
+      runPanelRefresh(els.mindnodeRefresh, function () { return loadFileList("mindnode"); });
     });
     on(els.mindnodePickerTrigger, "click", function (e) {
       e.stopPropagation();
@@ -394,7 +394,7 @@
         setSelection(sel);
         scheduleWorksheetLoad(sel);
       } else if (state.selection && state.selection.type === "excel") {
-        renderExcelList(state.excelFiles || []);
+        renderFileList("excel", state.excelFiles || []);
         hideWorksheetSection();
       }
     });
@@ -405,7 +405,7 @@
         // No worksheets on a mind map: setSelection alone settles it and frees Confirm.
         setSelection({ type: "mindnode", id_or_path: v, label: v.split("/").pop() || v });
       } else if (state.selection && state.selection.type === "mindnode") {
-        renderMindnodeList(state.mindnodeFiles || []);
+        renderFileList("mindnode", state.mindnodeFiles || []);
       }
     });
 
@@ -508,36 +508,20 @@
 
   var PICKER_KINDS = ["google", "excel", "mindnode", "worksheet"];
 
+  var PICKER_PLACEHOLDERS = {
+    google: "Select a Google Sheet…",
+    excel: "Select an Excel file…",
+    mindnode: "Select a MindNode document…",
+    worksheet: "Select a worksheet…",
+  };
+
   function pickerRefs(kind) {
-    if (kind === "google") {
-      return {
-        menu: els.googlePickerMenu,
-        trigger: els.googlePickerTrigger,
-        label: els.googlePickerLabel,
-        placeholder: "Select a Google Sheet…",
-      };
-    }
-    if (kind === "excel") {
-      return {
-        menu: els.excelPickerMenu,
-        trigger: els.excelPickerTrigger,
-        label: els.excelPickerLabel,
-        placeholder: "Select an Excel file…",
-      };
-    }
-    if (kind === "mindnode") {
-      return {
-        menu: els.mindnodePickerMenu,
-        trigger: els.mindnodePickerTrigger,
-        label: els.mindnodePickerLabel,
-        placeholder: "Select a MindNode document…",
-      };
-    }
     return {
-      menu: els.worksheetPickerMenu,
-      trigger: els.worksheetPickerTrigger,
-      label: els.worksheetPickerLabel,
-      placeholder: "Select a worksheet…",
+      root: els[kind + "Picker"],
+      menu: els[kind + "PickerMenu"],
+      trigger: els[kind + "PickerTrigger"],
+      label: els[kind + "PickerLabel"],
+      placeholder: PICKER_PLACEHOLDERS[kind],
     };
   }
 
@@ -576,22 +560,13 @@
   }
 
   function closePickersIfOutside(e) {
-    if (els.googlePicker && !els.googlePicker.contains(e.target) &&
-        els.googlePickerMenu && !els.googlePickerMenu.classList.contains("hidden")) {
-      closePicker("google");
-    }
-    if (els.excelPicker && !els.excelPicker.contains(e.target) &&
-        els.excelPickerMenu && !els.excelPickerMenu.classList.contains("hidden")) {
-      closePicker("excel");
-    }
-    if (els.mindnodePicker && !els.mindnodePicker.contains(e.target) &&
-        els.mindnodePickerMenu && !els.mindnodePickerMenu.classList.contains("hidden")) {
-      closePicker("mindnode");
-    }
-    if (els.worksheetPicker && !els.worksheetPicker.contains(e.target) &&
-        els.worksheetPickerMenu && !els.worksheetPickerMenu.classList.contains("hidden")) {
-      closePicker("worksheet");
-    }
+    PICKER_KINDS.forEach(function (kind) {
+      var refs = pickerRefs(kind);
+      if (refs.root && !refs.root.contains(e.target) &&
+          refs.menu && !refs.menu.classList.contains("hidden")) {
+        closePicker(kind);
+      }
+    });
   }
 
   function updatePickerLabel(kind, label) {
@@ -674,15 +649,9 @@
 
   function setSelection(sel) {
     state.selection = sel;
-    if (sel && sel.type === "google") {
-      highlightGoogleSelection(sel.id_or_path);
-      updatePickerLabel("google", sel.label || sel.id_or_path);
-    } else if (sel && sel.type === "excel") {
-      highlightExcelSelection(sel.id_or_path);
-      updatePickerLabel("excel", sel.label || sel.id_or_path);
-    } else if (sel && sel.type === "mindnode") {
-      highlightMindnodeSelection(sel.id_or_path);
-      updatePickerLabel("mindnode", sel.label || sel.id_or_path);
+    if (sel && (sel.type === "google" || sel.type === "excel" || sel.type === "mindnode")) {
+      highlightSelection(sel.type, sel.id_or_path);
+      updatePickerLabel(sel.type, sel.label || sel.id_or_path);
     }
     loadMindnodePreview(sel);
     // New spreadsheet identity: invalidate in-flight worksheet fetches and reset the dropdown.
@@ -1479,13 +1448,7 @@
         keepPreviousGoogleList("Google: " + g.auth_error);
         return;
       }
-      state.googleSheets = g.sheets || [];
-      els.googleStatus.textContent = state.googleSheets.length
-        ? state.googleSheets.length + " spreadsheets available"
-        : "No spreadsheets found in your account";
-      renderGoogleList(state.googleSheets);
-      setHidden(els.googlePicker, false);
-      setHidden(els.googleRefresh, false);
+      showGoogleSheets(g.sheets);
     }).catch(function (err) {
       // Recover, don't rethrow: nothing downstream restores the panel, and Promise.all must reach applyCurrentSessionPrefill.
       console.error("Google sheet list failed", err);
@@ -1590,7 +1553,7 @@
     }
   }
 
-  function onGooglePollSuccess(sheets) {
+  function showGoogleSheets(sheets) {
     state.googleSheets = sheets || [];
     els.googleStatus.textContent = state.googleSheets.length
       ? state.googleSheets.length + " spreadsheets available"
@@ -1610,7 +1573,7 @@
     apiGet("/api/spreadsheets/google").then(function (g) {
       if (g.authenticated && !g.auth_error) {
         state.googlePollTimer = null;
-        onGooglePollSuccess(g.sheets);
+        showGoogleSheets(g.sheets);
         return;
       }
       if (g.auth_error) {
@@ -1654,44 +1617,69 @@
       els.googlePickerMenu.appendChild(option);
     });
     if (state.selection && state.selection.type === "google") {
-      highlightGoogleSelection(state.selection.id_or_path);
+      highlightSelection("google", state.selection.id_or_path);
     }
   }
 
-  function highlightGoogleSelection(idOrPath) {
-    if (!els.googlePickerMenu) return;
-    var items = els.googlePickerMenu.querySelectorAll(".sheet-picker__option");
+  // Google options key on data-id, file options on data-path.
+  function highlightSelection(kind, idOrPath) {
+    var menu = els[kind + "PickerMenu"];
+    if (!menu) return;
+    var attr = kind === "google" ? "data-id" : "data-path";
+    var items = menu.querySelectorAll(".sheet-picker__option");
     Array.prototype.forEach.call(items, function (item) {
-      item.classList.toggle("is-selected", item.getAttribute("data-id") === idOrPath);
+      item.classList.toggle("is-selected", item.getAttribute(attr) === idOrPath);
     });
   }
+
+  var FILE_PICKERS = {
+    excel: {
+      name: "Excel",
+      url: "/api/spreadsheets/excel",
+      found: function (n, dir) { return n + " .xlsx in " + dir; },
+      none: "No .xlsx files in ",
+      empty: "No .xlsx files in the input folder",
+      select: function (sel) { selectSpreadsheet(sel); },
+    },
+    mindnode: {
+      name: "MindNode",
+      url: "/api/spreadsheets/mindnode",
+      found: function (n, dir) { return n + (n === 1 ? " mind map in " : " mind maps in ") + dir; },
+      none: "No .mindnode documents in ",
+      empty: "No .mindnode documents in the input folder",
+      // No worksheets to fetch, so setSelection is the whole flow.
+      select: function (sel) { setSelection(sel); },
+    },
+  };
 
   // No server cache: the route re-globs each call, so Refresh just re-runs this.
-  function loadExcelFiles() {
-    if (!els.excelStatus) return Promise.resolve();
-    setStatusShimmer(els.excelStatus, "Scanning input folder…");
-    return apiGet("/api/spreadsheets/excel").then(function (r) {
-      state.excelFiles = r.files || [];
-      els.excelStatus.textContent = state.excelFiles.length
-        ? state.excelFiles.length + " .xlsx in " + r.input_dir
-        : "No .xlsx files in " + r.input_dir;
-      renderExcelList(state.excelFiles);
+  function loadFileList(kind) {
+    var cfg = FILE_PICKERS[kind];
+    var status = els[kind + "Status"];
+    var key = kind + "Files";
+    if (!status) return Promise.resolve();
+    setStatusShimmer(status, "Scanning input folder…");
+    return apiGet(cfg.url).then(function (r) {
+      state[key] = r.files || [];
+      status.textContent = state[key].length
+        ? cfg.found(state[key].length, r.input_dir)
+        : cfg.none + r.input_dir;
+      renderFileList(kind, state[key]);
     }).catch(function (err) {
       // Log and continue: never strand the panel on "Scanning…" or break refresh()'s chain.
-      console.error("Excel scan failed", err);
-      els.excelStatus.textContent = (state.excelFiles || []).length
+      console.error(cfg.name + " scan failed", err);
+      status.textContent = (state[key] || []).length
         ? "Couldn't re-scan the input folder. Showing the last list."
         : "Could not scan the input folder.";
     });
   }
 
-  function renderExcelList(files) {
-    if (!els.excelPickerMenu) return;
-    els.excelPickerMenu.innerHTML = "";
+  function renderFileList(kind, files) {
+    var menu = els[kind + "PickerMenu"];
+    if (!menu) return;
+    menu.innerHTML = "";
     if (!files.length) {
-      els.excelPickerMenu.appendChild(
-        el("div", "sheet-picker__empty", "No .xlsx files in the input folder")
-      );
+      menu.appendChild(el("div", "sheet-picker__empty", FILE_PICKERS[kind].empty));
       return;
     }
     files.forEach(function (f) {
@@ -1704,82 +1692,16 @@
       var edited = formatEdited(f.modified);
       if (edited) option.appendChild(el("span", "sheet-picker__option-meta", edited));
       option.addEventListener("click", function () {
-        if (els.excelPaste) els.excelPaste.value = "";
-        selectSpreadsheet({ type: "excel", id_or_path: f.path, label: f.name });
-        closePicker("excel");
+        var paste = els[kind + "Paste"];
+        if (paste) paste.value = "";
+        FILE_PICKERS[kind].select({ type: kind, id_or_path: f.path, label: f.name });
+        closePicker(kind);
       });
-      els.excelPickerMenu.appendChild(option);
+      menu.appendChild(option);
     });
-    if (state.selection && state.selection.type === "excel") {
-      highlightExcelSelection(state.selection.id_or_path);
+    if (state.selection && state.selection.type === kind) {
+      highlightSelection(kind, state.selection.id_or_path);
     }
-  }
-
-  function highlightExcelSelection(path) {
-    if (!els.excelPickerMenu) return;
-    var items = els.excelPickerMenu.querySelectorAll(".sheet-picker__option");
-    Array.prototype.forEach.call(items, function (item) {
-      item.classList.toggle("is-selected", item.getAttribute("data-path") === path);
-    });
-  }
-
-  // Mirrors loadExcelFiles: the route re-globs each call, so Refresh just re-runs this.
-  function loadMindnodeFiles() {
-    if (!els.mindnodeStatus) return Promise.resolve();
-    setStatusShimmer(els.mindnodeStatus, "Scanning input folder…");
-    return apiGet("/api/spreadsheets/mindnode").then(function (r) {
-      state.mindnodeFiles = r.files || [];
-      els.mindnodeStatus.textContent = state.mindnodeFiles.length
-        ? state.mindnodeFiles.length +
-          (state.mindnodeFiles.length === 1 ? " mind map in " : " mind maps in ") +
-          r.input_dir
-        : "No .mindnode documents in " + r.input_dir;
-      renderMindnodeList(state.mindnodeFiles);
-    }).catch(function (err) {
-      console.error("MindNode scan failed", err);
-      els.mindnodeStatus.textContent = (state.mindnodeFiles || []).length
-        ? "Couldn't re-scan the input folder. Showing the last list."
-        : "Could not scan the input folder.";
-    });
-  }
-
-  function renderMindnodeList(files) {
-    if (!els.mindnodePickerMenu) return;
-    els.mindnodePickerMenu.innerHTML = "";
-    if (!files.length) {
-      els.mindnodePickerMenu.appendChild(
-        el("div", "sheet-picker__empty", "No .mindnode documents in the input folder")
-      );
-      return;
-    }
-    files.forEach(function (f) {
-      var option = el("button", "sheet-picker__option");
-      option.type = "button";
-      option.setAttribute("role", "option");
-      option.setAttribute("data-path", f.path);
-      option.appendChild(el("span", "sheet-picker__option-main", f.name));
-      option.appendChild(el("span", "sheet-picker__option-sub", f.path));
-      var edited = formatEdited(f.modified);
-      if (edited) option.appendChild(el("span", "sheet-picker__option-meta", edited));
-      option.addEventListener("click", function () {
-        if (els.mindnodePaste) els.mindnodePaste.value = "";
-        // No worksheets to fetch, so setSelection is the whole flow.
-        setSelection({ type: "mindnode", id_or_path: f.path, label: f.name });
-        closePicker("mindnode");
-      });
-      els.mindnodePickerMenu.appendChild(option);
-    });
-    if (state.selection && state.selection.type === "mindnode") {
-      highlightMindnodeSelection(state.selection.id_or_path);
-    }
-  }
-
-  function highlightMindnodeSelection(path) {
-    if (!els.mindnodePickerMenu) return;
-    var items = els.mindnodePickerMenu.querySelectorAll(".sheet-picker__option");
-    Array.prototype.forEach.call(items, function (item) {
-      item.classList.toggle("is-selected", item.getAttribute("data-path") === path);
-    });
   }
 
   // Mind-map counterpart of the source-video preview, plus the bundle's QuickLook render.
@@ -2410,8 +2332,8 @@
       loadDirs(),
       loadStartSettings(),
       loadGoogleSheets(),
-      loadExcelFiles(),
-      loadMindnodeFiles(),
+      loadFileList("excel"),
+      loadFileList("mindnode"),
     ])
       .then(applyCurrentSessionPrefill)
       .catch(function (err) {

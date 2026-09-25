@@ -27,7 +27,8 @@
   var state = SS.state;
   // Hub helpers, published before this file loads; other helpers are ambient globals.
   var normalizeRegionRef = SS.normalizeRegionRef,
-    activeRegionRef = SS.activeRegionRef;
+    activeRegionRef = SS.activeRegionRef,
+    findStash = SS.findStash;
 
   // ---- Model view (preprocessed preview) ----
 
@@ -68,10 +69,7 @@
       toggle.addEventListener("change", function () {
         state.overlayEnabled = !!toggle.checked;
         try { sessionStorage.setItem("ss_overlayEnabled", state.overlayEnabled ? "1" : "0"); } catch (_) { /* ignore */ }
-        var curTs = Number(state.currentTimestamp || 0).toFixed(3);
-        if (state.overlayEnabled && (!state.overlayImage || state.overlayImageTimestamp !== curTs || state.overlayImageTool !== _previewToolKey())) {
-          refreshModelView();
-        }
+        if (state.overlayEnabled && overlayImageStale()) refreshModelView();
         SS.renderOverlay();
       });
     }
@@ -82,15 +80,7 @@
         state.overlayLayer = sel.value || null;
         try { sessionStorage.setItem("ss_overlayLayer", state.overlayLayer || ""); } catch (_) { /* ignore */ }
         // Force a refetch of the overlay image at the new layer.
-        if (state.overlayImageObjectUrl) {
-          URL.revokeObjectURL(state.overlayImageObjectUrl);
-          state.overlayImageObjectUrl = null;
-        }
-        state.overlayImage = null;
-        state.overlayImageScope = null;
-        state.overlayImageRegion = null;
-        state.overlayImageTimestamp = null;
-        state.overlayImageTool = null;
+        _clearOverlayImage();
         refreshModelView();
         SS.renderOverlay();
       });
@@ -105,6 +95,25 @@
         }
       })
       .catch(function () { /* leave catalog empty; toggle stays disabled */ });
+  }
+
+  function _clearOverlayImage() {
+    if (state.overlayImageObjectUrl) {
+      URL.revokeObjectURL(state.overlayImageObjectUrl);
+      state.overlayImageObjectUrl = null;
+    }
+    state.overlayImage = null;
+    state.overlayImageScope = null;
+    state.overlayImageRegion = null;
+    state.overlayImageTimestamp = null;
+    state.overlayImageTool = null;
+  }
+
+  // True when the overlay image is missing or from another frame or tool.
+  function overlayImageStale() {
+    var curTs = Number(state.currentTimestamp || 0).toFixed(3);
+    return !state.overlayImage || state.overlayImageTimestamp !== curTs
+      || state.overlayImageTool !== _previewToolKey();
   }
 
   // The multitool step the preview follows: clamped state.multitoolFocus, or null when empty.
@@ -131,18 +140,14 @@
     return tool;
   }
 
-  function _capitalize(s) {
-    return s ? s.charAt(0).toUpperCase() + s.slice(1) : "";
-  }
-
   // "Color" for plain tools, "Multitool · 2. Change" for the focused step.
   function _updateFocusLabel() {
     var label = qs("#modelViewFocus");
     if (!label) return;
-    var text = _capitalize(state.activeWorkflow || "");
+    var text = toolLabel(state.activeWorkflow);
     if (state.activeWorkflow === "multitool") {
       var f = _focusStep();
-      if (f) text += " · " + (f.idx + 1) + ". " + _capitalize(f.step.type);
+      if (f) text += " · " + (f.idx + 1) + ". " + toolLabel(f.step.type);
     }
     label.textContent = text;
   }
@@ -250,38 +255,16 @@
 
   var _FULL_FRAME_REGION_STRING = "0.000000,0.000000,1.000000,1.000000";
 
-  // Region {x,y,w,h} (normalized when source_width is set, else canvas pixels) → fraction string.
-  function _regionDataToString(r) {
-    if (r.source_width) {
-      return [r.x, r.y, r.w, r.h]
-        .map(function (v) { return Number(v).toFixed(6); })
-        .join(",");
-    }
-    var canvas = qs("#overlayCanvas");
-    if (!canvas.width || !canvas.height) return _FULL_FRAME_REGION_STRING;
-    return [r.x / canvas.width, r.y / canvas.height, r.w / canvas.width, r.h / canvas.height]
-      .map(function (v) { return Number(v).toFixed(6); })
-      .join(",");
+  function _fracString(arr) {
+    return arr.map(function (v) { return Number(v).toFixed(6); }).join(",");
   }
 
-  // Any region ref (active / stash / full-frame) → coordinate string, or null if unresolved.
-  function _regionStringForRef(ref) {
-    var r = normalizeRegionRef(ref);
-    if (!r) return null;
-    if (r.source === "full_frame") return _FULL_FRAME_REGION_STRING;
-    var data = null;
-    if (r.source === "stash") {
-      for (var i = 0; i < state.stashes.length; i++) {
-        if (state.stashes[i].id === r.stash_id) {
-          data = state.stashes[i].regions[r.name];
-          break;
-        }
-      }
-    } else {
-      data = state.regions[r.name];
-    }
-    if (!data) return null;
-    return _regionDataToString(data);
+  // Region {x,y,w,h} (normalized when source_width is set, else canvas pixels) → fraction string.
+  function _regionDataToString(r) {
+    if (r.source_width) return _fracString([r.x, r.y, r.w, r.h]);
+    var canvas = qs("#overlayCanvas");
+    if (!canvas.width || !canvas.height) return _FULL_FRAME_REGION_STRING;
+    return _fracString([r.x / canvas.width, r.y / canvas.height, r.w / canvas.width, r.h / canvas.height]);
   }
 
   // Preview target: last run-region toggled on, else the active chip. Multitool/boundary hide the picker.
@@ -306,17 +289,10 @@
     return null;
   }
 
+  // Pending regions carry no source_width, so they take the canvas-pixel branch.
   function _normalizedRegionString() {
-    if (state.pendingRegion) {
-      var p = state.pendingRegion;
-      var c = qs("#overlayCanvas");
-      if (!c.width || !c.height) return _FULL_FRAME_REGION_STRING;
-      return [p.x / c.width, p.y / c.height, p.w / c.width, p.h / c.height]
-        .map(function (v) { return Number(v).toFixed(6); })
-        .join(",");
-    }
-    var regionStr = _regionStringForRef(_previewRegionRef());
-    return regionStr || _FULL_FRAME_REGION_STRING;
+    var r = state.pendingRegion || _regionObjectForRef(_previewRegionRef());
+    return r ? _regionDataToString(r) : _FULL_FRAME_REGION_STRING;
   }
 
   function _hasActiveOrPendingRegion() {
@@ -372,12 +348,8 @@
     var r = normalizeRegionRef(ref);
     if (!r || r.source === "full_frame") return null;
     if (r.source === "stash") {
-      for (var i = 0; i < state.stashes.length; i++) {
-        if (state.stashes[i].id === r.stash_id) {
-          return state.stashes[i].regions[r.name] || null;
-        }
-      }
-      return null;
+      var stash = findStash(r.stash_id);
+      return (stash && stash.regions[r.name]) || null;
     }
     return state.regions[r.name] || null;
   }
@@ -568,8 +540,7 @@
       if (snapRegion) {
         var capRect = (state.previewRegions || state.regions)[snapRegion];
         if (capRect) {
-          qsParts.push("ref_region=" + [capRect.x, capRect.y, capRect.w, capRect.h]
-            .map(function (v) { return Number(v).toFixed(6); }).join(","));
+          qsParts.push("ref_region=" + _fracString([capRect.x, capRect.y, capRect.w, capRect.h]));
           var capMask = _encodeMaskContours(capRect.points);
           if (capMask) qsParts.push("ref_mask=" + encodeURIComponent(capMask));
         }
@@ -587,6 +558,13 @@
     meta.classList.add("cg-shimmer");
     meta.textContent = "Loading preview…";
 
+    function revokeImgUrl() {
+      if (img._modelViewObjectUrl) {
+        URL.revokeObjectURL(img._modelViewObjectUrl);
+        img._modelViewObjectUrl = null;
+      }
+    }
+
     function applyPreviewError() {
       if (gen !== _modelViewGen) return;
       meta.classList.remove("cg-shimmer");
@@ -596,10 +574,7 @@
 
     function applyPreviewOkFromBlob(blob) {
       if (gen !== _modelViewGen) return;
-      if (img._modelViewObjectUrl) {
-        URL.revokeObjectURL(img._modelViewObjectUrl);
-        img._modelViewObjectUrl = null;
-      }
+      revokeImgUrl();
       var u = URL.createObjectURL(blob);
       img._modelViewObjectUrl = u;
       img.src = u;
@@ -609,7 +584,7 @@
 
     function previewMetaText() {
       var metaText = MODEL_VIEW_META[tool] || "";
-      if (sfx) metaText = "Step " + (stepIdx + 1) + " · " + _capitalize(tool) + ". " + metaText;
+      if (sfx) metaText = "Step " + (stepIdx + 1) + " · " + toolLabel(tool) + ". " + metaText;
       if (!hasRegion) {
         metaText = (metaText ? metaText + " " : "") + "(Full frame — no region selected.)";
       } else if (_maskFallbackActive()) {
@@ -623,15 +598,7 @@
       if (gen !== _modelViewGen) return;
       var resolved = _resolveOverlayLayer();
       if (!resolved) {
-        if (state.overlayImageObjectUrl) {
-          URL.revokeObjectURL(state.overlayImageObjectUrl);
-          state.overlayImageObjectUrl = null;
-        }
-        state.overlayImage = null;
-        state.overlayImageScope = null;
-        state.overlayImageRegion = null;
-        state.overlayImageTimestamp = null;
-        state.overlayImageTool = null;
+        _clearOverlayImage();
         return;
       }
       var layerQs = qsParts.concat(["layer=" + encodeURIComponent(resolved.id)]);
@@ -691,10 +658,7 @@
     var tmp = new Image();
     tmp.onload = function () {
       if (gen !== _modelViewGen) return;
-      if (img._modelViewObjectUrl) {
-        URL.revokeObjectURL(img._modelViewObjectUrl);
-        img._modelViewObjectUrl = null;
-      }
+      revokeImgUrl();
       img.src = tmp.src;
       meta.classList.remove("cg-shimmer");
       meta.textContent = previewMetaText();
@@ -712,6 +676,7 @@
   SS.refreshModelView = refreshModelView;
   SS.setMultitoolFocus = setMultitoolFocus;
   SS._previewToolKey = _previewToolKey;
+  SS.overlayImageStale = overlayImageStale;
   SS._updateOverlayUi = _updateOverlayUi;
   SS._overlayEligibleForActiveTool = _overlayEligibleForActiveTool;
   SS._updateMinAreaReadout = _updateMinAreaReadout;

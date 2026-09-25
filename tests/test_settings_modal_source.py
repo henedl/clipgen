@@ -97,13 +97,23 @@ def test_suggested_rows_offer_download_or_downloaded():
         )
     ]
     assert "model.installed" in row
-    assert '"Downloaded"' in row
-    assert '"Download"' in row
-    assert '"btn btn-small btn-icon"' in row
-    assert "model-icon--download" in row
-    assert "model-icon--done" in row
-    assert '"settings-llm-model-bar-fill"' in row
-    assert "_watchLlmDownload(model.name" in row
+    assert "_downloadedState()" in row
+    assert "_downloadAction(name, size, action, model.size_mb" in row
+    assert 'API_ROOT + "/models/llm/download"' in row
+
+    # Shared with the Redact row.
+    action = _JS[
+        _JS.index("function _downloadedState") : _JS.index(
+            "function _buildRedactModelBlock"
+        )
+    ]
+    assert '"Downloaded"' in action
+    assert '"Download"' in action
+    assert '"btn btn-small btn-icon"' in action
+    assert "model-icon--download" in action
+    assert "model-icon--done" in action
+    assert '"settings-llm-model-bar-fill"' in action
+    assert "_watchDownload(spec, onProgress)" in action
 
     css = read("settings-modal.css")
     assert 'url("icons/arrow-down-tray.svg")' in css
@@ -119,6 +129,9 @@ def test_model_rows_name_and_link_the_model():
     assert "model.label || model.name" in block
     assert '"settings-llm-model-title"' in block
     assert '"settings-llm-model-id"' in block
+    block = _JS[
+        _JS.index("function _modelLinkButton") : _JS.index("function _downloadedState")
+    ]
     # No catalog entry, no link: a stem cannot be reversed into a repo.
     assert "if (!model.model_url) return null;" in block
     assert 'link.target = "_blank"' in block
@@ -139,9 +152,7 @@ def test_download_routes_go_through_the_api_root():
 def test_download_completion_refreshes_block_and_selects():
     """Cache cleared first, so the block and every dropdown share one fetch."""
     watch = _JS[
-        _JS.index("function _watchLlmDownload") : _JS.index(
-            "function _buildLlmModelsBlock"
-        )
+        _JS.index("function _watchDownload") : _JS.index("function _modelLinkButton")
     ]
     assert "_refreshLlmViews()" in watch
     views = _JS[

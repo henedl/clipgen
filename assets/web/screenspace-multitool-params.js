@@ -4,8 +4,7 @@
  * drop-to-import from the task queue). Carved out of screenspace.js to shrink
  * the page script; loaded after it. Reads the hub's shared state + helpers via
  * window.ClipgenScreenspace (set up in screenspace.js) and publishes back the
- * two entry points the hub calls. Function bodies are unchanged from when they
- * lived inline in screenspace.js — the locals below stand in for the closure.
+ * two entry points the hub calls. The locals below stand in for the hub closure.
  */
 (function () {
   "use strict";
@@ -44,15 +43,7 @@
   // ---- Multitool step list (drag reorder + drop-to-import from task queue) ----
 
   var MULTITOOL_ALLOWED_TYPES = [
-    { value: "color", label: "Color" },
-    { value: "change", label: "Change" },
-    { value: "similarity", label: "Similarity" },
-    { value: "text", label: "Text" },
-    { value: "numbers", label: "Numbers" },
-    { value: "template", label: "Template" },
-    { value: "flow", label: "Flow" },
-    { value: "scene", label: "Scene" },
-    { value: "inactivity", label: "Inactivity" },
+    "color", "change", "similarity", "text", "numbers", "template", "flow", "scene", "inactivity",
   ];
 
   function renderMultitoolStepBody(body, stepType, idx) {
@@ -109,7 +100,7 @@
     var initH = numberOrDefault(initColor.h, 0);
     var initS = numberOrDefault(initColor.s, 0);
     var initV = numberOrDefault(initColor.v, 0);
-    var initTol = init.tolerance ? Math.round(init.tolerance.h * 100 / 90) : 30;
+    var initTol = colorTolPct(init.tolerance);
     var row1 = el("div", "param-row");
     row1.appendChild(el("span", "param-label", "Hex color"));
     var ctrl1 = el("div", "param-control");
@@ -429,11 +420,7 @@
     var r = el("div", "param-row");
     r.appendChild(el("span", "param-label", label));
     var c = el("div", "param-control");
-    var cb = document.createElement("input");
-    cb.type = "checkbox";
-    cb.id = id;
-    cb.checked = !!checked;
-    c.appendChild(cb);
+    c.appendChild(checkboxInput(id, checked));
     r.appendChild(c);
     body.appendChild(r);
   }
@@ -484,46 +471,20 @@
   var _multitoolDragOverRaf = null;
   var _multitoolPendingDragOver = null;
 
-  function _cacheMultitoolDragMidpoints(container) {
-    var cards = container.querySelectorAll(".multitool-step:not(.dragging)");
-    var mids = new Array(cards.length);
-    for (var i = 0; i < cards.length; i++) {
-      var r = cards[i].getBoundingClientRect();
-      mids[i] = r.top + r.height / 2;
-    }
-    _multitoolDragMidpoints = mids;
-  }
-
   function getMultitoolDropIndex(container, clientY) {
-    var mids = _multitoolDragMidpoints;
-    if (!mids) {
-      _cacheMultitoolDragMidpoints(container);
-      mids = _multitoolDragMidpoints;
-    }
-    for (var i = 0; i < mids.length; i++) {
-      if (clientY < mids[i]) return i;
-    }
-    return mids.length;
-  }
-
-  function clearMultitoolDragIndicators(container) {
-    var cards = container.querySelectorAll(".multitool-step.drag-over");
-    for (var i = 0; i < cards.length; i++) cards[i].classList.remove("drag-over");
-    container.classList.remove("drag-over-append");
+    if (!_multitoolDragMidpoints) _multitoolDragMidpoints = dragMidpoints(container, ".multitool-step", "y");
+    return indexBefore(_multitoolDragMidpoints, clientY);
   }
 
   function taskToMultitoolStep(task) {
     var type = task.type;
-    var allowed = MULTITOOL_ALLOWED_TYPES.some(function (t) { return t.value === type; });
-    if (!allowed) return null;
+    if (MULTITOOL_ALLOWED_TYPES.indexOf(type) === -1) return null;
     var params = task.parameters || {};
     var step = { type: type, collapsed: false, logic: "AND" };
     if (task.region) step.region = task.region;
     if (task.region_ref) step.region_ref = task.region_ref;
     if (params.reference_timestamp !== undefined) step._refTs = params.reference_timestamp;
-    if (params.scene_references) step._scenes = params.scene_references.map(function (ref) {
-      return { name: ref.name, timestamp: ref.timestamp, threshold: numberOrDefault(ref.threshold, 0.75) };
-    });
+    if (params.scene_references) step._scenes = params.scene_references.map(sceneRefPayload);
     step._initial = params;
     return step;
   }
@@ -541,12 +502,7 @@
           s: numberOrDefault((qs("#paramColorS" + sfx) || {}).value, prevColor.s || 0),
           v: numberOrDefault((qs("#paramColorV" + sfx) || {}).value, prevColor.v || 0),
         };
-        var tol = numberOrDefault((qs("#paramColorTol" + sfx) || {}).value, 30);
-        init.tolerance = {
-          h: Math.round(tol * 90 / 100),
-          s: Math.round(tol * 128 / 100),
-          v: Math.round(tol * 128 / 100),
-        };
+        init.tolerance = colorTolerance(numberOrDefault((qs("#paramColorTol" + sfx) || {}).value, 30));
         var snapMode = (qs("#paramColorMode" + sfx) || {}).value;
         if (snapMode === "presence") {
           init.color_mode = "presence";
@@ -713,7 +669,7 @@
       typeSpan.style.color = taskTypeColor(step.type);
       var icon = buildTypeIcon(step.type);
       if (icon) typeSpan.appendChild(icon);
-      typeSpan.appendChild(document.createTextNode(" " + step.type.charAt(0).toUpperCase() + step.type.slice(1)));
+      typeSpan.appendChild(document.createTextNode(" " + toolLabel(step.type)));
       header.appendChild(typeSpan);
       var removeBtn = el("button", "multitool-step-remove");
       removeBtn.title = "Remove step";
@@ -795,7 +751,7 @@
       card.classList.add("dragging");
       e.dataTransfer.setData("text/plain", card.dataset.stepIdx);
       e.dataTransfer.effectAllowed = "move";
-      _cacheMultitoolDragMidpoints(stepsDiv);
+      _multitoolDragMidpoints = dragMidpoints(stepsDiv, ".multitool-step", "y");
     });
     stepsDiv.addEventListener("dragend", function (e) {
       var card = e.target.closest(".multitool-step");
@@ -808,7 +764,7 @@
         _multitoolDragOverRaf = null;
       }
       _multitoolPendingDragOver = null;
-      clearMultitoolDragIndicators(stepsDiv);
+      clearDropIndicators(stepsDiv, ".multitool-step");
       _multitoolDragMidpoints = null;
     });
     stepsDiv.addEventListener("dragover", function (e) {
@@ -824,7 +780,7 @@
         _multitoolDragOverRaf = null;
         var pending = _multitoolPendingDragOver;
         if (!pending) return;
-        clearMultitoolDragIndicators(stepsDiv);
+        clearDropIndicators(stepsDiv, ".multitool-step");
         if (pending.isTaskDrop) {
           stepsDiv.classList.add("drag-over-append");
         } else {
@@ -847,7 +803,7 @@
     });
     stepsDiv.addEventListener("drop", function (e) {
       e.preventDefault();
-      clearMultitoolDragIndicators(stepsDiv);
+      clearDropIndicators(stepsDiv, ".multitool-step");
       stepsDiv.classList.remove("drag-over-append");
 
       // Check for task card drop (import task as step)
@@ -893,7 +849,7 @@
     sel.id = "mtAddTypeSelect";
     MULTITOOL_ALLOWED_TYPES.forEach(function (t) {
       var opt = document.createElement("option");
-      opt.value = t.value; opt.textContent = t.label;
+      opt.value = t; opt.textContent = toolLabel(t);
       sel.appendChild(opt);
     });
     addRow.appendChild(sel);
@@ -916,7 +872,6 @@
 
   // ---- Published back to the hub (screenspace.js calls these) ----
   SS.renderMultitoolParams = renderMultitoolParams;
-  SS.clearMultitoolDragIndicators = clearMultitoolDragIndicators;
   // The hub's global dragend handler calls this; keeps drag state private here.
   SS.cancelMultitoolDrag = function () {
     if (_multitoolDragOverRaf != null) {

@@ -40,6 +40,24 @@ function hsvToRgb(h, s, v) {
 
 // hexToRgb / rgbToHex are utils.js globals; the HSV pair stays here for the OpenCV ranges.
 
+// Tolerance slider percent to per-channel HSV tolerance, and back.
+function colorTolerance(pct) {
+  return {
+    h: Math.round(pct * 90 / 100),
+    s: Math.round(pct * 128 / 100),
+    v: Math.round(pct * 128 / 100),
+  };
+}
+
+function colorTolPct(tolerance) {
+  return tolerance ? Math.round(tolerance.h * 100 / 90) : 30;
+}
+
+// Scene reference as the server stores it.
+function sceneRefPayload(ref) {
+  return { name: ref.name, timestamp: ref.timestamp, threshold: numberOrDefault(ref.threshold, 0.75) };
+}
+
 // ---- Form input builders ----
 
 function rangeInput(id, min, max, value, step) {
@@ -74,6 +92,14 @@ function textInput(id, placeholder) {
   return inp;
 }
 
+function checkboxInput(id, checked) {
+  var inp = document.createElement("input");
+  inp.type = "checkbox";
+  if (id) inp.id = id;
+  inp.checked = !!checked;
+  return inp;
+}
+
 // ---- Canvas ----
 
 // Backing store = CSS box × devicePixelRatio. Returns device-pixel { w, h, dpr }.
@@ -87,6 +113,38 @@ function sizeCanvasToDisplay(canvas) {
     canvas.height = h;
   }
   return { w: w, h: h, dpr: dpr };
+}
+
+// Canvas pixels per display pixel; 1 when the canvas has no display width.
+function canvasScale(canvas, rect) {
+  return canvas.width / ((rect || canvas.getBoundingClientRect()).width || canvas.width);
+}
+
+// ---- Drag reordering ----
+
+// Midpoints of the non-dragging cards along "x" or "y", cached at dragstart.
+function dragMidpoints(container, selector, axis) {
+  var cards = container.querySelectorAll(selector + ":not(.dragging)");
+  var mids = new Array(cards.length);
+  for (var i = 0; i < cards.length; i++) {
+    var r = cards[i].getBoundingClientRect();
+    mids[i] = axis === "x" ? r.left + r.width / 2 : r.top + r.height / 2;
+  }
+  return mids;
+}
+
+// Drop index: the first midpoint past pos, else the end.
+function indexBefore(mids, pos) {
+  for (var i = 0; i < mids.length; i++) {
+    if (pos < mids[i]) return i;
+  }
+  return mids.length;
+}
+
+function clearDropIndicators(container, cardSel) {
+  var cards = container.querySelectorAll(cardSel + ".drag-over");
+  for (var i = 0; i < cards.length; i++) cards[i].classList.remove("drag-over");
+  container.classList.remove("drag-over-append");
 }
 
 // ---- Geometry ----
@@ -229,6 +287,19 @@ function floodFillMask(data, w, h, sx, sy, tolerance) {
     }
   }
   return mask;
+}
+
+// Canvas path for contours: points are bbox-relative (0–1), r is the pixel bbox.
+function traceRegionPolygonPath(ctx, contours, r) {
+  ctx.beginPath();
+  contours.forEach(function (points) {
+    if (points.length < 3) return;
+    ctx.moveTo(r.x + points[0][0] * r.w, r.y + points[0][1] * r.h);
+    for (var i = 1; i < points.length; i++) {
+      ctx.lineTo(r.x + points[i][0] * r.w, r.y + points[i][1] * r.h);
+    }
+    ctx.closePath();
+  });
 }
 
 // Over a list of contours; saved shaped regions store one list per part.
@@ -404,6 +475,17 @@ function isTaskActive(task) {
 
 function isTaskFinished(task) {
   return task.status === "completed" || task.status === "failed";
+}
+
+// Point results carry timestamp; span results carry start.
+function resultTime(r) {
+  return r.timestamp !== undefined ? r.timestamp : r.start;
+}
+
+// Heatmap filenames land after completion; the signature catches their late arrival.
+function taskHeatmapSig(t) {
+  if (!t) return "";
+  return (t.heatmap || "") + "|" + (t.heatmap_gif || "") + "|" + (t.heatmap_rolling_gif || "");
 }
 
 // Restore-to-workflow reads the task's stored inputs; a queued task has none yet.
