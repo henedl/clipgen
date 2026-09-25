@@ -1,6 +1,6 @@
 # Code quality plan
 
-> **Status: Waves 1–6 done (2026-09-25); Wave 7 (ratchets) next.** 363 verified findings from an 11-slice review with adversarial verification (22 agents). About 7,500 lines are removable if every item lands. Each item carries its change and the verifier's note below it. Check items off as each batch lands.
+> **Status: All waves done (2026-09-25).** 363 verified findings from an 11-slice review with adversarial verification (22 agents). About 7,500 lines are removable if every item lands. Each item carries its change and the verifier's note below it. Check items off as each batch lands.
 
 ## How to work a batch
 
@@ -1199,10 +1199,10 @@ Module moves.
 
 ## Wave 7: Ratchets
 
-- [ ] `tests/test_py_dead_functions.py`: non-route Python functions named nowhere else in `source/`/`build/`; allowlist for test seams. Mirrors `test_js_dead_functions.py`.
-- [ ] `tests/test_css_dead_selectors.py`: per-file count of unreferenced class selectors, may only shrink.
-- [ ] Function-length ratchet: the set of Python and JS functions ≥150 lines may only shrink.
-- [ ] Short "Orphans and helpers" section in `agents/CODE-REVIEW.md` pointing at the three guards.
+- [x] `tests/test_py_dead_functions.py`: non-route Python functions named nowhere else in `source/`/`build/`; allowlist for test seams. Mirrors `test_js_dead_functions.py`.
+- [x] `tests/test_css_dead_selectors.py`: per-file names of unreferenced class selectors, may only shrink.
+- [x] Function-length ratchet: the set of Python and JS functions ≥150 lines may only shrink. `tests/test_function_length.py`; a pinned function may also grow at most 10%.
+- [x] Short "Orphans and helpers" section in `agents/CODE-REVIEW.md` pointing at the three guards.
 
 ## Deferred
 
