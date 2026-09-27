@@ -8,6 +8,36 @@ Notable changes per release. One level-2 heading per version — `## <version> �
 
 `<Tool>` is one of `Core`, `Studio`, `Screenspace`, `Transcripts`, `Workflows`, `Composer`, `Overview`. Write for someone using clipgen, not building it: name the thing by what it is called in the interface, say what changed for them, and leave the internals in the commit. Add a second sentence only when the first leaves an obvious "so what". Lines render as **plain text** in the Start overlay's Recent updates tab — no backticks or markdown inside them, or it shows up literally.
 
+## v0.17.6 — 2026-09-25
+**Transcripts:** Feat: An optional Redact pass finds names, contacts, and addresses in 27 languages and shows them as placeholders in the page, exports, and AI prompts without changing your words.
+**Transcripts:** Feat: Redact has its own tab with Run, an auto-run switch, per-item restore, and a model download beside Summary and Friction.
+**Core:** Fix: Clips, reels, and Studio intake transcripts now honor redaction the same way the Transcripts page does.
+
+## v0.17.5 — 2026-09-24
+**Transcripts:** Feat: Video and transcript sit in two resizable columns with a divider you can drag; picture-in-picture is gone.
+**Studio:** Feat: Hold Option while dropping a queue card to copy it instead of moving it, so the same item can sit in Artifacts and Reel.
+
+## v0.17.4 — 2026-09-18
+**Studio:** Fix: Intake cards move between Reel and Artifacts again, generate-intake survives disconnects, and reel builds offset transcript text per title card.
+**Studio:** Fix: MindNode note titles keep your prose, !key marks reach generated clips, and a closed map no longer reappears on reload.
+**Core:** Feat: Icons cross-fade when they change, and palette, cheatsheet, and menu panels animate in and out.
+
+## v0.17.3 — 2026-09-18
+**Core:** Feat: --profile writes a JSON report you can save or fetch from the server, with browser benchmarks and per-job operation records.
+**Screenspace:** Feat: Attention scans skip channels you turned off, so motion-only and contrast-only runs finish much faster.
+**Composer:** Fix: Cut and trim edits validate before saving, undo/redo keeps the same annotation id, and concurrent trim changes no longer revert each other.
+**Workflows:** Fix: Resume re-runs nodes you edited or rewired, batch runs respect muted gates, and failed exports retry instead of looking done.
+**Transcripts:** Fix: Inline transcript edits save through one route and survive reload; correction rules chain and add new pairs correctly.
+
+## v0.17.2 — 2026-09-10
+**Core:** Feat: Settings, Summaries recommends a summary model from your RAM, CPU, and GPU, with a Use recommended action and fit chips on each row.
+**Core:** Feat: Clips with title cards build faster after font lookup and endcard caching fixes.
+**Transcripts:** Fix: Stopping mid-speaker detection keeps the transcript; speaker renames and manual lines survive a re-run or turning speakers off.
+
+## v0.17.1 — 2026-09-04
+**Core:** Feat: The macOS and Windows desktop app can check GitHub Releases, download an update, and relaunch in place from the About tab.
+**Transcripts:** Feat: Turn on speaker attribution to label who spoke, rename voices, and carry speaker tags through exports and summaries.
+
 ## v0.17.0 — 2026-09-03
 **Screenspace:** Feat: Click a Multitool step to focus it. Model view previews that step's tool, region and reference, and its calibration track is highlighted.
 **Screenspace:** Feat: Template and Shape scans run much faster when the tool has a search region.
