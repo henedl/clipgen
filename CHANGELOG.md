@@ -8,6 +8,38 @@ Notable changes per release. One level-2 heading per version — `## <version> �
 
 `<Tool>` is one of `Core`, `Studio`, `Screenspace`, `Transcripts`, `Workflows`, `Composer`, `Overview`. Write for someone using clipgen, not building it: name the thing by what it is called in the interface, say what changed for them, and leave the internals in the commit. Add a second sentence only when the first leaves an obvious "so what". Lines render as **plain text** in the Start overlay's Recent updates tab — no backticks or markdown inside them, or it shows up literally.
 
+## v0.17.6 — 2026-09-25
+**Transcripts:** Feat: Redact finds names, contacts, and other PII and shows placeholders in the page, exports, search, and AI prompts without changing the underlying text.
+**Studio:** Feat: Hold Option while dropping a queue card to copy it into the other queue instead of moving it.
+**Transcripts:** Fix: Clips, reels, intake exports, and transcript sidecars honor Redact again instead of leaking PII that was hidden on the page.
+**Composer:** Fix: Burned-in subtitles keep speaker renames after you relabel who spoke.
+
+## v0.17.5 — 2026-09-24
+**Transcripts:** Feat: Video and transcript sit in two columns with a draggable divider; Summary and Friction stay under the player.
+**Studio:** Fix: Drag intake cards between Artifacts and Reel; intake generation and Build Reel survive disconnects, honor Screenshot and GIF, and surface why a build was refused.
+**Studio:** Fix: MindNode intake keeps note titles, !key marks on generated clips, and the project name after you reload.
+**Core:** Fix: Leaving a Screenspace tool tile no longer snaps the preview, Composer lane icons animate cleanly, and small controls are easier to hit.
+
+## v0.17.4 — 2026-09-19
+**Core:** Feat: Play, pause, mute, and similar icons cross-fade when they change; the command palette, hotkey sheet, and quick-actions menu fade out on close.
+**Screenspace:** Feat: Attention scans skip channels you turned off, so motion-only and contrast-only runs are much faster.
+**Transcripts:** Feat: Cross-reference badges stop re-downloading the whole spreadsheet when nothing changed.
+
+## v0.17.3 — 2026-09-18
+**Core:** Feat: Settings, Summaries recommends a model that fits your RAM and GPU, with Use recommended to pick and download it.
+**Composer:** Fix: Undo and redo keep the right cut after edits, and trim times reject invalid values.
+**Workflows:** Fix: Paused runs re-execute nodes you rewired or muted, and retry work that failed because the AI server was down.
+**Transcripts:** Fix: Inline transcript edits and dictionary corrections save reliably on every path.
+
+## v0.17.2 — 2026-09-10
+**Core:** Feat: The desktop app can install updates from inside clipgen on macOS and Windows.
+**Core:** Feat: Clips with title cards build faster thanks to a shared endcard and a fixed title font.
+**Core:** Fix: About lists every bundled dependency, including libraries that were missing from the table before.
+
+## v0.17.1 — 2026-09-04
+**Transcripts:** Feat: Speaker attribution labels who said each line when you opt in and download the speaker model.
+**Core:** Fix: A reel that failed to build no longer leaves a broken artifact that looks successful.
+
 ## v0.17.0 — 2026-09-03
 **Screenspace:** Feat: Click a Multitool step to focus it. Model view previews that step's tool, region and reference, and its calibration track is highlighted.
 **Screenspace:** Feat: Template and Shape scans run much faster when the tool has a search region.
