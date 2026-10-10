@@ -479,6 +479,8 @@ TRANSCRIBE_CONDITION_ON_PREVIOUS_TEXT: bool = (
 )
 # Pre-load faster-whisper in Transcripts UI: off | queue_open | page_load.
 TRANSCRIBE_PREWARM: str = "queue_open"
+# Longer spans transcribe in windows; features cost ~1 MB per audio-second.
+TRANSCRIBE_WINDOW_SECONDS: int = 900
 # Speaker attribution: label segments by detected speaker after transcription.
 TRANSCRIBE_SPEAKERS: bool = False
 TRANSCRIBE_SPEAKER_MAX: int = 4  # cluster cap, 2..8

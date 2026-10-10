@@ -75,7 +75,7 @@ KNOWN_LONG: dict[str, int] = {
     "source/titlecards.py::_build_card_frame": 154,
     "source/titlecards.py::wrap_clip_with_cards": 217,
     "source/transcripts.py::TranscriptWorker._execute_task": 164,
-    "source/transcripts.py::transcribe_video": 222,
+    "source/transcripts.py::_transcribe_span": 193,
     "source/video.py::compress_to_size": 158,
     "source/workflows.py::_exec_post_process": 181,
 }

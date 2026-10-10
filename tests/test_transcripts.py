@@ -2672,3 +2672,129 @@ class TestSpeakerWorkerTasks:
         worker._execute_task(task)
         assert task["status"] == transcripts.TASK_STATUS_COMPLETED
         assert "speakers" not in task["result"]
+
+
+# ---- windowed transcription ----------------------------------------------------
+
+
+def _span_recorder(monkeypatch, languages=("sv",)):
+    """Stub the per-span pass; record each window's bounds and language."""
+    calls = []
+
+    def fake_span(path, *, language, audio_index, start_seconds, end_seconds, **_k):
+        calls.append((start_seconds, end_seconds, language, audio_index))
+        lo = start_seconds or 0.0
+        seg = TranscriptSegment(start=lo + 1.0, end=lo + 2.0, text=f"at {lo:.0f}")
+        lang = languages[min(len(calls) - 1, len(languages) - 1)]
+        return TranscriptResult(
+            segments=[seg], language=lang, source_file=path, model="base"
+        )
+
+    monkeypatch.setattr(transcripts, "_transcribe_span", fake_span)
+    monkeypatch.setattr(transcripts, "_resolve_audio_index", lambda _p, i: i or 0)
+    monkeypatch.setattr(
+        transcripts, "_quiet_point", lambda _p, _i, around, _r: around + 2.0
+    )
+    return calls
+
+
+def test_long_file_transcribes_in_windows(monkeypatch):
+    import video
+
+    monkeypatch.setattr(config, "TRANSCRIBE_WINDOW_SECONDS", 900)
+    monkeypatch.setattr(video, "get_file_duration", lambda _p: 3600)
+    calls = _span_recorder(monkeypatch)
+    result = transcripts.transcribe_video("study_P01.mp4")
+    assert result is not None
+    starts = [c[0] for c in calls]
+    ends = [c[1] for c in calls]
+    # Cuts land on the quiet point, later windows start 60 s early for warm-up.
+    assert starts == [None, 842.0, 1744.0, 2646.0]
+    assert ends == [902.0, 1804.0, 2706.0, None]
+    # The first window's detected language carries forward.
+    assert [c[2] for c in calls] == [None, "sv", "sv", "sv"]
+    assert result["language"] == "sv"
+    # Each fake window yields one segment at lo + 1, inside its overlap: dropped.
+    assert [s["start"] for s in result["segments"]] == [1.0]
+
+
+def test_short_file_and_short_tail_take_one_pass(monkeypatch):
+    import video
+
+    monkeypatch.setattr(config, "TRANSCRIBE_WINDOW_SECONDS", 900)
+    monkeypatch.setattr(video, "get_file_duration", lambda _p: 1300)
+    calls = _span_recorder(monkeypatch)
+    transcripts.transcribe_video("study_P01.mp4")
+    assert [(c[0], c[1]) for c in calls] == [(None, None)]
+
+
+def test_window_respects_in_out_markers(monkeypatch):
+    import video
+
+    monkeypatch.setattr(config, "TRANSCRIBE_WINDOW_SECONDS", 900)
+    monkeypatch.setattr(
+        video, "get_file_duration", lambda _p: pytest.fail("bounded span: no probe")
+    )
+    calls = _span_recorder(monkeypatch)
+    transcripts.transcribe_video("study_P01.mp4", start_seconds=600, end_seconds=2700)
+    assert [(c[0], c[1]) for c in calls] == [(600, 1502.0), (1442.0, 2700)]
+
+
+def test_window_failure_fails_the_whole_file(monkeypatch):
+    import video
+
+    monkeypatch.setattr(config, "TRANSCRIBE_WINDOW_SECONDS", 900)
+    monkeypatch.setattr(video, "get_file_duration", lambda _p: 3600)
+    _span_recorder(monkeypatch)
+    real = transcripts._transcribe_span
+    monkeypatch.setattr(
+        transcripts,
+        "_transcribe_span",
+        lambda p, **k: None if k["start_seconds"] else real(p, **k),
+    )
+    assert transcripts.transcribe_video("study_P01.mp4") is None
+
+
+def test_quiet_point_finds_the_pause(monkeypatch):
+    import video
+
+    rate = 16000
+    audio = np.full(rate * 30, 0.5, dtype=np.float32)
+    audio[rate * 21 : rate * 21 + rate // 10] = 0.0  # 100 ms of silence at 21 s
+    monkeypatch.setattr(video, "decode_audio_pcm", lambda *_a, **_k: audio)
+    # The read starts at 85 s, so the pause lands at 106 s.
+    assert transcripts._quiet_point("x.mp4", 0, 100.0, 15.0) == pytest.approx(106.05)
+    monkeypatch.setattr(video, "decode_audio_pcm", lambda *_a, **_k: None)
+    assert transcripts._quiet_point("x.mp4", 0, 100.0, 15.0) == 100.0
+
+
+def test_overlap_segments_are_dropped_and_not_streamed(monkeypatch):
+    import video
+
+    monkeypatch.setattr(config, "TRANSCRIBE_WINDOW_SECONDS", 900)
+    monkeypatch.setattr(video, "get_file_duration", lambda _p: 2000)
+    monkeypatch.setattr(transcripts, "_resolve_audio_index", lambda _p, i: 0)
+    monkeypatch.setattr(transcripts, "_quiet_point", lambda _p, _i, around, _r: around)
+
+    def fake_span(path, *, start_seconds, on_segment=None, **_k):
+        lo = start_seconds or 0.0
+        segs = [
+            TranscriptSegment(start=t, end=t + 1, text=str(t))
+            for t in (lo + 10, lo + 70)
+        ]
+        for seg in segs:
+            if on_segment:
+                on_segment(seg["end"], seg)
+        return TranscriptResult(
+            segments=segs, language="en", source_file=path, model="b"
+        )
+
+    monkeypatch.setattr(transcripts, "_transcribe_span", fake_span)
+    streamed = []
+    result = transcripts.transcribe_video(
+        "study_P01.mp4", on_segment=lambda _e, seg: streamed.append(seg["start"])
+    )
+    assert result is not None
+    # Window 2 runs 840..EOF: 850 is warm-up overlap, 910 is past the 900 cut.
+    assert [s["start"] for s in result["segments"]] == [10.0, 70.0, 910.0]
+    assert streamed == [10.0, 70.0, 910.0]
