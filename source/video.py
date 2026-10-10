@@ -3501,27 +3501,37 @@ def _batch_extract_screenshots(
         shutil.rmtree(tmpdir, ignore_errors=True)
 
 
-def _parallel_extract_gifs(
+def _parallel_extract(
     input_file: str,
     timestamps: list[int],
+    output_format: str,
     gif_duration_seconds: int,
     duration: int,
     *,
     cancel_flag: Callable[[], bool] | None = None,
 ) -> list[dict[str, Any]] | None:
-    """Extract gallery GIFs using parallel ffmpeg processes.
+    """Extract gallery GIFs or screenshots using parallel ffmpeg processes.
 
-    Returns artifact list on success, or None to signal fallback.
+    Each capture is its own fast input-seek, so the cost is O(captures × GOP)
+    rather than a decode of the whole file. Returns the artifact list on
+    success, or None to signal fallback.
     """
-    ext = config.GIF_FORMAT
-    tasks: list[tuple[str, str, str, int, float]] = []
+    gif = output_format != "screen"
+    ext = config.GIF_FORMAT if gif else config.SCREENSHOT_FORMAT
+    tasks: list[tuple[str, str, str, int | None, float]] = []
     for ts in timestamps:
         ts_str, filename = _gallery_name(ts, ext)
-        gif_dur = min(gif_duration_seconds, duration - ts)
-        if gif_dur <= 0:
+        gif_dur = min(gif_duration_seconds, duration - ts) if gif else None
+        if gif_dur is not None and gif_dur <= 0:
             break
         output_path = files.get_unique_filename(filename, file_format=ext)
         tasks.append((input_file, output_path, ts_str, gif_dur, float(ts)))
+
+    def capture(task: tuple[str, str, str, int | None, float]) -> bool:
+        src, out, ts_str, gif_dur, _ts = task
+        if gif_dur is None:
+            return extract_screenshot(src, out, ts_str, cancel_flag=cancel_flag)
+        return extract_gif(src, out, ts_str, gif_dur, cancel_flag=cancel_flag)
 
     if not tasks:
         return None
@@ -3534,12 +3544,7 @@ def _parallel_extract_gifs(
         with concurrent.futures.ThreadPoolExecutor(
             max_workers=config.GALLERY_PARALLEL_WORKERS,
         ) as pool:
-            future_to_task = {
-                pool.submit(
-                    extract_gif, t[0], t[1], t[2], t[3], cancel_flag=cancel_flag
-                ): t
-                for t in tasks
-            }
+            future_to_task = {pool.submit(capture, t): t for t in tasks}
             for future in concurrent.futures.as_completed(future_to_task):
                 task = future_to_task[future]
                 _, output_path, ts_str, gif_dur, ts_float = task
@@ -3547,17 +3552,19 @@ def _parallel_extract_gifs(
                 try:
                     ok = future.result()
                 except (OSError, RuntimeError) as exc:
-                    utils.debug_print(f"GIF extraction task failed: {exc}")
+                    utils.debug_print(f"Gallery capture task failed: {exc}")
                     ok = False
                 if ok:
                     artifacts.append(
-                        _gallery_artifact(output_path, ts_float, ts_str, "gif", gif_dur)
+                        _gallery_artifact(
+                            output_path, ts_float, ts_str, output_format, gif_dur
+                        )
                     )
                 else:
                     files.release_reservation(output_path)
                 utils.standard_print(f"  Captured {completed}/{total} at {ts_str}")
     except (OSError, RuntimeError) as exc:
-        utils.debug_print(f"Parallel GIF extraction failed: {exc}")
+        utils.debug_print(f"Parallel gallery extraction failed: {exc}")
         return None
 
     artifacts.sort(key=lambda a: a["timestamp"])
@@ -3620,6 +3627,22 @@ def generate_interval_captures(
     )
 
     if output_format == "screen" and not config.DEBUGGING and total > 1:
+        # Seeking costs ~half a GOP per shot; one batch pass decodes every frame.
+        gap = probe_max_keyframe_gap(input_file)
+        if gap is not None and gap <= 2 * interval_seconds:
+            seek_artifacts = _parallel_extract(
+                input_file,
+                timestamps,
+                output_format,
+                gif_duration_seconds,
+                duration,
+                cancel_flag=cancel_flag,
+            )
+            if seek_artifacts is not None:
+                utils.info_print(
+                    f"Gallery complete: {len(seek_artifacts)} of {total} captures succeeded."
+                )
+                return seek_artifacts
         batch_artifacts = _batch_extract_screenshots(
             input_file, timestamps, interval_seconds, cancel_flag=cancel_flag
         )
@@ -3633,9 +3656,10 @@ def generate_interval_captures(
             return batch_artifacts
 
     if output_format != "screen" and not config.DEBUGGING and total > 1:
-        parallel_artifacts = _parallel_extract_gifs(
+        parallel_artifacts = _parallel_extract(
             input_file,
             timestamps,
+            output_format,
             gif_duration_seconds,
             duration,
             cancel_flag=cancel_flag,

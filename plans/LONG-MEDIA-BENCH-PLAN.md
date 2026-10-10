@@ -114,7 +114,8 @@ Raw JSON/console output was kept under `.context/bench/` (not committed). Each r
 - **#1 Screenspace full decode — fix later, measured smaller than feared** on screen content (~27 s per source-hour). Re-measure with `--source` on a real OBS session (webcam overlays and motion decode slower). Candidate fix: a seek-sampling path, or relax the keyframe gate when `interval ≥ 1 s` and accept snapping to the nearest keyframe.
 - **#4 Studio sprite — fixed.** A blanket `seek_frames=True` would have regressed short clips: on 8.3 s GOPs each seek decodes up to a GOP, so the seek path has a flat ~1.0 s floor, while single-pass costs 159 ms (10 s) → 1.09 s (180 s) → 3.5 s (600 s). Studio now seeks only at `STUDIO_SCRUBBER_SEEK_SECONDS` (120 s) and up. `ui_bench --scenarios studio-scrub`: sprite-30s 313 ms (single-pass), sprite-600s 1088 ms (was 3.5 s).
 - **#5 clip-audio cap — low priority.** 144 ms for 180 s; the cost is browser-side decode of a 4 MB WAV. Cap it for parity with Composer.
-- **#6 gallery batch to EOF**, **#8 timeouts** — not measured here. Add a `gallery` scenario to `clip_bench` when someone touches them.
+- **#6 gallery — fixed, differently than planned.** Decoding to EOF is inherent (the grid spans the whole file); the cost is that the batch `fps` filter decodes every frame. One fast seek per shot decodes ~half a GOP, and the shots run on `GALLERY_PARALLEL_WORKERS`. Screenshots now take that path when the probed keyframe gap is ≤ 2× the interval. 1 h 1080p at 10 s: 22.2 → 12.6 s; 120 s 720p: 0.37 → 0.16 s. Sparse or unknown keyframes keep the batch path.
+- **#8 timeouts** — not measured here.
 - **#7 redact mapping** — wontfix (numbers above).
 
 ### Docs

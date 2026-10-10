@@ -139,9 +139,7 @@ DEFAULT_GIF_DURATION_SECONDS: int = (
 )
 GALLERY_INTERVAL_SECONDS: int = 10  # Default interval between gallery captures
 GALLERY_GIF_DURATION_SECONDS: int = 3  # Default per-GIF duration in gallery mode
-GALLERY_PARALLEL_WORKERS: int = (
-    4  # Max concurrent ffmpeg processes for gallery GIF extraction
-)
+GALLERY_PARALLEL_WORKERS: int = 4  # Max concurrent ffmpeg processes per gallery
 GALLERY_BUNDLE_ENABLED: bool = False  # embed images as base64 data URIs in gallery HTML
 CLIP_PARALLEL_WORKERS: int = 0  # Max concurrent ffmpeg processes for clip/screenshot/GIF generation; 0 = auto (min(4, cpu_count))
 MAX_FILESIZE_MB: int = 0  # Maximum output file size in MB (0 = disabled)
