@@ -2139,9 +2139,10 @@ def decode_audio_pcm(
     falls into the empty-stream failure path below.
     Returns a writable ``np.ndarray`` (float32), or ``None`` on any failure —
     including an empty stream, since zero samples would only fail later and
-    less legibly inside the model. ~4 MB per audio-minute; the transient
-    bytes→array copy briefly doubles that, matching what faster-whisper's own
-    ``decode_audio`` peaked at.
+    less legibly inside the model. ~4 MB per audio-minute, held once: ffmpeg
+    writes a temp file that ``np.fromfile`` reads into the one writable array.
+    Piping held the bytes *and* their writable copy, 1.4 GB for three hours,
+    which made the speaker pass the transcription peak.
     """
     if config.DEBUGGING:
         return None
@@ -2165,30 +2166,33 @@ def decode_audio_pcm(
         "16000",
         "-f",
         "f32le",
-        "pipe:1",
+        "-y",
     ]
+    fd, tmp_name = tempfile.mkstemp(prefix="clipgen_pcm_", suffix=".f32")
+    os.close(fd)
+    tmp = Path(tmp_name)
     try:
         with profiling.span("transcribe.decode_audio"):
             result = subprocess.run(
-                cmd,
+                [*cmd, tmp_name],
                 capture_output=True,
                 check=False,
                 # Loose bound; a wedged ffmpeg must not pin a transcription worker.
                 timeout=900,
             )
+        if result.returncode != 0 or not tmp.stat().st_size:
+            stderr_tail = result.stderr.decode("utf-8", "replace").strip()[-300:]
+            utils.verbose_print(
+                f"PCM decode failed for {filepath} "
+                f"(exit {result.returncode}): {stderr_tail or 'no output'}"
+            )
+            return None
+        return np.fromfile(tmp_name, dtype=np.float32)
     except (subprocess.TimeoutExpired, FileNotFoundError, OSError) as exc:
         utils.verbose_print(f"PCM decode failed for {filepath}: {exc}")
         return None
-    if result.returncode != 0 or not result.stdout:
-        stderr_tail = result.stderr.decode("utf-8", "replace").strip()[-300:]
-        utils.verbose_print(
-            f"PCM decode failed for {filepath} "
-            f"(exit {result.returncode}): {stderr_tail or 'no output'}"
-        )
-        return None
-    # bytearray copy: frombuffer over bytes is read-only, and the model needs a writable
-    # array.
-    return np.frombuffer(bytearray(result.stdout), dtype=np.float32)
+    finally:
+        _delete_quietly(tmp)
 
 
 def _delete_quietly(path: Path) -> None:

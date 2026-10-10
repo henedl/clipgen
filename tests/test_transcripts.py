@@ -986,11 +986,12 @@ class TestDecodeAudioPcmWindow:
 
         class FakeResult:
             returncode = 0
-            stdout = np.zeros(16, dtype=np.float32).tobytes()
             stderr = b""
 
         def fake_run(cmd, **_kw):
             captured["cmd"] = cmd
+            # ffmpeg writes the PCM to the temp file named last.
+            np.zeros(16, dtype=np.float32).tofile(cmd[-1])
             return FakeResult()
 
         monkeypatch.setattr(config, "DEBUGGING", False)
