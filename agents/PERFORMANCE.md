@@ -2,7 +2,7 @@
 
 Patterns to apply from the start when writing new features, so dedicated optimization passes are not needed later.
 
-To *measure* rather than reason — opt-in instrumentation on both the Python and browser side, plus the workflow for proving a fix with numbers — see [agents/skills/profile/SKILL.md](skills/profile/SKILL.md). `--profile-output PATH` writes the report as JSON (labels, startup marks, environment, tuning settings); `tests/perf/*_bench.py` compare such runs by median and refuse mismatched fixtures or environments.
+To *measure* rather than reason — opt-in instrumentation on both the Python and browser side, plus the workflow for proving a fix with numbers — see [agents/skills/profile/SKILL.md](skills/profile/SKILL.md). `--profile-output PATH` writes the report as JSON (labels, startup marks, environment, tuning settings); `tests/perf/*_bench.py` compare such runs by median and refuse mismatched fixtures or environments. Their default `smoke` tier (120 s, 1 s keyframes) is a regression gate, not a realism claim: real sessions are 1–3 h OBS recordings, so measure anything that scales with source or clip length with `--tier session`, `--scale`, or `--source` (see the profile skill).
 
 ## Avoid redundant I/O and API calls
 

@@ -326,6 +326,10 @@ def _scan_via_ffmpeg_pipe(
 
     # Profiling accumulates in locals and flushes after the loop (see profiling.py).
     _prof = config.PROFILING
+    if _prof:
+        # A count, not a time: which decode path this scan took.
+        mode = "keyframe" if skip_non_keyframes else "full"
+        profiling.add(f"scan.decode_mode.{mode}", 0.0, 1)
     _cb_label = f"scan.callback.{profile_kind}" if profile_kind else "scan.callback"
     _deep = profiling.deep_profiler(_cb_label) if _prof else None
     _decode_s = _filter_s = _cb_s = 0.0

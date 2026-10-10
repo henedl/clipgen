@@ -8,6 +8,7 @@ reads change shape, so it is pinned against a real ``profiling.export()``.
 import pytest
 
 import bench_common as bc
+import bench_fixtures as bf
 import clip_bench
 import config
 import profiling
@@ -122,3 +123,47 @@ def test_run_scenario_invalidates_short_work(tmp_path, monkeypatch, make_doc):
     result = clip_bench.run_scenario("clips", tmp_path / "in", tmp_path / "out")
     assert result["valid"] is False
     assert result["reasons"][0].startswith("5 clips cut")
+
+
+def test_sheet_cells_spread_long_clips_across_the_source():
+    cells = clip_bench.sheet_cells(3600, 180)
+    assert cells[0] == "0:01-3:01"
+    assert cells[clip_bench.EXPECTED_CLIPS - 1] == "54:08-57:08"
+    assert len(cells) == clip_bench.DATA_ROWS
+    assert clip_bench.clip_media_seconds(cells) == 180 * clip_bench.EXPECTED_CLIPS
+    # Without --clip-seconds the legacy first-minute windows stay.
+    assert clip_bench.sheet_cells(120, None)[0] == "0:02-0:05"
+
+
+def test_clip_cells_reach_past_an_hour():
+    cells = bf.clip_cells(4, duration=10_800, clip_seconds=60)
+    assert cells[-1] == "2:14:14-2:15:14"
+    assert bf.format_hms(59) == "0:59" and bf.format_hms(3600) == "1:00:00"
+
+
+def test_compress_scenario_requires_compress_passes(tmp_path, make_doc):
+    for i in range(clip_bench.EXPECTED_CLIPS):
+        (tmp_path / f"clip{i}.mp4").write_bytes(b"x")
+    n = clip_bench.EXPECTED_CLIPS
+    skipped = make_doc({"pipeline.clip": (1.0, n, 0.1)})
+    assert (
+        "compress passes"
+        in clip_bench.check_work("clips-compress", skipped, tmp_path)[0]
+    )
+    ran = make_doc(
+        {"pipeline.clip": (1.0, n, 0.1), "ffmpeg.run.compress": (9.0, 2 * n, 0.5)}
+    )
+    assert clip_bench.check_work("clips-compress", ran, tmp_path) == []
+
+
+def test_run_scenario_passes_overrides_only_where_needed(tmp_path, monkeypatch):
+    seen = []
+
+    def fake_run(args, out_dir, *, required_labels, timeout=0, overrides=None):
+        seen.append(overrides)
+        return {"valid": False, "reasons": ["x"], "doc": {}, "output": ""}
+
+    monkeypatch.setattr(bc, "run_clipgen", fake_run)
+    clip_bench.run_scenario("clips", tmp_path / "in", tmp_path / "out")
+    clip_bench.run_scenario("clips-reencode", tmp_path / "in", tmp_path / "out")
+    assert seen == [None, {"REENCODING": True}]
