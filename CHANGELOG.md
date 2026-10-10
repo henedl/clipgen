@@ -8,6 +8,32 @@ Notable changes per release. One level-2 heading per version — `## <version> �
 
 `<Tool>` is one of `Core`, `Studio`, `Screenspace`, `Transcripts`, `Workflows`, `Composer`, `Overview`. Write for someone using clipgen, not building it: name the thing by what it is called in the interface, say what changed for them, and leave the internals in the commit. Add a second sentence only when the first leaves an obvious "so what". Lines render as **plain text** in the Start overlay's Recent updates tab — no backticks or markdown inside them, or it shows up literally.
 
+## v0.18.0 — 2026-10-10
+**Transcripts:** Feat: Redact finds names, email addresses and other personal details and shows placeholders like [GIVEN_NAME_1] instead. The model is an optional download, and you can restore any single item.
+**Transcripts:** Feat: Speaker labels show who is talking on each line. Turn them on per participant, rename speakers, and fix single lines; your changes survive a re-run.
+**Transcripts:** Feat: The page splits into a video column and a transcript column, with a divider you can drag to resize.
+**Workflows:** Feat: The Transcribe node can label speakers too.
+**Studio:** Feat: Hold Option (Ctrl on Windows) while dragging a card to copy it between Artifacts and Reel instead of moving it.
+**Core:** Feat: The desktop app checks for updates and installs them from the About tab of the Start window. You can skip a version or turn off automatic checks.
+**Core:** Feat: Settings, Summaries recommends an AI model that fits your computer's memory and graphics.
+**Core:** Feat: Clips with title cards build about a fifth faster.
+**Core:** Feat: Icons cross-fade when they change, and menus, the command palette and the hotkey cheatsheet fade out instead of vanishing.
+**Screenspace:** Feat: Attention scans run faster when some of their channels are turned off.
+**Studio:** Fix: Dragging an intake card between queues moves it instead of deleting it, and Add to reel makes a copy so trimming one leaves the other alone.
+**Studio:** Fix: A clip, screenshot and GIF of the same cell no longer overwrite each other, and intake queues honour Screenshot and GIF.
+**Studio:** Fix: Refresh no longer refills queues you cleared, and saved filters keep only what fits the current sheet.
+**Studio:** Fix: MindNode note titles drop their timestamps, and !key marks reach the clip.
+**Transcripts:** Fix: Stopping the speaker pass no longer throws away the finished transcript.
+**Transcripts:** Fix: Inline edits save the whole line, and corrections apply every matching rule.
+**Composer:** Fix: Undo and redo keep restored cuts and annotations intact, and invalid times are refused.
+**Workflows:** Fix: Resuming a run re-runs nodes you edited or muted since, and the new-video trigger notices every recording part.
+**Screenspace:** Fix: Model view overlays line up with the video again.
+**Core:** Fix: A CLI run and Studio sharing an output folder no longer overwrite each other's project state.
+**Core:** Fix: Other websites can no longer send commands to clipgen's local server.
+**Core:** Fix: A stalled video file no longer freezes the page that probes it.
+**Core:** Fix: A failed AI model start shows the model server's own error instead of a bare timeout.
+**Core:** Fix: Settings, Summaries no longer offers Delete for models Ollama manages.
+
 ## v0.17.0 — 2026-09-03
 **Screenspace:** Feat: Click a Multitool step to focus it. Model view previews that step's tool, region and reference, and its calibration track is highlighted.
 **Screenspace:** Feat: Template and Shape scans run much faster when the tool has a search region.
