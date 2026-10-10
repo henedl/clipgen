@@ -197,6 +197,8 @@ STUDIO_THUMBNAIL_WIDTH: int = 200
 STUDIO_CARD_SCRUBBER: bool = False
 STUDIO_SCRUBBER_SPRITE_COLS: int = 5
 STUDIO_SCRUBBER_SPRITE_ROWS: int = 5
+# Seek per frame past this span; shorter clips decode faster in one pass.
+STUDIO_SCRUBBER_SEEK_SECONDS: float = 120.0
 
 # Cross-reference badges on Studio, Transcripts, and Overview.
 # Mirrored to JS via get_frontend_config() (never hardcode).

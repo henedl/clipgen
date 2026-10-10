@@ -338,7 +338,7 @@ CLIPGEN_UI_CHECK=1 uv run --extra ui python tests/ui/ui_bench.py --scenarios idl
 | `screenspace` | 2000 events on the fixture video | `open-results` (first chunk), `drain` (scroll the lazy list to all 2000), `filter` (confidence 0.6), `switch-pane`, `switch-back` |
 | `idle` | the six pages, default fixture | a sampled soak per page, second half as a background tab |
 | `composer` | a 3 h 1080p participant: 60 cuts, 40 sheet markers, 2000 events, 200 marks | `zoom-in` (to the 200× cap), `zoom-reset` |
-| `studio-scrub` | the same 3 h source | `sprite-30s`/`-180s`, `audio-30s`/`-180s`: the hover-scrubber routes near the file's end, status recorded per fetch |
+| `studio-scrub` | the same 3 h source | `sprite-30s`/`-180s`/`-600s`, `audio-30s`/`-180s`/`-600s`: the hover-scrubber routes near the file's end, status recorded per fetch |
 
 `--tier session` raises Transcripts to 6000 segments (three hours at the real
 ~2000/hour), moves Screenspace onto the 3 h video, and adds `composer` and

@@ -24,7 +24,7 @@ Scenarios (fixtures come from tests/perf/bench_fixtures.py):
                    Screenspace events and 200 transcript marks; load, zoom
                    in to the 200× cap, reset.
 - ``studio-scrub``  the hover-scrubber media routes on a three-hour 1080p
-                   source: sprite sheet and audio for 30 s and 180 s clips
+                   source: sprite sheet and audio for 30 s, 180 s and 600 s clips
                    near the end of the file (cost should not grow with the
                    clip; the studio route decodes the whole span).
 - ``idle``         each of the six pages sits for ``--soak`` seconds sampled
@@ -88,7 +88,7 @@ LONG_SHEET_ROWS = 40
 LONG_CUTS = 60
 LONG_SEGMENTS = 6000
 LONG_MARK_EVERY = 30
-SCRUB_CLIPS = (30, 180)
+SCRUB_CLIPS = (30, 180, 600)
 
 TIER_SEGMENTS = {"smoke": SEGMENTS, "session": {"P01": LONG_SEGMENTS, "P02": 100}}
 TIERS: dict[str, dict[str, Any]] = {"smoke": {}, "session": {"runs": 1}}
@@ -527,7 +527,7 @@ def run_studio_scrub(d: Driver, counts: dict[str, Any]) -> dict[str, Any]:
     statuses: dict[str, int] = {}
     for route, label in (("sprite", "sprite"), ("clip-audio", "audio")):
         for clip in SCRUB_CLIPS:
-            start = LONG_SECONDS - 200 - _run_salt
+            start = LONG_SECONDS - 700 - _run_salt
             url = f"api/{route}/P01?start={start}&end={start + clip}"
             name = f"{label}-{clip}s"
 

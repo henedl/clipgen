@@ -1307,8 +1307,11 @@ def extract_sprite_sheet_bytes(
     thread pool and composites the grid with PIL, making the cost
     O(frame_count) instead of O(duration): the default single-pass ``fps``
     filter decodes the *entire* span to emit its frames, which takes seconds
-    on the minutes-long spans Composer's timeline tiles cover. Studio's short
-    clip sprites keep the single-pass default.
+    on the minutes-long spans Composer's timeline tiles cover. Each seek still
+    decodes up to one GOP, so on long-GOP footage the seek path has a floor.
+    Measured on 1080p with OBS's 8.3 s keyframes, 5×5 grid: single-pass
+    159 ms (10 s span) → 1.09 s (180 s) → 3.5 s (600 s); seek ~1.0 s flat.
+    Studio switches at ``STUDIO_SCRUBBER_SEEK_SECONDS``.
     """
     if config.DEBUGGING:
         config.debug_ic(input_file, start_seconds, duration_seconds, cols, rows)

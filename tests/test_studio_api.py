@@ -4796,6 +4796,27 @@ def test_api_sprite_happy_path(client, monkeypatch):
     assert resp.data == b"JPEGDATA"
 
 
+def test_api_sprite_seeks_only_long_clips(client, monkeypatch):
+    """Short clips decode in one pass; long ones seek per frame (O(frames))."""
+    from pathlib import Path
+
+    monkeypatch.setattr(server, "_sheet_context", object())
+    monkeypatch.setattr(
+        server, "_resolve_clip_media_source", lambda p, s: (Path("/nope.mp4"), 0.0)
+    )
+    monkeypatch.setattr(server.config, "STUDIO_SCRUBBER_SEEK_SECONDS", 120.0)
+    seen = []
+
+    def fake(*_a, seek_frames=False, **_k):
+        seen.append(seek_frames)
+        return b"JPEG"
+
+    monkeypatch.setattr(server.video, "extract_sprite_sheet_bytes", fake)
+    assert client.get("/studio/api/sprite/P01?start=0&end=30").status_code == 200
+    assert client.get("/studio/api/sprite/P01?start=0&end=180").status_code == 200
+    assert seen == [False, True]
+
+
 def test_api_clip_audio_happy_path(client, monkeypatch):
     from pathlib import Path
 
