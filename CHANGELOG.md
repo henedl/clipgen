@@ -8,6 +8,12 @@ Notable changes per release. One level-2 heading per version — `## <version> �
 
 `<Tool>` is one of `Core`, `Studio`, `Screenspace`, `Transcripts`, `Workflows`, `Composer`, `Overview`. Write for someone using clipgen, not building it: name the thing by what it is called in the interface, say what changed for them, and leave the internals in the commit. Add a second sentence only when the first leaves an obvious "so what". Lines render as **plain text** in the Start overlay's Recent updates tab — no backticks or markdown inside them, or it shows up literally.
 
+## v0.18.1 — 2026-10-11
+**Transcripts:** Feat: Multi-hour recordings transcribe in overlapping windows, so peak memory on a three-hour session drops from about eight gigabytes to about two.
+**Transcripts:** Feat: Speaker labeling on long sessions with thousands of turns finishes in under a second where it used to take over a minute.
+**Studio:** Feat: Preview sprites on clips longer than two minutes build about three times faster by seeking one frame at a time instead of decoding the whole span.
+**Studio:** Feat: Gallery screenshots from hour-long videos build about forty percent faster by seeking to each shot instead of decoding the whole recording.
+
 ## v0.18.0 — 2026-10-10
 **Transcripts:** Feat: Redact finds names, email addresses and other personal details and shows placeholders like [GIVEN_NAME_1] instead. The model is an optional download, and you can restore any single item.
 **Transcripts:** Feat: Speaker labels show who is talking on each line. Turn them on per participant, rename speakers, and fix single lines; your changes survive a re-run.
