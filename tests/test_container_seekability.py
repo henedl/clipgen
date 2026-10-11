@@ -634,3 +634,22 @@ class TestReadMvhdDuration:
 
     def test_truncated_body(self):
         assert video._read_mvhd_duration(b"\x00\x00\x00") is None
+
+
+@requires_ffmpeg
+def test_decode_audio_pcm_returns_one_writable_array(tmp_path, monkeypatch):
+    """The temp-file decode yields 16 kHz float32, writable, and cleans up."""
+    import tempfile
+
+    import numpy as np
+
+    path = tmp_path / "clip.mp4"
+    _encode(path, fragmented=False, audio_tracks=1)
+    monkeypatch.setattr(tempfile, "tempdir", str(tmp_path))
+    pcm = video.decode_audio_pcm(str(path), 0, start_seconds=0.5, duration_seconds=1)
+    assert pcm is not None
+    assert pcm.dtype == np.float32 and pcm.flags.writeable
+    assert abs(len(pcm) - 16000) < 400
+    assert float(np.abs(pcm).max()) > 0.1
+    assert video.decode_audio_pcm(str(path), 0, start_seconds=99) is None
+    assert not list(tmp_path.glob("clipgen_pcm_*"))

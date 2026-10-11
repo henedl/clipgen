@@ -566,7 +566,12 @@ def api_sprite(participant: str) -> FlaskResponse:
         cache=_sprite_cache,
         resolve=lambda start, dur: _resolve_clip_media_paths(participant, start, dur),
         produce=lambda path, local_start, dur: video.extract_sprite_sheet_bytes(
-            path, local_start, dur, cols, rows
+            path,
+            local_start,
+            dur,
+            cols,
+            rows,
+            seek_frames=dur >= config.STUDIO_SCRUBBER_SEEK_SECONDS,
         ),
         mimetype="image/jpeg",
         kind_label="Sprite",

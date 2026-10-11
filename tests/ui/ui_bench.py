@@ -20,9 +20,22 @@ Scenarios (fixtures come from tests/perf/bench_fixtures.py):
 - ``screenspace``  2,000 synthetic events with the fixture video; load,
                    open results, drain the lazy list, confidence filter,
                    switch panes.
+- ``composer``     a three-hour participant: 60 cuts, 40 sheet markers, the
+                   Screenspace events and 200 transcript marks; load, zoom
+                   in to the 200× cap, reset.
+- ``studio-scrub``  the hover-scrubber media routes on a three-hour 1080p
+                   source: sprite sheet and audio for 30 s, 180 s and 600 s clips
+                   near the end of the file (cost should not grow with the
+                   clip; the studio route decodes the whole span).
 - ``idle``         each of the six pages sits for ``--soak`` seconds sampled
                    every ``--soak-interval``, the second half emulated as a
                    background tab. Growth is a signal, not a proof.
+
+``--tier session`` sizes the defaults to a real three-hour session: 6,000
+segments, Screenspace events on the three-hour video, and adds ``composer``
+and ``studio-scrub`` to the default list. Those two always use the long
+project (``bench_fixtures.make_long_video``: an OBS-like 1080p file built in
+seconds), whatever the tier.
 
 Every action waits on a *condition* — a DOM count or a namespace state
 field — never a fixed sleep; a condition that does not settle marks the
@@ -66,13 +79,29 @@ SHEET_PARTICIPANTS = 12
 SEGMENTS = {"P01": 2400, "P02": 100}
 EVENTS = 2000
 ACTION_TIMEOUT_MS = 15_000
+FETCH_TIMEOUT_MS = 60_000
 
-SCENARIOS = ("studio", "transcripts", "screenspace", "idle")
+# The long project: one participant, a three-hour OBS-like source.
+LONG_STUDY = "uilong"
+LONG_SECONDS = 10_800
+LONG_SHEET_ROWS = 40
+LONG_CUTS = 60
+LONG_SEGMENTS = 6000
+LONG_MARK_EVERY = 30
+SCRUB_CLIPS = (30, 180, 600)
+
+TIER_SEGMENTS = {"smoke": SEGMENTS, "session": {"P01": LONG_SEGMENTS, "P02": 100}}
+TIERS: dict[str, dict[str, Any]] = {"smoke": {}, "session": {"runs": 1}}
+
+SCENARIOS = ("studio", "transcripts", "screenspace", "composer", "studio-scrub", "idle")
+LONG_SCENARIOS = ("composer", "studio-scrub")
 # The count that must match a baseline for rows to be comparable.
 COUNT_KEY = {
     "studio": "rows",
     "transcripts": "segments",
     "screenspace": "events",
+    "composer": "markers",
+    "studio-scrub": "fetches",
     "idle": "pages",
 }
 
@@ -84,7 +113,66 @@ class ActionFailed(RuntimeError):
 # ---- Fixtures -------------------------------------------------------------------
 
 
-def build_fixtures(work: Path) -> dict[str, dict[str, Any]]:
+def build_long_project(work: Path) -> dict[str, Any]:
+    """The three-hour project: video, sheet and a manifest with every lane."""
+    long_dir = work / "long"
+    out_dir = work / "long-out"
+    video = long_dir / f"{LONG_STUDY}_P01.mp4"
+    spec = bc.session_spec(LONG_SECONDS, audio="sine")
+    bc.ensure_video(
+        video,
+        spec,
+        lambda: bf.make_long_video(
+            video, duration=LONG_SECONDS, audio="sine", **bc.SESSION_VIDEO
+        ),
+    )
+    sheet = long_dir / f"{LONG_STUDY}.xlsx"
+    if not sheet.is_file():
+        cells = bf.clip_cells(LONG_SHEET_ROWS, duration=LONG_SECONDS, clip_seconds=60)
+        bf.write_sheet(
+            sheet,
+            study=LONG_STUDY,
+            rows=LONG_SHEET_ROWS,
+            participants=1,
+            cell=lambda r, _p: cells[r],
+        )
+    if not (out_dir / "clipgen.json").is_file():
+        step = LONG_SECONDS / LONG_CUTS
+        cuts = [
+            {
+                "id": f"bench-cut-{i}",
+                "participant": "P01",
+                "start": round(i * step + 5, 3),
+                "end": round(i * step + 65, 3),
+                "label": f"cut {i}",
+                "createdAt": "2026-01-05T12:00:00",
+            }
+            for i in range(LONG_CUTS)
+        ]
+        width, height = spec["width"], spec["height"]
+        bf.write_manifest(
+            out_dir,
+            {
+                "screenspace": bf.screenspace_section(
+                    study=LONG_STUDY,
+                    participant="P01",
+                    video_path=video,
+                    events=EVENTS,
+                    duration=float(LONG_SECONDS),
+                    source_size=(width, height),
+                ),
+                "transcripts": bf.transcripts_section(
+                    {"P01": LONG_SEGMENTS}, marks_every=LONG_MARK_EVERY
+                ),
+                "composer": {"cuts": cuts, "ui": {"followPlayhead": True}},
+            },
+        )
+    return {"sheet": sheet, "input_dir": long_dir, "output_dir": out_dir}
+
+
+def build_fixtures(
+    work: Path, tier: str = "smoke", scenarios: tuple[str, ...] = ()
+) -> dict[str, dict[str, Any]]:
     """Write every scenario's inputs under *work*; returns per-scenario paths."""
     _ui_fixtures.ensure_inputs()
     studio_dir = work / "studio"
@@ -93,9 +181,11 @@ def build_fixtures(work: Path) -> dict[str, dict[str, Any]]:
         bf.write_sheet(
             sheet, study=STUDY, rows=SHEET_ROWS, participants=SHEET_PARTICIPANTS
         )
-    ts_dir = work / "transcripts"
+    ts_dir = work / ("transcripts" if tier == "smoke" else f"transcripts-{tier}")
     if not (ts_dir / "clipgen.json").is_file():
-        bf.write_manifest(ts_dir, {"transcripts": bf.transcripts_section(SEGMENTS)})
+        bf.write_manifest(
+            ts_dir, {"transcripts": bf.transcripts_section(TIER_SEGMENTS[tier])}
+        )
     ss_dir = work / "screenspace"
     video = _ui_fixtures.video_path("P01")
     if not (ss_dir / "clipgen.json").is_file():
@@ -111,20 +201,34 @@ def build_fixtures(work: Path) -> dict[str, dict[str, Any]]:
                 )
             },
         )
-    return {
+    fixtures: dict[str, dict[str, Any]] = {
         "studio": {"sheet": sheet, "input_dir": studio_dir, "output_dir": studio_dir},
         "transcripts": {"sheet": None, "input_dir": None, "output_dir": ts_dir},
         "screenspace": {"sheet": None, "input_dir": None, "output_dir": ss_dir},
         "idle": {"sheet": None, "input_dir": None, "output_dir": None},
     }
+    if tier != "smoke" or set(scenarios) & set(LONG_SCENARIOS):
+        long_fx = build_long_project(work)
+        for name in LONG_SCENARIOS:
+            fixtures[name] = long_fx
+        if tier != "smoke":
+            fixtures["screenspace"] = long_fx
+    return fixtures
 
 
-def fixture_counts(work: Path) -> dict[str, Any]:
+def fixture_counts(
+    work: Path, fixtures: dict[str, dict[str, Any]] | None = None
+) -> dict[str, Any]:
     """What was written, so a run can prove the page loaded all of it."""
+    fixtures = fixtures or {}
+
+    def out(name: str, default: str) -> Path:
+        return (fixtures.get(name) or {}).get("output_dir") or work / default
+
     return {
         "rows": bf.sheet_rows(work / "studio" / f"{STUDY}.xlsx"),
-        "segments": bf.manifest_counts(work / "transcripts")["segments"],
-        "events": bf.manifest_counts(work / "screenspace")["events"],
+        "segments": bf.manifest_counts(out("transcripts", "transcripts"))["segments"],
+        "events": bf.manifest_counts(out("screenspace", "screenspace"))["events"],
         "pages": len(_ui_pages.PAGES),
     }
 
@@ -141,11 +245,11 @@ class Driver:
         self.origin = origin
         self.actions: dict[str, dict[str, Any]] = {}
 
-    def wait(self, js: str, what: str) -> Any:
+    def wait(self, js: str, what: str, timeout_ms: int = ACTION_TIMEOUT_MS) -> Any:
         """Wait until *js* (an expression) is truthy; raise with *what* on timeout."""
         try:
             return self.page.wait_for_function(
-                f"() => {{ return {js}; }}", timeout=ACTION_TIMEOUT_MS
+                f"() => {{ return {js}; }}", timeout=timeout_ms
             ).json_value()
         except _ui_browser.playwright_error() as exc:
             raise ActionFailed(f"{what}: {str(exc).splitlines()[0]}") from None
@@ -163,13 +267,21 @@ class Driver:
             doc = json.loads(r.read().decode("utf-8"))
         return doc.get("labels", {})
 
-    def action(self, name: str, fn: Any, *, before: str, after: str) -> None:
+    def action(
+        self,
+        name: str,
+        fn: Any,
+        *,
+        before: str,
+        after: str,
+        timeout_ms: int = ACTION_TIMEOUT_MS,
+    ) -> None:
         """Time *fn* plus its settle condition; record counts either side."""
         self.server_window()  # open a fresh window
         b = self.count(before)
         t0 = time.perf_counter()
         fn()
-        a = self.wait(after, name)
+        a = self.wait(after, name, timeout_ms)
         ms = (time.perf_counter() - t0) * 1000
         self.actions[name] = {
             "ms": ms,
@@ -359,15 +471,101 @@ def run_screenspace(d: Driver, counts: dict[str, Any]) -> dict[str, Any]:
     return {"events": events}
 
 
+_CO = "window.ClipgenComposer.state"
+
+
+def run_composer(d: Driver, counts: dict[str, Any]) -> dict[str, Any]:
+    d.wait(
+        f"{_CO}.duration > {LONG_SECONDS - 5}"
+        f" && {_CO}.cuts.length === {LONG_CUTS}"
+        f" && {_CO}.markers.sheet.length > 0"
+        f" && {_CO}.markers.screenspace.length > 0"
+        f" && {_CO}.markers.transcript.length > 0",
+        "composer ready",
+    )
+
+    def zoom_in() -> None:
+        d.page.evaluate(
+            "() => { for (var i = 0; i < 14; i++)"
+            " document.querySelector('#coZoomInBtn').click(); }"
+        )
+
+    d.action(
+        "zoom-in",
+        zoom_in,
+        before="#coCutList .co-cut-item",
+        after=f"{_CO}.zoom >= 200 && {_CO}.zoom",
+    )
+    d.action(
+        "zoom-reset",
+        lambda: d.page.click("#coZoomResetBtn"),
+        before="#coCutList .co-cut-item",
+        after=f"{_CO}.zoom === 1 && {_CO}.offset === 0 && 1",
+    )
+    lanes = d.page.evaluate(
+        f"() => ({{ sheet: {_CO}.markers.sheet.length,"
+        f" screenspace: {_CO}.markers.screenspace.length,"
+        f" transcript: {_CO}.markers.transcript.length }})"
+    )
+    return {"markers": lanes, "cuts": LONG_CUTS}
+
+
+_FETCH = "window.__benchFetch"
+_run_salt = 0
+
+
+def run_studio_scrub(d: Driver, counts: dict[str, Any]) -> dict[str, Any]:
+    """Time the hover-scrubber routes for a short and a long clip near the end.
+
+    Each run shifts the window by a second so the server's media LRU never
+    answers a repeat; the status lands in the workload, so a timed-out
+    sprite (a 404 after the route's 20 s ffmpeg cap) is visible, not hidden.
+    """
+    global _run_salt
+    _run_salt += 1
+    d.wait(f"document.querySelectorAll({_ROWS!r}).length > 0", "grid ready")
+    statuses: dict[str, int] = {}
+    for route, label in (("sprite", "sprite"), ("clip-audio", "audio")):
+        for clip in SCRUB_CLIPS:
+            start = LONG_SECONDS - 700 - _run_salt
+            url = f"api/{route}/P01?start={start}&end={start + clip}"
+            name = f"{label}-{clip}s"
+
+            def fetch(url: str = url) -> None:
+                d.page.evaluate(
+                    "url => { window.__benchFetch = { done: false };"
+                    " fetch(url).then(function (r) { return r.arrayBuffer()"
+                    ".then(function (b) { window.__benchFetch ="
+                    " { done: true, status: r.status, bytes: b.byteLength }; }); })"
+                    ".catch(function () { window.__benchFetch ="
+                    " { done: true, status: -1, bytes: 0 }; }); }",
+                    url,
+                )
+
+            d.action(
+                name,
+                fetch,
+                before=_ROWS,
+                after=f"{_FETCH}.done && {_FETCH}.status",
+                timeout_ms=FETCH_TIMEOUT_MS,
+            )
+            statuses[name] = int(d.page.evaluate(f"() => {_FETCH}.status"))
+    return {"fetches": len(statuses), "status": statuses}
+
+
 SCENARIO_FN = {
     "studio": run_studio,
     "transcripts": run_transcripts,
     "screenspace": run_screenspace,
+    "composer": run_composer,
+    "studio-scrub": run_studio_scrub,
 }
 SCENARIO_PAGE = {
     "studio": "studio",
     "transcripts": "transcripts",
     "screenspace": "screenspace",
+    "composer": "composer",
+    "studio-scrub": "studio",
 }
 
 
@@ -477,6 +675,10 @@ def summarize(scenario: str, run: dict[str, Any]) -> dict[str, Any]:
         out["hidden_polls_per_min"] = hidden_ticks
     counts = run.get("workload") or {}
     for key, value in counts.items():
+        if key == "status":
+            # Scrub responses: count the failures, never sum status codes.
+            out["failed_fetches"] = sum(1 for v in value.values() if v != 200)
+            continue
         out[key] = sum(value.values()) if isinstance(value, dict) else value
     return out
 
@@ -517,8 +719,16 @@ def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument(
         "--scenarios",
-        default=",".join(s for s in SCENARIOS if s != "idle"),
-        help="comma-separated scenario list (default: all but idle)",
+        default=None,
+        help="comma-separated scenario list (default: studio, transcripts, "
+        "screenspace; session adds composer, studio-scrub)",
+    )
+    ap.add_argument(
+        "--tier",
+        choices=tuple(TIERS),
+        default="smoke",
+        help="smoke: the short regression gate (default); "
+        "session: three-hour sizes, one run",
     )
     ap.add_argument(
         "--work",
@@ -531,6 +741,11 @@ def main(argv: list[str] | None = None) -> int:
     bc.add_common_args(ap, "load")
     args = ap.parse_args(argv)
     bc.validate_common_args(ap, args)
+    if args.runs is None:
+        args.runs = TIERS[args.tier].get("runs", 3)
+    if args.scenarios is None:
+        skip = {"idle"} if args.tier != "smoke" else {"idle", *LONG_SCENARIOS}
+        args.scenarios = ",".join(s for s in SCENARIOS if s not in skip)
     scenarios = [s.strip() for s in args.scenarios.split(",") if s.strip()]
     unknown = [s for s in scenarios if s not in SCENARIOS]
     if unknown:
@@ -542,11 +757,11 @@ def main(argv: list[str] | None = None) -> int:
     profiling.enable()  # the page reads CLIPGEN_CONFIG.profiling from the config payload
     work = args.work
     try:
-        fixtures = build_fixtures(work)
+        fixtures = build_fixtures(work, args.tier, tuple(scenarios))
     except _ui_fixtures.UiUnavailable as exc:
         print(exc, file=sys.stderr)
         return bc.EXIT_USAGE
-    counts = fixture_counts(work)
+    counts = fixture_counts(work, fixtures)
     print(
         f"fixtures: {counts['rows']} rows × {SHEET_PARTICIPANTS}, "
         f"{sum(counts['segments'].values())} segments, {counts['events']} events"
@@ -603,8 +818,13 @@ def main(argv: list[str] | None = None) -> int:
             "spec": {
                 "rows": SHEET_ROWS,
                 "participants": SHEET_PARTICIPANTS,
-                "segments": SEGMENTS,
+                "segments": TIER_SEGMENTS[args.tier],
                 "events": EVENTS,
+                **(
+                    {"tier": args.tier, "long_seconds": LONG_SECONDS}
+                    if args.tier != "smoke"
+                    else {}
+                ),
             },
             "probed": counts,
         },

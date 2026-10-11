@@ -322,4 +322,155 @@ def test_validate_common_args_rejects_deep_with_save():
     with pytest.raises(SystemExit):
         bc.validate_common_args(ap, ap.parse_args(["--fail-abs", "1"]))
     bc.validate_common_args(ap, ap.parse_args(["--deep"]))
-    assert ap.parse_args([]).runs == 3
+    assert ap.parse_args([]).runs is None  # the tier fills it
+
+
+# ---------- long media: scaling, rates, tiers, identity -----------------------------
+
+
+def test_fit_scaling_reads_linear_flat_and_superlinear():
+    linear = bc.fit_scaling([(600, 10.0), (1800, 30.0), (3600, 60.0)])
+    assert linear["verdict"] == "linear"
+    assert linear["slope_per_hour"] == pytest.approx(60.0)
+    assert linear["exponent"] == pytest.approx(1.0)
+    assert bc.fit_scaling([(600, 2.0), (3600, 2.05)])["verdict"] == "flat"
+    cubic = bc.fit_scaling([(1000, 0.37), (2000, 2.99)])
+    assert cubic["verdict"] == "superlinear"
+    assert cubic["exponent"] == pytest.approx(3.0, abs=0.05)
+    assert bc.fit_scaling([(600, 1.0)])["verdict"] == "n/a"
+
+
+def test_fit_scaling_exponent_ignores_startup_overhead():
+    """A fixed 2 s launch must not read a linear cost as sublinear."""
+    pts = [(x, 2.0 + x / 60) for x in (60, 1800, 3600)]
+    assert bc.fit_scaling(pts)["verdict"] == "linear"
+
+
+def test_add_rates_normalizes_by_media_length():
+    sample = bc.add_rates({"elapsed_s": 40.0}, 3600.0)
+    assert sample["xrt"] == pytest.approx(90.0)
+    assert sample["s_per_media_hour"] == pytest.approx(40.0)
+    assert bc.add_rates({"elapsed_s": 0.0}, 10.0)["xrt"] == 0.0
+
+
+def test_build_row_adds_rates_only_with_media():
+    results = [{"valid": True, "reasons": [], "elapsed_s": 2.0, "doc": {}}]
+    plain = bc.build_row(results, lambda _d: {}, ("elapsed_s",))
+    assert "xrt" not in plain["samples"][0]
+    rated = bc.build_row(results, lambda _d: {}, ("elapsed_s",), media_s=120.0)
+    assert rated["samples"][0]["xrt"] == pytest.approx(60.0)
+
+
+def test_timeout_scales_with_media():
+    assert bc.timeout_for(60, None) == 1800.0
+    assert bc.timeout_for(10_800, None) == 32_400.0
+    assert bc.timeout_for(10_800, 99) == 99.0
+
+
+def test_parse_scale_needs_two_positive_durations():
+    assert bc.parse_scale("3600, 600,600") == [600, 3600]
+    for bad in ("600", "0,600", ""):
+        with pytest.raises(ValueError):
+            bc.parse_scale(bad)
+
+
+def _tier_parser():
+    ap = argparse.ArgumentParser()
+    bc.add_common_args(ap, "callback")
+    tiers = {"smoke": {"duration": 120}, "session": {"duration": 3600, "runs": 1}}
+    bc.add_long_args(ap, tiers)
+    ap.add_argument("--duration", type=int, default=None)
+    return ap, tiers
+
+
+def test_apply_tier_fills_only_unset_flags():
+    ap, tiers = _tier_parser()
+    args = ap.parse_args(["--tier", "session"])
+    bc.apply_tier(ap, args, tiers)
+    assert (args.duration, args.runs) == (3600, 1)
+    args = ap.parse_args(["--tier", "session", "--duration", "60", "--runs", "2"])
+    bc.apply_tier(ap, args, tiers)
+    assert (args.duration, args.runs) == (60, 2)
+    args = ap.parse_args([])
+    bc.apply_tier(ap, args, tiers)
+    assert (args.duration, args.runs) == (120, 3)
+
+
+def test_apply_tier_rejects_scale_with_save_or_source(tmp_path):
+    ap, tiers = _tier_parser()
+    with pytest.raises(SystemExit):
+        bc.apply_tier(ap, ap.parse_args(["--scale", "60,120", "--save", "x"]), tiers)
+    with pytest.raises(SystemExit):
+        bc.apply_tier(ap, ap.parse_args(["--source", str(tmp_path / "no")]), tiers)
+
+
+def test_keyframe_gap_is_matched_within_tolerance():
+    spec = {"duration": 3600, "keyframe_gap": 8.333}
+    assert bc.fixture_matches({"duration": 3600.08, "keyframe_gap": 8.36}, spec)
+    # A 1 s-GOP leftover must never pass for an OBS-like fixture.
+    assert not bc.fixture_matches({"duration": 3600, "keyframe_gap": 1.0}, spec)
+
+
+def test_probe_keyframe_gap_takes_the_widest(monkeypatch):
+    out = "0.000,K__\n0.033,___\n8.333,K__\n16.666,K__\n19.0,K__\n"
+    monkeypatch.setattr(
+        bc.subprocess, "run", lambda *_a, **_k: SimpleNamespace(stdout=out)
+    )
+    assert bc.probe_keyframe_gap(Path("x.mp4")) == pytest.approx(8.333)
+
+
+def test_ensure_video_rebuilds_on_an_unprobed_mismatch(tmp_path, monkeypatch):
+    """Same geometry, different content: the sidecar tells them apart."""
+    video = tmp_path / "v_P01.mp4"
+    spec = {"duration": 60, "content": "screen"}
+    built = []
+
+    def build():
+        built.append(1)
+        video.write_bytes(b"x")
+
+    monkeypatch.setattr(bc, "probe_fixture", lambda *_a, **_k: {"duration": 60.0})
+    bc.ensure_video(video, spec, build)
+    bc.ensure_video(video, spec, build)
+    assert len(built) == 1
+    bc.ensure_video(video, dict(spec, content="testsrc"), build)
+    assert len(built) == 2
+
+
+def test_run_clipgen_reports_a_timeout(tmp_path, monkeypatch):
+    def hang(cmd, **kwargs):
+        raise bc.subprocess.TimeoutExpired(cmd, kwargs["timeout"], output=b"partial")
+
+    monkeypatch.setattr(bc.subprocess, "run", hang)
+    result = bc.run_clipgen(["--x"], tmp_path, required_labels=[], timeout=5)
+    assert result["valid"] is False
+    assert result["reasons"][0] == "timeout after 5s"
+    assert "partial" in result["output"]
+
+
+def test_run_clipgen_overrides_launch_through_python(tmp_path, monkeypatch):
+    seen = {}
+
+    def fake(cmd, **_kwargs):
+        seen["cmd"] = cmd
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(bc.subprocess, "run", fake)
+    bc.run_clipgen(["-r", "6"], tmp_path, required_labels=[], overrides={"A": 1})
+    cmd = seen["cmd"]
+    assert cmd[:4] == ["uv", "run", "python", "-c"]
+    assert json.loads(cmd[5]) == {"A": 1}
+    assert cmd[6:8] == ["-r", "6"]
+    bc.run_clipgen(["-r", "6"], tmp_path, required_labels=[])
+    assert seen["cmd"][:3] == ["uv", "run", "clipgen.py"]
+
+
+def test_link_source_never_copies(tmp_path):
+    source = tmp_path / "Session 7.mkv"
+    source.write_bytes(b"media")
+    link = bc.link_source(source, tmp_path / "in", "bench_P01.mp4")
+    assert link.is_symlink() and link.resolve() == source.resolve()
+    bc.link_source(source, tmp_path / "in", "bench_P01.mp4")  # relink is fine
+    ident = bc.source_identity(source)
+    assert ident["name"] == "Session 7.mkv" and ident["bytes"] == 5
+    assert str(tmp_path) not in json.dumps(ident)

@@ -703,9 +703,150 @@ def transcribe_video(
             instead of waiting for the next ``on_segment`` callback. faster-
             whisper exposes no hard abort, so cancellation is cooperative.
 
+    Spans longer than ``TRANSCRIBE_WINDOW_SECONDS`` run as consecutive
+    windows (see :func:`_window_cuts`): faster-whisper builds features for the
+    whole array it is handed, ~1 MB per audio-second, so a three-hour file
+    peaked at 7.8 GB. Each window reuses the in/out-marker path, so times stay
+    on the file's timeline; a detected language carries forward. Later
+    windows start ``_WINDOW_OVERLAP_SECONDS`` early and keep only segments
+    from their cut on: a window that opens without context can skip a whole
+    30 s chunk.
+
     Returns:
         TranscriptResult with segments, or None on failure.
     """
+    span_kwargs: dict[str, Any] = {
+        "model_name": model_name,
+        "initial_prompt": initial_prompt,
+        "context_keywords": context_keywords,
+        "known_terms": known_terms,
+        "on_segment": on_segment,
+        "cancel_flag": cancel_flag,
+    }
+    window = float(config.TRANSCRIBE_WINDOW_SECONDS or 0)
+    begin = max(0.0, start_seconds or 0.0)
+    end = end_seconds
+    if window > 0 and end is None and not config.DEBUGGING:
+        import video as video_mod
+
+        total = video_mod.get_file_duration(str(video_path))
+        end = float(total) if total else None
+    # A tail under half a window rides with the last one.
+    if window <= 0 or end is None or end - begin <= window * 1.5:
+        return _transcribe_span(
+            video_path,
+            language=language,
+            audio_index=audio_index,
+            start_seconds=start_seconds,
+            end_seconds=end_seconds,
+            **span_kwargs,
+        )
+    idx = _resolve_audio_index(video_path, audio_index)
+    bounds = [begin, *_window_cuts(video_path, idx, begin, end, window)]
+    merged: list[TranscriptSegment] = []
+    lang = language
+    result: TranscriptResult | None = None
+    for i, cut in enumerate(bounds):
+        last = i == len(bounds) - 1
+        # Warm-up overlap: a context-free window start can skip a 30 s chunk.
+        lo = cut if i == 0 else max(begin, cut - _WINDOW_OVERLAP_SECONDS)
+        window_kwargs = dict(span_kwargs)
+        if on_segment is not None:
+            window_kwargs["on_segment"] = _segments_from(cut if i else None, on_segment)
+        result = _transcribe_span(
+            video_path,
+            language=lang,
+            # The first window keeps the caller's choice so auto-selection is reported.
+            audio_index=audio_index if i == 0 else idx,
+            start_seconds=lo or None,
+            # The probed duration is whole seconds; the last window reads to EOF.
+            end_seconds=end_seconds if last else bounds[i + 1],
+            **window_kwargs,
+        )
+        if result is None:
+            return None
+        merged.extend(s for s in result["segments"] if i == 0 or s["start"] >= cut)
+        lang = lang or result["language"]
+    assert result is not None
+    return TranscriptResult(
+        segments=merged,
+        language=lang or result["language"],
+        source_file=str(video_path),
+        model=result["model"],
+    )
+
+
+# Window cuts move to the quietest moment within this many seconds.
+_CUT_SEARCH_SECONDS = 15.0
+# Each later window starts this early; its segments before the cut are dropped.
+_WINDOW_OVERLAP_SECONDS = 60.0
+
+
+def _segments_from(
+    cut: float | None, on_segment: Callable[[float, "TranscriptSegment"], None]
+) -> Callable[[float, "TranscriptSegment"], None]:
+    """Forward only segments starting at *cut* or later (all when None)."""
+
+    def forward(end_time: float, segment: "TranscriptSegment") -> None:
+        if cut is None or segment["start"] >= cut:
+            on_segment(end_time, segment)
+
+    return forward
+
+
+def _window_cuts(
+    video_path: str, audio_index: int, begin: float, end: float, window: float
+) -> list[float]:
+    """Cut points every *window* seconds, each moved into the nearest pause.
+
+    A cut mid-word would split it across two windows; snapping to the
+    lowest-energy 100 ms within ``±_CUT_SEARCH_SECONDS`` lands it in a pause
+    almost always. Only that short span is decoded per cut.
+    """
+    cuts: list[float] = []
+    target = begin + window
+    while end - target > window * 0.5:
+        cut = _quiet_point(video_path, audio_index, target, _CUT_SEARCH_SECONDS)
+        cuts.append(round(max(cut, (cuts[-1] if cuts else begin) + 1.0), 3))
+        target = cuts[-1] + window
+    return cuts
+
+
+def _quiet_point(
+    video_path: str, audio_index: int, around: float, radius: float
+) -> float:
+    """The lowest-RMS 100 ms frame within ``around ± radius``; *around* on failure."""
+    import numpy as np
+
+    import video as video_mod
+
+    lo = max(0.0, around - radius)
+    pcm = video_mod.decode_audio_pcm(
+        str(video_path), audio_index, start_seconds=lo, duration_seconds=2 * radius
+    )
+    hop = 16000 // 10  # decode_audio_pcm is 16 kHz mono
+    if pcm is None or len(pcm) < hop:
+        return around
+    frames = pcm[: len(pcm) // hop * hop].reshape(-1, hop)
+    rms = np.sqrt(np.mean(frames.astype(np.float64) ** 2, axis=1))
+    return lo + (int(np.argmin(rms)) + 0.5) * 0.1
+
+
+def _transcribe_span(
+    video_path: str,
+    *,
+    model_name: str | None = None,
+    language: str | None = None,
+    audio_index: int | None = None,
+    initial_prompt: str | None = None,
+    context_keywords: list[str] | None = None,
+    known_terms: list[str] | None = None,
+    on_segment: Callable[[float, "TranscriptSegment"], None] | None = None,
+    cancel_flag: Callable[[], bool] | None = None,
+    start_seconds: float | None = None,
+    end_seconds: float | None = None,
+) -> TranscriptResult | None:
+    """One faster-whisper pass over a span; :func:`transcribe_video` documents the arguments."""
     resolved_model = model_name or config.TRANSCRIBE_MODEL
     if config.DEBUGGING:
         return TranscriptResult(

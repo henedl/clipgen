@@ -204,3 +204,37 @@ def test_build_row_keeps_every_sample(make_doc):
     assert len(row["samples"]) == 3
     assert row["stats"]["elapsed_s"]["median"] == pytest.approx(3.1)
     assert row["stats"]["callback_s"]["median"] == pytest.approx(1.2)
+
+
+def test_summarize_reports_the_decode_path(make_doc):
+    full = scan_bench.summarize(
+        "color", make_doc({"scan.decode_mode.full": (0, 1, None)})
+    )
+    assert scan_bench.decode_mode(full) == "full"
+    key = scan_bench.summarize(
+        "color", make_doc({"scan.decode_mode.keyframe": (0, 1, None)})
+    )
+    assert scan_bench.decode_mode(key) == "key"
+    assert scan_bench.decode_mode(scan_bench.summarize("color", make_doc({}))) == "-"
+
+
+def test_session_spec_pins_obs_keyframes():
+    spec = scan_bench.fixture_spec(3600, "session")
+    assert spec["keyframe_gap"] == pytest.approx(250 / 30, abs=0.001)
+    assert (spec["width"], spec["content"]) == (1920, "screen")
+    # Smoke keeps its legacy shape so old baselines still compare.
+    assert set(scan_bench.fixture_spec(120)) == {
+        "duration",
+        "width",
+        "height",
+        "fps",
+        "has_audio",
+    }
+
+
+def test_region_follows_the_fixture_size():
+    assert (
+        scan_bench.region_for({"width": 1280, "height": 720}) is scan_bench.BENCH_REGION
+    )
+    big = scan_bench.region_for({"width": 1920, "height": 1080})
+    assert (big["source_width"], big["w"]) == (1920, scan_bench.BENCH_REGION["w"])

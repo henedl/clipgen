@@ -25,12 +25,14 @@ Unit-tested in test_scan_bench_parse.py / test_clip_bench_parse.py.
 from __future__ import annotations
 
 import argparse
+import itertools
 import json
+import math
 import statistics
 import subprocess
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, TypedDict
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
@@ -50,38 +52,64 @@ _EXIT_BY_KIND = {
 _ENV_KEYS = ("platform", "chip", "arch", "cpu_count", "memory_mb", "ffmpeg")
 
 
+# Sets config attributes, then runs the launcher exactly as `uv run clipgen.py` would.
+_OVERRIDE_LAUNCHER = """
+import json, runpy, sys
+sys.path.insert(0, "source")
+import config
+for key, value in json.loads(sys.argv[1]).items():
+    setattr(config, key, value)
+sys.argv = ["clipgen.py", *sys.argv[2:]]
+runpy.run_path("clipgen.py", run_name="__main__")
+"""
+
+
 def run_clipgen(
     args: list[str],
     out_dir: Path,
     *,
     required_labels: list[str],
     timeout: float = 1800,
+    overrides: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Run ``clipgen.py`` once and judge the run; never raises on failure.
 
     Returns ``{valid, reasons, elapsed_s, returncode, doc, output}``. The run
-    is invalid on a non-zero exit, a missing or unreadable ``profile.json``, a
-    deep-profile run (its totals carry cProfile's overhead), or any missing
-    required label. ``elapsed_s`` is the subprocess wall time, including the
-    ``uv run`` launch — the end-to-end number a user waits for.
+    is invalid on a non-zero exit, a timeout, a missing or unreadable
+    ``profile.json``, a deep-profile run (its totals carry cProfile's
+    overhead), or any missing required label. ``elapsed_s`` is the subprocess
+    wall time, including the ``uv run`` launch — the end-to-end number a user
+    waits for.
+
+    *overrides* sets ``config`` attributes before ``cli.main`` runs, for
+    settings no CLI flag reaches (``REENCODING``, ``MAX_FILESIZE_MB``).
     """
     profile_path = out_dir / "profile.json"
-    cmd = [
-        "uv",
-        "run",
-        "clipgen.py",
-        *args,
-        "--profile-output",
-        str(profile_path),
-    ]
+    tail = [*args, "--profile-output", str(profile_path)]
+    if overrides:
+        cmd = ["uv", "run", "python", "-c", _OVERRIDE_LAUNCHER, json.dumps(overrides)]
+        cmd += tail
+    else:
+        cmd = ["uv", "run", "clipgen.py", *tail]
     t0 = time.perf_counter()
-    proc = subprocess.run(
-        cmd, cwd=REPO_ROOT, capture_output=True, text=True, timeout=timeout, check=False
-    )
-    elapsed = time.perf_counter() - t0
     reasons: list[str] = []
-    if proc.returncode:
-        reasons.append(f"exit {proc.returncode}")
+    try:
+        proc = subprocess.run(
+            cmd,
+            cwd=REPO_ROOT,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            check=False,
+        )
+        returncode, output = proc.returncode, proc.stdout + proc.stderr
+    except subprocess.TimeoutExpired as exc:
+        returncode = -1
+        output = _as_text(exc.stdout) + _as_text(exc.stderr)
+        reasons.append(f"timeout after {timeout:.0f}s")
+    elapsed = time.perf_counter() - t0
+    if returncode and not reasons:
+        reasons.append(f"exit {returncode}")
     doc: dict[str, Any] = {}
     try:
         doc = json.loads(profile_path.read_text(encoding="utf-8"))
@@ -97,10 +125,16 @@ def run_clipgen(
         "valid": not reasons,
         "reasons": reasons,
         "elapsed_s": elapsed,
-        "returncode": proc.returncode,
+        "returncode": returncode,
         "doc": doc,
-        "output": proc.stdout + proc.stderr,
+        "output": output,
     }
+
+
+def _as_text(data: str | bytes | None) -> str:
+    if isinstance(data, bytes):
+        return data.decode("utf-8", "replace")
+    return data or ""
 
 
 def print_failure(name: str, result: dict[str, Any]) -> None:
@@ -112,8 +146,12 @@ def print_failure(name: str, result: dict[str, Any]) -> None:
         print("    " + tail.replace("\n", "\n    "))
 
 
-def probe_fixture(path: Path) -> dict[str, Any] | None:
-    """``{duration, width, height, fps, has_audio}`` of *path*, or None."""
+def probe_fixture(path: Path, *, keyframes: bool = False) -> dict[str, Any] | None:
+    """``{duration, width, height, fps, has_audio}`` of *path*, or None.
+
+    With *keyframes*, also ``keyframe_gap``: the widest keyframe spacing in
+    the first minute, so a 1 s-GOP leftover cannot pass for an OBS one.
+    """
     try:
         proc = subprocess.run(
             [
@@ -144,7 +182,7 @@ def probe_fixture(path: Path) -> dict[str, Any] | None:
         duration = float(info.get("format", {}).get("duration", 0.0))
     except ValueError:
         return None
-    return {
+    probed: dict[str, Any] = {
         "duration": duration,
         "width": int(video.get("width", 0)),
         "height": int(video.get("height", 0)),
@@ -153,16 +191,50 @@ def probe_fixture(path: Path) -> dict[str, Any] | None:
             s.get("codec_type") == "audio" for s in info.get("streams", [])
         ),
     }
+    if keyframes:
+        probed["keyframe_gap"] = probe_keyframe_gap(path)
+    return probed
+
+
+def probe_keyframe_gap(path: Path, window: float = 60.0) -> float | None:
+    """Widest keyframe spacing in the first *window* seconds, or None."""
+    try:
+        proc = subprocess.run(
+            ["ffprobe", "-v", "error", "-select_streams", "v:0"]
+            + ["-read_intervals", f"%+{window}", "-show_entries"]
+            + ["packet=pts_time,flags", "-of", "csv=p=0", str(path)],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except OSError:
+        return None
+    times = []
+    for line in proc.stdout.splitlines():
+        pts, _, flags = line.partition(",")
+        if "K" in flags:
+            try:
+                times.append(float(pts))
+            except ValueError:
+                continue
+    times.sort()
+    if len(times) < 2:
+        return None
+    return round(max(b - a for a, b in itertools.pairwise(times)), 3)
+
+
+# Probed fields compared within a tolerance (seconds) instead of exactly.
+_TOLERANCE = {"duration": 0.5, "keyframe_gap": 0.5}
 
 
 def fixture_matches(probed: dict[str, Any] | None, spec: dict[str, Any]) -> bool:
-    """True when every spec field matches; duration within half a second."""
+    """True when every spec field matches; durations within half a second."""
     if probed is None:
         return False
     for key, want in spec.items():
         have = probed.get(key)
-        if key == "duration":
-            if have is None or abs(float(have) - float(want)) >= 0.5:
+        if key in _TOLERANCE:
+            if have is None or abs(float(have) - float(want)) >= _TOLERANCE[key]:
                 return False
         elif have != want:
             return False
@@ -189,17 +261,21 @@ def build_row(
     results: list[dict[str, Any]],
     summarize: Any,
     metrics: tuple[str, ...],
+    media_s: float | None = None,
 ) -> dict[str, Any]:
     """Reduce one scenario's repetitions to the persisted row.
 
     Every sample is kept; ``stats`` aggregates *metrics*. Any invalid
     repetition invalidates the row — a good run must never hide a bad one.
+    With *media_s*, each sample also carries :func:`add_rates`' fields.
     """
     samples = [
         dict(summarize(r["doc"]), elapsed_s=r["elapsed_s"])
         for r in results
         if r["valid"]
     ]
+    if media_s:
+        samples = [add_rates(sample, media_s) for sample in samples]
     reasons = [reason for r in results for reason in r["reasons"]]
     return {
         "valid": all(r["valid"] for r in results) and bool(results),
@@ -319,9 +395,10 @@ def add_common_args(ap: argparse.ArgumentParser, breakdown: str) -> None:
     """The flags both benches share; *breakdown* names the secondary metric."""
     ap.add_argument(
         "--runs",
-        default=3,
+        default=None,
         type=int,
-        help="fresh-process repetitions per scenario; every sample is kept",
+        help="fresh-process repetitions per scenario; every sample is kept "
+        "(default: 3, or the tier's)",
     )
     ap.add_argument("--save", type=Path, help="write results JSON here")
     ap.add_argument("--compare", type=Path, help="baseline JSON to diff against")
@@ -396,3 +473,229 @@ def stat_cells(row: dict[str, Any], metric: str) -> str:
     """``median   min   mad`` cells for the table."""
     st = row["stats"][metric]
     return f"{st['median']:>8.3f}s{st['min']:>8.3f}s{st['mad']:>7.3f}s"
+
+
+# ---- Long media: tiers, real sources, normalized rates, scaling -----------------
+
+
+class VideoShape(TypedDict):
+    """The ``make_long_video`` keywords that define a fixture's look."""
+
+    size: str
+    rate: int
+    gop: int
+    content: str
+
+
+# The `session` fixture: an OBS 1080p recording with fixed 250-frame keyframes.
+SESSION_VIDEO: VideoShape = {
+    "size": "1920x1080",
+    "rate": 30,
+    "gop": 250,
+    "content": "screen",
+}
+
+
+def session_spec(duration: int, *, audio: str) -> dict[str, Any]:
+    """Fixture identity for a ``session``-tier :func:`bench_fixtures.make_long_video`."""
+    width, height = (int(v) for v in SESSION_VIDEO["size"].split("x"))
+    rate = SESSION_VIDEO["rate"]
+    return {
+        "duration": duration,
+        "width": width,
+        "height": height,
+        "fps": float(rate),
+        "has_audio": audio != "none",
+        "keyframe_gap": round(SESSION_VIDEO["gop"] / rate, 3),
+        "content": SESSION_VIDEO["content"],
+        "audio": audio,
+    }
+
+
+def ensure_video(video: Path, spec: dict[str, Any], build: Any) -> None:
+    """Run *build* unless *video* already matches *spec*.
+
+    Keys ffprobe cannot see (``content``, ``audio``) are recorded in a hidden
+    sidecar at build time and merged under the probe, so a ``testsrc`` leftover
+    never passes for a ``screen`` fixture of the same geometry.
+    """
+    sidecar = video.with_name(f".{video.name}.spec.json")
+    probed = None
+    if video.is_file():
+        probed = (
+            probe_fixture(video, keyframes=True)
+            if "keyframe_gap" in spec
+            else probe_fixture(video)
+        )
+    have = None
+    if probed is not None:
+        try:
+            recorded = json.loads(sidecar.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            recorded = {}
+        have = {**recorded, **probed}
+    if fixture_matches(have, spec):
+        return
+    if video.is_file():
+        was = f"{probed['duration']:.0f}s" if probed else "unreadable"
+        print(f"rebuilding {video.name} ({was} → {spec['duration']}s)")
+        video.unlink()
+    sidecar.unlink(missing_ok=True)
+    build()
+    sidecar.write_text(json.dumps(spec), encoding="utf-8")
+
+
+def source_identity(path: Path) -> dict[str, Any]:
+    """What a ``--source`` compare must hold constant; basename only, never the path."""
+    st = path.stat()
+    return {"name": path.name, "bytes": st.st_size, "mtime": int(st.st_mtime)}
+
+
+def link_source(source: Path, dest_dir: Path, name: str) -> Path:
+    """Symlink a real recording into *dest_dir* as *name*; the media is never copied."""
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    link = dest_dir / name
+    if link.is_symlink() or link.exists():
+        link.unlink()
+    link.symlink_to(source.resolve())
+    return link
+
+
+def add_long_args(ap: argparse.ArgumentParser, tiers: dict[str, Any]) -> None:
+    """``--tier``, ``--source``, ``--scale`` and ``--timeout``, shared by every bench."""
+    ap.add_argument(
+        "--tier",
+        choices=tuple(tiers),
+        default="smoke",
+        help="smoke: short regression gate (default); "
+        "session: hour-long OBS-like 1080p fixture, one run",
+    )
+    ap.add_argument(
+        "--source",
+        type=Path,
+        default=None,
+        help="a real local recording to bench instead of a fixture "
+        "(symlinked, never copied or saved; JSON keeps only its basename)",
+    )
+    ap.add_argument(
+        "--scale",
+        default=None,
+        help="comma-separated fixture durations in seconds; runs each and "
+        "fits cost against length (diagnostic: no --save/--compare)",
+    )
+    ap.add_argument(
+        "--timeout",
+        type=float,
+        default=None,
+        help="per-run subprocess timeout in seconds (default: max(1800, 3× media))",
+    )
+
+
+def apply_tier(
+    ap: argparse.ArgumentParser, args: argparse.Namespace, tiers: dict[str, Any]
+) -> None:
+    """Fill every flag left unset (None) from the chosen tier; reject bad combos."""
+    for key, value in tiers[args.tier].items():
+        if getattr(args, key, None) is None:
+            setattr(args, key, value)
+    if args.runs is None:
+        args.runs = 3
+    if args.scale and (args.save or args.compare or args.source):
+        ap.error("--scale is a diagnostic; drop --save/--compare/--source")
+    if args.source is not None and not args.source.is_file():
+        ap.error(f"--source {args.source} is not a file")
+
+
+def parse_scale(text: str) -> list[int]:
+    """``"300,1800,3600"`` → sorted unique durations; at least two."""
+    durations = sorted({int(float(v)) for v in text.split(",") if v.strip()})
+    if len(durations) < 2 or durations[0] <= 0:
+        raise ValueError("--scale needs at least two positive durations")
+    return durations
+
+
+def timeout_for(media_s: float, override: float | None) -> float:
+    """Long runs get room: three times the media length, never under 30 min."""
+    if override:
+        return float(override)
+    return max(1800.0, 3.0 * float(media_s))
+
+
+def add_rates(sample: dict[str, Any], media_s: float) -> dict[str, Any]:
+    """Annotate *sample* with ``media_s``, ``xrt`` and ``s_per_media_hour``.
+
+    *media_s* is the media the run actually processed — the scanned or
+    transcribed source, or the summed clip lengths — so runs over different
+    durations read side by side, and a 120 s number is never silently
+    extrapolated to a three-hour session.
+    """
+    elapsed = float(sample.get("elapsed_s") or 0.0)
+    sample["media_s"] = float(media_s)
+    sample["xrt"] = media_s / elapsed if elapsed else 0.0
+    sample["s_per_media_hour"] = elapsed / media_s * 3600 if media_s else 0.0
+    return sample
+
+
+def fit_scaling(points: list[tuple[float, float]]) -> dict[str, Any]:
+    """Fit cost against media length; *points* are ``(seconds_of_media, cost_s)``.
+
+    Returns the least-squares ``intercept`` and ``slope_per_hour`` plus the
+    ``exponent`` between the two longest points (log-log), where fixed
+    start-up overhead no longer masks the growth: ~0 is flat, ~1 linear,
+    > 1.15 superlinear.
+    """
+    pts = sorted((float(x), float(y)) for x, y in points if x > 0)
+    if len(pts) < 2:
+        return {
+            "intercept": 0.0,
+            "slope_per_hour": 0.0,
+            "exponent": None,
+            "verdict": "n/a",
+        }
+    n = len(pts)
+    mx = sum(x for x, _ in pts) / n
+    my = sum(y for _, y in pts) / n
+    var = sum((x - mx) ** 2 for x, _ in pts)
+    slope = sum((x - mx) * (y - my) for x, y in pts) / var if var else 0.0
+    (x1, y1), (x2, y2) = pts[-2], pts[-1]
+    exponent = None
+    if y1 > 0 and y2 > 0 and x2 > x1:
+        exponent = math.log(y2 / y1) / math.log(x2 / x1)
+    if exponent is None:
+        verdict = "n/a"
+    elif exponent > 1.15:
+        verdict = "superlinear"
+    elif exponent < 0.15:
+        verdict = "flat"
+    elif exponent < 0.85:
+        verdict = "sublinear"
+    else:
+        verdict = "linear"
+    return {
+        "intercept": my - slope * mx,
+        "slope_per_hour": slope * 3600,
+        "exponent": exponent,
+        "verdict": verdict,
+    }
+
+
+def print_scaling(
+    points: dict[str, list[tuple[float, float]]],
+    *,
+    unit: str = "media hour",
+    per: float = 3600.0,
+) -> None:
+    """One fit line per row name: cost per *unit* (*per* x-units) and the verdict."""
+    print(
+        f"\n{'scaling':<24}{'points':>7}{'per ' + unit:>16}{'base':>9}{'exp':>7}  verdict"
+    )
+    for name, pts in points.items():
+        fit = fit_scaling(pts)
+        exp = f"{fit['exponent']:.2f}" if fit["exponent"] is not None else "-"
+        slope = fit["slope_per_hour"] / 3600.0 * per
+        print(
+            f"{name:<24}{len(pts):>7}{slope:>15.3f}s"
+            f"{fit['intercept']:>8.2f}s{exp:>7}  {fit['verdict']}"
+        )
+        for x, y in sorted(pts):
+            print(f"{'':<24}{x:>7.0f} -> {y:.3f}")

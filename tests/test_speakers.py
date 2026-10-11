@@ -82,6 +82,50 @@ def test_cluster_empty():
     assert speakers.cluster(np.zeros((0, 4), dtype=np.float32), 4) == []
 
 
+def _greedy_cluster(embeddings, max_speakers, threshold):
+    """The original O(n³) global-minimum loop: the oracle the NN-chain must match."""
+    n = len(embeddings)
+    x = np.asarray(embeddings, dtype=np.float32)
+    x = x / np.clip(np.linalg.norm(x, axis=1, keepdims=True), 1e-8, None)
+    dist = (1.0 - x @ x.T).astype(np.float32)
+    np.fill_diagonal(dist, np.inf)
+    sizes = np.ones(n, dtype=np.float32)
+    members = [[i] for i in range(n)]
+    active = set(range(n))
+    while len(active) > 1:
+        i, j = divmod(int(np.argmin(dist)), n)
+        if dist[i, j] > threshold and len(active) <= max_speakers:
+            break
+        merged = (sizes[i] * dist[i] + sizes[j] * dist[j]) / (sizes[i] + sizes[j])
+        dist[i, :] = merged
+        dist[:, i] = merged
+        dist[i, i] = np.inf
+        dist[j, :] = np.inf
+        dist[:, j] = np.inf
+        sizes[i] += sizes[j]
+        members[i] += members[j]
+        active.discard(j)
+    labels = [0] * n
+    for rank, root in enumerate(sorted(active, key=lambda r: min(members[r]))):
+        for m in members[root]:
+            labels[m] = rank
+    return labels
+
+
+def test_cluster_matches_the_greedy_merge_order():
+    rng = np.random.default_rng(0)
+    for _ in range(40):
+        n = int(rng.integers(2, 60))
+        k = int(rng.integers(1, 5))
+        centroids = rng.standard_normal((k, 16))
+        pts = centroids[rng.integers(0, k, n)]
+        pts = pts + rng.uniform(0.05, 1.5) * rng.standard_normal((n, 16))
+        for max_speakers in (1, 2, 8):
+            for threshold in (0.0, 0.6, 0.9):
+                want = _greedy_cluster(pts, max_speakers, threshold)
+                assert speakers.cluster(pts, max_speakers, threshold) == want
+
+
 # ---- assign_speakers ---------------------------------------------------------
 
 

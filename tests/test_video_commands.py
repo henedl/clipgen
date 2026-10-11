@@ -2138,10 +2138,49 @@ def test_parallel_gifs_reserve_nothing_for_a_tail_past_the_end(monkeypatch, tmp_
     monkeypatch.setattr(config, "OUTPUT_DIR", str(tmp_path), raising=False)
     monkeypatch.setattr(video, "extract_gif", lambda *_a, **_k: True)
 
-    artifacts = video._parallel_extract_gifs("in.mp4", [0, 10], 3, 10)
+    artifacts = video._parallel_extract("in.mp4", [0, 10], "gif", 3, 10)
 
     assert artifacts is not None and len(artifacts) == 1
     assert sorted(p.name for p in tmp_path.iterdir()) == ["gallery_0_00.gif"]
+
+
+def _gallery_harness(monkeypatch, tmp_path, gap):
+    """Route captures to stubs; returns which path each gallery took."""
+    monkeypatch.setattr(config, "OUTPUT_DIR", str(tmp_path), raising=False)
+    monkeypatch.setattr(config, "DEBUGGING", False)
+    monkeypatch.setattr(video, "get_file_duration", lambda _p: 60)
+    monkeypatch.setattr(video, "probe_max_keyframe_gap", lambda _p: gap)
+    used: list[str] = []
+    monkeypatch.setattr(
+        video,
+        "extract_screenshot",
+        lambda *_a, **_k: used.append("seek") or True,
+    )
+
+    def batch(_src, timestamps, *_a, **_k):
+        used.append("batch")
+        return [{"timestamp": float(t)} for t in timestamps]
+
+    monkeypatch.setattr(video, "_batch_extract_screenshots", batch)
+    (tmp_path / "in.mp4").write_bytes(b"x")
+    return used
+
+
+def test_gallery_seeks_per_shot_when_keyframes_are_dense(monkeypatch, tmp_path):
+    """OBS 8.3 s GOPs at a 10 s interval: seeking measured 3.4x faster on 1 h."""
+    used = _gallery_harness(monkeypatch, tmp_path, gap=8.3)
+    artifacts = video.generate_interval_captures(
+        str(tmp_path / "in.mp4"), interval_seconds=10
+    )
+    assert used == ["seek"] * 6
+    assert [a["timestamp"] for a in artifacts] == [0.0, 10.0, 20.0, 30.0, 40.0, 50.0]
+
+
+@pytest.mark.parametrize("gap", [None, 25.0])
+def test_gallery_batches_when_keyframes_are_sparse(monkeypatch, tmp_path, gap):
+    used = _gallery_harness(monkeypatch, tmp_path, gap=gap)
+    video.generate_interval_captures(str(tmp_path / "in.mp4"), interval_seconds=10)
+    assert used == ["batch"]
 
 
 def test_run_ffmpeg_rejects_a_zero_length_range(monkeypatch):

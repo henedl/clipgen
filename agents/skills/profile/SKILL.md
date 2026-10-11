@@ -173,6 +173,24 @@ uv run python -c "import sys; sys.path.insert(0,'tests/perf'); import bench_fixt
   print(bf.sheet_rows(pathlib.Path('/tmp/gridbench.xlsx')))"
 ```
 
+**A 120 s fixture says nothing about a three-hour session.** Real sources are
+60–180+ min OBS recordings (1080p, a keyframe every 250 frames ≈ 8.3 s) with
+multi-minute clips; the short fixtures above have 1 s keyframes and clips in
+the first minute. That difference changes which code path runs, not just how
+long it takes: a 1 s GOP lets Screenspace decode keyframes only, an 8.3 s GOP
+at the default 1.0 s interval forces a full decode. Build long media with
+**`make_long_video(path, duration=, size=, rate=, gop=, audio=, content=)`**: it
+encodes a ~50 s seed of whole fixed-length GOPs and stream-copies it with
+`-stream_loop`, so an hour of 1080p costs ~3 s and ~50 MB. `content="screen"`
+(a still frame changing every 5 s, the default) behaves like a screen
+recording under phash-skip; `"testsrc"` is the constant-motion worst case.
+`audio="speech"` loops a two-voice dialogue rendered with macOS `say`
+(`make_speech_audio`), so VAD, Whisper and the speaker pass do real work — a
+sine track is silence to VAD. `clip_cells(rows, duration=, clip_seconds=)`
+writes `H:MM:SS` ranges spread across the whole file. **For ground truth, use a
+real recording**: every media bench takes `--source PATH` (symlinked, never
+copied; the JSON keeps only its basename, size and mtime).
+
 ## Step 3 — Capture a baseline
 
 Run twice; trust only what reproduces (same discipline as
@@ -254,7 +272,48 @@ uv run python tests/perf/clip_bench.py --compare /tmp/clipbase.json --fail-on 10
 
 `--duration` rebuilds the video *and* the sheet when the existing file's length
 does not match, and timestamps stay inside that length (an MM:SS with SS > 59
-is dropped at parse). Same `fixture … Ns` line as scan_bench.
+is dropped at parse). Same `fixture … Ns` line as scan_bench. Two opt-in
+scenarios cover the paths whose cost grows with clip length:
+`clips-reencode` (`REENCODING`) and `clips-compress` (`MAX_FILESIZE_MB` = 0.1,
+so every clip takes the two-pass encode). Neither setting has a CLI flag, so
+`run_clipgen(overrides=)` sets `config` before `cli.main` runs.
+
+**Transcription has one too** — `tests/perf/transcribe_bench.py` runs
+`--pre-transcribe` (`whisper`, then `speakers` with `--speakers`) on a speech
+fixture and reports the profiler's own `whisper_xrt`, the PCM decode, the speaker
+pass split (`speakers.decode` / `embed` / `cluster`) and `peak_rss_mb`, which
+grows with the recording: the whole track is held as 16 kHz float32. The
+`speakers` row needs `build/vendor/speakers/speaker_embed.onnx` (the pin in
+`build/fetch_binaries.py`). **Pure steps get `tests/perf/scale_bench.py`**: no
+media, synthetic N, fastest-of-3 per size, a fitted exponent and `--project N`
+— it is how a cubic step shows up in seconds instead of a session that never
+finishes.
+
+**Tiers, scaling and rates.** Every media bench has `--tier smoke` (the
+default, the short regression gate; its fixture and workload meta are unchanged
+so old baselines still compare) and `--tier session`: an hour of OBS-like 1080p
+(`bc.SESSION_VIDEO`), the default 1.0 s scan interval, 180 s clips spread
+across the file, one repetition, its own `/tmp/*-session` input dir. Explicit
+flags beat the tier. Rows carry `media_s`, `xrt` (media seconds per wall
+second — scanned or transcribed source, or summed clip length) and
+`s_per_media_hour`. `--scale 600,1800,3600` reruns the workload at each fixture
+length and fits cost against it: `slope` per media hour, `base` (start-up
+overhead), and the exponent between the two longest points — `flat`
+(cutting a fixed set of clips should be), `linear` (a scan), or `superlinear`
+(> 1.15: investigate). It is a diagnostic: no `--save`/`--compare`. Timeouts
+grow with the media (`max(1800, 3 × media)`; `--timeout` overrides), and a run
+that hits one is `invalid` with the reason, never a hang. scan_bench's `path`
+column says which decode ran: `full`, or `key` (keyframe-only) from the
+`scan.decode_mode.*` count labels.
+
+```bash
+uv run python tests/perf/scan_bench.py --tier session --tools change,color
+uv run python tests/perf/scan_bench.py --tier session --scale 600,1800,3600 --tools change
+uv run python tests/perf/clip_bench.py --tier session --scenarios clips,reel,clips-reencode
+uv run python tests/perf/clip_bench.py --source ~/rec/P07.mp4 --clip-seconds 240
+uv run python tests/perf/transcribe_bench.py --tier session
+uv run python tests/perf/scale_bench.py --only cluster --project 6000
+```
 
 Live server: launch with `--profile`, then `curl http://127.0.0.1:8089/api/profile`
 (404 without the flag; `?reset=1` snapshots then clears atomically, bracketing
@@ -278,6 +337,12 @@ CLIPGEN_UI_CHECK=1 uv run --extra ui python tests/ui/ui_bench.py --scenarios idl
 | `transcripts` | 2400 segments (P01), 100 (P02) | `search`, `clear-search`, `switch` (→ P02's 100 rows), `restore` |
 | `screenspace` | 2000 events on the fixture video | `open-results` (first chunk), `drain` (scroll the lazy list to all 2000), `filter` (confidence 0.6), `switch-pane`, `switch-back` |
 | `idle` | the six pages, default fixture | a sampled soak per page, second half as a background tab |
+| `composer` | a 3 h 1080p participant: 60 cuts, 40 sheet markers, 2000 events, 200 marks | `zoom-in` (to the 200× cap), `zoom-reset` |
+| `studio-scrub` | the same 3 h source | `sprite-30s`/`-180s`/`-600s`, `audio-30s`/`-180s`/`-600s`: the hover-scrubber routes near the file's end, status recorded per fetch |
+
+`--tier session` raises Transcripts to 6000 segments (three hours at the real
+~2000/hour), moves Screenspace onto the 3 h video, and adds `composer` and
+`studio-scrub` to the default list (they always use the long project).
 
 The table shows subprocess-free **elapsed** (browser context open → last
 condition met) as median/min/MAD plus each action's median ms; `--fail-metric

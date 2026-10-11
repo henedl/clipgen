@@ -1307,8 +1307,11 @@ def extract_sprite_sheet_bytes(
     thread pool and composites the grid with PIL, making the cost
     O(frame_count) instead of O(duration): the default single-pass ``fps``
     filter decodes the *entire* span to emit its frames, which takes seconds
-    on the minutes-long spans Composer's timeline tiles cover. Studio's short
-    clip sprites keep the single-pass default.
+    on the minutes-long spans Composer's timeline tiles cover. Each seek still
+    decodes up to one GOP, so on long-GOP footage the seek path has a floor.
+    Measured on 1080p with OBS's 8.3 s keyframes, 5×5 grid: single-pass
+    159 ms (10 s span) → 1.09 s (180 s) → 3.5 s (600 s); seek ~1.0 s flat.
+    Studio switches at ``STUDIO_SCRUBBER_SEEK_SECONDS``.
     """
     if config.DEBUGGING:
         config.debug_ic(input_file, start_seconds, duration_seconds, cols, rows)
@@ -2136,9 +2139,10 @@ def decode_audio_pcm(
     falls into the empty-stream failure path below.
     Returns a writable ``np.ndarray`` (float32), or ``None`` on any failure —
     including an empty stream, since zero samples would only fail later and
-    less legibly inside the model. ~4 MB per audio-minute; the transient
-    bytes→array copy briefly doubles that, matching what faster-whisper's own
-    ``decode_audio`` peaked at.
+    less legibly inside the model. ~4 MB per audio-minute, held once: ffmpeg
+    writes a temp file that ``np.fromfile`` reads into the one writable array.
+    Piping held the bytes *and* their writable copy, 1.4 GB for three hours,
+    which made the speaker pass the transcription peak.
     """
     if config.DEBUGGING:
         return None
@@ -2162,30 +2166,33 @@ def decode_audio_pcm(
         "16000",
         "-f",
         "f32le",
-        "pipe:1",
+        "-y",
     ]
+    fd, tmp_name = tempfile.mkstemp(prefix="clipgen_pcm_", suffix=".f32")
+    os.close(fd)
+    tmp = Path(tmp_name)
     try:
         with profiling.span("transcribe.decode_audio"):
             result = subprocess.run(
-                cmd,
+                [*cmd, tmp_name],
                 capture_output=True,
                 check=False,
                 # Loose bound; a wedged ffmpeg must not pin a transcription worker.
                 timeout=900,
             )
+        if result.returncode != 0 or not tmp.stat().st_size:
+            stderr_tail = result.stderr.decode("utf-8", "replace").strip()[-300:]
+            utils.verbose_print(
+                f"PCM decode failed for {filepath} "
+                f"(exit {result.returncode}): {stderr_tail or 'no output'}"
+            )
+            return None
+        return np.fromfile(tmp_name, dtype=np.float32)
     except (subprocess.TimeoutExpired, FileNotFoundError, OSError) as exc:
         utils.verbose_print(f"PCM decode failed for {filepath}: {exc}")
         return None
-    if result.returncode != 0 or not result.stdout:
-        stderr_tail = result.stderr.decode("utf-8", "replace").strip()[-300:]
-        utils.verbose_print(
-            f"PCM decode failed for {filepath} "
-            f"(exit {result.returncode}): {stderr_tail or 'no output'}"
-        )
-        return None
-    # bytearray copy: frombuffer over bytes is read-only, and the model needs a writable
-    # array.
-    return np.frombuffer(bytearray(result.stdout), dtype=np.float32)
+    finally:
+        _delete_quietly(tmp)
 
 
 def _delete_quietly(path: Path) -> None:
@@ -3498,27 +3505,37 @@ def _batch_extract_screenshots(
         shutil.rmtree(tmpdir, ignore_errors=True)
 
 
-def _parallel_extract_gifs(
+def _parallel_extract(
     input_file: str,
     timestamps: list[int],
+    output_format: str,
     gif_duration_seconds: int,
     duration: int,
     *,
     cancel_flag: Callable[[], bool] | None = None,
 ) -> list[dict[str, Any]] | None:
-    """Extract gallery GIFs using parallel ffmpeg processes.
+    """Extract gallery GIFs or screenshots using parallel ffmpeg processes.
 
-    Returns artifact list on success, or None to signal fallback.
+    Each capture is its own fast input-seek, so the cost is O(captures × GOP)
+    rather than a decode of the whole file. Returns the artifact list on
+    success, or None to signal fallback.
     """
-    ext = config.GIF_FORMAT
-    tasks: list[tuple[str, str, str, int, float]] = []
+    gif = output_format != "screen"
+    ext = config.GIF_FORMAT if gif else config.SCREENSHOT_FORMAT
+    tasks: list[tuple[str, str, str, int | None, float]] = []
     for ts in timestamps:
         ts_str, filename = _gallery_name(ts, ext)
-        gif_dur = min(gif_duration_seconds, duration - ts)
-        if gif_dur <= 0:
+        gif_dur = min(gif_duration_seconds, duration - ts) if gif else None
+        if gif_dur is not None and gif_dur <= 0:
             break
         output_path = files.get_unique_filename(filename, file_format=ext)
         tasks.append((input_file, output_path, ts_str, gif_dur, float(ts)))
+
+    def capture(task: tuple[str, str, str, int | None, float]) -> bool:
+        src, out, ts_str, gif_dur, _ts = task
+        if gif_dur is None:
+            return extract_screenshot(src, out, ts_str, cancel_flag=cancel_flag)
+        return extract_gif(src, out, ts_str, gif_dur, cancel_flag=cancel_flag)
 
     if not tasks:
         return None
@@ -3531,12 +3548,7 @@ def _parallel_extract_gifs(
         with concurrent.futures.ThreadPoolExecutor(
             max_workers=config.GALLERY_PARALLEL_WORKERS,
         ) as pool:
-            future_to_task = {
-                pool.submit(
-                    extract_gif, t[0], t[1], t[2], t[3], cancel_flag=cancel_flag
-                ): t
-                for t in tasks
-            }
+            future_to_task = {pool.submit(capture, t): t for t in tasks}
             for future in concurrent.futures.as_completed(future_to_task):
                 task = future_to_task[future]
                 _, output_path, ts_str, gif_dur, ts_float = task
@@ -3544,17 +3556,19 @@ def _parallel_extract_gifs(
                 try:
                     ok = future.result()
                 except (OSError, RuntimeError) as exc:
-                    utils.debug_print(f"GIF extraction task failed: {exc}")
+                    utils.debug_print(f"Gallery capture task failed: {exc}")
                     ok = False
                 if ok:
                     artifacts.append(
-                        _gallery_artifact(output_path, ts_float, ts_str, "gif", gif_dur)
+                        _gallery_artifact(
+                            output_path, ts_float, ts_str, output_format, gif_dur
+                        )
                     )
                 else:
                     files.release_reservation(output_path)
                 utils.standard_print(f"  Captured {completed}/{total} at {ts_str}")
     except (OSError, RuntimeError) as exc:
-        utils.debug_print(f"Parallel GIF extraction failed: {exc}")
+        utils.debug_print(f"Parallel gallery extraction failed: {exc}")
         return None
 
     artifacts.sort(key=lambda a: a["timestamp"])
@@ -3617,6 +3631,22 @@ def generate_interval_captures(
     )
 
     if output_format == "screen" and not config.DEBUGGING and total > 1:
+        # Seeking costs ~half a GOP per shot; one batch pass decodes every frame.
+        gap = probe_max_keyframe_gap(input_file)
+        if gap is not None and gap <= 2 * interval_seconds:
+            seek_artifacts = _parallel_extract(
+                input_file,
+                timestamps,
+                output_format,
+                gif_duration_seconds,
+                duration,
+                cancel_flag=cancel_flag,
+            )
+            if seek_artifacts is not None:
+                utils.info_print(
+                    f"Gallery complete: {len(seek_artifacts)} of {total} captures succeeded."
+                )
+                return seek_artifacts
         batch_artifacts = _batch_extract_screenshots(
             input_file, timestamps, interval_seconds, cancel_flag=cancel_flag
         )
@@ -3630,9 +3660,10 @@ def generate_interval_captures(
             return batch_artifacts
 
     if output_format != "screen" and not config.DEBUGGING and total > 1:
-        parallel_artifacts = _parallel_extract_gifs(
+        parallel_artifacts = _parallel_extract(
             input_file,
             timestamps,
+            output_format,
             gif_duration_seconds,
             duration,
             cancel_flag=cancel_flag,

@@ -16,6 +16,7 @@ tests can load it with ``importlib`` without the source tree on ``sys.path``.
 from __future__ import annotations
 
 import json
+import shutil
 import subprocess
 from collections.abc import Callable
 from pathlib import Path
@@ -104,8 +105,167 @@ def make_testsrc_video(
     return path
 
 
-def transcripts_section(participants: dict[str, int]) -> dict[str, Any]:
-    """The ``transcripts`` manifest section with N synthetic segments per id."""
+# Two speakers so the speaker pass has turns to cluster.
+SPEECH_LINES = (
+    (
+        "Samantha",
+        "Okay, so I am on the onboarding screen and I cannot find the continue button.",
+    ),
+    ("Daniel", "Take your time. What would you expect to happen next?"),
+    (
+        "Samantha",
+        "I guess I would tap the arrow in the corner, but it looks disabled to me.",
+    ),
+    ("Daniel", "Why does it look disabled? Tell me what you are seeing."),
+    (
+        "Samantha",
+        "It is grey and very small, and nothing happens when I hover over it.",
+    ),
+    ("Daniel", "Thanks. Let us move on to the settings page for a moment."),
+)
+
+
+def _say_line(voice: str, text: str, out: Path) -> None:
+    """Render *text* with macOS ``say``; the default voice when *voice* is missing."""
+    proc = subprocess.run(
+        ["say", "-v", voice, "-o", str(out), text], capture_output=True, check=False
+    )
+    if proc.returncode or not out.is_file():
+        subprocess.run(["say", "-o", str(out), text], check=True)
+
+
+def make_speech_audio(path: Path) -> Path:
+    """A ~40 s two-voice dialogue (macOS ``say``) with pauses between turns.
+
+    Real speech, so VAD, Whisper and the speaker pass all do their actual
+    work — a sine track is all silence to VAD and measures nothing.
+    """
+    if shutil.which("say") is None:
+        raise RuntimeError("speech fixtures need macOS 'say'; pass --source instead")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    parts: list[Path] = []
+    for i, (voice, text) in enumerate(SPEECH_LINES):
+        part = path.parent / f"_line{i}.aiff"
+        _say_line(voice, text, part)
+        parts.append(part)
+    inputs: list[str] = []
+    for part in parts:
+        inputs += ["-i", str(part)]
+    pads = "".join(f"[{i}:a]apad=pad_dur=0.8[a{i}];" for i in range(len(parts)))
+    joined = "".join(f"[a{i}]" for i in range(len(parts)))
+    graph = f"{pads}{joined}concat=n={len(parts)}:v=0:a=1[out]"
+    subprocess.run(
+        ["ffmpeg", "-y", "-loglevel", "error", *inputs]
+        + ["-filter_complex", graph, "-map", "[out]", "-ar", "48000", str(path)],
+        check=True,
+    )
+    for part in parts:
+        part.unlink()
+    return path
+
+
+def make_long_video(
+    path: Path,
+    *,
+    duration: int,
+    size: str = "1920x1080",
+    rate: int = 30,
+    gop: int = 250,
+    audio: str = "sine",
+    content: str = "screen",
+) -> Path:
+    """An hours-long OBS-like recording, built in seconds by looping a short seed.
+
+    The seed holds a whole number of fixed-length GOPs (``-g``/``-keyint_min``
+    with scene-cut off, as OBS writes them) and is stream-copied with
+    ``-stream_loop`` up to *duration*, so a 3 h fixture costs one ~50 s
+    encode. *content* is ``screen`` (a still frame changing every 5 s, like
+    a screen recording, so phash-skip behaves as on real footage) or
+    ``testsrc`` (constant motion, the worst case). *audio* is ``sine``,
+    ``speech`` (:func:`make_speech_audio`; the seed then matches its length),
+    or ``none``.
+    """
+    if content not in ("screen", "testsrc"):
+        raise ValueError(f"unknown content {content!r}")
+    if audio not in ("sine", "speech", "none"):
+        raise ValueError(f"unknown audio {audio!r}")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    seed = path.with_name(f"_seed_{path.stem}.mp4")
+    seed_s = gop * 6 / rate
+    audio_args: list[str] = []
+    speech = path.with_name(f"_speech_{path.stem}.wav")
+    if audio == "speech":
+        make_speech_audio(speech)
+        audio_args = ["-stream_loop", "-1", "-i", str(speech)]
+        seed_s = max(seed_s, _probe_duration(speech))
+    elif audio == "sine":
+        audio_args = ["-f", "lavfi", "-i", f"sine=frequency=220:duration={seed_s}"]
+    source = (
+        f"testsrc=duration={seed_s}:size={size}:rate=0.2,fps={rate}"
+        if content == "screen"
+        else f"testsrc=duration={seed_s}:size={size}:rate={rate}"
+    )
+    cmd = ["ffmpeg", "-y", "-loglevel", "error", "-f", "lavfi", "-i", source]
+    cmd += audio_args
+    cmd += ["-pix_fmt", "yuv420p", "-c:v", "libx264", "-preset", "veryfast"]
+    cmd += ["-crf", "28", "-g", str(gop), "-keyint_min", str(gop)]
+    cmd += ["-sc_threshold", "0", "-t", f"{seed_s:.3f}"]
+    if audio != "none":
+        cmd += ["-c:a", "aac", "-shortest"]
+    cmd.append(str(seed))
+    subprocess.run(cmd, check=True)
+    subprocess.run(
+        ["ffmpeg", "-y", "-loglevel", "error", "-stream_loop", "-1", "-i", str(seed)]
+        + ["-c", "copy", "-t", str(duration), str(path)],
+        check=True,
+    )
+    seed.unlink()
+    if audio == "speech":
+        speech.unlink()  # its name would parse as a participant video
+    return path
+
+
+def _probe_duration(path: Path) -> float:
+    proc = subprocess.run(
+        ["ffprobe", "-v", "error", "-show_entries", "format=duration"]
+        + ["-of", "csv=p=0", str(path)],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return float(proc.stdout.strip())
+
+
+def format_hms(seconds: int) -> str:
+    """``H:MM:SS`` (or ``MM:SS`` under an hour), as a sheet cell writes it."""
+    h, rest = divmod(int(seconds), 3600)
+    m, s = divmod(rest, 60)
+    return f"{h}:{m:02d}:{s:02d}" if h else f"{m}:{s:02d}"
+
+
+def clip_cells(rows: int, *, duration: int, clip_seconds: int) -> list[str]:
+    """*rows* ranges of *clip_seconds*, spread evenly across the whole source.
+
+    Row *i* starts at ``i/rows`` of the usable span, so the last clips sit
+    deep in an hours-long file — the seeks short fixtures never exercise.
+    """
+    clip = max(1, min(int(clip_seconds), int(duration) - 2))
+    span = max(0, int(duration) - clip - 2)
+    cells = []
+    for i in range(rows):
+        start = 1 + (span * i) // max(rows, 1)
+        cells.append(f"{format_hms(start)}-{format_hms(start + clip)}")
+    return cells
+
+
+def transcripts_section(
+    participants: dict[str, int], *, marks_every: int = 0
+) -> dict[str, Any]:
+    """The ``transcripts`` manifest section with N synthetic segments per id.
+
+    *marks_every* > 0 bookmarks every Nth segment, the shape Composer's
+    transcript lane draws.
+    """
     source: dict[str, Any] = {}
     for pid, n in participants.items():
         source[pid] = {
@@ -121,7 +281,21 @@ def transcripts_section(participants: dict[str, int]) -> dict[str, Any]:
             "language": "en",
             "model": "synthetic",
         }
-    return {"source_transcripts": source, "corrections": [], "marks": []}
+    marks = []
+    if marks_every > 0:
+        for pid, n in participants.items():
+            marks += [
+                {
+                    "id": f"m_{pid}_{i}",
+                    "segment_id": f"{pid}:{i}",
+                    "category": "bookmark",
+                    "label": None,
+                    "severity": None,
+                    "created": "2026-01-05T12:00:00+00:00",
+                }
+                for i in range(0, n, marks_every)
+            ]
+    return {"source_transcripts": source, "corrections": [], "marks": marks}
 
 
 def screenspace_section(

@@ -197,3 +197,17 @@ def test_driver_action_reports_the_stalled_condition(bench, monkeypatch):
     with pytest.raises(bench.ActionFailed, match="filter: Timeout"):
         driver.action("filter", lambda: None, before="tr", after="false")
     assert driver.actions == {}
+
+
+def test_summarize_counts_failed_scrub_fetches(bench):
+    run = {
+        "elapsed_s": 3.0,
+        "load": None,
+        "actions": {"sprite-180s": {"ms": 900.0}},
+        "workload": {"fetches": 2, "status": {"sprite-30s": 200, "sprite-180s": 404}},
+    }
+    sample = bench.summarize("studio-scrub", run)
+    assert sample["fetches"] == 2
+    assert sample["failed_fetches"] == 1
+    assert sample["sprite-180s_ms"] == 900.0
+    assert "status" not in sample

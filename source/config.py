@@ -139,9 +139,7 @@ DEFAULT_GIF_DURATION_SECONDS: int = (
 )
 GALLERY_INTERVAL_SECONDS: int = 10  # Default interval between gallery captures
 GALLERY_GIF_DURATION_SECONDS: int = 3  # Default per-GIF duration in gallery mode
-GALLERY_PARALLEL_WORKERS: int = (
-    4  # Max concurrent ffmpeg processes for gallery GIF extraction
-)
+GALLERY_PARALLEL_WORKERS: int = 4  # Max concurrent ffmpeg processes per gallery
 GALLERY_BUNDLE_ENABLED: bool = False  # embed images as base64 data URIs in gallery HTML
 CLIP_PARALLEL_WORKERS: int = 0  # Max concurrent ffmpeg processes for clip/screenshot/GIF generation; 0 = auto (min(4, cpu_count))
 MAX_FILESIZE_MB: int = 0  # Maximum output file size in MB (0 = disabled)
@@ -197,6 +195,8 @@ STUDIO_THUMBNAIL_WIDTH: int = 200
 STUDIO_CARD_SCRUBBER: bool = False
 STUDIO_SCRUBBER_SPRITE_COLS: int = 5
 STUDIO_SCRUBBER_SPRITE_ROWS: int = 5
+# Seek per frame past this span; shorter clips decode faster in one pass.
+STUDIO_SCRUBBER_SEEK_SECONDS: float = 120.0
 
 # Cross-reference badges on Studio, Transcripts, and Overview.
 # Mirrored to JS via get_frontend_config() (never hardcode).
@@ -477,6 +477,8 @@ TRANSCRIBE_CONDITION_ON_PREVIOUS_TEXT: bool = (
 )
 # Pre-load faster-whisper in Transcripts UI: off | queue_open | page_load.
 TRANSCRIBE_PREWARM: str = "queue_open"
+# Longer spans transcribe in windows; features cost ~1 MB per audio-second.
+TRANSCRIBE_WINDOW_SECONDS: int = 900
 # Speaker attribution: label segments by detected speaker after transcription.
 TRANSCRIBE_SPEAKERS: bool = False
 TRANSCRIBE_SPEAKER_MAX: int = 4  # cluster cap, 2..8
