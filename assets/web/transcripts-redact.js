@@ -37,14 +37,16 @@
     return words.join(" ");
   }
 
-  function _spanFor(spans, run) {
-    if (!run) return null;
+  // Applied spans overlapping *run*, in text order.
+  function _spansIn(spans, run) {
+    var out = [];
+    if (!run) return out;
     for (var i = 0; i < spans.length; i++) {
       var sp = spans[i];
       if (sp.excluded) continue;
-      if (Math.max(sp.start, run.start) < Math.min(sp.end, run.end)) return sp;
+      if (Math.max(sp.start, run.start) < Math.min(sp.end, run.end)) out.push(sp);
     }
-    return null;
+    return out.sort(function (a, b) { return a.start - b.start; });
   }
 
   // Same word spans as the hub; a covered word becomes a chip.
@@ -67,29 +69,35 @@
       var run = runs[r];
       if (run.space) {
         // Whitespace stays unless the same span continues on the next word.
-        if (open && _spanFor(spans, runs[r + 1]) === open.span) continue;
+        if (open && _spansIn(spans, runs[r + 1])[0] === open.span) continue;
         flush();
         html += run.text;
         continue;
       }
-      var sp = _spanFor(spans, run);
+      var hits = _spansIn(spans, run);
       var ws = segWords ? segWords[wi].start : null;
       var we = segWords ? segWords[wi].end : null;
       wi++;
-      if (!sp) {
+      if (!hits.length) {
         flush();
         html += '<span class="segment-word"' +
           (ws !== null ? ' data-ws="' + ws + '" data-we="' + we + '"' : "") + ">" +
           escapeHtml(run.text) + "</span>";
         continue;
       }
-      if (open && open.span !== sp) flush();
-      var head = run.text.slice(0, Math.max(0, sp.start - run.start));
-      var tail = run.text.slice(Math.min(run.text.length, sp.end - run.start));
-      if (head) { flush(); html += escapeHtml(head); }
-      if (!open) open = { span: sp, ws: ws, we: we };
-      else open.we = we !== null ? we : open.we;
-      if (tail) { flush(); html += escapeHtml(tail); }
+      // One word can hold several spans, e.g. "a@x.com,b@y.com".
+      var pos = 0;
+      for (var h = 0; h < hits.length; h++) {
+        var sp = hits[h];
+        if (open && open.span !== sp) flush();
+        var from = Math.max(0, sp.start - run.start);
+        if (from > pos) { flush(); html += escapeHtml(run.text.slice(pos, from)); }
+        if (!open) open = { span: sp, ws: ws, we: we };
+        else open.we = we !== null ? we : open.we;
+        pos = Math.max(pos, Math.min(run.text.length, sp.end - run.start));
+        if (pos < run.text.length) flush();
+      }
+      if (pos < run.text.length) html += escapeHtml(run.text.slice(pos));
     }
     flush();
     return html;
@@ -123,6 +131,14 @@
     showToast(data.reason === "model_missing" ? "Download the Redact model in Settings" : (data.error || fallback));
   }
 
+  // Agent output gets placeholders at read time, so refetch it with the transcript.
+  function _reloadShown(pid) {
+    if (state.selectedParticipant !== pid) return;
+    loadTranscript(pid);
+    if (TS.loadSummary) TS.loadSummary(pid);
+    if (TS.loadFriction) TS.loadFriction(pid);
+  }
+
   function setRedactEnabled(pid, enabled) {
     return apiPut("api/redact/" + pid, { enabled: enabled }).then(function (data) {
       if (!data.ok) {
@@ -131,7 +147,7 @@
       }
       _adoptTask(data.task);
       return loadParticipants().then(function () {
-        if (state.selectedParticipant === pid) loadTranscript(pid);
+        _reloadShown(pid);
       });
     }).catch(function () {
       showToast("Failed to update redaction");
@@ -265,7 +281,7 @@
     return apiPut("api/redact/" + pid + "/exclude", { label: label, text: text, excluded: excluded })
       .then(function (data) {
         if (!data.ok) { showToast(data.error || "Failed to update redaction"); return; }
-        if (state.selectedParticipant === pid) loadTranscript(pid);
+        _reloadShown(pid);
       })
       .catch(function () { showToast("Failed to update redaction"); });
   }

@@ -230,6 +230,30 @@ def build_screenspace_pins(manifest: dict[str, Any]) -> list[dict[str, Any]]:
     return records
 
 
+def _corrections(manifest: dict[str, Any]) -> list[dict[str, Any]]:
+    return [c for c in (manifest.get("corrections") or []) if isinstance(c, dict)]
+
+
+def _entry_pii(
+    entry: dict[str, Any], corrections: list[dict[str, Any]]
+) -> tuple[list[Any], list[str], list[list[dict[str, Any]]] | None]:
+    """(segments, corrected texts, spans per segment or None when redaction is off)."""
+    # Late import: transcripts sits a layer above this module.
+    import transcripts
+
+    segments: list[Any] = [
+        {**s, "text": str(s.get("text", ""))}
+        for s in (entry.get("segments", []) or [])
+        if isinstance(s, dict)
+    ]
+    # Corrected text, like every other reader; redaction spans index into it.
+    texts = [s["text"] for s in transcripts.apply_corrections(segments, corrections)]
+    if not redact.entry_wanted(entry) or not any(s.get("pii") for s in segments):
+        return segments, texts, None
+    excluded = (entry.get("redaction") or {}).get("excluded")
+    return segments, texts, redact.entry_spans(segments, texts, excluded)
+
+
 def build_transcript_segments(manifest: dict[str, Any]) -> list[dict[str, Any]]:
     """One row per transcript segment, with participant and mark info joined."""
     source = manifest.get("source_transcripts", {}) or {}
@@ -244,6 +268,7 @@ def build_transcript_segments(manifest: dict[str, Any]) -> list[dict[str, Any]]:
             continue
         marks_by_segment.setdefault(seg_id, []).append(mk)
 
+    corrections = _corrections(manifest)
     records: list[dict[str, Any]] = []
     for participant_id, entry in source.items():
         if not isinstance(entry, dict):
@@ -253,18 +278,7 @@ def build_transcript_segments(manifest: dict[str, Any]) -> list[dict[str, Any]]:
         source_file = entry.get("source_file", "")
         transcribed_at = entry.get("transcribed_at", "")
         speaker_labels = (entry.get("speakers") or {}).get("labels") or {}
-        segments = [s for s in (entry.get("segments", []) or []) if isinstance(s, dict)]
-        # Placeholders replace the text whenever redaction applies to the participant.
-        redacted = redact.entry_wanted(entry) and any(s.get("pii") for s in segments)
-        pii_view = (
-            redact.entry_spans(
-                segments,
-                [str(s.get("text", "")) for s in segments],
-                (entry.get("redaction") or {}).get("excluded"),
-            )
-            if redacted
-            else None
-        )
+        segments, texts, pii_view = _entry_pii(entry, corrections)
         for idx, seg in enumerate(segments):
             seg_id = seg.get("id") or f"{participant_id}:{idx}"
             spans = [
@@ -272,7 +286,7 @@ def build_transcript_segments(manifest: dict[str, Any]) -> list[dict[str, Any]]:
                 for sp in (pii_view[idx] if pii_view is not None else [])
                 if not sp.get("excluded")
             ]
-            text = str(seg.get("text", ""))
+            text = texts[idx]
             try:
                 start = float(seg.get("start", 0.0))
                 end = float(seg.get("end", 0.0))
@@ -310,6 +324,7 @@ def build_transcript_segments(manifest: dict[str, Any]) -> list[dict[str, Any]]:
 def build_friction_moments(manifest: dict[str, Any]) -> list[dict[str, Any]]:
     """One row per LLM-detected friction moment, across all participants."""
     source = manifest.get("source_transcripts", {}) or {}
+    corrections = _corrections(manifest)
     records: list[dict[str, Any]] = []
     for participant_id, entry in source.items():
         if not isinstance(entry, dict):
@@ -317,6 +332,9 @@ def build_friction_moments(manifest: dict[str, Any]) -> list[dict[str, Any]]:
         friction_data = entry.get("friction")
         if not isinstance(friction_data, dict):
             continue
+        # Agents read real names; placeholders go on here, as in the UI.
+        _segs, _texts, pii_view = _entry_pii(entry, corrections)
+        placeholders = redact.surface_placeholders(pii_view) if pii_view else {}
         computed_at = friction_data.get("computed_at", "")
         model = friction_data.get("model", "")
         for moment in friction_data.get("moments", []) or []:
@@ -327,7 +345,9 @@ def build_friction_moments(manifest: dict[str, Any]) -> list[dict[str, Any]]:
                     "participant": participant_id,
                     "segment_ids": [str(s) for s in (moment.get("segment_ids") or [])],
                     "category": moment.get("category", ""),
-                    "rationale": moment.get("rationale", ""),
+                    "rationale": redact.scrub_text(
+                        str(moment.get("rationale", "")), placeholders
+                    ),
                     "score": utils.sanitize_floats(moment.get("score", 0.0)),
                     "model": model,
                     "computed_at": computed_at,

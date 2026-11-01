@@ -151,7 +151,7 @@
               source: "transcript",
               start: seg.start + off,
               end: seg.end + off,
-              label: mark.label || seg.text || "",
+              label: mark.label || seg.display_text || seg.text || "",
               eventType: mark.category || "bookmark",
             });
           });

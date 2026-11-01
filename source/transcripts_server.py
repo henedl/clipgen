@@ -376,6 +376,21 @@ def _redacted_view(
     )
 
 
+def _agent_placeholders(pid: str) -> dict[str, str]:
+    """Surface-to-placeholder map for agent output; empty when redaction is off."""
+    with _manifest_lock:
+        entry = _manifest.get("source_transcripts", {}).get(pid)
+        if not entry or not entry.get("segments"):
+            return {}
+        entry = dict(entry)
+        raw_segments = list(entry["segments"])
+        corrections = list(_manifest.get("corrections", []))
+        version = _corrections_version
+    corrected = _corrected_segments(pid, raw_segments, corrections, version=version)
+    view = _redacted_view(pid, raw_segments, corrected, entry)
+    return redact.surface_placeholders(view) if view is not None else {}
+
+
 def _requeue_stale_redactions() -> None:
     """After a text-changing correction, re-detect where the spans' text moved.
 
@@ -388,15 +403,16 @@ def _requeue_stale_redactions() -> None:
         corrections = list(_manifest.get("corrections", []))
         for pid, entry in src.items():
             segs = entry.get("segments") or []
+            # Every scanned segment carries pii_crc, hits or not.
             if (
                 not segs
                 or not redact.entry_wanted(entry)
-                or not any(s.get("pii") for s in segs)
+                or not any("pii_crc" in s for s in segs)
             ):
                 continue
             corrected = _corrected_segments(pid, segs, corrections)
             if any(
-                raw.get("pii") and raw.get("pii_crc") != redact.text_crc(cor["text"])
+                raw.get("pii_crc") != redact.text_crc(cor["text"])
                 for raw, cor in zip(segs, corrected, strict=True)
             ):
                 _enqueue_redact_task(pid, entry)
@@ -746,6 +762,9 @@ def api_transcript(participant: str) -> FlaskResponse:
             if pii_view
             else [],
         }
+        # Placeholder text for pages that show segments without chips.
+        if pii_view and pii_view[i]:
+            seg["display_text"] = redact.render_text(corrected["text"], pii_view[i])
         segments.append(seg)
 
     return ok(
@@ -1532,8 +1551,10 @@ def api_agent_get(agent_key: str, participant: str) -> FlaskResponse:
         segments_snapshot = list(entry.get("segments") or []) if entry else []
         corrections_snapshot = list(_manifest.get("corrections", []))
         version_snapshot = _corrections_version
+    # Agents read real names; placeholders go on at read time.
+    placeholders = _agent_placeholders(participant)
     if result:
-        resp: dict[str, Any] = {field: result}
+        resp: dict[str, Any] = {field: redact.scrub_value(result, placeholders)}
         for dep in thinking_agents.AGENTS:
             if agent_key in dep["depends_on"]:  # depends_on holds agent keys
                 dep_field = dep["manifest_field"]
@@ -1547,7 +1568,9 @@ def api_agent_get(agent_key: str, participant: str) -> FlaskResponse:
     if _orchestrator.is_generating(participant, agent_key):
         resp = {
             "started_at": _orchestrator.started_at(participant, agent_key),
-            "partial": _orchestrator.partial_text(participant, agent_key),
+            "partial": redact.scrub_text(
+                _orchestrator.partial_text(participant, agent_key), placeholders
+            ),
         }
         # Regenerate pops the stored field first; without this the scores vanish
         # for the whole run.
@@ -1657,6 +1680,8 @@ def api_summary_stream(participant: str) -> FlaskResponse:
     client falls back to the GET poll, so this is a pure enhancement.
     """
 
+    placeholders = _agent_placeholders(participant)
+
     def _events():  # type: ignore[no-untyped-def]
         sent = 0
         deadline = time.monotonic() + _SUMMARY_STREAM_START_GRACE
@@ -1665,7 +1690,8 @@ def api_summary_stream(participant: str) -> FlaskResponse:
             text = _orchestrator.partial_text(participant, "summary")
             if len(text) > sent:
                 sent = len(text)
-                yield f"data: {json.dumps({'partial': text})}\n\n"
+                shown = redact.scrub_text(text, placeholders)
+                yield f"data: {json.dumps({'partial': shown})}\n\n"
             if not generating:
                 # Open race: regenerate may not have flipped is_generating yet;
                 # wait briefly before done.
@@ -1698,6 +1724,11 @@ def api_summary_save(participant: str) -> FlaskResponse:
         entry = _manifest.get("source_transcripts", {}).get(participant)
         if not entry:
             return err("Participant not found", 404)
+        # The editor shows placeholders; saving would store them as the summary.
+        if redact.entry_wanted(entry) and any(
+            s.get("pii") for s in entry.get("segments") or []
+        ):
+            return err("Turn off redaction to edit", 409)
         entry["summary"] = summary_raw.strip()
         # An edited summary invalidates dependents exactly like the regenerate route.
         _invalidate_dependents(entry, summary_agent)
@@ -1899,6 +1930,8 @@ def api_dictionary_import() -> FlaskResponse:
 
     with _manifest_lock:
         added_corrections, added_terms = _merge_dictionary_locked(corrections, terms)
+    if added_corrections:
+        _requeue_stale_redactions()
     _schedule_persist()
     return ok(
         corrections=added_corrections,
@@ -1957,6 +1990,8 @@ def api_dictionary_global_load() -> FlaskResponse:
     terms = [str(t).strip() for t in saved.get("known_terms", []) if str(t).strip()]
     with _manifest_lock:
         added_corrections, added_terms = _merge_dictionary_locked(corrections, terms)
+    if added_corrections:
+        _requeue_stale_redactions()
     _schedule_persist()
     return ok(corrections=added_corrections, terms=added_terms)
 
@@ -2233,16 +2268,16 @@ def api_search() -> FlaskResponse:
         participant_count = 0
         pii_view = _redacted_view(pid, raw_segments, corrected, entries_by_pid[pid])
         for i, (raw, seg) in enumerate(zip(raw_segments, corrected, strict=True)):
-            text_lower = seg["text"].lower()
-            n = text_lower.count(query_lower)
+            # Match what the page shows, so hidden names stay unfindable.
+            shown = (
+                redact.render_text(seg["text"], pii_view[i])
+                if pii_view is not None
+                else seg["text"]
+            )
+            n = shown.lower().count(query_lower)
             if n > 0:
                 participant_count += n
                 speaker = seg.get("speaker", "")
-                shown = (
-                    redact.render_text(seg["text"], pii_view[i])
-                    if pii_view is not None
-                    else seg["text"]
-                )
                 results.append(
                     {
                         "participant": pid,
@@ -2805,13 +2840,16 @@ def _apply_redact_result(live: dict[str, Any], result: dict[str, Any]) -> None:
     fresh = {s.get("id"): s for s in result["segments"] if s.get("id")}
     count = 0
     for seg in live["segments"]:
-        hit = fresh.get(seg.get("id"))
-        if hit and hit.get("pii"):
+        hit = fresh.get(seg.get("id")) or {}
+        if hit.get("pii"):
             seg["pii"] = list(hit["pii"])
-            seg["pii_crc"] = hit.get("pii_crc")
             count += len(hit["pii"])
         else:
             seg.pop("pii", None)
+        # Kept on clean segments too, so a later correction can requeue them.
+        if hit.get("pii_crc") is not None:
+            seg["pii_crc"] = hit["pii_crc"]
+        else:
             seg.pop("pii_crc", None)
     block = dict(result["redaction"])
     block["count"] = count
@@ -3148,18 +3186,6 @@ class AgentOrchestrator:
                         list(entry["segments"]),
                         list(_manifest.get("corrections", [])),
                     )
-                    # Agents never see the surface behind a placeholder.
-                    pii_view = _redacted_view(
-                        participant,
-                        list(entry["segments"]),
-                        snapshot["segments"],
-                        entry,
-                    )
-                    if pii_view is not None:
-                        for seg, spans in zip(
-                            snapshot["segments"], pii_view, strict=True
-                        ):
-                            seg["text"] = redact.render_text(seg["text"], spans)
 
                 def _sink(tok: str) -> None:
                     with self._partial_lock:

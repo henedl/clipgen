@@ -502,7 +502,7 @@ def _run_transcript_mark(args: argparse.Namespace) -> None:
     """Batch-mark transcript segments whose text contains a search term.
 
     Mirrors the Transcripts UI's "Mark all results" action: case-insensitive
-    substring match against corrected segment text, upsert into the manifest's
+    substring match against the shown text (corrected, redacted when on), upsert into the manifest's
     ``marks`` array (no duplicates per segment). When the Transcripts server is
     running locally, POST through its API so its in-memory state stays in sync;
     otherwise write the manifest directly.

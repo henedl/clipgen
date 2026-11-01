@@ -753,7 +753,7 @@
                   marks: [],
                   category: "",
                   label: "",
-                  text: segs[k].text || "",
+                  text: segs[k].display_text || segs[k].text || "",
                   severity: "",
                 });
               }
