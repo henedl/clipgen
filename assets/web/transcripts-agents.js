@@ -696,6 +696,11 @@
       var pid = state.selectedParticipant;
       if (!pid) return;
       if (!state.summaryEditing) {
+        // The summary shows placeholders; saving them would replace the real text.
+        if (TS.redactOn()) {
+          showToast("Turn off redaction to edit");
+          return;
+        }
         var ta = document.createElement("textarea");
         ta.className = "summary-edit-textarea";
         ta.value = state.summaryText;

@@ -29,7 +29,9 @@ read-time helpers for free.
 
 from __future__ import annotations
 
+import functools
 import json
+import re
 import struct
 import threading
 import unicodedata
@@ -680,12 +682,29 @@ def _anchor(text: str, spans: list[dict[str, Any]]) -> list[dict[str, Any]]:
         surface = str(span.get("text") or "")
         if not surface:
             continue
-        found = text.find(surface, cursor)
+        found = _find_word(text, surface, cursor)
         if found < 0:
             continue
         out.append({**span, "start": found, "end": found + len(surface)})
         cursor = found + len(surface)
     return out
+
+
+def _find_word(text: str, surface: str, start: int) -> int:
+    """First match of *surface* not glued to a longer word; -1 when none."""
+    found = text.find(surface, start)
+    while found >= 0:
+        end = found + len(surface)
+        glued_left = (
+            found > 0 and _is_word_char(surface[0]) and _is_word_char(text[found - 1])
+        )
+        glued_right = (
+            end < len(text) and _is_word_char(surface[-1]) and _is_word_char(text[end])
+        )
+        if not (glued_left or glued_right):
+            return found
+        found = text.find(surface, found + 1)
+    return -1
 
 
 def entry_spans(
@@ -768,6 +787,58 @@ def render_text(text: str, spans: list[dict[str, Any]]) -> str:
         if 0 <= start < end <= len(out):
             out = out[:start] + str(span.get("placeholder") or "[PII]") + out[end:]
     return out
+
+
+def surface_placeholders(per_segment: list[list[dict[str, Any]]]) -> dict[str, str]:
+    """Placeholder per applied surface key, plus each word of a multi-word name."""
+    found: dict[str, str] = {}
+    words: dict[str, str] = {}
+    restored: set[str] = set()
+    for spans in per_segment:
+        for span in spans:
+            key = surface_key(str(span.get("text") or ""))
+            if not key:
+                continue
+            if span.get("excluded"):
+                restored.add(key)
+                continue
+            placeholder = str(span.get("placeholder") or "[PII]")
+            found.setdefault(key, placeholder)
+            # "Ms. Svensson" in agent prose still hides "Anna Svensson".
+            if span.get("label") in NAME_LABELS:
+                for word in key.split():
+                    word = word.strip(_TRIM)
+                    if len(word) > 1:
+                        words.setdefault(word, placeholder)
+    words = {w: p for w, p in words.items() if w not in restored}
+    return {**words, **found}
+
+
+@functools.lru_cache(maxsize=32)
+def _surface_pattern(keys: tuple[str, ...]) -> re.Pattern[str]:
+    alternatives = "|".join(r"\s+".join(map(re.escape, k.split())) for k in keys)
+    return re.compile(rf"(?<!\w)(?:{alternatives})(?!\w)", re.IGNORECASE)
+
+
+def scrub_text(text: str, placeholders: dict[str, str]) -> str:
+    """Replace known surfaces in free text, such as agent output."""
+    if not text or not placeholders:
+        return text
+    keys = tuple(sorted(placeholders, key=len, reverse=True))
+    return _surface_pattern(keys).sub(
+        lambda m: placeholders.get(surface_key(m.group(0)), "[PII]"), text
+    )
+
+
+def scrub_value(value: Any, placeholders: dict[str, str]) -> Any:
+    """scrub_text over every string inside a JSON-like value."""
+    if isinstance(value, str):
+        return scrub_text(value, placeholders)
+    if isinstance(value, list):
+        return [scrub_value(v, placeholders) for v in value]
+    if isinstance(value, dict):
+        return {k: scrub_value(v, placeholders) for k, v in value.items()}
+    return value
 
 
 def utf16_spans(text: str, spans: list[dict[str, Any]]) -> list[dict[str, Any]]:

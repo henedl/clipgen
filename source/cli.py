@@ -21,6 +21,7 @@ import config
 import files
 import interactive
 import profiling
+import redact
 import spreadsheet
 import transcripts
 import utils
@@ -635,6 +636,7 @@ def _run_pre_transcribe(worksheet: Any, args: Any) -> None:
             utils.error_print(f"Transcription failed for {pid}.")
             continue
 
+        previous = source_transcripts.get(pid) or {}
         source_transcripts[pid] = {
             "segments": [
                 {"start": s["start"], "end": s["end"], "text": s["text"]}
@@ -645,6 +647,10 @@ def _run_pre_transcribe(worksheet: Any, args: Any) -> None:
             "source_file": result["source_file"],
             "transcribed_at": datetime.now(UTC).isoformat(),
         }
+        if "redaction" in previous:
+            source_transcripts[pid]["redaction"] = previous["redaction"]
+        if redact.entry_wanted(source_transcripts[pid]):
+            _redact_fresh_entry(source_transcripts[pid], corrections)
         if config.TRANSCRIBE_SPEAKERS:
             block = transcripts.label_speakers(
                 [str(p) for p in source_paths],
@@ -661,6 +667,22 @@ def _run_pre_transcribe(worksheet: Any, args: Any) -> None:
     utils.info_print(
         f"Pre-transcription complete: {transcribed} transcribed, {skipped} skipped."
     )
+
+
+def _redact_fresh_entry(entry: dict[str, Any], corrections: list[Any]) -> None:
+    """Tag PII on the corrected text, as the server's redact pass does."""
+    raw = entry["segments"]
+    shown = [dict(s) for s in transcripts.apply_corrections(raw, corrections)]
+    block = transcripts.redact_entry(shown)
+    if block is None:
+        return
+    for seg, tagged in zip(raw, shown, strict=True):
+        if tagged.get("pii"):
+            seg["pii"] = tagged["pii"]
+        seg["pii_crc"] = tagged["pii_crc"]
+    block["count"] = sum(len(s.get("pii") or []) for s in raw)
+    block["excluded"] = list((entry.get("redaction") or {}).get("excluded") or [])
+    entry["redaction"] = block
 
 
 # ---- Thinking-agent CLI ----

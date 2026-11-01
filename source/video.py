@@ -1354,9 +1354,8 @@ def _extract_sprite_sheet_seek(
     """Seek-based sprite sheet: one fast ``-ss`` grab per frame, PIL composite.
 
     Each frame decodes at most one GOP (keyframe seek + roll-forward), so a
-    ten-minute span costs the same as a ten-second one. Frame ``i`` samples the
-    *center* of its slot (``start + (i + 0.5) * step``) — indistinguishable
-    from the single-pass grid for the scrubber's purposes. Frames past EOF (or
+    ten-minute span costs the same as a ten-second one. Frame ``i`` samples
+    ``start + i * step``, the time the scrubber plays audio from. Frames past EOF (or
     individually failed grabs) reuse the previous frame so the grid stays
     aligned; returns ``None`` only when every grab fails.
     """
@@ -1364,7 +1363,7 @@ def _extract_sprite_sheet_seek(
     duration = max(0.1, duration_seconds)
     step = duration / frame_count
     start = max(0.0, start_seconds)
-    times = [start + (i + 0.5) * step for i in range(frame_count)]
+    times = [start + i * step for i in range(frame_count)]
 
     def grab(ts: float) -> bytes | None:
         cmd = ffmpeg_cmd(

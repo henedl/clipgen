@@ -2070,9 +2070,9 @@ def test_extract_sprite_sheet_seek_composites_grid(monkeypatch, tmp_path):
     assert data is not None
     sheet = Image.open(BytesIO(data))
     assert sheet.size == (16, 12)  # 2x2 grid of 8x6 frames
-    # One fast input-seek per frame, sampled at slot centers (pool order varies).
+    # One fast input-seek per frame at slot starts (pool order varies).
     seeks = sorted(float(c[c.index("-ss") + 1]) for c in calls)
-    assert seeks == [10.0 + (i + 0.5) * 25.0 for i in range(4)]
+    assert seeks == [10.0 + i * 25.0 for i in range(4)]
 
 
 def test_extract_sprite_sheet_seek_all_grabs_fail_returns_none(monkeypatch, tmp_path):

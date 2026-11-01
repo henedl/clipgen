@@ -2309,11 +2309,13 @@
       var hasActive = false;
       var newlyCompleted = [];
       var newlySpeakers = [];
+      var newlyRedacted = [];
       data.tasks.forEach(function (t) {
         if (t.status === "queued" || t.status === "running") hasActive = true;
         if (t.status === "completed" && !_refreshedCompletedTaskIds[t.id]) {
-          // Speaker and redact passes reload the transcript only; marks and agents stay.
+          // Speaker and redact passes reload the transcript; redact also re-reads agent output.
           ((_isSpeakerTask(t) || _isRedactTask(t)) ? newlySpeakers : newlyCompleted).push(t.participant);
+          if (_isRedactTask(t)) newlyRedacted.push(t.participant);
           _refreshedCompletedTaskIds[t.id] = true;
         }
       });
@@ -2340,6 +2342,10 @@
           } else if (state.selectedParticipant &&
               newlySpeakers.indexOf(state.selectedParticipant) >= 0) {
             loadTranscript(state.selectedParticipant);
+            if (newlyRedacted.indexOf(state.selectedParticipant) >= 0) {
+              loadSummary(state.selectedParticipant);
+              loadFriction(state.selectedParticipant);
+            }
           } else if (state.selectedParticipant) {
             // Agents may be chaining server-side; surface the running state.
             _rearmSelectedAgentPanels();

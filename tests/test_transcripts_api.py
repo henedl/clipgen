@@ -4676,8 +4676,10 @@ def test_vtt_search_and_marks_emit_placeholders(tr_client, monkeypatch, tmp_path
     vtt = tr_client.get("/transcripts/api/vtt/P01").get_data(as_text=True)
     assert "Hi [GIVEN_NAME_1], mail [EMAIL_1]" in vtt
     assert "Anna" not in vtt
-    hit = tr_client.get("/transcripts/api/search?q=anna").get_json()["results"][0]
+    hit = tr_client.get("/transcripts/api/search?q=mail").get_json()["results"][0]
     assert hit["text"] == "Hi [GIVEN_NAME_1], mail [EMAIL_1]"
+    # Search matches the shown text, so a hidden name finds nothing.
+    assert not tr_client.get("/transcripts/api/search?q=anna").get_json()["results"]
     tr_client.post(
         "/transcripts/api/marks",
         json={"segment_ids": ["P01:0"], "category": "friction"},
@@ -4748,6 +4750,7 @@ def test_merge_redact_task_copies_spans_by_id(monkeypatch):
     assert first["pii"][0]["label"] == "EMAIL"
     assert first["pii_crc"] == 1
     assert "pii" not in entry["segments"][1]
+    assert "pii_crc" not in entry["segments"][1]
     assert entry["redaction"]["count"] == 1
     assert entry["summary"] == {"paragraph": "keep"}
     assert chained == []
@@ -4848,6 +4851,66 @@ def test_edit_segment_requeues_when_span_text_drifts(tr_client, monkeypatch, tmp
     assert resp.status_code == 200
     assert [t["kind"] for t in worker.enqueued] == ["redact"]
     assert worker.enqueued[0]["segments"][0]["text"] == "Hey Anna, mail anna@ex.se"
+
+
+def _scanned_entry():
+    """_redacted_entry with its clean line scanned too (crc, no hits)."""
+    import redact
+
+    entry = _redacted_entry()
+    entry["segments"][1]["pii_crc"] = redact.text_crc("plain line")
+    return entry
+
+
+def test_edit_clean_segment_requeues_redaction(tr_client, monkeypatch, tmp_path):
+    worker = _seed_speakers(monkeypatch, tmp_path, _scanned_entry())
+    monkeypatch.setattr(transcripts_server, "_schedule_persist", lambda: None)
+    resp = tr_client.put(
+        "/transcripts/api/transcript/P01/segment",
+        json={"segment_id": "P01:1", "text": "plain Anna"},
+    )
+    assert resp.status_code == 200
+    assert [t["kind"] for t in worker.enqueued] == ["redact"]
+
+
+def test_dictionary_import_requeues_redaction(tr_client, monkeypatch, tmp_path):
+    worker = _seed_speakers(monkeypatch, tmp_path, _scanned_entry())
+    monkeypatch.setattr(transcripts_server, "_schedule_persist", lambda: None)
+    csv_text = "type,from,to\ncorrection,plain,Anna\n"
+    resp = tr_client.post("/transcripts/api/dictionary/import", json={"csv": csv_text})
+    assert resp.status_code == 200
+    assert [t["kind"] for t in worker.enqueued] == ["redact"]
+
+
+def test_transcript_route_ships_redacted_display_text(tr_client, monkeypatch, tmp_path):
+    _seed_speakers(monkeypatch, tmp_path, _redacted_entry())
+    segs = tr_client.get("/transcripts/api/transcript/P01").get_json()["segments"]
+    assert segs[0]["display_text"] == "Hi [GIVEN_NAME_1], mail [EMAIL_1]"
+    assert "display_text" not in segs[1]
+
+
+def test_agent_output_gets_placeholders_at_read_time(tr_client, monkeypatch, tmp_path):
+    entry = _redacted_entry()
+    entry["summary"] = "Anna wants mail at anna@ex.se."
+    _seed_speakers(monkeypatch, tmp_path, entry)
+    body = tr_client.get("/transcripts/api/agent/summary/P01").get_json()
+    assert body["summary"] == "[GIVEN_NAME_1] wants mail at [EMAIL_1]."
+    # The stored text keeps the names, so turning redaction off needs no rerun.
+    assert entry["summary"] == "Anna wants mail at anna@ex.se."
+    entry["redaction"]["enabled"] = False
+    body = tr_client.get("/transcripts/api/agent/summary/P01").get_json()
+    assert body["summary"] == "Anna wants mail at anna@ex.se."
+
+
+def test_summary_edit_blocked_while_redacted(tr_client, monkeypatch, tmp_path):
+    entry = _redacted_entry()
+    entry["summary"] = "Anna is happy."
+    _seed_speakers(monkeypatch, tmp_path, entry)
+    resp = tr_client.put(
+        "/transcripts/api/agent/summary/P01", json={"summary": "[GIVEN_NAME_1]"}
+    )
+    assert resp.status_code == 409
+    assert entry["summary"] == "Anna is happy."
 
 
 def test_agent_snapshot_reads_placeholders(tr_client, monkeypatch, tmp_path):

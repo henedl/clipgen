@@ -273,6 +273,35 @@ def test_entry_spans_reanchors_after_text_moved_and_drops_lost():
     assert redact.entry_spans([seg], [gone])[0] == []
 
 
+def test_entry_spans_reanchor_skips_matches_inside_words():
+    seg = _seg("Ann said hi", ("GIVEN_NAME", 0, 3))
+    moved = "Annual review with Ann"
+    spans = redact.entry_spans([seg], [moved])[0]
+    assert [(s["start"], s["end"]) for s in spans] == [(19, 22)]
+    assert redact.entry_spans([seg], ["Annual review"])[0] == []
+
+
+def test_scrub_text_hides_known_surfaces_and_name_parts():
+    seg = _seg(
+        "Anna Svensson mailed anna@ex.se",
+        ("GIVEN_NAME", 0, 13),
+        ("EMAIL", 21, 31),
+    )
+    placeholders = redact.surface_placeholders(redact.entry_spans([seg], [seg["text"]]))
+    text = "Ms. Svensson wrote from ANNA@ex.se; Anna's point. Annabel too."
+    assert redact.scrub_text(text, placeholders) == (
+        "Ms. [GIVEN_NAME_1] wrote from [EMAIL_1]; [GIVEN_NAME_1]'s point. Annabel too."
+    )
+
+
+def test_scrub_text_keeps_restored_surfaces():
+    seg = _seg("Anna met Anna Berg", ("GIVEN_NAME", 0, 4), ("GIVEN_NAME", 9, 18))
+    excluded = [{"label": "GIVEN_NAME", "key": redact.surface_key("Anna")}]
+    spans = redact.entry_spans([seg], [seg["text"]], excluded)
+    placeholders = redact.surface_placeholders(spans)
+    assert redact.scrub_text("Anna and Berg", placeholders) == "Anna and [GIVEN_NAME_2]"
+
+
 def test_render_text_substitutes_right_to_left():
     seg = _seg("Anna at anna@ex.se", ("GIVEN_NAME", 0, 4), ("EMAIL", 8, 18))
     spans = redact.entry_spans([seg], [seg["text"]])[0]
@@ -387,6 +416,51 @@ def test_export_redacts_on_global_default(monkeypatch):
         {"source_transcripts": {"P01": _pii_entry()}}
     )
     assert rows[0]["text"] == "Hi [GIVEN_NAME_1]"
+
+
+def test_export_maps_spans_onto_corrected_text(monkeypatch):
+    import data_export
+
+    monkeypatch.setattr(config, "TRANSCRIBE_REDACT", True)
+    entry = {
+        "segments": [
+            {
+                "id": "P01:0",
+                "start": 0.0,
+                "end": 1.0,
+                "text": "talked to jon",
+                "pii": [
+                    {
+                        "label": "GIVEN_NAME",
+                        "start": 10,
+                        "end": 14,
+                        "score": 0.9,
+                        "text": "John",
+                    }
+                ],
+                "pii_crc": redact.text_crc("talked to John"),
+            }
+        ]
+    }
+    rows = data_export.build_transcript_segments(
+        {
+            "source_transcripts": {"P01": entry},
+            "corrections": [{"from": "jon", "to": "John"}],
+        }
+    )
+    assert rows[0]["text"] == "talked to [GIVEN_NAME_1]"
+
+
+def test_export_friction_rationale_gets_placeholders(monkeypatch):
+    import data_export
+
+    monkeypatch.setattr(config, "TRANSCRIBE_REDACT", True)
+    entry = _pii_entry()
+    entry["friction"] = {
+        "moments": [{"segment_ids": ["P01:1"], "rationale": "Erik hesitates"}]
+    }
+    rows = data_export.build_friction_moments({"source_transcripts": {"P01": entry}})
+    assert rows[0]["rationale"] == "[GIVEN_NAME_2] hesitates"
 
 
 # ---- Assets and download ---------------------------------------------------
@@ -520,3 +594,38 @@ def test_real_model_reproduces_reference(monkeypatch):
     assert sum(a == b for a, b in pairs) >= 0.995 * len(pairs)
     got_spans = [[[s["label"], s["start"], s["end"]] for s in seg] for seg in spans]
     assert got_spans == ref["spans"]
+
+
+# ---- Page renderer ----------------------------------------------------------
+
+
+def test_page_renderer_chips_every_span_in_one_word():
+    from _frontend_source import NODE, node_eval, read, slice_between
+
+    if NODE is None:
+        pytest.skip("node missing")
+    src = slice_between(
+        read("transcripts-redact.js"),
+        '  // "GIVEN_NAME" -> "Given name"',
+        "  function redactedPlainText(seg)",
+    )
+    prelude = (
+        "function escapeHtml(s) { return String(s); }\n"
+        "function segWordTiming() { return null; }\n"
+        "function _tokenRuns(text) { var runs = [], pos = 0;"
+        " text.split(/(\\s+)/).forEach(function (t) { if (!t) return;"
+        " runs.push({ text: t, start: pos, end: pos + t.length,"
+        " space: /^\\s+$/.test(t) }); pos += t.length; }); return runs; }\n"
+    )
+    seg = {
+        "text": "mail a@x.se,b@y.se now",
+        "pii": [
+            {"label": "EMAIL", "start": 5, "end": 11, "placeholder": "[EMAIL_1]"},
+            {"label": "EMAIL", "start": 12, "end": 18, "placeholder": "[EMAIL_2]"},
+        ],
+    }
+    probe = (
+        f"var html = redactedTextHtml({json.dumps(seg)});"
+        "console.log(html.replace(/<[^>]+>/g, ''));"
+    )
+    assert node_eval(src, probe, prelude) == ["mail [EMAIL_1],[EMAIL_2] now"]
