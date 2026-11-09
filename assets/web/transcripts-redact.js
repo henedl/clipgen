@@ -215,6 +215,87 @@
     }).catch(function () { showToast("Failed to remove term"); });
   }
 
+  // ---- Permanent redaction: preview, typed confirmation, then the report ----
+
+  var _forever = null; // {request, confirm} while the dialog asks
+
+  function _closeForever() {
+    var modal = document.getElementById("redactForeverModal");
+    closeBlockingModal(modal);
+    modal.classList.add("hidden");
+    _forever = null;
+  }
+
+  // request: {scope: "item"|"term"|"all", label?, text?}
+  function redactForever(request) {
+    var body = { scope: request.scope, label: request.label, text: request.text, preview: true };
+    return apiPost("api/redact/permanent", body).then(function (data) {
+      if (!data.ok) { showToast(data.error || "Could not count matches"); return; }
+      if (!data.items) { showToast("Nothing to redact"); return; }
+      _forever = { request: request, confirm: data.confirm };
+      document.getElementById("redactForeverTitle").textContent = "Redact forever?";
+      document.getElementById("redactForeverMessage").textContent =
+        clipgenPluralUnit(data.matches, "match", "matches") + " in " +
+        clipgenPluralUnit(data.participants, "participant", "participants") + " will be replaced.";
+      var input = document.getElementById("redactForeverInput");
+      input.value = "";
+      input.placeholder = "Type " + data.confirm + " to confirm";
+      document.getElementById("redactForeverNote").classList.remove("hidden");
+      document.getElementById("redactForeverForm").classList.remove("hidden");
+      document.getElementById("redactForeverUnfixed").classList.add("hidden");
+      var confirm = document.getElementById("redactForeverConfirm");
+      confirm.classList.remove("hidden");
+      confirm.disabled = true;
+      document.getElementById("redactForeverCancel").textContent = "Cancel";
+      var modal = document.getElementById("redactForeverModal");
+      modal.classList.remove("hidden");
+      openBlockingModal(modal, { onEscape: _closeForever, onBackdropClick: _closeForever });
+      input.focus();
+    }).catch(function () { showToast("Could not count matches"); });
+  }
+
+  function _showForeverReport(data) {
+    document.getElementById("redactForeverTitle").textContent = "Redacted";
+    document.getElementById("redactForeverMessage").textContent =
+      "Rewrote " + clipgenPluralUnit(data.segments, "segment", "segments") + " and " +
+      clipgenPluralUnit(data.files.length, "file", "files") + ".";
+    document.getElementById("redactForeverNote").classList.add("hidden");
+    document.getElementById("redactForeverForm").classList.add("hidden");
+    document.getElementById("redactForeverConfirm").classList.add("hidden");
+    document.getElementById("redactForeverCancel").textContent = "Close";
+    var list = document.getElementById("redactForeverUnfixed");
+    list.classList.toggle("hidden", !data.unfixed.length);
+    var html = data.unfixed.length ? "<li>These file names still hold the word:</li>" : "";
+    for (var i = 0; i < data.unfixed.length; i++) html += "<li>" + escapeHtml(data.unfixed[i]) + "</li>";
+    list.innerHTML = html;
+  }
+
+  function _runForever() {
+    if (!_forever) return;
+    var request = _forever.request;
+    var confirm = document.getElementById("redactForeverConfirm");
+    confirm.disabled = true;
+    var body = { scope: request.scope, label: request.label, text: request.text, confirm: _forever.confirm };
+    apiPost("api/redact/permanent", body).then(function (data) {
+      if (!data.ok) {
+        showToast(data.error || "Permanent redaction failed");
+        confirm.disabled = false;
+        return;
+      }
+      // Studio's unsent queue (studio.js) may hold transcript text; drop it.
+      try { sessionStorage.removeItem("clipgen-studio-queues"); } catch (e) { /* storage blocked */ }
+      _showForeverReport(data);
+      if (TS.loadCorrections) TS.loadCorrections();
+      loadParticipants().then(function () {
+        if (TS.renderRedactTerms) TS.renderRedactTerms();
+        if (state.selectedParticipant) _reloadShown(state.selectedParticipant);
+      });
+    }).catch(function () {
+      showToast("Permanent redaction failed");
+      confirm.disabled = false;
+    });
+  }
+
   // ---- Redact tab ----
 
   // One row per placeholder: label, surface, occurrences, weakest score, first segment.
@@ -230,7 +311,7 @@
         var it = byKey[key];
         if (!it) {
           it = { placeholder: sp.placeholder, label: sp.label, surface: seg.text.slice(sp.start, sp.end),
-                 count: 0, score: 1, segIndex: i, excluded: !!sp.excluded };
+                 count: 0, score: 1, segIndex: i, excluded: !!sp.excluded, manual: !!sp.manual };
           byKey[key] = it;
           order.push(it);
         }
@@ -278,6 +359,7 @@
     statusEl.classList.toggle("hidden", !live && !ran && modelOk);
 
     document.querySelector("#redactTab .redact-switch").classList.toggle("hidden", !ran && !live);
+    document.getElementById("redactForeverAll").classList.toggle("hidden", !ran || live || !items.length);
     var rerun = document.getElementById("redactRerun");
     rerun.classList.toggle("hidden", !ran || !modelOk || live);
     document.getElementById("redactCancel").classList.toggle("hidden", !live);
@@ -305,6 +387,7 @@
       el.setAttribute("data-seg", String(it.segIndex));
       el.setAttribute("data-label", it.label);
       el.setAttribute("data-text", it.surface);
+      el.setAttribute("data-manual", it.manual ? "1" : "0");
       el.setAttribute("data-excluded", it.excluded ? "1" : "0");
       el.innerHTML =
         '<span class="segment-word segment-pii">' + escapeHtml(it.placeholder || "[PII]") + "</span>" +
@@ -314,7 +397,10 @@
         '<button type="button" class="redact-item-undo" data-tooltip="' +
           (it.excluded ? "Redact again" : "Restore the original text") + '" aria-label="' +
           (it.excluded ? "Redact again" : "Restore") + '"><span class="redact-item-undo-icon' +
-          (it.excluded ? " redact-item-undo-icon--redo" : "") + '"></span></button>';
+          (it.excluded ? " redact-item-undo-icon--redo" : "") + '"></span></button>' +
+        '<button type="button" class="redact-item-undo redact-item-forever" ' +
+          'data-tooltip="Redact forever, in every participant" aria-label="Redact forever">' +
+          '<span class="redact-item-undo-icon redact-item-undo-icon--forever"></span></button>';
       list.appendChild(el);
     }
   }
@@ -384,6 +470,15 @@
       if (state.selectedParticipant) stopRedact(state.selectedParticipant);
     });
     document.getElementById("redactDownload").addEventListener("click", startModelDownload);
+    document.getElementById("redactForeverAll").addEventListener("click", function () {
+      redactForever({ scope: "all" });
+    });
+    document.getElementById("redactForeverCancel").addEventListener("click", _closeForever);
+    document.getElementById("redactForeverConfirm").addEventListener("click", _runForever);
+    document.getElementById("redactForeverInput").addEventListener("input", function () {
+      document.getElementById("redactForeverConfirm").disabled =
+        !_forever || this.value.trim().toLowerCase() !== _forever.confirm;
+    });
     document.getElementById("redactRunCta").addEventListener("click", function () {
       if (!state.selectedParticipant) return;
       document.getElementById("redactRunCta").disabled = true;
@@ -392,6 +487,12 @@
     document.getElementById("redactList").addEventListener("click", function (e) {
       var item = e.target.closest(".redact-item");
       if (!item) return;
+      if (e.target.closest(".redact-item-forever")) {
+        var manual = item.getAttribute("data-manual") === "1";
+        redactForever({ scope: manual ? "term" : "item", label: item.getAttribute("data-label"),
+          text: item.getAttribute("data-text") });
+        return;
+      }
       var undo = e.target.closest(".redact-item-undo");
       if (undo && state.selectedParticipant) {
         undo.disabled = true;
@@ -422,6 +523,7 @@
 
   TS.redactOn = redactOn;
   TS.addRedactTerm = addRedactTerm;
+  TS.redactForever = redactForever;
   TS.removeRedactTerm = removeRedactTerm;
   TS.renderRedactPanel = renderRedactPanel;
   TS.initRedact = initRedact;

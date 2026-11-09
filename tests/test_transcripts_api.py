@@ -4629,6 +4629,151 @@ def test_redact_enable_without_model_works_once_a_term_exists(
     assert worker.enqueued == []
 
 
+def _seed_permanent(monkeypatch, tmp_path):
+    """P01 redacted (Anna + email), P02 switched off; one of everything that copies text."""
+    import redact
+
+    entry = _redacted_entry()
+    entry["segments"][0]["words"] = [{"word": "Hi", "start": 0.0, "end": 0.2}]
+    entry["segments"][1]["text"] = "Ana called"
+    entry["segments"][1]["pii_crc"] = redact.text_crc("Anna called")
+    entry["segments"][1]["pii"] = [
+        {"label": "GIVEN_NAME", "start": 0, "end": 4, "score": 0.9, "text": "Anna"}
+    ]
+    entry["summary"] = "Anna wants export."
+    entry["speakers"] = {"enabled": True, "labels": {"1": "Anna"}}
+    worker = _seed_speakers(monkeypatch, tmp_path, entry)
+    manifest = transcripts_server._manifest
+    manifest["source_transcripts"]["P02"] = {
+        "segments": [{"id": "P02:0", "start": 0, "end": 1, "text": "Anna or anna?"}],
+        "redaction": {"enabled": False},
+    }
+    manifest["corrections"] = [
+        {"id": "c1", "from": "Ana", "to": "Anna"},
+        {"id": "c2", "from": "teh", "to": "the"},
+    ]
+    manifest["marks"] = [{"id": "m1", "segment_id": "P01:0", "label": "Anna quote"}]
+    manifest["known_terms"] = ["Anna", "Widget"]
+    monkeypatch.setattr(transcripts_server, "_corrected_cache", {})
+    monkeypatch.setattr(config, "OUTPUT_DIR", str(tmp_path))
+    (tmp_path / "clip.md").write_text("Anna said hi", encoding="utf-8")
+    return entry, worker
+
+
+def test_permanent_item_rewrites_every_copy(tr_client, monkeypatch, tmp_path):
+    entry, _worker = _seed_permanent(monkeypatch, tmp_path)
+    manifest = transcripts_server._manifest
+    body = {"scope": "item", "label": "GIVEN_NAME", "text": "Anna"}
+    url = "/transcripts/api/redact/permanent"
+
+    preview = tr_client.post(url, json={**body, "preview": True}).get_json()
+    assert (preview["items"], preview["matches"], preview["participants"]) == (1, 3, 2)
+    assert entry["segments"][0]["text"] == "Hi Anna, mail anna@ex.se"
+    assert tr_client.post(url, json=body).status_code == 400
+
+    report = tr_client.post(url, json={**body, "confirm": "redact"}).get_json()
+    assert report["ok"] is True and report["segments"] == 3
+    assert report["files"] == ["clip.md"]
+    first, second = entry["segments"]
+    assert first["text"] == "Hi [GIVEN_NAME_1], mail anna@ex.se"
+    assert "words" not in first
+    assert [(s["label"], s["start"]) for s in first["pii"]] == [("EMAIL", 24)]
+    # The correction that produced the name is folded in, then dropped.
+    assert second["text"] == "[GIVEN_NAME_1] called" and "pii" not in second
+    assert [c["id"] for c in manifest["corrections"]] == ["c2"]
+    # Case-sensitive for a detected item, in every participant.
+    other = manifest["source_transcripts"]["P02"]["segments"][0]
+    assert other["text"] == "[GIVEN_NAME_1] or anna?"
+    assert entry["summary"] == "[GIVEN_NAME_1] wants export."
+    assert entry["speakers"]["labels"] == {"1": "[GIVEN_NAME_1]"}
+    assert manifest["marks"][0]["label"] == "[GIVEN_NAME_1] quote"
+    assert manifest["known_terms"] == ["Widget"]
+    assert (tmp_path / "clip.md").read_text(
+        encoding="utf-8"
+    ) == "[GIVEN_NAME_1] said hi"
+
+    shown = tr_client.get("/transcripts/api/transcript/P01").get_json()
+    assert shown["segments"][0]["display_text"] == "Hi [GIVEN_NAME_1], mail [EMAIL_1]"
+
+
+def test_permanent_all_keeps_a_participants_restores(tr_client, monkeypatch, tmp_path):
+    entry, _worker = _seed_permanent(monkeypatch, tmp_path)
+    manifest = transcripts_server._manifest
+    manifest["redact_terms"] = ["export"]
+    entry["redaction"]["excluded"] = [{"label": "EMAIL", "key": "anna@ex.se"}]
+
+    report = tr_client.post(
+        "/transcripts/api/redact/permanent", json={"scope": "all", "confirm": "redact"}
+    ).get_json()
+    assert report["items"] == 2
+    assert entry["segments"][0]["text"] == "Hi [GIVEN_NAME_1], mail anna@ex.se"
+    assert entry["segments"][0]["pii"][0]["label"] == "EMAIL"
+    assert entry["redaction"]["excluded"] == [{"label": "EMAIL", "key": "anna@ex.se"}]
+    assert entry["summary"] == "[GIVEN_NAME_1] wants [REDACTED_1]."
+    assert manifest["redact_terms"] == []
+
+
+def test_permanent_rewrites_other_sections_but_not_real_paths(
+    tr_client, monkeypatch, tmp_path
+):
+    import manifest as manifest_io
+    import redact
+
+    _seed_permanent(monkeypatch, tmp_path)
+    (tmp_path / "Anna intro.mp4").write_bytes(b"\x00")
+    manifest_io.save_manifest_section(
+        "clips",
+        {
+            "artifacts": [
+                {
+                    "id": "a1",
+                    "path": "Anna intro.mp4",
+                    "transcript": [{"text": "Anna said hi"}],
+                }
+            ]
+        },
+    )
+    live = [{"description": "Anna on export"}]
+    monkeypatch.setattr(
+        transcripts_server,
+        "_scrub_hooks",
+        [lambda sub: redact.scrub_in_place(live, sub)],
+    )
+
+    report = tr_client.post(
+        "/transcripts/api/redact/permanent",
+        json={
+            "scope": "item",
+            "label": "GIVEN_NAME",
+            "text": "Anna",
+            "confirm": "redact",
+        },
+    ).get_json()
+
+    artifact = manifest_io.load_manifest_section("clips")["artifacts"][0]
+    assert artifact["transcript"] == [{"text": "[GIVEN_NAME_1] said hi"}]
+    assert artifact["path"] == "Anna intro.mp4"
+    assert live == [{"description": "[GIVEN_NAME_1] on export"}]
+    assert report["unfixed"] == ["Anna intro.mp4"]
+
+
+def test_permanent_refuses_while_a_task_runs(tr_client, monkeypatch, tmp_path):
+    entry, worker = _seed_permanent(monkeypatch, tmp_path)
+    worker.tasks.append(
+        {
+            "id": "t1",
+            "kind": "redact",
+            "participant": "P01",
+            "status": transcripts.TASK_STATUS_RUNNING,
+        }
+    )
+    resp = tr_client.post(
+        "/transcripts/api/redact/permanent", json={"scope": "all", "confirm": "redact"}
+    )
+    assert resp.status_code == 409 and resp.get_json()["reason"] == "busy"
+    assert entry["segments"][0]["text"] == "Hi Anna, mail anna@ex.se"
+
+
 def test_redact_enable_without_model_is_409(tr_client, monkeypatch, tmp_path):
     import redact
 

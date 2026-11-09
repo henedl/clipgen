@@ -11,6 +11,11 @@ same surface gets the same ``[GIVEN_NAME_1]`` across a participant. The study's
 manual redaction terms (``redact_terms`` in the manifest) need no model: readers
 pass them in and ``entry_spans`` matches them as ``[REDACTED_N]`` spans.
 
+The one exception to "never rewritten" is a permanent redaction, which the
+user confirms by typing a word: ``permanent_sub`` builds the replacer, and
+``bake_segment`` / ``rebase_spans`` / ``scrub_in_place`` / ``scrub_files``
+apply it to stored text. The server owns the order of work.
+
 The model (``ASSETS``) is an opt-in download into ``models_dir()``: a 23M
 parameter 6-layer BERT token classifier over 89 BIOES tags (int8 TFLite),
 evaluated in numpy by ``tflite_numpy``. Text is tokenized by the model's own unigram
@@ -33,6 +38,7 @@ from __future__ import annotations
 
 import functools
 import json
+import os
 import re
 import struct
 import threading
@@ -92,6 +98,12 @@ NAME_LABELS = frozenset({"GIVEN_NAME", "SURNAME"})
 # Spans from the study's manual redaction terms; never stored on a segment.
 TERM_LABEL = "REDACTED"
 TERM_MIN_CHARS = 2
+# The word a caller must send to run a permanent redaction.
+PERMANENT_CONFIRM = "redact"
+# Generated text a permanent redaction rewrites in the output dir.
+_TEXT_SUFFIXES = frozenset({".md", ".srt", ".vtt", ".csv", ".txt", ".html", ".json"})
+_JSON_STRING = re.compile(r'"(?:[^"\\]|\\.)*"')
+_BAKED = re.compile(r"\[([A-Z][A-Z_]*)_(\d+)\]")
 _META = "▁"
 _CONNECT = frozenset({"-", "'", "’"})
 _TRIM = " \t\n\r.,;:!?()[]{}\"'«»‘’“”"
@@ -747,7 +759,7 @@ def entry_spans(
             if (span["label"], surface_key(str(span.get("text") or ""))) in keys:
                 span["excluded"] = True
         per_segment.append(spans)
-    return number_spans(per_segment)
+    return number_spans(per_segment, baked_counters(texts))
 
 
 def term_pattern(terms: Iterable[str]) -> re.Pattern[str] | None:
@@ -772,6 +784,7 @@ def _with_terms(
             "end": m.end(),
             "score": 1.0,
             "text": m.group(0),
+            "manual": True,
         }
         for m in pattern.finditer(text)
     ]
@@ -796,9 +809,15 @@ def surface_key(surface: str) -> str:
     return " ".join(folded.strip(_TRIM).split())
 
 
-def number_spans(per_segment: list[list[dict[str, Any]]]) -> list[list[dict[str, Any]]]:
-    """Assign ``[LABEL_N]`` placeholders; the same surface keeps its number."""
-    counters: dict[str, int] = {}
+def number_spans(
+    per_segment: list[list[dict[str, Any]]], counters: dict[str, int] | None = None
+) -> list[list[dict[str, Any]]]:
+    """Assign ``[LABEL_N]`` placeholders; the same surface keeps its number.
+
+    *counters* holds the highest number already taken per label, so live
+    placeholders never reuse one a permanent redaction wrote into the text.
+    """
+    counters = dict(counters or {})
     seen: dict[tuple[str, str], str] = {}
     for spans in per_segment:
         for span in sorted(spans, key=lambda s: s["start"]):
@@ -933,6 +952,185 @@ def scrub_value(value: Any, placeholders: dict[str, str]) -> Any:
     if isinstance(value, dict):
         return {k: scrub_value(v, placeholders) for k, v in value.items()}
     return value
+
+
+# ---------------------------------------------------------------------------
+# Permanent redaction (pure)
+# ---------------------------------------------------------------------------
+
+
+def baked_counters(texts: Iterable[str]) -> dict[str, int]:
+    """Highest ``[LABEL_N]`` number already written into *texts*, per label."""
+    counters: dict[str, int] = {}
+    for text in texts:
+        if "[" not in text:
+            continue
+        for label, number in _BAKED.findall(text):
+            counters[label] = max(counters.get(label, 0), int(number))
+    return counters
+
+
+def permanent_item(
+    label: str, placeholder: str, surfaces: Iterable[str]
+) -> dict[str, Any]:
+    """One surface to rewrite: its placeholder and the text forms that match it."""
+    forms = {" ".join(s.split()) for s in surfaces} - {""}
+    if label in NAME_LABELS:
+        # "Ms. Svensson" elsewhere still hides "Anna Svensson".
+        for form in list(forms):
+            words = [w.strip(_TRIM) for w in form.split()]
+            if len(words) > 1:
+                forms.update(w for w in words if len(w) > 1)
+    return {
+        "label": label,
+        "placeholder": placeholder,
+        "forms": sorted(forms),
+        "manual": label == TERM_LABEL,
+    }
+
+
+def permanent_sub(
+    items: Iterable[dict[str, Any]],
+) -> tuple[re.Pattern[str], Callable[[re.Match[str]], str]] | None:
+    """``(pattern, replace)`` rewriting *items* in any text; None when empty.
+
+    A manual term matches whole-word and case-insensitively. A detected item
+    matches only the forms that were tagged, case-sensitively, so a tagged
+    "Will" leaves every "will" alone.
+    """
+    exact: dict[str, str] = {}
+    folded: dict[str, str] = {}
+    for item in items:
+        for form in item["forms"]:
+            if item["manual"]:
+                folded.setdefault(surface_key(form), item["placeholder"])
+            else:
+                exact.setdefault(form, item["placeholder"])
+    folded.pop("", None)
+    if not exact and not folded:
+        return None
+
+    def source(text: str) -> str:
+        return r"\s+".join(map(re.escape, text.split()))
+
+    alternatives = [(k, f"(?i:{source(k)})") for k in folded]
+    alternatives += [(k, source(k)) for k in exact]
+    alternatives.sort(key=lambda a: (-len(a[0]), a[1]))
+    pattern = re.compile(
+        r"(?<!\w)(?:" + "|".join(src for _, src in alternatives) + r")(?!\w)"
+    )
+
+    def replace(match: re.Match[str]) -> str:
+        hit = match.group(0)
+        return (
+            exact.get(" ".join(hit.split()))
+            or folded.get(surface_key(hit))
+            or f"[{TERM_LABEL}]"
+        )
+
+    return pattern, replace
+
+
+def scrub_in_place(value: Any, sub: Callable[[str], str]) -> int:
+    """Run *sub* over every string value inside a JSON-like *value*; count changes."""
+    changed = 0
+    stack = [value]
+    while stack:
+        node = stack.pop()
+        if isinstance(node, dict):
+            children: Iterable[tuple[Any, Any]] = list(node.items())
+        elif isinstance(node, list):
+            children = list(enumerate(node))
+        else:
+            continue
+        for key, child in children:
+            if isinstance(child, str):
+                new = sub(child)
+                if new != child:
+                    node[key] = new
+                    changed += 1
+            else:
+                stack.append(child)
+    return changed
+
+
+def bake_segment(seg: dict[str, Any], sub: Callable[[str], str]) -> bool:
+    """Rewrite one stored segment's text with *sub*; True when it changed."""
+    text = str(seg.get("text") or "")
+    new = sub(text)
+    if new == text:
+        return False
+    seg["text"] = new
+    # Word timings describe the old text.
+    seg.pop("words", None)
+    return True
+
+
+def rebase_spans(
+    seg: dict[str, Any], shown: str, dropped: set[tuple[str, str]]
+) -> None:
+    """Keep a scanned segment's spans valid for *shown*, minus the *dropped* items."""
+    if "pii_crc" not in seg:
+        return
+    kept = [
+        s
+        for s in seg.get("pii") or []
+        if (s["label"], surface_key(str(s.get("text") or ""))) not in dropped
+    ]
+    if seg["pii_crc"] != text_crc(shown):
+        kept = _anchor(shown, kept)
+    tag_segment(seg, {"pii": kept, "pii_crc": text_crc(shown)})
+
+
+def _scrub_json_token(token: str, sub: Callable[[str], str]) -> str:
+    """*token* (one JSON string literal) with *sub* applied to its decoded value."""
+    try:
+        value = json.loads(token)
+    except ValueError:
+        return token
+    new = sub(value)
+    return token if new == value else json.dumps(new, ensure_ascii=False)
+
+
+def scrub_files(
+    root: Path, sub: Callable[[str], str], skip: Path
+) -> tuple[list[str], list[str]]:
+    """Rewrite generated text files under *root*, except *skip*.
+
+    Returns ``(changed, named)`` as paths relative to *root*; *named* are files
+    whose own name matches, which stay as they are for the caller to report.
+    """
+    changed: list[str] = []
+    named: list[str] = []
+    for path in sorted(root.rglob("*")):
+        if path == skip or not path.is_file():
+            continue
+        rel = str(path.relative_to(root))
+        if sub(path.name) != path.name:
+            named.append(rel)
+        suffix = path.suffix.lower()
+        if suffix not in _TEXT_SUFFIXES:
+            continue
+        try:
+            text = path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            continue
+        new = sub(text)
+        # Escaped JSON strings hide non-ASCII names from a plain text pass.
+        if suffix in (".json", ".html") and "\\u" in new:
+            new = _JSON_STRING.sub(lambda m: _scrub_json_token(m.group(0), sub), new)
+        if new == text:
+            continue
+        tmp = path.with_name(path.name + ".tmp")
+        tmp.write_text(new, encoding="utf-8")
+        os.replace(tmp, path)
+        changed.append(rel)
+    return changed, named
+
+
+def forget_surfaces() -> None:
+    """Drop cached matchers, which hold surfaces a permanent redaction removed."""
+    _surface_pattern.cache_clear()
 
 
 def utf16_spans(text: str, spans: list[dict[str, Any]]) -> list[dict[str, Any]]:

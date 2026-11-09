@@ -17,7 +17,7 @@ The model is an opt-in download (~25 MB) into the config dir. It first ran on `a
 | 4. Tests, docs, version bump | Done (2026-09-24) |
 | 5. Replace `ai-edge-litert` with the numpy evaluator `tflite_numpy.py` | Done (2026-09-25): 644/644 argmax tags and identical spans vs LiteRT over 21 multilingual texts; ~50 ms per window vs ~6 ms |
 | 6. Manual redaction terms (search + Corrections window) | Done (2026-11-09). No `GET api/redact-terms`: `/api/participants` carries the list |
-| 7. Permanent redaction ("Redact forever") | Planned |
+| 7. Permanent redaction ("Redact forever") | Done (2026-11-09). Changed: no stored counter, numbers come from the placeholders already in the text (`redact.baked_counters`); Studio's unsent sessionStorage queue is dropped after a run |
 
 Update each row as it lands, with any descoped item or changed decision.
 
@@ -98,7 +98,7 @@ Decided 2026-11-09: terms follow the per-participant Redact switch, like model d
 
 Decided 2026-11-09: rewrites `clipgen.json` and generated text files; per item and study-wide; audio is not touched (see Future features).
 
-- **Unit:** a surface, study-wide. One surface gets one placeholder everywhere, numbered from a study-wide counter (`redact_baked: {label: n}` in the `transcripts` section). Dynamic numbering starts above it.
+- **Unit:** a surface, study-wide. One surface gets one placeholder everywhere, numbered above the highest `[LABEL_N]` already written into any transcript. Live numbering starts above the baked ones in each participant.
 - **Matching:** a manual term matches like phase 6. A model-detected item matches the forms that were tagged, case-sensitive, whole word (so tagging "Will" does not rewrite every "will"). A multi-word name also matches each of its words, as `surface_placeholders` does today.
 - **Order of work, under `_manifest_lock`:** refuse while any transcription, speaker, redact or agent task runs. Apply every correction that mentions a chosen surface to the stored text once and delete it. Rewrite `segments[*].text`, drop `words` on changed segments, drop the matching `pii` spans and re-anchor the rest, scrub agent fields, speaker labels, mark labels and known terms, delete the matching `redact_terms` and `excluded` entries.
 - **Other stores:** every other `clipgen.json` section through its in-memory owner (clips, stashes, workflows, composer); text files under the output dir (`.md .srt .vtt .csv .html .txt`, and `.json` parsed); the global `dictionary.json`. A string that names an existing file is left alone and reported.

@@ -234,6 +234,7 @@
     var html = "";
     state.redactTerms.forEach(function (term, i) {
       html += '<span class="term-chip">' + escapeHtml(term);
+      html += '<button class="term-remove term-forever" data-index="' + i + '" data-tooltip="Redact forever, in every participant" aria-label="Redact forever"><span class="redact-item-undo-icon redact-item-undo-icon--forever"></span></button>';
       html += '<button class="term-remove" data-index="' + i + '" aria-label="Remove">&times;</button>';
       html += '</span>';
     });
@@ -243,7 +244,11 @@
     for (var i = 0; i < btns.length; i++) {
       btns[i].addEventListener("click", function () {
         var term = state.redactTerms[Number(this.getAttribute("data-index"))];
-        if (term) TS.removeRedactTerm(term);
+        if (!term) return;
+        if (!this.classList.contains("term-forever")) { TS.removeRedactTerm(term); return; }
+        // One blocking modal at a time: the confirmation replaces this one.
+        closeCorrectionsModal();
+        TS.redactForever({ scope: "term", text: term });
       });
     }
   }

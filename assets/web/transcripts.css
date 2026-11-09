@@ -1772,7 +1772,7 @@ body {
 
 .redact-item {
   display: grid;
-  grid-template-columns: auto 1fr auto auto auto;
+  grid-template-columns: auto 1fr auto auto auto auto;
   align-items: center;
   gap: var(--space-2);
   padding: var(--space-1) 0;
@@ -1840,6 +1840,20 @@ body {
 .redact-item-undo-icon--redo {
   mask-image: url(icons/eye-slash.svg);
   -webkit-mask-image: url(icons/eye-slash.svg);
+}
+
+.redact-item-undo-icon--forever {
+  mask-image: url(icons/lock-closed.svg);
+  -webkit-mask-image: url(icons/lock-closed.svg);
+}
+
+.redact-forever-unfixed {
+  max-height: 30vh;
+  margin: 0 0 var(--space-3);
+  padding-left: var(--space-4);
+  overflow-y: auto;
+  color: var(--color-text-dim);
+  font-size: var(--text-xs);
 }
 
 .segment-text-editing {
@@ -2615,6 +2629,10 @@ body {
 
 .term-remove:hover {
   color: var(--sev-critical);
+}
+
+.term-forever {
+  display: inline-flex;
 }
 
 .correction-form {
