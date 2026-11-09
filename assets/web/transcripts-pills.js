@@ -1060,6 +1060,8 @@
       _clearTranscribeInFlight(pids);
       showToast("Enqueued " + clipgenPluralUnit(data.tasks.length, "transcription", "transcriptions"));
       renderPills();
+      // Flip the empty pane to "Queued" now, not at the poll.
+      refreshTranscribeWording();
       startPolling();
       pollTaskStatus();
     }).catch(function () {

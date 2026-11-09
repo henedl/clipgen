@@ -1256,6 +1256,19 @@ body {
   text-wrap: pretty;
 }
 
+.transcript-empty-btn {
+  margin-top: var(--space-2);
+}
+
+.transcript-empty-icon {
+  width: var(--icon-size-sm);
+  height: var(--icon-size-sm);
+  flex-shrink: 0;
+  background-color: currentColor;
+  mask-image: url(icons/microphone.svg);
+  -webkit-mask-image: url(icons/microphone.svg);
+}
+
 /* Segment mark gutter — 14 px circular dot, hollow when unmarked
    (1.5 px border-strong) and filled with the category color when marked. */
 
