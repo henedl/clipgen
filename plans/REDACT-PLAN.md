@@ -16,6 +16,8 @@ The model is an opt-in download (~25 MB) into the config dir. It first ran on `a
 | 3. Frontend, exports, agents | Done (2026-09-24) |
 | 4. Tests, docs, version bump | Done (2026-09-24) |
 | 5. Replace `ai-edge-litert` with the numpy evaluator `tflite_numpy.py` | Done (2026-09-25): 644/644 argmax tags and identical spans vs LiteRT over 21 multilingual texts; ~50 ms per window vs ~6 ms |
+| 6. Manual redaction terms (search + Corrections window) | Done (2026-11-09). No `GET api/redact-terms`: `/api/participants` carries the list |
+| 7. Permanent redaction ("Redact forever") | Planned |
 
 Update each row as it lands, with any descoped item or changed decision.
 
@@ -81,6 +83,28 @@ Run with `uv run --with ai-edge-litert==2.2.0` on macOS arm64, Python 3.12:
 
 - `tests/test_redact.py`, worker/API tests, packaging/constants/layering/licenses ratchets, docs rows, `build/VERSION` patch bump.
 
+### 6. Manual redaction terms
+
+Decided 2026-11-09: terms follow the per-participant Redact switch, like model detections.
+
+- **Storage:** `redact_terms: [str]` at the top of the `transcripts` section, beside `known_terms`. Study-wide. Left out of the dictionary CSV and the global dictionary, because a term is usually a participant's name.
+- **Matching:** whole word, case-insensitive, whitespace-tolerant, on the corrected text (`redact._surface_pattern`). No model and no worker pass: `redact.entry_spans(..., terms=)` adds `REDACTED` spans at read time, so adding a term is instant and works without the model download.
+- **Merge:** term spans go through `_merge_spans` with the stored model spans. A restored (excluded) model span under a term match is dropped, so the term always hides it. A `[REDACTED_N]` item can itself be restored per participant through the existing exclude route.
+- **Gate:** `redact.entry_applied` is true when the entry wants redaction and has spans or the study has terms. Every reader passes `terms` (`_redacted_view`, `data_export._entry_pii`, `pipeline._manifest_transcript`, `cli_event_clips`).
+- **Routes:** `POST api/redact-terms`, `DELETE api/redact-terms/<term>`; `/api/participants` carries the list. POST returns `hidden` (matches where Redact is on) and `off` (matches where it is off) for the toast.
+- **Frontend:** a "Redaction terms" section in the Corrections window; a "Redact All" button beside "Mark All" in the search header that adds the query as a term. The Redact switch and CTA work without the model once a term exists. `redactOn()` reads the server's `redaction.applied`.
+
+### 7. Permanent redaction
+
+Decided 2026-11-09: rewrites `clipgen.json` and generated text files; per item and study-wide; audio is not touched (see Future features).
+
+- **Unit:** a surface, study-wide. One surface gets one placeholder everywhere, numbered from a study-wide counter (`redact_baked: {label: n}` in the `transcripts` section). Dynamic numbering starts above it.
+- **Matching:** a manual term matches like phase 6. A model-detected item matches the forms that were tagged, case-sensitive, whole word (so tagging "Will" does not rewrite every "will"). A multi-word name also matches each of its words, as `surface_placeholders` does today.
+- **Order of work, under `_manifest_lock`:** refuse while any transcription, speaker, redact or agent task runs. Apply every correction that mentions a chosen surface to the stored text once and delete it. Rewrite `segments[*].text`, drop `words` on changed segments, drop the matching `pii` spans and re-anchor the rest, scrub agent fields, speaker labels, mark labels and known terms, delete the matching `redact_terms` and `excluded` entries.
+- **Other stores:** every other `clipgen.json` section through its in-memory owner (clips, stashes, workflows, composer); text files under the output dir (`.md .srt .vtt .csv .html .txt`, and `.json` parsed); the global `dictionary.json`. A string that names an existing file is left alone and reported.
+- **Report:** counts per store, plus what could not be fixed: media files whose name holds the word, subtitled video copies, the audio itself.
+- **UI:** "Redact forever" on each Redact-tab item and each redaction term, and one study-wide action. A confirmation that shows the match count and requires typing the word `redact`.
+
 ## Verification
 
 Done 2026-09-24: full suite green, `/ui-check` green (chips render on the fixture's tagged line; Settings → Transcription shows the Redaction group and the model block), and an in-process run against the real model through the routes: enable → task → `[GIVEN_NAME_1] [SURNAME_1] from [CITY_1]`, `[EMAIL_1]`, `[PHONE_1]`, the second "Anna" reuses `_1`, VTT and search carry placeholders, a correction re-anchors the chips and requeues a pass, off restores the text. `redact.download()` fetched the three files from Hugging Face in under five seconds with sha256 verified. Still unexercised: the Settings Download button in a real browser, and a Windows machine.
@@ -97,7 +121,7 @@ Done 2026-09-24: full suite green, `/ui-check` green (chips render on the fixtur
 ## Future features
 
 - **Bleep or mute PII in the audio.** Spans map to word timings (`seg["words"]`; the chip carries `data-ws`/`data-we`). A `redact.pii_windows(entry)` helper yields padded, merged `(start, end)` seconds; clip and reel cuts in `source/video.py` take a mute list and apply `volume=0:enable='between(t,a,b)'` (or a sine bleep) in the same encode. Corrected segments lose word timing, so those spans fall back to the segment window.
-- **Destructive source redaction.** An explicit "Scrub source video" action: re-encode each source part with the mute windows, replace the file, rewrite segment text with placeholders, drop `pii`, mark the entry `scrubbed`. Template: the remux keep/discard-original flow in `source/remux_server.py`. Typed confirmation; refused while any task, transcription or export runs on that participant; irreversible and the UI says so.
+- **Destructive source redaction (audio).** Phase 7 covers the text. Still open: an explicit "Scrub source video" action that re-encodes each source part with the mute windows and replaces the file. Template: the remux keep/discard-original flow in `source/remux_server.py`. Typed confirmation; refused while any task, transcription or export runs on that participant; irreversible and the UI says so.
 
 ## Deferred: Align
 

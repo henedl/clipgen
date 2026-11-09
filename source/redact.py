@@ -7,7 +7,9 @@ into that segment's text) plus ``segment["pii_crc"]`` (crc32 of the text the
 offsets index). The text itself is never rewritten; every reader that wants
 placeholders calls ``entry_spans`` + ``render_text`` at read time, which also
 re-anchors spans after a correction moved the text and numbers them so the
-same surface gets the same ``[GIVEN_NAME_1]`` across a participant.
+same surface gets the same ``[GIVEN_NAME_1]`` across a participant. The study's
+manual redaction terms (``redact_terms`` in the manifest) need no model: readers
+pass them in and ``entry_spans`` matches them as ``[REDACTED_N]`` spans.
 
 The model (``ASSETS``) is an opt-in download into ``models_dir()``: a 23M
 parameter 6-layer BERT token classifier over 89 BIOES tags (int8 TFLite),
@@ -87,6 +89,9 @@ PAD_ID = 1
 DETERMINISTIC_LABELS = frozenset({"IMEI"})
 OPTIONAL_LABELS = frozenset({"ORG"})
 NAME_LABELS = frozenset({"GIVEN_NAME", "SURNAME"})
+# Spans from the study's manual redaction terms; never stored on a segment.
+TERM_LABEL = "REDACTED"
+TERM_MIN_CHARS = 2
 _META = "▁"
 _CONNECT = frozenset({"-", "'", "’"})
 _TRIM = " \t\n\r.,;:!?()[]{}\"'«»‘’“”"
@@ -716,30 +721,73 @@ def entry_spans(
     segments: list[Any],
     texts: list[str],
     excluded: list[dict[str, Any]] | None = None,
+    terms: Iterable[str] = (),
 ) -> list[list[dict[str, Any]]]:
     """Numbered spans per segment against *texts*, the text readers show.
 
     *excluded* is the entry's restore list (``[{label, key}]``); a matching
     span stays in the list flagged ``excluded`` so readers can offer to redact
-    it again, and every renderer skips it.
+    it again, and every renderer skips it. *terms* are the study's manual
+    redaction terms, matched here as ``TERM_LABEL`` spans.
     """
+    keys = {(e.get("label"), e.get("key")) for e in excluded or []}
+    pattern = term_pattern(terms)
     per_segment: list[list[dict[str, Any]]] = []
     for seg, text in zip(segments, texts, strict=True):
-        spans = list(seg.get("pii") or [])
-        if not spans:
-            per_segment.append([])
+        stored = list(seg.get("pii") or [])
+        if not stored:
+            spans = []
         elif seg.get("pii_crc") == text_crc(text):
-            per_segment.append([dict(s) for s in spans])
+            spans = [dict(s) for s in stored]
         else:
-            per_segment.append(_anchor(text, spans))
-    numbered = number_spans(per_segment)
-    keys = {(e.get("label"), e.get("key")) for e in excluded or []}
-    if keys:
-        for spans in numbered:
-            for span in spans:
-                if (span["label"], surface_key(str(span.get("text") or ""))) in keys:
-                    span["excluded"] = True
-    return numbered
+            spans = _anchor(text, stored)
+        if pattern is not None:
+            spans = _with_terms(text, spans, pattern, keys)
+        for span in spans:
+            if (span["label"], surface_key(str(span.get("text") or ""))) in keys:
+                span["excluded"] = True
+        per_segment.append(spans)
+    return number_spans(per_segment)
+
+
+def term_pattern(terms: Iterable[str]) -> re.Pattern[str] | None:
+    """Whole-word, case-insensitive matcher for manual terms; None when empty."""
+    keys = {surface_key(term) for term in terms} - {""}
+    if not keys:
+        return None
+    return _surface_pattern(tuple(sorted(keys, key=lambda k: (-len(k), k))))
+
+
+def _with_terms(
+    text: str,
+    spans: list[dict[str, Any]],
+    pattern: re.Pattern[str],
+    excluded: set[tuple[Any, Any]],
+) -> list[dict[str, Any]]:
+    """*spans* merged with the term matches in *text*; a term beats a restored span."""
+    manual: list[dict[str, Any]] = [
+        {
+            "label": TERM_LABEL,
+            "start": m.start(),
+            "end": m.end(),
+            "score": 1.0,
+            "text": m.group(0),
+        }
+        for m in pattern.finditer(text)
+    ]
+    if not manual:
+        return spans
+    live = [m for m in manual if (TERM_LABEL, surface_key(m["text"])) not in excluded]
+    kept = [
+        s
+        for s in spans
+        if (s["label"], surface_key(str(s.get("text") or ""))) not in excluded
+        or not any(s["start"] < m["end"] and m["start"] < s["end"] for m in live)
+    ]
+    merged = _merge_spans(kept + manual)
+    for span in merged:
+        span["text"] = text[span["start"] : span["end"]]
+    return merged
 
 
 def surface_key(surface: str) -> str:
@@ -772,33 +820,44 @@ def entry_wanted(entry: dict[str, Any]) -> bool:
     return bool(config.TRANSCRIBE_REDACT)
 
 
-def entry_applied(entry: dict[str, Any], segments: list[Any]) -> bool:
-    """True when the entry wants redaction and a pass left spans on *segments*."""
-    return entry_wanted(entry) and any(s.get("pii") for s in segments)
+def entry_applied(
+    entry: dict[str, Any], segments: list[Any], terms: Iterable[str] = ()
+) -> bool:
+    """True when the entry wants redaction and has stored spans or study terms."""
+    if not entry_wanted(entry):
+        return False
+    return any(s.get("pii") for s in segments) or term_pattern(terms) is not None
 
 
 def entry_view(
-    entry: dict[str, Any], segments: list[Any], texts: list[str]
+    entry: dict[str, Any],
+    segments: list[Any],
+    texts: list[str],
+    terms: Iterable[str] = (),
 ) -> list[list[dict[str, Any]]] | None:
     """``entry_spans`` over *texts* when redaction applies to the entry; else None."""
-    if not entry_applied(entry, segments):
+    if not entry_applied(entry, segments, terms):
         return None
     excluded = (entry.get("redaction") or {}).get("excluded")
-    return entry_spans(segments, texts, excluded)
+    return entry_spans(segments, texts, excluded, terms)
 
 
-def entry_texts(entry: dict[str, Any], texts: list[str]) -> list[str]:
+def entry_texts(
+    entry: dict[str, Any], texts: list[str], terms: Iterable[str] = ()
+) -> list[str]:
     """*texts* for the entry's segments with placeholders when redaction applies."""
-    view = entry_view(entry, list(entry.get("segments") or []), texts)
+    view = entry_view(entry, list(entry.get("segments") or []), texts, terms)
     if view is None:
         return texts
     return [render_text(t, s) for t, s in zip(texts, view, strict=True)]
 
 
-def entry_segments(entry: dict[str, Any], corrected: list[Any]) -> list[Any]:
+def entry_segments(
+    entry: dict[str, Any], corrected: list[Any], terms: Iterable[str] = ()
+) -> list[Any]:
     """*corrected* with placeholders baked into the text when redaction applies."""
     raw_texts = [seg["text"] for seg in corrected]
-    texts = entry_texts(entry, raw_texts)
+    texts = entry_texts(entry, raw_texts, terms)
     if texts == raw_texts:
         return corrected
     # Word timings and span offsets describe the raw text; drop them with it.

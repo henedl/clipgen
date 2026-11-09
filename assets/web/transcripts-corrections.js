@@ -1,13 +1,15 @@
 /* clipgen Transcripts dictionary satellite — transcripts-corrections.js
  *
- * The Corrections modal's two halves. Corrections are find→replace rules that
- * rewrite transcript text you already have; known terms are the study glossary,
+ * The Corrections modal. Corrections are find→replace rules that rewrite
+ * transcript text you already have; known terms are the study glossary,
  * forwarded to Whisper as hotwords so the next run spells them right instead of
- * needing a correction. Loaded after transcripts.js; reads the hub's shared
+ * needing a correction; redaction terms are words to hide wherever Redact is on
+ * (transcripts-redact.js owns their requests, and they stay out of the CSV and
+ * the global copy). Loaded after transcripts.js; reads the hub's shared
  * state + helpers through window.ClipgenTranscripts (TS) and publishes
  * initCorrectionsModal / loadCorrections back so the hub's boot and the
- * inline-edit saveCorrections() flow can reach them. Both halves travel together
- * through the CSV import/export and the global copy. Plain utils.js globals
+ * inline-edit saveCorrections() flow can reach them. Corrections and known terms
+ * travel together through the CSV import/export and the global copy. Plain utils.js globals
  * (qs/apiGet/apiPost/apiDelete/escapeHtml/clipgenSaveFromUrl/clipgenPluralUnit)
  * are reached via the scope chain.
  */
@@ -36,6 +38,7 @@
       });
       loadCorrections();
       loadKnownTerms();
+      renderRedactTerms();
       loadGlobalStatus();
     });
 
@@ -61,6 +64,14 @@
       if (e.key === "Enter") {
         e.preventDefault();
         addKnownTerm();
+      }
+    });
+
+    qs("#addRedactTermBtn").addEventListener("click", addRedactTerm);
+    qs("#redactTermInput").addEventListener("keydown", function (e) {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        addRedactTerm();
       }
     });
 
@@ -211,6 +222,41 @@
     });
   }
 
+  // ---- Redaction terms (the redact satellite owns the requests and the list) ----
+
+  function renderRedactTerms() {
+    var container = qs("#redactTermsList");
+    if (state.redactTerms.length === 0) {
+      container.innerHTML = '<div class="dict-empty">No terms yet</div>';
+      return;
+    }
+    // data-index, not data-value: escapeHtml leaves quotes in place.
+    var html = "";
+    state.redactTerms.forEach(function (term, i) {
+      html += '<span class="term-chip">' + escapeHtml(term);
+      html += '<button class="term-remove" data-index="' + i + '" aria-label="Remove">&times;</button>';
+      html += '</span>';
+    });
+    container.innerHTML = html;
+
+    var btns = container.querySelectorAll(".term-remove");
+    for (var i = 0; i < btns.length; i++) {
+      btns[i].addEventListener("click", function () {
+        var term = state.redactTerms[Number(this.getAttribute("data-index"))];
+        if (term) TS.removeRedactTerm(term);
+      });
+    }
+  }
+
+  function addRedactTerm() {
+    var input = qs("#redactTermInput");
+    var term = input.value.trim();
+    if (!term) return;
+    TS.addRedactTerm(term).then(function (listed) {
+      if (listed) input.value = "";
+    });
+  }
+
   // ---- Import / export ----
 
   // Imported corrections rewrite displayed text, so refetch the transcript too.
@@ -286,4 +332,5 @@
   // ---- Published back to the hub (boot + inline-edit saveCorrections call these) ----
   TS.initCorrectionsModal = initCorrectionsModal;
   TS.loadCorrections = loadCorrections;
+  TS.renderRedactTerms = renderRedactTerms;
 })();

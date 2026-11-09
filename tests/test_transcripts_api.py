@@ -4565,6 +4565,70 @@ def test_redact_enable_already_tagged_does_not_requeue(
     assert worker.enqueued == []
 
 
+def test_redact_terms_hide_matches_and_report_counts(tr_client, monkeypatch, tmp_path):
+    entry: dict[str, Any] = {
+        "segments": [{"id": "P01:0", "start": 0, "end": 1, "text": "Acme hired Bo"}],
+        "redaction": {"enabled": True},
+    }
+    _seed_speakers(monkeypatch, tmp_path, entry)
+    transcripts_server._manifest["source_transcripts"]["P02"] = {
+        "segments": [{"id": "P02:0", "start": 0, "end": 1, "text": "acme, Acme"}],
+        "redaction": {"enabled": False},
+    }
+    monkeypatch.setattr(transcripts_server, "_corrected_cache", {})
+
+    resp = tr_client.post("/transcripts/api/redact-terms", json={"term": " acme "})
+    assert resp.get_json() == {"ok": True, "terms": ["acme"], "hidden": 1, "off": 2}
+    dup = tr_client.post("/transcripts/api/redact-terms", json={"term": "ACME"})
+    assert dup.get_json()["duplicate"] is True
+    assert transcripts_server._manifest["redact_terms"] == ["acme"]
+
+    body = tr_client.get("/transcripts/api/transcript/P01").get_json()
+    assert body["redaction"]["applied"] is True
+    assert body["segments"][0]["display_text"] == "[REDACTED_1] hired Bo"
+    assert body["segments"][0]["pii"][0]["label"] == "REDACTED"
+    assert tr_client.get("/transcripts/api/participants").get_json()[
+        "redact_terms"
+    ] == ["acme"]
+    # Hidden text is unfindable, as with model detections.
+    assert tr_client.get("/transcripts/api/search?q=acme").get_json()[
+        "counts_by_participant"
+    ] == {"P02": 2}
+    assert "[REDACTED_1]" in tr_client.get("/transcripts/api/vtt/P01").get_data(
+        as_text=True
+    )
+
+    gone = tr_client.delete("/transcripts/api/redact-terms/Acme").get_json()
+    assert gone == {"ok": True, "terms": []}
+    body = tr_client.get("/transcripts/api/transcript/P01").get_json()
+    assert body["redaction"]["applied"] is False
+    assert "display_text" not in body["segments"][0]
+    assert tr_client.delete("/transcripts/api/redact-terms/Acme").status_code == 404
+
+
+def test_redact_term_needs_two_characters(tr_client):
+    resp = tr_client.post("/transcripts/api/redact-terms", json={"term": " a. "})
+    assert resp.status_code == 400
+
+
+def test_redact_enable_without_model_works_once_a_term_exists(
+    tr_client, monkeypatch, tmp_path
+):
+    import redact
+
+    entry: dict[str, Any] = {
+        "segments": [{"id": "P01:0", "start": 0, "end": 1, "text": "Hi Anna"}]
+    }
+    worker = _seed_speakers(monkeypatch, tmp_path, entry)
+    transcripts_server._manifest["redact_terms"] = ["Anna"]
+    monkeypatch.setattr(config, "DEBUGGING", False)
+    monkeypatch.setattr(redact, "is_redact_model_available", lambda: False)
+    resp = tr_client.put("/transcripts/api/redact/P01", json={"enabled": True})
+    assert resp.status_code == 200
+    assert entry["redaction"]["enabled"] is True
+    assert worker.enqueued == []
+
+
 def test_redact_enable_without_model_is_409(tr_client, monkeypatch, tmp_path):
     import redact
 
@@ -4751,7 +4815,7 @@ def test_merge_redact_task_copies_spans_by_id(monkeypatch):
     assert "pii" not in entry["segments"][1]
     assert "pii_crc" not in entry["segments"][1]
     assert entry["redaction"] == {"enabled": True, "excluded": []}
-    assert transcripts_server._redaction_summary(entry)["count"] == 1
+    assert transcripts_server._redaction_summary(entry)["detected"] is True
     assert entry["summary"] == {"paragraph": "keep"}
     assert chained == []
     assert transcripts_server._corrections_version > before
@@ -4920,7 +4984,7 @@ def test_agent_snapshot_reads_placeholders(tr_client, monkeypatch, tmp_path):
         segs = transcripts_server._corrected_segments_with_ids(
             "P01", list(entry["segments"]), []
         )
-        view = transcripts_server._redacted_view(entry["segments"], segs, entry)
+        view = transcripts_server._redacted_view(entry["segments"], segs, entry, [])
     assert view is not None
     import redact
 

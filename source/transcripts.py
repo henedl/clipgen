@@ -26,9 +26,9 @@ Key functions:
 
 Manifest I/O:
   load_transcripts_manifest() → dict with source_transcripts, corrections, marks,
-    and known_terms keys
+    known_terms and redact_terms keys
   save_transcripts_manifest(source_transcripts, corrections, marks=None,
-    known_terms=None) → assigns segment IDs, writes JSON
+    known_terms=None, redact_terms=None) → assigns segment IDs, writes JSON
 
 Corrections and vocabulary:
   apply_corrections(segments, corrections) → new segment list with from→to substitutions applied
@@ -1186,6 +1186,7 @@ def _empty_transcripts_manifest() -> dict[str, Any]:
         "corrections": [],
         "marks": [],
         "known_terms": [],
+        "redact_terms": [],
     }
 
 
@@ -1196,6 +1197,7 @@ def _is_empty_transcripts_manifest(data: dict[str, Any]) -> bool:
         or data.get("corrections")
         or data.get("marks")
         or data.get("known_terms")
+        or data.get("redact_terms")
     )
 
 
@@ -1222,6 +1224,7 @@ def save_transcripts_manifest(
     corrections: list[dict[str, Any]],
     marks: list[dict[str, Any]] | None = None,
     known_terms: list[str] | None = None,
+    redact_terms: list[str] | None = None,
 ) -> Path | None:
     """Write the transcripts manifest to disk.
 
@@ -1229,27 +1232,30 @@ def save_transcripts_manifest(
     already have one, but never overwrites an existing id — so marks and
     corrections that reference ``seg["id"]`` keep pointing at the same
     segment even when later segments are added, edited, or reordered.
-    *marks* and *known_terms* default to ``None`` which preserves whatever is
-    already on disk (load → merge → save). Pass a list to overwrite.
+    *marks*, *known_terms* and *redact_terms* default to ``None`` which preserves
+    whatever is already on disk (load → merge → save). Pass a list to overwrite.
     Returns the manifest path on success, or ``None`` on failure.
     """
     for participant_id, entry in source_transcripts.items():
         assign_segment_ids(participant_id, entry.get("segments", []))
 
-    # When marks/known_terms are None, preserve what is already on disk.
-    if marks is None or known_terms is None:
+    # A None list keeps what is already on disk.
+    if marks is None or known_terms is None or redact_terms is None:
         # .get: a KeyError here would silently kill the debounce timer thread.
         on_disk = load_transcripts_manifest()
         if marks is None:
             marks = on_disk.get("marks", [])
         if known_terms is None:
             known_terms = on_disk.get("known_terms", [])
+        if redact_terms is None:
+            redact_terms = on_disk.get("redact_terms", [])
 
     data = {
         "source_transcripts": source_transcripts,
         "corrections": corrections,
         "marks": marks,
         "known_terms": known_terms,
+        "redact_terms": redact_terms,
     }
     if _is_empty_transcripts_manifest(data):
         manifest_io.save_manifest_section("transcripts", None)

@@ -30,6 +30,7 @@
     redactModel: true,
     corrections: [],
     knownTerms: [],
+    redactTerms: [],
     tasks: [],
     // Task id -> { at, progress } for cancels in flight; server still reports "running".
     cancellingTasks: {},
@@ -687,6 +688,7 @@
       state.hasSheet = !!data.has_sheet;
       state.speakerModel = data.speaker_model !== false;
       state.redactModel = data.redact_model !== false;
+      state.redactTerms = data.redact_terms || [];
       state.transcribePrewarm = data.transcribe_prewarm || "queue_open";
       renderPills();
       refreshTopNavActions();
