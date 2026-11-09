@@ -51,6 +51,7 @@ import threading
 import uuid
 from datetime import UTC, datetime
 from pathlib import Path
+from collections.abc import Callable
 from typing import Any
 
 from flask import Blueprint, request, send_file
@@ -61,6 +62,7 @@ import files
 import pipeline
 import remux_server
 import manifest as manifest_io
+import redact
 import server_utils
 import utils
 import video
@@ -155,6 +157,15 @@ def _persist_locked() -> None:
     manifest_io.save_manifest_section(
         "composer", None if _is_empty_manifest(_manifest) else _manifest
     )
+
+
+def scrub_strings(sub: Callable[[str], str]) -> int:
+    """Permanent redaction over cut names and annotation text."""
+    with _manifest_lock:
+        changed = redact.scrub_in_place(_manifest, sub)
+        if changed:
+            _persist_locked()
+    return changed
 
 
 # ---- Participant / video discovery ----

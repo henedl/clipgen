@@ -96,6 +96,7 @@ import files
 import spreadsheet
 import pipeline
 import profiling
+import redact
 import start_settings
 import titlecards
 import manifest
@@ -1104,6 +1105,13 @@ def _generate_intake_clips(
         on_error=lambda _idx, exc: {"_ok": False, "_error": str(exc)},
     )
     return results
+
+
+def _scrub_generated(sub: Callable[[str], str]) -> int:
+    """Permanent redaction over the in-memory artifact and reel records."""
+    with _generated_output_lock:
+        changed = redact.scrub_in_place(_generated_artifacts, sub)
+        return changed + redact.scrub_in_place(_generated_reels, sub)
 
 
 # Reel and artifact stashes share the manifest's "stashes" section.
@@ -3471,6 +3479,16 @@ def _init_combined_state(
         observation_rows_getter=_sheet_observation_rows,
         participant_marks_getter=transcripts_server.marks_for_participant,
     )
+    # Same seam: a permanent redaction rewrites every blueprint's in-memory copy.
+    transcripts_server.configure_scrub(
+        hooks=[
+            _scrub_generated,
+            workflows_server.scrub_strings,
+            composer_server.scrub_strings,
+            screenspace_server.scrub_strings,
+        ],
+        busy=workflows_server.run_active,
+    )
 
     # Last: an armed trigger's first poll must not run against half-initialized
     # sibling state.
@@ -4343,7 +4361,6 @@ def _register_settings_routes(combined: Flask) -> None:
 def api_models() -> Response:
     import hardware
     import llm_client
-    import redact
     import thinking_agents
     import transcripts
 

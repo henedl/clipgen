@@ -229,6 +229,7 @@
               </label>
               <button id="redactRerun" type="button" class="btn btn-small hidden"><span class="agent-run-label">Re-run</span></button>
               <button id="redactCancel" type="button" class="btn btn-small hidden">Cancel</button>
+              <button id="redactForeverAll" type="button" class="btn btn-small hidden" data-tooltip="Make every applied redaction in the study permanent">Redact forever</button>
             </div>
           </div>
           <div id="redactModel" class="redact-model hidden">
@@ -344,6 +345,25 @@
       <div class="model-install-actions">
         <button id="modelInstallCancel" type="button" class="btn btn-small">Cancel</button>
         <button id="modelInstallConfirm" type="button" class="btn btn-small btn-primary">Download</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Permanent redaction: match count and typed confirmation, then the report. -->
+  <div id="redactForeverModal" class="modal cg-modal-overlay hidden">
+    <div class="modal-content model-install-modal">
+      <div class="modal-header">
+        <h3 id="redactForeverTitle">Redact forever?</h3>
+      </div>
+      <p id="redactForeverMessage" class="model-install-message"></p>
+      <p id="redactForeverNote" class="model-install-message">Stored transcripts, summaries, clips and exports are rewritten. This cannot be undone. Audio and video keep the spoken words.</p>
+      <div id="redactForeverForm" class="term-form">
+        <input id="redactForeverInput" type="text" autocomplete="off">
+      </div>
+      <ul id="redactForeverUnfixed" class="redact-forever-unfixed hidden"></ul>
+      <div class="model-install-actions">
+        <button id="redactForeverCancel" type="button" class="btn btn-small">Cancel</button>
+        <button id="redactForeverConfirm" type="button" class="btn btn-small btn-primary" disabled>Redact forever</button>
       </div>
     </div>
   </div>

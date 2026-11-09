@@ -29,6 +29,7 @@ API endpoints (all under /transcripts/):
   DELETE /api/known-terms/<term>                  - remove a known term
   POST /api/redact-terms                          - add a manual redaction term
   DELETE /api/redact-terms/<term>                 - remove a redaction term
+  POST /api/redact/permanent                      - preview or run a permanent redaction
   GET  /api/dictionary.csv                        - corrections + terms as one CSV
   POST /api/dictionary/import                     - merge a dictionary CSV
   GET  /api/dictionary/global                     - counts for the saved global copy
@@ -79,6 +80,7 @@ import config
 import files
 import friction
 import llm_client
+import manifest as manifest_io
 import profiling
 import redact
 import remux_server
@@ -1914,6 +1916,279 @@ def api_redact_terms_delete(term: str) -> FlaskResponse:
     return ok(terms=kept)
 
 
+# ---- Permanent redaction ----
+#
+# Rewrites stored text study-wide; nothing below can be undone.
+
+# Other blueprints' in-memory copies and busy state; server.py wires both.
+_scrub_hooks: list[Callable[[Callable[[str], str]], int]] = []
+_scrub_busy: Callable[[], bool] = lambda: False
+
+
+def configure_scrub(
+    hooks: list[Callable[[Callable[[str], str]], int]], busy: Callable[[], bool]
+) -> None:
+    """Register the sibling stores a permanent redaction must also rewrite."""
+    global _scrub_hooks, _scrub_busy
+    _scrub_hooks = list(hooks)
+    _scrub_busy = busy
+
+
+def _permanent_plan(
+    target: tuple[str, str] | None,
+) -> tuple[list[dict[str, Any]], dict[str, set[tuple[str, str]]]]:
+    """Items to rewrite and, per participant, the restored ones to leave alone.
+
+    *target* is one ``(label, surface)``; None means every applied redaction.
+    Caller holds _manifest_lock.
+    """
+    terms = _redact_terms()
+    corrections = _manifest.get("corrections", [])
+    surfaces: dict[tuple[str, str], set[str]] = {}
+    restored: dict[str, set[tuple[str, str]]] = {}
+    taken: dict[str, int] = {}
+    for pid, entry in _manifest.get("source_transcripts", {}).items():
+        segs = entry.get("segments") or []
+        texts = [seg["text"] for seg in _corrected_segments(pid, segs, corrections)]
+        for label, number in redact.baked_counters(texts).items():
+            taken[label] = max(taken.get(label, 0), number)
+        if target is not None:
+            spans = [span for seg in segs for span in seg.get("pii") or []]
+        else:
+            view = redact.entry_view(entry, segs, texts, terms) or []
+            spans = [span for seg_spans in view for span in seg_spans]
+        for span in spans:
+            surface = str(span.get("text") or "")
+            ident = (span["label"], redact.surface_key(surface))
+            if span.get("excluded"):
+                restored.setdefault(pid, set()).add(ident)
+            elif target is None or ident == (target[0], redact.surface_key(target[1])):
+                surfaces.setdefault(ident, set()).add(surface)
+    if target is not None:
+        ident = (target[0], redact.surface_key(target[1]))
+        surfaces.setdefault(ident, set()).add(target[1])
+    # Numbered last, so placeholders that appear in a transcript count from 1.
+    unmatched: set[tuple[str, str]] = set()
+    if target is None:
+        for term in terms:
+            ident = (redact.TERM_LABEL, redact.surface_key(term))
+            if ident not in surfaces:
+                unmatched.add(ident)
+            surfaces.setdefault(ident, set()).add(term)
+    items = []
+    for label, key in sorted(surfaces, key=lambda i: (i in unmatched, i)):
+        taken[label] = taken.get(label, 0) + 1
+        item = redact.permanent_item(
+            label, f"[{label}_{taken[label]}]", surfaces[(label, key)]
+        )
+        items.append({**item, "ident": (label, key)})
+    return items, restored
+
+
+_Subn = Callable[[str], tuple[str, int]]
+
+
+def _permanent_subs(
+    items: list[dict[str, Any]], restored: dict[str, set[tuple[str, str]]]
+) -> tuple[_Subn, dict[str, _Subn]]:
+    """``text -> (new, hits)``: study-wide, plus one per participant with restores."""
+
+    def make(skip: set[tuple[str, str]]) -> _Subn:
+        built = redact.permanent_sub(i for i in items if i["ident"] not in skip)
+        if built is None:
+            return lambda text: (text, 0)
+        pattern, replace = built
+        return lambda text: pattern.subn(replace, text)
+
+    return make(set()), {pid: make(skip) for pid, skip in restored.items()}
+
+
+def _apply_permanent_locked(
+    items: list[dict[str, Any]],
+    sub: Callable[[str], str],
+    subs: dict[str, Callable[[str], str]],
+    restored: dict[str, set[tuple[str, str]]],
+) -> dict[str, int]:
+    """Rewrite the transcripts section in memory; caller holds _manifest_lock."""
+    chosen = {item["ident"] for item in items}
+    src = _manifest.get("source_transcripts", {})
+    # A correction naming the word is applied once to the stored text, then removed.
+    corrections = _manifest.get("corrections", [])
+    naming = [
+        c
+        for c in corrections
+        if sub(str(c.get("from") or "")) != c.get("from")
+        or sub(str(c.get("to") or "")) != c.get("to")
+    ]
+    _manifest["corrections"] = [c for c in corrections if c not in naming]
+    fields = [agent["manifest_field"] for agent in thinking_agents.AGENTS]
+    counts = {"segments": 0, "participants": 0, "strings": 0}
+    for pid, entry in src.items():
+        segs = entry.get("segments") or []
+        if naming:
+            for seg, folded in zip(
+                segs, transcripts.apply_corrections(segs, naming), strict=True
+            ):
+                if folded["text"] != seg["text"]:
+                    seg["text"] = folded["text"]
+                    seg.pop("words", None)
+        entry_sub = subs.get(pid, sub)
+        baked = sum(redact.bake_segment(seg, entry_sub) for seg in segs)
+        counts["segments"] += baked
+        counts["participants"] += bool(baked)
+        dropped = chosen - restored.get(pid, set())
+        shown = transcripts.apply_corrections(segs, _manifest["corrections"])
+        for seg, cor in zip(segs, shown, strict=True):
+            redact.rebase_spans(seg, cor["text"], dropped)
+        # Agents read the real text, so their stored output holds it too.
+        holder = {f: entry[f] for f in fields if f in entry}
+        holder["labels"] = (entry.get("speakers") or {}).get("labels") or {}
+        counts["strings"] += redact.scrub_in_place(holder, entry_sub)
+        entry.update({f: holder[f] for f in fields if f in holder})
+        block = entry.get("redaction") or {}
+        if block.get("excluded"):
+            block["excluded"] = [
+                e
+                for e in block["excluded"]
+                if (e.get("label"), e.get("key")) not in dropped
+            ]
+    counts["strings"] += redact.scrub_in_place(_manifest.get("marks") or [], sub)
+    counts["strings"] += len(naming)
+    for name in ("known_terms", "redact_terms"):
+        kept = [t for t in _manifest.get(name) or [] if sub(t) == t]
+        if name == "redact_terms":
+            kept = [
+                t
+                for t in kept
+                if (redact.TERM_LABEL, redact.surface_key(t)) not in chosen
+            ]
+        counts["strings"] += len(_manifest.get(name) or []) - len(kept)
+        _manifest[name] = kept
+    _bump_corrections_version()
+    _do_persist()
+    return counts
+
+
+def _scrub_other_stores(sub: Callable[[str], str]) -> dict[str, Any]:
+    """Rewrite every store outside the transcripts section; returns the report."""
+    root = utils.get_effective_output_dir()
+    kept_paths: set[str] = set()
+
+    def guarded(text: str) -> str:
+        new = sub(text)
+        if new == text or len(text) > 1024 or "\n" in text:
+            return new
+        # A string naming a real file stays, or the record would point nowhere.
+        try:
+            is_file = Path(text).is_file() or (root / text).is_file()
+        except (OSError, ValueError):
+            return new
+        if is_file:
+            kept_paths.add(text)
+            return text
+        return new
+
+    strings = sum(hook(guarded) for hook in _scrub_hooks)
+    for name in sorted(manifest_io.manifest_sections() - {"transcripts"}):
+        data = manifest_io.load_manifest_section(name)
+        changed = redact.scrub_in_place(data, guarded)
+        if changed:
+            strings += changed
+            manifest_io.save_manifest_section(name, data)
+    files, named = redact.scrub_files(root, sub, root / config.MANIFEST_FILENAME)
+    saved = start_settings.load_config_json(_GLOBAL_DICTIONARY_FILE, default=None)
+    if isinstance(saved, dict):
+        clean = {
+            "corrections": [
+                c
+                for c in saved.get("corrections", [])
+                if sub(str(c.get("from") or "")) == c.get("from")
+                and sub(str(c.get("to") or "")) == c.get("to")
+            ],
+            "known_terms": [t for t in saved.get("known_terms", []) if sub(t) == t],
+        }
+        if clean != saved:
+            strings += 1
+            start_settings.save_config_json(_GLOBAL_DICTIONARY_FILE, clean)
+    return {
+        "strings": strings,
+        "files": files,
+        "unfixed": sorted(set(named) | kept_paths),
+    }
+
+
+@transcripts_bp.route("/api/redact/permanent", methods=["POST"])
+@json_endpoint
+def api_redact_permanent() -> FlaskResponse:
+    """Preview or run a permanent redaction.
+
+    Body: ``{scope: "item"|"term"|"all", label?, text?, preview?, confirm?}``.
+    An item (a detected surface) or a term covers every match in the study;
+    ``all`` covers every applied redaction and every term. A run needs
+    ``confirm`` to equal the word the preview returned.
+    """
+    data = require_json_body("Missing JSON body")
+    scope = data.get("scope")
+    if scope not in ("item", "term", "all"):
+        raise ApiError("scope must be item, term or all")
+    target = None
+    if scope != "all":
+        label = redact.TERM_LABEL if scope == "term" else str(data.get("label") or "")
+        target = (label.strip(), str(data.get("text") or ""))
+        if not target[0] or not redact.surface_key(target[1]):
+            raise ApiError("label and text are required")
+    preview = bool(data.get("preview"))
+    if not preview:
+        if data.get("confirm") != redact.PERMANENT_CONFIRM:
+            raise ApiError(f"Type {redact.PERMANENT_CONFIRM} to confirm")
+        # Checked before the lock (the worker lock never nests inside ours).
+        tasks = _worker.get_all_tasks(include_partials=False) if _worker else []
+        live = (transcripts.TASK_STATUS_QUEUED, transcripts.TASK_STATUS_RUNNING)
+        if (
+            any(t["status"] in live for t in tasks)
+            or _orchestrator.any_generating()
+            or _scrub_busy()
+        ):
+            return err("Wait for running tasks to finish", 409, reason="busy")
+
+    with _manifest_lock:
+        if not preview:
+            _merge_completed_results_locked()
+        items, restored = _permanent_plan(target)
+        subn, subns = _permanent_subs(items, restored)
+        if preview:
+            corrections = _manifest.get("corrections", [])
+            matches = participants = 0
+            for pid, entry in _manifest.get("source_transcripts", {}).items():
+                segs = entry.get("segments") or []
+                entry_subn = subns.get(pid, subn)
+                hits = sum(
+                    entry_subn(seg["text"])[1]
+                    for seg in _corrected_segments(pid, segs, corrections)
+                )
+                matches += hits
+                participants += bool(hits)
+            return ok(
+                items=len(items),
+                matches=matches,
+                participants=participants,
+                confirm=redact.PERMANENT_CONFIRM,
+            )
+
+        def plain(fn: _Subn) -> Callable[[str], str]:
+            return lambda text: fn(text)[0]
+
+        sub = plain(subn)
+        subs = {pid: plain(fn) for pid, fn in subns.items()}
+        report: dict[str, Any] = _apply_permanent_locked(items, sub, subs, restored)
+    redact.forget_surfaces()
+    other = _scrub_other_stores(sub)
+    report["strings"] += other["strings"]
+    return ok(
+        items=len(items), files=other["files"], unfixed=other["unfixed"], **report
+    )
+
+
 # ---- Dictionary import/export ----
 #
 # One `type,from,to` CSV plus a global config-dir copy; import always merges.
@@ -3089,6 +3364,11 @@ class AgentOrchestrator:
         if event is not None:
             event.set()
         return True
+
+    def any_generating(self) -> bool:
+        """True while any agent runs for any participant."""
+        with self._lock:
+            return any(self._in_flight.values())
 
     def busy_models(self) -> set[str]:
         """Model values of agents with an in-flight run (delete-route guard)."""

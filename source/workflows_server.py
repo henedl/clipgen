@@ -24,12 +24,14 @@ import threading
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
+from collections.abc import Callable
 from typing import Any
 
 from flask import Blueprint, Response, request
 
 import config
 import profiling
+import redact
 import manifest as manifest_io
 import server_utils
 import utils
@@ -99,6 +101,25 @@ server_utils.register_static_routes(
     media_dir_getter=lambda: str(utils.get_effective_input_dir()),
     media_error="Input directory not configured",
 )
+
+
+def run_active() -> bool:
+    """True while any workflow run is queued or running."""
+    live = (workflows.RUN_STATUS_QUEUED, workflows.RUN_STATUS_RUNNING)
+    with _runs_lock:
+        return any(runner.status in live for runner in _runs.values())
+
+
+def scrub_strings(sub: Callable[[str], str]) -> int:
+    """Permanent redaction over the in-memory manifest and finished run results."""
+    with _runs_lock:
+        runners = list(_runs.values())
+    changed = sum(redact.scrub_in_place(runner._results, sub) for runner in runners)
+    with _manifest_lock:
+        in_manifest = redact.scrub_in_place(_manifest, sub)
+        if in_manifest:
+            _persist_locked()
+    return changed + in_manifest
 
 
 def _persist_locked() -> None:

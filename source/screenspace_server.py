@@ -70,6 +70,7 @@ from flask import Blueprint, Response, request, send_file
 
 import config
 import files
+import redact
 import remux_server
 import screenspace
 import spreadsheet
@@ -2640,6 +2641,15 @@ def _do_persist(*, drain_events: bool = True) -> None:
 )
 
 atexit.register(_flush_pending_persist)
+
+
+def scrub_strings(sub: Callable[[str], str]) -> int:
+    """Permanent redaction over stored scan results, such as OCR text."""
+    with _manifest_lock:
+        changed = redact.scrub_in_place(_manifest, sub)
+    if changed:
+        _persist_manifest()
+    return changed
 
 
 def _persist_manifest(*, drain_events: bool = True) -> None:
