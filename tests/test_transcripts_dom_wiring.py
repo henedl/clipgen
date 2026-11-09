@@ -105,6 +105,7 @@ REQUIRED_IDS = [
     "saveGlobalDictBtn",
     "loadGlobalDictBtn",
     "dictGlobalHint",
+    "transcriptEmptyBtn",
 ]
 
 
@@ -144,6 +145,23 @@ def test_boot_placeholders_are_skeletons_not_empty_states():
         "#transcriptEmpty must ship with the .hidden CLASS — the JS toggles the "
         "class, so the bare `hidden` attribute would never be removed"
     )
+
+
+def test_empty_pane_transcribe_button_cannot_start_a_second_task():
+    """/api/transcribe has no in-flight guard, and the pane can outlive its
+    participant during a switch, so the button re-asks at click time."""
+    start = _JS.index("function initTranscriptEmptyBtn()")
+    body = _JS[start : _JS.index("\n  function ", start + 1)]
+    assert "if (_canStartTranscribe()) transcribeParticipants(" in body
+    start = _JS.index("function _canStartTranscribe()")
+    body = _JS[start : _JS.index("\n  function ", start + 1)]
+    for needle in ("has_video", "has_transcript", '"running"', '"queued"'):
+        assert needle in body, f"_canStartTranscribe must check {needle}"
+    start = _JS.index("function renderSegmentsImpl()")
+    body = _JS[start : _JS.index("\n  function ", start + 1)]
+    assert body.index("_setTranscriptEmptyText(") < body.index(
+        'empty.classList.remove("hidden")'
+    ), "reword before every reveal, or the button shows stale"
 
 
 def test_segment_rebuild_keeps_the_reader_in_place():

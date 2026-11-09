@@ -262,7 +262,10 @@
            (renderEmptyState / renderSegments' zero-segment branch). -->
       <div id="transcriptEmpty" class="transcript-empty hidden">
         <p>No transcript available</p>
-        <p class="empty-hint">Use the Queue panel to transcribe this participant's video</p>
+        <p class="empty-hint hidden"></p>
+        <button id="transcriptEmptyBtn" type="button" class="btn btn-primary btn-icon transcript-empty-btn hidden">
+          <span class="transcript-empty-icon" aria-hidden="true"></span><span class="transcript-empty-label">Transcribe</span>
+        </button>
       </div>
     </section>
   </main>
