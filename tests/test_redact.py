@@ -236,6 +236,20 @@ def test_redact_entry_without_model_returns_false(monkeypatch, tmp_path):
     assert redact.redact_entry([{"text": "x"}], min_score=0.6, org=False) is False
 
 
+def test_tag_segment_copies_spans_and_keeps_clean_crc():
+    span = {"label": "EMAIL", "start": 0, "end": 3, "score": 1.0, "text": "a@b"}
+    seg = {"text": "a@b", "pii": [dict(span)], "pii_crc": 1}
+    tagged = {"pii": [span], "pii_crc": 7}
+    redact.tag_segment(seg, tagged)
+    assert seg["pii"] == [span]
+    assert seg["pii"] is not tagged["pii"]
+    assert seg["pii_crc"] == 7
+    redact.tag_segment(seg, {"pii": [], "pii_crc": 9})
+    assert "pii" not in seg and seg["pii_crc"] == 9
+    redact.tag_segment(seg, {})
+    assert "pii" not in seg and "pii_crc" not in seg
+
+
 # ---- Read-time helpers -----------------------------------------------------
 
 

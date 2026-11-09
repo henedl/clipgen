@@ -700,7 +700,7 @@ def api_transcript(participant: str) -> FlaskResponse:
         transcribed_at = entry.get("transcribed_at", "")
         speakers_summary = _speakers_summary(entry)
         redaction_summary = _redaction_summary(entry)
-        entry_snapshot = dict(entry)
+        entry_snapshot = {**entry, "redaction": dict(entry.get("redaction") or {})}
         version_snapshot = _corrections_version
 
     # Apply corrections to get corrected text (memoized per participant)
@@ -810,7 +810,11 @@ def _formatted_result(participant: str) -> transcripts.TranscriptResult | None:
         source_file = entry.get("source_file", "")
         model = entry.get("model", "")
         speaker_labels = dict((entry.get("speakers") or {}).get("labels") or {})
-        entry_snapshot = {**entry, "segments": segments_snapshot}
+        entry_snapshot = {
+            **entry,
+            "segments": segments_snapshot,
+            "redaction": dict(entry.get("redaction") or {}),
+        }
         version_snapshot = _corrections_version
 
     corrected = _corrected_segments(

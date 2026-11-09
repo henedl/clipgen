@@ -489,7 +489,7 @@ def _seed_transcripts() -> None:
                     ],
                     "language": "en",
                     "model": "base",
-                    "redaction": {"enabled": True, "count": 2, "min_score": 0.6},
+                    "redaction": {"enabled": True},
                 },
                 "P02": {
                     "segments": [
