@@ -145,15 +145,13 @@
     }
     var redStatus = "idle";
     var redProgress = 0;
-    var redError = (p.redaction && p.redaction.error) || null;
+    var redError = null;
     if (redTask && (redTask.status === "running" || redTask.status === "queued")) {
       redStatus = redTask.status;
       if (redTask.status === "running") redProgress = Math.round((redTask.progress || 0) * 100);
     } else if (redTask && redTask.status === "failed") {
       redStatus = "failed";
-      redError = redTask.error || redError;
-    } else if (redError) {
-      redStatus = "failed";
+      redError = redTask.error || null;
     } else if (p.redaction && p.redaction.detected) {
       redStatus = "done";
     }

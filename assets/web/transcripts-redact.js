@@ -223,12 +223,11 @@
       : "Redaction queued";
     else if (task && task.status === "failed" && enabled) status = "Redaction failed" + (task.error ? " (" + task.error + ")" : "");
     else if (!enabled) status = "Off";
-    else if (rd.error) status = rd.error;
     else if (!rd.detected) status = modelOk ? "Not run yet" : "Model not downloaded";
     else status = items.length + " item" + (items.length === 1 ? "" : "s") + ", " + (rd.count || 0) + " mention" + (rd.count === 1 ? "" : "s");
     var statusEl = document.getElementById("redactStatus");
     statusEl.textContent = status;
-    statusEl.classList.toggle("friction-status--error", /failed/.test(status) || !!rd.error);
+    statusEl.classList.toggle("friction-status--error", /failed/.test(status));
     statusEl.classList.toggle("cg-shimmer", live);
     // Like Summary, the empty state speaks for itself.
     statusEl.classList.toggle("hidden", !live && !(enabled && rd.detected) && modelOk);

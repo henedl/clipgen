@@ -673,16 +673,11 @@ def _redact_fresh_entry(entry: dict[str, Any], corrections: list[Any]) -> None:
     """Tag PII on the corrected text, as the server's redact pass does."""
     raw = entry["segments"]
     shown = [dict(s) for s in transcripts.apply_corrections(raw, corrections)]
-    block = transcripts.redact_entry(shown)
-    if block is None:
+    if not transcripts.redact_entry(shown):
         return
     for seg, tagged in zip(raw, shown, strict=True):
-        if tagged.get("pii"):
-            seg["pii"] = tagged["pii"]
-        seg["pii_crc"] = tagged["pii_crc"]
-    block["count"] = sum(len(s.get("pii") or []) for s in raw)
-    block["excluded"] = list((entry.get("redaction") or {}).get("excluded") or [])
-    entry["redaction"] = block
+        redact.tag_segment(seg, tagged)
+    entry["redaction"] = redact.on_block(entry)
 
 
 # ---- Thinking-agent CLI ----

@@ -312,19 +312,13 @@ def _enqueue_speakers_task(pid: str, entry: dict[str, Any]) -> dict[str, Any] | 
 def _redaction_summary(entry: dict[str, Any]) -> dict[str, Any]:
     """Pill/transcript payload; ``enabled`` is None until the participant chose."""
     block = entry.get("redaction") or {}
-    segs = entry.get("segments") or []
+    count = sum(len(s.get("pii") or []) for s in entry.get("segments") or [])
     return {
         "enabled": block.get("enabled") if "enabled" in block else None,
-        "count": int(block.get("count") or 0),
-        "min_score": block.get("min_score"),
-        "detected": any(s.get("pii") for s in segs),
+        "count": count,
+        "detected": count > 0,
         "excluded": list(block.get("excluded") or []),
-        "error": block.get("error"),
     }
-
-
-def _redact_excluded(entry: dict[str, Any]) -> list[dict[str, Any]]:
-    return list((entry.get("redaction") or {}).get("excluded") or [])
 
 
 def _redact_off(entry: dict[str, Any] | None) -> bool:
@@ -335,16 +329,6 @@ def _redact_off(entry: dict[str, Any] | None) -> bool:
 
 def _redact_model_ready() -> bool:
     return config.DEBUGGING or redact.is_redact_model_available()
-
-
-def _redaction_on_block(old: dict[str, Any]) -> dict[str, Any]:
-    """Enabled redaction block keeping *old*'s count, min_score and exclusions."""
-    return {
-        "enabled": True,
-        "count": int(old.get("count") or 0),
-        "min_score": old.get("min_score"),
-        "excluded": list(old.get("excluded") or []),
-    }
 
 
 def _enqueue_redact_task(pid: str, entry: dict[str, Any]) -> dict[str, Any] | None:
@@ -366,14 +350,10 @@ def _enqueue_redact_task(pid: str, entry: dict[str, Any]) -> dict[str, Any] | No
 
 
 def _redacted_view(
-    pid: str, raw_segments: list[Any], corrected: list[Any], entry: dict[str, Any]
+    raw_segments: list[Any], corrected: list[Any], entry: dict[str, Any]
 ) -> list[list[dict[str, Any]]] | None:
-    """Numbered spans per segment when redaction is on and detected; else None."""
-    if not redact.entry_wanted(entry) or not any(s.get("pii") for s in raw_segments):
-        return None
-    return redact.entry_spans(
-        raw_segments, [seg["text"] for seg in corrected], _redact_excluded(entry)
-    )
+    """Numbered spans per corrected segment when redaction applies; else None."""
+    return redact.entry_view(entry, raw_segments, [seg["text"] for seg in corrected])
 
 
 def _agent_placeholders(pid: str) -> dict[str, str]:
@@ -387,7 +367,7 @@ def _agent_placeholders(pid: str) -> dict[str, str]:
         corrections = list(_manifest.get("corrections", []))
         version = _corrections_version
     corrected = _corrected_segments(pid, raw_segments, corrections, version=version)
-    view = _redacted_view(pid, raw_segments, corrected, entry)
+    view = _redacted_view(raw_segments, corrected, entry)
     return redact.surface_placeholders(view) if view is not None else {}
 
 
@@ -720,21 +700,14 @@ def api_transcript(participant: str) -> FlaskResponse:
         transcribed_at = entry.get("transcribed_at", "")
         speakers_summary = _speakers_summary(entry)
         redaction_summary = _redaction_summary(entry)
-        redact_on = redact.entry_wanted(entry)
-        excluded = _redact_excluded(entry)
+        entry_snapshot = {**entry, "redaction": dict(entry.get("redaction") or {})}
         version_snapshot = _corrections_version
 
     # Apply corrections to get corrected text (memoized per participant)
     corrected_segments = _corrected_segments(
         participant, raw_segments, corrections, version=version_snapshot
     )
-    pii_view = (
-        redact.entry_spans(
-            raw_segments, [c["text"] for c in corrected_segments], excluded
-        )
-        if redact_on
-        else None
-    )
+    pii_view = _redacted_view(raw_segments, corrected_segments, entry_snapshot)
 
     # Build marks-by-segment-id lookup
     marks_by_seg: dict[str, list[dict[str, Any]]] = {}
@@ -837,8 +810,11 @@ def _formatted_result(participant: str) -> transcripts.TranscriptResult | None:
         source_file = entry.get("source_file", "")
         model = entry.get("model", "")
         speaker_labels = dict((entry.get("speakers") or {}).get("labels") or {})
-        redact_on = redact.entry_wanted(entry)
-        excluded = _redact_excluded(entry)
+        entry_snapshot = {
+            **entry,
+            "segments": segments_snapshot,
+            "redaction": dict(entry.get("redaction") or {}),
+        }
         version_snapshot = _corrections_version
 
     corrected = _corrected_segments(
@@ -848,13 +824,11 @@ def _formatted_result(participant: str) -> transcripts.TranscriptResult | None:
         version=version_snapshot,
     )
     return transcripts.TranscriptResult(
-        segments=corrected,
+        segments=redact.entry_segments(entry_snapshot, corrected),
         language=language,
         source_file=source_file,
         model=model,
         speaker_labels=speaker_labels,
-        redact=redact_on,
-        redact_excluded=excluded,
     )
 
 
@@ -976,17 +950,15 @@ def api_redact_set(participant: str) -> FlaskResponse:
             raise ApiError("Unknown participant", 404)
         entry = src.setdefault(participant, {})
         task = None
-        block = entry.get("redaction") or {}
         if enabled:
-            entry["redaction"] = _redaction_on_block(block)
+            entry["redaction"] = redact.on_block(entry)
             segs = entry.get("segments") or []
             if segs and not any(s.get("pii") for s in segs):
                 task = _enqueue_redact_task(participant, entry)
         else:
             _cancel_tasks("redact", participant)
             redact.strip_entry(entry.get("segments") or [])
-            excluded = list(block.get("excluded") or [])
-            entry["redaction"] = {"enabled": False, "count": 0, "excluded": excluded}
+            entry["redaction"] = {**redact.on_block(entry), "enabled": False}
         _bump_corrections_version()
         summary = _redaction_summary(entry)
     _persist_manifest()
@@ -1003,7 +975,7 @@ def api_redact_regenerate(participant: str) -> FlaskResponse:
         entry = _manifest.get("source_transcripts", {}).get(participant)
         if not entry or not entry.get("segments"):
             raise ApiError("No transcript for participant", 404)
-        entry["redaction"] = _redaction_on_block(entry.get("redaction") or {})
+        entry["redaction"] = redact.on_block(entry)
         task = _enqueue_redact_task(participant, entry)
         if task is None:
             raise ApiError("No transcript for participant", 404)
@@ -1037,7 +1009,7 @@ def api_redact_exclude(participant: str) -> FlaskResponse:
         entry = _manifest.get("source_transcripts", {}).get(participant)
         if not entry or not entry.get("segments"):
             raise ApiError("No transcript for participant", 404)
-        block = entry.setdefault("redaction", {"enabled": True, "count": 0})
+        block = entry.setdefault("redaction", {"enabled": True})
         rest = [
             e
             for e in block.get("excluded") or []
@@ -1725,9 +1697,7 @@ def api_summary_save(participant: str) -> FlaskResponse:
         if not entry:
             return err("Participant not found", 404)
         # The editor shows placeholders; saving would store them as the summary.
-        if redact.entry_wanted(entry) and any(
-            s.get("pii") for s in entry.get("segments") or []
-        ):
+        if redact.entry_applied(entry, entry.get("segments") or []):
             return err("Turn off redaction to edit", 409)
         entry["summary"] = summary_raw.strip()
         # An edited summary invalidates dependents exactly like the regenerate route.
@@ -2041,7 +2011,7 @@ def _resolve_mark(
         corrected = _corrected_segments(pid, segments, corrections)
         seg = corrected[idx]
         text = seg["text"]
-        pii_view = _redacted_view(pid, segments, corrected, entry)
+        pii_view = _redacted_view(segments, corrected, entry)
         if pii_view is not None:
             text = redact.render_text(text, pii_view[idx])
         return _view(True, pid, seg, text)
@@ -2266,7 +2236,7 @@ def api_search() -> FlaskResponse:
             pid, raw_segments, corrections, version=version_snapshot
         )
         participant_count = 0
-        pii_view = _redacted_view(pid, raw_segments, corrected, entries_by_pid[pid])
+        pii_view = _redacted_view(raw_segments, corrected, entries_by_pid[pid])
         for i, (raw, seg) in enumerate(zip(raw_segments, corrected, strict=True)):
             # Match what the page shows, so hidden names stay unfindable.
             shown = (
@@ -2838,23 +2808,9 @@ def _apply_speaker_result(live: dict[str, Any], result: dict[str, Any]) -> None:
 def _apply_redact_result(live: dict[str, Any], result: dict[str, Any]) -> None:
     """Write a redact pass onto the live entry by segment id; the text is untouched."""
     fresh = {s.get("id"): s for s in result["segments"] if s.get("id")}
-    count = 0
     for seg in live["segments"]:
-        hit = fresh.get(seg.get("id")) or {}
-        if hit.get("pii"):
-            seg["pii"] = list(hit["pii"])
-            count += len(hit["pii"])
-        else:
-            seg.pop("pii", None)
-        # Kept on clean segments too, so a later correction can requeue them.
-        if hit.get("pii_crc") is not None:
-            seg["pii_crc"] = hit["pii_crc"]
-        else:
-            seg.pop("pii_crc", None)
-    block = dict(result["redaction"])
-    block["count"] = count
-    block["excluded"] = list((live.get("redaction") or {}).get("excluded") or [])
-    live["redaction"] = block
+        redact.tag_segment(seg, fresh.get(seg.get("id")) or {})
+    live["redaction"] = redact.on_block(live)
 
 
 def _do_persist() -> None:

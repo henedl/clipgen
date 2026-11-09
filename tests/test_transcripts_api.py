@@ -4531,7 +4531,7 @@ def _redacted_entry():
             },
             {"id": "P01:1", "start": 1, "end": 2, "text": "plain line"},
         ],
-        "redaction": {"enabled": True, "count": 2, "min_score": 0.6},
+        "redaction": {"enabled": True},
         "transcribed_at": "2026-01-01T00:00:00+00:00",
     }
 
@@ -4595,7 +4595,7 @@ def test_redact_disable_strips_spans_and_cancels(tr_client, monkeypatch, tmp_pat
     assert resp.get_json()["redaction"]["enabled"] is False
     assert worker.cancelled == ["rd_live"]
     assert all("pii" not in s and "pii_crc" not in s for s in entry["segments"])
-    assert entry["redaction"] == {"enabled": False, "count": 0, "excluded": []}
+    assert entry["redaction"] == {"enabled": False, "excluded": []}
     assert transcripts_server._corrections_version > before
 
 
@@ -4652,7 +4652,7 @@ def test_transcript_payload_reanchors_after_correction(
 
 def test_transcript_payload_hides_spans_when_off(tr_client, monkeypatch, tmp_path):
     entry = _redacted_entry()
-    entry["redaction"] = {"enabled": False, "count": 0}
+    entry["redaction"] = {"enabled": False}
     _seed_speakers(monkeypatch, tmp_path, entry)
     body = tr_client.get("/transcripts/api/transcript/P01").get_json()
     assert body["segments"][0]["pii"] == []
@@ -4694,7 +4694,7 @@ def test_merge_redact_task_copies_spans_by_id(monkeypatch):
             {"id": "P01:0", "text": "a@b.se"},
             {"id": "P01:1", "text": "b"},
         ],
-        "redaction": {"enabled": True, "count": 0},
+        "redaction": {"enabled": True},
         "summary": {"paragraph": "keep"},
     }
     monkeypatch.setattr(
@@ -4726,7 +4726,6 @@ def test_merge_redact_task_copies_spans_by_id(monkeypatch):
                 },
                 {"id": "P01:9", "pii": [{"label": "CITY"}], "pii_crc": 2},
             ],
-            "redaction": {"enabled": True, "count": 2, "min_score": 0.6, "org": False},
         },
     }
     monkeypatch.setattr(
@@ -4751,7 +4750,8 @@ def test_merge_redact_task_copies_spans_by_id(monkeypatch):
     assert first["pii_crc"] == 1
     assert "pii" not in entry["segments"][1]
     assert "pii_crc" not in entry["segments"][1]
-    assert entry["redaction"]["count"] == 1
+    assert entry["redaction"] == {"enabled": True, "excluded": []}
+    assert transcripts_server._redaction_summary(entry)["count"] == 1
     assert entry["summary"] == {"paragraph": "keep"}
     assert chained == []
     assert transcripts_server._corrections_version > before
@@ -4760,7 +4760,7 @@ def test_merge_redact_task_copies_spans_by_id(monkeypatch):
 def test_merge_redact_result_ignored_after_disable(monkeypatch):
     entry = {
         "segments": [{"id": "P01:0", "text": "a@b.se"}],
-        "redaction": {"enabled": False, "count": 0},
+        "redaction": {"enabled": False},
     }
     monkeypatch.setattr(
         transcripts_server,
@@ -4776,7 +4776,6 @@ def test_merge_redact_result_ignored_after_disable(monkeypatch):
         "created_at": "9999",
         "result": {
             "segments": [{"id": "P01:0", "pii": [{"label": "EMAIL"}], "pii_crc": 1}],
-            "redaction": {"enabled": True, "count": 1},
         },
     }
     monkeypatch.setattr(
@@ -4921,7 +4920,7 @@ def test_agent_snapshot_reads_placeholders(tr_client, monkeypatch, tmp_path):
         segs = transcripts_server._corrected_segments_with_ids(
             "P01", list(entry["segments"]), []
         )
-        view = transcripts_server._redacted_view("P01", entry["segments"], segs, entry)
+        view = transcripts_server._redacted_view(entry["segments"], segs, entry)
     assert view is not None
     import redact
 
@@ -5040,7 +5039,6 @@ def test_redact_exclusions_survive_off_on_and_merge(tr_client, monkeypatch, tmp_
         entry,
         {
             "segments": [{"id": "P01:0", "pii": [], "pii_crc": 1}],
-            "redaction": {"enabled": True, "count": 0, "min_score": 0.6, "org": False},
         },
     )
     assert entry["redaction"]["excluded"] == [{"label": "EMAIL", "key": "anna@ex.se"}]
