@@ -21,8 +21,9 @@
     latestTask = TS.latestTask,
     _selectedParticipantRow = TS._selectedParticipantRow;
 
+  // Server-decided: model spans or manual terms apply to the shown transcript.
   function redactOn() {
-    return !!(state.redaction && state.redaction.enabled && state.redaction.detected);
+    return !!(state.redaction && state.redaction.applied);
   }
 
   function redactEnabledFor(p) {
@@ -176,6 +177,44 @@
     });
   }
 
+  // ---- Manual terms: study-wide, applied wherever the Redact switch is on ----
+
+  function _termToast(data) {
+    if (data.duplicate) return "Term already listed";
+    if (data.hidden) {
+      return "Redacted " + clipgenPluralUnit(data.hidden, "match", "matches") +
+        (data.off ? "; " + data.off + " more where Redact is off" : "");
+    }
+    return data.off
+      ? "Term added; turn on Redact to hide " + clipgenPluralUnit(data.off, "match", "matches")
+      : "Term added, no matches yet";
+  }
+
+  function _termsChanged(terms) {
+    state.redactTerms = terms || [];
+    if (TS.renderRedactTerms) TS.renderRedactTerms();
+    if (state.selectedParticipant) _reloadShown(state.selectedParticipant);
+    else renderRedactPanel();
+  }
+
+  // Resolves true when the term is listed afterwards.
+  function addRedactTerm(term) {
+    return apiPost("api/redact-terms", { term: term }).then(function (data) {
+      if (!data.ok) { showToast(data.error || "Failed to add term"); return false; }
+      showToast(_termToast(data));
+      if (!data.duplicate) _termsChanged(data.terms);
+      return true;
+    }).catch(function () { showToast("Failed to add term"); return false; });
+  }
+
+  function removeRedactTerm(term) {
+    return apiDelete("api/redact-terms/" + encodeURIComponent(term)).then(function (data) {
+      if (!data.ok) { showToast(data.error || "Failed to remove term"); return; }
+      showToast("Term removed");
+      _termsChanged(data.terms);
+    }).catch(function () { showToast("Failed to remove term"); });
+  }
+
   // ---- Redact tab ----
 
   // One row per placeholder: label, surface, occurrences, weakest score, first segment.
@@ -210,12 +249,16 @@
     var live = !!task && (task.status === "running" || task.status === "queued");
     var enabled = row ? redactEnabledFor(row) : false;
     var modelOk = state.redactModel !== false;
+    // Terms need no model, so one term is enough to use the switch.
+    var hasTerms = state.redactTerms.length > 0;
     var rd = state.redaction || {};
     var items = enabled ? _items() : [];
+    var mentions = 0;
+    for (var m = 0; m < items.length; m++) mentions += items[m].count;
 
     var sw = document.getElementById("redactSwitch");
     sw.checked = enabled;
-    sw.disabled = !modelOk || !row;
+    sw.disabled = (!modelOk && !hasTerms) || !row;
 
     var status = "";
     if (live) status = task.status === "running"
@@ -223,17 +266,17 @@
       : "Redaction queued";
     else if (task && task.status === "failed" && enabled) status = "Redaction failed" + (task.error ? " (" + task.error + ")" : "");
     else if (!enabled) status = "Off";
-    else if (!rd.detected) status = modelOk ? "Not run yet" : "Model not downloaded";
-    else status = items.length + " item" + (items.length === 1 ? "" : "s") + ", " + (rd.count || 0) + " mention" + (rd.count === 1 ? "" : "s");
+    else if (!rd.detected && !items.length) status = modelOk ? "Not run yet" : "Model not downloaded";
+    else status = clipgenPluralUnit(items.length, "item", "items") + ", " + clipgenPluralUnit(mentions, "mention", "mentions");
     var statusEl = document.getElementById("redactStatus");
     statusEl.textContent = status;
     statusEl.classList.toggle("friction-status--error", /failed/.test(status));
     statusEl.classList.toggle("cg-shimmer", live);
+    // Header controls appear once a pass ran or terms apply; the CTA starts it.
+    var ran = enabled && (!!rd.detected || hasTerms);
     // Like Summary, the empty state speaks for itself.
-    statusEl.classList.toggle("hidden", !live && !(enabled && rd.detected) && modelOk);
+    statusEl.classList.toggle("hidden", !live && !ran && modelOk);
 
-    // Header controls appear once a pass ran; the empty-state CTA starts it.
-    var ran = enabled && !!rd.detected;
     document.querySelector("#redactTab .redact-switch").classList.toggle("hidden", !ran && !live);
     var rerun = document.getElementById("redactRerun");
     rerun.classList.toggle("hidden", !ran || !modelOk || live);
@@ -248,7 +291,7 @@
       document.getElementById("redactEmptyText").textContent = ran
         ? "No personal data found."
         : "No redaction yet.";
-      cta.classList.toggle("hidden", ran || !modelOk);
+      cta.classList.toggle("hidden", ran || !(modelOk || hasTerms));
       cta.disabled = !row;
     }
 
@@ -378,6 +421,8 @@
   }
 
   TS.redactOn = redactOn;
+  TS.addRedactTerm = addRedactTerm;
+  TS.removeRedactTerm = removeRedactTerm;
   TS.renderRedactPanel = renderRedactPanel;
   TS.initRedact = initRedact;
   TS.redactedTextHtml = redactedTextHtml;

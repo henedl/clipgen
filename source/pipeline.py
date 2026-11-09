@@ -870,15 +870,19 @@ def _run_clip_pipeline(
 
 
 def _manifest_transcript(
-    entry: dict[str, Any], corrections: list[Any], fallback_source: str
+    manifest: dict[str, Any], participant: str, fallback_source: str
 ) -> transcripts.TranscriptResult:
     """Corrected TranscriptResult with PII placeholders baked in over the whole entry.
 
     Rendering before any clip filter keeps placeholder numbering per participant.
     """
-    corrected = transcripts.apply_corrections(entry.get("segments", []), corrections)
+    entry = manifest["source_transcripts"][participant]
+    corrected = transcripts.apply_corrections(
+        entry.get("segments", []), manifest.get("corrections", [])
+    )
     segments = cast(
-        list[transcripts.TranscriptSegment], redact.entry_segments(entry, corrected)
+        list[transcripts.TranscriptSegment],
+        redact.entry_segments(entry, corrected, manifest.get("redact_terms") or []),
     )
     return transcripts.TranscriptResult(
         segments=segments,
@@ -906,14 +910,12 @@ def _embed_transcript_on_artifacts(
     participant = clip.get("participant", "")
     manifest = transcripts_manifest or transcripts.load_transcripts_manifest()
     source_transcripts = manifest.get("source_transcripts", {})
-    corrections = manifest.get("corrections", [])
 
     full_transcript = None
     transcript_version = ""
     if participant and participant in source_transcripts:
-        entry = source_transcripts[participant]
-        full_transcript = _manifest_transcript(entry, corrections, str(base_video))
-        transcript_version = entry.get("transcribed_at", "")
+        full_transcript = _manifest_transcript(manifest, participant, str(base_video))
+        transcript_version = source_transcripts[participant].get("transcribed_at", "")
     elif transcript_cache.get(base_video):
         full_transcript = transcript_cache[base_video]
 
@@ -965,7 +967,7 @@ def _transcribe_segments(
 
         if participant and participant in source_transcripts:
             transcript_cache[base_video] = _manifest_transcript(
-                source_transcripts[participant], corrections, str(base_video)
+                manifest, participant, str(base_video)
             )
         else:
             context_keywords = transcripts.get_corrections_keywords(corrections) or None
@@ -1279,7 +1281,6 @@ def _build_reel_transcript(
     """
     manifest = transcripts.load_transcripts_manifest()
     source_transcripts = manifest.get("source_transcripts", {})
-    corrections = manifest.get("corrections", [])
 
     merged_segments: list[dict[str, Any]] = []
     cumulative_offset = 0.0
@@ -1307,9 +1308,7 @@ def _build_reel_transcript(
         end_offset = endcard_duration if carded else 0
 
         if participant and participant in source_transcripts:
-            full_transcript = _manifest_transcript(
-                source_transcripts[participant], corrections, ""
-            )
+            full_transcript = _manifest_transcript(manifest, participant, "")
             clipped = transcripts.filter_segments(
                 full_transcript, comp_start, comp_end, offset_to_zero=True
             )

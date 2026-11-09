@@ -35,7 +35,10 @@
           <div id="searchResults" class="hidden">
             <div id="searchResultsHeader" class="hidden">
               <span id="searchCount" class="search-count"></span>
-              <button id="searchMarkAllBtn" type="button" class="btn btn-small">Mark All</button>
+              <span class="search-actions">
+                <button id="searchRedactAllBtn" type="button" class="btn btn-small" data-tooltip="Hide this word wherever Redact is on">Redact All</button>
+                <button id="searchMarkAllBtn" type="button" class="btn btn-small">Mark All</button>
+              </span>
             </div>
             <div id="searchResultsList"></div>
           </div>
@@ -267,8 +270,8 @@
     </section>
   </main>
 
-  <!-- Corrections modal: corrections (fix past text) + known terms
-       (bias future transcription) -->
+  <!-- Corrections modal: corrections (fix past text), known terms
+       (bias future transcription) and redaction terms (always hidden) -->
   <div id="correctionsModal" class="modal cg-modal-overlay hidden">
     <div class="modal-content">
       <div class="modal-header">
@@ -299,6 +302,15 @@
           <button id="addTermBtn" class="btn btn-small">Add</button>
         </div>
         <div id="termsList" class="term-chips"></div>
+      </section>
+      <section class="dict-section">
+        <h4>Redaction terms</h4>
+        <p class="dict-hint">Hidden wherever Redact is on. Kept out of the CSV and the global dictionary.</p>
+        <div class="term-form">
+          <input id="redactTermInput" type="text" placeholder="Name or word to hide" autocomplete="off">
+          <button id="addRedactTermBtn" class="btn btn-small">Add</button>
+        </div>
+        <div id="redactTermsList" class="term-chips"></div>
       </section>
       <section class="dict-section dict-global">
         <h4>Global dictionary</h4>

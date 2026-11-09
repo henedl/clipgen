@@ -366,6 +366,71 @@ def _pii_entry(enabled=None):
     return entry
 
 
+def _term_entry(*texts, excluded=None):
+    block: dict[str, Any] = {"enabled": True}
+    if excluded:
+        block["excluded"] = excluded
+    return {"segments": [{"text": t} for t in texts], "redaction": block}
+
+
+def test_terms_match_whole_words_without_a_model_pass():
+    texts = ["Acme AB hired anna.", "acme  ab, Annabel and ANNA"]
+    out = redact.entry_texts(_term_entry(*texts), texts, ["Anna", "acme ab"])
+    assert out == [
+        "[REDACTED_1] hired [REDACTED_2].",
+        "[REDACTED_1], Annabel and [REDACTED_2]",
+    ]
+
+
+def test_terms_follow_the_participant_switch(monkeypatch):
+    monkeypatch.setattr(config, "TRANSCRIBE_REDACT", False)
+    entry = _term_entry("Hi Anna")
+    entry["redaction"] = {"enabled": False}
+    assert redact.entry_view(entry, entry["segments"], ["Hi Anna"], ["Anna"]) is None
+    del entry["redaction"]
+    assert redact.entry_texts(entry, ["Hi Anna"], ["Anna"]) == ["Hi Anna"]
+
+
+def test_term_hides_a_restored_model_span():
+    entry = _pii_entry(True)
+    entry["redaction"]["excluded"] = [{"label": "GIVEN_NAME", "key": "anna"}]
+    texts = [s["text"] for s in entry["segments"]]
+    assert redact.entry_texts(entry, texts) == ["Hi Anna", "[GIVEN_NAME_2] and Anna"]
+    assert redact.entry_texts(entry, texts, ["anna"]) == [
+        "Hi [REDACTED_1]",
+        "[GIVEN_NAME_1] and [REDACTED_1]",
+    ]
+
+
+def test_term_item_can_be_restored_per_participant():
+    excluded = [{"label": redact.TERM_LABEL, "key": "anna"}]
+    entry = _term_entry("Hi Anna", excluded=excluded)
+    view = redact.entry_view(entry, entry["segments"], ["Hi Anna"], ["Anna"])
+    assert view is not None and view[0][0]["excluded"] is True
+    assert redact.render_text("Hi Anna", view[0]) == "Hi Anna"
+
+
+def test_term_longer_than_a_model_span_wins_and_keeps_its_surface():
+    entry = _pii_entry(True)
+    texts = [s["text"] for s in entry["segments"]]
+    view = redact.entry_view(entry, entry["segments"], texts, ["Erik and Anna"])
+    assert view is not None
+    assert [(s["label"], s["text"]) for s in view[1]] == [
+        (redact.TERM_LABEL, "Erik and Anna")
+    ]
+
+
+def test_manifest_transcript_applies_terms():
+    import pipeline
+
+    manifest = {
+        "source_transcripts": {"P01": _term_entry("Hi Anna")},
+        "redact_terms": ["Anna"],
+    }
+    result = pipeline._manifest_transcript(manifest, "P01", "")
+    assert [s["text"] for s in result["segments"]] == ["Hi [REDACTED_1]"]
+
+
 @pytest.mark.parametrize(
     ("enabled", "default", "wanted"),
     [
@@ -387,7 +452,9 @@ def test_manifest_transcript_redacts_before_clip_filter(monkeypatch):
     import transcripts
 
     monkeypatch.setattr(config, "TRANSCRIBE_REDACT", True)
-    result = pipeline._manifest_transcript(_pii_entry(), [], "")
+    result = pipeline._manifest_transcript(
+        {"source_transcripts": {"P01": _pii_entry()}}, "P01", ""
+    )
     clipped = transcripts.filter_segments(result, 4.0, 8.0, offset_to_zero=True)
     # Numbering spans the whole entry: Anna stays _1 inside a later clip.
     assert [s["text"] for s in clipped["segments"]] == [
@@ -399,7 +466,9 @@ def test_manifest_transcript_redacts_before_clip_filter(monkeypatch):
 def test_manifest_transcript_keeps_text_when_off():
     import pipeline
 
-    result = pipeline._manifest_transcript(_pii_entry(False), [], "")
+    result = pipeline._manifest_transcript(
+        {"source_transcripts": {"P01": _pii_entry(False)}}, "P01", ""
+    )
     assert result["segments"][1]["text"] == "Erik and Anna"
     assert result["segments"][1]["words"]
 

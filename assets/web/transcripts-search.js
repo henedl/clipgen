@@ -2,7 +2,8 @@
  *
  * Header full-text search across all transcripts: debounced query, client-side
  * merge of the streaming participant's partial segments, grouped results,
- * "Mark All", and jump-to-result. Result rows show only time + highlighted text
+ * "Mark All", "Redact All" (adds the query as a redaction term), and
+ * jump-to-result. Result rows show only time + highlighted text
  * (no cross-reference badges — they smush the narrow dropdown). Loaded after
  * transcripts.js; reads the hub's shared state + helpers through
  * window.ClipgenTranscripts (TS) and publishes initSearch back (boot wires it).
@@ -44,8 +45,19 @@
     }).catch(toastError("Could not mark results"));
   }
 
+  // The query becomes a study-wide redaction term; matching is whole-word.
+  function redactSearchQuery() {
+    var query = state.searchQuery;
+    if (!query) return;
+    TS.addRedactTerm(query).then(function (listed) {
+      if (listed && qs("#searchInput").value.trim() === query) doSearch(query);
+    });
+  }
+
   function initSearch() {
     var input = qs("#searchInput");
+
+    qs("#searchRedactAllBtn").addEventListener("click", redactSearchQuery);
 
     qs("#searchMarkAllBtn").addEventListener("click", function () {
       markAllSearchResults();

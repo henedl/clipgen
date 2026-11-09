@@ -1215,6 +1215,7 @@ class TestTranscriptsManifest:
             "corrections": [],
             "marks": [],
             "known_terms": [],
+            "redact_terms": [],
         }
 
     def test_load_missing_file(self, tmp_path, monkeypatch):
@@ -1225,6 +1226,7 @@ class TestTranscriptsManifest:
             "corrections": [],
             "marks": [],
             "known_terms": [],
+            "redact_terms": [],
         }
 
     def test_save_and_load_roundtrip(self, tmp_path, monkeypatch):
@@ -1306,6 +1308,16 @@ class TestTranscriptsManifest:
         loaded = transcripts.load_transcripts_manifest()
         assert loaded["known_terms"] == ["Frobnicator"]
 
+    def test_redact_terms_round_trip_and_survive_other_saves(
+        self, tmp_path, monkeypatch
+    ):
+        monkeypatch.setattr(config, "OUTPUT_DIR", str(tmp_path))
+        transcripts.save_transcripts_manifest({}, [], redact_terms=["Anna"])
+        assert transcripts.load_transcripts_manifest()["redact_terms"] == ["Anna"]
+        # A CLI save that does not know the list keeps it.
+        transcripts.save_transcripts_manifest({}, [], marks=[])
+        assert transcripts.load_transcripts_manifest()["redact_terms"] == ["Anna"]
+
     def test_terms_only_manifest_persists(self, tmp_path, monkeypatch):
         monkeypatch.setattr(config, "OUTPUT_DIR", str(tmp_path))
         path = transcripts.save_transcripts_manifest({}, [], known_terms=["Widget"])
@@ -1340,6 +1352,7 @@ class TestTranscriptsManifest:
             "corrections": [],
             "marks": [],
             "known_terms": [],
+            "redact_terms": [],
         }
 
     def test_load_returns_independent_copies(self, tmp_path, monkeypatch):

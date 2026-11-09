@@ -235,7 +235,7 @@ def _corrections(manifest: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def _entry_pii(
-    entry: dict[str, Any], corrections: list[dict[str, Any]]
+    entry: dict[str, Any], corrections: list[dict[str, Any]], terms: list[str]
 ) -> tuple[list[Any], list[str], list[list[dict[str, Any]]] | None]:
     """(segments, corrected texts, spans per segment or None when redaction is off)."""
     # Late import: transcripts sits a layer above this module.
@@ -248,7 +248,7 @@ def _entry_pii(
     ]
     # Corrected text, like every other reader; redaction spans index into it.
     texts = [s["text"] for s in transcripts.apply_corrections(segments, corrections)]
-    return segments, texts, redact.entry_view(entry, segments, texts)
+    return segments, texts, redact.entry_view(entry, segments, texts, terms)
 
 
 def build_transcript_segments(manifest: dict[str, Any]) -> list[dict[str, Any]]:
@@ -266,6 +266,7 @@ def build_transcript_segments(manifest: dict[str, Any]) -> list[dict[str, Any]]:
         marks_by_segment.setdefault(seg_id, []).append(mk)
 
     corrections = _corrections(manifest)
+    terms = list(manifest.get("redact_terms") or [])
     records: list[dict[str, Any]] = []
     for participant_id, entry in source.items():
         if not isinstance(entry, dict):
@@ -275,7 +276,7 @@ def build_transcript_segments(manifest: dict[str, Any]) -> list[dict[str, Any]]:
         source_file = entry.get("source_file", "")
         transcribed_at = entry.get("transcribed_at", "")
         speaker_labels = (entry.get("speakers") or {}).get("labels") or {}
-        segments, texts, pii_view = _entry_pii(entry, corrections)
+        segments, texts, pii_view = _entry_pii(entry, corrections, terms)
         for idx, seg in enumerate(segments):
             seg_id = seg.get("id") or f"{participant_id}:{idx}"
             spans = [
@@ -322,6 +323,7 @@ def build_friction_moments(manifest: dict[str, Any]) -> list[dict[str, Any]]:
     """One row per LLM-detected friction moment, across all participants."""
     source = manifest.get("source_transcripts", {}) or {}
     corrections = _corrections(manifest)
+    terms = list(manifest.get("redact_terms") or [])
     records: list[dict[str, Any]] = []
     for participant_id, entry in source.items():
         if not isinstance(entry, dict):
@@ -330,7 +332,7 @@ def build_friction_moments(manifest: dict[str, Any]) -> list[dict[str, Any]]:
         if not isinstance(friction_data, dict):
             continue
         # Agents read real names; placeholders go on here, as in the UI.
-        _segs, _texts, pii_view = _entry_pii(entry, corrections)
+        _segs, _texts, pii_view = _entry_pii(entry, corrections, terms)
         placeholders = redact.surface_placeholders(pii_view) if pii_view else {}
         computed_at = friction_data.get("computed_at", "")
         model = friction_data.get("model", "")

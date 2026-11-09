@@ -107,7 +107,11 @@ def _filter_transcript_segments(
         raw_segments = entry.get("segments") or []
         # Match and label on the text the Transcripts UI shows: corrected, redacted.
         corrected = transcripts.apply_corrections(raw_segments, corrections)
-        texts = redact.entry_texts(entry, [seg["text"] for seg in corrected])
+        texts = redact.entry_texts(
+            entry,
+            [seg["text"] for seg in corrected],
+            manifest.get("redact_terms") or [],
+        )
         for idx, (raw, text) in enumerate(zip(raw_segments, texts, strict=True)):
             seg_id = raw.get("id") or f"{pid}:{idx}"
             attached = marks_by_segment.get(seg_id, [])

@@ -27,6 +27,8 @@ API endpoints (all under /transcripts/):
   GET  /api/known-terms                           - list the study vocabulary
   POST /api/known-terms                           - add a known term
   DELETE /api/known-terms/<term>                  - remove a known term
+  POST /api/redact-terms                          - add a manual redaction term
+  DELETE /api/redact-terms/<term>                 - remove a redaction term
   GET  /api/dictionary.csv                        - corrections + terms as one CSV
   POST /api/dictionary/import                     - merge a dictionary CSV
   GET  /api/dictionary/global                     - counts for the saved global copy
@@ -312,11 +314,9 @@ def _enqueue_speakers_task(pid: str, entry: dict[str, Any]) -> dict[str, Any] | 
 def _redaction_summary(entry: dict[str, Any]) -> dict[str, Any]:
     """Pill/transcript payload; ``enabled`` is None until the participant chose."""
     block = entry.get("redaction") or {}
-    count = sum(len(s.get("pii") or []) for s in entry.get("segments") or [])
     return {
         "enabled": block.get("enabled") if "enabled" in block else None,
-        "count": count,
-        "detected": count > 0,
+        "detected": any(s.get("pii") for s in entry.get("segments") or []),
         "excluded": list(block.get("excluded") or []),
     }
 
@@ -349,11 +349,21 @@ def _enqueue_redact_task(pid: str, entry: dict[str, Any]) -> dict[str, Any] | No
     return _task_info(task)
 
 
+def _redact_terms() -> list[str]:
+    """Snapshot of the study's manual redaction terms; caller holds _manifest_lock."""
+    return list(_manifest.get("redact_terms") or [])
+
+
 def _redacted_view(
-    raw_segments: list[Any], corrected: list[Any], entry: dict[str, Any]
+    raw_segments: list[Any],
+    corrected: list[Any],
+    entry: dict[str, Any],
+    terms: list[str],
 ) -> list[list[dict[str, Any]]] | None:
     """Numbered spans per corrected segment when redaction applies; else None."""
-    return redact.entry_view(entry, raw_segments, [seg["text"] for seg in corrected])
+    return redact.entry_view(
+        entry, raw_segments, [seg["text"] for seg in corrected], terms
+    )
 
 
 def _agent_placeholders(pid: str) -> dict[str, str]:
@@ -365,9 +375,10 @@ def _agent_placeholders(pid: str) -> dict[str, str]:
         entry = dict(entry)
         raw_segments = list(entry["segments"])
         corrections = list(_manifest.get("corrections", []))
+        terms = _redact_terms()
         version = _corrections_version
     corrected = _corrected_segments(pid, raw_segments, corrections, version=version)
-    view = _redacted_view(raw_segments, corrected, entry)
+    view = _redacted_view(raw_segments, corrected, entry, terms)
     return redact.surface_placeholders(view) if view is not None else {}
 
 
@@ -591,6 +602,7 @@ def api_participants() -> FlaskResponse:
         transcribe_prewarm=_transcribe_prewarm_setting(),
         speaker_model=_speaker_model_ready(),
         redact_model=_redact_model_ready(),
+        redact_terms=list(_manifest.get("redact_terms") or []),
         config=utils.get_frontend_config(),
     )
 
@@ -701,13 +713,16 @@ def api_transcript(participant: str) -> FlaskResponse:
         speakers_summary = _speakers_summary(entry)
         redaction_summary = _redaction_summary(entry)
         entry_snapshot = {**entry, "redaction": dict(entry.get("redaction") or {})}
+        terms = _redact_terms()
         version_snapshot = _corrections_version
 
     # Apply corrections to get corrected text (memoized per participant)
     corrected_segments = _corrected_segments(
         participant, raw_segments, corrections, version=version_snapshot
     )
-    pii_view = _redacted_view(raw_segments, corrected_segments, entry_snapshot)
+    pii_view = _redacted_view(raw_segments, corrected_segments, entry_snapshot, terms)
+    # The page shows chips on this flag; terms apply without a model pass.
+    redaction_summary["applied"] = pii_view is not None
 
     # Build marks-by-segment-id lookup
     marks_by_seg: dict[str, list[dict[str, Any]]] = {}
@@ -815,6 +830,7 @@ def _formatted_result(participant: str) -> transcripts.TranscriptResult | None:
             "segments": segments_snapshot,
             "redaction": dict(entry.get("redaction") or {}),
         }
+        terms = _redact_terms()
         version_snapshot = _corrections_version
 
     corrected = _corrected_segments(
@@ -824,7 +840,7 @@ def _formatted_result(participant: str) -> transcripts.TranscriptResult | None:
         version=version_snapshot,
     )
     return transcripts.TranscriptResult(
-        segments=redact.entry_segments(entry_snapshot, corrected),
+        segments=redact.entry_segments(entry_snapshot, corrected, terms),
         language=language,
         source_file=source_file,
         model=model,
@@ -942,9 +958,11 @@ def api_redact_set(participant: str) -> FlaskResponse:
     enabled = data.get("enabled")
     if not isinstance(enabled, bool):
         raise ApiError("enabled must be true or false")
-    if enabled and not _redact_model_ready():
-        return err("Redact model is not installed", 409, reason="model_missing")
+    model_ready = _redact_model_ready()
     with _manifest_lock:
+        # Manual terms need no model, so the switch works once one exists.
+        if enabled and not model_ready and not _redact_terms():
+            return err("Redact model is not installed", 409, reason="model_missing")
         src = _manifest.setdefault("source_transcripts", {})
         if participant not in src and not _video_paths_for_participant(participant):
             raise ApiError("Unknown participant", 404)
@@ -953,7 +971,7 @@ def api_redact_set(participant: str) -> FlaskResponse:
         if enabled:
             entry["redaction"] = redact.on_block(entry)
             segs = entry.get("segments") or []
-            if segs and not any(s.get("pii") for s in segs):
+            if model_ready and segs and not any(s.get("pii") for s in segs):
                 task = _enqueue_redact_task(participant, entry)
         else:
             _cancel_tasks("redact", participant)
@@ -1697,7 +1715,7 @@ def api_summary_save(participant: str) -> FlaskResponse:
         if not entry:
             return err("Participant not found", 404)
         # The editor shows placeholders; saving would store them as the summary.
-        if redact.entry_applied(entry, entry.get("segments") or []):
+        if redact.entry_applied(entry, entry.get("segments") or [], _redact_terms()):
             return err("Turn off redaction to edit", 409)
         entry["summary"] = summary_raw.strip()
         # An edited summary invalidates dependents exactly like the regenerate route.
@@ -1832,6 +1850,68 @@ def api_known_terms_delete(term: str) -> FlaskResponse:
 
     _schedule_persist()
     return ok()
+
+
+# ---- Manual redaction terms ----
+#
+# Study-wide and matched at read time; /api/participants carries the list.
+
+
+@transcripts_bp.route("/api/redact-terms", methods=["POST"])
+@json_endpoint
+def api_redact_terms_add() -> FlaskResponse:
+    """Add a term; ``hidden``/``off`` count its matches by Redact switch state."""
+    data = require_json_body("Missing JSON body")
+    term = " ".join(str(data.get("term", "")).split())
+    key = redact.surface_key(term)
+    if len(key) < redact.TERM_MIN_CHARS:
+        return err(f"A term needs at least {redact.TERM_MIN_CHARS} characters")
+
+    with _manifest_lock:
+        terms = _manifest.setdefault("redact_terms", [])
+        # A duplicate is not an error; the input should just clear.
+        duplicate = any(redact.surface_key(t) == key for t in terms)
+        if not duplicate:
+            terms.append(term)
+            _bump_corrections_version()
+        listed = list(terms)
+        corrections = list(_manifest.get("corrections", []))
+        version = _corrections_version
+        snapshots = [
+            (pid, list(entry["segments"]), redact.entry_wanted(entry))
+            for pid, entry in _manifest.get("source_transcripts", {}).items()
+            if entry.get("segments")
+        ]
+    if duplicate:
+        return ok(terms=listed, duplicate=True)
+    _schedule_persist()
+
+    pattern = redact.term_pattern([term])
+    assert pattern is not None  # the key passed the length check
+    hidden = off = 0
+    for pid, raw_segments, wanted in snapshots:
+        corrected = _corrected_segments(pid, raw_segments, corrections, version=version)
+        count = sum(len(pattern.findall(seg["text"])) for seg in corrected)
+        if wanted:
+            hidden += count
+        else:
+            off += count
+    return ok(terms=listed, hidden=hidden, off=off)
+
+
+@transcripts_bp.route("/api/redact-terms/<path:term>", methods=["DELETE"])
+def api_redact_terms_delete(term: str) -> FlaskResponse:
+    """Remove a redaction term; its matches show again."""
+    key = redact.surface_key(term)
+    with _manifest_lock:
+        terms = _redact_terms()
+        kept = [t for t in terms if redact.surface_key(t) != key]
+        if len(kept) == len(terms):
+            return err("Term not found", 404)
+        _manifest["redact_terms"] = kept
+        _bump_corrections_version()
+    _schedule_persist()
+    return ok(terms=kept)
 
 
 # ---- Dictionary import/export ----
@@ -2011,7 +2091,7 @@ def _resolve_mark(
         corrected = _corrected_segments(pid, segments, corrections)
         seg = corrected[idx]
         text = seg["text"]
-        pii_view = _redacted_view(segments, corrected, entry)
+        pii_view = _redacted_view(segments, corrected, entry, _redact_terms())
         if pii_view is not None:
             text = redact.render_text(text, pii_view[idx])
         return _view(True, pid, seg, text)
@@ -2077,7 +2157,9 @@ def intake_transcript(pid: str, mark_ids: list[str]) -> tuple[str, str]:
         }
         segments = list(entry.get("segments", []) or [])
         corrected = _corrected_segments(pid, segments, _manifest.get("corrections", []))
-        texts = redact.entry_texts(entry, [seg["text"] for seg in corrected])
+        texts = redact.entry_texts(
+            entry, [seg["text"] for seg in corrected], _redact_terms()
+        )
         parts = [
             text.strip()
             for seg, text in zip(segments, texts, strict=True)
@@ -2230,13 +2312,14 @@ def api_search() -> FlaskResponse:
             for pid, entry in src.items()
         }
         entries_by_pid = {pid: dict(entry) for pid, entry in src.items()}
+        terms = _redact_terms()
 
     for pid, raw_segments in segment_snapshots.items():
         corrected = _corrected_segments(
             pid, raw_segments, corrections, version=version_snapshot
         )
         participant_count = 0
-        pii_view = _redacted_view(raw_segments, corrected, entries_by_pid[pid])
+        pii_view = _redacted_view(raw_segments, corrected, entries_by_pid[pid], terms)
         for i, (raw, seg) in enumerate(zip(raw_segments, corrected, strict=True)):
             # Match what the page shows, so hidden names stay unfindable.
             shown = (
@@ -2821,6 +2904,7 @@ def _do_persist() -> None:
         _manifest.get("corrections", []),
         marks=_manifest.get("marks"),
         known_terms=_manifest.get("known_terms", []),
+        redact_terms=_manifest.get("redact_terms", []),
     )
 
 
