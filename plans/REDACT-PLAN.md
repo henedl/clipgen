@@ -50,7 +50,7 @@ Run with `uv run --with ai-edge-litert==2.2.0` on macOS arm64, Python 3.12:
 ## Design
 
 - **Execution** mirrors the speakers pass: a `kind: "redact"` worker task (text-only), auto-enqueued after a transcription merges when wanted, or on demand from the pill. `config.TRANSCRIBE_REDACT` is the global default; a participant's explicit `redaction.enabled` beats it.
-- **Storage** in `source_transcripts[pid]`: `redaction: {enabled, detected_at, min_score, org, count, error}` and per segment `pii: [{label, start, end, score, text}]` + `pii_crc` (crc32 of the corrected text the spans index). Disabling strips `pii`/`pii_crc`.
+- **Storage** in `source_transcripts[pid]`: `redaction: {enabled, excluded}` (the count is derived from the segments) and per segment `pii: [{label, start, end, score, text}]` + `pii_crc` (crc32 of the corrected text the spans index). Disabling strips `pii`/`pii_crc`.
 - **Corrections**: detection runs on corrected text. At read time a crc mismatch re-anchors spans by their surface and drops the ones that vanished; a text-changing correction route requeues a redact task.
 - **Numbering** at read time, per participant, server-side: same `(label, normalised surface)` → same `[LABEL_N]`. The API ships `placeholder` per span with UTF-16 offsets.
 - **Model delivery**: `redact.ASSETS` pins the three files; `redact.models_dir()` is `config_dir()/redact_models`; `redact.download()` streams each file through `llm_client.stream_download`. Routes `POST /api/models/redact/download`, `GET /api/models/redact/download-status`, `DELETE /api/models/redact`. Settings → Transcription → Redaction has the install block; the pill row disables with a hint while the model is missing.

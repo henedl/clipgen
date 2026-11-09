@@ -37,7 +37,6 @@ import threading
 import unicodedata
 import zlib
 from collections.abc import Callable, Iterable
-from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -163,15 +162,10 @@ def remove() -> None:
     _drop_runtime()
 
 
-def redaction_block(count: int, *, min_score: float, org: bool) -> dict[str, Any]:
-    """Fresh manifest ``redaction`` block after a detection run."""
-    return {
-        "enabled": True,
-        "count": count,
-        "min_score": min_score,
-        "org": org,
-        "detected_at": datetime.now(UTC).isoformat(),
-    }
+def on_block(entry: dict[str, Any]) -> dict[str, Any]:
+    """Enabled ``redaction`` block that keeps the entry's restore list."""
+    excluded = (entry.get("redaction") or {}).get("excluded")
+    return {"enabled": True, "excluded": list(excluded or [])}
 
 
 # ---------------------------------------------------------------------------
@@ -646,13 +640,13 @@ def redact_entry(
     org: bool,
     cancel_flag: Callable[[], bool] | None = None,
     on_progress: Callable[[float], None] | None = None,
-) -> dict[str, Any] | None:
-    """Tag *segments* in place; returns the ``redaction`` block, None if no model."""
+) -> bool:
+    """Tag *segments* in place; False when the model is not installed."""
     if not segments:
-        return redaction_block(0, min_score=min_score, org=org)
+        return True
     if not config.DEBUGGING and not is_redact_model_available():
         utils.warning_print("Redact model is not installed; skipping redaction.")
-        return None
+        return False
     texts = [str(seg.get("text") or "") for seg in segments]
     per_segment = detect_spans(
         texts,
@@ -661,12 +655,23 @@ def redact_entry(
         cancel_flag=cancel_flag,
         on_progress=on_progress,
     )
-    count = 0
     for seg, text, spans in zip(segments, texts, per_segment, strict=True):
         seg["pii"] = spans
         seg["pii_crc"] = text_crc(text)
-        count += len(spans)
-    return redaction_block(count, min_score=min_score, org=org)
+    return True
+
+
+def tag_segment(seg: dict[str, Any], tagged: dict[str, Any]) -> None:
+    """Copy *tagged*'s spans and crc onto *seg*; a clean segment keeps only the crc."""
+    if tagged.get("pii"):
+        seg["pii"] = list(tagged["pii"])
+    else:
+        seg.pop("pii", None)
+    # Kept on clean segments too, so a later correction can requeue them.
+    if tagged.get("pii_crc") is not None:
+        seg["pii_crc"] = tagged["pii_crc"]
+    else:
+        seg.pop("pii_crc", None)
 
 
 # ---------------------------------------------------------------------------
@@ -767,14 +772,44 @@ def entry_wanted(entry: dict[str, Any]) -> bool:
     return bool(config.TRANSCRIBE_REDACT)
 
 
+def entry_applied(entry: dict[str, Any], segments: list[Any]) -> bool:
+    """True when the entry wants redaction and a pass left spans on *segments*."""
+    return entry_wanted(entry) and any(s.get("pii") for s in segments)
+
+
+def entry_view(
+    entry: dict[str, Any], segments: list[Any], texts: list[str]
+) -> list[list[dict[str, Any]]] | None:
+    """``entry_spans`` over *texts* when redaction applies to the entry; else None."""
+    if not entry_applied(entry, segments):
+        return None
+    excluded = (entry.get("redaction") or {}).get("excluded")
+    return entry_spans(segments, texts, excluded)
+
+
 def entry_texts(entry: dict[str, Any], texts: list[str]) -> list[str]:
     """*texts* for the entry's segments with placeholders when redaction applies."""
-    segments = list(entry.get("segments") or [])
-    if not entry_wanted(entry) or not any(s.get("pii") for s in segments):
+    view = entry_view(entry, list(entry.get("segments") or []), texts)
+    if view is None:
         return texts
-    excluded = (entry.get("redaction") or {}).get("excluded")
-    spans = entry_spans(segments, texts, excluded)
-    return [render_text(t, s) for t, s in zip(texts, spans, strict=True)]
+    return [render_text(t, s) for t, s in zip(texts, view, strict=True)]
+
+
+def entry_segments(entry: dict[str, Any], corrected: list[Any]) -> list[Any]:
+    """*corrected* with placeholders baked into the text when redaction applies."""
+    raw_texts = [seg["text"] for seg in corrected]
+    texts = entry_texts(entry, raw_texts)
+    if texts == raw_texts:
+        return corrected
+    # Word timings and span offsets describe the raw text; drop them with it.
+    return [
+        {
+            k: v
+            for k, v in {**seg, "text": text}.items()
+            if k not in ("words", "pii", "pii_crc")
+        }
+        for seg, text in zip(corrected, texts, strict=True)
+    ]
 
 
 def render_text(text: str, spans: list[dict[str, Any]]) -> str:

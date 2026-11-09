@@ -877,22 +877,9 @@ def _manifest_transcript(
     Rendering before any clip filter keeps placeholder numbering per participant.
     """
     corrected = transcripts.apply_corrections(entry.get("segments", []), corrections)
-    raw_texts = [seg["text"] for seg in corrected]
-    texts = redact.entry_texts(entry, raw_texts)
-    segments = corrected
-    if texts != raw_texts:
-        # Word timings and span offsets describe the raw text; drop them with it.
-        segments = [
-            cast(
-                transcripts.TranscriptSegment,
-                {
-                    k: v
-                    for k, v in {**seg, "text": text}.items()
-                    if k not in ("words", "pii", "pii_crc")
-                },
-            )
-            for seg, text in zip(corrected, texts, strict=True)
-        ]
+    segments = cast(
+        list[transcripts.TranscriptSegment], redact.entry_segments(entry, corrected)
+    )
     return transcripts.TranscriptResult(
         segments=segments,
         language=entry.get("language", ""),

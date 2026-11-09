@@ -248,10 +248,7 @@ def _entry_pii(
     ]
     # Corrected text, like every other reader; redaction spans index into it.
     texts = [s["text"] for s in transcripts.apply_corrections(segments, corrections)]
-    if not redact.entry_wanted(entry) or not any(s.get("pii") for s in segments):
-        return segments, texts, None
-    excluded = (entry.get("redaction") or {}).get("excluded")
-    return segments, texts, redact.entry_spans(segments, texts, excluded)
+    return segments, texts, redact.entry_view(entry, segments, texts)
 
 
 def build_transcript_segments(manifest: dict[str, Any]) -> list[dict[str, Any]]:

@@ -2287,13 +2287,11 @@ class TestRedactCarry:
         assert out[0]["text"] == "email anna@ex.se"
         assert out[0]["pii_crc"] == 7
 
-    def test_filter_segments_keeps_redact_flag(self):
+    def test_filter_segments_keeps_pii(self):
         result = TranscriptResult(
             segments=[self._seg()], language="en", source_file="v.mp4", model="base"
         )
-        result["redact"] = True
         out = transcripts.filter_segments(result, 0.0, 5.0)
-        assert out["redact"] is True
         assert out["segments"][0]["pii_crc"] == 7
 
 
@@ -2316,12 +2314,13 @@ class TestRedactFormatting:
         a["pii_crc"] = redact.text_crc(text)
         a["speaker"] = "1"
         b = TranscriptSegment(start=1.0, end=2.0, text="Plain line")
-        result = TranscriptResult(
-            segments=[a, b], language="en", source_file="v.mp4", model="base"
+        entry = {"segments": [a, b], "redaction": {"enabled": redact_on}}
+        return TranscriptResult(
+            segments=redact.entry_segments(entry, [a, b]),
+            language="en",
+            source_file="v.mp4",
+            model="base",
         )
-        if redact_on:
-            result["redact"] = True
-        return result
 
     def test_formats_substitute_placeholders_when_on(self):
         for fmt in (
@@ -2365,7 +2364,7 @@ class TestRedactWorkerTasks:
         assert task["status"] == transcripts.TASK_STATUS_COMPLETED
         assert task["progress"] == 1.0
         result = task["result"]
-        assert result["redaction"]["count"] == 1
+        assert list(result) == ["segments"]
         assert [s["id"] for s in result["segments"]] == ["P01:0", "P01:1"]
         assert result["segments"][0]["pii"][0]["text"] == "a@b.se"
         assert result["segments"][1]["pii"] == []
@@ -2390,15 +2389,13 @@ class TestRedactWorkerTasks:
         assert "not installed" in task["error"]
 
     def test_redact_task_cancel_marks_cancelled(self, monkeypatch):
-        import redact
-
         monkeypatch.setattr(config, "DEBUGGING", True)
         worker = transcripts.TranscriptWorker()
         task = transcripts.create_redact_task("P01", [{"id": "P01:0", "text": "x"}])
 
         def cancel_late(segments, **kwargs):
             task["_cancelled"] = True
-            return redact.redaction_block(0, min_score=0.6, org=False)
+            return True
 
         monkeypatch.setattr(transcripts, "redact_entry", cancel_late)
         worker._execute_task(task)
