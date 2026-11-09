@@ -863,9 +863,8 @@
       state.segments = [];
       state.speakers = null;
       state.streamingParticipant = null;
+      // Rewords the empty pane with the indicator's task pick, not taskForPid.
       renderSegments();
-      // Not taskForPid: the pane must match the indicator's pick among duplicate tasks.
-      _setTranscriptEmptyText(_taskForSelectedParticipant());
       renderTimeline();
       clearAnalysisPanel();
     }
@@ -880,9 +879,11 @@
     if (!empty) return;
     var main = empty.querySelector("p");
     var hint = empty.querySelector(".empty-hint");
+    var btn = qs("#transcriptEmptyBtn");
     // Only in-flight states shimmer.
     var waiting = !!(task && (task.status === "running" || task.status === "queued"));
     main.classList.toggle("cg-shimmer", waiting);
+    var canStart = false;
     if (_cancelPending(task)) {
       main.textContent = "Cancelling…";
       // Not "finishing the current segment": a cancel may wait on the model load.
@@ -900,9 +901,33 @@
       main.textContent = "Queued for transcription…";
       hint.textContent = "Waiting for the current task to finish";
     } else {
-      main.textContent = "No transcript available";
-      hint.textContent = "Use the Queue panel to transcribe this participant's video";
+      var row = _selectedParticipantRow();
+      var failed = !!(task && task.status === "failed");
+      canStart = _canStartTranscribe();
+      main.textContent = failed ? "Transcription failed" : "No transcript available";
+      if (failed) hint.textContent = task.error || "";
+      else if (canStart) hint.textContent = "Runs on this machine. Lines appear here as they are transcribed.";
+      else if (row && !row.has_video) hint.textContent = "No source video for this participant";
+      else hint.textContent = "";
+      btn.querySelector(".transcript-empty-label").textContent = failed ? "Retry" : "Transcribe";
     }
+    hint.classList.toggle("hidden", !hint.textContent);
+    btn.classList.toggle("hidden", !canStart);
+  }
+
+  // Selected participant has a video, no transcript, and no live transcription task.
+  function _canStartTranscribe() {
+    var row = _selectedParticipantRow();
+    if (!row || !row.has_video || row.has_transcript) return false;
+    var task = _taskForSelectedParticipant();
+    return !(task && (task.status === "running" || task.status === "queued"));
+  }
+
+  // Rechecks at click: the pane can outlive its participant during a switch.
+  function initTranscriptEmptyBtn() {
+    qs("#transcriptEmptyBtn").addEventListener("click", function () {
+      if (_canStartTranscribe()) transcribeParticipants([state.selectedParticipant], false);
+    });
   }
 
   function renderEmptyState() {
@@ -1002,6 +1027,8 @@
 
     if (state.segments.length === 0) {
       container.innerHTML = "";
+      // Every reveal rewords the pane, so the Transcribe button never shows stale.
+      _setTranscriptEmptyText(_taskForSelectedParticipant());
       empty.classList.remove("hidden");
       return;
     }
@@ -2962,6 +2989,7 @@
     initSearch();
     initPillOutsideClick();
     initPillWheelScroll();
+    initTranscriptEmptyBtn();
     initCorrectionsModal();
     initBatchModals();
     initVideoPlayer();
