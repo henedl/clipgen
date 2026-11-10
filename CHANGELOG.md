@@ -8,6 +8,17 @@ Notable changes per release. One level-2 heading per version — `## <version> �
 
 `<Tool>` is one of `Core`, `Studio`, `Screenspace`, `Transcripts`, `Workflows`, `Composer`, `Overview`. Write for someone using clipgen, not building it: name the thing by what it is called in the interface, say what changed for them, and leave the internals in the commit. Add a second sentence only when the first leaves an obvious "so what". Lines render as **plain text** in the Start overlay's Recent updates tab — no backticks or markdown inside them, or it shows up literally.
 
+## v0.18.3 — 2026-11-09
+**Transcripts:** Feat: Add your own redaction terms in the Corrections window or with Redact All in search. They hide every match without the Redact model.
+**Transcripts:** Feat: Redact forever rewrites the saved text for one item, one term or the whole study after you confirm. Audio and video stay as they are.
+**Transcripts:** Feat: An empty transcript pane has a Transcribe button.
+**Transcripts:** Feat: Long recordings transcribe with far less memory, and speaker labels on a three-hour session take seconds instead of minutes.
+**Studio:** Feat: Hover scrubbing on long clips loads about three times faster.
+**Core:** Feat: Gallery screenshots from long videos build about twice as fast.
+**Transcripts:** Fix: Redaction now covers AI summaries, exports, search, and the text Studio and Composer pick up.
+**Core:** Fix: The timeline viewer's Attachments panel is styled again.
+**Core:** Fix: The loading screen no longer shows a seconds counter.
+
 ## v0.18.0 — 2026-10-10
 **Transcripts:** Feat: Redact finds names, email addresses and other personal details and shows placeholders like [GIVEN_NAME_1] instead. The model is an optional download, and you can restore any single item.
 **Transcripts:** Feat: Speaker labels show who is talking on each line. Turn them on per participant, rename speakers, and fix single lines; your changes survive a re-run.
