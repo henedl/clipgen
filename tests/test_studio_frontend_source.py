@@ -84,29 +84,13 @@ def test_studio_generate_uses_abort_controllers_for_both_branches():
     assert "signal: intakeAbort.signal" in src
 
 
-def test_on_cancel_generate_aborts_and_posts_intake_cancel():
-    """Cancel button must abort live fetches AND post both server cancel
-    endpoints so in-flight ffmpeg subprocesses get terminated."""
-    src = _studio_js()
-    start = src.index("function onCancelGenerate()")
-    end = src.index("\n  }", start)
-    body = src[start:end]
-    assert "aborts[i].abort()" in body
-    assert 'apiPost("api/generate/cancel")' in body
-    assert 'apiPost("api/generate-intake/cancel")' in body
-
-
 # ---- Task 3: studio streaming, selectors, finishBranch ----
 
 
 def test_studio_uses_shared_ndjson_reader():
-    """The shared NDJSON streaming helpers live in utils.js (also used by
-    Composer/Transcripts/Overview); Studio must not grow a local copy back."""
-    utils_src = (_WEB / "utils.js").read_text(encoding="utf-8")
-    assert "var readNDJSONStream = function (response, onLine)" in utils_src
-    # response.body guard
-    assert "if (!response.body" in utils_src
-    assert "var apiPostNDJSON = function (path, body, opts)" in utils_src
+    """Studio streams through the shared utils.js helpers, never a local copy.
+
+    The helpers' behavior runs under node in test_js_units.py."""
     src = _studio_js()
     # The duplicated raw .getReader() blocks should be gone (only the utils.js
     # helper calls it).

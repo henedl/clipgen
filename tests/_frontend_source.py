@@ -6,6 +6,7 @@ the JS comment stripper, and the ES5-discipline assertion. One definition here;
 the assertions themselves stay in the test files.
 """
 
+import json
 import re
 import shutil
 import subprocess
@@ -57,6 +58,9 @@ def slice_between(src: str, start: str, end: str) -> str:
     return src[i : src.index(end, i)]
 
 
+NODE_TIMEOUT = 20
+
+
 def node_eval(snippet: str, probe: str, prelude: str = "") -> list[str]:
     """Run *snippet* + *probe* under node and return stdout lines.
 
@@ -67,8 +71,32 @@ def node_eval(snippet: str, probe: str, prelude: str = "") -> list[str]:
     assert NODE is not None, "node missing; guard the test with skipif"
     result = subprocess.run(
         [NODE, "-e", prelude + "\n" + snippet + "\n" + probe],
-        check=True,
         capture_output=True,
         text=True,
+        timeout=NODE_TIMEOUT,
     )
+    assert result.returncode == 0, f"node exited {result.returncode}:\n{result.stderr}"
     return result.stdout.split("\n")[:-1]
+
+
+# Settle-or-fail: a rejection or a never-settled promise exits node nonzero.
+_ASYNC_PROBE = """
+var __settled = false;
+process.on("exit", function (code) {
+  if (!__settled && code === 0) {
+    console.error("probe promise never settled");
+    process.exitCode = 1;
+  }
+});
+Promise.resolve().then(function () { return (%s); }).then(
+  function (v) { __settled = true; console.log(JSON.stringify(v)); },
+  function (e) { __settled = true; console.error((e && e.stack) || e); process.exitCode = 1; }
+);
+"""
+
+
+def node_eval_async(snippet: str, expr: str, prelude: str = ""):
+    """Await the promise *expr* under node and return its JSON-decoded value."""
+    lines = node_eval(snippet, _ASYNC_PROBE % expr, prelude)
+    assert lines, "async probe printed nothing"
+    return json.loads(lines[-1])

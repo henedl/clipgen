@@ -24,7 +24,7 @@ The work changes tests and CI only. No public APIs, persisted schemas, productio
 
 | Package | Owner | Status |
 | --- | --- | --- |
-| Frontend streaming and cancellation | A | Not started |
+| Frontend streaming and cancellation | A | Done 2026-11-15 (see notes) |
 | Studio artifact journey | B | Not started |
 | Real-media assertions | C | Not started |
 | Concurrency tests | D | Not started |
@@ -32,6 +32,17 @@ The work changes tests and CI only. No public APIs, persisted schemas, productio
 | Integration and validation | Integrating agent | Not started |
 
 Update each package's status as it lands, including resolved issues or changed scope.
+
+## Progress notes
+
+**Package 1 (done 2026-11-15).**
+
+- `tests/_frontend_source.py`: `node_eval` now has a 20 s timeout and asserts a zero exit with node's stderr in the message, replacing `check=True`. New `node_eval_async(snippet, expr, prelude)` awaits a promise expression and returns its JSON value. A rejection prints the stack and exits 1; an exit listener turns a never-settled promise into exit 1.
+- `tests/test_js_units.py`: six new tests in three node processes per group (stream splitting/trimming, stream failures, `apiPostNDJSON` request + streaming, `apiPostNDJSON` errors/aborts, cancel aborts, abort classification). Cases inside a test run sequentially through an `all({...})` reducer, so one node process covers each group.
+- The cancel stub's `apiPost` always rejects. A cancel post without `.catch` raises an unhandled rejection that crashes node, so "failures are consumed" is executed rather than read from source.
+- Removed `test_on_cancel_generate_aborts_and_posts_intake_cancel` (all three assertions now executed) and the three `utils.js` signature/guard assertions from `test_studio_uses_shared_ndjson_reader`. The Studio-side architectural checks stay.
+- Mutation checks, each restored: dropping the intake cancel post, dropping the final buffered line, removing a cancel `.catch`, removing the per-controller `try`, a never-resolving `read()`, and dropping `e.status`. Each failed the intended test.
+- Observation, not changed: `readNDJSONStream` never calls `decoder.decode()` without `stream: true` at end of stream, so a truncated multibyte sequence at EOF is dropped silently. Only malformed streams hit this.
 
 ## Follow-up candidates (not scheduled)
 

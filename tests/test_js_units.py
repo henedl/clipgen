@@ -8,7 +8,7 @@ import json
 
 import pytest
 
-from _frontend_source import NODE, node_eval, read, slice_between
+from _frontend_source import NODE, node_eval, node_eval_async, read, slice_between
 
 pytestmark = pytest.mark.skipif(NODE is None, reason="node not installed")
 
@@ -23,6 +23,9 @@ _HIGHLIGHT = slice_between(
 )
 _ESCAPE_STUB = 'var escapeHtml = function (s) { return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;"); };'
 _CLAMP = slice_between(_UTILS, "var clamp = ", "\n\n")
+_NDJSON = slice_between(
+    _UTILS, "// ---- NDJSON streaming reader ----", "// ---- File downloads ----"
+)
 
 
 def _probe(expr: str, prelude: str = "", snippet: str = _TIME) -> list:
@@ -207,3 +210,259 @@ def test_extract_corrections_keeps_insertions_and_deletions():
         {"from": "today", "to": ""},
     ]
     assert _diff("same text", "same  text") == []
+
+
+# ---- NDJSON streaming (utils.js) ----
+
+# Each chunk is a string, a byte array, or an Error the reader rejects with.
+_STREAM_STUBS = r"""
+var enc = new TextEncoder();
+function fakeResponse(chunks) {
+  var i = 0;
+  return { ok: true, status: 200, body: { getReader: function () {
+    return { read: function () {
+      if (i >= chunks.length) return Promise.resolve({ done: true });
+      var c = chunks[i++];
+      if (c instanceof Error) return Promise.reject(c);
+      return Promise.resolve({ done: false, value: typeof c === "string" ? enc.encode(c) : c });
+    } };
+  } } };
+}
+function outcome(p, lines) {
+  return p.then(
+    function () { return { lines: lines }; },
+    function (e) { return { lines: lines, error: e.message, name: e.name, status: e.status, bodyText: e.bodyText }; }
+  );
+}
+function collect(chunks) {
+  var lines = [];
+  return outcome(readNDJSONStream(fakeResponse(chunks), function (l) { lines.push(l); }), lines);
+}
+function all(cases) {
+  var keys = Object.keys(cases), out = {};
+  return keys.reduce(function (p, k) {
+    return p.then(cases[k]).then(function (v) { out[k] = v; });
+  }, Promise.resolve()).then(function () { return out; });
+}
+// Bytes 6..8 hold the euro sign; slicing at 7 splits it.
+var euro = enc.encode('{"t":"€"}\n');
+"""
+
+
+def test_read_ndjson_stream_splits_buffers_and_trims():
+    out = node_eval_async(
+        _NDJSON,
+        """all({
+          several: function () { return collect(['{"a":1}\\n{"a":2}\\n{"a":3}\\n']); },
+          split: function () { return collect(['{"a":', '1}', '\\n']); },
+          multibyte: function () { return collect([euro.slice(0, 7), euro.slice(7)]); },
+          blanks: function () { return collect(['\\n  {"a":1}  \\r\\n\\r\\n\\n', '\\t{"b":2}\\n']); },
+          tail: function () { return collect(['{"a":1}\\n{"a"', ':2}  ']); },
+          empty: function () { return collect([]); },
+          raw: function () { return collect(['not json\\n']); },
+          types: function () {
+            var seen = [];
+            return readNDJSONStream(fakeResponse(['{"a":1}\\n']), function (l) { seen.push(typeof l); })
+              .then(function () { return seen; });
+          }
+        })""",
+        _STREAM_STUBS,
+    )
+    assert out["several"] == {"lines": ['{"a":1}', '{"a":2}', '{"a":3}']}
+    assert out["split"] == {"lines": ['{"a":1}']}
+    assert out["multibyte"] == {"lines": ['{"t":"€"}']}
+    assert out["blanks"] == {"lines": ['{"a":1}', '{"b":2}']}
+    assert out["tail"] == {"lines": ['{"a":1}', '{"a":2}']}
+    assert out["empty"] == {"lines": []}
+    assert out["raw"] == {"lines": ["not json"]}
+    assert out["types"] == ["string"]
+
+
+def test_read_ndjson_stream_rejects_on_failures():
+    out = node_eval_async(
+        _NDJSON,
+        """all({
+          noBody: function () { return outcome(readNDJSONStream({}, function () {}), []); },
+          noReader: function () { return outcome(readNDJSONStream({ body: {} }, function () {}), []); },
+          readFails: function () { return collect(['{"a":1}\\n', new Error("boom")]); },
+          onLineThrows: function () {
+            return outcome(readNDJSONStream(fakeResponse(['x\\n']), function () {
+              throw new Error("bad line");
+            }), []);
+          }
+        })""",
+        _STREAM_STUBS,
+    )
+    unsupported = {
+        "lines": [],
+        "error": "Streaming response not supported",
+        "name": "Error",
+    }
+    assert out["noBody"] == unsupported
+    assert out["noReader"] == unsupported
+    assert out["readFails"] == {"lines": ['{"a":1}'], "error": "boom", "name": "Error"}
+    assert out["onLineThrows"] == {"lines": [], "error": "bad line", "name": "Error"}
+
+
+_FETCH_STUBS = """
+var calls = [];
+var reply;
+var fetch = function (url, init) { calls.push({ url: url, init: init }); return reply(); };
+var abortErr = new DOMException("The operation was aborted.", "AbortError");
+function errorReply(status, text) {
+  return function () {
+    return Promise.resolve({ ok: false, status: status, text: text });
+  };
+}
+function post(opts) {
+  var lines = [];
+  opts = opts || {};
+  opts.onLine = opts.onLine === false ? undefined : function (l) { lines.push(l); };
+  return outcome(apiPostNDJSON("api/generate", { cells: [1, 2] }, opts), lines);
+}
+"""
+
+
+def test_api_post_ndjson_sends_request_and_streams():
+    out = node_eval_async(
+        _NDJSON,
+        """(function () {
+          var ac = new AbortController();
+          reply = function () { return Promise.resolve(fakeResponse(['{"a":1}\\n', '{"b":2}'])); };
+          return post({ signal: ac.signal }).then(function (res) {
+            var c = calls[0];
+            res.request = { url: c.url, method: c.init.method, headers: c.init.headers,
+              body: c.init.body, sameSignal: c.init.signal === ac.signal, count: calls.length };
+            return post({ onLine: false }).then(function (bare) { res.bare = bare; return res; });
+          });
+        })()""",
+        _STREAM_STUBS + _FETCH_STUBS,
+    )
+    assert out["request"] == {
+        "url": "api/generate",
+        "method": "POST",
+        "headers": {"Content-Type": "application/json"},
+        "body": '{"cells":[1,2]}',
+        "sameSignal": True,
+        "count": 1,
+    }
+    assert out["lines"] == ['{"a":1}', '{"b":2}']
+    assert "error" not in out
+    assert out["bare"] == {"lines": []}
+
+
+def test_api_post_ndjson_errors_and_aborts():
+    out = node_eval_async(
+        _NDJSON,
+        """all({
+          http: function () {
+            reply = errorReply(409, function () { return Promise.resolve('{"error":"busy"}'); });
+            return post();
+          },
+          bodyFails: function () {
+            reply = errorReply(502, function () { return Promise.reject(new Error("gone")); });
+            return post();
+          },
+          fetchAbort: function () {
+            reply = function () { return Promise.reject(abortErr); };
+            return apiPostNDJSON("x", {}).then(null, function (e) { return e === abortErr; });
+          },
+          readAbort: function () {
+            reply = function () { return Promise.resolve(fakeResponse(['{"a":1}\\n', abortErr])); };
+            return apiPostNDJSON("x", {}).then(null, function (e) { return e === abortErr; });
+          }
+        })""",
+        _STREAM_STUBS + _FETCH_STUBS,
+    )
+    assert out["http"] == {
+        "lines": [],
+        "error": "Server error 409",
+        "name": "Error",
+        "status": 409,
+        "bodyText": '{"error":"busy"}',
+    }
+    assert out["bodyFails"] == {
+        "lines": [],
+        "error": "Server error 502",
+        "name": "Error",
+        "status": 502,
+        "bodyText": "",
+    }
+    assert out["fetchAbort"] is True
+    assert out["readAbort"] is True
+
+
+# ---- Studio generate cancellation (studio-generate.js) ----
+
+_GENERATE = read("studio-generate.js")
+_CANCEL = slice_between(
+    _GENERATE,
+    "  function isGenerateFetchAborted(err) {",
+    "  // Sheet and intake halves",
+) + slice_between(
+    _GENERATE, "  function onCancelGenerate() {", "  STUDIO.onGenerate = onGenerate;"
+)
+
+# A rejected cancel post with no handler crashes node, failing the probe.
+_CANCEL_STUBS = """
+var state = {};
+var hidden = [];
+var qs = function (sel) {
+  return { classList: { add: function (c) { hidden.push(sel + "." + c); } } };
+};
+var posts = [];
+var apiPost = function (path) { posts.push(path); return Promise.reject(new Error("offline")); };
+var tick = function () { return new Promise(function (r) { setTimeout(r, 0); }); };
+"""
+
+
+def test_on_cancel_generate_aborts_every_controller():
+    out = node_eval_async(
+        _CANCEL,
+        """(function () {
+          var first = new AbortController(), last = new AbortController();
+          var hit = [];
+          var broken = { abort: function () { hit.push("broken"); throw new Error("x"); } };
+          state.activeGenerateAborts = [first, broken, last];
+          onCancelGenerate();
+          var res = {
+            aborted: [first.signal.aborted, hit, last.signal.aborted],
+            cancelled: state.generateCancelledByUser,
+            hidden: hidden.slice(),
+            left: state.activeGenerateAborts,
+            posts: posts.slice()
+          };
+          state.activeGenerateAborts = [];
+          onCancelGenerate();
+          delete state.activeGenerateAborts;
+          onCancelGenerate();
+          res.afterAbsent = state.activeGenerateAborts;
+          res.postCount = posts.length;
+          return tick().then(function () { return res; });
+        })()""",
+        _CANCEL_STUBS,
+    )
+    assert out["aborted"] == [True, ["broken"], True]
+    assert out["cancelled"] is True
+    assert out["hidden"] == ["#cancelGenerateBtn.hidden"]
+    assert out["left"] == []
+    assert out["posts"] == ["api/generate/cancel", "api/generate-intake/cancel"]
+    assert out["afterAbsent"] == []
+    assert out["postCount"] == 6
+
+
+def test_is_generate_fetch_aborted_classifies_errors():
+    out = node_eval_async(
+        _CANCEL,
+        """(function () {
+          var abortErr = new DOMException("aborted", "AbortError");
+          var plain = new Error("HTTP 500");
+          var res = [isGenerateFetchAborted(abortErr), isGenerateFetchAborted(plain),
+            isGenerateFetchAborted(null)];
+          state.generateCancelledByUser = true;
+          res.push(isGenerateFetchAborted(plain));
+          return res;
+        })()""",
+        _CANCEL_STUBS,
+    )
+    assert out == [True, False, False, True]
