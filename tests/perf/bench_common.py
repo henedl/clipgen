@@ -285,6 +285,21 @@ def build_row(
     }
 
 
+def cpu_seconds(doc: dict[str, Any]) -> float:
+    """CPU the run burned: clipgen's threads plus its ffmpeg children.
+
+    The efficiency axis ``elapsed`` cannot show. A change that halves the
+    cores a scan pegs moves this and barely moves wall time.
+    """
+    res = doc.get("resources") or {}
+    return float(res.get("cpu_s") or 0.0) + float(res.get("child_cpu_s") or 0.0)
+
+
+def metric_key(fail_metric: str, breakdown_key: str) -> str:
+    """Sample key for a ``--fail-metric`` choice."""
+    return {"elapsed": "elapsed_s", "cpu": "cpu_s"}.get(fail_metric, breakdown_key)
+
+
 def delta_pct(current: float, base: float) -> float | None:
     """Percent change, or None when *base* is 0."""
     if not base:
@@ -322,6 +337,9 @@ def compare(
             findings.append(
                 ("incomparable", name, f"{count_key} {have:g} vs baseline {want:g}")
             )
+            continue
+        if metric not in base.get("stats", {}):
+            findings.append(("incomparable", name, f"baseline has no {metric}"))
             continue
         current = row["stats"][metric]["median"]
         ref = base["stats"][metric]["median"]
@@ -410,9 +428,10 @@ def add_common_args(ap: argparse.ArgumentParser, breakdown: str) -> None:
     )
     ap.add_argument(
         "--fail-metric",
-        choices=("elapsed", breakdown),
+        choices=("elapsed", breakdown, "cpu"),
         default="elapsed",
-        help="metric the thresholds apply to (default: subprocess elapsed)",
+        help="metric the thresholds apply to (default: subprocess elapsed; "
+        "cpu is clipgen plus its ffmpeg children)",
     )
     ap.add_argument(
         "--fail-abs",

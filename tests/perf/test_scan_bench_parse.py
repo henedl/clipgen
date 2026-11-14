@@ -215,6 +215,20 @@ def test_summarize_reports_the_decode_path(make_doc):
         "color", make_doc({"scan.decode_mode.keyframe": (0, 1, None)})
     )
     assert scan_bench.decode_mode(key) == "key"
+    ref = scan_bench.summarize(
+        "color", make_doc({"scan.decode_mode.reference": (0, 1, None)})
+    )
+    assert scan_bench.decode_mode(ref) == "ref"
+    both = scan_bench.summarize(
+        "color",
+        make_doc(
+            {
+                "scan.decode_mode.reference": (0, 1, None),
+                "scan.decode_mode.full": (0, 1, None),
+            }
+        ),
+    )
+    assert scan_bench.decode_mode(both) == "mixed"
     assert scan_bench.decode_mode(scan_bench.summarize("color", make_doc({}))) == "-"
 
 

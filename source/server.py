@@ -1667,6 +1667,7 @@ def api_generate() -> FlaskResponse:
             if workers >= 2 and len(to_generate) >= 2:
                 with (
                     profiling.span("pipeline.pool_wall"),
+                    video.encode_pool(min(workers, len(to_generate))),
                     concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool,
                 ):
                     future_to_cell: dict[concurrent.futures.Future, tuple[Any, str]] = {
@@ -2616,6 +2617,7 @@ def api_generate_intake() -> FlaskResponse:
             if workers >= 2 and len(items) >= 2:
                 with (
                     profiling.span("pipeline.pool_wall"),
+                    video.encode_pool(min(workers, len(items))),
                     concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool,
                 ):
                     futures = [
@@ -3344,6 +3346,7 @@ def _open_mindnode(id_or_path: str, project_name: str | None) -> FlaskResponse:
 def _profile_request_start() -> None:
     """before_request hook: stamp the start time when profiling is on."""
     if config.PROFILING:
+        g._prof_c0 = time.thread_time()
         g._prof_t0 = time.perf_counter()
 
 
@@ -3385,6 +3388,7 @@ def _profile_request_end(response):
             f"route {request.url_rule.rule}",
             time.perf_counter() - t0,
             nbytes=response.content_length or 0,
+            cpu=time.thread_time() - g._prof_c0,
         )
     return response
 
@@ -3540,6 +3544,18 @@ def api_profile_deep_file() -> FlaskResponse:
     if path is None:
         return err("Nothing recorded for that label", 404)
     return send_file(path, as_attachment=True, download_name=Path(path).name)
+
+
+def api_profile_stacks() -> FlaskResponse:
+    """The sampler's collapsed stacks as text (``?kind=cpu`` or ``wall``).
+
+    404 unless the server runs with ``--profile-sample``. Paste the body into
+    speedscope, or read it with ``sort -t' ' -k2 -n``.
+    """
+    if not config.PROFILE_SAMPLE:
+        return err("sampling is off (launch with --profile-sample)", 404)
+    kind = "wall" if request.args.get("kind") == "wall" else "cpu"
+    return Response(profiling.sampler.folded(kind), mimetype="text/plain")
 
 
 def status() -> Response:
@@ -4471,6 +4487,7 @@ _ROOT_ROUTES = (
     ("/api/profile", api_profile, ["GET"]),
     ("/api/profile/deep", api_profile_deep, ["GET"]),
     ("/api/profile/deep/file", api_profile_deep_file, ["GET"]),
+    ("/api/profile/stacks", api_profile_stacks, ["GET"]),
     ("/api/status", status, ["GET"]),
     ("/api/export/status", api_export_status, ["GET"]),
     ("/api/export", api_export, ["POST"]),

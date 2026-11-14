@@ -48,10 +48,19 @@ from pathlib import Path
 from typing import Any
 
 import config
+import profiling_sampler as sampler
 
 _LOCK = threading.Lock()
-# label -> [total_seconds, count, max_seconds, bytes, first_seconds]. Cap is a safety net.
+# label -> [seconds, count, max, bytes, first, thread cpu (-1 = untracked)]; capped.
 _TOTALS: dict[str, list[float]] = {}
+# Process counters at window start, so the resources report is a window delta.
+_RES_BASE: dict[str, float] = {}
+_RES_COUNTERS = (
+    "wakeups",
+    "idle_wakeups",
+    "disk_read_bytes",
+    "disk_write_bytes",
+)
 _MAX_LABELS = 1024
 _DROPPED = 0  # labels refused at the cap; reported, never silent
 _REPORT_REGISTERED = False
@@ -89,6 +98,7 @@ _ENV_SETTINGS = (
     "SCREENSPACE_OCR_POOL_SIZE",
     "SCREENSPACE_CV_RESOLUTION_SCALE",
     "SCREENSPACE_FAST_SCAN_SKIP_NONKEY",
+    "SCREENSPACE_REFERENCE_FRAMES_ONLY",
     "FFMPEG_VIDEO_ENCODER",
     "TITLECARD_ENCODE_PRESET",
     "TITLECARD_ENCODE_CRF",
@@ -172,6 +182,7 @@ def enable() -> None:
     with _LOCK:
         if _WINDOW_T0 is None:
             _WINDOW_T0 = time.perf_counter()
+            _RES_BASE.update(_resource_counters())
         if _REPORT_REGISTERED:
             return
         _REPORT_REGISTERED = True
@@ -185,8 +196,15 @@ def add(
     *,
     peak: float | None = None,
     nbytes: int = 0,
+    cpu: float | None = None,
 ) -> None:
     """Accumulate *seconds*, *n* occurrences and *nbytes* under *label*.
+
+    *cpu* is the CPU the recording thread burned inside those *seconds*
+    (``time.thread_time``). It splits a label into work and waiting: an
+    ``ffmpeg.run.cut`` is all wait on a child process, a ``heatmap.gif`` is
+    all work, and a route that holds the GIL reads near 100%. Labels that
+    never pass it report ``cpu: null``, never 0.
 
     *nbytes* is a payload size — a response body, a streamed drain, a manifest
     section — summed like *seconds*. It is the second axis a poll can go wrong
@@ -230,13 +248,16 @@ def add(
                 _DROPPED += 1
                 return
             first = seconds if n == 1 else 0.0
-            _TOTALS[label] = [seconds, float(n), peak or 0.0, float(nbytes), first]
+            entry = [seconds, float(n), peak or 0.0, float(nbytes), first, -1.0]
+            _TOTALS[label] = entry
         else:
             entry[0] += seconds
             entry[1] += n
             if peak is not None and peak > entry[2]:
                 entry[2] = peak
             entry[3] += nbytes
+        if cpu is not None:
+            entry[5] = cpu + max(entry[5], 0.0)
 
 
 def count(label: str, n: int = 1) -> None:
@@ -329,6 +350,7 @@ def span(label: str) -> Iterator[None]:
     deep = deep_profiler(label)
     deep_on = deep is not None and deep_enable(deep)
     sid = _begin_active(label)
+    cpu0 = time.thread_time()
     start = time.perf_counter()
     try:
         yield
@@ -338,7 +360,7 @@ def span(label: str) -> Iterator[None]:
             with _LOCK:
                 _DEEP_DONE.add(label)
         _end_active(sid)
-        add(label, time.perf_counter() - start)
+        add(label, time.perf_counter() - start, cpu=time.thread_time() - cpu0)
 
 
 def timed(label: str) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
@@ -425,12 +447,20 @@ def stream_span(body: Iterable[Any], *, rule: str) -> Generator[Any, None, None]
             count(f"stream.{outcome} {rule}")
 
 
-def _window(reset: bool) -> tuple[dict[str, dict[str, float]], int, float | None]:
+def _window(reset: bool) -> tuple[dict[str, dict[str, Any]], int, float | None]:
     """``(labels, dropped, window_t0)`` read — and optionally cleared — under one lock."""
     global _DROPPED, _WINDOW_T0
     with _LOCK:
         items = [
-            (label, entry[0], int(entry[1]), entry[2], int(entry[3]), entry[4])
+            (
+                label,
+                entry[0],
+                int(entry[1]),
+                entry[2],
+                int(entry[3]),
+                entry[4],
+                entry[5] if entry[5] >= 0 else None,
+            )
             for label, entry in _TOTALS.items()
         ]
         dropped = _DROPPED
@@ -441,20 +471,28 @@ def _window(reset: bool) -> tuple[dict[str, dict[str, float]], int, float | None
             _WINDOW_T0 = time.perf_counter()
     items.sort(key=lambda item: (-item[1], item[0]))
     labels = {
-        label: {"seconds": secs, "count": n, "max": mx, "bytes": nb, "first": first}
-        for label, secs, n, mx, nb, first in items
+        label: {
+            "seconds": secs,
+            "count": n,
+            "max": mx,
+            "bytes": nb,
+            "first": first,
+            "cpu": cpu,
+        }
+        for label, secs, n, mx, nb, first, cpu in items
     }
     return labels, dropped, t0
 
 
-def snapshot(*, reset: bool = False) -> dict[str, dict[str, float]]:
-    """Return ``{label: {seconds, count, max, bytes, first}}`` sorted by seconds desc.
+def snapshot(*, reset: bool = False) -> dict[str, dict[str, Any]]:
+    """Return ``{label: {seconds, count, max, bytes, first, cpu}}`` sorted by seconds desc.
 
     With *reset*, the copy and the clear happen under one lock acquisition, so
     a contribution can never land between them and vanish from both windows.
     ``max`` is 0.0 for labels fed only by batched flushes that supplied no
     ``peak=`` — see :func:`add`. ``bytes`` is 0 for labels that never passed
-    ``nbytes=``; ``first`` (the first observation) is 0.0 for batched labels.
+    ``nbytes=``; ``first`` (the first observation) is 0.0 for batched labels;
+    ``cpu`` is ``None`` for labels that never passed ``cpu=``.
     Sorting stays on seconds so none of them reorders the report.
     """
     return _window(reset)[0]
@@ -495,6 +533,71 @@ def peak_rss_mb() -> float | None:
     return raw * scale / (1024 * 1024)
 
 
+def _resource_counters() -> dict[str, float]:
+    """Every cumulative process counter, keyed like the resources report."""
+    cpu, child_cpu = sampler.process_cpu()
+    usage = sampler.os_usage()
+    out = {"cpu_s": cpu, "child_cpu_s": child_cpu}
+    out.update({key: usage[key] for key in _RES_COUNTERS if key in usage})
+    return out
+
+
+def resources(*, reset: bool = False) -> dict[str, Any]:
+    """What the process consumed this window, and what it holds right now.
+
+    ``cpu_s`` is this process, every thread, native pools included;
+    ``child_cpu_s`` is its finished ffmpeg/ffprobe children. Divide their sum
+    by ``window_seconds`` for cores in use: wall time alone cannot tell a
+    scan that pegs eleven cores from one that waits on a pipe. The counters
+    (``wakeups``, disk bytes) are window deltas; the memory
+    gauges (``footprint_mb``, ``peak_footprint_mb``, ``rss_mb``,
+    ``child_peak_rss_mb``) are process-wide and a reset cannot clear a peak.
+    See :func:`profiling_sampler.os_usage` for what each one counts.
+    """
+    now = _resource_counters()
+    usage = sampler.os_usage()
+    with _LOCK:
+        out: dict[str, Any] = {
+            key: value - _RES_BASE.get(key, 0.0) for key, value in now.items()
+        }
+        if reset:
+            _RES_BASE.clear()
+            _RES_BASE.update(now)
+    for key in ("footprint_mb", "peak_footprint_mb", "rss_mb"):
+        if key in usage:
+            out[key] = usage[key]
+    out["child_peak_rss_mb"] = sampler.child_peak_rss_mb()
+    out["threads"] = threading.active_count()
+    return out
+
+
+def sample_start(hz: int) -> None:
+    """Turn on ``--profile-sample``: profiling plus the stack sampler at *hz*."""
+    enable()
+    config.PROFILE_SAMPLE = hz
+    sampler.start(hz, on_memory=_observe_memory, context=_peak_context)
+
+
+def _observe_memory(footprint_mb: float) -> None:
+    """Raise the memory peak of every operation that is running right now."""
+    with _LOCK:
+        for rec in _OPS_ACTIVE.values():
+            if rec["started_at"] is not None:
+                rec["mem_peak_mb"] = max(rec.get("mem_peak_mb", 0.0), footprint_mb)
+
+
+def _peak_context() -> list[str]:
+    """Span labels and operations in flight, for the sampler's memory peak."""
+    with _LOCK:
+        names = {label for label, _start, _tid in _ACTIVE.values()}
+        names.update(
+            f"op:{rec['kind']}"
+            for rec in _OPS_ACTIVE.values()
+            if rec["started_at"] is not None
+        )
+    return sorted(names)
+
+
 def reset() -> None:
     """Clear the accumulated totals (brackets a measurement window).
 
@@ -524,8 +627,19 @@ def _run_text(argv: list[str], timeout: float) -> str | None:
     return proc.stdout.strip().splitlines()[0] if proc.stdout.strip() else ""
 
 
+@functools.cache
+def _ffmpeg_version() -> str | None:
+    return _run_text(["ffmpeg", "-version"], 10.0)
+
+
+@functools.cache
 def _git_state() -> tuple[str | None, bool | None]:
-    """``(commit, dirty)`` of the source checkout; both ``None`` when frozen."""
+    """``(commit, dirty)`` of the source checkout; both ``None`` when frozen.
+
+    Read once per process, like the ffmpeg version: ``/api/profile`` is polled
+    per measurement window, and three subprocesses per poll put the
+    profiler's own children into every window's ``child_cpu_s``.
+    """
     if getattr(sys, "frozen", False):
         return None, None
     import utils
@@ -566,7 +680,7 @@ def environment() -> dict[str, Any]:
         "python": platform.python_version(),
         "platform": platform.platform(),
         **hardware.profile(),
-        "ffmpeg": _run_text(["ffmpeg", "-version"], 10.0),
+        "ffmpeg": _ffmpeg_version(),
         "packages": packages,
         "settings": {name: getattr(config, name, None) for name in _ENV_SETTINGS},
     }
@@ -590,6 +704,8 @@ def export(*, reset: bool = False) -> dict[str, Any]:
         "labels": labels,
         "startup": startup_snapshot(),
         "peak_rss_mb": peak_rss_mb(),
+        "resources": resources(reset=reset),
+        "sample": sampler.snapshot(reset=reset),
         "dropped_labels": dropped,
         "active_spans": active_spans(),
         "operations": operations(),
@@ -636,22 +752,115 @@ def report() -> None:
         # Name the first observation only when it doubles the warm average; sub-5ms is noise.
         if n > 1 and first >= 0.005 and first >= 2 * (secs - first) / (n - 1):
             line += f"  first={first * 1000:.1f}ms"
+        cpu = entry.get("cpu")
+        # A share of a few milliseconds is noise; name it from 50 ms up.
+        if cpu is not None and secs >= 0.05:
+            line += f"  cpu={min(cpu / secs, 9.99) * 100:.0f}%"
         print(line)  # bare print: Rich would wrap piped output (see module docstring)
+    sampler.stop()
+    sample = sampler.snapshot()
     # Gate on output, not config.PROFILING: report() stays silent when nothing was recorded.
-    if snap:
+    if snap or sample:
         peak = peak_rss_mb()
         if peak is not None:
             print(f"profile | {'peak_rss':<32} {peak:8.1f}MB")
+        _resources_report()
         dropped = dropped_labels()
         if dropped:
             print(f"profile | {'labels_dropped':<32} {0.0:8.3f}s  n={dropped}")
     _deep_report()
+    if sample:
+        _sample_report(sample)
     if config.PROFILE_OUTPUT:
         out = Path(config.PROFILE_OUTPUT)
         deep_files = deep_dump(out.with_name(out.stem + ".deep")) if _DEEP else []
-        written = write_export(out, deep_files=deep_files)
+        stack_files = stacks_dump(out) if sample else []
+        written = write_export(out, deep_files=deep_files, stack_files=stack_files)
         if written is not None:
             print(f"profile | written {written}")
+
+
+def _resources_report() -> None:
+    """Print the ``cpu`` / ``mem`` / ``os`` lines of the exit report."""
+    res = resources()
+    with _LOCK:
+        t0 = _WINDOW_T0
+    wall = time.perf_counter() - t0 if t0 is not None else 0.0
+    cpu, child = res["cpu_s"], res["child_cpu_s"]
+    line = f"profile | {'cpu':<32} {cpu:8.3f}s  children={child:.3f}s"
+    if wall > 0:
+        line += f"  wall={wall:.3f}s  cores={(cpu + child) / wall:.2f}"
+    print(line)  # bare print: see module docstring
+    if "footprint_mb" in res:
+        line = (
+            f"profile | {'mem':<32} {res['footprint_mb']:8.1f}MB"
+            f"  peak={res.get('peak_footprint_mb', 0.0):.1f}MB"
+        )
+        if res.get("child_peak_rss_mb"):
+            line += f"  child_peak={res['child_peak_rss_mb']:.1f}MB"
+        print(line)
+    parts = [f"threads={res['threads']}"]
+    if "wakeups" in res:
+        parts.append(f"wakeups={int(res['wakeups'])}")
+    if "disk_read_bytes" in res:
+        parts.append(f"disk_read={format_bytes(int(res['disk_read_bytes']))}")
+        parts.append(f"disk_write={format_bytes(int(res['disk_write_bytes']))}")
+    print(f"profile | {'os':<32} {'  '.join(parts)}")
+
+
+def _sample_report(sample: dict[str, Any]) -> None:
+    """Print the ``profile-sample | `` block: threads, hot frames, memory peak."""
+    cpu_all = resources()["cpu_s"]
+    python_cpu = sample["cpu_s"]
+    # bare prints below: see module docstring
+    print(
+        f"profile-sample | {sample['hz']}Hz  {sample['seconds']:.1f}s"
+        f"  ticks={sample['ticks']}  overruns={sample['overruns']}"
+        f"  cost={sample['cost_s']:.3f}s  python_cpu={python_cpu:.3f}s"
+        f"  native_cpu={max(cpu_all - python_cpu, 0.0):.3f}s"
+    )
+    for name, entry in list(sample["threads"].items())[:10]:
+        if entry["cpu_s"] >= 0.001:
+            print(
+                f"profile-sample | thread {name:<34} cpu={entry['cpu_s']:.3f}s"
+                f"  samples={entry['samples']}"
+            )
+    for kind in ("own", "self"):
+        for row in sample[f"top_{kind}"]:
+            if row["cpu_s"] < 0.001 and python_cpu > 0:
+                continue
+            share = f"  {row['cpu_s'] / python_cpu * 100:.1f}%" if python_cpu else ""
+            print(
+                f"profile-sample | {kind:<4} {row['frame']:<52}"
+                f" cpu={row['cpu_s']:.3f}s{share}  samples={row['samples']}"
+            )
+    memory = sample["memory"]
+    if memory.get("mb"):
+        active = ", ".join(memory.get("active") or []) or "nothing labelled"
+        print(
+            f"profile-sample | mem peak={memory['mb']:.1f}MB"
+            f"  at={memory['at_s']:.1f}s  during={active}"
+        )
+
+
+def stacks_dump(output: Path) -> list[str]:
+    """Write the collapsed stacks beside *output*; returns the paths written.
+
+    ``<stem>.cpu.folded`` (CPU microseconds) and ``<stem>.wall.folded``
+    (sample counts) load in speedscope or flamegraph.pl.
+    """
+    written: list[str] = []
+    for kind in ("cpu", "wall"):
+        text = sampler.folded(kind)
+        if not text:
+            continue
+        path = output.with_name(f"{output.stem}.{kind}.folded")
+        try:
+            path.write_text(text, encoding="utf-8")
+        except OSError:
+            continue
+        written.append(str(path))
+    return written
 
 
 # ---- Operation records: per-job attribution that aggregate labels cannot give. ----
@@ -746,10 +955,18 @@ def _op_close(op_id: str, forced: str | None) -> None:
     """Move an active record to the recent list with its derived durations."""
     global _OPS_EVICTED
     now = time.time()
+    cpu, child_cpu = sampler.process_cpu()
+    footprint = sampler.os_usage().get("footprint_mb")
     with _LOCK:
         rec = _OPS_ACTIVE.pop(op_id, None)
         if rec is None:
             return
+        base = rec.pop("_res", None)
+        if base is not None:
+            rec["cpu_s"] = cpu - base[0]
+            rec["child_cpu_s"] = child_cpu - base[1]
+            if footprint is not None and base[2] is not None:
+                rec["mem_delta_mb"] = footprint - base[2]
         rec["ended_at"] = now
         rec["outcome"] = forced or rec["outcome"] or "completed"
         started = rec["started_at"] or now
@@ -776,7 +993,10 @@ def op_run(
     threads running ``bind``-wrapped callables submitted from it — fold into
     the record's ``measures``. Those measures are *inclusive*: a
     ``pipeline.pool_wall`` contains its ``pipeline.clip`` seconds. The only
-    additive identity is ``queue_wait_s + run_s == elapsed_s``. An exception
+    additive identity is ``queue_wait_s + run_s == elapsed_s``. ``cpu_s`` /
+    ``child_cpu_s`` / ``mem_delta_mb`` are process-wide readings taken at
+    start and end, so two overlapping jobs each see the other's share;
+    ``mem_peak_mb`` needs ``--profile-sample``. An exception
     ends the operation ``failed``; a generator closed by a client
     disconnect ends it ``abandoned``; otherwise the outcome set with
     :func:`op_outcome` stands, defaulting to ``completed``.
@@ -789,10 +1009,12 @@ def op_run(
     if not known:
         op_open(kind or "op", op_id=op_id, parent=parent, meta=meta)
     now = time.time()
+    res = (*sampler.process_cpu(), sampler.os_usage().get("footprint_mb"))
     with _LOCK:
         rec = _OPS_ACTIVE.get(op_id)
         if rec is not None and rec["started_at"] is None:
             rec["started_at"] = now
+            rec["_res"] = res
     prev = current_op()
     _CURRENT.op = op_id
     forced: str | None = None
@@ -888,7 +1110,7 @@ def bind(fn: Callable[..., Any]) -> Callable[..., Any]:
 
 
 def _op_export(rec: dict[str, Any], now: float) -> dict[str, Any]:
-    out = dict(rec)
+    out = {key: value for key, value in rec.items() if key != "_res"}
     out["measures"] = {
         label: {"seconds": secs, "count": int(n)}
         for label, (secs, n) in rec["measures"].items()

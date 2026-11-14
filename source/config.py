@@ -66,6 +66,7 @@ PROFILE_DEEP: str = (
     ""  # --profile-deep LABEL: cProfile spans whose label contains this substring
 )
 PROFILE_OUTPUT: str = ""  # --profile-output PATH: write the exit report as JSON
+PROFILE_SAMPLE: int = 0  # --profile-sample HZ: stack sampler rate, 0 is off
 QUIET: int = 0
 STANDARD: int = 1
 VERBOSE: int = 2
@@ -275,6 +276,10 @@ SCREENSPACE_CHANGE_HEATMAP_MIN_FRAC: float = (
 SCREENSPACE_FAST_SCAN_INTERVAL_MULTIPLIER: float = 3.0
 SCREENSPACE_FAST_SCAN_PHASH_THRESHOLD: int = 12  # tighter than general 15
 SCREENSPACE_FAST_SCAN_SKIP_NONKEY: bool = True  # fast-scan decodes keyframes only; auto-off per video when the probed keyframe gap is too long
+SCREENSPACE_REFERENCE_FRAMES_ONLY: bool = True  # scans skip decoding frames nothing else references (bit-identical frames, large CPU saving)
+SCREENSPACE_REFERENCE_GAP_MARGIN: float = (
+    0.1  # reference-only decode needs max reference gap <= interval * this
+)
 SCREENSPACE_KEYFRAME_PROBE_SECONDS: float = 20.0  # window (seconds from start) the keyframe-gap probe inspects to find the worst-case (max) GOP length
 SCREENSPACE_KEYFRAME_SKIP_MARGIN: float = 1.0  # keyframe-only decode needs max gap <= interval * this; lower = denser keyframes required
 SCREENSPACE_PARALLEL_WORKERS: int = (
@@ -1121,7 +1126,13 @@ STUDIO_SETTINGS: dict[str, dict[str, Any]] = {
         "tab": "Screenspace",
         "group": "Analysis Quality",
         "type": "bool",
-        "description": "Fast scans decode only keyframes on H.264/HEVC when the source's keyframe interval is short enough that no samples are lost (auto-probed per video), giving large decode savings. Turn off to always full-decode. Only affects fast scans; the precise scan path is never changed.",
+        "description": "Fast scans decode only keyframes on H.264/HEVC when the source's keyframe interval is short enough that no samples are lost (auto-probed per video), giving large decode savings. Turn off to stop decoding keyframes only. Only affects fast scans.",
+    },
+    "SCREENSPACE_REFERENCE_FRAMES_ONLY": {
+        "tab": "Screenspace",
+        "group": "Analysis Quality",
+        "type": "bool",
+        "description": "Scans decode only the frames other frames depend on, skipping the rest (H.264/HEVC B-frames). Analyzed frames are unchanged; a sample may land a few frames after its interval mark. Roughly halves scan CPU on typical recordings. Turn off to decode every frame.",
     },
     "SCREENSPACE_STATIC_FRAME_SKIP_THRESHOLD": {
         "tab": "Screenspace",

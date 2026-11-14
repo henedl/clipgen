@@ -744,6 +744,16 @@ def _add_run_args(parser: argparse.ArgumentParser) -> None:
         help="Write the profiling report as JSON to PATH (implies --profile)",
     )
     run_opts.add_argument(
+        "--profile-sample",
+        metavar="HZ",
+        nargs="?",
+        type=int,
+        const=100,
+        default=None,
+        help="Sample every thread's stack HZ times a second (default 100; "
+        "implies --profile): CPU per thread and function, memory timeline",
+    )
+    run_opts.add_argument(
         "--settings",
         action="store_true",
         help="Open the interactive settings editor before running "

@@ -6,6 +6,16 @@ desktop_chrome burned three consecutive fixes that way, and every claim in
 opt-in stopwatch on both halves of the stack. Use it **before** proposing a fix and
 **after** to prove it. A perf claim with no number is not reviewable.
 
+Pick the tool by the question:
+
+| Question | Tool |
+|---|---|
+| Which labelled step took the wall time? | `--profile` (the `profile \|` table) |
+| Was it working or waiting? How many cores? How much memory? | `--profile`: `cpu=` per label, the `cpu` / `mem` / `os` lines |
+| Which function inside one label? | `--profile-deep LABEL` |
+| Where does CPU go that no label covers, on any thread? What ran at the memory peak? | `--profile-sample` |
+| Did a change move a real workload? | `tests/perf/*_bench.py`, `tests/ui/ui_bench.py` |
+
 ## Step 1 — Enable
 
 `--profile` combines with every CLI mode and web launch (like `-v`). It flips
@@ -22,9 +32,9 @@ full-precision JSON — the form every tool below reads; the console lines are f
 eyes only. Keys: `mode` (`profile`, or `deep` when `--profile-deep` is attached —
 a deep run's totals carry cProfile's overhead and the benches refuse to compare
 one), `window_seconds`, `labels` (`{label: {seconds, count, max, bytes,
-first}}`), `startup`, `peak_rss_mb`, `dropped_labels` (labels refused at the
-1024 cap; the console prints `labels_dropped n=K` when non-zero), `active_spans`
-(work still in flight when the report was taken), and `env` — commit + dirty
+first}}`), `startup`, `peak_rss_mb`, `resources` and `sample` (both below), `dropped_labels`
+(labels refused at the 1024 cap; the console prints `labels_dropped n=K` when
+non-zero), `active_spans` (work still in flight when the report was taken), and `env` — commit + dirty
 state, Python, platform, chip/cores/memory, the ffmpeg version line, package
 versions, and the tuning knobs from [PERFORMANCE.md](../../PERFORMANCE.md) as
 `settings`. `GET /api/profile` on a live server returns the same document;
@@ -92,6 +102,73 @@ outer span and work nested inside it on one thread (`heatmap.gifs` wraps an
 inline `heatmap.gif` encode), the outermost profiler wins and absorbs the
 nested work — cProfile cannot nest, and the run must never break over it.
 
+**CPU, memory and the OS — the `cpu` / `mem` / `os` lines.** Wall time cannot
+tell a scan that pegs eight cores from one that waits on a pipe, and neither can
+a label. Every report ends with three process lines, and `resources` on
+`/api/profile` holds the same numbers per window:
+
+```
+profile | cpu                                29.310s  children=279.830s  wall=56.249s  cores=5.50
+profile | mem                                 489.3MB  peak=489.5MB  child_peak=215.5MB
+profile | os                               threads=1  wakeups=11175  disk_read=14.6MB  disk_write=23.9MB
+```
+
+- `cpu` is this process, all threads, native pools included (CTranslate2,
+  onnxruntime, OpenCV). `children` is every finished ffmpeg and ffprobe.
+  `cores` is their sum over wall time. **A scan is ffmpeg-bound: read
+  `children`, not `cpu`.** Whisper is the reverse.
+- `mem` is the **physical footprint**, the figure Activity Monitor shows.
+  `peak_rss` drops compressed pages, so under memory pressure it shrinks as
+  the process grows: the unwindowed Whisper hour read 2.55 GB there while `ps`
+  saw 4.0–5.9 GB. Trust `mem peak=`; keep `peak_rss` for old baselines.
+  `child_peak` is the largest single ffmpeg. macOS and Linux only.
+- `os` counts wakeups (macOS) and device I/O. An idle server measured
+  **0.03 s CPU and ~190 wakeups per 20 s**. A poller that never pauses shows
+  up here before it shows anywhere else.
+
+`cpu=NN%` on a label line is the share of that label's wall time its own
+thread spent on-CPU (`time.thread_time`), printed from 50 ms up. `ffmpeg.run.*`
+reads 1%: the thread waits on a child. `heatmap.gif` reads 94%. A route near
+100% holds the GIL and stalls every other request. Labels fed by batched
+flushes carry none, and the JSON says `cpu: null`, never 0.
+
+**Unlabelled time — `--profile-sample [HZ]`.** The table only knows labelled
+spans, and `--profile-deep` needs a label to attach to. `--profile-sample`
+(default 100 Hz, implies `--profile`) needs neither: one thread reads every
+Python thread's stack and weights each by the CPU that thread burned since the
+last tick. Idle threads weigh nothing however often they are seen.
+
+```
+profile-sample | 100Hz  66.5s  ticks=6637  overruns=8  cost=1.006s  python_cpu=23.024s  native_cpu=8.926s
+profile-sample | thread ThreadPoolExecutor-N_N             cpu=22.037s  samples=6752
+profile-sample | own  screenspace_frames:_ffmpeg_pipe_frames               cpu=13.713s  59.6%
+profile-sample | self PIL/ImageFile:_encode_tile                           cpu=0.768s  3.3%
+profile-sample | mem peak=483.1MB  at=66.2s  during=heatmap.gif, heatmap.rolling, op:screenspace_task
+```
+
+- `thread` rows are CPU per Python thread, pool counters folded (`…-N_N`).
+- `own` ranks the innermost **clipgen** frame: which of our functions the CPU
+  goes through. Start here. `self` ranks the innermost frame of any module:
+  where it was spent, usually a library.
+- `native_cpu` is process CPU no Python thread accounts for: library thread
+  pools. A large value means the work is already in C; Python-side changes
+  will not move it.
+- `mem peak … during=` names the spans and operations in flight at the
+  footprint peak (sampled every 0.2 s), and each operation record gains
+  `mem_peak_mb`.
+- `--profile-output p.json` also writes `p.cpu.folded` and `p.wall.folded`
+  (collapsed stacks; open in speedscope). `cpu` weights are CPU microseconds,
+  `wall` weights are sample counts and show where threads sit while waiting.
+  A live server serves them at `GET /api/profile/stacks?kind=cpu|wall`, and
+  `sample` on `/api/profile` resets with the window.
+
+Three limits. The sampler shares the GIL, so a pure-Python hot loop delays
+ticks (`overruns`) and samples lean toward points that release it; the CPU
+weight is the OS's number and is not affected. A cold wake costs ~0.2 ms, so
+at 100 Hz the sampler is **2% of one core on an idle process** (`cost=`): read
+idle CPU from a plain `--profile` run. Windows has no per-thread CPU probe, so
+the tables there rank by sample count.
+
 **Startup marks — `startup | ` lines.** Launch-to-window attribution for the
 desktop/web startup path. `clipgen.py` anchors T0 before any clipgen import;
 `profiling.mark()` records milestones *unconditionally* (marks land before
@@ -108,7 +185,7 @@ launch, read `/api/profile` from the running app — the frozen bootloader
 ignores `PYTHONUNBUFFERED`, so grepping a killed process's stdout loses the
 buffered `startup |` lines.
 
-Four report tokens are easy to misread:
+Four report tokens are easy to misread (`cpu=` is covered above):
 
 - **`bytes=`** is a payload sum, present only on labels that carry one:
   `route <rule>` (the `Content-Length` of every non-streamed response),
@@ -191,6 +268,30 @@ writes `H:MM:SS` ranges spread across the whole file. **For ground truth, use a
 real recording**: every media bench takes `--source PATH` (symlinked, never
 copied; the JSON keeps only its basename, size and mtime).
 
+**Synthetic fixtures miss what real files do.** The first real 58-minute
+recording (1080p60, four B-frames per P-frame) cost 520 CPU-seconds per scan
+where the 30 fps fixture had suggested 187, and that gap is where
+reference-only decode came from. Real files also carry edit lists (frame 0 of
+a trimmed file decodes 200 discarded frames first: 490 ms against 180 ms for a
+frame at 100 s), 4K AV1, and multi-part participants. To profile a whole
+project without touching it, point `-i` at the media, copy only the sheet and
+`clipgen.json` somewhere disposable, and keep the browser tab from opening:
+
+```bash
+mkdir -p /tmp/proj/out && cp study.xlsx /tmp/proj/ && cp clipgen.json /tmp/proj/out/
+BROWSER=/usr/bin/true uv run clipgen.py --studio -s /tmp/proj/study.xlsx \
+    -i /path/to/real/media -o /tmp/proj/out --no-input --profile-sample &
+curl -s "http://127.0.0.1:8089/api/profile?reset=1" > /dev/null   # open a window
+# ...load a page, run a job...
+curl -s "http://127.0.0.1:8089/api/profile?reset=1" | python3 -m json.tool | less
+```
+
+Wait for `/studio/api/sheet` to answer 200 before the first window:
+`/api/status` answers while the boot shell is still up. One window per page
+load gives `resources` (CPU, footprint, wakeups), the route table with
+`cpu`, and the sampler's `top_own`. That is how the Screenspace page's
+twelve frame-0 preloads (3.9 s of ffmpeg, +105 MB transient) were found.
+
 ## Step 3 — Capture a baseline
 
 Run twice; trust only what reproduces (same discipline as
@@ -234,8 +335,11 @@ refuses a baseline recorded on another fixture spec or workload, prints every
 environment difference (chip, cores, memory, Python, ffmpeg, tuning settings —
 never the commit), and needs `--allow-env-mismatch` to proceed across them.
 Thresholds: `--fail-on PCT` on the median, `--fail-abs SECONDS`, and
-`--fail-metric elapsed|callback` (`|clip` for clip_bench); with both thresholds
-set a regression must exceed both. `--deep` runs are diagnostics and refuse
+`--fail-metric elapsed|callback|cpu` (`clip` / `whisper` in place of `callback`
+for the other benches); with both thresholds set a regression must exceed
+both. The `cpu` column is clipgen plus its ffmpeg children, the axis a decode
+change moves when `elapsed` barely does; a baseline saved before the column
+existed is `incomparable` on it. `--deep` runs are diagnostics and refuse
 `--save`/`--compare`. `clip_bench`'s carded scenarios are `invalid` on an ffmpeg
 without `drawtext` (clipgen disables cards for the run; the bench reports that
 rather than a faster "carded" row).
@@ -303,8 +407,8 @@ overhead), and the exponent between the two longest points — `flat`
 (> 1.15: investigate). It is a diagnostic: no `--save`/`--compare`. Timeouts
 grow with the media (`max(1800, 3 × media)`; `--timeout` overrides), and a run
 that hits one is `invalid` with the reason, never a hang. scan_bench's `path`
-column says which decode ran: `full`, or `key` (keyframe-only) from the
-`scan.decode_mode.*` count labels.
+column says which decode ran: `full`, `ref` (reference frames only), or `key`
+(keyframes only) from the `scan.decode_mode.*` count labels.
 
 ```bash
 uv run python tests/perf/scan_bench.py --tier session --tools change,color
@@ -317,7 +421,9 @@ uv run python tests/perf/scale_bench.py --only cluster --project 6000
 
 Live server: launch with `--profile`, then `curl http://127.0.0.1:8089/api/profile`
 (404 without the flag; `?reset=1` snapshots then clears atomically, bracketing
-a window; the label map is under `labels`, see Step 1).
+a window; the label map is under `labels`, see Step 1). The first call pays
+for the `env` probes (git, `ffmpeg -version`); they are cached after that, so
+later windows carry none of the profiler's own children in `child_cpu_s`.
 
 Browser: `uv sync --extra dev --extra ui` (~1 s from cache; `/check` uninstalls the
 ui extra). **The workload bench is `tests/ui/ui_bench.py`** — it builds the
@@ -416,9 +522,29 @@ CLIPGEN_UI_CHECK=1 uv run --extra ui python tests/ui/shot.py transcripts \
 
 ## Step 4 — Interpret
 
-- `scan.decode_wait` dominates → the scan is decode-bound: look at the fast-scan
-  knobs (`SCREENSPACE_FAST_SCAN_SKIP_NONKEY`, GOP/interval) in
-  [PERFORMANCE.md](../../PERFORMANCE.md), not the callback.
+- `scan.decode_wait` dominates → the scan is decode-bound: look at the decode
+  knobs (`SCREENSPACE_REFERENCE_FRAMES_ONLY`, `SCREENSPACE_FAST_SCAN_SKIP_NONKEY`,
+  GOP/interval) in [PERFORMANCE.md](../../PERFORMANCE.md), not the callback.
+  Check `scan.decode_mode.*` first: `full` on H.264 means the reference probe
+  refused (span under 120 s, no droppable frames, or a gap over 15% of the
+  interval). **A scan's wall time is the larger of ffmpeg's pipeline and the
+  callbacks, not their sum**: a reader thread keeps two frames ahead, so
+  ffmpeg decodes while a callback runs. `decode_wait` is the time the consumer
+  sat with an empty queue. Decode-bound: a real 58-min 1080p60 `change` and
+  `color` scan both take 56 s with callbacks of 16.7 s and 3.6 s, so a faster
+  callback buys nothing there. Callback-bound: on the synthetic screen-content
+  hour, `flow` takes 16.4 s with 13.4 s of callback.
+- Measured dead ends on the decode path, so nobody repeats them: reading the
+  raw-frame pipe costs 0.5 ms per 1080p frame whatever the method (`read`,
+  `readinto`, reused buffer), and a `socketpair` with 7 MB buffers moved wall
+  time by nothing; `-hwaccel videotoolbox` is 7x slower in wall time even with
+  `select` before `hwdownload` (hardware decode is serial);
+  `-skip_loop_filter` saves 20% but changes pixels; `-threads 4` doubles wall.
+- `child_peak=` on the `mem` line is the largest single ffmpeg. It found the
+  4K titlecard fallback: three wraps at 2.7 GB each, 40 s apiece, because
+  libx264 starts 1.5 threads per core whatever else is running. A subprocess
+  pool has to divide the cores itself (`video.encode_pool`, which now caps
+  the pooled software encodes above 1440p).
 - `scan.callback` dominates → analysis-bound: per-frame CV work is the target.
   The proven shape is redundant work across consecutive frames — frame N processed
   again at step N+1 (`blur_gray`, `flow_downscale` carries), or the same conversion
@@ -516,8 +642,10 @@ run id — never a label), `kind`, `meta`, `queued_at` / `started_at` /
 `ended_at`, `queue_wait_s` / `run_s` / `elapsed_s` (the one additive
 identity), `outcome` (`completed`, `failed`, `cancelled`, `paused`,
 `abandoned` for a streamed response the client dropped, or the task's own
-terminal status), `work` (clips cut, results found, segments) and
-`measures` — the labels recorded by threads working for it. Measures are
+terminal status), `work` (clips cut, results found, segments), `cpu_s` /
+`child_cpu_s` / `mem_delta_mb` (process-wide readings at start and end, so
+overlapping jobs each see the other's share; `mem_peak_mb` with
+`--profile-sample`) and `measures` — the labels recorded by threads working for it. Measures are
 **inclusive**: a `pipeline.pool_wall` contains its `pipeline.clip` seconds,
 so never add them. `active` lists running jobs (read it mid-run), `recent`
 the last 100 finished, `evicted` how many fell off either list. A large

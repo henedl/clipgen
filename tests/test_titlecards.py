@@ -975,3 +975,15 @@ def test_get_or_build_endcard_builds_once_under_parallel_workers(monkeypatch, tm
         assert len(set(results)) == 1 and results[0]
     finally:
         titlecards.clear_endcard_cache()
+
+
+def test_pooled_wrap_of_large_frames_caps_encoder_threads(monkeypatch):
+    """A 4K wrap inside the clip pool takes its share of cores; cards never do."""
+    import video
+
+    monkeypatch.setattr(video.os, "cpu_count", lambda: 12)
+    assert "-threads" not in titlecards._x264_video_args(3840 * 2160)
+    with video.encode_pool(4):
+        assert titlecards._x264_video_args(3840 * 2160)[-2:] == ["-threads", "5"]
+        assert "-threads" not in titlecards._x264_video_args(1920 * 1080)
+        assert "-threads" not in titlecards._x264_video_args()

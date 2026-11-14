@@ -38,6 +38,7 @@ _probe_inflight: dict[tuple[str, int], threading.Lock] = {}
 _probe_inflight_guard = threading.Lock()
 # Max keyframe gap (s) per file; None means unknown, so no keyframe-only decode.
 _keyframe_gap_cache: dict[tuple[str, int], float | None] = {}
+_reference_gap_cache: dict[tuple[str, int], float | None] = {}
 
 
 FFPROBE_TIMEOUT_SECONDS = 20
@@ -432,6 +433,65 @@ def resolve_video_encoder() -> str:
     if choice == "auto" and not _hw_encode_failed and check_videotoolbox_support():
         return "h264_videotoolbox"
     return "libx264"
+
+
+# Software encodes running at once across every clip pool in the process.
+_encode_pool_width = 0
+_encode_pool_lock = threading.Lock()
+# Above 1440p an encoder thread's frame buffers are what fills memory.
+_POOL_CAP_MIN_PIXELS = 2560 * 1440
+
+
+@contextlib.contextmanager
+def encode_pool(width: int) -> Iterator[None]:
+    """Declare that *width* encodes are about to run side by side.
+
+    libx264 starts 1.5 frame threads per core no matter what else is running,
+    and each thread holds its own frame buffers. Four 4K re-encodes in the
+    clip pool therefore held 8.7 GB between them, on cores they were already
+    fighting over. Inside this context :func:`pooled_thread_args` gives a
+    large-frame encode its share instead: 5.1 GB for the same four, at 1%
+    more wall time. Widths add up across overlapping pools.
+
+    Three encodes take the cap, the ones a pool worker runs in software: the
+    clip re-encode (``REENCODING``, :func:`build_ffmpeg_cut_command`), the
+    two-pass :func:`compress_to_size`, and the titlecard wrap fallback.
+    Hardware encodes ignore it. A reel's concat runs after its pool, alone,
+    and keeps every core.
+    """
+    global _encode_pool_width
+    with _encode_pool_lock:
+        _encode_pool_width += width
+    try:
+        yield
+    finally:
+        with _encode_pool_lock:
+            _encode_pool_width -= width
+
+
+def pooled_thread_args(pixels: int) -> list[str]:
+    """``-threads N`` for a large libx264 encode inside :func:`encode_pool`.
+
+    Empty outside a pool, so a lone encode keeps every core, and empty for
+    frames of *pixels* up to 1440p: there the buffers are small, and the cap
+    cost a pool of short two-pass encodes 9.5% of its wall time for nothing.
+    An output option: it caps the encoder, never the decoder.
+    """
+    width = _encode_pool_width
+    if width < 2 or pixels <= _POOL_CAP_MIN_PIXELS:
+        return []
+    cores = os.cpu_count() or 1
+    return ["-threads", str(max(2, math.ceil(cores * 1.5 / width)))]
+
+
+def pooled_thread_args_for(filepath: str) -> list[str]:
+    """:func:`pooled_thread_args` sized to *filepath*; probes only inside a pool."""
+    if _encode_pool_width < 2:
+        return []
+    props = probe_video_properties(filepath) or {}
+    return pooled_thread_args(
+        int(props.get("width") or 0) * int(props.get("height") or 0)
+    )
 
 
 def video_encoder_args(
@@ -830,6 +890,7 @@ def build_ffmpeg_cut_command(
     reencode: bool,
     audio_normalize: bool,
     encoder: str | None = None,
+    thread_args: list[str] | None = None,
 ) -> list[str]:
     """Build ffmpeg argv for cutting a clip. Caller runs subprocess.
 
@@ -843,6 +904,8 @@ def build_ffmpeg_cut_command(
         encoder: Video encoder for the re-encode branch. ``None`` or
             ``"libx264"`` adds no ``-c:v`` at all, leaving ffmpeg on its default
             (libx264 for mp4) exactly as before hardware encoding existed.
+        thread_args: ``pooled_thread_args`` for the software re-encode; a
+            hardware encode ignores them.
     Returns:
         argv list for subprocess (e.g. ['ffmpeg', '-y', ...])
     """
@@ -873,7 +936,7 @@ def build_ffmpeg_cut_command(
     encoder_args = (
         video_encoder_args(encoder)
         if encoder is not None and encoder != "libx264"
-        else []
+        else list(thread_args or [])
     )
     if audio_normalize:
         return base + ["-af", LOUDNORM_FILTER] + encoder_args + [output_file]
@@ -1126,6 +1189,8 @@ def run_ffmpeg(
         )
         return False
 
+    thread_args = pooled_thread_args_for(input_file) if reencode else []
+
     def build_command(encoder: str) -> list[str]:
         return build_ffmpeg_cut_command(
             input_file,
@@ -1135,6 +1200,7 @@ def run_ffmpeg(
             reencode,
             config.AUDIO_NORMALIZE,
             encoder=encoder if reencode else None,
+            thread_args=thread_args,
         )
 
     # Stream copy has no encoder to fail over; skip the hardware probe.
@@ -2281,6 +2347,73 @@ def probe_max_keyframe_gap(filepath: str) -> float | None:
     return result
 
 
+# An encoder's B-frame run repeats within seconds; a longer window only costs decode.
+_REFERENCE_PROBE_SECONDS = 5.0
+
+
+def probe_max_reference_gap(filepath: str) -> float | None:
+    """Return the largest gap (seconds) between consecutive reference frames.
+
+    A reference frame is one other frames are predicted from; the rest
+    (typically B-frames) can be dropped before decode with ``-skip_frame
+    noref`` and the frames that remain still decode bit-identically. On a
+    1080p60 OBS recording with four B-frames per P-frame that removed 61% of
+    a scan's decode CPU. The gap says how far a sample can land from its grid
+    point when the scan decodes reference frames only, so the caller gates on
+    it against the sampling interval.
+
+    Decodes the first ``_REFERENCE_PROBE_SECONDS`` with the same skip, since
+    packet flags do not say which frames are references. Returns ``None``
+    when the cadence can't be confirmed (fewer than two frames, ffprobe
+    failure, missing file). Cached per ``(resolved_path, mtime)``.
+    """
+    if config.DEBUGGING:
+        return None
+
+    key = _resolved_path_and_mtime(filepath)
+    if key is None:
+        return None
+    if key in _reference_gap_cache:
+        return _reference_gap_cache[key]
+
+    probe_command = [
+        "ffprobe",
+        "-v",
+        "error",
+        "-select_streams",
+        "v:0",
+        "-skip_frame",
+        "noref",
+        "-read_intervals",
+        f"%{_REFERENCE_PROBE_SECONDS}",
+        "-show_entries",
+        "frame=best_effort_timestamp_time",
+        "-of",
+        "csv=print_section=0",
+        filepath,
+    ]
+    result: float | None = None
+    try:
+        raw = _ffprobe_check_output(probe_command)
+    except (subprocess.CalledProcessError, FileNotFoundError, OSError):
+        _reference_gap_cache[key] = None
+        return None
+
+    times: list[float] = []
+    for line in raw.splitlines():
+        try:
+            times.append(float(line.strip().strip(",")))
+        except ValueError:
+            continue
+    times.sort()
+    gaps = [b - a for a, b in itertools.pairwise(times) if b - a > 0]
+    if gaps:
+        result = max(gaps)
+
+    _reference_gap_cache[key] = result
+    return result
+
+
 # Real files find moov within a few boxes; the bound only stops corrupt files looping.
 _MAX_TOPLEVEL_BOXES = 64
 
@@ -2813,8 +2946,9 @@ def extract_frame_at_timestamp(
 
     import numpy as np
 
+    # count=, not a slice: slicing bytes would copy the frame a second time.
     return (
-        np.frombuffer(result.stdout[:frame_size], dtype=np.uint8)
+        np.frombuffer(result.stdout, dtype=np.uint8, count=frame_size)
         .reshape((height, width, 3))
         .copy()
     )
@@ -2983,12 +3117,14 @@ def compress_to_size(
                 compressed_temp_path,
             ),
         )
+        thread_args = pooled_thread_args_for(filepath)
         for n, tail, output in passes:
             command = ffmpeg_cmd(
                 "-i",
                 filepath,
                 "-c:v",
                 "libx264",
+                *thread_args,
                 "-b:v",
                 f"{target_bitrate}k",
                 "-pass",

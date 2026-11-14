@@ -71,7 +71,7 @@ OVERRIDES: dict[str, dict[str, Any]] = {
     "clips-compress": {"MAX_FILESIZE_MB": 0.1},  # every real clip exceeds 100 KB
 }
 ALL_SCENARIOS = {**SCENARIOS, **EXTRA_SCENARIOS}
-METRICS = ("elapsed_s", "clip_s")
+METRICS = ("elapsed_s", "clip_s", "cpu_s")
 
 TIERS: dict[str, dict[str, Any]] = {
     "smoke": {"duration": 120, "input": Path("/tmp/clipbench")},
@@ -129,6 +129,7 @@ def summarize(doc: dict[str, Any]) -> dict[str, Any]:
         "cards_copy": int(get("titlecard.copy")["count"]),
         "cards_reencode": int(get("titlecard.reencode")["count"]),
         "peak_rss_mb": doc.get("peak_rss_mb") or 0.0,
+        "cpu_s": bc.cpu_seconds(doc),
         "compress_n": int(get("ffmpeg.run.compress")["count"]),
     }
 
@@ -274,13 +275,13 @@ def print_table(
     delta_hdr = f"  Δ{metric.removesuffix('_s'):<8}" if baseline else ""
     print(
         f"{'scenario':<14}{'elapsed':>9}{'min':>9}{'mad':>8}{'clip':>9}{'n':>4}"
-        f"{'pool':>9}{'par':>6}{'ffmpeg':>9}{'cards':>9}{'copy/re':>9}{'rss':>8}"
+        f"{'pool':>9}{'par':>6}{'ffmpeg':>9}{'cards':>9}{'copy/re':>9}{'rss':>8}{'cpu':>9}"
         f"{'xrt':>8}{delta_hdr}  status"
     )
     for scenario, row in rows.items():
         status = bc.status_of(scenario, findings)
         if not row["samples"]:
-            print(f"{scenario:<14}{'':>106}  {status}")
+            print(f"{scenario:<14}{'':>115}  {status}")
             continue
 
         def med(key: str, samples: list[dict[str, Any]] = row["samples"]) -> float:
@@ -293,7 +294,7 @@ def print_table(
             f"{med('pool_wall_s'):>8.3f}s{med('parallelism'):>6.1f}"
             f"{med('ffmpeg_s'):>8.3f}s{med('cards_s'):>8.3f}s"
             f"{int(med('cards_copy')):>4d}/{int(med('cards_reencode')):<4d}"
-            f"{med('peak_rss_mb'):>6.0f}MB{med('xrt'):>7.1f}x"
+            f"{med('peak_rss_mb'):>6.0f}MB{med('cpu_s'):>8.1f}s{med('xrt'):>7.1f}x"
         )
         if baseline:
             base = baseline.get(scenario)
@@ -469,7 +470,7 @@ def main() -> int:
     }
     baseline = None
     findings: list[tuple[str, str, str]] = []
-    metric = "elapsed_s" if args.fail_metric == "elapsed" else "clip_s"
+    metric = bc.metric_key(args.fail_metric, "clip_s")
     if args.compare:
         baseline, problems = bc.load_baseline(
             args.compare, "scenarios", meta, allow_env=args.allow_env_mismatch

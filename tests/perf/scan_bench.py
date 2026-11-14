@@ -80,7 +80,7 @@ BENCH_REGION = {
     "source_height": 720,
 }
 REGION_TOOLS = {"template", "shape"}
-METRICS = ("elapsed_s", "callback_s")
+METRICS = ("elapsed_s", "callback_s", "cpu_s")
 
 TIERS: dict[str, dict[str, Any]] = {
     "smoke": {"duration": 120, "interval": 0.1, "input": Path("/tmp/ssbench")},
@@ -134,17 +134,27 @@ def summarize(tool: str, doc: dict[str, Any]) -> dict[str, float]:
         "filter_s": get("scan.fast_filter")["seconds"],
         "heatmap_s": heatmap,
         "peak_rss_mb": doc.get("peak_rss_mb") or 0.0,
+        "cpu_s": bc.cpu_seconds(doc),
         "keyframe_scans": int(get("scan.decode_mode.keyframe")["count"]),
+        "reference_scans": int(get("scan.decode_mode.reference")["count"]),
         "full_scans": int(get("scan.decode_mode.full")["count"]),
     }
 
 
 def decode_mode(sample: dict[str, Any]) -> str:
-    """``key``, ``full``, ``mixed`` or ``-`` (a build without the label)."""
-    key, full = sample.get("keyframe_scans", 0), sample.get("full_scans", 0)
-    if key and full:
+    """``key``, ``ref``, ``full``, ``mixed`` or ``-`` (a build without the label)."""
+    modes = [
+        name
+        for name, field in (
+            ("key", "keyframe_scans"),
+            ("ref", "reference_scans"),
+            ("full", "full_scans"),
+        )
+        if sample.get(field, 0)
+    ]
+    if len(modes) > 1:
         return "mixed"
-    return "key" if key else "full" if full else "-"
+    return modes[0] if modes else "-"
 
 
 def task_completed(out_dir: Path) -> bool:
@@ -251,13 +261,13 @@ def print_table(
     delta_hdr = f"  Δ{metric.removesuffix('_s'):<8}" if baseline else ""
     print(
         f"{'tool':<12}{'elapsed':>9}{'min':>9}{'mad':>8}{'callback':>10}{'avg':>9}"
-        f"{'frames':>8}{'decode':>9}{'heatmap':>9}{'rss':>9}{'xrt':>8}{'path':>6}"
+        f"{'frames':>8}{'decode':>9}{'heatmap':>9}{'rss':>9}{'cpu':>9}{'xrt':>8}{'path':>6}"
         f"{delta_hdr}  status"
     )
     for tool, row in rows.items():
         status = bc.status_of(tool, findings)
         if not row["samples"]:
-            print(f"{tool:<12}{'':>106}  {status}")
+            print(f"{tool:<12}{'':>115}  {status}")
             continue
 
         def med(key: str, samples: list[dict[str, Any]] = row["samples"]) -> float:
@@ -269,7 +279,7 @@ def print_table(
             f"{tool:<12}{bc.stat_cells(row, 'elapsed_s')}"
             f"{cb:>9.3f}s{(cb / frames * 1000 if frames else 0.0):>7.1f}ms"
             f"{frames:>8d}{med('decode_s'):>8.3f}s{med('heatmap_s'):>8.3f}s"
-            f"{med('peak_rss_mb'):>7.0f}MB{med('xrt'):>7.1f}x"
+            f"{med('peak_rss_mb'):>7.0f}MB{med('cpu_s'):>8.1f}s{med('xrt'):>7.1f}x"
             f"{decode_mode(row['samples'][0]):>6}"
         )
         if baseline:
@@ -441,7 +451,7 @@ def main() -> int:
     }
     baseline = None
     findings: list[tuple[str, str, str]] = []
-    metric = "elapsed_s" if args.fail_metric == "elapsed" else "callback_s"
+    metric = bc.metric_key(args.fail_metric, "callback_s")
     if args.compare:
         baseline, problems = bc.load_baseline(
             args.compare, "tools", meta, allow_env=args.allow_env_mismatch
