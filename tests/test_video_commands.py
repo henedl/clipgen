@@ -726,6 +726,47 @@ def test_probe_max_keyframe_gap_file_not_found():
     assert video.probe_max_keyframe_gap("/nonexistent/missing.mp4") is None
 
 
+# -- probe_max_reference_gap tests --
+
+
+def test_probe_max_reference_gap_returns_largest_gap(monkeypatch, tmp_path):
+    video._reference_gap_cache.clear()
+    clip = tmp_path / "clip.mp4"
+    clip.write_bytes(b"x")
+    seen = []
+
+    def fake(cmd, **_kw):
+        seen.append(cmd)
+        # ffprobe's csv writer leaves a trailing comma on single-field rows.
+        return "0.000000,\n0.083333,\n0.100000,\n0.183333,\nN/A\n"
+
+    monkeypatch.setattr(video.subprocess, "check_output", fake)
+    assert video.probe_max_reference_gap(str(clip)) == pytest.approx(0.083333)
+    cmd = seen[0]
+    assert cmd[cmd.index("-skip_frame") + 1] == "noref"
+    assert cmd[cmd.index("-read_intervals") + 1] == "%5.0"
+    # Cached per (path, mtime): the second call does not probe again.
+    assert video.probe_max_reference_gap(str(clip)) == pytest.approx(0.083333)
+    assert len(seen) == 1
+
+
+def test_probe_max_reference_gap_unknown_returns_none(monkeypatch, tmp_path):
+    video._reference_gap_cache.clear()
+    clip = tmp_path / "clip.mp4"
+    clip.write_bytes(b"x")
+    monkeypatch.setattr(video.subprocess, "check_output", lambda _c, **_k: "0.5,\n")
+    assert video.probe_max_reference_gap(str(clip)) is None
+
+    video._reference_gap_cache.clear()
+
+    def raise_cpe(_cmd, **_kw):
+        raise subprocess.CalledProcessError(returncode=1, cmd="ffprobe")
+
+    monkeypatch.setattr(video.subprocess, "check_output", raise_cpe)
+    assert video.probe_max_reference_gap(str(clip)) is None
+    assert video.probe_max_reference_gap("/nonexistent/missing.mp4") is None
+
+
 def test_probe_video_properties_reprobes_after_mtime_change(monkeypatch, tmp_path):
     """A re-encoded file (new mtime_ns) invalidates the cached props."""
     import os
@@ -2207,3 +2248,76 @@ class TestFfprobeTimeout:
         monkeypatch.setattr(subprocess, "check_output", _stall)
         with pytest.raises(subprocess.CalledProcessError):
             video._ffprobe_check_output(["ffprobe", "x.mp4"])
+
+
+# -- encode_pool / pooled_thread_args tests --
+
+_UHD = 3840 * 2160
+_FHD = 1920 * 1080
+
+
+def test_pooled_thread_args_empty_outside_a_pool():
+    assert video.pooled_thread_args(_UHD) == []
+    with video.encode_pool(1):
+        assert video.pooled_thread_args(_UHD) == []
+
+
+def test_pooled_thread_args_share_cores_for_large_frames(monkeypatch):
+    monkeypatch.setattr(video.os, "cpu_count", lambda: 12)
+    with video.encode_pool(3):
+        assert video.pooled_thread_args(_UHD) == ["-threads", "6"]
+        # Small frames keep every thread: the cap only slowed them down.
+        assert video.pooled_thread_args(_FHD) == []
+        assert video.pooled_thread_args(2560 * 1440) == []
+        # Overlapping pools add up: seven encodes share the same twelve cores.
+        with video.encode_pool(4):
+            assert video.pooled_thread_args(_UHD) == ["-threads", "3"]
+        assert video.pooled_thread_args(_UHD) == ["-threads", "6"]
+    assert video.pooled_thread_args(_UHD) == []
+
+
+def test_pooled_thread_args_never_below_two(monkeypatch):
+    monkeypatch.setattr(video.os, "cpu_count", lambda: 2)
+    with video.encode_pool(8):
+        assert video.pooled_thread_args(_UHD) == ["-threads", "2"]
+
+
+def test_cut_reencode_takes_the_cap_only_in_software():
+    args = ("in.mp4", "out.mp4", "0:10", 5, True, False)
+    cap = ["-threads", "6"]
+    software = video.build_ffmpeg_cut_command(*args, thread_args=cap)
+    assert software[-3:] == ["-threads", "6", "out.mp4"]
+    hardware = video.build_ffmpeg_cut_command(
+        *args, encoder="h264_videotoolbox", thread_args=cap
+    )
+    assert "-threads" not in hardware
+    # Stream copy has no encoder to cap.
+    copy = video.build_ffmpeg_cut_command(
+        "in.mp4", "out.mp4", "0:10", 5, False, False, thread_args=cap
+    )
+    assert "-threads" not in copy
+    assert "-threads" not in video.build_ffmpeg_cut_command(*args)
+
+
+def test_pooled_thread_args_for_probes_only_inside_a_pool(monkeypatch):
+    probes = []
+
+    def fake_probe(path):
+        probes.append(path)
+        return {"width": 3840, "height": 2160}
+
+    monkeypatch.setattr(video, "probe_video_properties", fake_probe)
+    monkeypatch.setattr(video.os, "cpu_count", lambda: 12)
+    assert video.pooled_thread_args_for("a.mp4") == []
+    assert probes == []
+    with video.encode_pool(3):
+        assert video.pooled_thread_args_for("a.mp4") == ["-threads", "6"]
+        monkeypatch.setattr(video, "probe_video_properties", lambda _p: None)
+        assert video.pooled_thread_args_for("b.mp4") == []
+    assert probes == ["a.mp4"]
+
+
+def test_encode_pool_releases_its_width_on_error():
+    with pytest.raises(RuntimeError), video.encode_pool(4):
+        raise RuntimeError("boom")
+    assert video.pooled_thread_args(_UHD) == []

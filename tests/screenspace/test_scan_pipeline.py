@@ -623,6 +623,110 @@ class TestKeyframeSkipGating:
         )
         assert "-skip_frame" not in cmd
 
+    def test_reference_skip_argv_and_grid_select(self, monkeypatch):
+        captured = self._capture_cmd(monkeypatch)
+        list(
+            screenspace._ffmpeg_pipe_frames(
+                "/fake.mp4",
+                1.0,
+                start_seconds=15.0,
+                frame_width=4,
+                frame_height=2,
+                skip_non_reference=True,
+            )
+        )
+        cmd = captured["cmd"]
+        sf_idx = cmd.index("-skip_frame")
+        assert cmd[sf_idx + 1] == "noref"
+        assert cmd.index("-ss") < sf_idx < cmd.index("-i")
+        # One sample per grid cell: late landings must not add up into fewer samples.
+        vf = cmd[cmd.index("-vf") + 1]
+        assert "gt(floor((t+0.000001)/1.0),floor((prev_selected_t+0.000001)/1.0))" in vf
+        assert "gte(t-prev_selected_t" not in vf
+        assert "showinfo" in vf
+
+    def _run_reference_scan(
+        self,
+        monkeypatch,
+        *,
+        ref_gap,
+        codec="h264",
+        fps=60.0,
+        interval=1.0,
+        duration=600.0,
+        enabled=True,
+        fast_opts=None,
+        kf_gap=5.0,
+    ):
+        captured = self._capture_cmd(monkeypatch)
+        probes = []
+        monkeypatch.setattr(
+            "video.probe_video_properties",
+            lambda _: {"width": 4, "height": 2, "video_codec": codec, "fps": fps},
+        )
+        monkeypatch.setattr("video.probe_max_keyframe_gap", lambda _: kf_gap)
+        monkeypatch.setattr(
+            "video.probe_max_reference_gap",
+            lambda _: probes.append(1) or ref_gap,
+        )
+        monkeypatch.setattr(config, "SCREENSPACE_REFERENCE_FRAMES_ONLY", enabled)
+        monkeypatch.setattr(config, "SCREENSPACE_FAST_SCAN_SKIP_NONKEY", True)
+        screenspace._scan_via_ffmpeg_pipe(
+            "/fake.mp4",
+            None,
+            interval,
+            lambda ts, f: None,
+            duration=duration,
+            fast_opts=fast_opts,
+        )
+        return captured["cmd"], probes
+
+    def test_reference_skip_engages_on_precise_scans(self, monkeypatch):
+        # Four B-frames per P at 60 fps: references sit 5/60 s apart.
+        cmd, _ = self._run_reference_scan(monkeypatch, ref_gap=5 / 60)
+        assert cmd[cmd.index("-skip_frame") + 1] == "noref"
+
+    def test_reference_skip_needs_a_droppable_frame(self, monkeypatch):
+        # Every frame a reference: nothing to save, so the argv stays untouched.
+        cmd, _ = self._run_reference_scan(monkeypatch, ref_gap=1 / 60)
+        assert "-skip_frame" not in cmd
+        assert "gte(t-prev_selected_t,1.0)" in cmd[cmd.index("-vf") + 1]
+
+    def test_reference_skip_refuses_a_gap_near_the_interval(self, monkeypatch):
+        # A 0.25 s gap against a 1 s interval is past the 15% margin.
+        cmd, _ = self._run_reference_scan(monkeypatch, ref_gap=0.25)
+        assert "-skip_frame" not in cmd
+        cmd, _ = self._run_reference_scan(monkeypatch, ref_gap=5 / 60, interval=0.1)
+        assert "-skip_frame" not in cmd
+
+    def test_reference_skip_off_for_short_spans_without_probing(self, monkeypatch):
+        cmd, probes = self._run_reference_scan(
+            monkeypatch, ref_gap=5 / 60, duration=60.0
+        )
+        assert "-skip_frame" not in cmd
+        assert probes == []
+
+    def test_reference_skip_honours_switch_codec_and_probe(self, monkeypatch):
+        cmd, probes = self._run_reference_scan(
+            monkeypatch, ref_gap=5 / 60, enabled=False
+        )
+        assert "-skip_frame" not in cmd and probes == []
+        cmd, probes = self._run_reference_scan(monkeypatch, ref_gap=5 / 60, codec="av1")
+        assert "-skip_frame" not in cmd and probes == []
+        cmd, _ = self._run_reference_scan(monkeypatch, ref_gap=None)
+        assert "-skip_frame" not in cmd
+
+    def test_keyframe_skip_wins_over_reference_skip(self, monkeypatch):
+        cmd, probes = self._run_reference_scan(
+            monkeypatch,
+            ref_gap=5 / 60,
+            interval=3.0,
+            kf_gap=1.0,
+            fast_opts={"phash_skip": True},
+        )
+        assert cmd[cmd.index("-skip_frame") + 1] == "nokey"
+        assert probes == []
+
 
 class TestAnalysisPreviewAlignment:
     """End-to-end: each ts yielded by `_ffmpeg_pipe_frames` must point at the
@@ -672,7 +776,9 @@ class TestAnalysisPreviewAlignment:
         )
 
     @staticmethod
-    def _assert_aligned(video_path: str) -> None:
+    def _assert_aligned(
+        video_path: str, interval: float = 1.0, **pipe_kwargs
+    ) -> list[float]:
         import hashlib
 
         import video as video_mod
@@ -680,11 +786,12 @@ class TestAnalysisPreviewAlignment:
         frames = list(
             screenspace._ffmpeg_pipe_frames(
                 video_path,
-                interval_seconds=1.0,
+                interval_seconds=interval,
                 start_seconds=0.0,
                 end_seconds=10.0,
                 frame_width=320,
                 frame_height=240,
+                **pipe_kwargs,
             )
         )
         assert frames, "expected at least one analysed frame"
@@ -697,6 +804,7 @@ class TestAnalysisPreviewAlignment:
                 f"analysed frame and preview differ at ts={ts:.4f} "
                 f"(analysis={h_a[:8]} preview={h_p[:8]})"
             )
+        return [ts for ts, _frame in frames]
 
     def test_cfr_source_alignment(self, tmp_path):
         if not self._have_ffmpeg():
@@ -717,6 +825,24 @@ class TestAnalysisPreviewAlignment:
             vf_extra="select='not(eq(mod(n,7),3))*not(eq(mod(n,11),5))'",
         )
         self._assert_aligned(video_path)
+
+    def test_reference_only_decode_is_bit_identical(self, tmp_path):
+        if not self._have_ffmpeg():
+            pytest.skip("ffmpeg/ffprobe required for end-to-end alignment test")
+        video_path = str(tmp_path / "bframes.mp4")
+        # libx264's defaults put B-frames between references, so frames get skipped.
+        self._synthesize(video_path)
+        # 0.7 s marks fall on B-frames; 1.0 s marks would all hit keyframes.
+        interval = 0.7
+        # Same pixels as an accurate seek to each timestamp...
+        skipped = self._assert_aligned(video_path, interval, skip_non_reference=True)
+        # ...one per interval, each at most a short B-frame run after its mark.
+        assert len(skipped) >= 14
+        for index, ts in enumerate(skipped):
+            mark = index * interval
+            assert mark - 1e-3 <= ts < mark + 0.2, (index, ts)
+        # A sample off its mark proves frames were skipped, not merely flagged.
+        assert any(ts - index * interval > 0.01 for index, ts in enumerate(skipped))
 
 
 class TestScanVideoFramesFfmpegIntegration:

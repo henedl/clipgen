@@ -46,7 +46,7 @@ SCENARIOS: dict[str, list[str]] = {
     "whisper": [],
     "speakers": ["--speakers"],
 }
-METRICS = ("elapsed_s", "whisper_s")
+METRICS = ("elapsed_s", "whisper_s", "cpu_s")
 
 # A small still video: the bench measures audio work, not video decode.
 VIDEO: bc.VideoShape = {"size": "320x240", "rate": 10, "gop": 100, "content": "screen"}
@@ -108,6 +108,9 @@ def summarize(doc: dict[str, Any]) -> dict[str, Any]:
         "speakers_embed_s": get("speakers.embed")["seconds"],
         "speakers_cluster_s": get("speakers.cluster")["seconds"],
         "peak_rss_mb": doc.get("peak_rss_mb") or 0.0,
+        "footprint_peak_mb": (doc.get("resources") or {}).get("peak_footprint_mb")
+        or 0.0,
+        "cpu_s": bc.cpu_seconds(doc),
     }
 
 
@@ -176,12 +179,12 @@ def print_table(
     print(
         f"{'scenario':<10}{'elapsed':>9}{'min':>9}{'mad':>8}{'whisper':>10}"
         f"{'w-xrt':>8}{'segs':>6}{'load':>8}{'pcm':>8}{'speakers':>10}"
-        f"{'cluster':>9}{'rss':>9}{'xrt':>8}{delta_hdr}  status"
+        f"{'cluster':>9}{'rss':>9}{'footpr':>9}{'cpu':>9}{'xrt':>8}{delta_hdr}  status"
     )
     for name, row in rows.items():
         status = bc.status_of(name, findings)
         if not row["samples"]:
-            print(f"{name:<10}{'':>102}  {status}")
+            print(f"{name:<10}{'':>120}  {status}")
             continue
 
         def med(key: str, samples: list[dict[str, Any]] = row["samples"]) -> float:
@@ -195,6 +198,7 @@ def print_table(
             f"{int(med('segments')):>6d}{med('model_load_s'):>7.2f}s"
             f"{med('pcm_s'):>7.2f}s{med('speakers_s'):>9.2f}s"
             f"{med('speakers_cluster_s'):>8.2f}s{med('peak_rss_mb'):>7.0f}MB"
+            f"{med('footprint_peak_mb'):>7.0f}MB{med('cpu_s'):>8.1f}s"
             f"{med('xrt'):>7.1f}x"
         )
         if baseline:
@@ -351,7 +355,7 @@ def main() -> int:
     }
     baseline = None
     findings: list[tuple[str, str, str]] = []
-    metric = "elapsed_s" if args.fail_metric == "elapsed" else "whisper_s"
+    metric = bc.metric_key(args.fail_metric, "whisper_s")
     if args.compare:
         baseline, problems = bc.load_baseline(
             args.compare, "scenarios", meta, allow_env=args.allow_env_mismatch

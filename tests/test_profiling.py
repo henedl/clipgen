@@ -29,6 +29,8 @@ def _clean_profiling(monkeypatch):
     monkeypatch.setattr(profiling, "_STARTUP_MARKS", [])
     profiling.reset()
     profiling.deep_reset()
+    profiling._git_state.cache_clear()
+    profiling._ffmpeg_version.cache_clear()
     yield
     profiling.reset()
     profiling.deep_reset()
@@ -58,6 +60,7 @@ def test_add_and_count_accumulate_when_on(monkeypatch):
         "max": 0.25,
         "bytes": 0,
         "first": 0.0,
+        "cpu": None,
     }
     assert snap["hits"] == {
         "seconds": 0.0,
@@ -65,6 +68,7 @@ def test_add_and_count_accumulate_when_on(monkeypatch):
         "max": 0.0,
         "bytes": 0,
         "first": 0.0,
+        "cpu": None,
     }
 
 
@@ -126,8 +130,15 @@ def test_label_cap_drops_new_labels(monkeypatch):
 
 
 def _deep_probe_workload():
-    """A named function the deep profile must be able to attribute time to."""
-    return sum(range(200000))
+    """A named function the deep profile must be able to attribute time to.
+
+    The loop keeps the time in this frame: a builtin ``sum`` would own it, and
+    this row would then fight a dozen near-zero rows for the top-15 cut.
+    """
+    total = 0
+    for value in range(20000):
+        total += value
+    return total
 
 
 def test_deep_profiler_none_when_unrequested(monkeypatch):
@@ -367,6 +378,7 @@ def test_api_profile_snapshot_and_reset(client, monkeypatch):
         "max": 0.0,
         "bytes": 0,
         "first": 0.0,
+        "cpu": None,
     }
     # Inspecting the profile must not appear in the profile.
     assert "route /api/profile" not in profiling.snapshot()
@@ -644,8 +656,10 @@ def test_report_appends_peak_rss(monkeypatch, capsys):
     lines = capsys.readouterr().out.splitlines()
     assert all(line.startswith("profile | ") for line in lines)
     if profiling.peak_rss_mb() is not None:
-        assert lines[-1].startswith("profile | peak_rss")
-        assert lines[-1].rstrip().endswith("MB")
+        peak = next(line for line in lines if line.startswith("profile | peak_rss"))
+        assert peak.rstrip().endswith("MB")
+    # The resource lines close the table, after every label.
+    assert lines[-1].startswith("profile | os ")
 
 
 def test_report_silent_when_empty_including_rss(capsys):
@@ -1301,3 +1315,115 @@ def test_api_profile_deep_routes(client, monkeypatch, tmp_path):
     assert (tmp_path / "profiles" / "unit.route.prof").is_file()
     # Neither inspection route shows up in the profile it reports on.
     assert not any(k.startswith("route /api/profile") for k in profiling.snapshot())
+
+
+# ---------- CPU and resources --------------------------------------------------
+
+
+def test_span_records_thread_cpu(monkeypatch):
+    monkeypatch.setattr(config, "PROFILING", True)
+    with profiling.span("busy"):
+        end = time.thread_time() + 0.02
+        while time.thread_time() < end:
+            pass
+    with profiling.span("idle"):
+        time.sleep(0.02)
+    snap = profiling.snapshot()
+    assert snap["busy"]["cpu"] >= 0.02
+    assert snap["idle"]["cpu"] < 0.01
+    assert snap["idle"]["seconds"] >= 0.02
+
+
+def test_cpu_accumulates_and_untracked_stays_none(monkeypatch):
+    monkeypatch.setattr(config, "PROFILING", True)
+    profiling.add("route /x", 0.1, cpu=0.03)
+    profiling.add("route /x", 0.1, cpu=0.02)
+    profiling.add("batched", 1.0, 10)
+    snap = profiling.snapshot()
+    assert snap["route /x"]["cpu"] == pytest.approx(0.05)
+    assert snap["batched"]["cpu"] is None
+
+
+def test_report_prints_cpu_share_from_50ms(monkeypatch, capsys):
+    monkeypatch.setattr(config, "PROFILING", True)
+    profiling.add("wait", 0.2, cpu=0.002)
+    profiling.add("tiny", 0.01, cpu=0.01)
+    profiling.report()
+    lines = {line.split()[2]: line for line in capsys.readouterr().out.splitlines()}
+    assert "cpu=1%" in lines["wait"]
+    assert "cpu=" not in lines["tiny"]
+
+
+def test_resources_reports_window_deltas(monkeypatch):
+    monkeypatch.setattr(config, "PROFILING", True)
+    profiling.resources(reset=True)
+    end = time.thread_time() + 0.03
+    while time.thread_time() < end:
+        pass
+    res = profiling.resources(reset=True)
+    assert res["cpu_s"] >= 0.03
+    assert res["child_cpu_s"] >= 0.0
+    assert res["threads"] >= 1
+    assert profiling.resources()["cpu_s"] < res["cpu_s"]
+
+
+def test_report_prints_resource_lines(monkeypatch, capsys):
+    monkeypatch.setattr(config, "PROFILING", True)
+    profiling.add("work", 0.25)
+    profiling.report()
+    out = capsys.readouterr().out
+    assert "profile | cpu " in out and "children=" in out
+    assert "profile | os " in out and "threads=" in out
+
+
+def test_export_carries_resources_and_no_sample_by_default(monkeypatch):
+    monkeypatch.setattr(config, "PROFILING", True)
+    monkeypatch.setattr(profiling, "environment", dict)
+    monkeypatch.setattr(profiling.sampler, "_HZ", 0)
+    doc = profiling.export()
+    assert {"cpu_s", "child_cpu_s", "threads"} <= set(doc["resources"])
+    assert doc["sample"] is None
+
+
+def test_operation_records_carry_cpu(monkeypatch):
+    monkeypatch.setattr(config, "PROFILING", True)
+    profiling.ops_reset()
+    with profiling.op_run("job-cpu", kind="scan"):
+        end = time.thread_time() + 0.02
+        while time.thread_time() < end:
+            pass
+    rec = profiling.operations()["recent"][-1]
+    assert rec["cpu_s"] >= 0.02
+    assert rec["child_cpu_s"] >= 0.0
+    assert "_res" not in rec
+    profiling.ops_reset()
+
+
+def test_environment_probes_run_once(monkeypatch):
+    calls = []
+
+    def fake_run(argv, **_kwargs):
+        calls.append(argv[0])
+        raise FileNotFoundError("nope")
+
+    monkeypatch.setattr(profiling.subprocess, "run", fake_run)
+    profiling.environment()
+    first = len(calls)
+    profiling.environment()
+    assert first > 0 and len(calls) == first
+
+
+def test_api_profile_stacks_404_without_sampler(client, monkeypatch):
+    monkeypatch.setattr(config, "PROFILING", True)
+    monkeypatch.setattr(config, "PROFILE_SAMPLE", 0)
+    assert client.get("/api/profile/stacks").status_code == 404
+
+
+def test_api_profile_stacks_returns_text(client, monkeypatch):
+    monkeypatch.setattr(config, "PROFILING", True)
+    monkeypatch.setattr(config, "PROFILE_SAMPLE", 100)
+    monkeypatch.setattr(profiling.sampler, "folded", lambda kind: f"{kind};a;b 3\n")
+    resp = client.get("/api/profile/stacks?kind=wall")
+    assert resp.status_code == 200
+    assert resp.get_data(as_text=True) == "wall;a;b 3\n"
+    assert client.get("/api/profile/stacks").get_data(as_text=True).startswith("cpu;")

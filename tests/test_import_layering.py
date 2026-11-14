@@ -88,6 +88,7 @@ def test_redact_stays_import_light() -> None:
 # Whole-tree layers; module-level imports point strictly downhill.
 _TREE_LAYERS = {
     "config": 0,
+    "profiling_sampler": 0,
     "profiling": 1,
     "friction": 1,
     "composer_render": 1,

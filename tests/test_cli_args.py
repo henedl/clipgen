@@ -155,6 +155,33 @@ def test_profile_output_enables_profiling(monkeypatch, tmp_path):
     profiling.reset()
 
 
+def test_profile_sample_parses_rate_and_starts_sampler(monkeypatch):
+    import atexit
+
+    import config
+    import profiling
+
+    monkeypatch.setattr("sys.argv", ["clipgen.py", "--profile-sample", "--studio"])
+    assert cli.parse_arguments().profile_sample == 100
+    monkeypatch.setattr("sys.argv", ["clipgen.py", "--profile-sample", "250"])
+    assert cli.parse_arguments().profile_sample == 250
+    monkeypatch.setattr("sys.argv", ["clipgen.py", "--studio"])
+    assert cli.parse_arguments().profile_sample is None
+
+    started = []
+    monkeypatch.setattr(config, "PROFILING", False)
+    monkeypatch.setattr(config, "PROFILE_SAMPLE", 0)
+    monkeypatch.setattr(atexit, "register", lambda fn: fn)  # no process-exit hook
+    monkeypatch.setattr(
+        profiling.sampler, "start", lambda hz, **_kw: started.append(hz) or True
+    )
+    cli._apply_config_overrides(_base_args(profile_sample=250), cli_mode=True)
+    assert config.PROFILING is True
+    assert config.PROFILE_SAMPLE == 250
+    assert started == [250]
+    profiling.reset()
+
+
 def test_profile_flag_default_leaves_profiling_off(monkeypatch):
     import config
 

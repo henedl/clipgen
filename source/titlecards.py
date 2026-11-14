@@ -33,8 +33,11 @@ _endcard_lock = threading.Lock()
 _endcard_flights: dict[str, threading.Lock] = {}
 
 
-def _x264_video_args() -> list[str]:
+def _x264_video_args(pixels: int = 0) -> list[str]:
     """Shared libx264 output args for card generation and the card wrap.
+
+    *pixels* is the frame area of a whole-clip wrap; a pooled wrap above 1440p
+    gets a thread cap (see ``video.encode_pool``). Cards pass nothing.
 
     A fast preset + explicit CRF: cards are always encoded with these args, and
     the fallback wrap path (non-copy-safe body, or a failed copy concat)
@@ -51,6 +54,7 @@ def _x264_video_args() -> list[str]:
         str(config.TITLECARD_ENCODE_CRF),
         "-pix_fmt",
         "yuv420p",
+        *video.pooled_thread_args(pixels),
     ]
 
 
@@ -725,7 +729,7 @@ def wrap_clip_with_cards(
             "-filter_complex",
             filter_complex,
             *map_args,
-            *_x264_video_args(),
+            *_x264_video_args(int(probed["width"]) * int(probed["height"])),
         )
         if has_clip_audio:
             ffmpeg_command.extend(["-c:a", "aac"])

@@ -733,6 +733,7 @@ def _parallel_map_ordered(
     worker_fn = profiling.bind(profiling.timed("pipeline.clip")(worker_fn))
     with (
         profiling.span("pipeline.pool_wall"),
+        video.encode_pool(min(workers, len(items))),
         concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool,
     ):
         future_to_idx = {
@@ -1962,6 +1963,7 @@ def _regenerate_reel(
     if parallel and len(tasks) >= 2 and workers >= 2:
         with (
             profiling.span("pipeline.pool_wall"),
+            video.encode_pool(min(workers, len(tasks))),
             concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool,
         ):
             for future in concurrent.futures.as_completed(
