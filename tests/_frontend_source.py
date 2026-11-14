@@ -74,6 +74,7 @@ def node_eval(snippet: str, probe: str, prelude: str = "") -> list[str]:
         capture_output=True,
         text=True,
         timeout=NODE_TIMEOUT,
+        check=False,
     )
     assert result.returncode == 0, f"node exited {result.returncode}:\n{result.stderr}"
     return result.stdout.split("\n")[:-1]
