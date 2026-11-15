@@ -26,7 +26,7 @@ The work changes tests and CI only. No public APIs, persisted schemas, productio
 | --- | --- | --- |
 | Frontend streaming and cancellation | A | Done 2026-11-15 (see notes) |
 | Studio artifact journey | B | Not started |
-| Real-media assertions | C | Not started |
+| Real-media assertions | C | Done 2026-11-15 (see notes) |
 | Concurrency tests | D | Not started |
 | CI prerequisites | E | Not started |
 | Integration and validation | Integrating agent | Not started |
@@ -44,7 +44,14 @@ Update each package's status as it lands, including resolved issues or changed s
 - Mutation checks, each restored: dropping the intake cancel post, dropping the final buffered line, removing a cancel `.catch`, removing the per-controller `try`, a never-resolving `read()`, and dropping `e.status`. Each failed the intended test.
 - Observation, not changed: `readNDJSONStream` never calls `decoder.decode()` without `stream: true` at end of stream, so a truncated multibyte sequence at EOF is dropped silently. Only malformed streams hit this.
 
-## Follow-up candidates (not scheduled)
+**Package 3 (done 2026-11-15).**
+
+- `tests/test_pipeline_io.py` keeps four tests. The shared source is now 1 s red + 2 s blue (two lavfi `color=` inputs through `concat`, `-g 15 -bf 0`, `keyint=15:min-keyint=15:scenecut=0`). `config.REENCODING`, `AUDIO_NORMALIZE`, and `DEBUGGING` are pinned in the `output_dir` fixture.
+- Helpers with more than one caller: `_stream_duration` (ffprobe JSON, clip + reel), `_decode_centers` (full decode with `-xerror`, empty stderr required, center pixel per frame; clip + reel), `_color` (channel dominance >150 / <100; all three tests). Every subprocess, including the untouched seek test's, now has a 30 s timeout.
+- Measured on ffmpeg 9.0.2: the clip probes at 1.0 s and the reel at 2.0 s, both inside the one-frame / two-frame tolerances.
+- Mutations through a scratch pytest plugin (outside the repo): copying the source in place of each cut, reversing the reel parts, duplicating the first part, and dropping the second part. Each failed the clip or reel assertions.
+- Timings, two serial runs each (`-p no:randomly`): file total 1.23/1.24 s before, 1.30/1.31 s after. The reel test moved from 0.32 s to 0.37–0.42 s; the others are unchanged within noise.
+ (not scheduled)
 
 Recorded so the review's "apply the same pattern" remark is not lost. Henrik decides whether any becomes a package.
 
