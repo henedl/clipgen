@@ -1150,10 +1150,9 @@ audio.cg-audiotrack { display: none; }
  *   2. the caret mechanics — deliberately out-specified; see its own comment
  *
  * Vertical metrics are padding-driven on purpose: WebKit ignores line-height on
- * a <select> and centres the option text in the content box, so symmetric
- * vertical padding (or a fixed height with padding-block: 0, which is what the
- * denser page rules do) is the only shape both engines agree on. Do not add
- * line-height here or to any select rule.
+ * a <select>, and clips the label of a fixed-height one, so symmetric vertical
+ * padding is the only shape both engines agree on. Do not add line-height or
+ * height to any select rule.
  *
  * The popover is left system-drawn. macOS paints select popups as a native menu
  * in both WebKit and Chromium and ignores `option { }` there, so styling options
