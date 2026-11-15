@@ -1,11 +1,10 @@
-"""Five click-through journeys: click → API → DOM must still hang together.
+"""Six click-through journeys: click → API → DOM must still hang together.
 
 The boot smoke (``test_ui_smoke.py``) proves the curtain goes up; it clicks
 nothing. Each journey here drives one researcher path through the page's own
 UI — real clicks on live selectors, never internal render calls — and asserts
-both the journey's DOM contract and ``log.fatal``. Capped at five until a real
-shipped bug earns a sixth (see ``plans/TEST-SUITE-PLAN.md`` /
-``agents/skills/test/SKILL.md``).
+both the journey's DOM contract and ``log.fatal``. Capped at six (see
+``agents/skills/test/SKILL.md``); extend an existing journey before adding one.
 
 Same double opt-in as the smoke: ``norecursedirs`` excludes the directory and
 the module gate below refuses to run without ``CLIPGEN_UI_CHECK=1``.
@@ -13,6 +12,8 @@ the module gate below refuses to run without ``CLIPGEN_UI_CHECK=1``.
 
 import json
 import os
+import time
+import urllib.parse
 import urllib.request
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -69,6 +70,31 @@ _WAIT_MS = 15_000
 _GENERATE_MS = 30_000
 
 
+def _get(live_server: LiveServer, path: str) -> tuple[int, bytes]:
+    with urllib.request.urlopen(live_server.origin + path, timeout=10) as response:
+        return response.status, response.read()
+
+
+def _manifest_artifacts(live_server: LiveServer) -> list[dict[str, Any]]:
+    status, body = _get(live_server, "/studio/api/manifest")
+    assert status == 200
+    payload = json.loads(body)
+    assert payload["ok"], payload
+    return payload["artifacts"]
+
+
+def _new_artifacts(
+    live_server: LiveServer, before: set[str], timeout_s: float
+) -> list[dict[str, Any]]:
+    """Poll the manifest until generation persists at least one new artifact."""
+    deadline = time.monotonic() + timeout_s
+    while True:
+        fresh = [a for a in _manifest_artifacts(live_server) if a["id"] not in before]
+        if fresh or time.monotonic() > deadline:
+            return fresh
+        time.sleep(0.1)
+
+
 def _overlay(name: str) -> _ui_states.Overlay:
     return next(o for o in _ui_states.GLOBAL_OVERLAYS if o.name == name)
 
@@ -111,9 +137,11 @@ def test_studio_generate_produces_an_artifact(
 ) -> None:
     """Queue one valid cell, click Generate, and watch a real clip land.
 
-    Row 6 is P01 ``0:01-0:04`` — a 3 s cut of the 20 s fixture. A plain click is
-    load-bearing: Shift/right-click route the cell to the reel queue instead.
+    Row 6 is P01 ``0:01-0:04`` — a 3 s cut of the 20 s fixture. A plain click
+    matters: Shift/right-click route the cell to the reel queue instead. The
+    success UI must match a new manifest record whose file the server serves.
     """
+    before = {a["id"] for a in _manifest_artifacts(live_server)}
     with _journey(browser_context, live_server, "studio", "journey-generate") as (
         page,
         log,
@@ -132,7 +160,24 @@ def test_studio_generate_produces_an_artifact(
             SELECTORS["studio-spinner-idle"], state="attached", timeout=_WAIT_MS
         )
         assert page.locator(SELECTORS["studio-card-fail"]).count() == 0
+        fresh = _new_artifacts(live_server, before, _GENERATE_MS / 1000)
     assert not log.fatal, _fatal_message("studio-generate", log, "journey-generate")
+
+    # Generation itself persists the record; nothing here posts a manifest save.
+    assert [(a["type"], a["participant"], a["cellRow"]) for a in fresh] == [
+        ("clip", "P01", 6)
+    ], fresh
+    output_dir = _ui_fixtures.OUTPUT_DIR.resolve()
+    clip_path = (output_dir / fresh[0]["file"]).resolve()
+    assert clip_path.is_relative_to(output_dir), clip_path
+    assert clip_path.is_file(), f"{clip_path} is missing"
+    clip_bytes = clip_path.read_bytes()
+    assert clip_bytes, f"{clip_path} is empty"
+    status, served = _get(
+        live_server, "/studio/media/" + urllib.parse.quote(fresh[0]["file"])
+    )
+    assert status == 200
+    assert served == clip_bytes
 
 
 def test_screenspace_result_row_seeks_playhead(

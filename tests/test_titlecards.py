@@ -1,6 +1,5 @@
 import os
 import subprocess
-import time
 
 
 import config
@@ -940,41 +939,43 @@ def test_card_font_falls_back_to_fontconfig_monospace(monkeypatch):
 
 
 def test_get_or_build_endcard_builds_once_under_parallel_workers(monkeypatch, tmp_path):
+    """Four callers reach the flight lock while one build is held; one build wins."""
     import threading
 
+    from _concurrency import WAIT, CountingLock, OneLockDict, join_all, start_threads
+
     titlecards.clear_endcard_cache()
+    flight = CountingLock()
+    monkeypatch.setattr(titlecards, "_endcard_flights", OneLockDict(flight))
     calls = []
     entered = threading.Event()
     release = threading.Event()
 
-    def slow_build(resolution, **_kwargs):
+    def held_build(resolution, **_kwargs):
         calls.append(resolution)
         entered.set()
-        release.wait(timeout=5)
+        assert release.wait(WAIT), "build never released"
         card = tmp_path / f"endcard-{len(calls)}.mp4"
         card.write_bytes(b"\0")
         return str(card)
 
-    monkeypatch.setattr(titlecards, "build_endcard_frame", slow_build)
-    results: list[str | None] = []
-    threads = [
-        threading.Thread(
-            target=lambda: results.append(titlecards.get_or_build_endcard("1280x720"))
-        )
-        for _ in range(4)
-    ]
-    for t in threads:
-        t.start()
-    assert entered.wait(timeout=5)
-    time.sleep(0.1)  # let the other workers queue on the flight lock
-    release.set()
-    for t in threads:
-        t.join(timeout=10)
+    monkeypatch.setattr(titlecards, "build_endcard_frame", held_build)
+    threads, results, errors = start_threads(
+        lambda: titlecards.get_or_build_endcard("1280x720"), 4
+    )
     try:
-        assert len(calls) == 1
-        assert len(set(results)) == 1 and results[0]
+        assert entered.wait(WAIT), "no caller started a build"
+        assert flight.wait_attempts(4), (
+            f"only {flight.attempts} callers reached the lock"
+        )
     finally:
+        release.set()
+        join_all(threads)
         titlecards.clear_endcard_cache()
+    assert errors == []
+    assert len(calls) == 1
+    assert len(results) == 4
+    assert len(set(results)) == 1 and results[0]
 
 
 def test_pooled_wrap_of_large_frames_caps_encoder_threads(monkeypatch):

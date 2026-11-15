@@ -14,6 +14,7 @@ Deliberately capped at four (see ``agents/skills/test/SKILL.md``): titlecards
 stay mocked elsewhere.
 """
 
+import json
 import shutil
 import subprocess
 
@@ -34,18 +35,68 @@ requires_ffmpeg = pytest.mark.skipif(
 )
 
 
+# Subprocess bound; each call here finishes well under a second.
+_TIMEOUT = 30
+_FPS = 15
+_SIZE = (160, 120)
+
+
 def _encode(path) -> None:
-    """Encode a 2 s testsrc clip; keyframe every second so short cuts stay tight."""
+    """Encode 1 s red then 2 s blue, a keyframe every second, no B-frames."""
     command = ["ffmpeg", "-y", "-v", "error"]
-    command += ["-f", "lavfi", "-i", "testsrc=duration=2:size=160x120:rate=15"]
-    command += ["-c:v", "libx264", "-pix_fmt", "yuv420p", "-g", "15"]
+    for color, seconds in (("red", 1), ("blue", 2)):
+        command += [
+            "-f",
+            "lavfi",
+            "-i",
+            f"color=c={color}:s=160x120:r={_FPS}:d={seconds}",
+        ]
+    command += ["-filter_complex", "[0:v][1:v]concat=n=2:v=1:a=0[v]", "-map", "[v]"]
+    command += ["-c:v", "libx264", "-pix_fmt", "yuv420p", "-g", str(_FPS), "-bf", "0"]
+    command += ["-x264-params", f"keyint={_FPS}:min-keyint={_FPS}:scenecut=0"]
     command += ["-f", "mp4", str(path)]
-    subprocess.run(command, check=True, capture_output=True)
+    subprocess.run(command, check=True, capture_output=True, timeout=_TIMEOUT)
+
+
+def _stream_duration(path) -> float:
+    """The video stream's precise duration from ffprobe JSON."""
+    command = ["ffprobe", "-v", "error", "-select_streams", "v:0"]
+    command += ["-show_entries", "stream=duration", "-of", "json", str(path)]
+    result = subprocess.run(
+        command, check=True, capture_output=True, text=True, timeout=_TIMEOUT
+    )
+    return float(json.loads(result.stdout)["streams"][0]["duration"])
+
+
+def _decode_centers(path) -> list[tuple[int, ...]]:
+    """Decode every frame, failing on any decode error; return center RGB pixels."""
+    command = ["ffmpeg", "-v", "error", "-xerror", "-i", str(path)]
+    command += ["-f", "rawvideo", "-pix_fmt", "rgb24", "pipe:1"]
+    result = subprocess.run(command, check=True, capture_output=True, timeout=_TIMEOUT)
+    assert result.stderr == b"", result.stderr.decode(errors="replace")
+    width, height = _SIZE
+    frame_size = width * height * 3
+    assert result.stdout and len(result.stdout) % frame_size == 0
+    center = ((height // 2) * width + width // 2) * 3
+    return [
+        tuple(result.stdout[i + center : i + center + 3])
+        for i in range(0, len(result.stdout), frame_size)
+    ]
+
+
+def _color(rgb) -> str:
+    """Name the dominant channel: it must exceed 150, the others stay below 100."""
+    names = ("red", "green", "blue")
+    for idx, name in enumerate(names):
+        others = [v for j, v in enumerate(rgb) if j != idx]
+        if rgb[idx] > 150 and all(v < 100 for v in others):
+            return name
+    return f"unclear {tuple(rgb)}"
 
 
 @pytest.fixture(scope="module")
 def source_dir(tmp_path_factory):
-    """One shared 2 s source at the ``{study}_{participant}.mp4`` contract path."""
+    """One shared red/blue source at the ``{study}_{participant}.mp4`` contract path."""
     if not _have_ffmpeg():
         pytest.skip("needs real ffmpeg/ffprobe")
     directory = tmp_path_factory.mktemp("io_input")
@@ -61,6 +112,10 @@ def output_dir(monkeypatch, source_dir, tmp_path):
     monkeypatch.setattr(config, "INPUT_DIR", str(source_dir), raising=False)
     monkeypatch.setattr(config, "OUTPUT_DIR", str(out), raising=False)
     monkeypatch.setattr(config, "CLIP_PARALLEL_WORKERS", 1)
+    # Stream copy, no loudnorm, real ffmpeg: the output is the cut itself.
+    monkeypatch.setattr(config, "REENCODING", False)
+    monkeypatch.setattr(config, "AUDIO_NORMALIZE", False)
+    monkeypatch.setattr(config, "DEBUGGING", False)
     # Keep Rich progress/spinner rendering out of the test output.
     monkeypatch.setattr(pipeline.utils, "create_progress_bar", lambda: None)
     monkeypatch.setattr(pipeline.utils, "use_progress", lambda: False)
@@ -69,7 +124,7 @@ def output_dir(monkeypatch, source_dir, tmp_path):
 
 @requires_ffmpeg
 def test_cut_writes_playable_clip(make_clip, output_dir):
-    clip = make_clip(value="0:00-0:01")
+    clip = make_clip(value="0:01-0:02")
 
     generated, records = pipeline.process_clips(
         [clip], output_format="clip", titlecards_enabled=False
@@ -79,16 +134,16 @@ def test_cut_writes_playable_clip(make_clip, output_dir):
     assert len(records) == 1
     outputs = list(output_dir.glob("*.mp4"))
     assert len(outputs) == 1
-    assert outputs[0].stat().st_size > 0
-    # A ~1 s window from a 2 s source; stream copy may run to the next keyframe,
-    # and get_file_duration rounds to whole seconds. None would mean unprobeable.
-    duration = video.get_file_duration(str(outputs[0]))
-    assert duration is not None and 1 <= duration <= 2
+    # One second of the blue span, not the 3 s source or the red opening.
+    assert abs(_stream_duration(outputs[0]) - 1.0) <= 1 / _FPS
+    centers = _decode_centers(outputs[0])
+    assert _color(centers[len(centers) // 2]) == "blue"
 
 
 @requires_ffmpeg
 def test_screenshot_is_a_readable_image(make_clip, output_dir):
-    clip = make_clip(value="0:01-0:02")  # screenshots key off the start time only
+    # Screenshots key off the start time; 0:02 sits a second from either edge.
+    clip = make_clip(value="0:02-0:03")
 
     generated, _records = pipeline.process_clips(
         [clip], output_format="screen", titlecards_enabled=False
@@ -98,7 +153,10 @@ def test_screenshot_is_a_readable_image(make_clip, output_dir):
     outputs = list(output_dir.glob("*.png"))
     assert len(outputs) == 1
     with Image.open(outputs[0]) as image:
-        assert image.width > 0 and image.height > 0
+        image.load()
+        assert image.size == _SIZE
+        rgb = image.convert("RGB").getpixel((_SIZE[0] // 2, _SIZE[1] // 2))
+    assert _color(rgb) == "blue"
 
 
 @requires_ffmpeg
@@ -107,12 +165,11 @@ def test_reel_concatenates_both_windows_or_writes_nothing(
 ):
     def _clips():
         return [
-            make_clip(row=3, value="0:00-0:01"),
-            make_clip(row=4, value="0:01-0:02"),
+            make_clip(row=3, value="0:01-0:02"),
+            make_clip(row=4, value="0:00-0:01"),
         ]
 
-    # Failed second cut: no reel file may exist afterwards. With one worker the
-    # part cuts run in clip order, so failing the second call is deterministic.
+    # One worker cuts in clip order; failing call two must leave no reel.
     with monkeypatch.context() as patch:
         calls: list[str] = []
         real_run_ffmpeg = video.run_ffmpeg
@@ -135,15 +192,17 @@ def test_reel_concatenates_both_windows_or_writes_nothing(
         # The successful first part was unlinked and its reservation released.
         assert list(output_dir.iterdir()) == []
 
-    # Clean run: the reel is roughly the sum of both windows, not one of them.
+    # Clean run: blue then red, in request order, each window once.
     generated, records = pipeline.process_reel(_clips(), titlecards_enabled=False)
 
     assert generated == 1
     assert len(records) == 1
     reel_path = output_dir / "study_reel.mp4"
-    assert reel_path.is_file() and reel_path.stat().st_size > 0
-    duration = video.get_file_duration(str(reel_path))
-    assert duration is not None and 2 <= duration <= 3
+    assert reel_path.is_file()
+    assert abs(_stream_duration(reel_path) - 2.0) <= 2 / _FPS
+    centers = _decode_centers(reel_path)
+    first, second = centers[len(centers) // 4], centers[3 * len(centers) // 4]
+    assert (_color(first), _color(second)) == ("blue", "red")
 
 
 @requires_ffmpeg
@@ -156,19 +215,21 @@ def test_single_seek_matches_two_stage_seek_exactly(tmp_path):
     can only be locked against the real binary: every extracted frame must be
     bit-identical to the obsolete two-stage form (pre-input -ss to target-2s
     plus post-input -ss 2) it replaced. Needs its own 5 s fixture (not the
-    shared 2 s source) so the timestamps straddle the old 2 s split threshold
+    shared red/blue source) so the timestamps straddle the old 2 s split threshold
     — both branches of the old idiom — as well as keyframe boundaries.
     """
     path = str(tmp_path / "seek.mp4")
     command = ["ffmpeg", "-y", "-v", "error"]
     command += ["-f", "lavfi", "-i", "testsrc=duration=5:size=160x120:rate=15"]
     command += ["-c:v", "libx264", "-pix_fmt", "yuv420p", "-g", "15", "-f", "mp4", path]
-    subprocess.run(command, check=True, capture_output=True)
+    subprocess.run(command, check=True, capture_output=True, timeout=_TIMEOUT)
 
     def raw_frame(pre: list[str], post: list[str]) -> bytes:
         cmd = ["ffmpeg", *pre, "-i", path, *post, "-frames:v", "1"]
         cmd += ["-pix_fmt", "bgr24", "-f", "rawvideo", "-loglevel", "error", "pipe:1"]
-        return subprocess.run(cmd, capture_output=True, check=True).stdout
+        return subprocess.run(
+            cmd, capture_output=True, check=True, timeout=_TIMEOUT
+        ).stdout
 
     for ts in (0.4, 1.75, 3.0, 4.6):
         old = raw_frame(

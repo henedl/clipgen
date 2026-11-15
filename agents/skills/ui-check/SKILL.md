@@ -1,10 +1,11 @@
 # clipgen-ui-check — Headless page smoke, screenshots, and in-page probing
 
 Boots the real combined server against a generated fixture project, loads all six
-pages in headless Chromium, and fails on any uncaught error. It also runs five
-click-through journeys (`tests/ui/test_ui_journeys.py`): Studio generate,
-Screenspace result-row seek, Transcripts segment seek, settings persistence, and
-opening the fixture workbook through the Start overlay. Use it after touching
+pages in headless Chromium, and fails on any uncaught error. It also runs six
+click-through journeys (`tests/ui/test_ui_journeys.py`): Studio generate (down to
+the served clip file), Screenspace result-row seek, Transcripts segment seek,
+Transcripts pill-menu anchoring, settings persistence, and opening the fixture
+workbook through the Start overlay. Use it after touching
 anything in `assets/web/` — it is the runtime confirmation that used to be "ask the
 human to open the page".
 
@@ -42,13 +43,13 @@ CLIPGEN_UI_CHECK=1 uv run --extra dev --extra ui pytest -c tests/pytest.ini \
 
 `-p no:randomly` because shuffling independent page loads buys nothing and
 makes failure output harder to read. Cold run ~45 s (ffmpeg encodes the fixture
-videos once), warm ~30 s — the boot smoke plus the five journeys.
+videos once), warm ~30 s — the boot smoke plus the six journeys.
 
 ## 3. Inspect — actually look at the screenshots
 
 ```
 .context/ui-check/screenshots/{studio,screenspace,transcripts,workflows,composer,overview}.png
-.context/ui-check/screenshots/journey-{generate,screenspace,transcripts,settings,start-overlay}.png
+.context/ui-check/screenshots/journey-{generate,screenspace,transcripts,transcripts-pill,settings,start-overlay}.png
 .context/ui-check/ui-report.json
 ```
 
@@ -144,8 +145,8 @@ Two honest limits, worth knowing before you read the output:
   are two independent locks and both are deliberate.
 - `tests/test_frontend_syntax.py` (the `node --check` gate) is **not** part of this
   suite and *does* belong in `/check`. Don't move it here.
-- This is not an interaction crawl. The journey list is capped at five until a
-  real shipped bug earns a sixth (`agents/skills/test/SKILL.md` has the policy).
+- This is not an interaction crawl. The journey list is capped at six
+  (`agents/skills/test/SKILL.md` has the policy); extend a journey before adding one.
   Feel, motion, drag behaviour and real-media playback still need a human.
 
 ## Housekeeping
