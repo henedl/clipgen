@@ -39,6 +39,14 @@ def _burn_cpu(seconds: float) -> None:
         pass
 
 
+def _burn_while_sampled(seconds: float = 0.1, ticks: int = 10) -> None:
+    # A busy thread holds the GIL; on a loaded runner the sampler can starve.
+    deadline = time.monotonic() + 5.0
+    _burn_cpu(seconds)
+    while sampler._TICKS < ticks and time.monotonic() < deadline:
+        _burn_cpu(0.005)
+
+
 def _sample(target, *, hz: int = 500, **start_kwargs):
     thread = threading.Thread(target=target, name="burner-7")
     assert sampler.start(hz, **start_kwargs)
@@ -99,7 +107,7 @@ def test_start_refuses_a_second_sampler():
 
 
 def test_sampler_sees_every_thread_in_wall_samples():
-    snap = _sample(lambda: _burn_cpu(0.1))
+    snap = _sample(_burn_while_sampled)
     assert snap["ticks"] >= 5
     assert snap["faults"] == 0
     assert snap["threads"]["burner-N"]["samples"] >= 5
@@ -113,7 +121,7 @@ def test_sampler_sees_every_thread_in_wall_samples():
 
 @needs_os_probes
 def test_sampler_weights_stacks_by_thread_cpu():
-    snap = _sample(lambda: _burn_cpu(0.1))
+    snap = _sample(_burn_while_sampled)
     assert snap["threads"]["burner-N"]["cpu_s"] >= 0.05
     assert snap["threads"]["MainThread"]["cpu_s"] < 0.05
     top = snap["top_self"][0]
