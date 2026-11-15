@@ -32,7 +32,7 @@ _TOKEN = re.compile(r"[\w-]+")
 _BUILD = re.compile(r"-(?:[\"']\s*\+|\{|%s|%\()")
 _TAIL = re.compile(r"[A-Za-z_][\w-]*$")
 
-# Orphan classes per stylesheet. Wave 1 of plans/CODE-QUALITY-PLAN.md emptied it.
+# Orphan classes per stylesheet. Wave 1 of plans/archive/CODE-QUALITY-PLAN.md emptied it.
 KNOWN_ORPHANS: dict[str, frozenset[str]] = {}
 
 

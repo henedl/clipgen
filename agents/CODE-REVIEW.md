@@ -93,5 +93,5 @@ Four ratchets lock in the code-quality cleanup. Each baseline may only shrink, a
 - **Dead JS functions**: `tests/test_js_dead_functions.py` fails on a top-level `function` whose name appears nowhere else.
 - **Dead Python functions**: `tests/test_py_dead_functions.py` does the same for undecorated functions in `source/`. A name only tests call must sit in `KNOWN_TEST_ONLY` with a reason; only fixture seams such as cache resets belong there.
 - **Dead CSS classes**: `tests/test_css_dead_selectors.py` fails on a class no JS, HTML, or Python file sets. Concatenated names (`"task-card-" + status`) count through their prefix.
-- **Long functions**: `tests/test_function_length.py` fails on a new Python or JS function of 150+ lines, or a pinned one growing over 10%. Split along named phases, as in Wave 5 of [plans/CODE-QUALITY-PLAN.md](../plans/CODE-QUALITY-PLAN.md).
+- **Long functions**: `tests/test_function_length.py` fails on a new Python or JS function of 150+ lines, or a pinned one growing over 10%. Split along named phases, as in Wave 5 of [plans/archive/CODE-QUALITY-PLAN.md](../plans/archive/CODE-QUALITY-PLAN.md).
 - **House rule**: inline a helper with one caller unless it is a `mock.patch` target, a thread target, a registry entry, or a named domain concept. Extract once a shape repeats.
