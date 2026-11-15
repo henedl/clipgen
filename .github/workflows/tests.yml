@@ -67,6 +67,23 @@ jobs:
           uv venv
           uv pip install ".[dev]" pytest-cov pytest-xdist
 
+      - name: Install ffmpeg
+        # The runner image has no ffmpeg; without it the real-media tests skipped silently.
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q --no-install-recommends ffmpeg
+
+      - name: Check required test tools
+        # Node and ffmpeg tests skip locally without these; CI must fail instead.
+        run: |
+          set -uo pipefail
+          for tool in node ffmpeg ffprobe; do
+            path=$(command -v "$tool") || { echo "::error::Missing required test tool: $tool"; exit 1; }
+            if [ "$tool" = node ]; then flag=--version; else flag=-version; fi
+            out=$("$tool" "$flag" 2>&1) || { echo "::error::$tool $flag failed: $out"; exit 1; }
+            echo "$tool ($path): ${out%%$'\n'*}"
+          done
+
       - name: Cache Redact model
         # Keyed on the LiteRT-verified fixture, whose hashes test_redact.py pins to redact.ASSETS.
         id: redact-model
@@ -92,6 +109,7 @@ jobs:
         # -n auto parallelizes across cores (each xdist worker is a separate
         # process, so module-level server globals stay isolated). The fixed
         # --randomly-seed keeps the shuffled order reproducible run-to-run.
+        # -ra lists every skip reason, so an unexpected skip shows in the log.
         env:
           # Measure coverage through PEP 669 sys.monitoring instead of the
           # sys.settrace-based C tracer. Same numbers (verified identical: 20377
@@ -105,7 +123,7 @@ jobs:
           CLIPGEN_REDACT_MODEL_DIR: ${{ runner.temp }}/redact-model
         run: >-
           uv run --no-sync pytest -c tests/pytest.ini
-          -n auto --randomly-seed=20240601 --cov=. --cov-report=term
+          -n auto --randomly-seed=20240601 --cov=. --cov-report=term -ra
 
   lint:
     needs: [gate]

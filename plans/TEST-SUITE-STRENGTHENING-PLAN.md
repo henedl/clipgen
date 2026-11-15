@@ -28,7 +28,7 @@ The work changes tests and CI only. No public APIs, persisted schemas, productio
 | Studio artifact journey | B | Not started |
 | Real-media assertions | C | Done 2026-11-15 (see notes) |
 | Concurrency tests | D | Done 2026-11-15 (see notes) |
-| CI prerequisites | E | Not started |
+| CI prerequisites | E | Done 2026-11-15, scope changed (see notes) |
 | Integration and validation | Integrating agent | Not started |
 
 Update each package's status as it lands, including resolved issues or changed scope.
