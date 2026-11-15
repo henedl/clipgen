@@ -1257,43 +1257,64 @@ def test_compute_reel_id_is_deterministic_and_order_independent():
 def test_run_clip_pipeline_cancel_captures_started_clip_results(monkeypatch):
     """On cancel, results from futures that already started running must not be
     dropped — otherwise the files they produced (e.g. reel _reel_part_* segments)
-    are orphaned because the caller's cancel cleanup never sees their paths."""
+    are orphaned because the caller's cancel cleanup never sees their paths.
+
+    Clip 0 finishes while clip 1 is still running; the cancel check fires on clip
+    0's completion, so both results reach the caller only through the drain.
+    """
     import threading
-    import time
+
+    from _concurrency import WAIT, join_all, start_threads
 
     monkeypatch.setattr(pipeline, "_resolve_clip_workers", lambda: 2)
-
-    ran: list[int] = []
-    ran_lock = threading.Lock()
+    started = {0: threading.Event(), 1: threading.Event()}
+    release_second = threading.Event()
+    second_done = threading.Event()
+    observed: list[bool] = []
 
     def per_clip(clip, _missing):
-        with ran_lock:
-            ran.append(clip["id"])
-        time.sleep(0.1)  # keep the future running across the cancel
+        started[clip["id"]].set()
+        if clip["id"] == 0:
+            assert started[1].wait(WAIT), "second clip never started"
+        else:
+            assert release_second.wait(WAIT), "second clip never released"
+            second_done.set()
         return ([(f"/tmp/_reel_part_{clip['id']}.mp4", 0)], [])
 
     def cancel_flag():
-        # Cancel as soon as at least one clip has begun executing.
-        with ran_lock:
-            return len(ran) >= 1
+        if observed:
+            return True
+        running = started[1].is_set() and not second_done.is_set()
+        observed.append(running)
+        release_second.set()
+        assert running, "cancel must arrive while the second clip runs"
+        return True
 
-    clips = [{"id": i, "desc": f"c{i}", "participant": "P01"} for i in range(6)]
-    results, _missing = pipeline._run_clip_pipeline(
-        clips,
-        intro_message="",
-        task_label="t",
-        per_clip_fn=per_clip,
-        parallel=True,
-        cancel_flag=cancel_flag,
+    clips = [{"id": i, "desc": f"c{i}", "participant": "P01"} for i in range(2)]
+    threads, outcomes, errors = start_threads(
+        lambda: pipeline._run_clip_pipeline(
+            clips,
+            intro_message="",
+            task_label="t",
+            per_clip_fn=per_clip,
+            parallel=True,
+            cancel_flag=cancel_flag,
+        ),
+        1,
     )
+    try:
+        join_all(threads, timeout=2 * WAIT)
+    finally:
+        release_second.set()
+        join_all(threads)
 
-    # Every clip that started running is represented in the results (none
-    # orphaned); clips cancelled before starting are absent.
-    assert len(results) == len(ran)
-    assert all(r is not None for r in results)
-    # Each captured result is the proper (segment_paths, components) tuple shape.
-    for segment_paths, _components in results:
-        assert isinstance(segment_paths, list)
+    assert errors == []
+    assert observed == [True]
+    results, _missing = outcomes[0]
+    assert sorted(paths[0][0] for paths, _components in results) == [
+        "/tmp/_reel_part_0.mp4",
+        "/tmp/_reel_part_1.mp4",
+    ]
 
 
 def test_parallel_map_ordered_collects_in_original_order():

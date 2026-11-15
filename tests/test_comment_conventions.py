@@ -228,7 +228,7 @@ _TEST_BASELINE: dict[str, int] = {
     "tests/test_cli_args.py": 3,
     "tests/test_cli_event_clip_args.py": 2,
     "tests/test_cli_screenspace_args.py": 2,
-    "tests/test_clip_pipeline.py": 8,
+    "tests/test_clip_pipeline.py": 7,
     "tests/test_composer_server.py": 3,
     "tests/test_container_seekability.py": 5,
     "tests/test_css_custom_properties.py": 1,

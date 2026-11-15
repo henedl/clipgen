@@ -618,43 +618,39 @@ def test_extract_audio_track_concurrent_calls_run_ffmpeg_once(monkeypatch, tmp_p
     path with -y and one would rename a half-written file into the cache, which
     is then served for the source's whole mtime lifetime.
     """
+    from _concurrency import WAIT, CountingLock, OneLockDict, join_all, start_threads
+
     src = tmp_path / "v.mp4"
     src.write_bytes(b"x")
     monkeypatch.setattr(config, "DEBUGGING", False)
     monkeypatch.setattr(video.tempfile, "gettempdir", lambda: str(tmp_path))
+    track_lock = CountingLock()
+    monkeypatch.setattr(video, "_audio_track_locks", OneLockDict(track_lock))
 
     calls: list[list[str]] = []
     tmp_names: list[str] = []
-    started = threading.Event()
     calls_lock = threading.Lock()
 
     def _run(cmd, **_kw):
         with calls_lock:
             calls.append(cmd)
             tmp_names.append(Path(cmd[-1]).name)
-        started.set()
-        time.sleep(0.05)  # hold the lock long enough for the racer to pile up
+        # Hold the first extraction until the racer is at the lock.
+        assert track_lock.wait_attempts(2), "second caller never reached the lock"
         Path(cmd[-1]).write_bytes(b"audio")
         return subprocess.CompletedProcess(cmd, 0)
 
     monkeypatch.setattr(video.subprocess, "run", _run)
 
-    results: list[Path | None] = []
-    results_lock = threading.Lock()
+    threads, results, errors = start_threads(
+        lambda: video.extract_audio_track(str(src), 0), 2
+    )
+    # Nothing to release: the bounded wait inside _run is the only gate.
+    join_all(threads, timeout=2 * WAIT)
 
-    def _extract():
-        out = video.extract_audio_track(str(src), 0)
-        with results_lock:
-            results.append(out)
-
-    threads = [threading.Thread(target=_extract) for _ in range(2)]
-    threads[0].start()
-    started.wait(timeout=5)
-    threads[1].start()
-    for t in threads:
-        t.join(timeout=10)
-
+    assert errors == []
     assert len(calls) == 1, "second caller should have used the cached result"
+    assert track_lock.attempts == 2
     assert len(results) == 2
     assert results[0] == results[1]
     assert results[0] is not None and results[0].read_bytes() == b"audio"

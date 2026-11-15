@@ -27,7 +27,7 @@ The work changes tests and CI only. No public APIs, persisted schemas, productio
 | Frontend streaming and cancellation | A | Done 2026-11-15 (see notes) |
 | Studio artifact journey | B | Not started |
 | Real-media assertions | C | Done 2026-11-15 (see notes) |
-| Concurrency tests | D | Not started |
+| Concurrency tests | D | Done 2026-11-15 (see notes) |
 | CI prerequisites | E | Not started |
 | Integration and validation | Integrating agent | Not started |
 
