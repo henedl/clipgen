@@ -29,7 +29,7 @@ The work changes tests and CI only. No public APIs, persisted schemas, productio
 | Real-media assertions | C | Done 2026-11-15 (see notes) |
 | Concurrency tests | D | Done 2026-11-15 (see notes) |
 | CI prerequisites | E | Done 2026-11-15, scope changed (see notes) |
-| Integration and validation | Integrating agent | Not started |
+| Integration and validation | Integrating agent | Done 2026-11-15 (see notes) |
 
 Update each package's status as it lands, including resolved issues or changed scope.
 

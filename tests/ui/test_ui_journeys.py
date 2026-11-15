@@ -83,7 +83,7 @@ def _manifest_artifacts(live_server: LiveServer) -> list[dict[str, Any]]:
     return payload["artifacts"]
 
 
-def _new_clip_artifacts(
+def _new_artifacts(
     live_server: LiveServer, before: set[str], timeout_s: float
 ) -> list[dict[str, Any]]:
     """Poll the manifest until generation persists at least one new artifact."""
@@ -160,7 +160,7 @@ def test_studio_generate_produces_an_artifact(
             SELECTORS["studio-spinner-idle"], state="attached", timeout=_WAIT_MS
         )
         assert page.locator(SELECTORS["studio-card-fail"]).count() == 0
-        fresh = _new_clip_artifacts(live_server, before, _GENERATE_MS / 1000)
+        fresh = _new_artifacts(live_server, before, _GENERATE_MS / 1000)
     assert not log.fatal, _fatal_message("studio-generate", log, "journey-generate")
 
     # Generation itself persists the record; nothing here posts a manifest save.
