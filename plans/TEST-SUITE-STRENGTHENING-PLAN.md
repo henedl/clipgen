@@ -25,7 +25,7 @@ The work changes tests and CI only. No public APIs, persisted schemas, productio
 | Package | Owner | Status |
 | --- | --- | --- |
 | Frontend streaming and cancellation | A | Done 2026-11-15 (see notes) |
-| Studio artifact journey | B | Not started |
+| Studio artifact journey | B | Done 2026-11-15 (see notes) |
 | Real-media assertions | C | Done 2026-11-15 (see notes) |
 | Concurrency tests | D | Done 2026-11-15 (see notes) |
 | CI prerequisites | E | Done 2026-11-15, scope changed (see notes) |
@@ -44,7 +44,14 @@ Update each package's status as it lands, including resolved issues or changed s
 - Mutation checks, each restored: dropping the intake cancel post, dropping the final buffered line, removing a cancel `.catch`, removing the per-controller `try`, a never-resolving `read()`, and dropping `e.status`. Each failed the intended test.
 - Observation, not changed: `readNDJSONStream` never calls `decoder.decode()` without `stream: true` at end of stream, so a truncated multibyte sequence at EOF is dropped silently. Only malformed streams hit this.
 
-**Package 3 (done 2026-11-15).**
+**Package 2 (done 2026-11-15).**
+
+- `test_studio_generate_produces_an_artifact` records manifest artifact ids before clicking. After the existing DOM checks, inside the journey context, it polls `GET /studio/api/manifest` every 0.1 s, bounded by `_GENERATE_MS`. Outside the context it requires the new artifacts to be exactly `[("clip", "P01", 6)]` on `(type, participant, cellRow)`. It then resolves `file` under `_ui_fixtures.OUTPUT_DIR` (`is_relative_to`), requires a non-empty file, and GETs `/studio/media/<quoted file>`, requiring 200 and identical bytes. The fixture file name has spaces and brackets, so the quoting is exercised.
+- Mutations, each restored: a no-op `_save_manifest_quiet` (fails on the empty new-artifact list), a record `file` naming a missing file (fails on `is_file`), and the media route pointed at a wrong directory (404). The empty-file branch has an assertion but no mutation, because producing a zero-byte clip needs an ffmpeg fake inside the live server.
+- Full UI suite: 17 passed, twice (21.9 s each); the generate journey takes about 2 s. `journey-generate.png` shows the "Done / Generated 1 artifact" modal over one success card. Default collection includes no `tests/ui` tests. The journey count stays six, and the pipeline I/O count stays four.
+- Fixed while there: the journeys module docstring and `agents/skills/ui-check/SKILL.md` still said five journeys and listed five screenshots. Both now say six, and the skill names the pill-menu journey and its screenshot.
+- Local note: a fresh worktree lacks the `ui` extra. `uv run --offline --extra dev --extra ui` linked it from uv's cache with no download, and `PLAYWRIGHT_BROWSERS_PATH` must point at the real ms-playwright cache.
+
 
 - `tests/test_pipeline_io.py` keeps four tests. The shared source is now 1 s red + 2 s blue (two lavfi `color=` inputs through `concat`, `-g 15 -bf 0`, `keyint=15:min-keyint=15:scenecut=0`). `config.REENCODING`, `AUDIO_NORMALIZE`, and `DEBUGGING` are pinned in the `output_dir` fixture.
 - Helpers with more than one caller: `_stream_duration` (ffprobe JSON, clip + reel), `_decode_centers` (full decode with `-xerror`, empty stderr required, center pixel per frame; clip + reel), `_color` (channel dominance >150 / <100; all three tests). Every subprocess, including the untouched seek test's, now has a 30 s timeout.
