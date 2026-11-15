@@ -9,7 +9,7 @@ literals). Nested functions count on their own as well as inside their parent.
 ratchet landed. A listed function may grow by at most ``GROWTH`` over its pin,
 so edits to a giant cannot keep inflating it; one that drops below ``LIMIT``
 must leave the list. The fix for a failure is a split in the style of Wave 5
-in ``plans/CODE-QUALITY-PLAN.md``: carve named phases, not arbitrary halves.
+in ``plans/archive/CODE-QUALITY-PLAN.md``: carve named phases, not arbitrary halves.
 """
 
 import re
@@ -167,7 +167,7 @@ def _measure() -> dict[str, int]:
 
 
 _HOW = (
-    "Split it into named phases (see Wave 5 in plans/CODE-QUALITY-PLAN.md) "
+    "Split it into named phases (see Wave 5 in plans/archive/CODE-QUALITY-PLAN.md) "
     "rather than raising the pin."
 )
 

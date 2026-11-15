@@ -54,16 +54,10 @@
   color: var(--fg-faint);
 }
 
-.cv-control-select {
-  font-family: inherit;
+/* WebKit clips a fixed-height select, so size by padding. Beats .area-controls select. */
+.area-controls .cv-control-select {
   font-size: var(--text-xs);
-  height: 24px;
-  padding: 0 var(--space-1-5);
-  background: var(--bg-input);
-  color: var(--fg);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  cursor: pointer;
+  padding-block: var(--space-1);
 }
 
 /* ---- Filters bar: stream buttons + chips ---- */

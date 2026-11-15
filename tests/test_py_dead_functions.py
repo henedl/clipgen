@@ -29,7 +29,7 @@ from _py_source import PRODUCTION, ROOT, SOURCE, functions
 
 _WORD = re.compile(r"\w+")
 
-# Genuine orphans. Wave 1 of plans/CODE-QUALITY-PLAN.md emptied it; keep it so.
+# Genuine orphans. Wave 1 of plans/archive/CODE-QUALITY-PLAN.md emptied it; keep it so.
 KNOWN_DEAD: frozenset[str] = frozenset()
 
 # Production defines these for test fixtures only. The value says why it stays.
