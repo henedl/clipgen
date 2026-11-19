@@ -9,6 +9,7 @@ import pytest
 import config
 import screenspace
 import screenspace_tools
+import screenspace_worker
 
 
 class TestFastScanDispatchIntervalMultiplier:
@@ -57,8 +58,40 @@ class TestFastScanDispatchIntervalMultiplier:
         expected = 1.0 * config.SCREENSPACE_FAST_SCAN_INTERVAL_MULTIPLIER
         assert captured["interval"] == expected
         assert captured["fast_opts"] is not None
-        assert captured["fast_opts"]["phash_skip"] is True
+        # A held color needs its unchanged frames, so fast mode keeps them.
+        assert captured["fast_opts"]["phash_skip"] is False
         assert captured["fast_opts"]["max_region_dim"] == 32
+
+    @pytest.mark.parametrize(
+        ("tool", "params", "skips"),
+        [
+            ("change", {}, True),
+            ("inactivity", {}, False),
+            ("color", {}, False),
+            ("text", {"require_consecutive": 1}, True),
+            ("text", {"require_consecutive": 3}, False),
+            ("numbers", {"require_consecutive": 2}, False),
+        ],
+    )
+    def test_static_skip_per_tool(self, monkeypatch, tool, params, skips):
+        captured = {}
+
+        def fake_dispatch(_tool, *_a, fast_opts=None, **_k):
+            captured["fast_opts"] = fast_opts
+            return []
+
+        monkeypatch.setattr(screenspace_worker, "dispatch_tool_scan", fake_dispatch)
+        task = {
+            "id": "ss_test2",
+            "type": tool,
+            "video_paths": ["/fake.mp4"],
+            "region_coords": {"x": 0, "y": 0, "w": 100, "h": 100},
+            "parameters": {"scan_mode": "fast", "interval": 1.0, **params},
+        }
+        screenspace.ScreenspaceWorker()._dispatch(
+            task, lambda p: None, lambda: False, None
+        )
+        assert captured["fast_opts"]["phash_skip"] is skips
 
     def test_execute_task_records_an_operation(self, monkeypatch):
         """A finished task is one operation record: outcome and result count."""

@@ -435,6 +435,10 @@ class AnalysisTool:
             kwargs[key] = value
         return kwargs
 
+    def skips_static(self, params: dict[str, Any]) -> bool:
+        """Whether fast scan may drop unchanged frames before the callback."""
+        return True
+
     def _prepare_scan(
         self, params: dict[str, Any], fast_opts: dict[str, Any] | None
     ) -> dict[str, Any] | None:
@@ -481,7 +485,7 @@ class AnalysisTool:
 
 class ColorTool(AnalysisTool):
     name = "color"
-    fast_scan_description = "Lower resolution, skips unchanged frames"
+    fast_scan_description = "Lower resolution"
     preview_float_args = ("h", "s", "v")
     fast_scan_region_dim = 32
     score_key = "_confidence"
@@ -507,6 +511,10 @@ class ColorTool(AnalysisTool):
         else:
             matched, conf = color_matches(pixels, target, tol, mask=mask)
         return matched, {"_confidence": conf}
+
+    def skips_static(self, params):
+        # A held color state spans unchanged frames; dropping them zeroes its duration.
+        return False
 
     def _prepare_scan(self, params, fast_opts):
         # Presence needs full resolution: INTER_AREA downscaling erases small color patches.
@@ -618,6 +626,10 @@ class TextTool(AnalysisTool):
         )
         return _score_text_readings(readings, params)
 
+    def skips_static(self, params):
+        # A consecutive run over static text needs the unchanged frames.
+        return params.get("require_consecutive", 1) <= 1
+
 
 class NumbersTool(AnalysisTool):
     name = "numbers"
@@ -650,6 +662,10 @@ class NumbersTool(AnalysisTool):
             preprocess=params.get("ocr_preprocess", False),
         )
         return _score_numbers_readings(readings, params)
+
+    def skips_static(self, params):
+        # A consecutive run over static numbers needs the unchanged frames.
+        return params.get("require_consecutive", 1) <= 1
 
 
 class TemplateTool(AnalysisTool):
@@ -946,7 +962,7 @@ class SceneTool(AnalysisTool):
 
 class InactivityTool(AnalysisTool):
     name = "inactivity"
-    fast_scan_description = "Lower resolution, skips unchanged frames"
+    fast_scan_description = "Lower resolution"
     has_confidence = True
     fast_scan_region_dim = 64
     # Raw phash distance in Sensitivity-slider units; the strip inverts it (lower = more inactive).
@@ -971,6 +987,10 @@ class InactivityTool(AnalysisTool):
         else:
             conf = 1.0 if dist <= thresh else 0.0
         return dist <= thresh, {"distance": dist, "_confidence": conf}
+
+    def skips_static(self, params):
+        # Unchanged frames are what this tool measures.
+        return False
 
 
 class BoundaryTool(AnalysisTool):

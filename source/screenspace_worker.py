@@ -927,8 +927,8 @@ class ScreenspaceWorker:
 
         Builds the shared fast-scan ``fast_opts`` payload here so individual
         tool classes only need to declare ``fast_scan_region_dim`` /
-        ``supports_fast_scan`` / ``fast_scan_extra_opts`` as class attributes,
-        then delegates the single/multi-video scan to :func:`dispatch_tool_scan`.
+        ``supports_fast_scan`` / ``fast_scan_extra_opts`` as class attributes
+        (plus ``skips_static`` for tools that need unchanged frames), then delegates the single/multi-video scan to :func:`dispatch_tool_scan`.
         """
         task_type = task["type"]
         tool = TOOLS.get(task_type)
@@ -952,7 +952,7 @@ class ScreenspaceWorker:
             if params.get("interval", 0) > 0:
                 params["interval"] = params["interval"] * multiplier
             fast_opts = {
-                "phash_skip": True,
+                "phash_skip": tool.skips_static(params),
                 "max_region_dim": tool.fast_scan_region_dim,
                 **tool.fast_scan_extra_opts,
             }
