@@ -771,6 +771,9 @@ class ScreenspaceWorker:
                 result = task.get("result")
             profiling.op_outcome(task_id, status)
             profiling.op_work(task_id, len(result) if isinstance(result, list) else 0)
+        # Resume can land while the scan unwinds; it skipped this task.
+        if status == TASK_STATUS_PAUSED and not self._paused.is_set():
+            self.resume()
 
     def _execute_task_body(self, task: dict[str, Any]) -> None:
         """Dispatch task to the appropriate workflow function."""

@@ -781,8 +781,7 @@ class TestAttentionWorker:
         samples[3].update({"shift": True, "shift_distance": 0.5, "_confidence": 0.7})
 
         def pausing_dispatch(self, task, on_progress, cancel_flag, on_result=None):
-            with self._lock:
-                self._tasks[task["id"]]["_paused_flag"] = True
+            self.pause()
             return [dict(s) for s in samples]
 
         monkeypatch.setattr(

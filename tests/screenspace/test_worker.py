@@ -504,13 +504,40 @@ class TestScreenspaceWorker:
                 {"timestamp": 60.0},
             ]
 
+    def test_resume_while_unwinding_requeues_the_task(self, monkeypatch):
+        # Resume lands before the scan notices the pause; the task must not stick.
+        def pause_then_resume(self, task, on_progress, cancel_flag, on_result=None):
+            on_progress(0.5)
+            self.pause()
+            self.resume()  # task is still running, so resume() skips it
+            return []
+
+        monkeypatch.setattr(
+            screenspace.ScreenspaceWorker, "_dispatch", pause_then_resume
+        )
+        worker = screenspace.ScreenspaceWorker()
+        task = screenspace.create_task(
+            "color",
+            "P01",
+            "s.mp4",
+            ["/v.mp4"],
+            "r",
+            {"x": 0, "y": 0, "w": 1, "h": 1},
+            parameters={"start_seconds": 0.0, "end_seconds": 100.0},
+        )
+        worker.enqueue(task)
+        with worker._lock:
+            task["status"] = screenspace.TASK_STATUS_RUNNING
+        worker._execute_task(task)
+        assert task["status"] == screenspace.TASK_STATUS_QUEUED
+        assert task["_resume_at"] == 50.0
+
     def test_pause_after_resume_preserves_earlier_results(self, monkeypatch):
         # The paused branch of _execute_task must prepend _partial_results
         # like the completed branch does — otherwise pausing a resumed scan
         # permanently drops the results found before the first pause.
         def pausing_dispatch(self, task, on_progress, cancel_flag, on_result=None):
-            with self._lock:
-                self._tasks[task["id"]]["_paused_flag"] = True
+            self.pause()
             return [{"timestamp": 60.0}]
 
         monkeypatch.setattr(
