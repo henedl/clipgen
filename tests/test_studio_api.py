@@ -1432,6 +1432,14 @@ def test_api_viewer_400_when_no_artifacts(client):
     assert "No artifacts" in data["error"]
 
 
+def _viewer_clip():
+    """A batch clip record for P01 row 5 with one cut span."""
+    import types
+
+    cell = types.SimpleNamespace(row=5, col=2, value="0:00-0:05")
+    return {"desc": "test", "participant": "P01", "cell": cell}
+
+
 def test_api_timeline_viewer_without_intake(client, monkeypatch):
     import pipeline
     import spreadsheet
@@ -1440,7 +1448,7 @@ def test_api_timeline_viewer_without_intake(client, monkeypatch):
     fake_ws = type("FakeWS", (), {"title": "Sheet1"})()
     monkeypatch.setattr(server, "_worksheet", fake_ws)
 
-    fake_clips = [{"desc": "test", "participant": "P01"}]
+    fake_clips = [_viewer_clip()]
     fake_artifacts = [
         {
             "id": "a1",
@@ -1468,6 +1476,37 @@ def test_api_timeline_viewer_without_intake(client, monkeypatch):
     assert data["generated"] == 1
 
 
+def test_api_timeline_viewer_reuses_existing_clips(client, monkeypatch, tmp_path):
+    """A cell already cut is reused, so Studio's Log keeps a live file."""
+    import pipeline
+    import spreadsheet
+    import utils
+    import viewer
+
+    monkeypatch.setattr(server, "_worksheet", type("FakeWS", (), {"title": "S"})())
+    monkeypatch.setattr(utils, "resolve_output_path", lambda name: tmp_path / name)
+    (tmp_path / "obs.mp4").write_text("v")
+    existing = {"id": "a5c2s0", "type": "clip", "file": "obs.mp4", "study": "s"}
+    existing.update(cellRow=5, cellCol=2, start=0.0, end=5.0)
+    _set_artifacts(monkeypatch, [existing])
+    process = Mock(return_value=(0, []))
+    monkeypatch.setattr(pipeline, "process_clips", process)
+    monkeypatch.setattr(spreadsheet, "generate_list", lambda *a, **kw: [_viewer_clip()])
+    monkeypatch.setattr(spreadsheet, "is_excel_worksheet", lambda ws: False)
+    monkeypatch.setattr(viewer, "load_screenspace_events_for_viewer", list)
+    seen: list = []
+    monkeypatch.setattr(
+        viewer, "finalize_timeline_data", lambda arts, **kw: seen.extend(arts) or {}
+    )
+    monkeypatch.setattr(viewer, "generate_timeline_viewer", lambda *a, **kw: "v.html")
+    monkeypatch.setattr(server, "_save_manifest_quiet", lambda: None)
+
+    assert client.post("/studio/api/timeline-viewer", json={}).get_json()["ok"]
+    process.assert_not_called()
+    assert seen == [existing]
+    assert (tmp_path / "obs.mp4").exists()
+
+
 def test_api_timeline_viewer_with_intake(client, monkeypatch):
     import pipeline
     import spreadsheet
@@ -1476,7 +1515,7 @@ def test_api_timeline_viewer_with_intake(client, monkeypatch):
     fake_ws = type("FakeWS", (), {"title": "Sheet1"})()
     monkeypatch.setattr(server, "_worksheet", fake_ws)
 
-    fake_clips = [{"desc": "test", "participant": "P01"}]
+    fake_clips = [_viewer_clip()]
     sheet_artifacts = [
         {
             "id": "a1",
@@ -1587,7 +1626,7 @@ def test_api_timeline_viewer_cancel_discards_clips(client, monkeypatch, tmp_path
         }
     ]
 
-    monkeypatch.setattr(spreadsheet, "generate_list", lambda *a, **kw: [{"desc": "x"}])
+    monkeypatch.setattr(spreadsheet, "generate_list", lambda *a, **kw: [_viewer_clip()])
     monkeypatch.setattr(utils, "resolve_output_path", lambda name: tmp_path / name)
 
     def fake_process(clips, **kwargs):
@@ -1671,7 +1710,7 @@ def test_api_timeline_viewer_passes_cancel_flag(client, monkeypatch):
         captured["cancel_flag"] = kw.get("cancel_flag")
         return (1, [{"id": "a1", "type": "clip", "study": "s", "participant": "P01"}])
 
-    monkeypatch.setattr(spreadsheet, "generate_list", lambda *a, **kw: [{"desc": "x"}])
+    monkeypatch.setattr(spreadsheet, "generate_list", lambda *a, **kw: [_viewer_clip()])
     monkeypatch.setattr(pipeline, "process_clips", fake_process_clips)
     monkeypatch.setattr(spreadsheet, "is_excel_worksheet", lambda ws: False)
     monkeypatch.setattr(viewer, "load_screenspace_events_for_viewer", list)
@@ -1704,7 +1743,7 @@ def test_api_timeline_viewer_short_circuits_after_cancel(client, monkeypatch):
 
     generated_calls = []
 
-    monkeypatch.setattr(spreadsheet, "generate_list", lambda *a, **kw: [{"desc": "x"}])
+    monkeypatch.setattr(spreadsheet, "generate_list", lambda *a, **kw: [_viewer_clip()])
     monkeypatch.setattr(pipeline, "process_clips", fake_process_clips)
     monkeypatch.setattr(spreadsheet, "is_excel_worksheet", lambda ws: False)
     monkeypatch.setattr(
@@ -1778,7 +1817,7 @@ def test_api_timeline_viewer_discards_sheet_clips_on_cancel_during_intake(
     monkeypatch.setattr(server, "_generated_artifacts", [])
 
     sheet_artifacts = [{"id": "a1", "type": "clip", "study": "s", "participant": "P01"}]
-    monkeypatch.setattr(spreadsheet, "generate_list", lambda *a, **kw: [{"desc": "x"}])
+    monkeypatch.setattr(spreadsheet, "generate_list", lambda *a, **kw: [_viewer_clip()])
     monkeypatch.setattr(
         pipeline, "process_clips", lambda *a, **kw: (1, sheet_artifacts)
     )

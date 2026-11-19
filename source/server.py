@@ -2014,15 +2014,36 @@ def api_timeline_viewer() -> FlaskResponse:
         if not clips_list:
             return err("No clips found in sheet")
 
-        generated, artifacts = pipeline.process_clips(
-            clips_list,
-            output_format="clip",
-            cancel_flag=_timeline_viewer_cancel_event.is_set,
+        # Reuse clips whose spans already exist; re-cutting would unlink files the Log shows.
+        reused: list[dict[str, Any]] = []
+        to_cut: list[Any] = []
+        for clip in clips_list:
+            files.prepare_clip(clip)
+            existing = _find_existing_artifacts(
+                clip["cell"].row, clip["cell"].col, "clip"
+            )
+            wanted = Counter(
+                (utils.timestamp_to_seconds(s), utils.timestamp_to_seconds(e))
+                for s, e in clip.get("times") or []
+            )
+            if existing and Counter((a["start"], a["end"]) for a in existing) == wanted:
+                reused.extend(existing)
+            else:
+                to_cut.append(clip)
+
+        generated, artifacts = (
+            pipeline.process_clips(
+                to_cut,
+                output_format="clip",
+                cancel_flag=_timeline_viewer_cancel_event.is_set,
+            )
+            if to_cut
+            else (0, [])
         )
         if _timeline_viewer_cancel_event.is_set():
             _discard_artifact_files(artifacts)
             return refused("cancelled", cancelled=True)
-        if not artifacts:
+        if not artifacts and not reused:
             return err("No artifacts were generated")
 
         # Accumulate intake clips unpublished alongside sheet clips so a later cancel
@@ -2045,6 +2066,7 @@ def api_timeline_viewer() -> FlaskResponse:
             return refused("cancelled", cancelled=True)
 
         _extend_generated_artifacts(artifacts)
+        artifacts = reused + artifacts
 
         study = artifacts[0].get("study", "")
         ss_events = viewer.load_screenspace_events_for_viewer()
