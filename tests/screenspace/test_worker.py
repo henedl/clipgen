@@ -504,6 +504,32 @@ class TestScreenspaceWorker:
                 {"timestamp": 60.0},
             ]
 
+    def test_resume_drops_results_the_rescan_repeats(self):
+        # The in-flight frame lands past the progress mark; carrying it duplicated it.
+        worker = screenspace.ScreenspaceWorker()
+        task = screenspace.create_task(
+            "color",
+            "P01",
+            "s.mp4",
+            ["/v.mp4"],
+            "r",
+            {"x": 0, "y": 0, "w": 1, "h": 1},
+            parameters={"start_seconds": 0.0, "end_seconds": 100.0},
+        )
+        worker.enqueue(task)
+        with worker._lock:
+            task["status"] = screenspace.TASK_STATUS_PAUSED
+            task["progress"] = 0.5
+            # Color: merged spans in result, the per-frame stream in _raw_results.
+            task["result"] = [{"start": 10.0, "end": 52.0, "duration": 42.0}]
+            task["_raw_results"] = [{"timestamp": t} for t in (10.0, 49.0, 50.0, 52.0)]
+        worker.resume()
+        assert task["_resume_at"] == 50.0
+        assert task["_partial_results"] == [
+            {"start": 10.0, "end": 52.0, "duration": 42.0}
+        ]
+        assert task["_partial_raw"] == [{"timestamp": 10.0}, {"timestamp": 49.0}]
+
     def test_resume_while_unwinding_requeues_the_task(self, monkeypatch):
         # Resume lands before the scan notices the pause; the task must not stick.
         def pause_then_resume(self, task, on_progress, cancel_flag, on_result=None):

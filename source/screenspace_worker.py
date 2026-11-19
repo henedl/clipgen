@@ -506,6 +506,7 @@ class ScreenspaceWorker:
                     if task["status"] != TASK_STATUS_PAUSED:
                         continue
                     task.pop("_partial_results", None)
+                    task.pop("_partial_raw", None)
                     task.pop("_progress_offset", None)
                     task.pop("_progress_scale", None)
                     task.pop("_paused_flag", None)
@@ -538,7 +539,18 @@ class ScreenspaceWorker:
                 # A Cancel that raced the probe above wins.
                 if task["status"] != TASK_STATUS_PAUSED:
                     continue
-                task["_partial_results"] = list(task.get("result") or [])
+                # The in-flight frame emitted past the progress mark; the rescan repeats it.
+                task["_partial_results"] = [
+                    r
+                    for r in task.get("result") or []
+                    if r.get("timestamp", -1.0) < resume_at
+                ]
+                # Raw per-frame stream, not Color's merged spans, feeds the events.
+                task["_partial_raw"] = [
+                    r
+                    for r in task.get("_raw_results", task.get("result")) or []
+                    if r.get("timestamp", -1.0) < resume_at
+                ]
                 task["_progress_offset"] = progress
                 task["_progress_scale"] = max(1.0 - progress, 0.001)
                 task.pop("_paused_flag", None)
@@ -784,7 +796,7 @@ class ScreenspaceWorker:
             t = self._tasks.get(task_id)
             if t:
                 t["result"] = list(t.get("_partial_results", []))
-                t["_raw_results"] = list(t.get("_partial_results", []))
+                t["_raw_results"] = list(t.get("_partial_raw", []))
 
         # Per-task throttle for SSE notifications (avoids cross-task race)
         last_notify: list[float] = [0.0]
@@ -861,6 +873,7 @@ class ScreenspaceWorker:
                     else:
                         # Normal completion or detect_first early stop
                         partial = t.pop("_partial_results", None)
+                        t.pop("_partial_raw", None)
                         if partial and isinstance(result, list):
                             result = partial + result
                         t["status"] = TASK_STATUS_COMPLETED
