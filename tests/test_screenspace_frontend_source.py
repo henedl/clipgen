@@ -372,3 +372,12 @@ def test_paused_queue_at_load_seeds_state_and_streams():
     assert "state.tasks.some(isTaskActive)" in boot
     pause = _tasks_fn("initPauseButton")
     assert "startSSE()" in pause
+
+
+def test_numbers_range_never_becomes_a_multitool_step():
+    """The step select has no range option, so a range step ran as ">"."""
+    start = MULTITOOL_JS.index("function taskToMultitoolStep(")
+    body = MULTITOOL_JS[start : MULTITOOL_JS.index("\n  }", start)]
+    assert 'params.operator === "range") return null;' in body
+    restore = _tasks_fn("restoreTaskToWorkflow")
+    assert 's.operator === "range"' in restore

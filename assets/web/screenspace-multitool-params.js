@@ -465,6 +465,8 @@
     var type = task.type;
     if (MULTITOOL_ALLOWED_TYPES.indexOf(type) === -1) return null;
     var params = task.parameters || {};
+    // Steps have no range bounds; the blank select would run as ">".
+    if (type === "numbers" && params.operator === "range") return null;
     var step = { type: type, collapsed: false, logic: "AND" };
     if (task.region) step.region = task.region;
     if (task.region_ref) step.region_ref = task.region_ref;

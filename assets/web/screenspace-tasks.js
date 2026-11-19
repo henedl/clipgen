@@ -550,7 +550,12 @@
     if (task.type === "multitool") {
       var mtParams = task.parameters || {};
       state.multitoolFocus = 0;
-      state.multitoolSteps = (mtParams.steps || []).map(function (s) {
+      // Steps have no range bounds; drop a Numbers range step rather than run ">".
+      var mtSteps = (mtParams.steps || []).filter(function (s) {
+        return !(s.type === "numbers" && s.operator === "range");
+      });
+      if (mtSteps.length < (mtParams.steps || []).length) showToast("Dropped a Numbers range step");
+      state.multitoolSteps = mtSteps.map(function (s) {
         var step = { type: s.type, collapsed: true };
         step.logic = (s.logic || "AND").toUpperCase();
         if (s.offset && typeof s.offset.min === "number" && typeof s.offset.max === "number") {
