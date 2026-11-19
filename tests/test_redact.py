@@ -535,11 +535,14 @@ def test_scrub_files_rewrites_text_and_escaped_json(tmp_path):
     (tmp_path / "clips").mkdir()
     (tmp_path / "clips" / "a.srt").write_text("1\nZoë said hi\n", encoding="utf-8")
     (tmp_path / "run.json").write_text(json.dumps({"t": "by Zoë", "n": 1}))
+    (tmp_path / "tabs.json").write_text(
+        json.dumps(["a.\nZoë", "\tZoë"], ensure_ascii=False), encoding="utf-8"
+    )
     (tmp_path / "clipgen.json").write_text('{"x": "Zoë"}', encoding="utf-8")
     (tmp_path / "Zoë.mp4").write_bytes(b"\x00")
     (tmp_path / "plain.md").write_text("nothing here")
     changed, named = redact.scrub_files(tmp_path, sub, tmp_path / "clipgen.json")
-    assert changed == ["clips/a.srt", "run.json"]
+    assert changed == ["clips/a.srt", "run.json", "tabs.json"]
     assert named == ["Zoë.mp4"]
     assert (
         (tmp_path / "clips" / "a.srt")
@@ -550,6 +553,10 @@ def test_scrub_files_rewrites_text_and_escaped_json(tmp_path):
         "t": "by [REDACTED_1]",
         "n": 1,
     }
+    assert json.loads((tmp_path / "tabs.json").read_text(encoding="utf-8")) == [
+        "a.\n[REDACTED_1]",
+        "\t[REDACTED_1]",
+    ]
     assert "Zoë" in (tmp_path / "clipgen.json").read_text(encoding="utf-8")
     assert not list(tmp_path.rglob("*.tmp"))
 

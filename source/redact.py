@@ -1123,8 +1123,8 @@ def scrub_files(
         except (OSError, UnicodeDecodeError):
             continue
         new = sub(text)
-        # Escaped JSON strings hide non-ASCII names from a plain text pass.
-        if suffix in (".json", ".html") and "\\u" in new:
+        # JSON escapes (unicode, newline, tab) hide names from a plain text pass.
+        if suffix in (".json", ".html") and "\\" in new:
             new = _JSON_STRING.sub(lambda m: _scrub_json_token(m.group(0), sub), new)
         if new == text:
             continue
