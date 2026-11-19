@@ -775,6 +775,8 @@
           if (data.ok) {
             state.queuePaused = data.paused;
             updatePauseButton();
+            // A queue paused at page load never opened the stream.
+            if (!data.paused) startSSE();
           }
         })
         .catch(function (err) { showToast("Error: " + err.message); });
@@ -1238,6 +1240,7 @@
   SS.focusedTaskId = focusedTaskId;
   SS.renderTaskList = renderTaskList;
   SS.startSSE = startSSE;
+  SS.updatePauseButton = updatePauseButton;
   // Boot and participant switches call this so the timeline has markers before a tick.
   SS.syncTaskResults = _syncTaskResults;
   SS.reconcileResultCache = _reconcileResultCache;

@@ -361,3 +361,14 @@ def test_multi_part_playback_hands_off_on_ended():
     handler = SCREENSPACE_JS[start : SCREENSPACE_JS.index("\n    });", start)]
     assert "playNextPart(parts, i)" in handler
     assert handler.index("playNextPart(") < handler.index("pauseVideo()")
+
+
+def test_paused_queue_at_load_seeds_state_and_streams():
+    """A queue paused before the page loaded showed the Pause icon, and its
+    paused tasks never opened the stream, even after Resume."""
+    boot = SCREENSPACE_JS[SCREENSPACE_JS.index('apiGet("api/tasks")') :]
+    boot = boot[: boot.index(".catch(")]
+    assert "state.queuePaused = !!data.paused;" in boot
+    assert "state.tasks.some(isTaskActive)" in boot
+    pause = _tasks_fn("initPauseButton")
+    assert "startSSE()" in pause

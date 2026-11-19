@@ -3143,12 +3143,14 @@
       .then(function (data) {
         if (data.ok) {
           state.tasks = data.tasks || [];
+          state.queuePaused = !!data.paused;
+          if (SS.updatePauseButton) SS.updatePauseButton();
           renderTaskList();
           renderTimeline();
           // Seed the result cache; with every task completed the SSE stream never starts.
           if (SS.reconcileResultCache) SS.reconcileResultCache(state.tasks);
           if (SS.syncTaskResults) SS.syncTaskResults();
-          if (state.tasks.some(function (t) { return t.status === "queued" || t.status === "running"; })) {
+          if (state.tasks.some(isTaskActive)) {
             startSSE();
           }
         }
