@@ -495,6 +495,36 @@ def test_transcript_clusters_keep_every_part_name():
     assert clusters[0]["source_video"] == "s_P01-1.mp4 + s_P01-2.mp4"
 
 
+def test_cut_clusters_ids_stable_per_span(monkeypatch):
+    """Rows hash the span, not the list position: runs never overwrite each other."""
+    import pipeline
+    import viewer
+
+    rows: list = []
+
+    def fake_process(clips_list, **kw):
+        rows.append([c["cell"].row for c in clips_list])
+        return (0, [])
+
+    monkeypatch.setattr(pipeline, "process_clips", fake_process)
+    monkeypatch.setattr(viewer, "save_manifest", lambda *a, **kw: None)
+
+    def cluster(start):
+        return {"participant": "P01", "source_video": "s_P01.mp4", "start": start}
+
+    def run(starts):
+        clusters = [dict(cluster(t), end=t + 5) for t in starts]
+        cli_event_clips._cut_clusters(
+            clusters, lambda c: ("d", "c"), cell_col=2, mode="m", summary="s"
+        )
+
+    run([0, 10, 20])  # e.g. one mark filter
+    run([30, 40])  # another filter
+    run([30, 40])  # a true re-run
+    assert len(set(rows[0] + rows[1])) == 5
+    assert rows[1] == rows[2]
+
+
 def test_run_ss_clips_no_events_warns(monkeypatch, capsys):
     import screenspace
 
