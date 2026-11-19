@@ -277,3 +277,17 @@ def test_task_restore_loads_the_tasks_participant():
     assert "selectParticipant(task.participant)" in body
     assert "state.runParticipants = [task.participant]" in body
     assert "state.selectedParticipant = task.participant" not in body
+
+
+MULTITOOL_JS = read("screenspace-multitool-params.js")
+
+
+def test_multitool_step_edits_are_written_to_state():
+    """Step inputs are rebuilt on every params render (any tool switch); values
+    kept only in the DOM reset to defaults and Run used them silently."""
+    start = MULTITOOL_JS.index("function onStepEdit(")
+    body = MULTITOOL_JS[start : MULTITOOL_JS.index("\n    }", start)]
+    assert "saveStepValues(idx)" in body
+    assert "delete state.multitoolSteps" not in MULTITOOL_JS
+    pipette = read("screenspace-overlay-interaction.js")
+    assert "SS.saveStepValues(mtIdx)" in pipette

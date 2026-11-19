@@ -533,7 +533,7 @@
       state.sceneReferences = (sceneParams.scene_references || []).map(sceneRefPayload);
     }
 
-    // Rebuild multitool steps first; step._initial lets _mtRender* set values at creation.
+    // Rebuild multitool steps first; _mtRender* read their values from step._values.
     if (task.type === "multitool") {
       var mtParams = task.parameters || {};
       state.multitoolFocus = 0;
@@ -547,7 +547,7 @@
         if (s.region_ref) step.region_ref = s.region_ref;
         if (s.reference_timestamp !== undefined) step._refTs = s.reference_timestamp;
         if (s.scene_references) step._scenes = s.scene_references.map(sceneRefPayload);
-        step._initial = s;
+        step._values = Object.assign({}, s);
         return step;
       });
     }

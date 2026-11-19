@@ -621,6 +621,7 @@
           var mtHex = qs("#paramColorHex" + mtSfx);
           if (mtHex) mtHex.value = rgbToHex(pixel[0], pixel[1], pixel[2]);
           state._mtPipetteStep = -1;
+          if (SS.saveStepValues) SS.saveStepValues(mtIdx);
           // Programmatic sets fire no DOM event, so nudge calibration directly (as setTargetColor does).
           refreshCalibration({ debounce: true });
           if (SS.setMultitoolFocus) SS.setMultitoolFocus(mtIdx);
