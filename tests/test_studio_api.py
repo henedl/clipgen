@@ -1574,6 +1574,26 @@ def test_api_timeline_viewer_cancel_discards_clips(client, monkeypatch, tmp_path
     server._timeline_viewer_cancel_event.clear()
 
 
+def test_recut_upserts_artifact_by_id(client, monkeypatch, tmp_path):
+    """A timeline-viewer re-cut replaces the old record; Generate then reuses it."""
+    import utils
+
+    monkeypatch.setattr(utils, "resolve_output_path", lambda name: tmp_path / name)
+    old = {"id": "a1", "type": "clip", "file": "obs.mp4", "start": 83, "end": 105}
+    old["cellRow"], old["cellCol"] = 5, 3
+    new = dict(old, file="obs-1.mp4")
+    (tmp_path / "obs.mp4").write_text("v")
+    (tmp_path / "obs-1.mp4").write_text("v")
+
+    server._extend_generated_artifacts([old])
+    server._extend_generated_artifacts([new])
+
+    assert server._generated_artifacts == [new]
+    assert server._find_existing_artifacts(5, 3, "clip") == [new]
+    assert not (tmp_path / "obs.mp4").exists()
+    assert (tmp_path / "obs-1.mp4").exists()
+
+
 def test_api_gallery_cancel_discards_captures(client, monkeypatch, tmp_path):
     """A cancel mid-build unlinks gallery captures already written to disk."""
     import utils

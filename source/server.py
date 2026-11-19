@@ -340,12 +340,24 @@ def _rebuild_artifact_index() -> None:
 
 
 def _extend_generated_artifacts(artifacts: list[dict[str, Any]]) -> None:
+    """Upsert *artifacts* by id; a re-cut's old file is unlinked."""
     if not artifacts:
         return
+    ids = {a.get("id") for a in artifacts if a.get("id")}
     with _generated_output_lock:
+        superseded = [a for a in _generated_artifacts if a.get("id") in ids]
+        if superseded:
+            _generated_artifacts[:] = [
+                a for a in _generated_artifacts if a.get("id") not in ids
+            ]
         _generated_artifacts.extend(artifacts)
-        for a in artifacts:
-            _index_artifact(a)
+        if superseded:
+            _rebuild_artifact_index()
+        else:
+            for a in artifacts:
+                _index_artifact(a)
+    new_files = {a.get("file") for a in artifacts}
+    _discard_artifact_files([a for a in superseded if a.get("file") not in new_files])
 
 
 def _extend_generated_reels(reels: list[dict[str, Any]]) -> None:
