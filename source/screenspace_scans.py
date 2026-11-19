@@ -34,6 +34,7 @@ from screenspace_primitives import (
     _prepare_template,
     _scale_template,
     match_shape,
+    max_cell_diff,
     region_search_window,
     color_matches,
     color_present,
@@ -111,7 +112,13 @@ def _box_match_callback(
         if cancel_flag and cancel_flag():
             return False
         curr_gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        if _frame_is_static(prev_skip_gray[0], curr_gray):
+        prev = prev_skip_gray[0]
+        # Per-cell gate: a small icon appearing on a still screen must not count as static.
+        if (
+            prev is not None
+            and max_cell_diff(prev, curr_gray)
+            < config.SCREENSPACE_STATIC_FRAME_SKIP_THRESHOLD
+        ):
             # Near-duplicate frame: carry the row; keep prev_skip_gray so drift recomputes.
             if last_rd[0] is not None:
                 _emit({**last_rd[0], "timestamp": ts})

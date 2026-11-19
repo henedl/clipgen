@@ -73,6 +73,7 @@ from screenspace_primitives import (
     mask_points_key,
     match_shape,
     match_template,
+    max_cell_diff,
     mean_gray_diff,
     nms_boxes_iou,
     point_in_mask_points,

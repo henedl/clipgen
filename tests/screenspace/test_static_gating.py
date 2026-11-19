@@ -26,6 +26,7 @@ _REGION = {"x": 0, "y": 0, "w": 60, "h": 60}
 
 def _disable_gate(monkeypatch):
     monkeypatch.setattr(screenspace_scans, "_frame_is_static", lambda prev, curr: False)
+    monkeypatch.setattr(screenspace_scans, "max_cell_diff", lambda a, b: float("inf"))
 
 
 def test_mean_gray_diff_equals_numpy_mean_absdiff():
@@ -232,3 +233,41 @@ class TestTemplateStaticGate:
         assert all(r["match_count"] == 1 for r in on_results)
         assert on_calls < off_calls
         assert on_calls == 2 and off_calls == 4  # 2 frozen frames carried, not matched
+
+    def test_small_icon_on_still_screen_is_matched(self, monkeypatch):
+        # A 40px icon moves a 1280x720 frame's mean diff well under the threshold.
+        blank = np.full((720, 1280, 3), 200, dtype=np.uint8)
+        icon = _make_icon_frame(1280, 720, [(600, 300, 40)])
+        seq = [
+            (0.0, blank),
+            (1.0, blank.copy()),
+            (2.0, icon),
+            (3.0, icon.copy()),
+            (4.0, blank.copy()),
+            (5.0, blank.copy()),
+        ]
+        _feed_full(monkeypatch, seq)
+        results = screenspace.scan_template(
+            "/fake.mp4",
+            {"x": 0, "y": 0, "w": 1280, "h": 720},
+            _make_icon(40),
+            threshold=0.70,
+        )
+        assert [r["timestamp"] for r in results] == [2.0, 3.0]
+
+
+def test_static_skip_sees_short_text_in_wide_region():
+    region = np.full((100, 600, 3), 255, dtype=np.uint8)
+    labelled = region.copy()
+    labelled[40:55, 20:50] = 0  # a short dark word, under 1% of the region
+    prev_gray: list[np.ndarray | None] = [None]
+    buf = screenspace_primitives._ConsecutiveBuffer(2)
+
+    def skip(pixels):
+        return screenspace_primitives._is_static_skip(
+            0.0, pixels, prev_gray, buf, [], None, lambda ts: None
+        )
+
+    assert skip(region) is False
+    assert skip(region.copy()) is True
+    assert skip(labelled) is False

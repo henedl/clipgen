@@ -117,8 +117,8 @@ def _is_static_skip(
 ) -> bool:
     """Decide whether *pixels* is a near-duplicate of the previous frame.
 
-    True when the mean grayscale diff from the last processed frame is below
-    ``SCREENSPACE_STATIC_FRAME_SKIP_THRESHOLD``; the caller then returns from its
+    True when no cell of the grayscale diff from the last processed frame (see
+    :func:`max_cell_diff`) reaches ``SCREENSPACE_STATIC_FRAME_SKIP_THRESHOLD``; the caller then returns from its
     per-frame callback. Content and any active match are unchanged, so this
     carries the consecutive-match run via ``buf.carry`` (emitting through
     *results*/*on_result*) and reports progress instead of breaking it. Otherwise
@@ -127,7 +127,8 @@ def _is_static_skip(
     """
     gray = cv2.cvtColor(pixels, cv2.COLOR_BGR2GRAY)
     if prev_gray[0] is not None:
-        diff = mean_gray_diff(prev_gray[0], gray)
+        # Per-cell: a short label in a wide region barely moves the mean.
+        diff = max_cell_diff(prev_gray[0], gray)
         if diff < config.SCREENSPACE_STATIC_FRAME_SKIP_THRESHOLD:
             emitted = buf.carry(ts)
             if emitted is not None:
@@ -149,7 +150,7 @@ def _frame_is_static(prev_gray: np.ndarray | None, curr_gray: np.ndarray) -> boo
     predicate with no buffer/progress side effects, so each caller applies the
     skip semantics its scan needs (reset a motion run, extend a span, carry the
     last result). Shared by scan_similarity, scan_flow, scan_inactivity,
-    scan_boundaries, scan_scene, and scan_template.
+    scan_boundaries, and scan_scene.
     """
     if prev_gray is None:
         return False
@@ -157,6 +158,20 @@ def _frame_is_static(prev_gray: np.ndarray | None, curr_gray: np.ndarray) -> boo
         mean_gray_diff(prev_gray, curr_gray)
         < config.SCREENSPACE_STATIC_FRAME_SKIP_THRESHOLD
     )
+
+
+def max_cell_diff(a: np.ndarray, b: np.ndarray, cell: int = 16) -> float:
+    """Largest mean absolute diff over *cell*-pixel tiles of two same-shaped frames.
+
+    A whole-frame mean hides a small element appearing on a still screen; the
+    worst tile does not.
+    """
+    diff = cv2.absdiff(a, b)
+    h, w = diff.shape[:2]
+    grid = cv2.resize(
+        diff, (max(1, w // cell), max(1, h // cell)), interpolation=cv2.INTER_AREA
+    )
+    return float(grid.max())
 
 
 def mean_gray_diff(a: np.ndarray, b: np.ndarray) -> float:
