@@ -1024,6 +1024,10 @@ def test_offset_result_times_shifts_point_and_span():
     screenspace._offset_result_times(span, 80)
     assert span == {"timestamp": 85.0, "start": 85.0, "end": 92.0}
 
+    period = {"timestamp": 6.0, "period_start": 6.0, "period_end": 30.0}
+    screenspace._offset_result_times(period, 36)
+    assert period == {"timestamp": 42.0, "period_start": 42.0, "period_end": 66.0}
+
     untouched = {"timestamp": 3.0}
     screenspace._offset_result_times(untouched, 0)  # no-op
     assert untouched["timestamp"] == 3.0
