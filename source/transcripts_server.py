@@ -169,13 +169,16 @@ def _schedule_model_unload(model: str) -> None:
     """
     delay = float(config.LLM_UNLOAD_DELAY_SECONDS)
     if delay <= 0:
-        llm_client.unload_model(model)
+        # Another run on this model keeps it loaded.
+        if model not in _orchestrator.busy_models():
+            llm_client.unload_model(model)
         return
 
     def _unload() -> None:
         with _pending_model_unloads_lock:
             _pending_model_unloads.pop(model, None)
-        llm_client.unload_model(model)
+        if model not in _orchestrator.busy_models():
+            llm_client.unload_model(model)
 
     timer = threading.Timer(delay, _unload)
     timer.daemon = True

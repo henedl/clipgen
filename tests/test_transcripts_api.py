@@ -1142,6 +1142,28 @@ def test_zero_delay_unloads_immediately(_agent_state_clean, monkeypatch):
     assert "test-model" not in transcripts_server._pending_model_unloads
 
 
+@pytest.mark.parametrize("delay", [0, 0.01])
+def test_unload_skips_model_in_use(_agent_state_clean, monkeypatch, delay):
+    """Stopping one run must not unload a model another run is streaming from."""
+    monkeypatch.setattr(config, "LLM_UNLOAD_DELAY_SECONDS", delay)
+    monkeypatch.setattr(
+        transcripts_server._orchestrator, "busy_models", lambda: {"test-model"}
+    )
+    calls: list[str] = []
+    monkeypatch.setattr(
+        transcripts_server.llm_client,
+        "unload_model",
+        lambda m: calls.append(m) or True,
+    )
+
+    transcripts_server._schedule_model_unload("test-model")
+    deadline = time.monotonic() + 5.0
+    while "test-model" in transcripts_server._pending_model_unloads:
+        assert time.monotonic() < deadline
+        time.sleep(0.01)
+    assert calls == []
+
+
 # ---- Embed subtitle endpoints ----
 
 
