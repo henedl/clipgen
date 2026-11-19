@@ -13,6 +13,9 @@ import email.message
 import hashlib
 import io
 import json
+import os
+import subprocess
+import sys
 import urllib.error
 import zipfile
 from pathlib import Path
@@ -149,6 +152,48 @@ def test_mac_helper_waits_swaps_and_relaunches():
     assert script.rstrip().endswith('open -n "$LIVE"')
 
 
+def _run_mac_helper(tmp_path, monkeypatch, *, stage: bool) -> tuple[int, Path, Path]:
+    """Run the real helper against temp bundles with a recording ``open``."""
+    live = tmp_path / "apps" / "clip gen.app"
+    staged = tmp_path / "apps" / ".clipgen-update" / "clip gen.app"
+    live.mkdir(parents=True)
+    (live / "version").write_text("old", encoding="utf-8")
+    if stage:
+        staged.mkdir(parents=True)
+        (staged / "version").write_text("new", encoding="utf-8")
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    opened = tmp_path / "opened.txt"
+    fake_open = fake_bin / "open"
+    fake_open.write_text(f'#!/bin/sh\necho "$@" >>"{opened}"\n', encoding="utf-8")
+    fake_open.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{fake_bin}{os.pathsep}{os.environ['PATH']}")
+    done = subprocess.Popen(["true"])
+    done.wait()
+    log = tmp_path / "apply.log"
+    script = updater.render_mac_helper(done.pid, live, staged, log)
+    result = subprocess.run(["/bin/sh", "-c", script], check=False, timeout=30)
+    assert opened.read_text(encoding="utf-8").strip() == f"-n {live}"
+    return result.returncode, live, log
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX shell helper")
+def test_mac_helper_swaps_the_staged_bundle(tmp_path, monkeypatch):
+    code, live, log = _run_mac_helper(tmp_path, monkeypatch, stage=True)
+    assert code == 0
+    assert (live / "version").read_text(encoding="utf-8") == "new"
+    assert not log.exists()
+    assert not live.with_name(live.name + ".old").exists()
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX shell helper")
+def test_mac_helper_reopens_the_old_app_when_the_swap_fails(tmp_path, monkeypatch):
+    code, live, log = _run_mac_helper(tmp_path, monkeypatch, stage=False)
+    assert code == 3
+    assert (live / "version").read_text(encoding="utf-8") == "old"
+    assert "could not move the new app into place" in log.read_text(encoding="utf-8")
+
+
 def test_win_helper_waits_renames_and_relaunches():
     script = updater.render_win_helper(
         4242,
@@ -163,6 +208,9 @@ def test_win_helper_waits_renames_and_relaunches():
     assert script.index("'my clipgen.old'") < script.index("-NewName 'my clipgen'")
     assert "Start-Process -FilePath (Join-Path $root 'clipgen.exe')" in script
     assert "Set-Content -LiteralPath $log" in script
+    # A failed swap reopens the old app, but never while clipgen still runs.
+    assert script.index("$exited = $true") < script.index("Rename-Item")
+    assert "if ($exited -and (Test-Path -LiteralPath $exe))" in script
 
 
 def test_inno_relaunch_is_gated_on_the_switch():

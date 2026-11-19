@@ -14,8 +14,8 @@ Three install shapes, each with its own apply path:
   fires. Measured 2026-09-06 on Sequoia with a local ad-hoc build: the swap
   succeeded in ``/Applications``, ``~/Applications`` and a plain folder, with
   no App Management prompt. Should a future macOS refuse the rename, the
-  helper leaves the staged copy and logs the failure, which the next launch
-  reports as ``last_error``.
+  helper logs the failure and reopens the old app, whose launch reports it
+  as ``last_error``.
 * ``win-inno`` — the per-user installer (``unins000.exe`` beside the exe).
   Run the new ``setup.exe`` silently with ``/RELAUNCH=1``; the ``[Run]`` entry
   in ``build/clipgen.iss`` relaunches the app once files are in place.
@@ -580,12 +580,15 @@ def render_mac_helper(pid: int, live: Path, staged: Path, log: Path) -> str:
             'xattr -dr com.apple.quarantine "$STAGED" 2>/dev/null',
             "# A leftover .old would swallow the live bundle as a child of itself.",
             'rm -rf "$LIVE.old"',
+            "# A failed swap reopens the old app; the next launch reports the log.",
             'if ! mv "$LIVE" "$LIVE.old" 2>>"$LOG"; then',
-            '  echo "could not move the old app aside" >>"$LOG"; exit 2',
+            '  echo "could not move the old app aside" >>"$LOG"',
+            '  open -n "$LIVE"; exit 2',
             "fi",
             'if ! mv "$STAGED" "$LIVE" 2>>"$LOG"; then',
             '  mv "$LIVE.old" "$LIVE"',
-            '  echo "could not move the new app into place" >>"$LOG"; exit 3',
+            '  echo "could not move the new app into place" >>"$LOG"',
+            '  open -n "$LIVE"; exit 3',
             "fi",
             'rm -rf "$LIVE.old" "$STAGING"',
             'rm -f "$LOG"',
@@ -614,9 +617,11 @@ def render_win_helper(pid: int, root: Path, staged: Path, log: Path) -> str:
             f"$staged = {q(str(staged))}",
             f"$old = {q(str(old))}",
             f"$log = {q(str(log))}",
+            "$exited = $false",
             "try {",
             f"  Wait-Process -Id $target -Timeout {HELPER_WAIT_SECONDS} -ErrorAction SilentlyContinue",
             "  if (Get-Process -Id $target -ErrorAction SilentlyContinue) { throw 'clipgen did not exit' }",
+            "  $exited = $true",
             "  $moved = $false",
             "  for ($i = 0; $i -lt 5; $i++) {",
             f"    try {{ Rename-Item -LiteralPath $root -NewName {q(old.name)}; $moved = $true; break }}",
@@ -633,6 +638,9 @@ def render_win_helper(pid: int, root: Path, staged: Path, log: Path) -> str:
             "  Start-Process -FilePath (Join-Path $root 'clipgen.exe')",
             "} catch {",
             "  Set-Content -LiteralPath $log -Value $_.Exception.Message",
+            "  # A failed swap reopens the old app; a failed rollback leaves none.",
+            "  $exe = Join-Path $root 'clipgen.exe'",
+            "  if ($exited -and (Test-Path -LiteralPath $exe)) { Start-Process -FilePath $exe }",
             "}",
             "",
         ]
