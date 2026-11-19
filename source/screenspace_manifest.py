@@ -293,12 +293,13 @@ def _offset_result_times(result: dict[str, Any], offset: int) -> None:
     """Shift a scan result's time fields by *offset* seconds (in place).
 
     Maps a sub-video's local result times back onto the participant's global
-    timeline for multi-video scans. Covers point events (``timestamp``) and span
-    events (``start``/``end``, e.g. inactivity). A no-op when offset is 0.
+    timeline for multi-video scans. Covers point events (``timestamp``), span
+    events (``start``/``end``, e.g. inactivity) and Boundary periods
+    (``period_start``/``period_end``). A no-op when offset is 0.
     """
     if not offset:
         return
-    for key in ("timestamp", "start", "end"):
+    for key in ("timestamp", "start", "end", "period_start", "period_end"):
         value = result.get(key)
         if isinstance(value, (int, float)):
             result[key] = value + offset

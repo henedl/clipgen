@@ -117,8 +117,8 @@ def _is_static_skip(
 ) -> bool:
     """Decide whether *pixels* is a near-duplicate of the previous frame.
 
-    True when the mean grayscale diff from the last processed frame is below
-    ``SCREENSPACE_STATIC_FRAME_SKIP_THRESHOLD``; the caller then returns from its
+    True when no cell of the grayscale diff from the last processed frame (see
+    :func:`max_cell_diff`) reaches ``SCREENSPACE_STATIC_FRAME_SKIP_THRESHOLD``; the caller then returns from its
     per-frame callback. Content and any active match are unchanged, so this
     carries the consecutive-match run via ``buf.carry`` (emitting through
     *results*/*on_result*) and reports progress instead of breaking it. Otherwise
@@ -127,7 +127,8 @@ def _is_static_skip(
     """
     gray = cv2.cvtColor(pixels, cv2.COLOR_BGR2GRAY)
     if prev_gray[0] is not None:
-        diff = mean_gray_diff(prev_gray[0], gray)
+        # Per-cell: a short label in a wide region barely moves the mean.
+        diff = max_cell_diff(prev_gray[0], gray)
         if diff < config.SCREENSPACE_STATIC_FRAME_SKIP_THRESHOLD:
             emitted = buf.carry(ts)
             if emitted is not None:
@@ -149,7 +150,7 @@ def _frame_is_static(prev_gray: np.ndarray | None, curr_gray: np.ndarray) -> boo
     predicate with no buffer/progress side effects, so each caller applies the
     skip semantics its scan needs (reset a motion run, extend a span, carry the
     last result). Shared by scan_similarity, scan_flow, scan_inactivity,
-    scan_boundaries, scan_scene, and scan_template.
+    scan_boundaries, and scan_scene.
     """
     if prev_gray is None:
         return False
@@ -157,6 +158,20 @@ def _frame_is_static(prev_gray: np.ndarray | None, curr_gray: np.ndarray) -> boo
         mean_gray_diff(prev_gray, curr_gray)
         < config.SCREENSPACE_STATIC_FRAME_SKIP_THRESHOLD
     )
+
+
+def max_cell_diff(a: np.ndarray, b: np.ndarray, cell: int = 16) -> float:
+    """Largest mean absolute diff over *cell*-pixel tiles of two same-shaped frames.
+
+    A whole-frame mean hides a small element appearing on a still screen; the
+    worst tile does not.
+    """
+    diff = cv2.absdiff(a, b)
+    h, w = diff.shape[:2]
+    grid = cv2.resize(
+        diff, (max(1, w // cell), max(1, h // cell)), interpolation=cv2.INTER_AREA
+    )
+    return float(grid.max())
 
 
 def mean_gray_diff(a: np.ndarray, b: np.ndarray) -> float:
@@ -828,6 +843,7 @@ def _scale_template(
     template: np.ndarray,
     mask: np.ndarray | None,
     template_scale: float,
+    cv_scale: float | None = None,
 ) -> tuple[np.ndarray, np.ndarray | None]:
     """Resize a template (and its mask) for matching.
 
@@ -837,8 +853,10 @@ def _scale_template(
     compensate when their uploaded PNG is captured at a different pixel scale
     than its in-video rendering (e.g. a 50x50 icon appearing as 24x24 on
     screen). Returns the pair unchanged when the effective scale is ~1.0.
+    Pass ``cv_scale=1.0`` when matching native-resolution frames.
     """
-    cv_scale = _cv_scale()
+    if cv_scale is None:
+        cv_scale = _cv_scale()
     effective = template_scale * cv_scale
     if not (effective > 0 and abs(effective - 1.0) > 1e-6):
         return template, mask
@@ -1125,13 +1143,15 @@ def _prepare_shape_reference(
     scale_y_min: float = 0.0,
     scale_y_max: float = 0.0,
     scale_y_steps: int = 0,
+    cv_scale: float | None = None,
 ) -> _PreparedShape:
     """Build the per-scan-constant edge templates across the scale ladder.
 
     Canny is not scale-commutative, so each ladder scale resizes the grayscale
     reference and re-runs Canny rather than resizing one edge map. The ladder
     is geometric from *scale_min* to *scale_max*, each rung folded with the
-    global CV resolution scale like :func:`_scale_template`.
+    global CV resolution scale like :func:`_scale_template` (*cv_scale*
+    overrides it; pass 1.0 for native-resolution frames).
 
     By default the sweep is uniform (height follows width per rung). Passing
     *scale_y_min*/*scale_y_max* unlinks the axes into an independent vertical
@@ -1145,7 +1165,8 @@ def _prepare_shape_reference(
         scale_max = config.SCREENSPACE_SHAPE_SCALE_MAX
     if scale_steps <= 0:
         scale_steps = config.SCREENSPACE_SHAPE_SCALE_STEPS
-    cv_scale = _cv_scale()
+    if cv_scale is None:
+        cv_scale = _cv_scale()
     scales_x = _scale_ladder(scale_min, scale_max, scale_steps)
     if scale_y_min > 0 and scale_y_max > 0:
         scales_y = _scale_ladder(scale_y_min, scale_y_max, scale_y_steps or scale_steps)

@@ -1158,7 +1158,7 @@ def _exec_timelapse(
         f"timelapse.{out_format}", file_format=f".{out_format}"
     )
     result = screenspace_scans.generate_timelapse(
-        paths[0],
+        paths,
         region_coords,
         float(params.get("speedup_factor", 10.0) or 10.0),
         output_path,

@@ -142,7 +142,10 @@ def _pipe_frames_command(
         ]
 
     if region:
-        filters.append(f"crop={region['w']}:{region['h']}:{region['x']}:{region['y']}")
+        # exact=1: yuv420p crop otherwise rounds odd sizes and offsets down.
+        filters.append(
+            f"crop={region['w']}:{region['h']}:{region['x']}:{region['y']}:exact=1"
+        )
         out_w, out_h = region["w"], region["h"]
     else:
         out_w, out_h = frame_width, frame_height
@@ -549,12 +552,14 @@ def build_timelapse_command(
     end_seconds: float | None = None,
     sample_interval: float = 0.0,
     encoder: str = "libx264",
+    concat: bool = False,
 ) -> list[str]:
     """Construct ffmpeg argv for a cropped timelapse.
 
     *sample_interval* (seconds) keeps one frame per interval before crop and
     speed-up; 0 (default) uses every frame. *encoder* picks the H.264 encoder
     for mp4 (see ``video.resolve_video_encoder``); gif has none to pick.
+    *concat* reads *video_path* as a concat-demuxer list of parts.
     """
     x, y, w, h = region["x"], region["y"], region["w"], region["h"]
     filters: list[str] = []
@@ -569,6 +574,8 @@ def build_timelapse_command(
     if start_seconds > 0:
         cmd += ["-ss", str(start_seconds)]
 
+    if concat:
+        cmd += ["-f", "concat", "-safe", "0"]
     cmd += ["-i", video_path]
 
     if end_seconds is not None and end_seconds > start_seconds:

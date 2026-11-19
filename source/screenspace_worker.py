@@ -20,7 +20,7 @@ import profiling
 import redact
 import utils
 import video
-from screenspace_tools import TOOLS
+from screenspace_tools import TOOLS, TimelapseTool
 from screenspace_heatmap import (
     GridLayers,
     build_grid_layers,
@@ -51,6 +51,9 @@ _SENTINEL = object()
 
 # Heatmap-only per-frame grids; stripped from reads and dropped after heatmaps write.
 _SERVER_ONLY_GRID_KEYS = ("change_grid", "saliency_grid")
+
+# Task flags that stop a scan; _first_hit is detect-first's own, apart from a cancel.
+_STOP_KEYS = ("_cancelled", "_paused_flag", "_first_hit")
 
 # Keys the frontend turns into image URLs; each must name a file on disk.
 _HEATMAP_FILE_KEYS = ("heatmap", "heatmap_gif", "heatmap_rolling_gif")
@@ -203,11 +206,12 @@ def dispatch_tool_scan(
     if not video_paths:
         return []
     timeline = video.timeline_or_none(video_paths)
-    if timeline is None:
+    if timeline is None or isinstance(tool, TimelapseTool):
+        # Timelapse encodes one file over every part; per-part runs would overwrite it.
         return tool.scan(
             video_paths[0],
             region_coords,
-            params,
+            {**params, "video_paths": video_paths} if timeline else params,
             task_id=task_id,
             scan_mode=scan_mode,
             on_progress=on_progress,
@@ -495,26 +499,30 @@ class ScreenspaceWorker:
             progress = task.get("progress", 0.0)
             params = task.get("parameters", {})
 
-            # Offset multitool joins need every frame from the original start;
-            # restart from scratch.
-            if task.get("type") == "multitool" and _multitool_has_offset(
-                params.get("steps", [])
+            # Offset joins and timelapse output need every frame; restart from scratch.
+            if task.get("type") == "timelapse" or (
+                task.get("type") == "multitool"
+                and _multitool_has_offset(params.get("steps", []))
             ):
                 with self._lock:
                     # A Cancel that raced this Resume wins.
                     if task["status"] != TASK_STATUS_PAUSED:
                         continue
                     task.pop("_partial_results", None)
+                    task.pop("_partial_raw", None)
                     task.pop("_progress_offset", None)
                     task.pop("_progress_scale", None)
                     task.pop("_paused_flag", None)
+                    task.pop("_first_hit", None)
+                    task.pop("_resume_at", None)
                     task["result"] = []
                     task["progress"] = 0.0
                     task["status"] = TASK_STATUS_QUEUED
                 self._requeue(task)
                 continue
 
-            start = params.get("start_seconds", 0.0)
+            # A second resume continues from the first resume point.
+            start = task.get("_resume_at", params.get("start_seconds", 0.0))
             end = params.get("end_seconds")
             if end is None:
                 # Resume math is on the GLOBAL timeline; multi-video end is the
@@ -535,11 +543,24 @@ class ScreenspaceWorker:
                 # A Cancel that raced the probe above wins.
                 if task["status"] != TASK_STATUS_PAUSED:
                     continue
-                task["_partial_results"] = list(task.get("result") or [])
+                # The in-flight frame emitted past the progress mark; the rescan repeats it.
+                task["_partial_results"] = [
+                    r
+                    for r in task.get("result") or []
+                    if r.get("timestamp", -1.0) < resume_at
+                ]
+                # Raw per-frame stream, not Color's merged spans, feeds the events.
+                task["_partial_raw"] = [
+                    r
+                    for r in task.get("_raw_results", task.get("result")) or []
+                    if r.get("timestamp", -1.0) < resume_at
+                ]
                 task["_progress_offset"] = progress
                 task["_progress_scale"] = max(1.0 - progress, 0.001)
                 task.pop("_paused_flag", None)
-                params["start_seconds"] = resume_at
+                task.pop("_first_hit", None)
+                # Transient: the saved start_seconds must survive a resume.
+                task["_resume_at"] = resume_at
                 task["status"] = TASK_STATUS_QUEUED
 
             self._requeue(task)
@@ -767,6 +788,9 @@ class ScreenspaceWorker:
                 result = task.get("result")
             profiling.op_outcome(task_id, status)
             profiling.op_work(task_id, len(result) if isinstance(result, list) else 0)
+        # Resume can land while the scan unwinds; it skipped this task.
+        if status == TASK_STATUS_PAUSED and not self._paused.is_set():
+            self.resume()
 
     def _execute_task_body(self, task: dict[str, Any]) -> None:
         """Dispatch task to the appropriate workflow function."""
@@ -777,7 +801,7 @@ class ScreenspaceWorker:
             t = self._tasks.get(task_id)
             if t:
                 t["result"] = list(t.get("_partial_results", []))
-                t["_raw_results"] = list(t.get("_partial_results", []))
+                t["_raw_results"] = list(t.get("_partial_raw", []))
 
         # Per-task throttle for SSE notifications (avoids cross-task race)
         last_notify: list[float] = [0.0]
@@ -807,8 +831,8 @@ class ScreenspaceWorker:
 
         def _cancel_flag() -> bool:
             with self._lock:
-                t = self._tasks.get(task_id)
-                return bool(t and (t.get("_cancelled") or t.get("_paused_flag")))
+                t = self._tasks.get(task_id) or {}
+                return any(t.get(key) for key in _STOP_KEYS)
 
         def _on_result(result_dict: dict[str, Any]) -> None:
             with self._lock:
@@ -819,7 +843,7 @@ class ScreenspaceWorker:
                     if isinstance(t.get("_raw_results"), list):
                         t["_raw_results"].append(result_dict)
                     if t.get("parameters", {}).get("detect_first"):
-                        t["_cancelled"] = True
+                        t["_first_hit"] = True
             _throttled_notify()
 
         try:
@@ -847,13 +871,12 @@ class ScreenspaceWorker:
                         if partial and isinstance(result, list):
                             result = partial + result
                         t["result"] = _visible_results(result)
-                    elif t.get("_cancelled") and not t.get("parameters", {}).get(
-                        "detect_first"
-                    ):
+                    elif t.get("_cancelled"):
                         t["status"] = TASK_STATUS_CANCELLED
                     else:
                         # Normal completion or detect_first early stop
                         partial = t.pop("_partial_results", None)
+                        t.pop("_partial_raw", None)
                         if partial and isinstance(result, list):
                             result = partial + result
                         t["status"] = TASK_STATUS_COMPLETED
@@ -861,6 +884,7 @@ class ScreenspaceWorker:
                         t["progress"] = 1.0
                         t.pop("_progress_offset", None)
                         t.pop("_progress_scale", None)
+                        t.pop("_resume_at", None)
                         raw = t.pop("_raw_results", [])
                         t["_generated_events"] = generate_events_from_results(t, raw)
                         if isinstance(result, list) and result:
@@ -927,8 +951,8 @@ class ScreenspaceWorker:
 
         Builds the shared fast-scan ``fast_opts`` payload here so individual
         tool classes only need to declare ``fast_scan_region_dim`` /
-        ``supports_fast_scan`` / ``fast_scan_extra_opts`` as class attributes,
-        then delegates the single/multi-video scan to :func:`dispatch_tool_scan`.
+        ``supports_fast_scan`` / ``fast_scan_extra_opts`` as class attributes
+        (plus ``skips_static`` for tools that need unchanged frames), then delegates the single/multi-video scan to :func:`dispatch_tool_scan`.
         """
         task_type = task["type"]
         tool = TOOLS.get(task_type)
@@ -945,6 +969,8 @@ class ScreenspaceWorker:
 
         # Shallow copy: fast-scan interval scaling must not persist for pause/resume.
         params = dict(task.get("parameters", {}))
+        if "_resume_at" in task:
+            params["start_seconds"] = task["_resume_at"]
         scan_mode = params.get("scan_mode", "normal")
         fast_opts: dict[str, Any] | None = None
         if scan_mode == "fast" and tool.supports_fast_scan:
@@ -952,7 +978,7 @@ class ScreenspaceWorker:
             if params.get("interval", 0) > 0:
                 params["interval"] = params["interval"] * multiplier
             fast_opts = {
-                "phash_skip": True,
+                "phash_skip": tool.skips_static(params),
                 "max_region_dim": tool.fast_scan_region_dim,
                 **tool.fast_scan_extra_opts,
             }

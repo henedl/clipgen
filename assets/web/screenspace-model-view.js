@@ -411,6 +411,9 @@
     } else if (tool === "numbers") {
       var np = qs("#paramNumOcrPreprocess" + sfx);
       if (np && np.checked) out.ocr_preprocess = "1";
+    } else if (tool === "template") {
+      var tsc = qs("#paramTemplateScale" + sfx);
+      if (tsc) out.template_scale = (parseFloat(tsc.value) || 100) / 100;
     } else if (tool === "shape") {
       var st = qs("#paramShapeThresh" + sfx);
       if (st) out.threshold = st.value;

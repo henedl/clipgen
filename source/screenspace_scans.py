@@ -34,6 +34,7 @@ from screenspace_primitives import (
     _prepare_template,
     _scale_template,
     match_shape,
+    max_cell_diff,
     region_search_window,
     color_matches,
     color_present,
@@ -111,7 +112,13 @@ def _box_match_callback(
         if cancel_flag and cancel_flag():
             return False
         curr_gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        if _frame_is_static(prev_skip_gray[0], curr_gray):
+        prev = prev_skip_gray[0]
+        # Per-cell gate: a small icon appearing on a still screen must not count as static.
+        if (
+            prev is not None
+            and max_cell_diff(prev, curr_gray)
+            < config.SCREENSPACE_STATIC_FRAME_SKIP_THRESHOLD
+        ):
             # Near-duplicate frame: carry the row; keep prev_skip_gray so drift recomputes.
             if last_rd[0] is not None:
                 _emit({**last_rd[0], "timestamp": ts})
@@ -621,7 +628,7 @@ def scan_numbers(
 
 
 def generate_timelapse(
-    video_path: str,
+    video_path: str | list[str],
     region: dict[str, int],
     speedup_factor: float,
     output_path: str,
@@ -632,8 +639,12 @@ def generate_timelapse(
     sample_interval: float = 0.0,
     on_progress: Callable[[float], None] | None = None,
     cancel_flag: Callable[[], bool] | None = None,
+    concat: bool = False,
 ) -> str | None:
     """Generate a cropped timelapse via ffmpeg.
+
+    A list of *video_path* parts encodes one timelapse over the stitched
+    timeline (*concat* marks the concat-demuxer list this recurses with).
 
     *sample_interval* controls frame sampling (seconds between captured
     frames).  0 means every frame is used.
@@ -648,6 +659,28 @@ def generate_timelapse(
     is not a failed one), and both callers turn the exception into a failed
     node/task with the message attached.
     """
+    # One part needs no concat list; probing that list would fail.
+    if not isinstance(video_path, str) and len(video_path) == 1:
+        video_path = video_path[0]
+    if not isinstance(video_path, str):
+        timeline = video.timeline_or_none(video_path)
+        if end_seconds is None and timeline is not None:
+            end_seconds = timeline[-1][1] + timeline[-1][2]
+        with video._concat_list_file(video_path) as list_path:
+            return generate_timelapse(
+                list_path,
+                region,
+                speedup_factor,
+                output_path,
+                output_format,
+                start_seconds=start_seconds,
+                end_seconds=end_seconds,
+                sample_interval=sample_interval,
+                on_progress=on_progress,
+                cancel_flag=cancel_flag,
+                concat=True,
+            )
+
     # gif output has no H.264 encoder to choose, so it never probes for one.
     encoder = video.resolve_video_encoder() if output_format != "gif" else "libx264"
 
@@ -662,6 +695,7 @@ def generate_timelapse(
             end_seconds=end_seconds,
             sample_interval=sample_interval,
             encoder=enc,
+            concat=concat,
         )
 
     # Estimate output duration for progress calculation.

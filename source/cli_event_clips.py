@@ -280,7 +280,8 @@ def _build_clusters_from_transcript_segments(
         entry = sources.get(participant) or {}
         if isinstance(entry, dict):
             source_file = str(entry.get("source_file", "") or "")
-        source_video = Path(source_file).name if source_file else ""
+        # Multi-part entries join full paths with " + "; keep every part's name.
+        source_video = " + ".join(Path(p).name for p in source_file.split(" + "))
         out.append(
             {
                 "participant": participant,
@@ -319,7 +320,8 @@ def _cut_clusters(
     last_study = ""
     for idx, cluster in enumerate(clusters):
         source_video = cluster.get("source_video") or ""
-        parsed = utils.parse_source_video_name(source_video) if source_video else None
+        first_part = source_video.split(" + ")[0]
+        parsed = utils.parse_source_video_name(first_part) if first_part else None
         study = parsed[0] if parsed else ""
         desc, category = label_fn(cluster)
         clips_list.extend(
@@ -382,6 +384,16 @@ def _run_ss_clips(args: argparse.Namespace) -> None:
     if not filtered:
         utils.warning_print("No Screenspace events match the given filters.")
         return
+
+    # Multi-part events carry global times: cut them against every part.
+    task_parts = {
+        t.get("id"): t.get("video_paths") or [] for t in manifest.get("tasks") or []
+    }
+    for i, ev in enumerate(filtered):
+        paths = task_parts.get(ev.get("task_id")) or []
+        if len(paths) >= 2:
+            joined = " + ".join(Path(p).name for p in paths)
+            filtered[i] = {**ev, "source_video": joined}
 
     clusters = _build_clusters_from_ss_events(
         filtered,

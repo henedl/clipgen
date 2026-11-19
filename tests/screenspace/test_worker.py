@@ -4,6 +4,8 @@ import threading
 import time
 from unittest import mock
 
+import pytest
+
 
 import config
 import screenspace
@@ -322,7 +324,52 @@ class TestScreenspaceWorker:
         t = worker.get_task(task["id"])
         assert t is not None
         assert t["status"] == "queued"
-        assert t.get("parameters", {}).get("start_seconds") == 50.0
+        assert t["_resume_at"] == 50.0
+        # The saved start must survive, or Edit task skips the head.
+        assert t["parameters"]["start_seconds"] == 0.0
+
+    def test_dispatch_starts_at_the_resume_point(self, monkeypatch):
+        seen = {}
+
+        def fake_dispatch(_tool, _paths, _region, params, **_k):
+            seen["start"] = params["start_seconds"]
+            return []
+
+        monkeypatch.setattr(screenspace_worker, "dispatch_tool_scan", fake_dispatch)
+        task = {
+            "id": "t1",
+            "type": "color",
+            "video_paths": ["/v.mp4"],
+            "region_coords": {"x": 0, "y": 0, "w": 1, "h": 1},
+            "parameters": {"start_seconds": 0.0},
+            "_resume_at": 42.0,
+        }
+        screenspace.ScreenspaceWorker()._dispatch(task, lambda p: None, lambda: False)
+        assert seen["start"] == 42.0
+        assert task["parameters"]["start_seconds"] == 0.0
+
+    def test_resume_restarts_timelapse_from_scratch(self):
+        # A resumed timelapse would write only the tail of the video.
+        worker = screenspace.ScreenspaceWorker()
+        task = screenspace.create_task(
+            "timelapse",
+            "P01",
+            "s.mp4",
+            ["/v.mp4"],
+            "r",
+            {"x": 0, "y": 0, "w": 2, "h": 2},
+            parameters={"start_seconds": 0.0, "end_seconds": 100.0},
+        )
+        worker.enqueue(task)
+        with worker._lock:
+            worker._tasks[task["id"]]["status"] = screenspace.TASK_STATUS_PAUSED
+            worker._tasks[task["id"]]["progress"] = 0.5
+        worker.resume()
+        t = worker.get_task(task["id"])
+        assert t is not None
+        assert t["status"] == "queued"
+        assert t["progress"] == 0.0
+        assert "_resume_at" not in t
 
     def test_resume_keeps_a_cancel_that_raced_the_probe(self, monkeypatch):
         """A Cancel landing during resume's duration probe must win."""
@@ -415,7 +462,7 @@ class TestScreenspaceWorker:
         worker.resume()
         t = worker.get_task(task["id"])
         assert t is not None
-        assert t["parameters"]["start_seconds"] == 55.0  # 10 + 0.5*(100-10)
+        assert t["_resume_at"] == 55.0  # 10 + 0.5*(100-10)
         assert t.get("_partial_results") == [{"timestamp": 5.0}]
 
     def test_second_resume_uses_segment_local_progress(self):
@@ -443,7 +490,7 @@ class TestScreenspaceWorker:
         worker.resume()
         with worker._lock:
             t = worker._tasks[tid]
-            assert t["parameters"]["start_seconds"] == 50.0
+            assert t["_resume_at"] == 50.0
             # Simulate the resumed scan pausing again at global progress 0.75
             # — halfway through the [50, 100] segment — with one more result.
             t["status"] = screenspace.TASK_STATUS_PAUSED
@@ -452,19 +499,125 @@ class TestScreenspaceWorker:
         worker.resume()
         with worker._lock:
             t = worker._tasks[tid]
-            assert t["parameters"]["start_seconds"] == 75.0  # not 87.5
+            assert t["_resume_at"] == 75.0  # not 87.5
+            assert t["parameters"]["start_seconds"] == 0.0
             assert t["_partial_results"] == [
                 {"timestamp": 5.0},
                 {"timestamp": 60.0},
             ]
+
+    @pytest.mark.parametrize("user_cancels", [False, True])
+    def test_detect_first_keeps_user_cancel_apart(self, monkeypatch, user_cancels):
+        # detect_first reused _cancelled, so a cancel before any hit read as completed.
+        def dispatch(self, task, on_progress, cancel_flag, on_result=None):
+            if user_cancels:
+                self.cancel(task["id"])
+                assert cancel_flag()
+                return []
+            assert on_result is not None
+            on_result({"timestamp": 1.0})
+            assert cancel_flag()  # the first hit stops the scan
+            return [{"timestamp": 1.0}]
+
+        monkeypatch.setattr(screenspace.ScreenspaceWorker, "_dispatch", dispatch)
+        worker = screenspace.ScreenspaceWorker()
+        task = screenspace.create_task(
+            "color",
+            "P01",
+            "s.mp4",
+            ["/v.mp4"],
+            "r",
+            {"x": 0, "y": 0, "w": 1, "h": 1},
+            parameters={"detect_first": True},
+        )
+        worker.enqueue(task)
+        with worker._lock:
+            task["status"] = screenspace.TASK_STATUS_RUNNING
+        worker._execute_task(task)
+        expected = "cancelled" if user_cancels else "completed"
+        assert task["status"] == expected
+
+    def test_resume_clears_a_first_hit_that_raced_the_pause(self):
+        # A stale _first_hit stopped the resumed scan at once, with no results.
+        worker = screenspace.ScreenspaceWorker()
+        task = screenspace.create_task(
+            "color",
+            "P01",
+            "s.mp4",
+            ["/v.mp4"],
+            "r",
+            {"x": 0, "y": 0, "w": 1, "h": 1},
+            parameters={"detect_first": True, "end_seconds": 100.0},
+        )
+        worker.enqueue(task)
+        with worker._lock:
+            task["status"] = screenspace.TASK_STATUS_PAUSED
+            task["progress"] = 0.5
+            task["_first_hit"] = True
+        worker.resume()
+        assert task["status"] == screenspace.TASK_STATUS_QUEUED
+        assert "_first_hit" not in task
+
+    def test_resume_drops_results_the_rescan_repeats(self):
+        # The in-flight frame lands past the progress mark; carrying it duplicated it.
+        worker = screenspace.ScreenspaceWorker()
+        task = screenspace.create_task(
+            "color",
+            "P01",
+            "s.mp4",
+            ["/v.mp4"],
+            "r",
+            {"x": 0, "y": 0, "w": 1, "h": 1},
+            parameters={"start_seconds": 0.0, "end_seconds": 100.0},
+        )
+        worker.enqueue(task)
+        with worker._lock:
+            task["status"] = screenspace.TASK_STATUS_PAUSED
+            task["progress"] = 0.5
+            # Color: merged spans in result, the per-frame stream in _raw_results.
+            task["result"] = [{"start": 10.0, "end": 52.0, "duration": 42.0}]
+            task["_raw_results"] = [{"timestamp": t} for t in (10.0, 49.0, 50.0, 52.0)]
+        worker.resume()
+        assert task["_resume_at"] == 50.0
+        assert task["_partial_results"] == [
+            {"start": 10.0, "end": 52.0, "duration": 42.0}
+        ]
+        assert task["_partial_raw"] == [{"timestamp": 10.0}, {"timestamp": 49.0}]
+
+    def test_resume_while_unwinding_requeues_the_task(self, monkeypatch):
+        # Resume lands before the scan notices the pause; the task must not stick.
+        def pause_then_resume(self, task, on_progress, cancel_flag, on_result=None):
+            on_progress(0.5)
+            self.pause()
+            self.resume()  # task is still running, so resume() skips it
+            return []
+
+        monkeypatch.setattr(
+            screenspace.ScreenspaceWorker, "_dispatch", pause_then_resume
+        )
+        worker = screenspace.ScreenspaceWorker()
+        task = screenspace.create_task(
+            "color",
+            "P01",
+            "s.mp4",
+            ["/v.mp4"],
+            "r",
+            {"x": 0, "y": 0, "w": 1, "h": 1},
+            parameters={"start_seconds": 0.0, "end_seconds": 100.0},
+        )
+        worker.enqueue(task)
+        with worker._lock:
+            task["status"] = screenspace.TASK_STATUS_RUNNING
+        worker._execute_task(task)
+        assert task["status"] == screenspace.TASK_STATUS_QUEUED
+        assert task["_resume_at"] == 50.0
 
     def test_pause_after_resume_preserves_earlier_results(self, monkeypatch):
         # The paused branch of _execute_task must prepend _partial_results
         # like the completed branch does — otherwise pausing a resumed scan
         # permanently drops the results found before the first pause.
         def pausing_dispatch(self, task, on_progress, cancel_flag, on_result=None):
-            with self._lock:
-                self._tasks[task["id"]]["_paused_flag"] = True
+            self.pause()
             return [{"timestamp": 60.0}]
 
         monkeypatch.setattr(

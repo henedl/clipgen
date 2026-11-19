@@ -436,6 +436,65 @@ def test_run_ss_clips_smoke_dispatches_pipeline(monkeypatch):
     assert saved["artifacts"][0]["id"] == "a-1c1s0"
 
 
+def test_run_ss_clips_multi_part_cuts_against_every_part(monkeypatch):
+    # Events carry global times; part 2's name alone cut it at the wrong place.
+    import pipeline
+    import screenspace
+    import viewer
+
+    def event(eid, part, t):
+        return {
+            "id": eid,
+            "task_id": "ss_1",
+            "source_video": part,
+            "participant": "P01",
+            "detector": "color",
+            "time_in": t,
+            "time_out": t,
+            "confidence": 1.0,
+            "excluded": False,
+        }
+
+    task = {"id": "ss_1", "video_paths": ["/in/s_P01-1.mp4", "/in/s_P01-2.mp4"]}
+    monkeypatch.setattr(
+        screenspace,
+        "load_screenspace_manifest",
+        lambda: {
+            "events": [
+                event("a", "s_P01-1.mp4", 28.0),
+                event("b", "s_P01-2.mp4", 42.0),
+            ],
+            "tasks": [task],
+        },
+    )
+    captured: dict = {}
+
+    def fake_process(clips_list, **_kw):
+        captured["clips"] = clips_list
+        return (0, [])
+
+    monkeypatch.setattr(pipeline, "process_clips", fake_process)
+    monkeypatch.setattr(viewer, "save_manifest", lambda *_a, **_k: None)
+    cli_event_clips._run_ss_clips(_ss_args(ss_clips=True))
+
+    joined = "s_P01-1.mp4 + s_P01-2.mp4"
+    assert [c["source_filename"] for c in captured["clips"]] == [joined, joined]
+    assert [c["study"] for c in captured["clips"]] == ["s", "s"]
+
+
+def test_transcript_clusters_keep_every_part_name():
+    manifest = {
+        "source_transcripts": {
+            "P01": {"source_file": "/d/s_P01-1.mp4 + /d/s_P01-2.mp4"}
+        }
+    }
+    rows = [("P01", {"id": "P01:0", "start": 40.0, "end": 42.0, "text": "hi"}, [])]
+    clusters = cli_event_clips._build_clusters_from_transcript_segments(
+        rows, manifest, gap=1, pad_pre=0, pad_post=0, max_duration=0
+    )
+    assert clusters[0]["source_video"] == "s_P01-1.mp4 + s_P01-2.mp4"
+
+
 def test_run_ss_clips_no_events_warns(monkeypatch, capsys):
     import screenspace
 

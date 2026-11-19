@@ -731,6 +731,7 @@ class TestScanMultitool:
             duration=0.0,
             fast_opts=None,
             profile_kind="",
+            cv_scale=None,
         ):
             frame = np.zeros((10, 10, 3), dtype=np.uint8)
             callback(1.0, frame)
@@ -841,6 +842,7 @@ class TestScanMultitool:
             duration=0.0,
             fast_opts=None,
             profile_kind="",
+            cv_scale=None,
         ):
             frame = np.zeros((10, 10, 3), dtype=np.uint8)
             for ts in frames_ts:
@@ -1152,14 +1154,46 @@ class TestScanMultitool:
         assert [r["timestamp"] for r in results] == [1.0, 2.0]
         assert emitted == results  # streamed, one call per result
 
+    # ---------------------------------------------------------------------------
+    # Pin calibration scoring (Phase 2)
+    # ---------------------------------------------------------------------------
 
-# ---------------------------------------------------------------------------
-# Pin calibration scoring (Phase 2)
-# ---------------------------------------------------------------------------
+    @pytest.mark.parametrize("offset", [False, True])
+    def test_steps_scan_native_frames(self, monkeypatch, offset):
+        # Step regions are source pixels, so the global CV scale must not apply.
+        monkeypatch.setattr(config, "SCREENSPACE_CV_RESOLUTION_SCALE", 2.0)
+        monkeypatch.setattr(
+            screenspace_frames, "_probe_video_meta", lambda _p: (30.0, 10.0)
+        )
+        seen = []
+
+        def fake_scan(video_path, interval, callback, *, cv_scale=None, **_kw):
+            seen.append(cv_scale)
+
+        monkeypatch.setattr(screenspace_multitool, "scan_video_full_frames", fake_scan)
+        second = {"type": "change"}
+        if offset:
+            second["offset"] = {"min": 0, "max": 1}
+        screenspace.scan_multitool(
+            "/fake.mp4", {"x": 0, "y": 0, "w": 10, "h": 10}, [{"type": "color"}, second]
+        )
+        assert seen == [1.0]
 
 
 class TestScoreFrameForTool:
     region = {"x": 0, "y": 0, "w": 100, "h": 100}
+
+    @pytest.mark.parametrize("cv_scale", [1.0, 2.0, 0.5])
+    def test_template_scores_native_frame_at_any_cv_scale(self, monkeypatch, cv_scale):
+        # Calibration frames are native; scaling only the template broke the match.
+        monkeypatch.setattr(config, "SCREENSPACE_CV_RESOLUTION_SCALE", cv_scale)
+        frame = _make_icon_frame(320, 180, [(100, 60, 40)])
+        params = {"template_image": _make_icon(40), "threshold": 0.7}
+        res = screenspace.score_frame_for_tool(
+            "template", frame, None, {"x": 0, "y": 0, "w": 0, "h": 0}, params
+        )
+        assert res["passed"] is True
+        assert res["score"] > 0.9
 
     def test_color_miss_still_scored(self):
         frame = np.full((100, 100, 3), [255, 0, 0], dtype=np.uint8)  # blue

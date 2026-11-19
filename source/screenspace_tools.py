@@ -435,6 +435,10 @@ class AnalysisTool:
             kwargs[key] = value
         return kwargs
 
+    def skips_static(self, params: dict[str, Any]) -> bool:
+        """Whether fast scan may drop unchanged frames before the callback."""
+        return True
+
     def _prepare_scan(
         self, params: dict[str, Any], fast_opts: dict[str, Any] | None
     ) -> dict[str, Any] | None:
@@ -481,7 +485,7 @@ class AnalysisTool:
 
 class ColorTool(AnalysisTool):
     name = "color"
-    fast_scan_description = "Lower resolution, skips unchanged frames"
+    fast_scan_description = "Lower resolution"
     preview_float_args = ("h", "s", "v")
     fast_scan_region_dim = 32
     score_key = "_confidence"
@@ -507,6 +511,10 @@ class ColorTool(AnalysisTool):
         else:
             matched, conf = color_matches(pixels, target, tol, mask=mask)
         return matched, {"_confidence": conf}
+
+    def skips_static(self, params):
+        # A held color state spans unchanged frames; dropping them zeroes its duration.
+        return False
 
     def _prepare_scan(self, params, fast_opts):
         # Presence needs full resolution: INTER_AREA downscaling erases small color patches.
@@ -618,6 +626,10 @@ class TextTool(AnalysisTool):
         )
         return _score_text_readings(readings, params)
 
+    def skips_static(self, params):
+        # A consecutive run over static text needs the unchanged frames.
+        return params.get("require_consecutive", 1) <= 1
+
 
 class NumbersTool(AnalysisTool):
     name = "numbers"
@@ -651,12 +663,17 @@ class NumbersTool(AnalysisTool):
         )
         return _score_numbers_readings(readings, params)
 
+    def skips_static(self, params):
+        # A consecutive run over static numbers needs the unchanged frames.
+        return params.get("require_consecutive", 1) <= 1
+
 
 class TemplateTool(AnalysisTool):
     name = "template"
     fast_scan_description = "Downscales template 2\u00d7, skips unchanged frames"
     has_confidence = True
     reference = ("template_image_data", "template_image", "template_mask")
+    preview_float_args = ("template_scale",)
     fast_scan_extra_opts: ClassVar[dict[str, Any]] = {"template_downscale": True}
     score_key = "best_score"
 
@@ -671,10 +688,12 @@ class TemplateTool(AnalysisTool):
         # Cache the scaled prep on params so multitool reuses it across frames.
         prepared = params.get("_prepared_template")
         if prepared is None:
+            # Calibration and multitool hand native frames: no CV scale.
             scaled_img, scaled_mask = _scale_template(
                 template_img,
                 params.get("template_mask"),
                 float(params.get("template_scale", 1.0)),
+                cv_scale=1.0,
             )
             prepared = _prepare_template(scaled_img, scaled_mask)
             params["_prepared_template"] = prepared
@@ -792,6 +811,7 @@ class ShapeTool(AnalysisTool):
                 float(params.get("scale_y_min", 0.0)),
                 float(params.get("scale_y_max", 0.0)),
                 int(params.get("scale_y_steps", 0)),
+                cv_scale=1.0,
             )
             params["_prepared_shape"] = prepared
         if not prepared:
@@ -946,7 +966,7 @@ class SceneTool(AnalysisTool):
 
 class InactivityTool(AnalysisTool):
     name = "inactivity"
-    fast_scan_description = "Lower resolution, skips unchanged frames"
+    fast_scan_description = "Lower resolution"
     has_confidence = True
     fast_scan_region_dim = 64
     # Raw phash distance in Sensitivity-slider units; the strip inverts it (lower = more inactive).
@@ -971,6 +991,10 @@ class InactivityTool(AnalysisTool):
         else:
             conf = 1.0 if dist <= thresh else 0.0
         return dist <= thresh, {"distance": dist, "_confidence": conf}
+
+    def skips_static(self, params):
+        # Unchanged frames are what this tool measures.
+        return False
 
 
 class BoundaryTool(AnalysisTool):
@@ -1046,7 +1070,8 @@ class TimelapseTool(AnalysisTool):
                 Path(utils.get_effective_output_dir()) / f"timelapse_{task_id}.{ext}"
             )
         return generate_timelapse(
-            video_path,
+            # Multi-part participants arrive as the full part list.
+            params.get("video_paths") or video_path,
             region,
             speedup_factor=params.get("speedup_factor", 10.0),
             output_path=output_path,
@@ -1063,6 +1088,14 @@ class MultitoolTool(AnalysisTool):
     name = "multitool"
     fast_scan_description = "Skips unchanged frames, widens interval"
     has_confidence = True
+
+    def skips_static(self, params):
+        # Each step judges with its own params; one needing still frames keeps them.
+        return all(
+            TOOLS[s["type"]].skips_static(s)
+            for s in params.get("steps", [])
+            if s.get("type") in TOOLS
+        )
 
     def scan(
         self,
