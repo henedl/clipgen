@@ -1053,7 +1053,8 @@
       var markColor = markCat ? markCat.color : null;
       var markClass = markObj ? "segment-mark marked" : "segment-mark";
       var markStyle = markColor ? ' style="background:' + markColor + '"' : "";
-      var markLabel = markObj && markObj.label ? ' data-tooltip="' + escapeHtml(markObj.label) + '"' : "";
+      // escapeHtml leaves quotes alone; a quote would end the attribute.
+      var markLabel = markObj && markObj.label ? ' data-tooltip="' + escapeHtml(markObj.label).replace(/"/g, "&quot;") + '"' : "";
       var annoBadgeHtml = "";
       if (markObj && markObj.label && markColor) {
         annoBadgeHtml = '<span class="segment-anno-badge" style="--anno-badge-fg:' + markColor + '">' + escapeHtml(markObj.label) + '</span>';
@@ -1079,8 +1080,8 @@
             html += '<span class="segment-xref-badge" style="background:' + XREF_BADGES.screenspace.color + '" data-tooltip="' + escapeHtml(evTypes.join(", ")) + '"><span class="xref-badge-icon" style="' + iconMaskStyle(XREF_BADGES.screenspace.icon) + '"></span></span>';
           }
           if (xref.sheetObservations.length > 0) {
-            var obsTitle = xref.sheetObservations[0].observation;
-            html += '<span class="segment-xref-badge" style="background:' + XREF_BADGES.sheet.color + '" data-tooltip="' + escapeHtml(obsTitle) + '"><span class="xref-badge-icon" style="' + iconMaskStyle(XREF_BADGES.sheet.icon) + '"></span></span>';
+            var obsTitle = escapeHtml(xref.sheetObservations[0].observation).replace(/"/g, "&quot;");
+            html += '<span class="segment-xref-badge" style="background:' + XREF_BADGES.sheet.color + '" data-tooltip="' + obsTitle + '"><span class="xref-badge-icon" style="' + iconMaskStyle(XREF_BADGES.sheet.icon) + '"></span></span>';
           }
           html += '</span>';
         }

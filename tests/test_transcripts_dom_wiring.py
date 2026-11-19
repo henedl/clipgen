@@ -257,6 +257,16 @@ def test_closing_search_disarms_the_pending_query():
         assert "_searchVer++;" in branch
 
 
+def test_free_text_tooltips_escape_quotes():
+    """escapeHtml leaves `"` alone, so a quoted mark label or sheet observation
+    cut its data-tooltip attribute short."""
+    start = _JS.index("function renderSegmentsImpl(")
+    body = _JS[start : _JS.index("\n  }\n", start)]
+    for line in body.splitlines():
+        if "markLabel = " in line or "var obsTitle = " in line:
+            assert '.replace(/"/g, "&quot;")' in line, line
+
+
 def test_segment_clicks_reach_the_outside_click_closers():
     """A stopPropagation in the row handler kept the mark popover open, and an
     open popover disables Space, J, K and M."""
