@@ -1349,6 +1349,7 @@ def process_reel(
       ``{"phase": "clip_done", "clip_index": i, "total_clips": N}``
       ``{"phase": "concat", "progress": 0.0..1.0}`` (throttled)
       ``{"phase": "done"}``
+      ``{"phase": "failed", "failures": [str, ...]}`` (abort on uncut clips)
 
     Callers (the Flask reel routes) yield these as NDJSON to the frontend.
 
@@ -1532,6 +1533,7 @@ def _process_reel(
         for path in clip_paths:
             files.release_reservation(path)
         files.release_reservation(output_file)
+        _emit({"phase": "failed", "failures": reel_failures})
         utils.error_print(
             f"Reel aborted: {len(reel_failures)} clip(s) could not be generated.",
             reel_failures

@@ -1428,8 +1428,14 @@ def test_process_reel_aborts_cleanly_when_a_clip_raises(monkeypatch, make_clip):
         raise OSError("disk full")
 
     monkeypatch.setattr(pipeline, "_process_single_clip_segments", boom)
-    assert pipeline.process_reel([raw_clip], output_file="reel.mp4") == (0, [])
+    events: list = []
+    result = pipeline.process_reel(
+        [raw_clip], output_file="reel.mp4", progress_cb=events.append
+    )
+    assert result == (0, [])
     concat.assert_not_called()
+    failed = [e for e in events if e.get("phase") == "failed"]
+    assert len(failed) == 1 and "disk full" in failed[0]["failures"][0]
 
 
 def test_process_reel_marks_parts_whose_cards_soft_failed(monkeypatch, make_clip):

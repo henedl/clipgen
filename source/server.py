@@ -1414,10 +1414,18 @@ def _stream_process_reel(
     as NDJSON lines, finishing with a final result/error line."""
 
     def work(emit_event: Callable[[dict[str, Any]], None]) -> None:
+        failures: list[str] = []
+
+        def on_progress(event: dict[str, Any]) -> None:
+            if event.get("phase") == "failed":
+                failures.extend(event.get("failures") or [])
+                return
+            emit_event(event)
+
         generated, reel_records = pipeline.process_reel(
             clips,
             cancel_flag=cancel_flag,
-            progress_cb=emit_event,
+            progress_cb=on_progress,
             titlecards_enabled=titlecards_enabled,
             titlecard_duration_seconds=titlecard_duration_seconds,
         )
@@ -1427,6 +1435,18 @@ def _stream_process_reel(
                     "ok": False,
                     "cancelled": True,
                     "error": "Reel generation cancelled",
+                }
+            )
+            return
+        if not generated:
+            # process_reel prints why; the card must not read as built.
+            emit_event(
+                {
+                    "ok": False,
+                    "error": f"Reel aborted: {len(failures)} clip(s) failed"
+                    if failures
+                    else "No reel was generated",
+                    "failedSegments": failures,
                 }
             )
             return

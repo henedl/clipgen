@@ -3647,6 +3647,23 @@ def test_api_reel_continues_worker_after_client_disconnect(
     assert reel_record in server._generated_reels
 
 
+def test_api_reel_aborted_build_reports_failure(client, monkeypatch, tmp_path):
+    """A reel that cut nothing must end on ok: false with its failure lines."""
+    _setup_api_reel(monkeypatch, tmp_path)
+
+    def fake_process_reel(clips_list, **kwargs):
+        kwargs["progress_cb"]({"phase": "failed", "failures": ["P01 obs — boom"]})
+        return (0, [])
+
+    monkeypatch.setattr("pipeline.process_reel", fake_process_reel)
+    resp = client.post("/studio/api/reel", json={"cells": ["P01.5"]})
+    lines = [json.loads(line) for line in resp.get_data(as_text=True).splitlines()]
+    assert lines[-1]["ok"] is False
+    assert lines[-1]["failedSegments"] == ["P01 obs — boom"]
+    assert not any(line.get("phase") == "failed" for line in lines)
+    assert server._generated_reels == []
+
+
 def test_api_reel_busy_slot_held_during_worker_after_disconnect(
     client, monkeypatch, tmp_path
 ):
