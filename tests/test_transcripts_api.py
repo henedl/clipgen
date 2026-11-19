@@ -2562,6 +2562,26 @@ def test_summary_put_marks_friction_stale(tr_client, _agent_state_clean, monkeyp
     assert "citations" not in entry  # citations invalidated alongside friction
 
 
+def test_summary_put_stops_running_dependents(
+    tr_client, _agent_state_clean, monkeypatch
+):
+    """A dependent mid-run must not commit against the replaced summary."""
+    monkeypatch.setattr(transcripts_server, "_schedule_persist", lambda: None)
+    _seed_friction_entry()
+    orch = transcripts_server._orchestrator
+    events = {}
+    for key in ("citations", "friction"):
+        events[key] = threading.Event()
+        orch._in_flight[key].add("P01")
+        orch._cancel_events[key]["P01"] = events[key]
+    resp = tr_client.put(
+        "/transcripts/api/agent/summary/P01", json={"summary": "an edited summary"}
+    )
+    assert resp.status_code == 200
+    assert all(evt.is_set() for evt in events.values())
+    assert not orch.any_generating()
+
+
 def test_marks_add_debounces_persist_until_flush(tr_client, monkeypatch):
     """Rapid mark edits schedule a debounced write rather than blocking each
     request on disk; _flush_pending_persist forces the pending write to land

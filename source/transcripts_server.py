@@ -1724,6 +1724,10 @@ def api_summary_save(participant: str) -> FlaskResponse:
         return err("Summary text is required")
     summary_agent = thinking_agents.get_agent("summary")
     assert summary_agent is not None  # built-in agent, always registered
+    # A running dependent would commit against the old summary.
+    for dep in thinking_agents.AGENTS:
+        if "summary" in dep["depends_on"]:
+            _orchestrator.stop(dep["key"], participant)
     with _manifest_lock:
         entry = _manifest.get("source_transcripts", {}).get(participant)
         if not entry:
