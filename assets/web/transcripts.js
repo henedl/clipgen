@@ -858,7 +858,9 @@
     } else if (taskForPid && taskForPid.status === "running" && taskForPid.partial_count > 0) {
       state.streamingParticipant = pid;
       clearAnalysisPanel();
+      var streamVer = state.participantReqVer;
       _syncStreamSegs(taskForPid, function (segs) {
+        if (streamVer !== state.participantReqVer) return;
         if (segs.length > 0) renderPartialSegments(segs, taskForPid.progress);
       });
     } else {
@@ -2355,7 +2357,10 @@
       if (selectedRunningTask) {
         state.streamingParticipant = state.selectedParticipant;
         _loadStreamingMarks(state.selectedParticipant);
+        // The segments fetch can outlive a participant switch.
+        var streamVer = state.participantReqVer;
         _syncStreamSegs(selectedRunningTask, function (segs) {
+          if (streamVer !== state.participantReqVer) return;
           if (segs.length > 0) renderPartialSegments(segs, selectedRunningTask.progress);
         });
       } else if (state.streamingParticipant) {

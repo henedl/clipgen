@@ -229,6 +229,13 @@ def test_keyboard_marks_survive_the_streaming_rebuild():
     assert "marks: _streamingMarks[" in body
 
 
+def test_streamed_rows_never_paint_onto_the_next_participant():
+    """_syncStreamSegs guards only by task id; each caller checks the switch."""
+    calls = _JS.count("_syncStreamSegs(") - 1  # minus the definition
+    assert calls == 2
+    assert _JS.count("if (streamVer !== state.participantReqVer) return;") == calls
+
+
 def test_segment_clicks_reach_the_outside_click_closers():
     """A stopPropagation in the row handler kept the mark popover open, and an
     open popover disables Space, J, K and M."""
