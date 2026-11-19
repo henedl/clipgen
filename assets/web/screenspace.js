@@ -1597,7 +1597,27 @@
 
     updateVideoButtons();
 
+    // Load part i + 1 and keep playing from its start.
+    function playNextPart(parts, i) {
+      state.videoActivePart = i + 1;
+      state.videoOffset = parts[i + 1].cumulativeStart;
+      video.src = _ssStreamUrlForPart(state.selectedParticipant, i + 1);
+      var onMeta = function () {
+        video.removeEventListener("loadedmetadata", onMeta);
+        video.currentTime = 0.001;
+        window.ClipgenVideoControls.safePlay(video);
+      };
+      video.addEventListener("loadedmetadata", onMeta);
+    }
+
     video.addEventListener("ended", function () {
+      var parts = _ssParts();
+      var i = state.videoActivePart || 0;
+      // Part durations are rounded, so timeupdate's hand-off can miss the boundary.
+      if (parts && i < parts.length - 1) {
+        playNextPart(parts, i);
+        return;
+      }
       pauseVideo();
     });
 
@@ -1609,15 +1629,7 @@
         var i = state.videoActivePart || 0;
         // Hand off to the next part near the boundary for continuous playback.
         if (i < parts.length - 1 && video.currentTime >= parts[i].duration - 0.05) {
-          state.videoActivePart = i + 1;
-          state.videoOffset = parts[i + 1].cumulativeStart;
-          video.src = _ssStreamUrlForPart(state.selectedParticipant, i + 1);
-          var onMeta = function () {
-            video.removeEventListener("loadedmetadata", onMeta);
-            video.currentTime = 0.001;
-            window.ClipgenVideoControls.safePlay(video);
-          };
-          video.addEventListener("loadedmetadata", onMeta);
+          playNextPart(parts, i);
           return;
         }
         t = video.currentTime + (state.videoOffset || 0);

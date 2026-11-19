@@ -352,3 +352,12 @@ def test_task_restore_covers_attention():
         "interval",
     ):
         assert f"params.{key}" in branch, f"attention restore skips {key}"
+
+
+def test_multi_part_playback_hands_off_on_ended():
+    """Part durations are rounded, so the timeupdate window can never open
+    (600.6 s reports 601); `ended` must advance to the next part too."""
+    start = SCREENSPACE_JS.index('video.addEventListener("ended"')
+    handler = SCREENSPACE_JS[start : SCREENSPACE_JS.index("\n    });", start)]
+    assert "playNextPart(parts, i)" in handler
+    assert handler.index("playNextPart(") < handler.index("pauseVideo()")
