@@ -9,7 +9,7 @@ import config
 import transcripts
 import manifest as manifest_io
 import utils
-from transcripts import TranscriptResult, TranscriptSegment
+from transcripts import TranscriptResult, TranscriptSegment, TranscriptWord
 
 
 # ---------------------------------------------------------------------------
@@ -2821,3 +2821,49 @@ def test_overlap_segments_are_dropped_and_not_streamed(monkeypatch):
     # Window 2 runs 840..EOF: 850 is warm-up overlap, 910 is past the 900 cut.
     assert [s["start"] for s in result["segments"]] == [10.0, 70.0, 910.0]
     assert streamed == [10.0, 70.0, 910.0]
+
+
+def test_segment_straddling_a_cut_keeps_its_tail(monkeypatch):
+    """A later window's segment that crosses the cut keeps what lies past it."""
+    import video
+
+    monkeypatch.setattr(config, "TRANSCRIBE_WINDOW_SECONDS", 900)
+    monkeypatch.setattr(video, "get_file_duration", lambda _p: 2000)
+    monkeypatch.setattr(transcripts, "_resolve_audio_index", lambda _p, i: 0)
+    monkeypatch.setattr(transcripts, "_quiet_point", lambda _p, _i, around, _r: around)
+
+    def word(start, end, text):
+        return TranscriptWord(start=start, end=end, text=text)
+
+    def fake_span(path, *, start_seconds, on_segment=None, **_k):
+        segs = []
+        if start_seconds:  # the second window, cut at 900
+            with_words = TranscriptSegment(start=898.5, end=906.0, text="so then click")
+            with_words["words"] = [
+                word(898.5, 899.5, "so"),
+                word(900.2, 901.0, "then"),
+                word(901.5, 906.0, "click"),
+            ]
+            segs = [
+                with_words,
+                TranscriptSegment(start=897.0, end=901.0, text="mostly before"),
+                TranscriptSegment(start=899.0, end=905.0, text="mostly after"),
+            ]
+        for seg in segs:
+            if on_segment:
+                on_segment(seg["end"], seg)
+        return TranscriptResult(
+            segments=segs, language="en", source_file=path, model="b"
+        )
+
+    monkeypatch.setattr(transcripts, "_transcribe_span", fake_span)
+    streamed = []
+    result = transcripts.transcribe_video(
+        "study_P01.mp4", on_segment=lambda _e, seg: streamed.append(seg)
+    )
+    assert result is not None
+    assert [(s["start"], s["text"]) for s in result["segments"]] == [
+        (900.2, "then click"),
+        (899.0, "mostly after"),
+    ]
+    assert streamed == result["segments"]

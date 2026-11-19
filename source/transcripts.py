@@ -762,7 +762,10 @@ def transcribe_video(
         )
         if result is None:
             return None
-        merged.extend(s for s in result["segments"] if i == 0 or s["start"] >= cut)
+        for seg in result["segments"]:
+            kept = seg if i == 0 else _clip_to_cut(seg, cut)
+            if kept is not None:
+                merged.append(kept)
         lang = lang or result["language"]
     assert result is not None
     return TranscriptResult(
@@ -779,14 +782,39 @@ _CUT_SEARCH_SECONDS = 15.0
 _WINDOW_OVERLAP_SECONDS = 60.0
 
 
+def _clip_to_cut(segment: TranscriptSegment, cut: float) -> TranscriptSegment | None:
+    """The part of *segment* from *cut* on; None when nothing is left.
+
+    A straddling segment keeps its words from the cut, or the whole segment
+    when it has no words and its midpoint is past the cut.
+    """
+    if segment["start"] >= cut:
+        return segment
+    if segment["end"] <= cut:
+        return None
+    words = segment.get("words")
+    if not words:
+        return segment if segment["start"] + segment["end"] > 2 * cut else None
+    kept = [w for w in words if w["start"] >= cut]
+    if not kept:
+        return None
+    return {
+        **segment,
+        "start": kept[0]["start"],
+        "text": " ".join(w["text"] for w in kept),
+        "words": kept,
+    }
+
+
 def _segments_from(
     cut: float | None, on_segment: Callable[[float, "TranscriptSegment"], None]
 ) -> Callable[[float, "TranscriptSegment"], None]:
-    """Forward only segments starting at *cut* or later (all when None)."""
+    """Forward the part of each segment from *cut* on (all when None)."""
 
     def forward(end_time: float, segment: "TranscriptSegment") -> None:
-        if cut is None or segment["start"] >= cut:
-            on_segment(end_time, segment)
+        kept = segment if cut is None else _clip_to_cut(segment, cut)
+        if kept is not None:
+            on_segment(end_time, kept)
 
     return forward
 
