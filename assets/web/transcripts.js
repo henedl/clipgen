@@ -53,6 +53,8 @@
     xrefPoller: null,
     xrefEligible: false,
     xrefIndex: { eventsByParticipant: {}, sheetByParticipant: {} },
+    // A #tab= deep link; the first tab restore takes it once.
+    pendingTab: null,
     summaryEditing: false,
     summaryText: "",
     summaryCitations: null,
@@ -3032,11 +3034,7 @@
     initPlayerKeyboard();
     initPanelTabs();
     // #tab=friction deep links; the #P07 form is handled in loadParticipants.
-    var hashTab = clipgenHashTab();
-    if (hashTab === "summary" || hashTab === "friction" || hashTab === "redact") {
-      var hashTabBtn = qs("#tabBtn" + hashTab.charAt(0).toUpperCase() + hashTab.slice(1));
-      if (hashTabBtn) hashTabBtn.click();
-    }
+    state.pendingTab = clipgenHashTab() || null;
     initSummaryActions();
     initFriction();
     initFrictionMode();

@@ -236,6 +236,14 @@ def test_streamed_rows_never_paint_onto_the_next_participant():
     assert _JS.count("if (streamVer !== state.participantReqVer) return;") == calls
 
 
+def test_hash_tab_survives_the_first_participant_load():
+    """A boot-time tab click lost to _restoreActiveTab, which runs later."""
+    assert "state.pendingTab = clipgenHashTab()" in _JS
+    start = _JS.index("function _restoreActiveTab(")
+    body = _JS[start : _JS.index("\n  }\n", start)]
+    assert body.index("state.pendingTab ||") < body.index("state.pendingTab = null")
+
+
 def test_segment_clicks_reach_the_outside_click_closers():
     """A stopPropagation in the row handler kept the mark popover open, and an
     open popover disables Space, J, K and M."""

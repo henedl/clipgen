@@ -475,7 +475,8 @@
   }
 
   function _restoreActiveTab(pid) {
-    var saved = getStoredUIMapEntry("transcripts", "tabByParticipant", pid);
+    var saved = state.pendingTab || getStoredUIMapEntry("transcripts", "tabByParticipant", pid);
+    state.pendingTab = null;
     selectTab(_tabNames().indexOf(saved) >= 0 ? saved : "summary");
   }
 
