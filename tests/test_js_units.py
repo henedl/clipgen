@@ -212,6 +212,38 @@ def test_extract_corrections_keeps_insertions_and_deletions():
     assert _diff("same text", "same  text") == []
 
 
+_EDIT_TEXT = slice_between(
+    _TRANSCRIPTS, "  function _segmentEditText(", "  function startSegmentEditing("
+)
+
+# A .segment-text node whose first child is the mark label badge.
+_FAKE_TEXT_EL = r"""
+function fakeTextEl(badgeText, wordText) {
+  var parts = badgeText === null ? [wordText] : [badgeText, wordText];
+  return { cloneNode: function () {
+    var kids = parts.slice();
+    return {
+      querySelector: function () {
+        return badgeText === null ? null : { remove: function () { kids.shift(); } };
+      },
+      get textContent() { return kids.join(""); },
+    };
+  } };
+}
+"""
+
+
+def test_segment_edit_text_drops_the_mark_badge():
+    """The label badge must not leak into a saved correction."""
+    out = _probe(
+        '[_segmentEditText(fakeTextEl("Friction · confusion", "I can not find it")),'
+        ' _segmentEditText(fakeTextEl(null, "plain line"))]',
+        prelude=_FAKE_TEXT_EL,
+        snippet=_EDIT_TEXT,
+    )
+    assert out == ["I can not find it", "plain line"]
+
+
 # ---- NDJSON streaming (utils.js) ----
 
 # Each chunk is a string, a byte array, or an Error the reader rejects with.

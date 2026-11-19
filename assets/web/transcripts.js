@@ -1588,12 +1588,20 @@
 
   // ---- Inline segment editing ----
 
+  // Line text without the mark label badge, which renders inside .segment-text.
+  function _segmentEditText(textEl) {
+    var copy = textEl.cloneNode(true);
+    var badge = copy.querySelector(".segment-anno-badge");
+    if (badge) badge.remove();
+    return copy.textContent;
+  }
+
   function startSegmentEditing(textEl) {
     if (state.editingTextEl === textEl) return;
     if (state.editingTextEl) finishSegmentEditing(state.editingTextEl, false);
 
     state.editingTextEl = textEl;
-    textEl.setAttribute("data-original-text", textEl.textContent);
+    textEl.setAttribute("data-original-text", _segmentEditText(textEl));
     textEl.setAttribute("contenteditable", "true");
     textEl.setAttribute("spellcheck", "false");
     textEl.classList.add("segment-text-editing");
@@ -1633,7 +1641,7 @@
 
   function finishSegmentEditing(textEl, cancel) {
     var originalText = textEl.getAttribute("data-original-text") || "";
-    var newText = textEl.textContent.trim();
+    var newText = _segmentEditText(textEl).trim();
 
     textEl.removeAttribute("contenteditable");
     textEl.removeAttribute("data-original-text");
