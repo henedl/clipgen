@@ -241,7 +241,9 @@ class Tokenizer:
             while j < len(text):
                 nxt = unicodedata.normalize("NFKC", text[j])
                 joined = unicodedata.normalize("NFKC", text[i : j + 1])
-                if joined == norm + nxt:
+                # Marks stay in the cluster; reordering can compose them later.
+                mark = unicodedata.combining(text[j]) or unicodedata.combining(nxt[:1])
+                if joined == norm + nxt and not mark:
                     break
                 j += 1
                 norm = joined

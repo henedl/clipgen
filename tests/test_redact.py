@@ -2,6 +2,7 @@
 
 import json
 import os
+import random
 import struct
 import unicodedata
 from pathlib import Path
@@ -82,7 +83,15 @@ def test_tokenize_normalizes_like_whole_string_nfkc():
         "a\u00a0b  c ",
         "ｆｕｌｌ １２３",
         "  lead",
+        "Z\u030a\u0323",
     ]
+    # Deterministic fuzz over marks, ligatures, jamo, katakana and NBSP.
+    pool = (
+        "aeoZu \u00a0\u0301\u0308\u030a\u0323\u0327\u0345\u0344"
+        "\ufb01\u00b2\u00bd\u2122\u00b4\u1100\u1161\u11a8\uff76\uff9e"
+    )
+    rng = random.Random(7)
+    samples += ["".join(rng.choice(pool) for _ in range(8)) for _ in range(300)]
     for text in samples:
         expected = []
         last_space = True
@@ -93,8 +102,10 @@ def test_tokenize_normalizes_like_whole_string_nfkc():
             expected.append("▁" if ch == " " else ch)
         if expected and expected[-1] == "▁":
             expected.pop()
-        surfaces = [s for _i, s, _o in tok.tokenize(text)]
+        tokens = tok.tokenize(text)
+        surfaces = [s for _i, s, _o in tokens]
         assert "".join(surfaces) == "▁" + "".join(expected), text
+        assert all(0 <= a <= b <= len(text) for _i, _s, (a, b) in tokens), text
 
 
 # ---- Span algebra ----------------------------------------------------------
