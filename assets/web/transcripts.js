@@ -1428,6 +1428,7 @@
     if (!container) return;
     _segmentListDelegated = true;
 
+    // No stopPropagation: document outside-click closers must see these clicks.
     container.addEventListener("click", function (e) {
       var row = e.target.closest(".segment-row");
       if (!row) return;
@@ -1437,7 +1438,6 @@
 
       var markEl = e.target.closest(".segment-mark");
       if (markEl && row.contains(markEl)) {
-        e.stopPropagation();
         var segId = markEl.getAttribute("data-segment-id");
         if (isStreaming) {
           var existing = _streamingMarks[segId];
@@ -1454,7 +1454,6 @@
 
       var copyEl = e.target.closest(".segment-copy");
       if (copyEl && row.contains(copyEl)) {
-        e.stopPropagation();
         var src = isStreaming ? (_partialRender.segments || []) : state.segments;
         var segCopy = src[idx];
         if (!segCopy) return;
@@ -1472,21 +1471,18 @@
 
       var spkEl = e.target.closest(".segment-speaker");
       if (spkEl && row.contains(spkEl) && spkEl.hasAttribute("data-speaker")) {
-        e.stopPropagation();
         showSpeakerPopover(spkEl, spkEl.getAttribute("data-speaker"), idx);
         return;
       }
 
       var tsEl = e.target.closest(".segment-timestamp");
       if (tsEl && row.contains(tsEl)) {
-        e.stopPropagation();
         seekVideo(start);
         return;
       }
 
       var textEl = e.target.closest(".segment-text");
       if (textEl && row.contains(textEl)) {
-        e.stopPropagation();
         if (state.editingTextEl === textEl) return;
         // A placeholder chip opens the Redact tab, where it can be restored.
         if (e.target.closest(".segment-pii") && TS.selectTab) {

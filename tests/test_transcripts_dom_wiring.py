@@ -208,6 +208,19 @@ def test_a_poller_restart_does_not_replay_old_completions():
     ), "a same-participant reload keeps the J/K cursor"
 
 
+def test_segment_clicks_reach_the_outside_click_closers():
+    """A stopPropagation in the row handler kept the mark popover open, and an
+    open popover disables Space, J, K and M."""
+    start = _JS.index('container.addEventListener("click", function (e) {')
+    body = _JS[start : _JS.index('container.addEventListener("dblclick"', start)]
+    assert "stopPropagation" not in body
+    start = _JS.index("function showMarkPopover(")
+    body = _JS[start : _JS.index("\n  }\n", start)]
+    assert "setTimeout" in body, (
+        "the popover must attach its closer a tick late or its opening click closes it"
+    )
+
+
 def test_friction_decorations_are_the_only_friction_writer_on_the_segment_list():
     """renderSegments builds one big HTML string; applyFrictionDecorations then
     toggles classes on the result. If the string ALSO emitted friction markup the
