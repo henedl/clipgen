@@ -527,6 +527,19 @@
       }
     }
 
+    // Before rendering so the Template row shows the time; an upload would win the re-run.
+    var refParams = task.parameters || {};
+    if ((task.type === "template" || task.type === "shape") && refParams.reference_timestamp !== undefined) {
+      state.referenceTimestamp = refParams.reference_timestamp;
+      // Re-arm the capture region (name only) so a re-run samples the same region.
+      state.capturedRefPreview = refParams.reference_region
+        ? { region: refParams.reference_region, ts: refParams.reference_timestamp, dataUrl: null }
+        : null;
+      state.uploadedTemplate = null;
+      state.uploadedTemplateImg = null;
+      state.templateOverlayPos = null;
+    }
+
     // For scene, restore references into state before rendering so the list shows them.
     if (task.type === "scene") {
       var sceneParams = task.parameters || {};
@@ -558,13 +571,6 @@
     state.suppressCalibrationRefresh = false;
 
     params = task.parameters || {};
-    if ((task.type === "template" || task.type === "shape") && params.reference_timestamp !== undefined) {
-      state.referenceTimestamp = params.reference_timestamp;
-      // Re-arm the capture region (name only) so a re-run samples the same region.
-      state.capturedRefPreview = params.reference_region
-        ? { region: params.reference_region, ts: params.reference_timestamp, dataUrl: null }
-        : null;
-    }
     if (task.type === "multitool") {
       setInputValue("#paramMultitoolInterval", numberOrDefault(params.interval, 1.0));
     } else if (task.type === "color") {
@@ -670,6 +676,15 @@
       setInputValue("#paramInactThresh", intOrDefault(params.threshold, 10));
       setInputValue("#paramInactMinDur", numberOrDefault(params.min_duration, 2.0));
       setInputValue("#paramInactInterval", numberOrDefault(params.interval, 1.0));
+    } else if (task.type === "attention") {
+      setInputValue("#paramAttnShift", numberOrDefault(params.shift_threshold, 0.15));
+      setInputValue("#paramAttnSmooth", numberOrDefault(params.ema_alpha, 0.6));
+      setInputValue("#paramAttnWSpectral", numberOrDefault(params.weight_spectral, 1.0));
+      setInputValue("#paramAttnWContrast", numberOrDefault(params.weight_contrast, 0.7));
+      setInputValue("#paramAttnWMotion", numberOrDefault(params.weight_motion, 1.2));
+      setInputValue("#paramAttnWFace", numberOrDefault(params.weight_face, 0));
+      setInputValue("#paramAttnCenterBias", numberOrDefault(params.center_bias, 0.25));
+      setInputValue("#paramAttnInterval", numberOrDefault(params.interval, 0.5));
     } else if (task.type === "boundary") {
       setInputValue("#paramBoundaryMetric", params.metric || "");
       setInputValue("#paramBoundaryThresh", intOrDefault(params.threshold, 14));

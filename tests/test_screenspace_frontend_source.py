@@ -325,3 +325,30 @@ def test_multitool_numbers_step_offers_no_range_operator():
     start = MULTITOOL_JS.index("function _mtRenderNumbers(")
     body = MULTITOOL_JS[start : MULTITOOL_JS.index("\n  }", start)]
     assert '["range"' not in body
+
+
+def test_task_restore_sets_template_reference_before_rendering():
+    """The Template row reads referenceTimestamp at render time, and a leftover
+    upload beats the reference on Run."""
+    body = _tasks_fn("restoreTaskToWorkflow")
+    ref = body.index("state.referenceTimestamp = refParams.reference_timestamp;")
+    assert ref < body.index("renderWorkflowParams({ defaults: true });")
+    tail = body[ref:]
+    for key in ("uploadedTemplate", "uploadedTemplateImg", "templateOverlayPos"):
+        assert f"state.{key} = null;" in tail
+
+
+def test_task_restore_covers_attention():
+    body = _tasks_fn("restoreTaskToWorkflow")
+    branch = body[body.index('task.type === "attention"') :]
+    for key in (
+        "shift_threshold",
+        "ema_alpha",
+        "weight_spectral",
+        "weight_contrast",
+        "weight_motion",
+        "weight_face",
+        "center_bias",
+        "interval",
+    ):
+        assert f"params.{key}" in branch, f"attention restore skips {key}"
