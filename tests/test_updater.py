@@ -165,7 +165,10 @@ def _run_mac_helper(tmp_path, monkeypatch, *, stage: bool) -> tuple[int, Path, P
     fake_bin.mkdir()
     opened = tmp_path / "opened.txt"
     fake_open = fake_bin / "open"
-    fake_open.write_text(f'#!/bin/sh\necho "$@" >>"{opened}"\n', encoding="utf-8")
+    # printf, not echo: dash swallows a leading -n as echo's own flag.
+    fake_open.write_text(
+        f'#!/bin/sh\nprintf \'%s\\n\' "$*" >>"{opened}"\n', encoding="utf-8"
+    )
     fake_open.chmod(0o755)
     monkeypatch.setenv("PATH", f"{fake_bin}{os.pathsep}{os.environ['PATH']}")
     done = subprocess.Popen(["true"])
