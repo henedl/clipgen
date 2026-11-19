@@ -3777,10 +3777,8 @@ def test_media_route_follows_a_mid_session_output_dir_change(
 ):
     """/screenspace/media/ must resolve the output dir per request.
 
-    POST /api/dirs moves config.OUTPUT_DIR without re-running
-    _init_screenspace_state (the Start overlay's "no spreadsheet" path closes
-    without a reload), and the route used to serve from an init-time snapshot —
-    so heatmaps written to the new directory came back 404 for the whole session.
+    POST /api/dirs moves config.OUTPUT_DIR mid-session, and the route used to
+    serve from an init-time snapshot — so heatmaps written to the new directory came back 404 for the whole session.
     """
     first = tmp_path / "first"
     second = tmp_path / "second"

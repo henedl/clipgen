@@ -2051,3 +2051,21 @@ def test_resume_reruns_an_upstream_node_edited_since(wf_client, monkeypatch):
     assert calls["transcribe"] == 2  # re-ran with the new params
     assert "Reused from run" in (final["nodeStates"]["v"]["note"] or "")
     assert "Reused from run" not in (final["nodeStates"]["t"]["note"] or "")
+
+
+def test_crashed_batch_child_frees_the_batch_slot(wf_client, monkeypatch):
+    """A child that raises (e.g. a failed manifest write) must not pin run_active()."""
+
+    def _crash(*_args, **_kwargs):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(workflows_server, "_precompute_shared_nodes", lambda *a: {})
+    monkeypatch.setattr(workflows_server, "_run_batch_child", _crash)
+    workflows_server._batches["batch_x"] = {
+        "cancel_event": threading.Event(),
+        "runIds": ["run_x"],
+        "participants": ["P01"],
+    }
+    with pytest.raises(OSError):
+        workflows_server._run_batch("batch_x", {"nodes": [], "edges": []})
+    assert workflows_server.run_active() is False

@@ -104,8 +104,11 @@ server_utils.register_static_routes(
 
 
 def run_active() -> bool:
-    """True while any workflow run is queued or running."""
+    """True while any workflow run or batch is queued or running."""
     live = (workflows.RUN_STATUS_QUEUED, workflows.RUN_STATUS_RUNNING)
+    with _batches_lock:
+        if _batches:
+            return True
     with _runs_lock:
         return any(runner.status in live for runner in _runs.values())
 
@@ -880,31 +883,23 @@ def _run_batch(batch_id: str, blueprint: dict[str, Any]) -> None:
     cancel_event: threading.Event = record["cancel_event"]
     plan = list(zip(record["runIds"], record["participants"], strict=True))
 
-    # Shared sources once per batch: one Sheets API hit, not N.
-    seed_results = _precompute_shared_nodes(
-        blueprint, _build_node_context(threading.Event())
-    )
+    # A crashed child must still free the batch slot, or run_active() sticks.
+    try:
+        # Shared sources once per batch: one Sheets API hit, not N.
+        seed_results = _precompute_shared_nodes(
+            blueprint, _build_node_context(threading.Event())
+        )
 
-    workers = max(1, min(4, int(config.WORKFLOWS_BATCH_WORKERS or 1)))
-    _child = profiling.timed("workflows.batch_child")(_run_batch_child)
-    with (
-        profiling.op_run(batch_id, kind="workflow_batch"),
-        profiling.span("workflows.batch_wall"),
-    ):
-        _child = profiling.bind(_child)
-        if workers == 1 or len(plan) <= 1:
-            for run_id, participant in plan:
-                _child(
-                    run_id, participant, batch_id, blueprint, seed_results, cancel_event
-                )
-        else:
-            with ThreadPoolExecutor(
-                max_workers=min(workers, len(plan)),
-                thread_name_prefix=f"workflow-{batch_id}",
-            ) as pool:
-                futures = [
-                    pool.submit(
-                        _child,
+        workers = max(1, min(4, int(config.WORKFLOWS_BATCH_WORKERS or 1)))
+        _child = profiling.timed("workflows.batch_child")(_run_batch_child)
+        with (
+            profiling.op_run(batch_id, kind="workflow_batch"),
+            profiling.span("workflows.batch_wall"),
+        ):
+            _child = profiling.bind(_child)
+            if workers == 1 or len(plan) <= 1:
+                for run_id, participant in plan:
+                    _child(
                         run_id,
                         participant,
                         batch_id,
@@ -912,14 +907,29 @@ def _run_batch(batch_id: str, blueprint: dict[str, Any]) -> None:
                         seed_results,
                         cancel_event,
                     )
-                    for run_id, participant in plan
-                ]
-                for future in futures:
-                    future.result()  # child bodies swallow their own errors
-
-    with _batches_lock:
-        _batches.pop(batch_id, None)
-    _notify_batch_clients(batch_id)
+            else:
+                with ThreadPoolExecutor(
+                    max_workers=min(workers, len(plan)),
+                    thread_name_prefix=f"workflow-{batch_id}",
+                ) as pool:
+                    futures = [
+                        pool.submit(
+                            _child,
+                            run_id,
+                            participant,
+                            batch_id,
+                            blueprint,
+                            seed_results,
+                            cancel_event,
+                        )
+                        for run_id, participant in plan
+                    ]
+                    for future in futures:
+                        future.result()  # child bodies swallow their own errors
+    finally:
+        with _batches_lock:
+            _batches.pop(batch_id, None)
+        _notify_batch_clients(batch_id)
 
 
 @workflows_bp.route("/api/batches", methods=["POST"])
@@ -1270,6 +1280,7 @@ def _start_watch_thread() -> None:
 def _init_workflows_state(
     sheet_context: Any = None,
     worksheet: Any = None,
+    keep_video_watch: bool = False,
 ) -> None:
     """Initialize module-level state for Workflows routes.
 
@@ -1283,7 +1294,9 @@ def _init_workflows_state(
     ``thinking_agents.configure``) are initialized. ``server._init_combined_state``
     calls :func:`_start_watch_thread` as its last step instead.
 
-    Called once, from ``build_combined_app``. A worksheet swap goes through
+    Called from ``build_combined_app`` and on an output-dir switch, which passes
+    *keep_video_watch*: the new-video watcher follows the input dir, so its
+    pending copies must survive. A worksheet swap goes through
     :func:`repin_sheet_state` instead — re-running this would reload the
     manifest, reseed the watch baseline and restart the trigger daemon on
     every spreadsheet the user opens.
@@ -1296,7 +1309,11 @@ def _init_workflows_state(
     # Reclaim a stale empty manifest from a prior session (the save deletes empty files).
     with _manifest_lock:
         _persist_locked()
-    _seed_watch_seen()
+    if keep_video_watch:
+        _seed_watch_seen("transcript_complete")
+        _seed_watch_seen("scan_event")
+    else:
+        _seed_watch_seen()
 
 
 def repin_sheet_state(sheet_context: Any = None, worksheet: Any = None) -> None:

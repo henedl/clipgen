@@ -1083,6 +1083,7 @@
       if (!d || !d.ok) return;
       if (els.inputDir) els.inputDir.value = d.input || "";
       if (els.outputDir) els.outputDir.value = d.output || "";
+      state.loadedOutput = d.output || "";
       renderFolderRecents(els.inputRecentsList, d.recent_inputs || [], els.inputDir, "input");
       renderFolderRecents(els.outputRecentsList, d.recent_outputs || [], els.outputDir, "output");
     }).catch(function (err) {
@@ -2121,7 +2122,8 @@
       }
       var skipSpreadsheet = state.activeTab === "none" || !state.selection;
       if (skipSpreadsheet) {
-        confirmNoSheet(inputVal, outputVal, nameVal);
+        var moved = !!res.body.output && res.body.output !== state.loadedOutput;
+        confirmNoSheet(inputVal, outputVal, nameVal, moved);
         return;
       }
       // Built explicitly so the name rides along with the session-recording open.
@@ -2153,7 +2155,7 @@
   }
 
   // "No spreadsheet" must close the open source too; nothing else posts /api/spreadsheets/close.
-  function confirmNoSheet(inputVal, outputVal, nameVal) {
+  function confirmNoSheet(inputVal, outputVal, nameVal, moved) {
     var st = state.statusData || {};
     var needsClose = !!(st.sheet_loaded || st.mindnode_loaded);
     // One call per coexisting source; the route 409s mid-generation.
@@ -2182,8 +2184,8 @@
         return recordSession(inputVal, outputVal, null, nameVal).finally(
           function () {
             releaseConfirm();
-            // Reload only if something unloaded; other frontends hold data for the gone source.
-            if (needsClose) {
+            // Reload when a source unloaded or the output folder moved; pages hold stale data.
+            if (needsClose || moved) {
               window.location.reload();
               return;
             }

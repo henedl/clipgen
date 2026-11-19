@@ -194,6 +194,178 @@ def test_dirs_post_output_change_reloads_artifacts(client, monkeypatch, tmp_path
     assert server._generated_artifacts == []
 
 
+def _write_project(out_dir: Path) -> None:
+    """Seed a second project folder with state for every tool."""
+    out_dir.mkdir()
+    doc = {
+        "composer": {
+            "cuts": [{"id": "cut_B", "participant": "P01", "start": 1, "end": 5}],
+            "ui": {},
+        },
+        "workflows": {
+            "blueprints": [
+                {
+                    "id": "bp_B",
+                    "name": "B blueprint",
+                    "nodes": [{"id": "n1", "type": "video_source", "params": {}}],
+                    "edges": [],
+                }
+            ],
+        },
+        "transcripts": {
+            "source_transcripts": {
+                "P09": {
+                    "segments": [{"id": 0, "start": 0, "end": 1, "text": "B words"}]
+                }
+            },
+            "redact_terms": ["Bterm"],
+        },
+        "screenspace": {"regions": {"B_region": {"x": 0, "y": 0, "w": 0.5, "h": 0.5}}},
+    }
+    (out_dir / "clipgen.json").write_text(json.dumps(doc))
+
+
+def test_dirs_post_output_change_reloads_every_tool(client, tmp_path):
+    """Each tool serves and saves the new folder's data, not the old one's."""
+    import transcripts_server
+
+    region = {
+        "x": 0,
+        "y": 0,
+        "w": 10,
+        "h": 10,
+        "canvas_width": 100,
+        "canvas_height": 100,
+    }
+    client.post(
+        "/composer/api/cuts", json={"participant": "P01", "start": 10, "end": 20}
+    )
+    client.post("/screenspace/api/regions", json={"name": "A_region", **region})
+    new_out = tmp_path / "B"
+    _write_project(new_out)
+
+    assert client.post("/api/dirs", json={"output": str(new_out)}).status_code == 200
+
+    cuts = client.get("/composer/api/manifest").get_json()["manifest"]["cuts"]
+    assert [c["id"] for c in cuts] == ["cut_B"]
+    bps = client.get("/workflows/api/blueprints").get_json()["blueprints"]
+    assert [b["id"] for b in bps] == ["bp_B"]
+    assert "B words" in client.get("/transcripts/api/transcript/P09").get_data(True)
+    assert list(client.get("/screenspace/api/regions").get_json()["regions"]) == [
+        "B_region"
+    ]
+
+    client.post(
+        "/composer/api/cuts", json={"participant": "P01", "start": 30, "end": 40}
+    )
+    client.post(
+        "/workflows/api/blueprints", json={"name": "new", "nodes": [{"id": "x"}]}
+    )
+    client.post("/transcripts/api/redact-terms", json={"term": "Zed"})
+    client.post("/screenspace/api/regions", json={"name": "B_new", **region})
+    transcripts_server._flush_pending_persist()
+
+    doc = json.loads((new_out / "clipgen.json").read_text())
+    cut_ids = [c["id"] for c in doc["composer"]["cuts"]]
+    assert cut_ids[0] == "cut_B" and len(cut_ids) == 2
+    bp_ids = [b["id"] for b in doc["workflows"]["blueprints"]]
+    assert bp_ids[0] == "bp_B" and len(bp_ids) == 2
+    assert list(doc["transcripts"]["source_transcripts"]) == ["P09"]
+    assert doc["transcripts"]["redact_terms"] == ["Bterm", "Zed"]
+    assert sorted(doc["screenspace"]["regions"]) == ["B_new", "B_region"]
+
+
+def test_dirs_post_flushes_pending_writes_to_old_folder(client, tmp_path):
+    """A debounced write queued before the switch lands in the old folder."""
+    import transcripts_server
+
+    with transcripts_server._manifest_lock:
+        transcripts_server._manifest["known_terms"] = ["Aterm"]
+    transcripts_server._schedule_persist()
+    new_out = tmp_path / "B"
+    _write_project(new_out)
+
+    assert client.post("/api/dirs", json={"output": str(new_out)}).status_code == 200
+
+    old = json.loads((tmp_path / "out" / "clipgen.json").read_text())
+    assert old["transcripts"]["known_terms"] == ["Aterm"]
+    new = json.loads((new_out / "clipgen.json").read_text())
+    assert not new["transcripts"].get("known_terms")
+
+
+def _live_batch(monkeypatch):
+    import workflows_server
+
+    monkeypatch.setitem(workflows_server._batches, "batch_x", {})
+
+
+def _live_agent(monkeypatch):
+    import transcripts_server
+
+    monkeypatch.setitem(transcripts_server._orchestrator._in_flight, "summary", {"P01"})
+
+
+def _live_transcription(monkeypatch):
+    import transcripts_server
+
+    tasks = [{"status": "queued"}]
+    monkeypatch.setattr(
+        transcripts_server._worker, "get_all_tasks", lambda **_kw: tasks
+    )
+
+
+def _live_scan(monkeypatch):
+    import screenspace_server
+
+    tasks = [{"status": "paused"}]
+    monkeypatch.setattr(
+        screenspace_server._worker, "get_all_tasks", lambda **_kw: tasks
+    )
+
+
+_LIVE_WORK = [_live_batch, _live_agent, _live_transcription, _live_scan]
+
+
+@pytest.mark.parametrize("make_live", _LIVE_WORK)
+def test_dirs_post_rejected_during_tool_work(client, monkeypatch, tmp_path, make_live):
+    """Live work would land its results in the new folder."""
+    make_live(monkeypatch)
+    resp = client.post("/api/dirs", json={"output": str(tmp_path / "alt_out")})
+    assert resp.status_code == 409
+    assert (
+        resp.get_json()["error"]
+        == "Wait for scans, transcripts and workflows to finish."
+    )
+    assert config.OUTPUT_DIR == str(tmp_path / "out")
+
+
+def test_dirs_post_same_output_ignores_tool_work(client, monkeypatch, tmp_path):
+    """Re-posting the current folder changes nothing, so live work is fine."""
+    _live_scan(monkeypatch)
+    resp = client.post("/api/dirs", json={"output": str(tmp_path / "out")})
+    assert resp.status_code == 200
+
+
+def test_dirs_post_keeps_the_new_video_watch(client, monkeypatch, tmp_path):
+    """The video watch follows the input dir; transcript baselines follow the output."""
+    import workflows_server
+
+    copying = (("study_P07.mp4", 10, 1.0),)
+    monkeypatch.setitem(workflows_server._watch_pending, "P07", copying)
+    new_out = tmp_path / "B"
+    new_out.mkdir()
+    entry = {"segments": [], "transcribed_at": "2026-01-01T00:00:00"}
+    doc = {"transcripts": {"source_transcripts": {"P09": entry}}}
+    (new_out / "clipgen.json").write_text(json.dumps(doc))
+
+    assert client.post("/api/dirs", json={"output": str(new_out)}).status_code == 200
+
+    assert workflows_server._watch_pending["P07"] == copying
+    assert workflows_server._watch_transcript_baseline == {
+        "P09": entry["transcribed_at"]
+    }
+
+
 # ---------- /api/folder-picker ---------------------------------------------
 
 
@@ -1204,6 +1376,51 @@ def test_spreadsheets_close_rejected_during_reel(client, monkeypatch):
     resp = client.post("/api/spreadsheets/close")
     assert resp.status_code == 409
     assert resp.get_json()["ok"] is False
+
+
+@pytest.mark.parametrize("make_live", _LIVE_WORK)
+def test_spreadsheets_open_rejected_during_tool_work(
+    client, monkeypatch, tmp_path, make_live
+):
+    """A sheet swap retires the workers, so live work blocks it."""
+    path = tmp_path / "study.xlsx"
+    _write_valid_workbook(path, [("Sheet", "P01")])
+    make_live(monkeypatch)
+    resp = client.post(
+        "/api/spreadsheets/open", json={"type": "excel", "id_or_path": str(path)}
+    )
+    assert resp.status_code == 409
+    assert resp.get_json()["error"] == server._TOOL_BUSY_MESSAGE
+    assert server._worksheet is None
+
+
+def test_spreadsheets_open_keeps_a_queued_transcription(client, monkeypatch, tmp_path):
+    """Opening a sheet must not cancel the transcription queue."""
+    import transcripts
+    import transcripts_server
+
+    path = tmp_path / "study.xlsx"
+    _write_valid_workbook(path, [("Sheet", "P01")])
+    worker = transcripts.TranscriptWorker()  # never started, so the task stays queued
+    monkeypatch.setattr(transcripts_server, "_worker", worker)
+    task_id = worker.enqueue(transcripts._new_task("transcribe", "tr", "P01"))
+    resp = client.post(
+        "/api/spreadsheets/open", json={"type": "excel", "id_or_path": str(path)}
+    )
+    assert resp.status_code == 409
+    task = worker.get_task(task_id)
+    assert task is not None and task["status"] == "queued"
+
+
+@pytest.mark.parametrize("make_live", _LIVE_WORK)
+def test_spreadsheets_close_rejected_during_tool_work(client, monkeypatch, make_live):
+    """Closing the sheet swaps too, so live work blocks it."""
+    sentinel = object()
+    monkeypatch.setattr(server, "_worksheet", sentinel)
+    make_live(monkeypatch)
+    resp = client.post("/api/spreadsheets/close")
+    assert resp.status_code == 409
+    assert server._worksheet is sentinel
 
 
 def test_combined_server_forces_non_interactive(monkeypatch):

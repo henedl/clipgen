@@ -437,6 +437,22 @@ def _generation_busy() -> bool:
         return any(_busy_slots.values()) or _intake_active > 0
 
 
+_TOOL_BUSY_MESSAGE = "Wait for scans, transcripts and workflows to finish."
+
+
+def _tool_work_busy() -> bool:
+    """True while scans, transcript work or workflow runs are live."""
+    import screenspace_server
+    import transcripts_server
+    import workflows_server
+
+    return (
+        screenspace_server.scan_active()
+        or transcripts_server.work_active()
+        or workflows_server.run_active()
+    )
+
+
 @contextmanager
 def _override_config(**overrides: Any) -> Iterator[None]:
     """Temporarily override config attributes, restoring originals on exit."""
@@ -3638,6 +3654,11 @@ def api_dirs_get() -> Response:
 
 
 def api_dirs_post() -> FlaskResponse:
+    import composer_server
+    import screenspace_server
+    import transcripts_server
+    import workflows_server
+
     data = request.get_json(silent=True) or {}
     new_input = data.get("input")
     new_output = data.get("output")
@@ -3645,6 +3666,12 @@ def api_dirs_post() -> FlaskResponse:
 
     if _generation_busy():
         return err("Wait for generation to finish first.", 409)
+    moving = new_output is not None and str(utils.get_effective_output_dir()) != str(
+        Path(str(new_output)).expanduser()
+    )
+    # Live work would land its results in the wrong folder.
+    if moving and _tool_work_busy():
+        return err(_TOOL_BUSY_MESSAGE, 409)
 
     if new_input is not None:
         p = Path(str(new_input)).expanduser()
@@ -3662,13 +3689,24 @@ def api_dirs_post() -> FlaskResponse:
         except OSError as exc:
             errors["output"] = f"Could not create output directory: {exc}"
         else:
-            changed = str(utils.get_effective_output_dir()) != str(p)
+            if moving:
+                # Debounced writes belong to the old folder.
+                screenspace_server._flush_pending_persist()
+                transcripts_server._flush_pending_persist()
             with config.SETTINGS_LOCK:
                 config.OUTPUT_DIR = str(p)
             start_settings.record_recent_output(str(p))
-            # Studio's lists belong to the old folder; the next save would merge them in.
-            if changed:
+            # Every tool holds the old folder's state; the next save would overwrite.
+            if moving:
                 _load_generated_output()
+                screenspace_server._init_screenspace_state(sheet_context=_sheet_context)
+                transcripts_server._init_transcripts_state(sheet_context=_sheet_context)
+                workflows_server._init_workflows_state(
+                    sheet_context=_sheet_context,
+                    worksheet=_worksheet,
+                    keep_video_watch=True,
+                )
+                composer_server._init_composer_state(sheet_context=_sheet_context)
 
     if errors:
         return err("Folder error", 400, errors=errors)
@@ -4027,6 +4065,9 @@ def api_spreadsheets_open() -> FlaskResponse:
         )
     if type_ == "mindnode":
         return _open_mindnode(id_or_path, project_name)
+    # A swap retires the scan and transcript workers.
+    if _tool_work_busy():
+        return err(_TOOL_BUSY_MESSAGE, 409)
     if type_ == "google" and _google_auth.client is None:
         return err("Not authenticated with Google — click 'Connect Google' first.")
 
@@ -4091,6 +4132,8 @@ def api_spreadsheets_close() -> FlaskResponse:
         _active_project_source = _active_sheet_meta
         _seed_filename_overrides(_active_project_source)
         return ok(sheet_loaded=_worksheet is not None, mindnode_loaded=False)
+    if _tool_work_busy():
+        return err(_TOOL_BUSY_MESSAGE, 409)
     _swap_worksheet(None)
     _active_sheet_meta = None
     _active_project_source = _mindnode_source()
