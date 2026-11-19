@@ -317,3 +317,11 @@ def test_multitool_ids_all_end_in_the_step_suffix():
     assert by_idx, "no idx-suffixed ids found"
     for name in by_idx:
         assert name.endswith("_mt"), f"{name} + idx escapes the _mt<N> store gate"
+
+
+def test_multitool_numbers_step_offers_no_range_operator():
+    """The step has no min/max inputs, and the engine fails an unbounded range,
+    so offering it made the chain match nothing."""
+    start = MULTITOOL_JS.index("function _mtRenderNumbers(")
+    body = MULTITOOL_JS[start : MULTITOOL_JS.index("\n  }", start)]
+    assert '["range"' not in body

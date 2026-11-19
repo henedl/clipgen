@@ -217,7 +217,8 @@
     var sel = document.createElement("select");
     sel.id = "paramNumOperator" + sfx;
     sel.style.fontSize = "var(--text-xs)";
-    [["gt",">"],["lt","<"],["eq","="],["gte","≥"],["lte","≤"],["range","range"]].forEach(function (pair) {
+    // No "range": the step has no min/max inputs to bound it.
+    [["gt",">"],["lt","<"],["eq","="],["gte","≥"],["lte","≤"]].forEach(function (pair) {
       var opt = document.createElement("option"); opt.value = pair[0]; opt.textContent = pair[1];
       sel.appendChild(opt);
     });
