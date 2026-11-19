@@ -450,7 +450,7 @@ class TestScanViaFfmpegPipe:
         )
 
         cmd_str = " ".join(captured_cmd["args"])
-        assert "crop=4:3:1:2" in cmd_str
+        assert "crop=4:3:1:2:exact=1" in cmd_str
 
     def test_stops_on_callback_false(self, monkeypatch):
         w, h = 4, 2
@@ -843,6 +843,34 @@ class TestAnalysisPreviewAlignment:
             assert mark - 1e-3 <= ts < mark + 0.2, (index, ts)
         # A sample off its mark proves frames were skipped, not merely flagged.
         assert any(ts - index * interval > 0.01 for index, ts in enumerate(skipped))
+
+    def test_odd_region_matches_direct_crop(self, tmp_path):
+        if not self._have_ffmpeg():
+            pytest.skip("ffmpeg/ffprobe required for end-to-end alignment test")
+        import video as video_mod
+
+        video_path = str(tmp_path / "odd.mp4")
+        self._synthesize(video_path)
+        region = {"x": 41, "y": 31, "w": 101, "h": 81}
+        frames = list(
+            screenspace._ffmpeg_pipe_frames(
+                video_path,
+                interval_seconds=3.0,
+                start_seconds=0.0,
+                end_seconds=10.0,
+                region=region,
+                frame_width=320,
+                frame_height=240,
+            )
+        )
+        # A sheared read would also lose frames off the end.
+        assert [round(ts) for ts, _f in frames] == [0, 3, 6, 9]
+        for ts, crop in frames:
+            full = video_mod.extract_frame_at_timestamp(video_path, ts)
+            assert full is not None
+            ref = full[31:112, 41:142]
+            # Chroma subsampling shifts colour edges slightly; shear is ~80.
+            assert np.abs(crop.astype(int) - ref.astype(int)).mean() < 5
 
 
 class TestScanVideoFramesFfmpegIntegration:

@@ -142,7 +142,10 @@ def _pipe_frames_command(
         ]
 
     if region:
-        filters.append(f"crop={region['w']}:{region['h']}:{region['x']}:{region['y']}")
+        # exact=1: yuv420p crop otherwise rounds odd sizes and offsets down.
+        filters.append(
+            f"crop={region['w']}:{region['h']}:{region['x']}:{region['y']}:exact=1"
+        )
         out_w, out_h = region["w"], region["h"]
     else:
         out_w, out_h = frame_width, frame_height
