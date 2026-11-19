@@ -673,6 +673,7 @@ class TemplateTool(AnalysisTool):
     fast_scan_description = "Downscales template 2\u00d7, skips unchanged frames"
     has_confidence = True
     reference = ("template_image_data", "template_image", "template_mask")
+    preview_float_args = ("template_scale",)
     fast_scan_extra_opts: ClassVar[dict[str, Any]] = {"template_downscale": True}
     score_key = "best_score"
 

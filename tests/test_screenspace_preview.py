@@ -365,6 +365,18 @@ def test_template_heatmap_with_mask_matches_scan_prep(
     assert img.shape[:2] == synthetic_frame.shape[:2]
 
 
+def test_template_preview_applies_scale_slider(monkeypatch) -> None:
+    import config
+
+    # Preview frames are native, so the CV scale must not touch the template.
+    monkeypatch.setattr(config, "SCREENSPACE_CV_RESOLUTION_SCALE", 2.0)
+    template = np.random.default_rng(0).integers(0, 255, (40, 60, 3), dtype=np.uint8)
+    prepared = screenspace_preview._preview_template_prep(
+        template, None, {"template_scale": 0.5}
+    )
+    assert prepared[0].shape[:2] == (20, 30)
+
+
 def test_composite_template_preview_binarizes_mask(
     synthetic_frame: np.ndarray,
 ) -> None:

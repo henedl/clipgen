@@ -337,6 +337,16 @@ def _overlay_flow(
     return vis
 
 
+def _preview_template_prep(
+    template: "np.ndarray", mask: "np.ndarray | None", params: dict[str, Any]
+) -> Any:
+    """The scan's template prep at the slider's scale; preview frames are native."""
+    scaled, scaled_mask = screenspace_primitives._scale_template(
+        template, mask, float(params.get("template_scale") or 1.0), cv_scale=1.0
+    )
+    return screenspace_primitives._prepare_template(scaled, scaled_mask)
+
+
 def _overlay_template_heatmap(
     frame: "np.ndarray", region: dict[str, Any] | None, params: dict[str, Any]
 ) -> "np.ndarray | None":
@@ -348,7 +358,7 @@ def _overlay_template_heatmap(
         mask = None
     # Reuse the scan's template prep and correlation so the preview matches
     # a real scan.
-    prepared = screenspace_primitives._prepare_template(template, mask)
+    prepared = _preview_template_prep(template, mask, params)
     result = screenspace_primitives._template_correlation_map(frame, prepared)
     if result is None:
         return None
@@ -813,7 +823,7 @@ def _preview_template(
         mask = params.get("template_mask")
         if not (isinstance(mask, np.ndarray) and mask.size > 0):
             mask = None
-        prepared = screenspace_primitives._prepare_template(template, mask)
+        prepared = _preview_template_prep(template, mask, params)
         panels.append(_label_panel(_fit_width(prepared[0], 120), "template"))
         result = screenspace_primitives._template_correlation_map(frame, prepared)
         window = screenspace_primitives.region_search_window(region or {})
