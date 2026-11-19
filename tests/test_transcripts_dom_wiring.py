@@ -208,6 +208,15 @@ def test_a_poller_restart_does_not_replay_old_completions():
     ), "a same-participant reload keeps the J/K cursor"
 
 
+def test_redact_errors_toast_the_server_reason():
+    """err() replies reject, so a `data.error` read in `.then` never ran and
+    the toast showed only the generic fallback."""
+    js = read("transcripts-redact.js")
+    assert "showToast(data.error" not in js
+    assert "_redactFailToast(data" not in js
+    assert js.count("e.serverMessage ||") >= 5
+
+
 def test_segment_clicks_reach_the_outside_click_closers():
     """A stopPropagation in the row handler kept the mark popover open, and an
     open popover disables Space, J, K and M."""
@@ -1055,7 +1064,7 @@ def test_transcribe_enqueue_releases_its_claim_on_every_exit():
     assert body.count("_clearTranscribeInFlight(pids)") == 4, (
         "release on success, on !ok, on a declined download, and in .catch()"
     )
-    assert ".catch(function () {" in body, (
+    assert ".catch(function (e) {" in body, (
         "apiPost rejects on a non-2xx or a dropped connection; that path used to "
         "fall through silently and would now strand the claim"
     )

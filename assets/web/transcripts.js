@@ -1669,12 +1669,12 @@
     var pid = state.selectedParticipant;
     if (!pid || !segId) return;
     apiPut("api/transcript/" + encodeURIComponent(pid) + "/segment", { segment_id: segId, text: text })
-      .then(function (data) {
-        showToast(data.ok ? "Segment saved" : (data.error || "Failed to save segment"));
+      .then(function () {
+        showToast("Segment saved");
         // A changed segment may requeue the redact pass.
-        if (data.ok) pollTaskStatus();
-      }, function () {
-        showToast("Failed to save segment");
+        pollTaskStatus();
+      }, function (e) {
+        showToast(e.serverMessage || "Failed to save segment");
       })
       .then(function () {
         if (state.streamingParticipant) return;

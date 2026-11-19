@@ -1062,10 +1062,10 @@
       refreshTranscribeWording();
       startPolling();
       pollTaskStatus();
-    }).catch(function () {
+    }).catch(function (e) {
       // Without this the pids stay claimed and can never be re-enqueued.
       _clearTranscribeInFlight(pids);
-      showToast("Failed to enqueue transcription");
+      showToast(e.serverMessage || "Failed to enqueue transcription");
     });
   }
 
