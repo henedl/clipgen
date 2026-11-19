@@ -1089,6 +1089,14 @@ class MultitoolTool(AnalysisTool):
     fast_scan_description = "Skips unchanged frames, widens interval"
     has_confidence = True
 
+    def skips_static(self, params):
+        # Each step judges with its own params; one needing still frames keeps them.
+        return all(
+            TOOLS[s["type"]].skips_static(s)
+            for s in params.get("steps", [])
+            if s.get("type") in TOOLS
+        )
+
     def scan(
         self,
         video_path,

@@ -71,6 +71,18 @@ class TestFastScanDispatchIntervalMultiplier:
             ("text", {"require_consecutive": 1}, True),
             ("text", {"require_consecutive": 3}, False),
             ("numbers", {"require_consecutive": 2}, False),
+            ("multitool", {"steps": [{"type": "change"}, {"type": "flow"}]}, True),
+            ("multitool", {"steps": [{"type": "change"}, {"type": "color"}]}, False),
+            (
+                "multitool",
+                {
+                    "steps": [
+                        {"type": "change"},
+                        {"type": "text", "require_consecutive": 3},
+                    ]
+                },
+                False,
+            ),
         ],
     )
     def test_static_skip_per_tool(self, monkeypatch, tool, params, skips):
