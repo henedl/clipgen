@@ -298,3 +298,13 @@ def test_multitool_interval_reaches_the_first_step():
     left every chain sampling at the default 1 s."""
     run = read("screenspace-run.js")
     assert "params.steps[0].interval = params.interval;" in run
+
+
+def test_multitool_step_drop_requires_a_step_drag():
+    """Region chips also send text/plain; reading it as a step index spliced
+    undefined into the step list and every later render threw."""
+    start = MULTITOOL_JS.index('stepsDiv.addEventListener("drop"')
+    drop = MULTITOOL_JS[start : MULTITOOL_JS.index("\n    });", start)]
+    assert 'getData("text/plain")' not in drop
+    assert "var fromIdx = _stepDragIdx;" in drop
+    assert "!state.multitoolSteps[fromIdx]" in drop

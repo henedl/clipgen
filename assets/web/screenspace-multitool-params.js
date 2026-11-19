@@ -468,6 +468,8 @@
   var _multitoolDragMidpoints = null;
   var _multitoolDragOverRaf = null;
   var _multitoolPendingDragOver = null;
+  // Index of the step being dragged; region chips also send text/plain.
+  var _stepDragIdx = null;
 
   function getMultitoolDropIndex(container, clientY) {
     if (!_multitoolDragMidpoints) _multitoolDragMidpoints = dragMidpoints(container, ".multitool-step", "y");
@@ -746,6 +748,7 @@
       var card = e.target.closest(".multitool-step");
       if (!card) { e.preventDefault(); return; }
       card.classList.add("dragging");
+      _stepDragIdx = parseInt(card.dataset.stepIdx, 10);
       e.dataTransfer.setData("text/plain", card.dataset.stepIdx);
       e.dataTransfer.effectAllowed = "move";
       _multitoolDragMidpoints = dragMidpoints(stepsDiv, ".multitool-step", "y");
@@ -756,6 +759,7 @@
         card.classList.remove("dragging");
         card.removeAttribute("draggable");
       }
+      _stepDragIdx = null;
       if (_multitoolDragOverRaf != null) {
         cancelAnimationFrame(_multitoolDragOverRaf);
         _multitoolDragOverRaf = null;
@@ -780,7 +784,7 @@
         clearDropIndicators(stepsDiv, ".multitool-step");
         if (pending.isTaskDrop) {
           stepsDiv.classList.add("drag-over-append");
-        } else {
+        } else if (_stepDragIdx !== null) {
           var cards = stepsDiv.querySelectorAll(".multitool-step:not(.dragging)");
           var insertIdx = getMultitoolDropIndex(stepsDiv, pending.clientY);
           if (insertIdx < cards.length) {
@@ -822,8 +826,9 @@
 
       // getMultitoolDropIndex excludes the dragging card, so toIdx already fits
       // the post-splice array.
-      var fromIdx = parseInt(e.dataTransfer.getData("text/plain"), 10);
-      if (isNaN(fromIdx)) return;
+      var fromIdx = _stepDragIdx;
+      _stepDragIdx = null;
+      if (fromIdx === null || !state.multitoolSteps[fromIdx]) return;
       var toIdx = getMultitoolDropIndex(stepsDiv, e.clientY);
       if (fromIdx === toIdx) return;
       var moved = state.multitoolSteps.splice(fromIdx, 1)[0];
@@ -875,5 +880,6 @@
       _multitoolDragOverRaf = null;
     }
     _multitoolPendingDragOver = null;
+    _stepDragIdx = null;
   };
 })();
