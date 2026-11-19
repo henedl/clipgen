@@ -180,8 +180,6 @@
         return null;
       }
       p.scene_references = step._scenes.map(sceneRefPayload);
-    } else if (stepType === "inactivity") {
-      p.threshold = intv("paramInactThresh", 10);
     }
     var stepRegionRef = normalizeRegionRef(state.multitoolSteps[idx].region_ref)
       || (state.multitoolSteps[idx].region ? activeRegionRef(state.multitoolSteps[idx].region) : null);
@@ -218,6 +216,8 @@
         params.steps.push(stepP);
       }
       params.interval = num("paramMultitoolInterval", 1.0);
+      // scan_multitool samples at steps[0].interval.
+      params.steps[0].interval = params.interval;
     } else if (type === "color") {
       _colorParams(rd, params);
       params.interval = num("paramColorInterval", 1.0);

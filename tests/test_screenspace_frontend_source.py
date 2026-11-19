@@ -268,3 +268,116 @@ def test_tool_facts_come_from_the_catalog() -> None:
     assert "CONF_TASK_TYPES" not in results
     assert 'apiGet("api/tools")' in hub
     assert "state.tools[" in hub and "state.tools[" in results
+
+
+def test_task_restore_loads_the_tasks_participant():
+    """Assigning selectedParticipant alone left the frame, pins and notes on the
+    old participant, so a notes edit saved to the wrong one."""
+    body = _tasks_fn("restoreTaskToWorkflow")
+    assert "selectParticipant(task.participant)" in body
+    assert "state.runParticipants = [task.participant]" in body
+    assert "state.selectedParticipant = task.participant" not in body
+
+
+MULTITOOL_JS = read("screenspace-multitool-params.js")
+
+
+def test_multitool_step_edits_are_written_to_state():
+    """Step inputs are rebuilt on every params render (any tool switch); values
+    kept only in the DOM reset to defaults and Run used them silently."""
+    start = MULTITOOL_JS.index("function onStepEdit(")
+    body = MULTITOOL_JS[start : MULTITOOL_JS.index("\n    }", start)]
+    assert "saveStepValues(idx)" in body
+    assert "delete state.multitoolSteps" not in MULTITOOL_JS
+    pipette = read("screenspace-overlay-interaction.js")
+    assert "SS.saveStepValues(mtIdx)" in pipette
+
+
+def test_multitool_interval_reaches_the_first_step():
+    """scan_multitool reads steps[0]["interval"]; the top-level key alone
+    left every chain sampling at the default 1 s."""
+    run = read("screenspace-run.js")
+    assert "params.steps[0].interval = params.interval;" in run
+
+
+def test_multitool_step_drop_requires_a_step_drag():
+    """Region chips also send text/plain; reading it as a step index spliced
+    undefined into the step list and every later render threw."""
+    start = MULTITOOL_JS.index('stepsDiv.addEventListener("drop"')
+    drop = MULTITOOL_JS[start : MULTITOOL_JS.index("\n    });", start)]
+    assert 'getData("text/plain")' not in drop
+    assert "var fromIdx = _stepDragIdx;" in drop
+    assert "!state.multitoolSteps[fromIdx]" in drop
+
+
+def test_multitool_ids_all_end_in_the_step_suffix():
+    """Every positional id must match _MT_STEP_ID, or the generic restore writes
+    the old slot's value into a step that moved (the offset window did)."""
+    by_idx = re.findall(r'"(\w+)" \+ idx\b', MULTITOOL_JS)
+    assert by_idx, "no idx-suffixed ids found"
+    for name in by_idx:
+        assert name.endswith("_mt"), f"{name} + idx escapes the _mt<N> store gate"
+
+
+def test_multitool_numbers_step_offers_no_range_operator():
+    """The step has no min/max inputs, and the engine fails an unbounded range,
+    so offering it made the chain match nothing."""
+    start = MULTITOOL_JS.index("function _mtRenderNumbers(")
+    body = MULTITOOL_JS[start : MULTITOOL_JS.index("\n  }", start)]
+    assert '["range"' not in body
+
+
+def test_task_restore_sets_template_reference_before_rendering():
+    """The Template row reads referenceTimestamp at render time, and a leftover
+    upload beats the reference on Run."""
+    body = _tasks_fn("restoreTaskToWorkflow")
+    ref = body.index("state.referenceTimestamp = refParams.reference_timestamp;")
+    assert ref < body.index("renderWorkflowParams({ defaults: true });")
+    tail = body[ref:]
+    for key in ("uploadedTemplate", "uploadedTemplateImg", "templateOverlayPos"):
+        assert f"state.{key} = null;" in tail
+
+
+def test_task_restore_covers_attention():
+    body = _tasks_fn("restoreTaskToWorkflow")
+    branch = body[body.index('task.type === "attention"') :]
+    for key in (
+        "shift_threshold",
+        "ema_alpha",
+        "weight_spectral",
+        "weight_contrast",
+        "weight_motion",
+        "weight_face",
+        "center_bias",
+        "interval",
+    ):
+        assert f"params.{key}" in branch, f"attention restore skips {key}"
+
+
+def test_multi_part_playback_hands_off_on_ended():
+    """Part durations are rounded, so the timeupdate window can never open
+    (600.6 s reports 601); `ended` must advance to the next part too."""
+    start = SCREENSPACE_JS.index('video.addEventListener("ended"')
+    handler = SCREENSPACE_JS[start : SCREENSPACE_JS.index("\n    });", start)]
+    assert "playNextPart(parts, i)" in handler
+    assert handler.index("playNextPart(") < handler.index("pauseVideo()")
+
+
+def test_paused_queue_at_load_seeds_state_and_streams():
+    """A queue paused before the page loaded showed the Pause icon, and its
+    paused tasks never opened the stream, even after Resume."""
+    boot = SCREENSPACE_JS[SCREENSPACE_JS.index('apiGet("api/tasks")') :]
+    boot = boot[: boot.index(".catch(")]
+    assert "state.queuePaused = !!data.paused;" in boot
+    assert "state.tasks.some(isTaskActive)" in boot
+    pause = _tasks_fn("initPauseButton")
+    assert "startSSE()" in pause
+
+
+def test_numbers_range_never_becomes_a_multitool_step():
+    """The step select has no range option, so a range step ran as ">"."""
+    start = MULTITOOL_JS.index("function taskToMultitoolStep(")
+    body = MULTITOOL_JS[start : MULTITOOL_JS.index("\n  }", start)]
+    assert 'params.operator === "range") return null;' in body
+    restore = _tasks_fn("restoreTaskToWorkflow")
+    assert 's.operator === "range"' in restore

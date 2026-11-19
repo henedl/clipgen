@@ -43,7 +43,7 @@
   // ---- Multitool step list (drag reorder + drop-to-import from task queue) ----
 
   var MULTITOOL_ALLOWED_TYPES = [
-    "color", "change", "similarity", "text", "numbers", "template", "flow", "scene", "inactivity",
+    "color", "change", "similarity", "text", "numbers", "template", "flow", "scene",
   ];
 
   function renderMultitoolStepBody(body, stepType, idx) {
@@ -90,12 +90,10 @@
 
     var renderer = MULTITOOL_PARAM_RENDERERS[stepType];
     if (renderer) renderer(body, idx, sfx);
-    // _initial is consumed once; keep it and later re-renders clobber in-progress edits.
-    delete state.multitoolSteps[idx]._initial;
   }
 
   function _mtRenderColor(body, idx, sfx) {
-    var init = state.multitoolSteps[idx]._initial || {};
+    var init = state.multitoolSteps[idx]._values || {};
     var initColor = init.target_color || {};
     var initH = numberOrDefault(initColor.h, 0);
     var initS = numberOrDefault(initColor.s, 0);
@@ -171,19 +169,19 @@
   }
 
   function _mtRenderChange(body, idx, sfx) {
-    var init = state.multitoolSteps[idx]._initial || {};
+    var init = state.multitoolSteps[idx]._values || {};
     _mtAddNumberRow(body, "Threshold", "paramChangeThresh" + sfx, 0.01, 0.50, numberOrDefault(init.threshold, 0.03), 0.01);
     _mtAddNumberRow(body, "Noise", "paramChangeNoise" + sfx, 0, 100, intOrDefault(init.noise_threshold, 30), 1);
   }
 
   function _mtRenderSimilarity(body, idx, sfx) {
-    var init = state.multitoolSteps[idx]._initial || {};
+    var init = state.multitoolSteps[idx]._values || {};
     _mtAddCaptureRefRow(body, idx, "Reference", "paramSimRef" + sfx);
     _mtAddNumberRow(body, "Threshold", "paramSimThresh" + sfx, 0.50, 1.00, numberOrDefault(init.threshold, 0.90), 0.01);
   }
 
   function _mtRenderText(body, idx, sfx) {
-    var init = state.multitoolSteps[idx]._initial || {};
+    var init = state.multitoolSteps[idx]._values || {};
     var r1 = el("div", "param-row");
     r1.appendChild(el("span", "param-label", "Search"));
     var c1 = el("div", "param-control");
@@ -212,14 +210,15 @@
   }
 
   function _mtRenderNumbers(body, idx, sfx) {
-    var init = state.multitoolSteps[idx]._initial || {};
+    var init = state.multitoolSteps[idx]._values || {};
     var r1 = el("div", "param-row");
     r1.appendChild(el("span", "param-label", "Operator"));
     var c1 = el("div", "param-control");
     var sel = document.createElement("select");
     sel.id = "paramNumOperator" + sfx;
     sel.style.fontSize = "var(--text-xs)";
-    [["gt",">"],["lt","<"],["eq","="],["gte","≥"],["lte","≤"],["range","range"]].forEach(function (pair) {
+    // No "range": the step has no min/max inputs to bound it.
+    [["gt",">"],["lt","<"],["eq","="],["gte","≥"],["lte","≤"]].forEach(function (pair) {
       var opt = document.createElement("option"); opt.value = pair[0]; opt.textContent = pair[1];
       sel.appendChild(opt);
     });
@@ -243,7 +242,7 @@
   }
 
   function _mtRenderTemplate(body, idx, sfx) {
-    var init = state.multitoolSteps[idx]._initial || {};
+    var init = state.multitoolSteps[idx]._values || {};
     var step = state.multitoolSteps[idx];
 
     // Capture-or-upload row like the single-tool template, but state lives on the step.
@@ -327,7 +326,7 @@
   }
 
   function _mtRenderFlow(body, idx, sfx) {
-    var init = state.multitoolSteps[idx]._initial || {};
+    var init = state.multitoolSteps[idx]._values || {};
     _mtAddNumberRow(body, "Magnitude", "paramFlowMag" + sfx, 0.5, 20, numberOrDefault(init.magnitude_threshold, 2.0), 0.5);
   }
 
@@ -392,21 +391,6 @@
     body.appendChild(addScRow);
   }
 
-  function _mtRenderInactivity(body, idx, sfx) {
-    var init = state.multitoolSteps[idx]._initial || {};
-    var r1 = el("div", "param-row");
-    r1.appendChild(el("span", "param-label", "Sensitivity"));
-    var c1 = el("div", "param-control");
-    var inactSlider = rangeInput("paramInactThresh" + sfx, 0, 30, intOrDefault(init.threshold, 10), 1);
-    c1.appendChild(inactSlider);
-    var inactVal = el("span", "param-value");
-    inactVal.textContent = inactSlider.value;
-    inactSlider.addEventListener("input", function () { inactVal.textContent = inactSlider.value; });
-    c1.appendChild(inactVal);
-    r1.appendChild(c1);
-    body.appendChild(r1);
-  }
-
   // Helpers used by multiple per-type renderers above.
   function _mtAddNumberRow(body, label, id, min, max, def, step) {
     var r = el("div", "param-row");
@@ -464,12 +448,13 @@
     template:   _mtRenderTemplate,
     flow:       _mtRenderFlow,
     scene:      _mtRenderScene,
-    inactivity: _mtRenderInactivity,
   };
 
   var _multitoolDragMidpoints = null;
   var _multitoolDragOverRaf = null;
   var _multitoolPendingDragOver = null;
+  // Index of the step being dragged; region chips also send text/plain.
+  var _stepDragIdx = null;
 
   function getMultitoolDropIndex(container, clientY) {
     if (!_multitoolDragMidpoints) _multitoolDragMidpoints = dragMidpoints(container, ".multitool-step", "y");
@@ -480,67 +465,65 @@
     var type = task.type;
     if (MULTITOOL_ALLOWED_TYPES.indexOf(type) === -1) return null;
     var params = task.parameters || {};
+    // Steps have no range bounds; the blank select would run as ">".
+    if (type === "numbers" && params.operator === "range") return null;
     var step = { type: type, collapsed: false, logic: "AND" };
     if (task.region) step.region = task.region;
     if (task.region_ref) step.region_ref = task.region_ref;
     if (params.reference_timestamp !== undefined) step._refTs = params.reference_timestamp;
     if (params.scene_references) step._scenes = params.scene_references.map(sceneRefPayload);
-    step._initial = params;
+    step._values = Object.assign({}, params);
     return step;
   }
 
-  // Snapshot DOM values onto step._initial before list mutations, or
-  // renderWorkflowParams() resets them.
-  function snapshotMultitoolStepValues() {
-    state.multitoolSteps.forEach(function (step, idx) {
-      var sfx = "_mt" + idx;
-      var init = step._initial || {};
-      if (step.type === "color") {
-        var prevColor = init.target_color || {};
-        init.target_color = {
-          h: numberOrDefault((qs("#paramColorH" + sfx) || {}).value, prevColor.h || 0),
-          s: numberOrDefault((qs("#paramColorS" + sfx) || {}).value, prevColor.s || 0),
-          v: numberOrDefault((qs("#paramColorV" + sfx) || {}).value, prevColor.v || 0),
-        };
-        init.tolerance = colorTolerance(numberOrDefault((qs("#paramColorTol" + sfx) || {}).value, 30));
-        var snapMode = (qs("#paramColorMode" + sfx) || {}).value;
-        if (snapMode === "presence") {
-          init.color_mode = "presence";
-          init.min_coverage = numberOrDefault((qs("#paramColorMinArea" + sfx) || {}).value, 1) / 100;
-        } else {
-          init.color_mode = "average";
-          delete init.min_coverage;
-        }
-      } else if (step.type === "change") {
-        init.threshold = numberOrDefault((qs("#paramChangeThresh" + sfx) || {}).value, init.threshold);
-        init.noise_threshold = intOrDefault((qs("#paramChangeNoise" + sfx) || {}).value, init.noise_threshold);
-      } else if (step.type === "similarity") {
-        init.threshold = numberOrDefault((qs("#paramSimThresh" + sfx) || {}).value, init.threshold);
-      } else if (step.type === "text") {
-        var searchEl = qs("#paramTextSearch" + sfx);
-        if (searchEl) init.search_string = searchEl.value;
-        init.fuzzy_threshold = numberOrDefault((qs("#paramTextFuzzy" + sfx) || {}).value, init.fuzzy_threshold);
-        init.ocr_confidence_threshold = numberOrDefault((qs("#paramTextOcrConf" + sfx) || {}).value, init.ocr_confidence_threshold);
-        init.ocr_preprocess = !!((qs("#paramTextOcrPreprocess" + sfx) || {}).checked);
-        init.ocr_normalize = (qs("#paramTextOcrNormalize" + sfx) || {}).value || "off";
-      } else if (step.type === "numbers") {
-        var opEl = qs("#paramNumOperator" + sfx);
-        if (opEl) init.operator = opEl.value;
-        init.target_value = numberOrDefault((qs("#paramNumTarget" + sfx) || {}).value, init.target_value);
-        init.ocr_confidence_threshold = numberOrDefault((qs("#paramNumOcrConf" + sfx) || {}).value, init.ocr_confidence_threshold);
-        init.ocr_preprocess = !!((qs("#paramNumOcrPreprocess" + sfx) || {}).checked);
-        init.integers_only = !!((qs("#paramNumIntegersOnly" + sfx) || {}).checked);
-      } else if (step.type === "template") {
-        init.threshold = numberOrDefault((qs("#paramTemplateThresh" + sfx) || {}).value, init.threshold);
-        var tScalePct = numberOrDefault((qs("#paramTemplateScale" + sfx) || {}).value, 100);
-        init.template_scale = tScalePct / 100;
-      } else if (step.type === "flow") {
-        init.magnitude_threshold = numberOrDefault((qs("#paramFlowMag" + sfx) || {}).value, init.magnitude_threshold);
-      } else if (step.type === "inactivity") {
-        init.threshold = intOrDefault((qs("#paramInactThresh" + sfx) || {}).value, init.threshold);
+  // Write one step's inputs into step._values, the store its renderer reads.
+  function saveStepValues(idx) {
+    var step = state.multitoolSteps[idx];
+    var sfx = "_mt" + idx;
+    var init = step._values || {};
+    if (step.type === "color") {
+      var prevColor = init.target_color || {};
+      init.target_color = {
+        h: numberOrDefault((qs("#paramColorH" + sfx) || {}).value, prevColor.h || 0),
+        s: numberOrDefault((qs("#paramColorS" + sfx) || {}).value, prevColor.s || 0),
+        v: numberOrDefault((qs("#paramColorV" + sfx) || {}).value, prevColor.v || 0),
+      };
+      init.tolerance = colorTolerance(numberOrDefault((qs("#paramColorTol" + sfx) || {}).value, 30));
+      var snapMode = (qs("#paramColorMode" + sfx) || {}).value;
+      if (snapMode === "presence") {
+        init.color_mode = "presence";
+        init.min_coverage = numberOrDefault((qs("#paramColorMinArea" + sfx) || {}).value, 1) / 100;
+      } else {
+        init.color_mode = "average";
+        delete init.min_coverage;
       }
-      step._initial = init;
-    });
+    } else if (step.type === "change") {
+      init.threshold = numberOrDefault((qs("#paramChangeThresh" + sfx) || {}).value, init.threshold);
+      init.noise_threshold = intOrDefault((qs("#paramChangeNoise" + sfx) || {}).value, init.noise_threshold);
+    } else if (step.type === "similarity") {
+      init.threshold = numberOrDefault((qs("#paramSimThresh" + sfx) || {}).value, init.threshold);
+    } else if (step.type === "text") {
+      var searchEl = qs("#paramTextSearch" + sfx);
+      if (searchEl) init.search_string = searchEl.value;
+      init.fuzzy_threshold = numberOrDefault((qs("#paramTextFuzzy" + sfx) || {}).value, init.fuzzy_threshold);
+      init.ocr_confidence_threshold = numberOrDefault((qs("#paramTextOcrConf" + sfx) || {}).value, init.ocr_confidence_threshold);
+      init.ocr_preprocess = !!((qs("#paramTextOcrPreprocess" + sfx) || {}).checked);
+      init.ocr_normalize = (qs("#paramTextOcrNormalize" + sfx) || {}).value || "off";
+    } else if (step.type === "numbers") {
+      var opEl = qs("#paramNumOperator" + sfx);
+      if (opEl) init.operator = opEl.value;
+      init.target_value = numberOrDefault((qs("#paramNumTarget" + sfx) || {}).value, init.target_value);
+      init.ocr_confidence_threshold = numberOrDefault((qs("#paramNumOcrConf" + sfx) || {}).value, init.ocr_confidence_threshold);
+      init.ocr_preprocess = !!((qs("#paramNumOcrPreprocess" + sfx) || {}).checked);
+      init.integers_only = !!((qs("#paramNumIntegersOnly" + sfx) || {}).checked);
+    } else if (step.type === "template") {
+      init.threshold = numberOrDefault((qs("#paramTemplateThresh" + sfx) || {}).value, init.threshold);
+      var tScalePct = numberOrDefault((qs("#paramTemplateScale" + sfx) || {}).value, 100);
+      init.template_scale = tScalePct / 100;
+    } else if (step.type === "flow") {
+      init.magnitude_threshold = numberOrDefault((qs("#paramFlowMag" + sfx) || {}).value, init.magnitude_threshold);
+    }
+    step._values = init;
   }
 
   function renderMultitoolParams(container) {
@@ -591,12 +574,12 @@
 
         var offFields = el("div", "multitool-offset-fields" + (offActive ? "" : " hidden"));
         var minCtrl = el("div", "param-control");
-        var offMin = numberInput("paramMtOffsetMin" + idx, -maxOffset, maxOffset,
+        var offMin = numberInput("paramMtOffsetMin_mt" + idx, -maxOffset, maxOffset,
           step.offset ? step.offset.min : 0, 0.1);
         minCtrl.appendChild(offMin);
         var offSep = el("span", "multitool-offset-sep");
         var maxCtrl = el("div", "param-control");
-        var offMax = numberInput("paramMtOffsetMax" + idx, -maxOffset, maxOffset,
+        var offMax = numberInput("paramMtOffsetMax_mt" + idx, -maxOffset, maxOffset,
           step.offset ? step.offset.max : 5, 0.1);
         maxCtrl.appendChild(offMax);
         offFields.appendChild(minCtrl);
@@ -677,8 +660,7 @@
       (function (capturedIdx) {
         removeBtn.addEventListener("click", function (e) {
           e.stopPropagation();
-          snapshotMultitoolStepValues();
-          var focus = focusedStepIdx();
+            var focus = focusedStepIdx();
           state.multitoolSteps.splice(capturedIdx, 1);
           if (capturedIdx < focus) state.multitoolFocus = focus - 1;
           renderWorkflowParams();
@@ -730,7 +712,9 @@
     function onStepEdit(e) {
       var card = e.target.closest(".multitool-step");
       if (!card) return;
-      selectStep(parseInt(card.dataset.stepIdx, 10) || 0);
+      var idx = parseInt(card.dataset.stepIdx, 10) || 0;
+      saveStepValues(idx);
+      selectStep(idx);
       refreshModelView({ debounce: true });
     }
     stepsDiv.addEventListener("input", onStepEdit);
@@ -749,6 +733,7 @@
       var card = e.target.closest(".multitool-step");
       if (!card) { e.preventDefault(); return; }
       card.classList.add("dragging");
+      _stepDragIdx = parseInt(card.dataset.stepIdx, 10);
       e.dataTransfer.setData("text/plain", card.dataset.stepIdx);
       e.dataTransfer.effectAllowed = "move";
       _multitoolDragMidpoints = dragMidpoints(stepsDiv, ".multitool-step", "y");
@@ -759,6 +744,7 @@
         card.classList.remove("dragging");
         card.removeAttribute("draggable");
       }
+      _stepDragIdx = null;
       if (_multitoolDragOverRaf != null) {
         cancelAnimationFrame(_multitoolDragOverRaf);
         _multitoolDragOverRaf = null;
@@ -783,7 +769,7 @@
         clearDropIndicators(stepsDiv, ".multitool-step");
         if (pending.isTaskDrop) {
           stepsDiv.classList.add("drag-over-append");
-        } else {
+        } else if (_stepDragIdx !== null) {
           var cards = stepsDiv.querySelectorAll(".multitool-step:not(.dragging)");
           var insertIdx = getMultitoolDropIndex(stepsDiv, pending.clientY);
           if (insertIdx < cards.length) {
@@ -816,7 +802,6 @@
           showToast(task.type + " cannot be added as a multitool step");
           return;
         }
-        snapshotMultitoolStepValues();
         state.multitoolSteps.push(step);
         state.multitoolFocus = state.multitoolSteps.length - 1;
         renderWorkflowParams();
@@ -826,11 +811,11 @@
 
       // getMultitoolDropIndex excludes the dragging card, so toIdx already fits
       // the post-splice array.
-      var fromIdx = parseInt(e.dataTransfer.getData("text/plain"), 10);
-      if (isNaN(fromIdx)) return;
+      var fromIdx = _stepDragIdx;
+      _stepDragIdx = null;
+      if (fromIdx === null || !state.multitoolSteps[fromIdx]) return;
       var toIdx = getMultitoolDropIndex(stepsDiv, e.clientY);
       if (fromIdx === toIdx) return;
-      snapshotMultitoolStepValues();
       var moved = state.multitoolSteps.splice(fromIdx, 1)[0];
       state.multitoolSteps.splice(toIdx, 0, moved);
       // Focus rides the step, not the slot.
@@ -856,7 +841,6 @@
     var addBtn = el("button", "btn btn-small", "+ Add Step");
     addBtn.addEventListener("click", function () {
       var chosen = sel.value;
-      snapshotMultitoolStepValues();
       state.multitoolSteps.push({ type: chosen, collapsed: false, logic: "AND" });
       state.multitoolFocus = state.multitoolSteps.length - 1;
       renderWorkflowParams();
@@ -872,6 +856,8 @@
 
   // ---- Published back to the hub (screenspace.js calls these) ----
   SS.renderMultitoolParams = renderMultitoolParams;
+  // The pipette sets step inputs without events, then saves through this.
+  SS.saveStepValues = saveStepValues;
   // The hub's global dragend handler calls this; keeps drag state private here.
   SS.cancelMultitoolDrag = function () {
     if (_multitoolDragOverRaf != null) {
@@ -879,5 +865,6 @@
       _multitoolDragOverRaf = null;
     }
     _multitoolPendingDragOver = null;
+    _stepDragIdx = null;
   };
 })();

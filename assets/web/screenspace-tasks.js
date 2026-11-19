@@ -27,6 +27,7 @@
     refreshCalibration = SS.refreshCalibration,
     renderOverlay = SS.renderOverlay,
     renderRegionChips = SS.renderRegionChips,
+    renderRunParticipantPicker = SS.renderRunParticipantPicker,
     renderRunRegionPicker = SS.renderRunRegionPicker,
     renderTimeline = SS.renderTimeline,
     renderWorkflowParams = SS.renderWorkflowParams,
@@ -481,11 +482,11 @@
     // No .click() here, so mirror the tab into the category nav (late-bound).
     if (SS.syncToolCategoryNav) SS.syncToolCategoryNav();
 
-    // Select participant
-    if (task.participant) {
-      state.selectedParticipant = task.participant;
-      var sel = qs("#participantSelect");
-      if (sel) sel.value = task.participant;
+    // Load the task's participant so frame, pins and notes match the header.
+    if (task.participant && task.participant !== state.selectedParticipant) {
+      selectParticipant(task.participant);
+      state.runParticipants = [task.participant];
+      renderRunParticipantPicker();
     }
 
     // Select region
@@ -526,17 +527,35 @@
       }
     }
 
+    // Before rendering so the Template row shows the time; an upload would win the re-run.
+    var refParams = task.parameters || {};
+    if ((task.type === "template" || task.type === "shape") && refParams.reference_timestamp !== undefined) {
+      state.referenceTimestamp = refParams.reference_timestamp;
+      // Re-arm the capture region (name only) so a re-run samples the same region.
+      state.capturedRefPreview = refParams.reference_region
+        ? { region: refParams.reference_region, ts: refParams.reference_timestamp, dataUrl: null }
+        : null;
+      state.uploadedTemplate = null;
+      state.uploadedTemplateImg = null;
+      state.templateOverlayPos = null;
+    }
+
     // For scene, restore references into state before rendering so the list shows them.
     if (task.type === "scene") {
       var sceneParams = task.parameters || {};
       state.sceneReferences = (sceneParams.scene_references || []).map(sceneRefPayload);
     }
 
-    // Rebuild multitool steps first; step._initial lets _mtRender* set values at creation.
+    // Rebuild multitool steps first; _mtRender* read their values from step._values.
     if (task.type === "multitool") {
       var mtParams = task.parameters || {};
       state.multitoolFocus = 0;
-      state.multitoolSteps = (mtParams.steps || []).map(function (s) {
+      // Steps have no range bounds; drop a Numbers range step rather than run ">".
+      var mtSteps = (mtParams.steps || []).filter(function (s) {
+        return !(s.type === "numbers" && s.operator === "range");
+      });
+      if (mtSteps.length < (mtParams.steps || []).length) showToast("Dropped a Numbers range step");
+      state.multitoolSteps = mtSteps.map(function (s) {
         var step = { type: s.type, collapsed: true };
         step.logic = (s.logic || "AND").toUpperCase();
         if (s.offset && typeof s.offset.min === "number" && typeof s.offset.max === "number") {
@@ -546,7 +565,7 @@
         if (s.region_ref) step.region_ref = s.region_ref;
         if (s.reference_timestamp !== undefined) step._refTs = s.reference_timestamp;
         if (s.scene_references) step._scenes = s.scene_references.map(sceneRefPayload);
-        step._initial = s;
+        step._values = Object.assign({}, s);
         return step;
       });
     }
@@ -557,13 +576,6 @@
     state.suppressCalibrationRefresh = false;
 
     params = task.parameters || {};
-    if ((task.type === "template" || task.type === "shape") && params.reference_timestamp !== undefined) {
-      state.referenceTimestamp = params.reference_timestamp;
-      // Re-arm the capture region (name only) so a re-run samples the same region.
-      state.capturedRefPreview = params.reference_region
-        ? { region: params.reference_region, ts: params.reference_timestamp, dataUrl: null }
-        : null;
-    }
     if (task.type === "multitool") {
       setInputValue("#paramMultitoolInterval", numberOrDefault(params.interval, 1.0));
     } else if (task.type === "color") {
@@ -669,6 +681,15 @@
       setInputValue("#paramInactThresh", intOrDefault(params.threshold, 10));
       setInputValue("#paramInactMinDur", numberOrDefault(params.min_duration, 2.0));
       setInputValue("#paramInactInterval", numberOrDefault(params.interval, 1.0));
+    } else if (task.type === "attention") {
+      setInputValue("#paramAttnShift", numberOrDefault(params.shift_threshold, 0.15));
+      setInputValue("#paramAttnSmooth", numberOrDefault(params.ema_alpha, 0.6));
+      setInputValue("#paramAttnWSpectral", numberOrDefault(params.weight_spectral, 1.0));
+      setInputValue("#paramAttnWContrast", numberOrDefault(params.weight_contrast, 0.7));
+      setInputValue("#paramAttnWMotion", numberOrDefault(params.weight_motion, 1.2));
+      setInputValue("#paramAttnWFace", numberOrDefault(params.weight_face, 0));
+      setInputValue("#paramAttnCenterBias", numberOrDefault(params.center_bias, 0.25));
+      setInputValue("#paramAttnInterval", numberOrDefault(params.interval, 0.5));
     } else if (task.type === "boundary") {
       setInputValue("#paramBoundaryMetric", params.metric || "");
       setInputValue("#paramBoundaryThresh", intOrDefault(params.threshold, 14));
@@ -759,6 +780,8 @@
           if (data.ok) {
             state.queuePaused = data.paused;
             updatePauseButton();
+            // A queue paused at page load never opened the stream.
+            if (!data.paused) startSSE();
           }
         })
         .catch(function (err) { showToast("Error: " + err.message); });
@@ -1222,6 +1245,7 @@
   SS.focusedTaskId = focusedTaskId;
   SS.renderTaskList = renderTaskList;
   SS.startSSE = startSSE;
+  SS.updatePauseButton = updatePauseButton;
   // Boot and participant switches call this so the timeline has markers before a tick.
   SS.syncTaskResults = _syncTaskResults;
   SS.reconcileResultCache = _reconcileResultCache;
