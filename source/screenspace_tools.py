@@ -1070,7 +1070,8 @@ class TimelapseTool(AnalysisTool):
                 Path(utils.get_effective_output_dir()) / f"timelapse_{task_id}.{ext}"
             )
         return generate_timelapse(
-            video_path,
+            # Multi-part participants arrive as the full part list.
+            params.get("video_paths") or video_path,
             region,
             speedup_factor=params.get("speedup_factor", 10.0),
             output_path=output_path,

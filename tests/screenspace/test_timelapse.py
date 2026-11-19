@@ -8,6 +8,7 @@ import pytest
 
 import screenspace
 import screenspace_tools
+import screenspace_worker
 
 
 class TestBuildTimelapseCommand:
@@ -240,6 +241,42 @@ class TestTimelapseDispatchPassesMarkers:
         assert captured["end_seconds"] == 45.0
         assert captured["on_progress"] is not None
         assert captured["cancel_flag"] is not None
+
+    def test_multi_part_encodes_one_timelapse(self, monkeypatch):
+        # Per-part runs crashed on the path result and shared one output file.
+        calls = []
+
+        def fake_generate(video_path, region, **kw):
+            calls.append((video_path, kw["start_seconds"], kw["end_seconds"]))
+            return kw["output_path"]
+
+        monkeypatch.setattr(screenspace_tools, "generate_timelapse", fake_generate)
+        monkeypatch.setattr(
+            screenspace_worker.video,
+            "timeline_or_none",
+            lambda paths: [(paths[0], 30.0, 0.0), (paths[1], 40.0, 30.0)],
+        )
+        task = screenspace.create_task(
+            "timelapse",
+            "P01",
+            "s_P01_1.mp4",
+            ["/p1.mp4", "/p2.mp4"],
+            "region1",
+            {"x": 0, "y": 0, "w": 100, "h": 100},
+            parameters={"start_seconds": 20.0, "end_seconds": 50.0},
+        )
+        result = screenspace.ScreenspaceWorker()._dispatch(
+            task, lambda p: None, lambda: False, None
+        )
+        assert calls == [(["/p1.mp4", "/p2.mp4"], 20.0, 50.0)]
+        assert isinstance(result, str)
+
+    def test_concat_list_input(self):
+        cmd = screenspace.build_timelapse_command(
+            "/parts.txt", {"x": 0, "y": 0, "w": 10, "h": 10}, 2.0, "/o.mp4", concat=True
+        )
+        i = cmd.index("-i")
+        assert cmd[i - 4 : i + 2] == ["-f", "concat", "-safe", "0", "-i", "/parts.txt"]
 
 
 # ---------------------------------------------------------------------------

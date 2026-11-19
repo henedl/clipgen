@@ -628,7 +628,7 @@ def scan_numbers(
 
 
 def generate_timelapse(
-    video_path: str,
+    video_path: str | list[str],
     region: dict[str, int],
     speedup_factor: float,
     output_path: str,
@@ -639,8 +639,12 @@ def generate_timelapse(
     sample_interval: float = 0.0,
     on_progress: Callable[[float], None] | None = None,
     cancel_flag: Callable[[], bool] | None = None,
+    concat: bool = False,
 ) -> str | None:
     """Generate a cropped timelapse via ffmpeg.
+
+    A list of *video_path* parts encodes one timelapse over the stitched
+    timeline (*concat* marks the concat-demuxer list this recurses with).
 
     *sample_interval* controls frame sampling (seconds between captured
     frames).  0 means every frame is used.
@@ -655,6 +659,25 @@ def generate_timelapse(
     is not a failed one), and both callers turn the exception into a failed
     node/task with the message attached.
     """
+    if not isinstance(video_path, str):
+        timeline = video.timeline_or_none(video_path)
+        if end_seconds is None and timeline is not None:
+            end_seconds = timeline[-1][1] + timeline[-1][2]
+        with video._concat_list_file(video_path) as list_path:
+            return generate_timelapse(
+                list_path,
+                region,
+                speedup_factor,
+                output_path,
+                output_format,
+                start_seconds=start_seconds,
+                end_seconds=end_seconds,
+                sample_interval=sample_interval,
+                on_progress=on_progress,
+                cancel_flag=cancel_flag,
+                concat=True,
+            )
+
     # gif output has no H.264 encoder to choose, so it never probes for one.
     encoder = video.resolve_video_encoder() if output_format != "gif" else "libx264"
 
@@ -669,6 +692,7 @@ def generate_timelapse(
             end_seconds=end_seconds,
             sample_interval=sample_interval,
             encoder=enc,
+            concat=concat,
         )
 
     # Estimate output duration for progress calculation.

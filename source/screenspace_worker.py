@@ -20,7 +20,7 @@ import profiling
 import redact
 import utils
 import video
-from screenspace_tools import TOOLS
+from screenspace_tools import TOOLS, TimelapseTool
 from screenspace_heatmap import (
     GridLayers,
     build_grid_layers,
@@ -203,11 +203,12 @@ def dispatch_tool_scan(
     if not video_paths:
         return []
     timeline = video.timeline_or_none(video_paths)
-    if timeline is None:
+    if timeline is None or isinstance(tool, TimelapseTool):
+        # Timelapse encodes one file over every part; per-part runs would overwrite it.
         return tool.scan(
             video_paths[0],
             region_coords,
-            params,
+            {**params, "video_paths": video_paths} if timeline else params,
             task_id=task_id,
             scan_mode=scan_mode,
             on_progress=on_progress,
