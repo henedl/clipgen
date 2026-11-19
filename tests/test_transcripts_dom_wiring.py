@@ -217,6 +217,18 @@ def test_redact_errors_toast_the_server_reason():
     assert js.count("e.serverMessage ||") >= 5
 
 
+def test_keyboard_marks_survive_the_streaming_rebuild():
+    """M and 1-9 call toggleMark; on mirrored streaming rows it must write the
+    streaming cache, which renderPartialSegments rebuilds the mirror from."""
+    start = _JS.index("function toggleMark(")
+    body = _JS[start : _JS.index("\n  }\n", start)]
+    assert body.index("state.streamingParticipant") < body.index("_segmentIndexById")
+    assert "toggleMarkStreaming(" in body
+    start = _JS.index("function renderPartialSegmentsImpl(")
+    body = _JS[start : _JS.index("\n  }\n", start)]
+    assert "marks: _streamingMarks[" in body
+
+
 def test_segment_clicks_reach_the_outside_click_closers():
     """A stopPropagation in the row handler kept the mark popover open, and an
     open popover disables Space, J, K and M."""

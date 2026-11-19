@@ -1408,7 +1408,8 @@
         end: s.end,
         text: s.text,
         speaker: s.speaker,
-        marks: [],
+        // Shared with the cache so hotkeys and J/K see streaming marks.
+        marks: _streamingMarks[pid + ":" + mi] ? [_streamingMarks[pid + ":" + mi]] : [],
       });
     }
     state.segments = mirrored;
@@ -1846,6 +1847,12 @@
   }
 
   function toggleMark(segmentId) {
+    // Mirrored streaming rows are rebuilt each poll; marks live in _streamingMarks.
+    if (state.streamingParticipant) {
+      var dot = qs('#segmentList .segment-mark[data-segment-id="' + segmentId + '"]');
+      if (dot) toggleMarkStreaming(segmentId, dot);
+      return;
+    }
     var idx = _segmentIndexById(segmentId);
     var seg = idx >= 0 ? state.segments[idx] : null;
     if (!seg) {
@@ -1895,6 +1902,8 @@
           label: m.label || "",
           severity: m.severity || "",
         };
+        var mi = _segmentIndexById(segmentId);
+        if (mi >= 0) state.segments[mi].marks = [_streamingMarks[segmentId]];
         _bumpStreamingMarksVersion();
       }
     }).catch(toastError("Could not add mark"));
