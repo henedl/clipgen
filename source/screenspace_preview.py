@@ -382,6 +382,7 @@ def _shape_prepared(params: dict[str, Any]) -> "list[dict[str, Any]] | None":
         float(params.get("scale_y_min", 0) or 0),
         float(params.get("scale_y_max", 0) or 0),
         int(params.get("scale_y_steps", 0) or 0),
+        cv_scale=1.0,
     )
 
 

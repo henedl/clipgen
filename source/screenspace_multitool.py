@@ -148,6 +148,7 @@ def scan_multitool(
                 on_progress(0.9 * (ts - scan_start) / total_range)
             return None
 
+        # Steps crop with source-pixel regions, so frames stay native.
         scan_video_full_frames(
             video_path,
             interval,
@@ -157,6 +158,7 @@ def scan_multitool(
             duration=vid_duration,
             fast_opts=fast_opts,
             profile_kind="multitool",
+            cv_scale=1.0,
         )
 
         # Cancel/pause skips the join; the worker settles status. Offset tasks
@@ -241,6 +243,7 @@ def scan_multitool(
         duration=vid_duration,
         fast_opts=fast_opts,
         profile_kind="multitool",
+        cv_scale=1.0,
     )
 
     if on_progress:

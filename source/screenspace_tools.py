@@ -687,10 +687,12 @@ class TemplateTool(AnalysisTool):
         # Cache the scaled prep on params so multitool reuses it across frames.
         prepared = params.get("_prepared_template")
         if prepared is None:
+            # Calibration and multitool hand native frames: no CV scale.
             scaled_img, scaled_mask = _scale_template(
                 template_img,
                 params.get("template_mask"),
                 float(params.get("template_scale", 1.0)),
+                cv_scale=1.0,
             )
             prepared = _prepare_template(scaled_img, scaled_mask)
             params["_prepared_template"] = prepared
@@ -808,6 +810,7 @@ class ShapeTool(AnalysisTool):
                 float(params.get("scale_y_min", 0.0)),
                 float(params.get("scale_y_max", 0.0)),
                 int(params.get("scale_y_steps", 0)),
+                cv_scale=1.0,
             )
             params["_prepared_shape"] = prepared
         if not prepared:
