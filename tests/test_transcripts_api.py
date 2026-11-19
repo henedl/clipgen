@@ -2640,6 +2640,14 @@ def test_summary_put_stops_running_dependents(
         events[key] = threading.Event()
         orch._in_flight[key].add("P01")
         orch._cancel_events[key]["P01"] = events[key]
+    # A rejected save leaves the runs alone.
+    monkeypatch.setattr(transcripts_server.redact, "entry_applied", lambda *a: True)
+    resp = tr_client.put(
+        "/transcripts/api/agent/summary/P01", json={"summary": "an edited summary"}
+    )
+    assert resp.status_code == 409
+    assert not any(evt.is_set() for evt in events.values())
+    monkeypatch.setattr(transcripts_server.redact, "entry_applied", lambda *a: False)
     resp = tr_client.put(
         "/transcripts/api/agent/summary/P01", json={"summary": "an edited summary"}
     )

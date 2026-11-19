@@ -1734,10 +1734,6 @@ def api_summary_save(participant: str) -> FlaskResponse:
         return err("Summary text is required")
     summary_agent = thinking_agents.get_agent("summary")
     assert summary_agent is not None  # built-in agent, always registered
-    # A running dependent would commit against the old summary.
-    for dep in thinking_agents.AGENTS:
-        if "summary" in dep["depends_on"]:
-            _orchestrator.stop(dep["key"], participant)
     with _manifest_lock:
         entry = _manifest.get("source_transcripts", {}).get(participant)
         if not entry:
@@ -1745,6 +1741,10 @@ def api_summary_save(participant: str) -> FlaskResponse:
         # The editor shows placeholders; saving would store them as the summary.
         if redact.entry_applied(entry, entry.get("segments") or [], _redact_terms()):
             return err("Turn off redaction to edit", 409)
+        # Under the lock: a running dependent cannot commit against the old summary.
+        for dep in thinking_agents.AGENTS:
+            if "summary" in dep["depends_on"]:
+                _orchestrator.stop_locked(dep["key"], participant)
         entry["summary"] = summary_raw.strip()
         # An edited summary invalidates dependents exactly like the regenerate route.
         _invalidate_dependents(entry, summary_agent)
@@ -3394,11 +3394,15 @@ class AgentOrchestrator:
         thread's ``finally`` block to fire.
         """
         with self._lock:
-            if participant not in self._in_flight.get(agent_key, set()):
-                return False
-            event = self._cancel_events.get(agent_key, {}).get(participant)
-            self._in_flight[agent_key].discard(participant)
-            self._started_at.get(agent_key, {}).pop(participant, None)
+            return self.stop_locked(agent_key, participant)
+
+    def stop_locked(self, agent_key: str, participant: str) -> bool:
+        """:meth:`stop` for a caller already holding ``_manifest_lock``."""
+        if participant not in self._in_flight.get(agent_key, set()):
+            return False
+        event = self._cancel_events.get(agent_key, {}).get(participant)
+        self._in_flight[agent_key].discard(participant)
+        self._started_at.get(agent_key, {}).pop(participant, None)
         with self._partial_lock:
             self._partial.get(agent_key, {}).pop(participant, None)
         if event is not None:
