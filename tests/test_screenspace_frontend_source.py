@@ -291,3 +291,10 @@ def test_multitool_step_edits_are_written_to_state():
     assert "delete state.multitoolSteps" not in MULTITOOL_JS
     pipette = read("screenspace-overlay-interaction.js")
     assert "SS.saveStepValues(mtIdx)" in pipette
+
+
+def test_multitool_interval_reaches_the_first_step():
+    """scan_multitool reads steps[0]["interval"]; the top-level key alone
+    left every chain sampling at the default 1 s."""
+    run = read("screenspace-run.js")
+    assert "params.steps[0].interval = params.interval;" in run

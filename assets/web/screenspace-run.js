@@ -218,6 +218,8 @@
         params.steps.push(stepP);
       }
       params.interval = num("paramMultitoolInterval", 1.0);
+      // scan_multitool samples at steps[0].interval.
+      params.steps[0].interval = params.interval;
     } else if (type === "color") {
       _colorParams(rd, params);
       params.interval = num("paramColorInterval", 1.0);
