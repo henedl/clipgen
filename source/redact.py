@@ -812,7 +812,8 @@ def _with_terms(
 
 def surface_key(surface: str) -> str:
     """Case- and punctuation-insensitive identity of a detected surface."""
-    folded = unicodedata.normalize("NFKC", surface).casefold()
+    # lower(), not casefold(): ß → ss would stop the regex matching the text.
+    folded = unicodedata.normalize("NFKC", surface).lower()
     return " ".join(folded.strip(_TRIM).split())
 
 

@@ -352,6 +352,17 @@ def test_scrub_text_hides_known_surfaces_and_name_parts():
     )
 
 
+def test_sharp_s_term_matches_its_own_spelling():
+    pattern = redact.term_pattern(["Weiß"])
+    assert pattern is not None
+    assert [m.group(0) for m in pattern.finditer("Herr Weiß and weiß")] == [
+        "Weiß",
+        "weiß",
+    ]
+    placeholders = {redact.surface_key("Weiß"): "[SURNAME_1]"}
+    assert redact.scrub_text("Ask Weiß.", placeholders) == "Ask [SURNAME_1]."
+
+
 def test_scrub_text_keeps_restored_surfaces():
     seg = _seg("Anna met Anna Berg", ("GIVEN_NAME", 0, 4), ("GIVEN_NAME", 9, 18))
     excluded = [{"label": "GIVEN_NAME", "key": redact.surface_key("Anna")}]
