@@ -748,6 +748,7 @@
     hideMarkPopover();
     hideSpeakerPopover();
     state.selectedParticipant = pid;
+    state.activeSegmentIndex = -1;
     setStoredUIStateField("transcripts", "selectedParticipant", pid);
     // Restore transcribe-range markers; loadedmetadata clamps them later.
     if (TS.restoreMarkers) {
@@ -956,7 +957,8 @@
     state.segments = data.segments;
     state.speakers = data.speakers || null;
     state.redaction = data.redaction || null;
-    state.activeSegmentIndex = -1;
+    // A same-participant reload keeps the J/K cursor; selectParticipant resets it.
+    if (state.activeSegmentIndex >= state.segments.length) state.activeSegmentIndex = -1;
     renderSegments();
     renderTimeline();
     renderRedactPanel();
@@ -2220,6 +2222,15 @@
 
   // Keyed by task id, not participant: old completed tasks linger and would suppress new runs.
   var _refreshedCompletedTaskIds = {};
+
+  // Forget only tasks the server dropped; clearing replays every old completion.
+  function _pruneSeenTasks(tasks) {
+    var kept = {};
+    tasks.forEach(function (t) {
+      if (_refreshedCompletedTaskIds[t.id]) kept[t.id] = true;
+    });
+    _refreshedCompletedTaskIds = kept;
+  }
   // Poll cycles kept alive after completion so the agent "Generating…" state surfaces.
   var _postCompletionGrace = 0;
   var POST_COMPLETION_GRACE_CYCLES = 4; // ~12s at POLL_INTERVAL=3000ms
@@ -2395,7 +2406,7 @@
           if (_anyAgentActive() || _postCompletionGrace > 0 || state.streamingParticipant) startPolling();
           else if (!hasActive) {
             stopPolling();
-            _refreshedCompletedTaskIds = {};
+            _pruneSeenTasks(data.tasks);
           }
         });
       }
@@ -2404,7 +2415,7 @@
         startPolling();
       } else if (!needsRefresh) {
         stopPolling();
-        _refreshedCompletedTaskIds = {};
+        _pruneSeenTasks(data.tasks);
       }
 
       if (!hasActive && _hadActiveTranscriptionLastPoll) {

@@ -189,6 +189,25 @@ def test_segment_rebuild_keeps_the_reader_in_place():
     )
 
 
+def test_a_poller_restart_does_not_replay_old_completions():
+    """The server keeps finished tasks, so clearing the seen-id map on stop made
+    the next focus poll reload the transcript and repaint an open summary edit."""
+    assert "_refreshedCompletedTaskIds = {};" not in _JS.replace(
+        "var _refreshedCompletedTaskIds = {};", ""
+    ), "prune the seen ids to the server's list; never clear them"
+    start = _JS.index("function loadSummary(")
+    body = _JS[start : _JS.index("\n  }\n", start)]
+    assert body.count("state.summaryEditing") >= 2, (
+        "loadSummary and its reply must both leave an open edit alone"
+    )
+    start = _JS.index("function _applyTranscript(")
+    body = _JS[start : _JS.index("\n  }\n", start)]
+    assert "state.activeSegmentIndex = -1;" not in body.replace(
+        "if (state.activeSegmentIndex >= state.segments.length) state.activeSegmentIndex = -1;",
+        "",
+    ), "a same-participant reload keeps the J/K cursor"
+
+
 def test_friction_decorations_are_the_only_friction_writer_on_the_segment_list():
     """renderSegments builds one big HTML string; applyFrictionDecorations then
     toggles classes on the result. If the string ALSO emitted friction markup the
