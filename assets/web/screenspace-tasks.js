@@ -27,6 +27,7 @@
     refreshCalibration = SS.refreshCalibration,
     renderOverlay = SS.renderOverlay,
     renderRegionChips = SS.renderRegionChips,
+    renderRunParticipantPicker = SS.renderRunParticipantPicker,
     renderRunRegionPicker = SS.renderRunRegionPicker,
     renderTimeline = SS.renderTimeline,
     renderWorkflowParams = SS.renderWorkflowParams,
@@ -481,11 +482,11 @@
     // No .click() here, so mirror the tab into the category nav (late-bound).
     if (SS.syncToolCategoryNav) SS.syncToolCategoryNav();
 
-    // Select participant
-    if (task.participant) {
-      state.selectedParticipant = task.participant;
-      var sel = qs("#participantSelect");
-      if (sel) sel.value = task.participant;
+    // Load the task's participant so frame, pins and notes match the header.
+    if (task.participant && task.participant !== state.selectedParticipant) {
+      selectParticipant(task.participant);
+      state.runParticipants = [task.participant];
+      renderRunParticipantPicker();
     }
 
     // Select region

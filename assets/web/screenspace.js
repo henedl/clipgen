@@ -3191,6 +3191,7 @@
   SS.templateOverlayBounds = templateOverlayBounds;
   SS.renderRunRegionPicker = renderRunRegionPicker;
   SS.selectParticipant = selectParticipant;
+  SS.renderRunParticipantPicker = renderRunParticipantPicker;
   // Hub helper the color satellite reuses.
   SS.regionToPixels = regionToPixels;
   // Helpers the overlay-interaction satellite reads; it publishes renderRegionChips,

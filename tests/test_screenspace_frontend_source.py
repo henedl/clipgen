@@ -268,3 +268,12 @@ def test_tool_facts_come_from_the_catalog() -> None:
     assert "CONF_TASK_TYPES" not in results
     assert 'apiGet("api/tools")' in hub
     assert "state.tools[" in hub and "state.tools[" in results
+
+
+def test_task_restore_loads_the_tasks_participant():
+    """Assigning selectedParticipant alone left the frame, pins and notes on the
+    old participant, so a notes edit saved to the wrong one."""
+    body = _tasks_fn("restoreTaskToWorkflow")
+    assert "selectParticipant(task.participant)" in body
+    assert "state.runParticipants = [task.participant]" in body
+    assert "state.selectedParticipant = task.participant" not in body
