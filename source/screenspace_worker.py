@@ -495,10 +495,10 @@ class ScreenspaceWorker:
             progress = task.get("progress", 0.0)
             params = task.get("parameters", {})
 
-            # Offset multitool joins need every frame from the original start;
-            # restart from scratch.
-            if task.get("type") == "multitool" and _multitool_has_offset(
-                params.get("steps", [])
+            # Offset joins and timelapse output need every frame; restart from scratch.
+            if task.get("type") == "timelapse" or (
+                task.get("type") == "multitool"
+                and _multitool_has_offset(params.get("steps", []))
             ):
                 with self._lock:
                     # A Cancel that raced this Resume wins.
@@ -508,13 +508,15 @@ class ScreenspaceWorker:
                     task.pop("_progress_offset", None)
                     task.pop("_progress_scale", None)
                     task.pop("_paused_flag", None)
+                    task.pop("_resume_at", None)
                     task["result"] = []
                     task["progress"] = 0.0
                     task["status"] = TASK_STATUS_QUEUED
                 self._requeue(task)
                 continue
 
-            start = params.get("start_seconds", 0.0)
+            # A second resume continues from the first resume point.
+            start = task.get("_resume_at", params.get("start_seconds", 0.0))
             end = params.get("end_seconds")
             if end is None:
                 # Resume math is on the GLOBAL timeline; multi-video end is the
@@ -539,7 +541,8 @@ class ScreenspaceWorker:
                 task["_progress_offset"] = progress
                 task["_progress_scale"] = max(1.0 - progress, 0.001)
                 task.pop("_paused_flag", None)
-                params["start_seconds"] = resume_at
+                # Transient: the saved start_seconds must survive a resume.
+                task["_resume_at"] = resume_at
                 task["status"] = TASK_STATUS_QUEUED
 
             self._requeue(task)
@@ -861,6 +864,7 @@ class ScreenspaceWorker:
                         t["progress"] = 1.0
                         t.pop("_progress_offset", None)
                         t.pop("_progress_scale", None)
+                        t.pop("_resume_at", None)
                         raw = t.pop("_raw_results", [])
                         t["_generated_events"] = generate_events_from_results(t, raw)
                         if isinstance(result, list) and result:
@@ -945,6 +949,8 @@ class ScreenspaceWorker:
 
         # Shallow copy: fast-scan interval scaling must not persist for pause/resume.
         params = dict(task.get("parameters", {}))
+        if "_resume_at" in task:
+            params["start_seconds"] = task["_resume_at"]
         scan_mode = params.get("scan_mode", "normal")
         fast_opts: dict[str, Any] | None = None
         if scan_mode == "fast" and tool.supports_fast_scan:
