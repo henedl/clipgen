@@ -104,8 +104,11 @@ server_utils.register_static_routes(
 
 
 def run_active() -> bool:
-    """True while any workflow run is queued or running."""
+    """True while any workflow run or batch is queued or running."""
     live = (workflows.RUN_STATUS_QUEUED, workflows.RUN_STATUS_RUNNING)
+    with _batches_lock:
+        if _batches:
+            return True
     with _runs_lock:
         return any(runner.status in live for runner in _runs.values())
 
@@ -1283,7 +1286,7 @@ def _init_workflows_state(
     ``thinking_agents.configure``) are initialized. ``server._init_combined_state``
     calls :func:`_start_watch_thread` as its last step instead.
 
-    Called once, from ``build_combined_app``. A worksheet swap goes through
+    Called from ``build_combined_app`` and on an output-dir switch. A worksheet swap goes through
     :func:`repin_sheet_state` instead — re-running this would reload the
     manifest, reseed the watch baseline and restart the trigger daemon on
     every spreadsheet the user opens.

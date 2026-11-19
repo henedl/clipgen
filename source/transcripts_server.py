@@ -259,6 +259,15 @@ def _active_tasks(kind: str, pid: str | None = None) -> list[dict[str, Any]]:
     ]
 
 
+def work_active() -> bool:
+    """True while any transcript task or thinking agent is live."""
+    live = (transcripts.TASK_STATUS_QUEUED, transcripts.TASK_STATUS_RUNNING)
+    tasks = _worker.get_all_tasks(include_partials=False) if _worker else []
+    if any(t["status"] in live for t in tasks):
+        return True
+    return _orchestrator.any_generating()
+
+
 def _cancel_tasks(kind: str, pid: str) -> bool:
     cancelled = False
     for t in _active_tasks(kind, pid):

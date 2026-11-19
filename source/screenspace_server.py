@@ -234,6 +234,17 @@ def _task_state() -> dict[str, Any]:
     }
 
 
+def scan_active() -> bool:
+    """True while any scan is queued, running or paused."""
+    live = (
+        screenspace.TASK_STATUS_QUEUED,
+        screenspace.TASK_STATUS_RUNNING,
+        screenspace.TASK_STATUS_PAUSED,
+    )
+    tasks = _worker.get_all_tasks(include_results=False) if _worker else []
+    return any(t["status"] in live for t in tasks)
+
+
 def _sse_task_payload() -> str:
     """Build an SSE data line with current task state."""
     return f"data: {json.dumps({'ok': True, **_task_state()})}\n\n"
