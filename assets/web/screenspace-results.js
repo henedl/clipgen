@@ -325,15 +325,15 @@
     var row = el("div", "result-row" + (isExcluded ? " excluded" : ""));
     row.dataset.resultIndex = rIdx;
 
-    // Color and inactivity report spans; every other tool reports one instant.
-    var isSpan = task.type === "color" || task.type === "inactivity";
+    // Spans carry start/end; a running color scan streams instants instead.
+    var isSpan = r.start !== undefined;
     row.dataset.timestamp = isSpan ? r.start : r.timestamp;
     row.appendChild(el("span", "result-timestamp", isSpan
       ? formatTime(r.start, { decimals: 1 }) + " \u2013 " + formatTime(r.end, { decimals: 1 })
       : formatTime(r.timestamp, { decimals: 1 })));
 
     if (task.type === "color") {
-      row.appendChild(el("span", "result-detail", r.duration.toFixed(1) + "s"));
+      if (isSpan) row.appendChild(el("span", "result-detail", r.duration.toFixed(1) + "s"));
     } else if (task.type === "inactivity") {
       row.appendChild(el("span", "result-detail", r.duration.toFixed(1) + "s"));
       row.appendChild(el("span", "result-score", "d:" + (r.avg_distance !== undefined ? r.avg_distance : "?")));

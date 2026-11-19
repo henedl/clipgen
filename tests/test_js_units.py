@@ -466,3 +466,30 @@ def test_is_generate_fetch_aborted_classifies_errors():
         _CANCEL_STUBS,
     )
     assert out == [True, False, False, True]
+
+
+_RESULT_ROW = slice_between(
+    read("screenspace-results.js"),
+    "function buildResultRow(",
+    "// Which detectors offer a certainty cutoff",
+)
+_RESULT_ROW_STUBS = """
+function el(tag, cls, text) {
+  var kids = [];
+  return { dataset: {}, cls: cls, text: text || "", kids: kids,
+    appendChild: function (c) { kids.push(c); } };
+}
+function formatTime(t) { return String(t); }
+"""
+
+
+def test_result_row_accepts_streamed_color_instants():
+    """A running color scan streams {timestamp, _confidence}; treating it as a
+    span threw on r.duration and stalled the Results panel."""
+    out = _probe(
+        "[buildResultRow({timestamp: 4, _confidence: 0.9}, 0, null, false, {type: 'color'}).kids.map(function (k) { return k.text; }),"
+        " buildResultRow({start: 1, end: 3, duration: 2}, 0, null, false, {type: 'color'}).kids.map(function (k) { return k.text; })]",
+        prelude=_RESULT_ROW_STUBS,
+        snippet=_RESULT_ROW,
+    )
+    assert out == [["4"], ["1 – 3", "2.0s"]]
