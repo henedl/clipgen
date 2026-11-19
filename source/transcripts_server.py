@@ -210,9 +210,10 @@ def _agent_model(agent_key: str) -> str | None:
     return thinking_agents.resolve_model(agent)
 
 
-def _step_state_transcription(entry: dict[str, Any]) -> str:
-    # Persisted state only; the frontend merges live Whisper status from
-    # /api/transcribe/status.
+def _step_state_transcription(entry: dict[str, Any], live: bool) -> str:
+    # *live*: a queued or running transcribe task exists for this participant.
+    if live:
+        return "running"
     return "done" if entry.get("segments") else "idle"
 
 
@@ -512,6 +513,8 @@ def api_participants() -> FlaskResponse:
 
     _refresh_participants()
     result = []
+    # Before the lock: the worker lock never nests inside ours.
+    transcribing = {t["participant"] for t in _active_tasks("transcribe")}
     with _manifest_lock:
         src = _manifest.get("source_transcripts", {})
         for p in _participants:
@@ -534,7 +537,9 @@ def api_participants() -> FlaskResponse:
                 # Filled outside the lock below (stat/probe I/O).
                 "video_version": None,
                 "agents": {
-                    "transcription": _step_state_transcription(entry),
+                    "transcription": _step_state_transcription(
+                        entry, pid in transcribing
+                    ),
                     "summary": _step_state_agent(pid, entry, "summary"),
                     "citations": _step_state_agent(pid, entry, "citations"),
                     "friction": _step_state_agent(pid, entry, "friction"),
@@ -2893,6 +2898,8 @@ def api_transcribe() -> FlaskResponse:
     _refresh_participants()
     available = {p["id"]: p for p in _participants}
     enqueued = []
+    # A second click must not queue a duplicate run.
+    transcribing = {t["participant"] for t in _active_tasks("transcribe")}
 
     with _manifest_lock:
         src = _manifest.get("source_transcripts", {})
@@ -2902,7 +2909,7 @@ def api_transcribe() -> FlaskResponse:
         eligible: list[dict[str, Any]] = []
         for pid in participant_ids:
             p = available.get(pid)
-            if not p or not p.get("has_video"):
+            if not p or not p.get("has_video") or pid in transcribing:
                 continue
 
             # Skip already-transcribed unless force

@@ -387,8 +387,7 @@ def test_warmup_proceeds_when_model_cached(tr_client, monkeypatch):
 
 def test_transcribe_returns_adoptable_task_records(tr_client, monkeypatch):
     """The enqueue response is the client's only view of a new task until the
-    next 3 s status poll, and it gates the *next* enqueue on it (the server has
-    no in-flight guard, so a duplicate POST would run the participant twice).
+    next 3 s status poll, and it gates the *next* enqueue on it.
     A record missing created_at loses the newest-task-per-participant reducer to
     the participant's older completed task, so a re-transcribe would read as
     still-eligible and the pill would keep painting the stale done state."""
@@ -396,6 +395,9 @@ def test_transcribe_returns_adoptable_task_records(tr_client, monkeypatch):
     class _StubWorker:
         def enqueue(self, task):
             pass
+
+        def get_all_tasks(self, include_partials=True):
+            return []
 
     transcripts_server._participants = [
         {"id": "P01", "video_paths": ["/tmp/P01.mp4"], "has_video": True}
@@ -427,6 +429,33 @@ def test_transcribe_returns_adoptable_task_records(tr_client, monkeypatch):
     assert task["created_at"], "the reducer sorts on this; it must not be null"
 
 
+def test_transcribe_in_flight_reads_running_and_blocks_duplicate(
+    tr_client, monkeypatch
+):
+    """A queued run shows as running and a second click enqueues nothing."""
+    monkeypatch.setattr(
+        transcripts_server,
+        "_participants",
+        [{"id": "P01", "video_paths": ["/tmp/P01.mp4"], "has_video": True}],
+    )
+    monkeypatch.setattr(transcripts_server, "_refresh_participants", lambda: None)
+    monkeypatch.setattr(
+        transcripts_server, "_worker", transcripts.TranscriptWorker()
+    )  # never started: tasks stay queued
+    monkeypatch.setattr(transcripts, "is_whisper_model_cached", lambda n=None: True)
+
+    first = tr_client.post(
+        "/transcripts/api/transcribe", json={"participants": ["P01"]}
+    )
+    assert len(first.get_json()["tasks"]) == 1
+    rows = tr_client.get("/transcripts/api/participants").get_json()["participants"]
+    assert rows[0]["agents"]["transcription"] == "running"
+    again = tr_client.post(
+        "/transcripts/api/transcribe", json={"participants": ["P01"]}
+    )
+    assert again.get_json()["tasks"] == []
+
+
 def test_transcribe_applies_per_participant_overrides(tr_client, monkeypatch):
     """POST /api/transcribe threads {model, language} overrides onto the task."""
 
@@ -435,6 +464,9 @@ def test_transcribe_applies_per_participant_overrides(tr_client, monkeypatch):
     class _StubWorker:
         def enqueue(self, task):
             captured.append(task)
+
+        def get_all_tasks(self, include_partials=True):
+            return []
 
     transcripts_server._participants = [
         {"id": "P01", "video_paths": ["/tmp/P01.mp4"], "has_video": True}
@@ -467,6 +499,9 @@ def test_transcribe_without_overrides_defaults_to_none(tr_client, monkeypatch):
         def enqueue(self, task):
             captured.append(task)
 
+        def get_all_tasks(self, include_partials=True):
+            return []
+
     transcripts_server._participants = [
         {"id": "P01", "video_paths": ["/tmp/P01.mp4"], "has_video": True}
     ]
@@ -491,6 +526,9 @@ def _stub_transcribe_worker(monkeypatch) -> list[dict]:
     class _StubWorker:
         def enqueue(self, task):
             captured.append(task)
+
+        def get_all_tasks(self, include_partials=True):
+            return []
 
     transcripts_server._participants = [
         {"id": "P01", "video_paths": ["/tmp/P01.mp4"], "has_video": True}
@@ -617,6 +655,9 @@ def test_transcribe_rejects_uncached_model(tr_client, monkeypatch):
         def enqueue(self, task):
             captured.append(task)
 
+        def get_all_tasks(self, include_partials=True):
+            return []
+
     transcripts_server._participants = [
         {"id": "P01", "video_paths": ["/tmp/P01.mp4"], "has_video": True}
     ]
@@ -647,6 +688,9 @@ def test_transcribe_allows_uncached_with_allow_download(tr_client, monkeypatch):
     class _StubWorker:
         def enqueue(self, task):
             captured.append(task)
+
+        def get_all_tasks(self, include_partials=True):
+            return []
 
     transcripts_server._participants = [
         {"id": "P01", "video_paths": ["/tmp/P01.mp4"], "has_video": True}
