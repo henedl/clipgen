@@ -1118,6 +1118,40 @@ class TestDownloadModel:
             assert llm_client.download_model("acme/tiny:Q8_0") is True
             mock_urlopen.assert_not_called()
 
+    def test_second_download_keeps_first_part_file(self, tmp_path):
+        """Only the first download sweeps; a later one must not delete live .part files."""
+        stale = tmp_path / "tmpold.part"
+        stale.write_bytes(b"x")
+
+        def _resp(payload, during=None):
+            resp = MagicMock()
+            chunks = [payload, b""]
+
+            def _read(*_a):
+                if during is not None and len(chunks) == 1:
+                    during()  # a second download starts mid-stream
+                return chunks.pop(0)
+
+            resp.read.side_effect = _read
+            resp.headers.get.return_value = str(len(payload))
+            resp.__enter__ = MagicMock(return_value=resp)
+            return resp
+
+        def _second():
+            with patch("llm_client.urllib.request.urlopen", return_value=_resp(b"bb")):
+                assert llm_client.stream_download(
+                    "https://x/m", tmp_path / "b", sha256="", size=2
+                )
+
+        with patch(
+            "llm_client.urllib.request.urlopen", return_value=_resp(b"aa", _second)
+        ):
+            assert llm_client.stream_download(
+                "https://x/m", tmp_path / "a", sha256="", size=2
+            )
+        assert not stale.exists()
+        assert (tmp_path / "a").read_bytes() == b"aa"
+
     def test_bare_stem_is_not_downloadable(self):
         assert llm_client.download_model("local-model") is False
 

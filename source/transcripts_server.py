@@ -161,20 +161,30 @@ _llm_downloads = JobRegistry(
 )
 
 
+# Retry period for an unload deferred by another run on the model.
+_UNLOAD_RETRY_SECONDS = 5.0
+
+
 def _schedule_model_unload(model: str) -> None:
     """Schedule a model unload after ``config.LLM_UNLOAD_DELAY_SECONDS``.
 
     Replaces any pending unload timer for the same model so the delay always
-    measures from the most recent Stop.
+    measures from the most recent Stop. While another run uses the model, the
+    unload retries until that run ends; a new run cancels it.
     """
     delay = float(config.LLM_UNLOAD_DELAY_SECONDS)
     if delay <= 0:
-        llm_client.unload_model(model)
-        return
+        if model not in _orchestrator.busy_models():
+            llm_client.unload_model(model)
+            return
+        delay = _UNLOAD_RETRY_SECONDS
 
     def _unload() -> None:
         with _pending_model_unloads_lock:
             _pending_model_unloads.pop(model, None)
+        if model in _orchestrator.busy_models():
+            _schedule_model_unload(model)  # retry once the other run ends
+            return
         llm_client.unload_model(model)
 
     timer = threading.Timer(delay, _unload)
@@ -207,9 +217,10 @@ def _agent_model(agent_key: str) -> str | None:
     return thinking_agents.resolve_model(agent)
 
 
-def _step_state_transcription(entry: dict[str, Any]) -> str:
-    # Persisted state only; the frontend merges live Whisper status from
-    # /api/transcribe/status.
+def _step_state_transcription(entry: dict[str, Any], live: bool) -> str:
+    # *live*: a queued or running transcribe task exists for this participant.
+    if live:
+        return "running"
     return "done" if entry.get("segments") else "idle"
 
 
@@ -315,6 +326,8 @@ def _enqueue_speakers_task(pid: str, entry: dict[str, Any]) -> dict[str, Any] | 
     task = transcripts.create_speakers_task(
         pid, video_paths, entry["segments"], audio_index=entry.get("audio_index")
     )
+    # The merge drops the labels if a re-transcription lands first.
+    task["transcribed_at"] = entry.get("transcribed_at")
     _worker.enqueue(task)
     return _task_info(task)
 
@@ -509,6 +522,8 @@ def api_participants() -> FlaskResponse:
 
     _refresh_participants()
     result = []
+    # Queued or running transcribe tasks read as "running".
+    transcribing = {t["participant"] for t in _active_tasks("transcribe")}
     with _manifest_lock:
         src = _manifest.get("source_transcripts", {})
         for p in _participants:
@@ -531,7 +546,9 @@ def api_participants() -> FlaskResponse:
                 # Filled outside the lock below (stat/probe I/O).
                 "video_version": None,
                 "agents": {
-                    "transcription": _step_state_transcription(entry),
+                    "transcription": _step_state_transcription(
+                        entry, pid in transcribing
+                    ),
                     "summary": _step_state_agent(pid, entry, "summary"),
                     "citations": _step_state_agent(pid, entry, "citations"),
                     "friction": _step_state_agent(pid, entry, "friction"),
@@ -810,8 +827,11 @@ def api_edit_segment(participant: str) -> FlaskResponse:
         if original_text == new_text:
             return ok(correction=None)
 
-        # Create correction
-        correction = _new_correction(original_text, new_text)
+        # A whole-line edit rewrites only this line, never the study.
+        correction = {
+            **_new_correction(original_text, new_text),
+            "segment_id": segment_id,
+        }
         corrections.append(correction)
         _bump_corrections_version()  # new correction invalidates corrected cache
         _mark_friction_stale(entry)  # edited segment text invalidates friction scores
@@ -1728,6 +1748,10 @@ def api_summary_save(participant: str) -> FlaskResponse:
         # The editor shows placeholders; saving would store them as the summary.
         if redact.entry_applied(entry, entry.get("segments") or [], _redact_terms()):
             return err("Turn off redaction to edit", 409)
+        # Under the lock: a running dependent cannot commit against the old summary.
+        for dep in thinking_agents.AGENTS:
+            if "summary" in dep["depends_on"]:
+                _orchestrator.stop_locked(dep["key"], participant)
         entry["summary"] = summary_raw.strip()
         # An edited summary invalidates dependents exactly like the regenerate route.
         _invalidate_dependents(entry, summary_agent)
@@ -2291,7 +2315,9 @@ def api_dictionary_global_status() -> FlaskResponse:
 def api_dictionary_global_save() -> FlaskResponse:
     """Copy this study's dictionary to the config dir for reuse elsewhere."""
     with _manifest_lock:
-        corrections = list(_manifest.get("corrections", []))
+        corrections = [
+            c for c in _manifest.get("corrections", []) if not c.get("segment_id")
+        ]
         terms = list(_manifest.get("known_terms", []))
     if not corrections and not terms:
         return err("Nothing to save")
@@ -2884,13 +2910,15 @@ def api_transcribe() -> FlaskResponse:
 
     with _manifest_lock:
         src = _manifest.get("source_transcripts", {})
+        # Under the lock that covers the enqueue, so a concurrent POST cannot duplicate.
+        transcribing = {t["participant"] for t in _active_tasks("transcribe")}
 
         # Resolve eligible participants and their effective Whisper model
         # (override → default).
         eligible: list[dict[str, Any]] = []
         for pid in participant_ids:
             p = available.get(pid)
-            if not p or not p.get("has_video"):
+            if not p or not p.get("has_video") or pid in transcribing:
                 continue
 
             # Skip already-transcribed unless force
@@ -3090,7 +3118,12 @@ def _merge_completed_results_locked() -> list[str]:
             if task.get("kind") == "speakers":
                 # Labels land by id on the live list; marks and agents stay put.
                 live = src.get(pid)
-                if live and live.get("segments") and not _speakers_off(live):
+                if (
+                    live
+                    and live.get("segments")
+                    and not _speakers_off(live)
+                    and task.get("transcribed_at") == live.get("transcribed_at")
+                ):
                     _apply_speaker_result(live, task["result"])
                     entries_changed = True
                 _merged_task_ids.add(task["id"])
@@ -3109,14 +3142,19 @@ def _merge_completed_results_locked() -> list[str]:
                 for seg in task["result"].get("segments") or []:
                     seg.pop("speaker", None)
             if existing.get("segments"):
-                # A re-transcription re-mints the same "{pid}:{index}" ids; drop
-                # marks older than this run.
-                task_started = task.get("created_at") or ""
+                # Re-minted ids: drop marks made before this run started, not queued.
+                task_started = task.get("started_at") or ""
                 _manifest["marks"] = [
                     m
                     for m in _manifest.get("marks", [])
                     if (m.get("segment_id") or "").split(":", 1)[0] != pid
                     or (m.get("created") or "") >= task_started
+                ]
+                # Line edits name the old ids too.
+                _manifest["corrections"] = [
+                    c
+                    for c in _manifest.get("corrections", [])
+                    if (c.get("segment_id") or "").split(":", 1)[0] != pid
                 ]
             existing.update(task["result"])
             src[pid] = existing
@@ -3363,11 +3401,15 @@ class AgentOrchestrator:
         thread's ``finally`` block to fire.
         """
         with self._lock:
-            if participant not in self._in_flight.get(agent_key, set()):
-                return False
-            event = self._cancel_events.get(agent_key, {}).get(participant)
-            self._in_flight[agent_key].discard(participant)
-            self._started_at.get(agent_key, {}).pop(participant, None)
+            return self.stop_locked(agent_key, participant)
+
+    def stop_locked(self, agent_key: str, participant: str) -> bool:
+        """:meth:`stop` for a caller already holding ``_manifest_lock``."""
+        if participant not in self._in_flight.get(agent_key, set()):
+            return False
+        event = self._cancel_events.get(agent_key, {}).get(participant)
+        self._in_flight[agent_key].discard(participant)
+        self._started_at.get(agent_key, {}).pop(participant, None)
         with self._partial_lock:
             self._partial.get(agent_key, {}).pop(participant, None)
         if event is not None:

@@ -177,6 +177,8 @@
 
   function loadSummary(pid) {
     var ver = state.participantReqVer;
+    // A refresh must not repaint over an open summary edit.
+    if (state.summaryEditing && _summaryPaintedPid === pid) return;
 
     // Blank only on a real switch: the catch below keeps painted panes on transient failures.
     if (_summaryPaintedPid !== pid) {
@@ -190,7 +192,7 @@
     }
 
     apiGet(AGENT_DESCRIPTORS.summary.urlBase + "/" + pid).then(function (data) {
-      if (ver !== state.participantReqVer) return;
+      if (ver !== state.participantReqVer || state.summaryEditing) return;
       if (data.ok && data.summary) {
         _stopSummaryPoll();
         _onSummaryResult(pid, data);
@@ -473,7 +475,8 @@
   }
 
   function _restoreActiveTab(pid) {
-    var saved = getStoredUIMapEntry("transcripts", "tabByParticipant", pid);
+    var saved = state.pendingTab || getStoredUIMapEntry("transcripts", "tabByParticipant", pid);
+    state.pendingTab = null;
     selectTab(_tabNames().indexOf(saved) >= 0 ? saved : "summary");
   }
 

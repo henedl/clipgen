@@ -189,6 +189,97 @@ def test_segment_rebuild_keeps_the_reader_in_place():
     )
 
 
+def test_a_poller_restart_does_not_replay_old_completions():
+    """The server keeps finished tasks, so clearing the seen-id map on stop made
+    the next focus poll reload the transcript and repaint an open summary edit."""
+    assert "_refreshedCompletedTaskIds = {};" not in _JS.replace(
+        "var _refreshedCompletedTaskIds = {};", ""
+    ), "prune the seen ids to the server's list; never clear them"
+    start = _JS.index("function loadSummary(")
+    body = _JS[start : _JS.index("\n  }\n", start)]
+    assert body.count("state.summaryEditing") >= 2, (
+        "loadSummary and its reply must both leave an open edit alone"
+    )
+    start = _JS.index("function _applyTranscript(")
+    body = _JS[start : _JS.index("\n  }\n", start)]
+    assert "state.activeSegmentIndex = -1;" not in body.replace(
+        "if (state.activeSegmentIndex >= state.segments.length) state.activeSegmentIndex = -1;",
+        "",
+    ), "a same-participant reload keeps the J/K cursor"
+
+
+def test_redact_errors_toast_the_server_reason():
+    """err() replies reject, so a `data.error` read in `.then` never ran and
+    the toast showed only the generic fallback."""
+    js = read("transcripts-redact.js")
+    assert "showToast(data.error" not in js
+    assert "_redactFailToast(data" not in js
+    assert js.count("e.serverMessage ||") >= 5
+
+
+def test_keyboard_marks_survive_the_streaming_rebuild():
+    """M and 1-9 call toggleMark; on mirrored streaming rows it must write the
+    streaming cache, which renderPartialSegments rebuilds the mirror from."""
+    start = _JS.index("function toggleMark(")
+    body = _JS[start : _JS.index("\n  }\n", start)]
+    assert body.index("state.streamingParticipant") < body.index("_segmentIndexById")
+    assert "toggleMarkStreaming(" in body
+    start = _JS.index("function renderPartialSegmentsImpl(")
+    body = _JS[start : _JS.index("\n  }\n", start)]
+    assert "marks: _streamingMarks[" in body
+
+
+def test_streamed_rows_never_paint_onto_the_next_participant():
+    """_syncStreamSegs guards only by task id; each caller checks the switch."""
+    calls = _JS.count("_syncStreamSegs(") - 1  # minus the definition
+    assert calls == 2
+    assert _JS.count("if (streamVer !== state.participantReqVer) return;") == calls
+
+
+def test_hash_tab_survives_the_first_participant_load():
+    """A boot-time tab click lost to _restoreActiveTab, which runs later."""
+    assert "state.pendingTab = clipgenHashTab()" in _JS
+    start = _JS.index("function _restoreActiveTab(")
+    body = _JS[start : _JS.index("\n  }\n", start)]
+    assert body.index("state.pendingTab ||") < body.index("state.pendingTab = null")
+
+
+def test_closing_search_disarms_the_pending_query():
+    """Escape and the outside click hid the list, then the debounced or
+    in-flight search reopened it."""
+    js = read("transcripts-search.js")
+    start = js.index('if (e.key === "Escape") {')
+    escape = js[start : js.index("}", start)]
+    start = js.index("!searchArea.contains(e.target)")
+    outside = js[start : js.index("}", start)]
+    for branch in (escape, outside):
+        assert "clearTimeout(_searchTimer);" in branch
+        assert "_searchVer++;" in branch
+
+
+def test_free_text_tooltips_escape_quotes():
+    """escapeHtml leaves `"` alone, so a quoted mark label or sheet observation
+    cut its data-tooltip attribute short."""
+    start = _JS.index("function renderSegmentsImpl(")
+    body = _JS[start : _JS.index("\n  }\n", start)]
+    for line in body.splitlines():
+        if "markLabel = " in line or "var obsTitle = " in line:
+            assert '.replace(/"/g, "&quot;")' in line, line
+
+
+def test_segment_clicks_reach_the_outside_click_closers():
+    """A stopPropagation in the row handler kept the mark popover open, and an
+    open popover disables Space, J, K and M."""
+    start = _JS.index('container.addEventListener("click", function (e) {')
+    body = _JS[start : _JS.index('container.addEventListener("dblclick"', start)]
+    assert "stopPropagation" not in body
+    start = _JS.index("function showMarkPopover(")
+    body = _JS[start : _JS.index("\n  }\n", start)]
+    assert "setTimeout" in body, (
+        "the popover must attach its closer a tick late or its opening click closes it"
+    )
+
+
 def test_friction_decorations_are_the_only_friction_writer_on_the_segment_list():
     """renderSegments builds one big HTML string; applyFrictionDecorations then
     toggles classes on the result. If the string ALSO emitted friction markup the
@@ -1023,7 +1114,7 @@ def test_transcribe_enqueue_releases_its_claim_on_every_exit():
     assert body.count("_clearTranscribeInFlight(pids)") == 4, (
         "release on success, on !ok, on a declined download, and in .catch()"
     )
-    assert ".catch(function () {" in body, (
+    assert ".catch(function (e) {" in body, (
         "apiPost rejects on a non-2xx or a dropped connection; that path used to "
         "fall through silently and would now strand the claim"
     )

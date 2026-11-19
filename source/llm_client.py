@@ -1265,6 +1265,11 @@ def stream_download(
     return True
 
 
+# Directories already swept this process; the lock spans the sweep itself.
+_swept_dirs: set[Path] = set()
+_swept_dirs_lock = threading.Lock()
+
+
 def _sweep_stale_downloads(directory: Path) -> None:
     """Remove partial ``.part`` temp files left by an interrupted download.
 
@@ -1272,10 +1277,16 @@ def _sweep_stale_downloads(directory: Path) -> None:
     shutdown *without* unwinding, so quitting clipgen mid-download leaves the
     partial file behind — at ~6 GB per model that adds up fast. Best-effort
     by design; a sweep failure must not block the download that follows.
+    Runs once per directory per process: a later sweep would delete the
+    ``.part`` file of a download still in flight.
     """
-    for stale in directory.glob("tmp*.part"):
-        try:
-            if stale.is_file():
-                stale.unlink()
-        except OSError:
-            pass
+    with _swept_dirs_lock:
+        if directory in _swept_dirs:
+            return
+        _swept_dirs.add(directory)
+        for stale in directory.glob("tmp*.part"):
+            try:
+                if stale.is_file():
+                    stale.unlink()
+            except OSError:
+                pass

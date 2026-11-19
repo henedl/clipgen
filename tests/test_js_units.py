@@ -212,6 +212,71 @@ def test_extract_corrections_keeps_insertions_and_deletions():
     assert _diff("same text", "same  text") == []
 
 
+_TASK_PICK = slice_between(
+    _TRANSCRIPTS,
+    "  function _taskForSelectedParticipant(",
+    "  // Diarization rides the same task list",
+)
+_TASK_PICK_STUBS = r"""
+var state = { selectedParticipant: "P01", tasks: [] };
+function _isSpeakerTask(t) { return t.kind === "speakers"; }
+function _isRedactTask(t) { return t.kind === "redact"; }
+function pick(tasks) { state.tasks = tasks; var t = _taskForSelectedParticipant(); return t && t.id; }
+"""
+
+
+def test_status_task_pick_prefers_active_then_newest():
+    """A retry that completed must replace the older failure in the indicator."""
+    out = _probe(
+        "["
+        'pick([{id: "a", participant: "P01", status: "failed", created_at: 1},'
+        ' {id: "b", participant: "P01", status: "completed", created_at: 2}]),'
+        'pick([{id: "a", participant: "P01", status: "completed", created_at: 1},'
+        ' {id: "b", participant: "P01", status: "failed", created_at: 2}]),'
+        'pick([{id: "a", participant: "P01", status: "queued", created_at: 3},'
+        ' {id: "b", participant: "P01", status: "running", created_at: 1},'
+        ' {id: "c", participant: "P01", status: "failed", created_at: 4}]),'
+        'pick([{id: "a", participant: "P01", status: "completed", created_at: 1},'
+        ' {id: "b", participant: "P01", status: "running", created_at: 2, kind: "redact"}])'
+        "]",
+        prelude=_TASK_PICK_STUBS,
+        snippet=_TASK_PICK,
+    )
+    assert out == ["b", "b", "b", "a"]
+
+
+_EDIT_TEXT = slice_between(
+    _TRANSCRIPTS, "  function _segmentEditText(", "  function startSegmentEditing("
+)
+
+# A .segment-text node whose first child is the mark label badge.
+_FAKE_TEXT_EL = r"""
+function fakeTextEl(badgeText, wordText) {
+  var parts = badgeText === null ? [wordText] : [badgeText, wordText];
+  return { cloneNode: function () {
+    var kids = parts.slice();
+    return {
+      querySelector: function () {
+        return badgeText === null ? null : { remove: function () { kids.shift(); } };
+      },
+      get textContent() { return kids.join(""); },
+    };
+  } };
+}
+"""
+
+
+def test_segment_edit_text_drops_the_mark_badge():
+    """The label badge must not leak into a saved correction."""
+    out = _probe(
+        '[_segmentEditText(fakeTextEl("Friction · confusion", "I can not find it")),'
+        ' _segmentEditText(fakeTextEl(null, "plain line"))]',
+        prelude=_FAKE_TEXT_EL,
+        snippet=_EDIT_TEXT,
+    )
+    assert out == ["I can not find it", "plain line"]
+
+
 # ---- NDJSON streaming (utils.js) ----
 
 # Each chunk is a string, a byte array, or an Error the reader rejects with.

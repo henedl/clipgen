@@ -387,8 +387,7 @@ def test_warmup_proceeds_when_model_cached(tr_client, monkeypatch):
 
 def test_transcribe_returns_adoptable_task_records(tr_client, monkeypatch):
     """The enqueue response is the client's only view of a new task until the
-    next 3 s status poll, and it gates the *next* enqueue on it (the server has
-    no in-flight guard, so a duplicate POST would run the participant twice).
+    next 3 s status poll, and it gates the *next* enqueue on it.
     A record missing created_at loses the newest-task-per-participant reducer to
     the participant's older completed task, so a re-transcribe would read as
     still-eligible and the pill would keep painting the stale done state."""
@@ -396,6 +395,9 @@ def test_transcribe_returns_adoptable_task_records(tr_client, monkeypatch):
     class _StubWorker:
         def enqueue(self, task):
             pass
+
+        def get_all_tasks(self, include_partials=True):
+            return []
 
     transcripts_server._participants = [
         {"id": "P01", "video_paths": ["/tmp/P01.mp4"], "has_video": True}
@@ -427,6 +429,65 @@ def test_transcribe_returns_adoptable_task_records(tr_client, monkeypatch):
     assert task["created_at"], "the reducer sorts on this; it must not be null"
 
 
+def test_transcribe_in_flight_reads_running_and_blocks_duplicate(
+    tr_client, monkeypatch
+):
+    """A queued run shows as running and a second click enqueues nothing."""
+    monkeypatch.setattr(
+        transcripts_server,
+        "_participants",
+        [{"id": "P01", "video_paths": ["/tmp/P01.mp4"], "has_video": True}],
+    )
+    monkeypatch.setattr(transcripts_server, "_refresh_participants", lambda: None)
+    monkeypatch.setattr(
+        transcripts_server, "_worker", transcripts.TranscriptWorker()
+    )  # never started: tasks stay queued
+    monkeypatch.setattr(transcripts, "is_whisper_model_cached", lambda n=None: True)
+
+    first = tr_client.post(
+        "/transcripts/api/transcribe", json={"participants": ["P01"]}
+    )
+    assert len(first.get_json()["tasks"]) == 1
+    rows = tr_client.get("/transcripts/api/participants").get_json()["participants"]
+    assert rows[0]["agents"]["transcription"] == "running"
+    again = tr_client.post(
+        "/transcripts/api/transcribe", json={"participants": ["P01"]}
+    )
+    assert again.get_json()["tasks"] == []
+
+
+def test_concurrent_transcribe_posts_enqueue_once(tr_app, tr_client, monkeypatch):
+    """Two simultaneous POSTs for one participant must not both enqueue."""
+    monkeypatch.setattr(
+        transcripts_server,
+        "_participants",
+        [{"id": "P01", "video_paths": ["/tmp/P01.mp4"], "has_video": True}],
+    )
+    monkeypatch.setattr(transcripts_server, "_refresh_participants", lambda: None)
+    worker = transcripts.TranscriptWorker()  # never started: tasks stay queued
+    monkeypatch.setattr(transcripts_server, "_worker", worker)
+    monkeypatch.setattr(transcripts, "is_whisper_model_cached", lambda n=None: True)
+
+    real_active = transcripts_server._active_tasks
+    other = threading.Thread(
+        target=lambda: tr_app.test_client().post(
+            "/transcripts/api/transcribe", json={"participants": ["P01"]}
+        )
+    )
+
+    def racing_active(kind, pid=None):
+        out = real_active(kind, pid)
+        if kind == "transcribe" and not other.is_alive() and other.ident is None:
+            other.start()  # the second POST lands between check and enqueue
+            other.join(0.2)
+        return out
+
+    monkeypatch.setattr(transcripts_server, "_active_tasks", racing_active)
+    tr_client.post("/transcripts/api/transcribe", json={"participants": ["P01"]})
+    other.join(5.0)
+    assert len(worker.get_all_tasks(include_partials=False)) == 1
+
+
 def test_transcribe_applies_per_participant_overrides(tr_client, monkeypatch):
     """POST /api/transcribe threads {model, language} overrides onto the task."""
 
@@ -435,6 +496,9 @@ def test_transcribe_applies_per_participant_overrides(tr_client, monkeypatch):
     class _StubWorker:
         def enqueue(self, task):
             captured.append(task)
+
+        def get_all_tasks(self, include_partials=True):
+            return []
 
     transcripts_server._participants = [
         {"id": "P01", "video_paths": ["/tmp/P01.mp4"], "has_video": True}
@@ -467,6 +531,9 @@ def test_transcribe_without_overrides_defaults_to_none(tr_client, monkeypatch):
         def enqueue(self, task):
             captured.append(task)
 
+        def get_all_tasks(self, include_partials=True):
+            return []
+
     transcripts_server._participants = [
         {"id": "P01", "video_paths": ["/tmp/P01.mp4"], "has_video": True}
     ]
@@ -491,6 +558,9 @@ def _stub_transcribe_worker(monkeypatch) -> list[dict]:
     class _StubWorker:
         def enqueue(self, task):
             captured.append(task)
+
+        def get_all_tasks(self, include_partials=True):
+            return []
 
     transcripts_server._participants = [
         {"id": "P01", "video_paths": ["/tmp/P01.mp4"], "has_video": True}
@@ -617,6 +687,9 @@ def test_transcribe_rejects_uncached_model(tr_client, monkeypatch):
         def enqueue(self, task):
             captured.append(task)
 
+        def get_all_tasks(self, include_partials=True):
+            return []
+
     transcripts_server._participants = [
         {"id": "P01", "video_paths": ["/tmp/P01.mp4"], "has_video": True}
     ]
@@ -647,6 +720,9 @@ def test_transcribe_allows_uncached_with_allow_download(tr_client, monkeypatch):
     class _StubWorker:
         def enqueue(self, task):
             captured.append(task)
+
+        def get_all_tasks(self, include_partials=True):
+            return []
 
     transcripts_server._participants = [
         {"id": "P01", "video_paths": ["/tmp/P01.mp4"], "has_video": True}
@@ -1139,6 +1215,34 @@ def test_zero_delay_unloads_immediately(_agent_state_clean, monkeypatch):
     transcripts_server._schedule_model_unload("test-model")
 
     assert calls == ["test-model"]
+    assert "test-model" not in transcripts_server._pending_model_unloads
+
+
+@pytest.mark.parametrize("delay", [0, 0.01])
+def test_unload_waits_for_model_in_use(_agent_state_clean, monkeypatch, delay):
+    """A Stop defers the unload while another run uses the model, then unloads."""
+    monkeypatch.setattr(config, "LLM_UNLOAD_DELAY_SECONDS", delay)
+    monkeypatch.setattr(transcripts_server, "_UNLOAD_RETRY_SECONDS", 0.01)
+    busy = {"test-model"}
+    monkeypatch.setattr(transcripts_server._orchestrator, "busy_models", lambda: busy)
+    calls: list[str] = []
+    monkeypatch.setattr(
+        transcripts_server.llm_client,
+        "unload_model",
+        lambda m: calls.append(m) or True,
+    )
+
+    transcripts_server._schedule_model_unload("test-model")
+    time.sleep(0.1)  # several retry periods while busy
+    assert calls == []
+    assert "test-model" in transcripts_server._pending_model_unloads
+    busy.clear()  # the other run ends
+    deadline = time.monotonic() + 5.0
+    while not calls:
+        assert time.monotonic() < deadline
+        time.sleep(0.01)
+    assert calls == ["test-model"]
+    time.sleep(0.05)
     assert "test-model" not in transcripts_server._pending_model_unloads
 
 
@@ -2562,6 +2666,34 @@ def test_summary_put_marks_friction_stale(tr_client, _agent_state_clean, monkeyp
     assert "citations" not in entry  # citations invalidated alongside friction
 
 
+def test_summary_put_stops_running_dependents(
+    tr_client, _agent_state_clean, monkeypatch
+):
+    """A dependent mid-run must not commit against the replaced summary."""
+    monkeypatch.setattr(transcripts_server, "_schedule_persist", lambda: None)
+    _seed_friction_entry()
+    orch = transcripts_server._orchestrator
+    events = {}
+    for key in ("citations", "friction"):
+        events[key] = threading.Event()
+        orch._in_flight[key].add("P01")
+        orch._cancel_events[key]["P01"] = events[key]
+    # A rejected save leaves the runs alone.
+    monkeypatch.setattr(transcripts_server.redact, "entry_applied", lambda *a: True)
+    resp = tr_client.put(
+        "/transcripts/api/agent/summary/P01", json={"summary": "an edited summary"}
+    )
+    assert resp.status_code == 409
+    assert not any(evt.is_set() for evt in events.values())
+    monkeypatch.setattr(transcripts_server.redact, "entry_applied", lambda *a: False)
+    resp = tr_client.put(
+        "/transcripts/api/agent/summary/P01", json={"summary": "an edited summary"}
+    )
+    assert resp.status_code == 200
+    assert all(evt.is_set() for evt in events.values())
+    assert not orch.any_generating()
+
+
 def test_marks_add_debounces_persist_until_flush(tr_client, monkeypatch):
     """Rapid mark edits schedule a debounced write rather than blocking each
     request on disk; _flush_pending_persist forces the pending write to land
@@ -3691,6 +3823,12 @@ def test_retranscription_merge_drops_pre_run_marks(monkeypatch, tmp_path):
                     "created": "2026-03-01T12:00:00+00:00",
                 },
                 {
+                    # Made on the old transcript while the re-run sat queued.
+                    "id": "m_queued",
+                    "segment_id": "P01:2",
+                    "created": "2026-03-01T03:00:00+00:00",
+                },
+                {
                     "id": "m_other",
                     "segment_id": "P02:0",
                     "created": "2026-01-01T00:00:00+00:00",
@@ -3705,6 +3843,7 @@ def test_retranscription_merge_drops_pre_run_marks(monkeypatch, tmp_path):
         "participant": "P01",
         "status": transcripts.TASK_STATUS_COMPLETED,
         "created_at": "2026-03-01T00:00:00+00:00",
+        "started_at": "2026-03-01T06:00:00+00:00",
         "result": {"segments": [{"start": 0.0, "end": 2.0, "text": "new"}]},
     }
     monkeypatch.setattr(transcripts_server, "_worker", _CompletedTasksWorker([task]))
@@ -4181,6 +4320,7 @@ def test_merge_speakers_task_copies_labels_by_id_without_agent_reset(monkeypatch
         "participant": pid,
         "status": transcripts.TASK_STATUS_COMPLETED,
         "created_at": "9999",
+        "transcribed_at": "then",
         "result": {
             "segments": [
                 {"id": "P01:0", "text": "a", "speaker": "1"},
@@ -4216,6 +4356,39 @@ def test_merge_speakers_task_copies_labels_by_id_without_agent_reset(monkeypatch
     assert chained == []
     assert transcripts_server._corrections_version > before
     assert "sp_done" in transcripts_server._merged_task_ids
+
+
+def test_merge_drops_speakers_from_before_a_retranscription(monkeypatch):
+    """Labels computed on the old transcript must not land on re-minted ids."""
+    entry = {
+        "segments": [{"id": "P01:0", "text": "new words"}],
+        "speakers": {"enabled": True, "labels": {}, "count": 0},
+        "transcribed_at": "second run",
+    }
+    monkeypatch.setattr(
+        transcripts_server, "_manifest", {"source_transcripts": {"P01": entry}}
+    )
+    task = {
+        "id": "sp_stale",
+        "kind": "speakers",
+        "participant": "P01",
+        "status": transcripts.TASK_STATUS_COMPLETED,
+        "transcribed_at": "first run",
+        "result": {
+            "segments": [{"id": "P01:0", "text": "old words", "speaker": "2"}],
+            "speakers": {"enabled": True, "labels": {}, "count": 2},
+        },
+    }
+    monkeypatch.setattr(transcripts_server, "_worker", _CompletedTasksWorker([task]))
+    monkeypatch.setattr(transcripts_server, "_merged_task_ids", set())
+    monkeypatch.setattr(transcripts_server, "_pending_chain_pids", [])
+
+    with transcripts_server._manifest_lock:
+        transcripts_server._merge_completed_results_locked()
+
+    assert "speaker" not in entry["segments"][0]
+    assert entry["speakers"]["count"] == 0
+    assert "sp_stale" in transcripts_server._merged_task_ids
 
 
 def test_speakers_segment_override_and_new_speaker(tr_client, monkeypatch, tmp_path):
@@ -4495,6 +4668,55 @@ def test_edit_segment_matches_already_corrected_text(tr_client, monkeypatch):
     assert resp.get_json()["correction"]["from"] == "I like the cat"
     seg = tr_client.get("/transcripts/api/transcript/P01").get_json()["segments"][0]
     assert seg["text"] == "I really like the cat"
+
+
+def test_edit_segment_scopes_to_that_line(tr_client, monkeypatch):
+    """A whole-line edit rewrites its own line only, and stays study-local."""
+    monkeypatch.setattr(transcripts_server, "_schedule_persist", lambda: None)
+    src = transcripts_server._manifest["source_transcripts"]
+    src["P01"] = {
+        "segments": [
+            {"id": "P01:0", "start": 0.0, "end": 1.0, "text": "Okay."},
+            {"id": "P01:1", "start": 1.0, "end": 2.0, "text": "I think that's okay."},
+        ],
+    }
+    src["P02"] = {
+        "segments": [{"id": "P02:0", "start": 0.0, "end": 1.0, "text": "Okay."}],
+    }
+    resp = tr_client.put(
+        "/transcripts/api/transcript/P01/segment",
+        json={"segment_id": "P01:0", "text": "Okay, start the first task."},
+    )
+    assert resp.get_json()["correction"]["segment_id"] == "P01:0"
+
+    def texts(pid):
+        body = tr_client.get(f"/transcripts/api/transcript/{pid}").get_json()
+        return [s["text"] for s in body["segments"]]
+
+    assert texts("P01") == ["Okay, start the first task.", "I think that's okay."]
+    assert texts("P02") == ["Okay."]
+    corrections = transcripts_server._manifest["corrections"]
+    assert transcripts.get_corrections_keywords(corrections) == []
+    csv_text = tr_client.get("/transcripts/api/dictionary.csv").get_data(as_text=True)
+    assert "first task" not in csv_text
+
+    # A re-transcription re-mints the ids, so the line edit goes.
+    class _Worker:
+        def get_all_tasks(self, include_partials=True):
+            return [
+                {
+                    "id": "t1",
+                    "participant": "P01",
+                    "status": transcripts.TASK_STATUS_COMPLETED,
+                    "created_at": "",
+                    "result": {"segments": [{"start": 0.0, "end": 1.0, "text": "x"}]},
+                }
+            ]
+
+    monkeypatch.setattr(transcripts_server, "_worker", _Worker())
+    with transcripts_server._manifest_lock:
+        transcripts_server._merge_completed_results_locked()
+    assert transcripts_server._manifest["corrections"] == []
 
 
 # ---- PII redaction ---------------------------------------------------------

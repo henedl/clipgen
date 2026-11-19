@@ -53,6 +53,8 @@
     xrefPoller: null,
     xrefEligible: false,
     xrefIndex: { eventsByParticipant: {}, sheetByParticipant: {} },
+    // A #tab= deep link; the first tab restore takes it once.
+    pendingTab: null,
     summaryEditing: false,
     summaryText: "",
     summaryCitations: null,
@@ -340,13 +342,14 @@
     var pid = state.selectedParticipant;
     if (!pid) return null;
     var latest = null;
+    // Running beats queued beats finished; among finished tasks the newest wins.
+    var order = { running: 2, queued: 1 };
     for (var i = 0; i < state.tasks.length; i++) {
       var t = state.tasks[i];
       if (t.participant !== pid || _isSpeakerTask(t) || _isRedactTask(t)) continue;
-      // Priority: running > queued > failed > completed/cancelled > stale
       if (!latest) { latest = t; continue; }
-      var order = { running: 5, queued: 4, failed: 3, completed: 2, cancelled: 1 };
-      if ((order[t.status] || 0) > (order[latest.status] || 0)) latest = t;
+      var rank = order[t.status] || 0, latestRank = order[latest.status] || 0;
+      if (rank > latestRank || (rank === latestRank && t.created_at > latest.created_at)) latest = t;
     }
     return latest;
   }
@@ -748,6 +751,7 @@
     hideMarkPopover();
     hideSpeakerPopover();
     state.selectedParticipant = pid;
+    state.activeSegmentIndex = -1;
     setStoredUIStateField("transcripts", "selectedParticipant", pid);
     // Restore transcribe-range markers; loadedmetadata clamps them later.
     if (TS.restoreMarkers) {
@@ -856,7 +860,9 @@
     } else if (taskForPid && taskForPid.status === "running" && taskForPid.partial_count > 0) {
       state.streamingParticipant = pid;
       clearAnalysisPanel();
+      var streamVer = state.participantReqVer;
       _syncStreamSegs(taskForPid, function (segs) {
+        if (streamVer !== state.participantReqVer) return;
         if (segs.length > 0) renderPartialSegments(segs, taskForPid.progress);
       });
     } else {
@@ -956,7 +962,8 @@
     state.segments = data.segments;
     state.speakers = data.speakers || null;
     state.redaction = data.redaction || null;
-    state.activeSegmentIndex = -1;
+    // A same-participant reload keeps the J/K cursor; selectParticipant resets it.
+    if (state.activeSegmentIndex >= state.segments.length) state.activeSegmentIndex = -1;
     renderSegments();
     renderTimeline();
     renderRedactPanel();
@@ -1046,7 +1053,8 @@
       var markColor = markCat ? markCat.color : null;
       var markClass = markObj ? "segment-mark marked" : "segment-mark";
       var markStyle = markColor ? ' style="background:' + markColor + '"' : "";
-      var markLabel = markObj && markObj.label ? ' data-tooltip="' + escapeHtml(markObj.label) + '"' : "";
+      // escapeHtml leaves quotes alone; a quote would end the attribute.
+      var markLabel = markObj && markObj.label ? ' data-tooltip="' + escapeHtml(markObj.label).replace(/"/g, "&quot;") + '"' : "";
       var annoBadgeHtml = "";
       if (markObj && markObj.label && markColor) {
         annoBadgeHtml = '<span class="segment-anno-badge" style="--anno-badge-fg:' + markColor + '">' + escapeHtml(markObj.label) + '</span>';
@@ -1072,8 +1080,8 @@
             html += '<span class="segment-xref-badge" style="background:' + XREF_BADGES.screenspace.color + '" data-tooltip="' + escapeHtml(evTypes.join(", ")) + '"><span class="xref-badge-icon" style="' + iconMaskStyle(XREF_BADGES.screenspace.icon) + '"></span></span>';
           }
           if (xref.sheetObservations.length > 0) {
-            var obsTitle = xref.sheetObservations[0].observation;
-            html += '<span class="segment-xref-badge" style="background:' + XREF_BADGES.sheet.color + '" data-tooltip="' + escapeHtml(obsTitle) + '"><span class="xref-badge-icon" style="' + iconMaskStyle(XREF_BADGES.sheet.icon) + '"></span></span>';
+            var obsTitle = escapeHtml(xref.sheetObservations[0].observation).replace(/"/g, "&quot;");
+            html += '<span class="segment-xref-badge" style="background:' + XREF_BADGES.sheet.color + '" data-tooltip="' + obsTitle + '"><span class="xref-badge-icon" style="' + iconMaskStyle(XREF_BADGES.sheet.icon) + '"></span></span>';
           }
           html += '</span>';
         }
@@ -1405,7 +1413,8 @@
         end: s.end,
         text: s.text,
         speaker: s.speaker,
-        marks: [],
+        // Shared with the cache so hotkeys and J/K see streaming marks.
+        marks: _streamingMarks[pid + ":" + mi] ? [_streamingMarks[pid + ":" + mi]] : [],
       });
     }
     state.segments = mirrored;
@@ -1426,6 +1435,7 @@
     if (!container) return;
     _segmentListDelegated = true;
 
+    // No stopPropagation: document outside-click closers must see these clicks.
     container.addEventListener("click", function (e) {
       var row = e.target.closest(".segment-row");
       if (!row) return;
@@ -1435,7 +1445,6 @@
 
       var markEl = e.target.closest(".segment-mark");
       if (markEl && row.contains(markEl)) {
-        e.stopPropagation();
         var segId = markEl.getAttribute("data-segment-id");
         if (isStreaming) {
           var existing = _streamingMarks[segId];
@@ -1452,7 +1461,6 @@
 
       var copyEl = e.target.closest(".segment-copy");
       if (copyEl && row.contains(copyEl)) {
-        e.stopPropagation();
         var src = isStreaming ? (_partialRender.segments || []) : state.segments;
         var segCopy = src[idx];
         if (!segCopy) return;
@@ -1470,21 +1478,18 @@
 
       var spkEl = e.target.closest(".segment-speaker");
       if (spkEl && row.contains(spkEl) && spkEl.hasAttribute("data-speaker")) {
-        e.stopPropagation();
         showSpeakerPopover(spkEl, spkEl.getAttribute("data-speaker"), idx);
         return;
       }
 
       var tsEl = e.target.closest(".segment-timestamp");
       if (tsEl && row.contains(tsEl)) {
-        e.stopPropagation();
         seekVideo(start);
         return;
       }
 
       var textEl = e.target.closest(".segment-text");
       if (textEl && row.contains(textEl)) {
-        e.stopPropagation();
         if (state.editingTextEl === textEl) return;
         // A placeholder chip opens the Redact tab, where it can be restored.
         if (e.target.closest(".segment-pii") && TS.selectTab) {
@@ -1588,12 +1593,20 @@
 
   // ---- Inline segment editing ----
 
+  // Line text without the mark label badge, which renders inside .segment-text.
+  function _segmentEditText(textEl) {
+    var copy = textEl.cloneNode(true);
+    var badge = copy.querySelector(".segment-anno-badge");
+    if (badge) badge.remove();
+    return copy.textContent;
+  }
+
   function startSegmentEditing(textEl) {
     if (state.editingTextEl === textEl) return;
     if (state.editingTextEl) finishSegmentEditing(state.editingTextEl, false);
 
     state.editingTextEl = textEl;
-    textEl.setAttribute("data-original-text", textEl.textContent);
+    textEl.setAttribute("data-original-text", _segmentEditText(textEl));
     textEl.setAttribute("contenteditable", "true");
     textEl.setAttribute("spellcheck", "false");
     textEl.classList.add("segment-text-editing");
@@ -1633,7 +1646,7 @@
 
   function finishSegmentEditing(textEl, cancel) {
     var originalText = textEl.getAttribute("data-original-text") || "";
-    var newText = textEl.textContent.trim();
+    var newText = _segmentEditText(textEl).trim();
 
     textEl.removeAttribute("contenteditable");
     textEl.removeAttribute("data-original-text");
@@ -1663,12 +1676,12 @@
     var pid = state.selectedParticipant;
     if (!pid || !segId) return;
     apiPut("api/transcript/" + encodeURIComponent(pid) + "/segment", { segment_id: segId, text: text })
-      .then(function (data) {
-        showToast(data.ok ? "Segment saved" : (data.error || "Failed to save segment"));
+      .then(function () {
+        showToast("Segment saved");
         // A changed segment may requeue the redact pass.
-        if (data.ok) pollTaskStatus();
-      }, function () {
-        showToast("Failed to save segment");
+        pollTaskStatus();
+      }, function (e) {
+        showToast(e.serverMessage || "Failed to save segment");
       })
       .then(function () {
         if (state.streamingParticipant) return;
@@ -1839,6 +1852,12 @@
   }
 
   function toggleMark(segmentId) {
+    // Mirrored streaming rows are rebuilt each poll; marks live in _streamingMarks.
+    if (state.streamingParticipant) {
+      var dot = qs('#segmentList .segment-mark[data-segment-id="' + segmentId + '"]');
+      if (dot) toggleMarkStreaming(segmentId, dot);
+      return;
+    }
     var idx = _segmentIndexById(segmentId);
     var seg = idx >= 0 ? state.segments[idx] : null;
     if (!seg) {
@@ -1888,6 +1907,8 @@
           label: m.label || "",
           severity: m.severity || "",
         };
+        var mi = _segmentIndexById(segmentId);
+        if (mi >= 0) state.segments[mi].marks = [_streamingMarks[segmentId]];
         _bumpStreamingMarksVersion();
       }
     }).catch(toastError("Could not add mark"));
@@ -2212,6 +2233,15 @@
 
   // Keyed by task id, not participant: old completed tasks linger and would suppress new runs.
   var _refreshedCompletedTaskIds = {};
+
+  // Forget only tasks the server dropped; clearing replays every old completion.
+  function _pruneSeenTasks(tasks) {
+    var kept = {};
+    tasks.forEach(function (t) {
+      if (_refreshedCompletedTaskIds[t.id]) kept[t.id] = true;
+    });
+    _refreshedCompletedTaskIds = kept;
+  }
   // Poll cycles kept alive after completion so the agent "Generating…" state surfaces.
   var _postCompletionGrace = 0;
   var POST_COMPLETION_GRACE_CYCLES = 4; // ~12s at POLL_INTERVAL=3000ms
@@ -2330,7 +2360,10 @@
       if (selectedRunningTask) {
         state.streamingParticipant = state.selectedParticipant;
         _loadStreamingMarks(state.selectedParticipant);
+        // The segments fetch can outlive a participant switch.
+        var streamVer = state.participantReqVer;
         _syncStreamSegs(selectedRunningTask, function (segs) {
+          if (streamVer !== state.participantReqVer) return;
           if (segs.length > 0) renderPartialSegments(segs, selectedRunningTask.progress);
         });
       } else if (state.streamingParticipant) {
@@ -2387,7 +2420,7 @@
           if (_anyAgentActive() || _postCompletionGrace > 0 || state.streamingParticipant) startPolling();
           else if (!hasActive) {
             stopPolling();
-            _refreshedCompletedTaskIds = {};
+            _pruneSeenTasks(data.tasks);
           }
         });
       }
@@ -2396,7 +2429,7 @@
         startPolling();
       } else if (!needsRefresh) {
         stopPolling();
-        _refreshedCompletedTaskIds = {};
+        _pruneSeenTasks(data.tasks);
       }
 
       if (!hasActive && _hadActiveTranscriptionLastPoll) {
@@ -3002,11 +3035,7 @@
     initPlayerKeyboard();
     initPanelTabs();
     // #tab=friction deep links; the #P07 form is handled in loadParticipants.
-    var hashTab = clipgenHashTab();
-    if (hashTab === "summary" || hashTab === "friction" || hashTab === "redact") {
-      var hashTabBtn = qs("#tabBtn" + hashTab.charAt(0).toUpperCase() + hashTab.slice(1));
-      if (hashTabBtn) hashTabBtn.click();
-    }
+    state.pendingTab = clipgenHashTab() || null;
     initSummaryActions();
     initFriction();
     initFrictionMode();

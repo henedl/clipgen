@@ -128,8 +128,9 @@
     pollTaskStatus();
   }
 
-  function _redactFailToast(data, fallback) {
-    showToast(data.reason === "model_missing" ? "Download the Redact model in Settings" : (data.error || fallback));
+  // These routes answer 409 only for a missing model; utils.js drops `reason`.
+  function _redactFailToast(e, fallback) {
+    showToast(e.status === 409 ? "Download the Redact model in Settings" : (e.serverMessage || fallback));
   }
 
   // Agent output gets placeholders at read time, so refetch it with the transcript.
@@ -142,17 +143,13 @@
 
   function setRedactEnabled(pid, enabled) {
     return apiPut("api/redact/" + pid, { enabled: enabled }).then(function (data) {
-      if (!data.ok) {
-        _redactFailToast(data, "Failed to update redaction");
-        return loadParticipants().then(renderRedactPanel);
-      }
       _adoptTask(data.task);
       return loadParticipants().then(function () {
         renderRedactPanel();
         _reloadShown(pid);
       });
-    }).catch(function () {
-      showToast("Failed to update redaction");
+    }).catch(function (e) {
+      _redactFailToast(e, "Failed to update redaction");
       // Put the switch back before the reload, which may fail too.
       renderRedactPanel();
       return loadParticipants().then(renderRedactPanel);
@@ -161,14 +158,10 @@
 
   function regenerateRedact(pid) {
     return apiPost("api/redact/" + pid + "/regenerate", {}).then(function (data) {
-      if (!data.ok) {
-        _redactFailToast(data, "Failed to start redaction");
-        return;
-      }
       _adoptTask(data.task);
       loadParticipants();
-    }).catch(function () {
-      showToast("Failed to start redaction");
+    }).catch(function (e) {
+      _redactFailToast(e, "Failed to start redaction");
     });
   }
 
@@ -203,19 +196,17 @@
   // Resolves true when the term is listed afterwards.
   function addRedactTerm(term) {
     return apiPost("api/redact-terms", { term: term }).then(function (data) {
-      if (!data.ok) { showToast(data.error || "Failed to add term"); return false; }
       showToast(_termToast(data));
       if (!data.duplicate) _termsChanged(data.terms);
       return true;
-    }).catch(function () { showToast("Failed to add term"); return false; });
+    }).catch(function (e) { showToast(e.serverMessage || "Failed to add term"); return false; });
   }
 
   function removeRedactTerm(term) {
     return apiDelete("api/redact-terms/" + encodeURIComponent(term)).then(function (data) {
-      if (!data.ok) { showToast(data.error || "Failed to remove term"); return; }
       showToast("Term removed");
       _termsChanged(data.terms);
-    }).catch(function () { showToast("Failed to remove term"); });
+    }).catch(function (e) { showToast(e.serverMessage || "Failed to remove term"); });
   }
 
   // ---- Permanent redaction: preview, typed confirmation, then the report ----
@@ -233,7 +224,6 @@
   function redactForever(request) {
     var body = { scope: request.scope, label: request.label, text: request.text, preview: true };
     return apiPost("api/redact/permanent", body).then(function (data) {
-      if (!data.ok) { showToast(data.error || "Could not count matches"); return; }
       if (!data.items) { showToast("Nothing to redact"); return; }
       _forever = { request: request, confirm: data.confirm };
       document.getElementById("redactForeverTitle").textContent = "Redact forever?";
@@ -254,7 +244,7 @@
       modal.classList.remove("hidden");
       openBlockingModal(modal, { onEscape: _closeForever, onBackdropClick: _closeForever });
       input.focus();
-    }).catch(function () { showToast("Could not count matches"); });
+    }).catch(function (e) { showToast(e.serverMessage || "Could not count matches"); });
   }
 
   function _showForeverReport(data) {
@@ -280,11 +270,6 @@
     confirm.disabled = true;
     var body = { scope: request.scope, label: request.label, text: request.text, confirm: _forever.confirm };
     apiPost("api/redact/permanent", body).then(function (data) {
-      if (!data.ok) {
-        showToast(data.error || "Permanent redaction failed");
-        confirm.disabled = false;
-        return;
-      }
       // Studio's unsent queue (studio.js) may hold transcript text; drop it.
       try { sessionStorage.removeItem("clipgen-studio-queues"); } catch (e) { /* storage blocked */ }
       _showForeverReport(data);
@@ -293,8 +278,8 @@
         if (TS.renderRedactTerms) TS.renderRedactTerms();
         if (state.selectedParticipant) _reloadShown(state.selectedParticipant);
       });
-    }).catch(function () {
-      showToast("Permanent redaction failed");
+    }).catch(function (e) {
+      showToast(e.serverMessage || "Permanent redaction failed");
       confirm.disabled = false;
     });
   }
@@ -410,11 +395,10 @@
 
   function setExcluded(pid, label, text, excluded) {
     return apiPut("api/redact/" + pid + "/exclude", { label: label, text: text, excluded: excluded })
-      .then(function (data) {
-        if (!data.ok) { showToast(data.error || "Failed to update redaction"); return; }
+      .then(function () {
         _reloadShown(pid);
       })
-      .catch(function () { showToast("Failed to update redaction"); });
+      .catch(function (e) { showToast(e.serverMessage || "Failed to update redaction"); });
   }
 
   function _setDownloadUi(st) {

@@ -108,7 +108,10 @@
 
     var html = "";
     state.corrections.forEach(function (c) {
-      html += '<div class="correction-row">';
+      // Line edits apply to one segment only; ids read "P01:4".
+      var line = c.segment_id ? c.segment_id.split(":") : null;
+      var hint = line ? ' data-tooltip="Only ' + escapeHtml(line[0]) + ', line ' + (Number(line[1]) + 1) + '"' : "";
+      html += '<div class="correction-row"' + hint + '>';
       html += '<span class="correction-from">' + escapeHtml(c.from) + '</span>';
       html += '<span class="correction-arrow">&rarr;</span>';
       html += '<span class="correction-to">' + escapeHtml(c.to) + '</span>';

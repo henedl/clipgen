@@ -762,7 +762,10 @@ def transcribe_video(
         )
         if result is None:
             return None
-        merged.extend(s for s in result["segments"] if i == 0 or s["start"] >= cut)
+        for seg in result["segments"]:
+            kept = seg if i == 0 else _clip_to_cut(seg, cut)
+            if kept is not None:
+                merged.append(kept)
         lang = lang or result["language"]
     assert result is not None
     return TranscriptResult(
@@ -779,14 +782,39 @@ _CUT_SEARCH_SECONDS = 15.0
 _WINDOW_OVERLAP_SECONDS = 60.0
 
 
+def _clip_to_cut(segment: TranscriptSegment, cut: float) -> TranscriptSegment | None:
+    """The part of *segment* from *cut* on; None when nothing is left.
+
+    A straddling segment keeps its words from the cut, or the whole segment
+    when it has no words and its midpoint is past the cut.
+    """
+    if segment["start"] >= cut:
+        return segment
+    if segment["end"] <= cut:
+        return None
+    words = segment.get("words")
+    if not words:
+        return segment if segment["start"] + segment["end"] > 2 * cut else None
+    kept = [w for w in words if w["start"] >= cut]
+    if not kept:
+        return None
+    return {
+        **segment,
+        "start": kept[0]["start"],
+        "text": " ".join(w["text"] for w in kept),
+        "words": kept,
+    }
+
+
 def _segments_from(
     cut: float | None, on_segment: Callable[[float, "TranscriptSegment"], None]
 ) -> Callable[[float, "TranscriptSegment"], None]:
-    """Forward only segments starting at *cut* or later (all when None)."""
+    """Forward the part of each segment from *cut* on (all when None)."""
 
     def forward(end_time: float, segment: "TranscriptSegment") -> None:
-        if cut is None or segment["start"] >= cut:
-            on_segment(end_time, segment)
+        kept = segment if cut is None else _clip_to_cut(segment, cut)
+        if kept is not None:
+            on_segment(end_time, kept)
 
     return forward
 
@@ -1316,12 +1344,13 @@ def apply_corrections(
     Never mutates the input. Case-insensitive, word-boundary matching — a
     ``"the" -> "they"`` correction must not rewrite "there" — with the
     replacement inserted literally (a backslash in *to* is text, not a
-    ``re.sub`` template escape).
+    ``re.sub`` template escape). A correction carrying ``segment_id`` (a whole-line
+    edit) applies only to the segment with that id.
     """
     if not corrections:
         return list(segments)
 
-    pairs: list[tuple[re.Pattern[str], str]] = []
+    pairs: list[tuple[re.Pattern[str], str, str]] = []
     for c in corrections:
         frm, to = c.get("from"), c.get("to")
         if not frm or not to:
@@ -1332,7 +1361,8 @@ def apply_corrections(
             pattern = r"\b" + pattern
         if frm[-1].isalnum() or frm[-1] == "_":
             pattern = pattern + r"\b"
-        pairs.append((re.compile(pattern, re.IGNORECASE), to))
+        scope = c.get("segment_id") or ""
+        pairs.append((re.compile(pattern, re.IGNORECASE), to, scope))
     if not pairs:
         return list(segments)
 
@@ -1341,7 +1371,9 @@ def apply_corrections(
     for seg in segments:
         text = seg["text"]
         seg_applied = 0
-        for pattern, to_text in pairs:
+        for pattern, to_text, scope in pairs:
+            if scope and scope != seg.get("id"):
+                continue
             new_text, count = pattern.subn(lambda _m, _to=to_text: _to, text)
             if count > 0:
                 text = new_text
@@ -1362,6 +1394,8 @@ def get_corrections_keywords(corrections: list[dict[str, Any]]) -> list[str]:
     seen: set[str] = set()
     keywords: list[str] = []
     for c in corrections:
+        if c.get("segment_id"):
+            continue  # a one-line edit is no study term
         to_val = c.get("to", "").strip()
         if to_val and to_val not in seen:
             seen.add(to_val)
@@ -1417,7 +1451,7 @@ def dictionary_to_csv(corrections: list[dict[str, Any]], known_terms: list[str])
             "to": _defang_csv_text(str(c.get("to", ""))),
         }
         for c in corrections
-        if c.get("from") and c.get("to")
+        if c.get("from") and c.get("to") and not c.get("segment_id")
     ]
     rows += [
         {"type": "term", "from": "", "to": _defang_csv_text(term)}
@@ -1759,7 +1793,7 @@ class TranscriptWorker:
         it can only finish its current (cancelled) task and exit.
         """
         self._running = False
-        self._queue.put((0, _TRANSCRIPT_SENTINEL))
+        self._queue.put((0, "", _TRANSCRIPT_SENTINEL))
         if self._thread is not None:
             self._thread.join(timeout=join_timeout)
 
@@ -1782,7 +1816,8 @@ class TranscriptWorker:
             op_id=task_id,
             meta={"participant": task.get("participant", "")},
         )
-        self._queue.put((100, task_id))
+        # created_at breaks ties, so equal-priority tasks run in enqueue order.
+        self._queue.put((100, task["created_at"], task_id))
         return task_id
 
     def cancel(self, task_id: str) -> bool:
@@ -1870,7 +1905,7 @@ class TranscriptWorker:
             except queue.Empty:
                 continue
 
-            _priority, task_id = item
+            _priority, _created, task_id = item
             if task_id is _TRANSCRIPT_SENTINEL:
                 break
 
@@ -2134,6 +2169,8 @@ class TranscriptWorker:
             task["phase"] = "transcribing"
             # Progress/ETA baseline: excludes queue-wait and the model load.
             task["transcribe_started_at"] = datetime.now(UTC).isoformat()
+            # The diarize phase restamps the above; the merge's mark cutoff needs this.
+            task["started_at"] = task["transcribe_started_at"]
 
         def _on_seg(end_time: float, segment: TranscriptSegment) -> None:
             # Check the cancel flag outside the lock; the except handler also takes self._lock.
