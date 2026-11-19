@@ -589,12 +589,12 @@
 
         var offFields = el("div", "multitool-offset-fields" + (offActive ? "" : " hidden"));
         var minCtrl = el("div", "param-control");
-        var offMin = numberInput("paramMtOffsetMin" + idx, -maxOffset, maxOffset,
+        var offMin = numberInput("paramMtOffsetMin_mt" + idx, -maxOffset, maxOffset,
           step.offset ? step.offset.min : 0, 0.1);
         minCtrl.appendChild(offMin);
         var offSep = el("span", "multitool-offset-sep");
         var maxCtrl = el("div", "param-control");
-        var offMax = numberInput("paramMtOffsetMax" + idx, -maxOffset, maxOffset,
+        var offMax = numberInput("paramMtOffsetMax_mt" + idx, -maxOffset, maxOffset,
           step.offset ? step.offset.max : 5, 0.1);
         maxCtrl.appendChild(offMax);
         offFields.appendChild(minCtrl);

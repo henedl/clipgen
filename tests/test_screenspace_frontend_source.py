@@ -308,3 +308,12 @@ def test_multitool_step_drop_requires_a_step_drag():
     assert 'getData("text/plain")' not in drop
     assert "var fromIdx = _stepDragIdx;" in drop
     assert "!state.multitoolSteps[fromIdx]" in drop
+
+
+def test_multitool_ids_all_end_in_the_step_suffix():
+    """Every positional id must match _MT_STEP_ID, or the generic restore writes
+    the old slot's value into a step that moved (the offset window did)."""
+    by_idx = re.findall(r'"(\w+)" \+ idx\b', MULTITOOL_JS)
+    assert by_idx, "no idx-suffixed ids found"
+    for name in by_idx:
+        assert name.endswith("_mt"), f"{name} + idx escapes the _mt<N> store gate"
