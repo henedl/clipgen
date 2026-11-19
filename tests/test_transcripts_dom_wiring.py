@@ -244,6 +244,19 @@ def test_hash_tab_survives_the_first_participant_load():
     assert body.index("state.pendingTab ||") < body.index("state.pendingTab = null")
 
 
+def test_closing_search_disarms_the_pending_query():
+    """Escape and the outside click hid the list, then the debounced or
+    in-flight search reopened it."""
+    js = read("transcripts-search.js")
+    start = js.index('if (e.key === "Escape") {')
+    escape = js[start : js.index("}", start)]
+    start = js.index("!searchArea.contains(e.target)")
+    outside = js[start : js.index("}", start)]
+    for branch in (escape, outside):
+        assert "clearTimeout(_searchTimer);" in branch
+        assert "_searchVer++;" in branch
+
+
 def test_segment_clicks_reach_the_outside_click_closers():
     """A stopPropagation in the row handler kept the mark popover open, and an
     open popover disables Space, J, K and M."""

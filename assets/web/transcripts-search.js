@@ -76,6 +76,8 @@
 
     input.addEventListener("keydown", function (e) {
       if (e.key === "Escape") {
+        clearTimeout(_searchTimer);
+        _searchVer++;
         input.value = "";
         hideSearchResults();
       }
@@ -85,6 +87,9 @@
     document.addEventListener("click", function (e) {
       var searchArea = qs("#headerSearch");
       if (searchArea && !searchArea.contains(e.target)) {
+        // Disarm a pending or in-flight search, or it reopens the list.
+        clearTimeout(_searchTimer);
+        _searchVer++;
         hideSearchResults();
       }
     });
