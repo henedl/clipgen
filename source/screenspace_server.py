@@ -2647,6 +2647,8 @@ def scrub_strings(sub: Callable[[str], str]) -> int:
     """Permanent redaction over stored scan results, such as OCR text."""
     with _manifest_lock:
         changed = redact.scrub_in_place(_manifest, sub)
+        if _worker:
+            changed += _worker.scrub_tasks(sub)
     if changed:
         _persist_manifest()
     return changed

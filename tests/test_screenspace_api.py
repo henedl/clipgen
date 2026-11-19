@@ -2083,6 +2083,35 @@ def test_task_results_since_cursor(client):
     assert tail["total"] == 3
 
 
+def test_scrub_strings_rewrites_worker_tasks(client, monkeypatch):
+    """A permanent redaction reaches live tasks, so a persist cannot restore it."""
+    saved: list[list] = []
+    monkeypatch.setattr(
+        screenspace,
+        "save_screenspace_manifest",
+        lambda r, t, *a, **k: saved.append(t),
+    )
+    worker = screenspace_server._worker
+    assert worker is not None
+    task = screenspace.create_task(
+        "text",
+        "P01",
+        "s.mp4",
+        ["/v.mp4"],
+        "r",
+        {"x": 0, "y": 0, "w": 1, "h": 1},
+        {"search_string": "Jane Doe"},
+    )
+    task["status"] = "completed"
+    task["result"] = [{"timestamp": 1.0, "text_found": "Hi Jane Doe"}]
+    worker.restore_tasks([task])
+    screenspace_server._persist_manifest()
+    assert screenspace_server.scrub_strings(lambda s: s.replace("Jane Doe", "X")) > 0
+    body = client.get(f"/screenspace/api/tasks/{task['id']}/results").get_json()
+    assert body["results"][0]["text_found"] == "Hi X"
+    assert "Jane Doe" not in json.dumps(saved[-1])
+
+
 def test_tasks_list_slim_omits_results(client):
     """The polling/SSE task list carries result_count, not the result list."""
     worker = screenspace_server._worker
