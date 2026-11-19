@@ -4497,6 +4497,55 @@ def test_edit_segment_matches_already_corrected_text(tr_client, monkeypatch):
     assert seg["text"] == "I really like the cat"
 
 
+def test_edit_segment_scopes_to_that_line(tr_client, monkeypatch):
+    """A whole-line edit rewrites its own line only, and stays study-local."""
+    monkeypatch.setattr(transcripts_server, "_schedule_persist", lambda: None)
+    src = transcripts_server._manifest["source_transcripts"]
+    src["P01"] = {
+        "segments": [
+            {"id": "P01:0", "start": 0.0, "end": 1.0, "text": "Okay."},
+            {"id": "P01:1", "start": 1.0, "end": 2.0, "text": "I think that's okay."},
+        ],
+    }
+    src["P02"] = {
+        "segments": [{"id": "P02:0", "start": 0.0, "end": 1.0, "text": "Okay."}],
+    }
+    resp = tr_client.put(
+        "/transcripts/api/transcript/P01/segment",
+        json={"segment_id": "P01:0", "text": "Okay, start the first task."},
+    )
+    assert resp.get_json()["correction"]["segment_id"] == "P01:0"
+
+    def texts(pid):
+        body = tr_client.get(f"/transcripts/api/transcript/{pid}").get_json()
+        return [s["text"] for s in body["segments"]]
+
+    assert texts("P01") == ["Okay, start the first task.", "I think that's okay."]
+    assert texts("P02") == ["Okay."]
+    corrections = transcripts_server._manifest["corrections"]
+    assert transcripts.get_corrections_keywords(corrections) == []
+    csv_text = tr_client.get("/transcripts/api/dictionary.csv").get_data(as_text=True)
+    assert "first task" not in csv_text
+
+    # A re-transcription re-mints the ids, so the line edit goes.
+    class _Worker:
+        def get_all_tasks(self, include_partials=True):
+            return [
+                {
+                    "id": "t1",
+                    "participant": "P01",
+                    "status": transcripts.TASK_STATUS_COMPLETED,
+                    "created_at": "",
+                    "result": {"segments": [{"start": 0.0, "end": 1.0, "text": "x"}]},
+                }
+            ]
+
+    monkeypatch.setattr(transcripts_server, "_worker", _Worker())
+    with transcripts_server._manifest_lock:
+        transcripts_server._merge_completed_results_locked()
+    assert transcripts_server._manifest["corrections"] == []
+
+
 # ---- PII redaction ---------------------------------------------------------
 
 

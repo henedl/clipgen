@@ -810,8 +810,11 @@ def api_edit_segment(participant: str) -> FlaskResponse:
         if original_text == new_text:
             return ok(correction=None)
 
-        # Create correction
-        correction = _new_correction(original_text, new_text)
+        # A whole-line edit rewrites only this line, never the study.
+        correction = {
+            **_new_correction(original_text, new_text),
+            "segment_id": segment_id,
+        }
         corrections.append(correction)
         _bump_corrections_version()  # new correction invalidates corrected cache
         _mark_friction_stale(entry)  # edited segment text invalidates friction scores
@@ -2291,7 +2294,9 @@ def api_dictionary_global_status() -> FlaskResponse:
 def api_dictionary_global_save() -> FlaskResponse:
     """Copy this study's dictionary to the config dir for reuse elsewhere."""
     with _manifest_lock:
-        corrections = list(_manifest.get("corrections", []))
+        corrections = [
+            c for c in _manifest.get("corrections", []) if not c.get("segment_id")
+        ]
         terms = list(_manifest.get("known_terms", []))
     if not corrections and not terms:
         return err("Nothing to save")
@@ -3117,6 +3122,12 @@ def _merge_completed_results_locked() -> list[str]:
                     for m in _manifest.get("marks", [])
                     if (m.get("segment_id") or "").split(":", 1)[0] != pid
                     or (m.get("created") or "") >= task_started
+                ]
+                # Line edits name the old ids too.
+                _manifest["corrections"] = [
+                    c
+                    for c in _manifest.get("corrections", [])
+                    if (c.get("segment_id") or "").split(":", 1)[0] != pid
                 ]
             existing.update(task["result"])
             src[pid] = existing

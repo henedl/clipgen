@@ -1316,12 +1316,13 @@ def apply_corrections(
     Never mutates the input. Case-insensitive, word-boundary matching — a
     ``"the" -> "they"`` correction must not rewrite "there" — with the
     replacement inserted literally (a backslash in *to* is text, not a
-    ``re.sub`` template escape).
+    ``re.sub`` template escape). A correction carrying ``segment_id`` (a whole-line
+    edit) applies only to the segment with that id.
     """
     if not corrections:
         return list(segments)
 
-    pairs: list[tuple[re.Pattern[str], str]] = []
+    pairs: list[tuple[re.Pattern[str], str, str]] = []
     for c in corrections:
         frm, to = c.get("from"), c.get("to")
         if not frm or not to:
@@ -1332,7 +1333,8 @@ def apply_corrections(
             pattern = r"\b" + pattern
         if frm[-1].isalnum() or frm[-1] == "_":
             pattern = pattern + r"\b"
-        pairs.append((re.compile(pattern, re.IGNORECASE), to))
+        scope = c.get("segment_id") or ""
+        pairs.append((re.compile(pattern, re.IGNORECASE), to, scope))
     if not pairs:
         return list(segments)
 
@@ -1341,7 +1343,9 @@ def apply_corrections(
     for seg in segments:
         text = seg["text"]
         seg_applied = 0
-        for pattern, to_text in pairs:
+        for pattern, to_text, scope in pairs:
+            if scope and scope != seg.get("id"):
+                continue
             new_text, count = pattern.subn(lambda _m, _to=to_text: _to, text)
             if count > 0:
                 text = new_text
@@ -1362,6 +1366,8 @@ def get_corrections_keywords(corrections: list[dict[str, Any]]) -> list[str]:
     seen: set[str] = set()
     keywords: list[str] = []
     for c in corrections:
+        if c.get("segment_id"):
+            continue  # a one-line edit is no study term
         to_val = c.get("to", "").strip()
         if to_val and to_val not in seen:
             seen.add(to_val)
@@ -1417,7 +1423,7 @@ def dictionary_to_csv(corrections: list[dict[str, Any]], known_terms: list[str])
             "to": _defang_csv_text(str(c.get("to", ""))),
         }
         for c in corrections
-        if c.get("from") and c.get("to")
+        if c.get("from") and c.get("to") and not c.get("segment_id")
     ]
     rows += [
         {"type": "term", "from": "", "to": _defang_csv_text(term)}
