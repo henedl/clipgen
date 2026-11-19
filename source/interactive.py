@@ -29,11 +29,8 @@ from spreadsheet import SheetContext
 def prompt_batch_confirm(ctx: SheetContext) -> bool:
     """Show clip count and confirm batch mode. Returns True to proceed."""
     clips = spreadsheet.generate_batch_timestamps(ctx)
-    num_data_rows = (
-        len(ctx.sheet_data)
-        - ctx.first_data_row_idx
-        - (1 if ctx.filename_row_idx is not None else 0)
-    )
+    # Same rows the batch reads: no Filename or Baseline row.
+    num_data_rows = sum(1 for _ in spreadsheet._data_rows(ctx))
     msg = f"\nThis will generate {len(clips)} clips (from {num_data_rows} data rows and {ctx.num_participants} participant column(s)). Proceed? [y/n]\n>> "
     yn = utils.read_user_input(msg)
     return yn.strip().lower() == "y"

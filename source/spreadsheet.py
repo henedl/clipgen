@@ -733,10 +733,11 @@ def collect_severities(ctx: SheetContext) -> tuple[list[str], dict[str, int]]:
 def _data_rows(
     ctx: SheetContext, start: int | None = None, end: int | None = None
 ) -> Iterator[int]:
-    """Row indices from *start* to *end*, skipping the Filename override row."""
+    """Row indices from *start* to *end*, skipping the Filename and Baseline rows."""
     first = ctx.first_data_row_idx if start is None else start
     last = len(ctx.sheet_data) if end is None else end
-    return (i for i in range(first, last) if i != ctx.filename_row_idx)
+    reserved = (ctx.filename_row_idx, ctx.baseline_row_idx)
+    return (i for i in range(first, last) if i not in reserved)
 
 
 def iter_data_rows(ctx: SheetContext) -> Iterator[tuple[int, list[str], str, str]]:
@@ -744,8 +745,6 @@ def iter_data_rows(ctx: SheetContext) -> Iterator[tuple[int, list[str], str, str
     obs_col = ctx.observation_cell.col - 1
     sev_col = ctx.severity_cell.col - 1 if ctx.severity_cell else None
     for row_idx in _data_rows(ctx):
-        if row_idx == ctx.baseline_row_idx:
-            continue
         row_data = ctx.sheet_data[row_idx]
         observation = row_data[obs_col] if obs_col < len(row_data) else ""
         severity = ""
@@ -1055,6 +1054,8 @@ def generate_line_timestamps(
             utils.standard_print(
                 f"  Line {line_num}: [RESERVED - filename overrides row]"
             )
+        elif ctx.baseline_row_idx is not None and line_num - 1 == ctx.baseline_row_idx:
+            utils.standard_print(f"  Line {line_num}: [RESERVED - baseline time row]")
         else:
             desc = ctx.sheet_data[line_num - 1][ctx.observation_cell.col - 1]
             utils.standard_print(f"  Line {line_num}: {desc}")
@@ -1148,6 +1149,9 @@ def generate_cell_timestamps(
             utils.warning_print(
                 f"Row {row_number} is reserved for filename overrides and will be skipped."
             )
+            continue
+        if ctx.baseline_row_idx is not None and row_idx == ctx.baseline_row_idx:
+            utils.warning_print(f"Row {row_number} is the baseline time row; skipped.")
             continue
 
         if col_idx >= len(ctx.sheet_data[row_idx]):

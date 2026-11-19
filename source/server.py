@@ -340,12 +340,24 @@ def _rebuild_artifact_index() -> None:
 
 
 def _extend_generated_artifacts(artifacts: list[dict[str, Any]]) -> None:
+    """Upsert *artifacts* by id; a re-cut's old file is unlinked."""
     if not artifacts:
         return
+    ids = {a.get("id") for a in artifacts if a.get("id")}
     with _generated_output_lock:
+        superseded = [a for a in _generated_artifacts if a.get("id") in ids]
+        if superseded:
+            _generated_artifacts[:] = [
+                a for a in _generated_artifacts if a.get("id") not in ids
+            ]
         _generated_artifacts.extend(artifacts)
-        for a in artifacts:
-            _index_artifact(a)
+        if superseded:
+            _rebuild_artifact_index()
+        else:
+            for a in artifacts:
+                _index_artifact(a)
+    new_files = {a.get("file") for a in artifacts}
+    _discard_artifact_files([a for a in superseded if a.get("file") not in new_files])
 
 
 def _extend_generated_reels(reels: list[dict[str, Any]]) -> None:
@@ -853,6 +865,11 @@ def api_sheet_baseline() -> FlaskResponse:
 def api_sheet_refresh() -> FlaskResponse:
     if _worksheet is None:
         return err("No spreadsheet loaded — pick one from the Start panel.")
+    import excel_io
+
+    # The adapter caches cells at open; reread so saved edits show up.
+    if isinstance(_worksheet, excel_io.ExcelSheetAdapter) and not _worksheet.reload():
+        return err("Could not reread the Excel file", 500)
     new_context = spreadsheet.build_sheet_context(_worksheet)
     if new_context is None:
         return err("Failed to refresh sheet data", 500)
@@ -1040,8 +1057,10 @@ def _process_intake_item(
             description = item_label
         elif item_text:
             description = item_text if len(item_text) <= 80 else item_text[:77] + "…"
+    # One item's clip, screenshot and GIF must not share an id.
+    type_suffix = "" if output_format == "clip" else f"-{output_format}"
     artifact: dict[str, Any] = {
-        "id": f"intake_{id_hash}_s0",
+        "id": f"intake_{id_hash}_s0{type_suffix}",
         "type": output_format,
         "file": Path(out_path).name,
         "start": start,
@@ -1414,10 +1433,18 @@ def _stream_process_reel(
     as NDJSON lines, finishing with a final result/error line."""
 
     def work(emit_event: Callable[[dict[str, Any]], None]) -> None:
+        failures: list[str] = []
+
+        def on_progress(event: dict[str, Any]) -> None:
+            if event.get("phase") == "failed":
+                failures.extend(event.get("failures") or [])
+                return
+            emit_event(event)
+
         generated, reel_records = pipeline.process_reel(
             clips,
             cancel_flag=cancel_flag,
-            progress_cb=emit_event,
+            progress_cb=on_progress,
             titlecards_enabled=titlecards_enabled,
             titlecard_duration_seconds=titlecard_duration_seconds,
         )
@@ -1427,6 +1454,18 @@ def _stream_process_reel(
                     "ok": False,
                     "cancelled": True,
                     "error": "Reel generation cancelled",
+                }
+            )
+            return
+        if not generated:
+            # process_reel prints why; the card must not read as built.
+            emit_event(
+                {
+                    "ok": False,
+                    "error": f"Reel aborted: {len(failures)} clip(s) failed"
+                    if failures
+                    else "No reel was generated",
+                    "failedSegments": failures,
                 }
             )
             return
@@ -1659,15 +1698,26 @@ def api_generate() -> FlaskResponse:
                 _extend_generated_artifacts(artifacts)
             return generated, artifacts
 
-        def _cell_result(cell_str: str, fn: Callable[[], Any]) -> str:
+        def _cell_result(clip: Any, cell_str: str, fn: Callable[[], Any]) -> str:
             try:
                 generated, artifacts = fn()
+                # One flag per segment, so the client greens only the cards that cut.
+                produced = Counter((a.get("start"), a.get("end")) for a in artifacts)
+                segments: list[bool] = []
+                for s, e in clip.get("times") or []:
+                    span = (
+                        utils.timestamp_to_seconds(s),
+                        utils.timestamp_to_seconds(e),
+                    )
+                    segments.append(produced[span] > 0)
+                    produced[span] -= 1
                 return _ndjson_line(
                     {
                         "cell": cell_str,
-                        "ok": generated > 0,
+                        "ok": generated > 0 and all(segments),
                         "generated": generated,
                         "artifacts": artifacts,
+                        "segments": segments,
                     }
                 )
             except Exception as e:
@@ -1699,14 +1749,16 @@ def api_generate() -> FlaskResponse:
                         _bump_job_done(
                             _generate_job_state, len(clip.get("times") or [])
                         )
-                        yield _cell_result(cell_str, future.result)
+                        yield _cell_result(clip, cell_str, future.result)
             else:
                 for clip, cell_str, stale in to_generate:
                     if cancel_flag():
                         break
                     _bump_job_done(_generate_job_state, len(clip.get("times") or []))
                     yield _cell_result(
-                        cell_str, functools.partial(_generate_and_persist, clip, stale)
+                        clip,
+                        cell_str,
+                        functools.partial(_generate_and_persist, clip, stale),
                     )
 
         for cs in cell_strings:
@@ -1962,15 +2014,36 @@ def api_timeline_viewer() -> FlaskResponse:
         if not clips_list:
             return err("No clips found in sheet")
 
-        generated, artifacts = pipeline.process_clips(
-            clips_list,
-            output_format="clip",
-            cancel_flag=_timeline_viewer_cancel_event.is_set,
+        # Reuse clips whose spans already exist; re-cutting would unlink files the Log shows.
+        reused: list[dict[str, Any]] = []
+        to_cut: list[Any] = []
+        for clip in clips_list:
+            files.prepare_clip(clip)
+            existing = _find_existing_artifacts(
+                clip["cell"].row, clip["cell"].col, "clip"
+            )
+            wanted = Counter(
+                (utils.timestamp_to_seconds(s), utils.timestamp_to_seconds(e))
+                for s, e in clip.get("times") or []
+            )
+            if existing and Counter((a["start"], a["end"]) for a in existing) == wanted:
+                reused.extend(existing)
+            else:
+                to_cut.append(clip)
+
+        generated, artifacts = (
+            pipeline.process_clips(
+                to_cut,
+                output_format="clip",
+                cancel_flag=_timeline_viewer_cancel_event.is_set,
+            )
+            if to_cut
+            else (0, [])
         )
         if _timeline_viewer_cancel_event.is_set():
             _discard_artifact_files(artifacts)
             return refused("cancelled", cancelled=True)
-        if not artifacts:
+        if not artifacts and not reused:
             return err("No artifacts were generated")
 
         # Accumulate intake clips unpublished alongside sheet clips so a later cancel
@@ -1993,6 +2066,7 @@ def api_timeline_viewer() -> FlaskResponse:
             return refused("cancelled", cancelled=True)
 
         _extend_generated_artifacts(artifacts)
+        artifacts = reused + artifacts
 
         study = artifacts[0].get("study", "")
         ss_events = viewer.load_screenspace_events_for_viewer()

@@ -77,6 +77,18 @@ def test_prompt_batch_confirm_no(monkeypatch):
     assert interactive.prompt_batch_confirm(_ctx()) is False
 
 
+def test_prompt_batch_confirm_excludes_baseline_row(monkeypatch):
+    """A Baseline row below the header is not counted as a data row."""
+    data = _sheet_data()
+    data.insert(2, ["Baseline time", "09:12:00", "", "", "", ""])
+    ctx = _ctx(sheet_data=data)
+    ctx.baseline_row_idx = 2
+    prompts: list = []
+    monkeypatch.setattr(utils, "read_user_input", lambda p="": prompts.append(p) or "y")
+    assert interactive.prompt_batch_confirm(ctx) is True
+    assert "from 3 data rows" in prompts[0]
+
+
 # ---- prompt_multi_selection (generic engine) ----
 
 

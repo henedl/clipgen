@@ -305,16 +305,17 @@ def _prepare_and_check_clip(
 
 
 def _local_timestamp(seconds: float) -> str:
-    """Format local *seconds* as ``H:MM:SS`` for ffmpeg.
+    """Format local *seconds* as ``H:MM:SS`` for ffmpeg, plus ``.mmm`` if fractional.
 
     Always emits the hours component so every ffmpeg-bound timestamp shares one
-    uniform shape. This is a consistency/readability invariant, not a
-    correctness requirement: ``video.get_duration`` parses each end
-    independently (via ``utils.timestamp_to_seconds``) and tolerates mixed
-    ``M:SS`` / ``H:MM:SS`` pairs. These strings feed ffmpeg, not the
-    spreadsheet, so the explicit hours are harmless.
+    uniform shape. Whole seconds (every sheet timestamp) carry no fraction;
+    Composer, transcript and Screenspace spans keep their milliseconds, which
+    ``video.get_duration`` parses. These strings feed ffmpeg, not the
+    spreadsheet.
     """
-    return utils.seconds_to_timestamp(round(seconds), force_hours=True)
+    whole, ms = divmod(round(seconds * 1000), 1000)
+    ts = utils.seconds_to_timestamp(whole, force_hours=True)
+    return f"{ts}.{ms:03d}" if ms else ts
 
 
 def _point_source(
@@ -1349,6 +1350,7 @@ def process_reel(
       ``{"phase": "clip_done", "clip_index": i, "total_clips": N}``
       ``{"phase": "concat", "progress": 0.0..1.0}`` (throttled)
       ``{"phase": "done"}``
+      ``{"phase": "failed", "failures": [str, ...]}`` (abort on uncut clips)
 
     Callers (the Flask reel routes) yield these as NDJSON to the frontend.
 
@@ -1532,6 +1534,7 @@ def _process_reel(
         for path in clip_paths:
             files.release_reservation(path)
         files.release_reservation(output_file)
+        _emit({"phase": "failed", "failures": reel_failures})
         utils.error_print(
             f"Reel aborted: {len(reel_failures)} clip(s) could not be generated.",
             reel_failures

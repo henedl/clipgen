@@ -81,6 +81,14 @@ class ExcelSheetAdapter:
         """Return all sheet data as list of rows (list of strings)."""
         return self._data
 
+    def reload(self) -> bool:
+        """Reread the workbook from disk; False (error printed) when unreadable."""
+        fresh = open_excel_workbook(self._workbook_path, self.title)
+        if fresh is None:
+            return False
+        self._ws, self._data, self.title = fresh._ws, fresh._data, fresh.title
+        return True
+
 
 def _get_worksheet_from_workbook(wb: Any, preferred_name: str | None = None) -> Any:
     """Pick worksheet: preferred_name, else config.WORKSHEET_PRIORITY, else first."""

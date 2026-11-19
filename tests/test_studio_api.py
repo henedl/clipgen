@@ -8,6 +8,7 @@ Flask = pytest.importorskip("flask").Flask
 import config
 import server
 import server_utils
+import utils
 import itertools
 
 
@@ -258,6 +259,9 @@ def test_process_intake_item_writes_stills_for_screen_and_gif(tmp_path, monkeypa
     assert gif["file"].endswith(server.config.GIF_FORMAT)
     assert [fmt for _path, fmt in stills] == ["screen", "gif"]
     cut.assert_not_called()
+    # A shared id would let the by-id upsert unlink the other format's file.
+    assert screen["id"].endswith("_s0-screen")
+    assert gif["id"].endswith("_s0-gif")
 
 
 def test_extract_global_still_maps_into_owning_part(monkeypatch):
@@ -675,6 +679,30 @@ def test_api_sheet_refresh_success(client, monkeypatch):
     assert server._sheet_context is fake_context
 
 
+def test_api_sheet_refresh_rereads_excel_workbook(client, monkeypatch, tmp_path):
+    """Refresh picks up edits saved to the .xlsx after it was opened."""
+    import excel_io
+    import openpyxl
+
+    path = tmp_path / "study.xlsx"
+
+    def write(ts):
+        wb = openpyxl.Workbook()
+        for row in [["Study"], ["ID", "P01", "Observation", "Category"], ["1", ts]]:
+            wb.active.append(row)
+        wb.save(path)
+
+    write("1:23-1:45")
+    monkeypatch.setattr(server, "_worksheet", excel_io.open_excel_workbook(str(path)))
+    write("5:00-5:30")
+
+    resp = client.post("/studio/api/sheet/refresh")
+    assert resp.get_json()["ok"] is True
+    ctx = server._sheet_context
+    assert ctx is not None
+    assert ctx.sheet_data[2][1] == "5:00-5:30"
+
+
 def test_api_sheet_refresh_500_when_build_fails(client, monkeypatch):
     import spreadsheet
 
@@ -980,6 +1008,8 @@ def test_api_generate_regenerates_when_file_missing(client, monkeypatch, tmp_pat
         "file": "new.mp4",
         "cellRow": 5,
         "cellCol": 2,
+        "start": 60,
+        "end": 60 + config.DEFAULT_DURATION_SECONDS,
     }
     monkeypatch.setattr(
         "pipeline.process_clips",
@@ -1402,6 +1432,14 @@ def test_api_viewer_400_when_no_artifacts(client):
     assert "No artifacts" in data["error"]
 
 
+def _viewer_clip():
+    """A batch clip record for P01 row 5 with one cut span."""
+    import types
+
+    cell = types.SimpleNamespace(row=5, col=2, value="0:00-0:05")
+    return {"desc": "test", "participant": "P01", "cell": cell}
+
+
 def test_api_timeline_viewer_without_intake(client, monkeypatch):
     import pipeline
     import spreadsheet
@@ -1410,7 +1448,7 @@ def test_api_timeline_viewer_without_intake(client, monkeypatch):
     fake_ws = type("FakeWS", (), {"title": "Sheet1"})()
     monkeypatch.setattr(server, "_worksheet", fake_ws)
 
-    fake_clips = [{"desc": "test", "participant": "P01"}]
+    fake_clips = [_viewer_clip()]
     fake_artifacts = [
         {
             "id": "a1",
@@ -1438,6 +1476,37 @@ def test_api_timeline_viewer_without_intake(client, monkeypatch):
     assert data["generated"] == 1
 
 
+def test_api_timeline_viewer_reuses_existing_clips(client, monkeypatch, tmp_path):
+    """A cell already cut is reused, so Studio's Log keeps a live file."""
+    import pipeline
+    import spreadsheet
+    import utils
+    import viewer
+
+    monkeypatch.setattr(server, "_worksheet", type("FakeWS", (), {"title": "S"})())
+    monkeypatch.setattr(utils, "resolve_output_path", lambda name: tmp_path / name)
+    (tmp_path / "obs.mp4").write_text("v")
+    existing = {"id": "a5c2s0", "type": "clip", "file": "obs.mp4", "study": "s"}
+    existing.update(cellRow=5, cellCol=2, start=0.0, end=5.0)
+    _set_artifacts(monkeypatch, [existing])
+    process = Mock(return_value=(0, []))
+    monkeypatch.setattr(pipeline, "process_clips", process)
+    monkeypatch.setattr(spreadsheet, "generate_list", lambda *a, **kw: [_viewer_clip()])
+    monkeypatch.setattr(spreadsheet, "is_excel_worksheet", lambda ws: False)
+    monkeypatch.setattr(viewer, "load_screenspace_events_for_viewer", list)
+    seen: list = []
+    monkeypatch.setattr(
+        viewer, "finalize_timeline_data", lambda arts, **kw: seen.extend(arts) or {}
+    )
+    monkeypatch.setattr(viewer, "generate_timeline_viewer", lambda *a, **kw: "v.html")
+    monkeypatch.setattr(server, "_save_manifest_quiet", lambda: None)
+
+    assert client.post("/studio/api/timeline-viewer", json={}).get_json()["ok"]
+    process.assert_not_called()
+    assert seen == [existing]
+    assert (tmp_path / "obs.mp4").exists()
+
+
 def test_api_timeline_viewer_with_intake(client, monkeypatch):
     import pipeline
     import spreadsheet
@@ -1446,7 +1515,7 @@ def test_api_timeline_viewer_with_intake(client, monkeypatch):
     fake_ws = type("FakeWS", (), {"title": "Sheet1"})()
     monkeypatch.setattr(server, "_worksheet", fake_ws)
 
-    fake_clips = [{"desc": "test", "participant": "P01"}]
+    fake_clips = [_viewer_clip()]
     sheet_artifacts = [
         {
             "id": "a1",
@@ -1557,7 +1626,7 @@ def test_api_timeline_viewer_cancel_discards_clips(client, monkeypatch, tmp_path
         }
     ]
 
-    monkeypatch.setattr(spreadsheet, "generate_list", lambda *a, **kw: [{"desc": "x"}])
+    monkeypatch.setattr(spreadsheet, "generate_list", lambda *a, **kw: [_viewer_clip()])
     monkeypatch.setattr(utils, "resolve_output_path", lambda name: tmp_path / name)
 
     def fake_process(clips, **kwargs):
@@ -1572,6 +1641,26 @@ def test_api_timeline_viewer_cancel_discards_clips(client, monkeypatch, tmp_path
     assert resp.get_json()["cancelled"] is True
     assert not clip_file.exists()
     server._timeline_viewer_cancel_event.clear()
+
+
+def test_recut_upserts_artifact_by_id(client, monkeypatch, tmp_path):
+    """A timeline-viewer re-cut replaces the old record; Generate then reuses it."""
+    import utils
+
+    monkeypatch.setattr(utils, "resolve_output_path", lambda name: tmp_path / name)
+    old = {"id": "a1", "type": "clip", "file": "obs.mp4", "start": 83, "end": 105}
+    old["cellRow"], old["cellCol"] = 5, 3
+    new = dict(old, file="obs-1.mp4")
+    (tmp_path / "obs.mp4").write_text("v")
+    (tmp_path / "obs-1.mp4").write_text("v")
+
+    server._extend_generated_artifacts([old])
+    server._extend_generated_artifacts([new])
+
+    assert server._generated_artifacts == [new]
+    assert server._find_existing_artifacts(5, 3, "clip") == [new]
+    assert not (tmp_path / "obs.mp4").exists()
+    assert (tmp_path / "obs-1.mp4").exists()
 
 
 def test_api_gallery_cancel_discards_captures(client, monkeypatch, tmp_path):
@@ -1621,7 +1710,7 @@ def test_api_timeline_viewer_passes_cancel_flag(client, monkeypatch):
         captured["cancel_flag"] = kw.get("cancel_flag")
         return (1, [{"id": "a1", "type": "clip", "study": "s", "participant": "P01"}])
 
-    monkeypatch.setattr(spreadsheet, "generate_list", lambda *a, **kw: [{"desc": "x"}])
+    monkeypatch.setattr(spreadsheet, "generate_list", lambda *a, **kw: [_viewer_clip()])
     monkeypatch.setattr(pipeline, "process_clips", fake_process_clips)
     monkeypatch.setattr(spreadsheet, "is_excel_worksheet", lambda ws: False)
     monkeypatch.setattr(viewer, "load_screenspace_events_for_viewer", list)
@@ -1654,7 +1743,7 @@ def test_api_timeline_viewer_short_circuits_after_cancel(client, monkeypatch):
 
     generated_calls = []
 
-    monkeypatch.setattr(spreadsheet, "generate_list", lambda *a, **kw: [{"desc": "x"}])
+    monkeypatch.setattr(spreadsheet, "generate_list", lambda *a, **kw: [_viewer_clip()])
     monkeypatch.setattr(pipeline, "process_clips", fake_process_clips)
     monkeypatch.setattr(spreadsheet, "is_excel_worksheet", lambda ws: False)
     monkeypatch.setattr(
@@ -1728,7 +1817,7 @@ def test_api_timeline_viewer_discards_sheet_clips_on_cancel_during_intake(
     monkeypatch.setattr(server, "_generated_artifacts", [])
 
     sheet_artifacts = [{"id": "a1", "type": "clip", "study": "s", "participant": "P01"}]
-    monkeypatch.setattr(spreadsheet, "generate_list", lambda *a, **kw: [{"desc": "x"}])
+    monkeypatch.setattr(spreadsheet, "generate_list", lambda *a, **kw: [_viewer_clip()])
     monkeypatch.setattr(
         pipeline, "process_clips", lambda *a, **kw: (1, sheet_artifacts)
     )
@@ -3647,6 +3736,23 @@ def test_api_reel_continues_worker_after_client_disconnect(
     assert reel_record in server._generated_reels
 
 
+def test_api_reel_aborted_build_reports_failure(client, monkeypatch, tmp_path):
+    """A reel that cut nothing must end on ok: false with its failure lines."""
+    _setup_api_reel(monkeypatch, tmp_path)
+
+    def fake_process_reel(clips_list, **kwargs):
+        kwargs["progress_cb"]({"phase": "failed", "failures": ["P01 obs — boom"]})
+        return (0, [])
+
+    monkeypatch.setattr("pipeline.process_reel", fake_process_reel)
+    resp = client.post("/studio/api/reel", json={"cells": ["P01.5"]})
+    lines = [json.loads(line) for line in resp.get_data(as_text=True).splitlines()]
+    assert lines[-1]["ok"] is False
+    assert lines[-1]["failedSegments"] == ["P01 obs — boom"]
+    assert not any(line.get("phase") == "failed" for line in lines)
+    assert server._generated_reels == []
+
+
 def test_api_reel_busy_slot_held_during_worker_after_disconnect(
     client, monkeypatch, tmp_path
 ):
@@ -4187,7 +4293,18 @@ def _setup_single_cell_generate(monkeypatch, tmp_path, cell_value, *, generated=
             {"participant": "P01", "cell": cell, "desc": "obs", "category": "nav"}
         ],
     )
-    monkeypatch.setattr("pipeline.process_clips", lambda *a, **kw: (generated, []))
+
+    def fake_process_clips(clips, **kw):
+        arts = [
+            {
+                "start": utils.timestamp_to_seconds(s),
+                "end": utils.timestamp_to_seconds(e),
+            }
+            for s, e in clips[0]["times"][:generated]
+        ]
+        return (len(arts), arts)
+
+    monkeypatch.setattr("pipeline.process_clips", fake_process_clips)
 
 
 def test_api_generate_progress_counts_artifacts_not_cells(
@@ -4213,6 +4330,20 @@ def test_api_generate_progress_counts_artifacts_not_cells(
     # ...but the progress snapshot advances by both segments, in one step.
     assert server._generate_job_state["total"] == 2
     assert server._generate_job_state["done"] == 2
+
+
+def test_api_generate_partial_cell_flags_each_segment(client, monkeypatch, tmp_path):
+    """A cell whose second segment fails is not ok, and says which one cut."""
+    _setup_single_cell_generate(
+        monkeypatch, tmp_path, "1:23-1:45, 95:00-95:30", generated=1
+    )
+    resp = client.post(
+        "/studio/api/generate", json={"cells": ["P01.5"], "format": "clip"}
+    )
+    lines = [json.loads(line) for line in resp.data.decode().strip().split("\n")]
+    assert lines[0]["ok"] is False
+    assert lines[0]["segments"] == [True, False]
+    assert len(lines[0]["artifacts"]) == 1
 
 
 def test_api_generate_progress_counts_trimmed_override_segments(

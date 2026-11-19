@@ -309,12 +309,11 @@ def test_detect_clip_mismatches_parallels_clip_paths(monkeypatch):
 
     monkeypatch.setattr(video, "probe_video_properties", fake_probe)
 
-    props_list, res_mismatch, audio_mismatch = video._detect_clip_mismatches(
+    props_list, stream_mismatch = video._detect_clip_mismatches(
         ["a.mp4", "b.mp4", "c.mp4"]
     )
     assert [p is None for p in props_list] == [False, True, False]
-    assert res_mismatch is False
-    assert audio_mismatch is False
+    assert stream_mismatch is False
 
 
 def test_detect_clip_mismatches_single_clip_stays_inline(monkeypatch):
@@ -894,6 +893,36 @@ def test_concatenate_clips_resolution_mismatch_uses_filter_complex(monkeypatch):
     assert "-f" not in cmd  # no concat demuxer
 
 
+@pytest.mark.parametrize(
+    "change",
+    [
+        {"video_codec": "mpeg4"},
+        {"pix_fmt": "yuv444p"},
+        {"fps": 60.0},
+        {"audio_tracks": [{"codec": "aac", "channels": 2, "sample_rate": 44100}]},
+        {"audio_tracks": [{"codec": "opus", "channels": 2, "sample_rate": 48000}]},
+        {"audio_tracks": [{"codec": "aac", "channels": 1, "sample_rate": 48000}]},
+    ],
+)
+def test_concatenate_clips_stream_mismatch_reencodes(monkeypatch, change):
+    """Any differing stream parameter skips the stream-copy demuxer."""
+    monkeypatch.setattr(video.Path, "is_file", lambda self: True)
+    monkeypatch.setattr(video, "verify_output_file", lambda *_a, **_kw: True)
+    props_by_path = {"a.mp4": dict(_MATCHING_PROPS), "b.mp4": _MATCHING_PROPS | change}
+    monkeypatch.setattr(video, "probe_video_properties", lambda p: props_by_path[p])
+    captured = []
+
+    def fake_run(command, **_kw):
+        captured.append(command)
+        return subprocess.CompletedProcess(args=command, returncode=0, stderr="")
+
+    monkeypatch.setattr(video, "run_ffmpeg_process", fake_run)
+
+    assert video.concatenate_clips(["a.mp4", "b.mp4"], "reel.mp4") is True
+    assert len(captured) == 1
+    assert "-filter_complex" in captured[0]
+
+
 def test_concatenate_clips_warns_on_mismatch(monkeypatch):
     """Mismatch detection prints warnings."""
     monkeypatch.setattr(video.Path, "is_file", lambda self: True)
@@ -1090,6 +1119,15 @@ def test_get_duration_accepts_every_pair_the_parser_emits():
     # Explicit range cell with overflow minutes.
     start, end = utils.parse_timestamps("75:00-80:00")[0]
     assert video.get_duration(start, end) == 300
+
+
+def test_get_duration_keeps_milliseconds():
+    """Local cuts carry .mmm; whole seconds still return an int for the argv."""
+    assert video.get_duration("0:00:12.600", "0:00:17.400") == 4.8
+    assert video.get_duration("0:00:10.100", "0:00:10.400") == 0.3
+    assert video.get_duration("0:00:10.500", "0:00:11.500") == 1
+    assert isinstance(video.get_duration("0:00:10", "0:00:12"), int)
+    assert video.get_duration("0:00:10.x", "0:00:12") is None
 
 
 def test_calculate_target_bitrate_typical_and_min_floor():

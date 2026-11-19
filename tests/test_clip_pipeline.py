@@ -1428,8 +1428,14 @@ def test_process_reel_aborts_cleanly_when_a_clip_raises(monkeypatch, make_clip):
         raise OSError("disk full")
 
     monkeypatch.setattr(pipeline, "_process_single_clip_segments", boom)
-    assert pipeline.process_reel([raw_clip], output_file="reel.mp4") == (0, [])
+    events: list = []
+    result = pipeline.process_reel(
+        [raw_clip], output_file="reel.mp4", progress_cb=events.append
+    )
+    assert result == (0, [])
     concat.assert_not_called()
+    failed = [e for e in events if e.get("phase") == "failed"]
+    assert len(failed) == 1 and "disk full" in failed[0]["failures"][0]
 
 
 def test_process_reel_marks_parts_whose_cards_soft_failed(monkeypatch, make_clip):
@@ -1555,8 +1561,20 @@ def test_regenerate_gif_artifact_keeps_default_gif_length(monkeypatch, tmp_path)
     assert kwargs["duration_seconds"] == config.DEFAULT_GIF_DURATION_SECONDS
 
 
-def test_regenerate_artifact_rounds_fractional_local_times(monkeypatch, tmp_path):
-    """Rounding matches the original cut; truncation drifted by up to a second."""
+def test_cut_global_range_passes_milliseconds(monkeypatch):
+    """A Composer span is cut to the millisecond; whole seconds keep today's form."""
+    run_ffmpeg = Mock(return_value=True)
+    monkeypatch.setattr(pipeline.video, "run_ffmpeg", run_ffmpeg)
+    pipeline.cut_global_range(None, "x.mp4", 12.6, 17.4, "o.mp4", reencode=False)
+    assert run_ffmpeg.call_args.kwargs["start_pos"] == "0:00:12.600"
+    assert run_ffmpeg.call_args.kwargs["end_pos"] == "0:00:17.400"
+    pipeline.cut_global_range(None, "x.mp4", 83, 105, "o.mp4", reencode=False)
+    assert run_ffmpeg.call_args.kwargs["start_pos"] == "0:01:23"
+    assert run_ffmpeg.call_args.kwargs["end_pos"] == "0:01:45"
+
+
+def test_regenerate_artifact_keeps_fractional_local_times(monkeypatch, tmp_path):
+    """Regeneration cuts the recorded span to the millisecond, like the original."""
     monkeypatch.setattr(config, "INPUT_DIR", str(tmp_path), raising=False)
     monkeypatch.setattr(config, "OUTPUT_DIR", str(tmp_path), raising=False)
     (tmp_path / "study_P01.mp4").write_text("v")
@@ -1572,5 +1590,5 @@ def test_regenerate_artifact_rounds_fractional_local_times(monkeypatch, tmp_path
     }
     assert pipeline._regenerate_single_artifact(artifact, set()) is True
     _, kwargs = run_ffmpeg.call_args
-    assert kwargs["start_pos"] == "0:00:11"
-    assert kwargs["end_pos"] == "0:00:20"
+    assert kwargs["start_pos"] == "0:00:10.600"
+    assert kwargs["end_pos"] == "0:00:20.400"

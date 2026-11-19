@@ -8,6 +8,7 @@ stays fast.
 from __future__ import annotations
 
 import argparse
+import hashlib
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -318,7 +319,7 @@ def _cut_clusters(
 
     clips_list: list[ClipRecord] = []
     last_study = ""
-    for idx, cluster in enumerate(clusters):
+    for cluster in clusters:
         source_video = cluster.get("source_video") or ""
         first_part = source_video.split(" + ")[0]
         parsed = utils.parse_source_video_name(first_part) if first_part else None
@@ -333,7 +334,14 @@ def _cut_clusters(
                 category=category,
                 study=study,
                 cell_col=cell_col,
-                cell_row_base=idx,
+                # Stable per cluster, so a re-run upserts and other filters coexist.
+                cell_row_base=int(
+                    hashlib.md5(
+                        f"{cluster.get('participant')}|{source_video}|"
+                        f"{cluster['start']}|{cluster['end']}".encode()
+                    ).hexdigest()[:8],
+                    16,
+                ),
             )
         )
         last_study = study or last_study
