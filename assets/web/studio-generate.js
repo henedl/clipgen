@@ -258,21 +258,29 @@
           updateGenerateButtonProgress();
         }
         var cards = generateCardIndex[cellKey] || [];
-        if (data.ok) {
-          for (var ci = 0; ci < cards.length; ci++) setCardResult(cards[ci], true);
-          totalSuccess += (data.generated || 1);
-          if (data.artifacts) {
-            allArtifacts = allArtifacts.concat(data.artifacts);
-            for (var gi = 0; gi < data.artifacts.length; gi++) {
-              state.generatedArtifacts.push(stampLog(data.artifacts[gi]));
-            }
+        if (data.generated > 0 && data.artifacts) {
+          totalSuccess += data.generated;
+          allArtifacts = allArtifacts.concat(data.artifacts);
+          for (var gi = 0; gi < data.artifacts.length; gi++) {
+            state.generatedArtifacts.push(stampLog(data.artifacts[gi]));
           }
-        } else {
-          // The server omits `error` when a clean run simply produced nothing.
-          var reason = data.error || "No artifact produced";
-          for (ci = 0; ci < cards.length; ci++) setCardResult(cards[ci], false, reason);
+        } else if (data.ok) {
+          totalSuccess += (data.generated || 1);
+        }
+        // The server omits `error` when a clean run simply produced nothing.
+        var reason = data.error || (data.generated > 0 ? "Segment not generated" : "No artifact produced");
+        var failedCards = 0;
+        for (var ci = 0; ci < cards.length; ci++) {
+          // Per-segment flags when present; a partial cell must not go all green.
+          var segOk = data.segments
+            ? !!data.segments[parseInt(cards[ci].getAttribute("data-seg-idx"), 10)]
+            : !!data.ok;
+          setCardResult(cards[ci], segOk, segOk ? undefined : reason);
+          if (!segOk) failedCards++;
+        }
+        if (!data.ok) {
           failReasons.push(reason);
-          totalFail++;
+          totalFail += failedCards || 1;
         }
       }
 

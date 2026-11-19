@@ -8,6 +8,7 @@ Flask = pytest.importorskip("flask").Flask
 import config
 import server
 import server_utils
+import utils
 import itertools
 
 
@@ -980,6 +981,8 @@ def test_api_generate_regenerates_when_file_missing(client, monkeypatch, tmp_pat
         "file": "new.mp4",
         "cellRow": 5,
         "cellCol": 2,
+        "start": 60,
+        "end": 60 + config.DEFAULT_DURATION_SECONDS,
     }
     monkeypatch.setattr(
         "pipeline.process_clips",
@@ -4224,7 +4227,18 @@ def _setup_single_cell_generate(monkeypatch, tmp_path, cell_value, *, generated=
             {"participant": "P01", "cell": cell, "desc": "obs", "category": "nav"}
         ],
     )
-    monkeypatch.setattr("pipeline.process_clips", lambda *a, **kw: (generated, []))
+
+    def fake_process_clips(clips, **kw):
+        arts = [
+            {
+                "start": utils.timestamp_to_seconds(s),
+                "end": utils.timestamp_to_seconds(e),
+            }
+            for s, e in clips[0]["times"][:generated]
+        ]
+        return (len(arts), arts)
+
+    monkeypatch.setattr("pipeline.process_clips", fake_process_clips)
 
 
 def test_api_generate_progress_counts_artifacts_not_cells(
@@ -4250,6 +4264,20 @@ def test_api_generate_progress_counts_artifacts_not_cells(
     # ...but the progress snapshot advances by both segments, in one step.
     assert server._generate_job_state["total"] == 2
     assert server._generate_job_state["done"] == 2
+
+
+def test_api_generate_partial_cell_flags_each_segment(client, monkeypatch, tmp_path):
+    """A cell whose second segment fails is not ok, and says which one cut."""
+    _setup_single_cell_generate(
+        monkeypatch, tmp_path, "1:23-1:45, 95:00-95:30", generated=1
+    )
+    resp = client.post(
+        "/studio/api/generate", json={"cells": ["P01.5"], "format": "clip"}
+    )
+    lines = [json.loads(line) for line in resp.data.decode().strip().split("\n")]
+    assert lines[0]["ok"] is False
+    assert lines[0]["segments"] == [True, False]
+    assert len(lines[0]["artifacts"]) == 1
 
 
 def test_api_generate_progress_counts_trimmed_override_segments(

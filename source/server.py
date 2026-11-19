@@ -1691,15 +1691,26 @@ def api_generate() -> FlaskResponse:
                 _extend_generated_artifacts(artifacts)
             return generated, artifacts
 
-        def _cell_result(cell_str: str, fn: Callable[[], Any]) -> str:
+        def _cell_result(clip: Any, cell_str: str, fn: Callable[[], Any]) -> str:
             try:
                 generated, artifacts = fn()
+                # One flag per segment, so the client greens only the cards that cut.
+                produced = Counter((a.get("start"), a.get("end")) for a in artifacts)
+                segments: list[bool] = []
+                for s, e in clip.get("times") or []:
+                    span = (
+                        utils.timestamp_to_seconds(s),
+                        utils.timestamp_to_seconds(e),
+                    )
+                    segments.append(produced[span] > 0)
+                    produced[span] -= 1
                 return _ndjson_line(
                     {
                         "cell": cell_str,
-                        "ok": generated > 0,
+                        "ok": generated > 0 and all(segments),
                         "generated": generated,
                         "artifacts": artifacts,
+                        "segments": segments,
                     }
                 )
             except Exception as e:
@@ -1731,14 +1742,16 @@ def api_generate() -> FlaskResponse:
                         _bump_job_done(
                             _generate_job_state, len(clip.get("times") or [])
                         )
-                        yield _cell_result(cell_str, future.result)
+                        yield _cell_result(clip, cell_str, future.result)
             else:
                 for clip, cell_str, stale in to_generate:
                     if cancel_flag():
                         break
                     _bump_job_done(_generate_job_state, len(clip.get("times") or []))
                     yield _cell_result(
-                        cell_str, functools.partial(_generate_and_persist, clip, stale)
+                        clip,
+                        cell_str,
+                        functools.partial(_generate_and_persist, clip, stale),
                     )
 
         for cs in cell_strings:
