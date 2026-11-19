@@ -340,13 +340,14 @@
     var pid = state.selectedParticipant;
     if (!pid) return null;
     var latest = null;
+    // Running beats queued beats finished; among finished tasks the newest wins.
+    var order = { running: 2, queued: 1 };
     for (var i = 0; i < state.tasks.length; i++) {
       var t = state.tasks[i];
       if (t.participant !== pid || _isSpeakerTask(t) || _isRedactTask(t)) continue;
-      // Priority: running > queued > failed > completed/cancelled > stale
       if (!latest) { latest = t; continue; }
-      var order = { running: 5, queued: 4, failed: 3, completed: 2, cancelled: 1 };
-      if ((order[t.status] || 0) > (order[latest.status] || 0)) latest = t;
+      var rank = order[t.status] || 0, latestRank = order[latest.status] || 0;
+      if (rank > latestRank || (rank === latestRank && t.created_at > latest.created_at)) latest = t;
     }
     return latest;
   }
