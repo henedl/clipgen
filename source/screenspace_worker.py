@@ -513,6 +513,7 @@ class ScreenspaceWorker:
                     task.pop("_progress_offset", None)
                     task.pop("_progress_scale", None)
                     task.pop("_paused_flag", None)
+                    task.pop("_first_hit", None)
                     task.pop("_resume_at", None)
                     task["result"] = []
                     task["progress"] = 0.0
@@ -557,6 +558,7 @@ class ScreenspaceWorker:
                 task["_progress_offset"] = progress
                 task["_progress_scale"] = max(1.0 - progress, 0.001)
                 task.pop("_paused_flag", None)
+                task.pop("_first_hit", None)
                 # Transient: the saved start_seconds must survive a resume.
                 task["_resume_at"] = resume_at
                 task["status"] = TASK_STATUS_QUEUED

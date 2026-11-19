@@ -537,6 +537,27 @@ class TestScreenspaceWorker:
         expected = "cancelled" if user_cancels else "completed"
         assert task["status"] == expected
 
+    def test_resume_clears_a_first_hit_that_raced_the_pause(self):
+        # A stale _first_hit stopped the resumed scan at once, with no results.
+        worker = screenspace.ScreenspaceWorker()
+        task = screenspace.create_task(
+            "color",
+            "P01",
+            "s.mp4",
+            ["/v.mp4"],
+            "r",
+            {"x": 0, "y": 0, "w": 1, "h": 1},
+            parameters={"detect_first": True, "end_seconds": 100.0},
+        )
+        worker.enqueue(task)
+        with worker._lock:
+            task["status"] = screenspace.TASK_STATUS_PAUSED
+            task["progress"] = 0.5
+            task["_first_hit"] = True
+        worker.resume()
+        assert task["status"] == screenspace.TASK_STATUS_QUEUED
+        assert "_first_hit" not in task
+
     def test_resume_drops_results_the_rescan_repeats(self):
         # The in-flight frame lands past the progress mark; carrying it duplicated it.
         worker = screenspace.ScreenspaceWorker()
