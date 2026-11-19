@@ -52,6 +52,9 @@ _SENTINEL = object()
 # Heatmap-only per-frame grids; stripped from reads and dropped after heatmaps write.
 _SERVER_ONLY_GRID_KEYS = ("change_grid", "saliency_grid")
 
+# Task flags that stop a scan; _first_hit is detect-first's own, apart from a cancel.
+_STOP_KEYS = ("_cancelled", "_paused_flag", "_first_hit")
+
 # Keys the frontend turns into image URLs; each must name a file on disk.
 _HEATMAP_FILE_KEYS = ("heatmap", "heatmap_gif", "heatmap_rolling_gif")
 
@@ -826,8 +829,8 @@ class ScreenspaceWorker:
 
         def _cancel_flag() -> bool:
             with self._lock:
-                t = self._tasks.get(task_id)
-                return bool(t and (t.get("_cancelled") or t.get("_paused_flag")))
+                t = self._tasks.get(task_id) or {}
+                return any(t.get(key) for key in _STOP_KEYS)
 
         def _on_result(result_dict: dict[str, Any]) -> None:
             with self._lock:
@@ -838,7 +841,7 @@ class ScreenspaceWorker:
                     if isinstance(t.get("_raw_results"), list):
                         t["_raw_results"].append(result_dict)
                     if t.get("parameters", {}).get("detect_first"):
-                        t["_cancelled"] = True
+                        t["_first_hit"] = True
             _throttled_notify()
 
         try:
@@ -866,9 +869,7 @@ class ScreenspaceWorker:
                         if partial and isinstance(result, list):
                             result = partial + result
                         t["result"] = _visible_results(result)
-                    elif t.get("_cancelled") and not t.get("parameters", {}).get(
-                        "detect_first"
-                    ):
+                    elif t.get("_cancelled"):
                         t["status"] = TASK_STATUS_CANCELLED
                     else:
                         # Normal completion or detect_first early stop

@@ -4,6 +4,8 @@ import threading
 import time
 from unittest import mock
 
+import pytest
+
 
 import config
 import screenspace
@@ -503,6 +505,37 @@ class TestScreenspaceWorker:
                 {"timestamp": 5.0},
                 {"timestamp": 60.0},
             ]
+
+    @pytest.mark.parametrize("user_cancels", [False, True])
+    def test_detect_first_keeps_user_cancel_apart(self, monkeypatch, user_cancels):
+        # detect_first reused _cancelled, so a cancel before any hit read as completed.
+        def dispatch(self, task, on_progress, cancel_flag, on_result=None):
+            if user_cancels:
+                self.cancel(task["id"])
+                assert cancel_flag()
+                return []
+            assert on_result is not None
+            on_result({"timestamp": 1.0})
+            assert cancel_flag()  # the first hit stops the scan
+            return [{"timestamp": 1.0}]
+
+        monkeypatch.setattr(screenspace.ScreenspaceWorker, "_dispatch", dispatch)
+        worker = screenspace.ScreenspaceWorker()
+        task = screenspace.create_task(
+            "color",
+            "P01",
+            "s.mp4",
+            ["/v.mp4"],
+            "r",
+            {"x": 0, "y": 0, "w": 1, "h": 1},
+            parameters={"detect_first": True},
+        )
+        worker.enqueue(task)
+        with worker._lock:
+            task["status"] = screenspace.TASK_STATUS_RUNNING
+        worker._execute_task(task)
+        expected = "cancelled" if user_cancels else "completed"
+        assert task["status"] == expected
 
     def test_resume_drops_results_the_rescan_repeats(self):
         # The in-flight frame lands past the progress mark; carrying it duplicated it.
