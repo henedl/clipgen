@@ -883,31 +883,23 @@ def _run_batch(batch_id: str, blueprint: dict[str, Any]) -> None:
     cancel_event: threading.Event = record["cancel_event"]
     plan = list(zip(record["runIds"], record["participants"], strict=True))
 
-    # Shared sources once per batch: one Sheets API hit, not N.
-    seed_results = _precompute_shared_nodes(
-        blueprint, _build_node_context(threading.Event())
-    )
+    # A crashed child must still free the batch slot, or run_active() sticks.
+    try:
+        # Shared sources once per batch: one Sheets API hit, not N.
+        seed_results = _precompute_shared_nodes(
+            blueprint, _build_node_context(threading.Event())
+        )
 
-    workers = max(1, min(4, int(config.WORKFLOWS_BATCH_WORKERS or 1)))
-    _child = profiling.timed("workflows.batch_child")(_run_batch_child)
-    with (
-        profiling.op_run(batch_id, kind="workflow_batch"),
-        profiling.span("workflows.batch_wall"),
-    ):
-        _child = profiling.bind(_child)
-        if workers == 1 or len(plan) <= 1:
-            for run_id, participant in plan:
-                _child(
-                    run_id, participant, batch_id, blueprint, seed_results, cancel_event
-                )
-        else:
-            with ThreadPoolExecutor(
-                max_workers=min(workers, len(plan)),
-                thread_name_prefix=f"workflow-{batch_id}",
-            ) as pool:
-                futures = [
-                    pool.submit(
-                        _child,
+        workers = max(1, min(4, int(config.WORKFLOWS_BATCH_WORKERS or 1)))
+        _child = profiling.timed("workflows.batch_child")(_run_batch_child)
+        with (
+            profiling.op_run(batch_id, kind="workflow_batch"),
+            profiling.span("workflows.batch_wall"),
+        ):
+            _child = profiling.bind(_child)
+            if workers == 1 or len(plan) <= 1:
+                for run_id, participant in plan:
+                    _child(
                         run_id,
                         participant,
                         batch_id,
@@ -915,14 +907,29 @@ def _run_batch(batch_id: str, blueprint: dict[str, Any]) -> None:
                         seed_results,
                         cancel_event,
                     )
-                    for run_id, participant in plan
-                ]
-                for future in futures:
-                    future.result()  # child bodies swallow their own errors
-
-    with _batches_lock:
-        _batches.pop(batch_id, None)
-    _notify_batch_clients(batch_id)
+            else:
+                with ThreadPoolExecutor(
+                    max_workers=min(workers, len(plan)),
+                    thread_name_prefix=f"workflow-{batch_id}",
+                ) as pool:
+                    futures = [
+                        pool.submit(
+                            _child,
+                            run_id,
+                            participant,
+                            batch_id,
+                            blueprint,
+                            seed_results,
+                            cancel_event,
+                        )
+                        for run_id, participant in plan
+                    ]
+                    for future in futures:
+                        future.result()  # child bodies swallow their own errors
+    finally:
+        with _batches_lock:
+            _batches.pop(batch_id, None)
+        _notify_batch_clients(batch_id)
 
 
 @workflows_bp.route("/api/batches", methods=["POST"])
