@@ -271,6 +271,24 @@ class TestTimelapseDispatchPassesMarkers:
         assert calls == [(["/p1.mp4", "/p2.mp4"], 20.0, 50.0)]
         assert isinstance(result, str)
 
+    def test_one_part_list_reads_the_file(self, monkeypatch):
+        # A one-part list took the concat path and ffprobed the list file.
+        cmds = []
+
+        def fake_popen(cmd, **_kw):
+            cmds.append(cmd)
+            proc = mock.MagicMock()
+            proc.stdout = io.BytesIO(b"progress=end\n")
+            proc.returncode = 0
+            return proc
+
+        monkeypatch.setattr("subprocess.Popen", fake_popen)
+        screenspace.generate_timelapse(
+            ["/v.mp4"], {"x": 0, "y": 0, "w": 10, "h": 10}, 2.0, "/o.mp4"
+        )
+        assert "concat" not in cmds[0]
+        assert cmds[0][cmds[0].index("-i") + 1] == "/v.mp4"
+
     def test_concat_list_input(self):
         cmd = screenspace.build_timelapse_command(
             "/parts.txt", {"x": 0, "y": 0, "w": 10, "h": 10}, 2.0, "/o.mp4", concat=True

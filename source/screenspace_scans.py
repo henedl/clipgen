@@ -659,6 +659,9 @@ def generate_timelapse(
     is not a failed one), and both callers turn the exception into a failed
     node/task with the message attached.
     """
+    # One part needs no concat list; probing that list would fail.
+    if not isinstance(video_path, str) and len(video_path) == 1:
+        video_path = video_path[0]
     if not isinstance(video_path, str):
         timeline = video.timeline_or_none(video_path)
         if end_seconds is None and timeline is not None:
