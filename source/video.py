@@ -3207,12 +3207,13 @@ def compress_to_size(
 
 def _detect_clip_mismatches(
     clip_paths: list[str],
-) -> tuple[list[dict[str, Any] | None], bool, bool]:
+) -> tuple[list[dict[str, Any] | None], bool]:
     """Probe clips and detect property mismatches.
 
     Returns:
-        (properties_list, has_resolution_mismatch, has_audio_presence_mismatch)
-        properties_list parallels clip_paths (None entries for failed probes).
+        (properties_list, has_stream_mismatch). properties_list parallels
+        clip_paths (None entries for failed probes). Any differing stream
+        parameter counts: stream-copy concat cannot join such clips.
 
     Probing is parallel; the mismatch detection and its warnings stay on the
     calling thread so the output order is stable.
@@ -3222,7 +3223,7 @@ def _detect_clip_mismatches(
     )
     probed = [p for p in props_list if p is not None]
     if len(probed) < 2:
-        return (props_list, False, False)
+        return (props_list, False)
 
     resolutions = Counter((p["width"], p["height"]) for p in probed)
     video_codecs = Counter(p["video_codec"] for p in probed)
@@ -3248,7 +3249,21 @@ def _detect_clip_mismatches(
     if has_audio_presence_mismatch:
         utils.warning_print("Audio stream mismatch: some clips have no audio track.")
 
-    return (props_list, has_resolution_mismatch, has_audio_presence_mismatch)
+    def stream_params(p: dict[str, Any]) -> tuple[Any, ...]:
+        audio = first_audio_track(p) or {}
+        return (
+            p["width"],
+            p["height"],
+            p["video_codec"],
+            p.get("pix_fmt"),
+            round(p.get("fps") or 0.0, 3),
+            audio.get("codec"),
+            audio.get("sample_rate"),
+            audio.get("channels"),
+        )
+
+    has_stream_mismatch = len({stream_params(p) for p in probed}) > 1
+    return (props_list, has_stream_mismatch)
 
 
 def _pick_target_resolution(
@@ -3320,8 +3335,9 @@ def concatenate_clips(
 ) -> bool:
     """Concatenate multiple video clips into a single file.
 
-    Probes all clips for property mismatches. When resolutions or audio presence
-    differ, uses ffmpeg filter_complex to scale/pad inputs to a common resolution.
+    Probes all clips for property mismatches. When any stream parameter differs
+    (resolution, codec, pixel format, fps, audio presence or format), uses ffmpeg
+    filter_complex to re-encode all inputs to one common format.
     Otherwise uses the fast concat demuxer with stream copy, falling back to
     re-encoding if stream copy fails.
 
@@ -3349,12 +3365,12 @@ def concatenate_clips(
         utils.debug_print("Debugging enabled, not calling ffmpeg for concat.")
         return False
 
-    props_list, res_mismatch, audio_mismatch = _detect_clip_mismatches(clip_paths)
+    props_list, stream_mismatch = _detect_clip_mismatches(clip_paths)
     total_duration = sum(
         float(p["duration"]) for p in props_list if p is not None and p.get("duration")
     )
 
-    if res_mismatch or audio_mismatch:
+    if stream_mismatch:
         utils.warning_print(
             "Re-encoding all clips to produce a compatible reel (this may take longer)."
         )
