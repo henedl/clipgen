@@ -144,15 +144,18 @@
     return apiPut("api/redact/" + pid, { enabled: enabled }).then(function (data) {
       if (!data.ok) {
         _redactFailToast(data, "Failed to update redaction");
-        return loadParticipants();
+        return loadParticipants().then(renderRedactPanel);
       }
       _adoptTask(data.task);
       return loadParticipants().then(function () {
+        renderRedactPanel();
         _reloadShown(pid);
       });
     }).catch(function () {
       showToast("Failed to update redaction");
-      return loadParticipants();
+      // Put the switch back before the reload, which may fail too.
+      renderRedactPanel();
+      return loadParticipants().then(renderRedactPanel);
     });
   }
 
@@ -423,7 +426,7 @@
       bar.classList.add("hidden");
       btn.disabled = false;
       note.textContent = st.succeeded ? "" : (st.error || "Download failed");
-      if (st.succeeded) loadParticipants();
+      if (st.succeeded) loadParticipants().then(renderRedactPanel);
       return;
     }
     btn.disabled = true;
