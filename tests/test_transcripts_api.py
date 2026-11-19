@@ -1187,12 +1187,12 @@ def test_zero_delay_unloads_immediately(_agent_state_clean, monkeypatch):
 
 
 @pytest.mark.parametrize("delay", [0, 0.01])
-def test_unload_skips_model_in_use(_agent_state_clean, monkeypatch, delay):
-    """Stopping one run must not unload a model another run is streaming from."""
+def test_unload_waits_for_model_in_use(_agent_state_clean, monkeypatch, delay):
+    """A Stop defers the unload while another run uses the model, then unloads."""
     monkeypatch.setattr(config, "LLM_UNLOAD_DELAY_SECONDS", delay)
-    monkeypatch.setattr(
-        transcripts_server._orchestrator, "busy_models", lambda: {"test-model"}
-    )
+    monkeypatch.setattr(transcripts_server, "_UNLOAD_RETRY_SECONDS", 0.01)
+    busy = {"test-model"}
+    monkeypatch.setattr(transcripts_server._orchestrator, "busy_models", lambda: busy)
     calls: list[str] = []
     monkeypatch.setattr(
         transcripts_server.llm_client,
@@ -1201,11 +1201,17 @@ def test_unload_skips_model_in_use(_agent_state_clean, monkeypatch, delay):
     )
 
     transcripts_server._schedule_model_unload("test-model")
+    time.sleep(0.1)  # several retry periods while busy
+    assert calls == []
+    assert "test-model" in transcripts_server._pending_model_unloads
+    busy.clear()  # the other run ends
     deadline = time.monotonic() + 5.0
-    while "test-model" in transcripts_server._pending_model_unloads:
+    while not calls:
         assert time.monotonic() < deadline
         time.sleep(0.01)
-    assert calls == []
+    assert calls == ["test-model"]
+    time.sleep(0.05)
+    assert "test-model" not in transcripts_server._pending_model_unloads
 
 
 # ---- Embed subtitle endpoints ----

@@ -161,24 +161,31 @@ _llm_downloads = JobRegistry(
 )
 
 
+# Retry period for an unload deferred by another run on the model.
+_UNLOAD_RETRY_SECONDS = 5.0
+
+
 def _schedule_model_unload(model: str) -> None:
     """Schedule a model unload after ``config.LLM_UNLOAD_DELAY_SECONDS``.
 
     Replaces any pending unload timer for the same model so the delay always
-    measures from the most recent Stop.
+    measures from the most recent Stop. While another run uses the model, the
+    unload retries until that run ends; a new run cancels it.
     """
     delay = float(config.LLM_UNLOAD_DELAY_SECONDS)
     if delay <= 0:
-        # Another run on this model keeps it loaded.
         if model not in _orchestrator.busy_models():
             llm_client.unload_model(model)
-        return
+            return
+        delay = _UNLOAD_RETRY_SECONDS
 
     def _unload() -> None:
         with _pending_model_unloads_lock:
             _pending_model_unloads.pop(model, None)
-        if model not in _orchestrator.busy_models():
-            llm_client.unload_model(model)
+        if model in _orchestrator.busy_models():
+            _schedule_model_unload(model)  # retry once the other run ends
+            return
+        llm_client.unload_model(model)
 
     timer = threading.Timer(delay, _unload)
     timer.daemon = True
