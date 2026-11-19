@@ -1057,8 +1057,10 @@ def _process_intake_item(
             description = item_label
         elif item_text:
             description = item_text if len(item_text) <= 80 else item_text[:77] + "…"
+    # One item's clip, screenshot and GIF must not share an id.
+    type_suffix = "" if output_format == "clip" else f"-{output_format}"
     artifact: dict[str, Any] = {
-        "id": f"intake_{id_hash}_s0",
+        "id": f"intake_{id_hash}_s0{type_suffix}",
         "type": output_format,
         "file": Path(out_path).name,
         "start": start,

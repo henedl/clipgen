@@ -259,6 +259,9 @@ def test_process_intake_item_writes_stills_for_screen_and_gif(tmp_path, monkeypa
     assert gif["file"].endswith(server.config.GIF_FORMAT)
     assert [fmt for _path, fmt in stills] == ["screen", "gif"]
     cut.assert_not_called()
+    # A shared id would let the by-id upsert unlink the other format's file.
+    assert screen["id"].endswith("_s0-screen")
+    assert gif["id"].endswith("_s0-gif")
 
 
 def test_extract_global_still_maps_into_owning_part(monkeypatch):
