@@ -3777,6 +3777,12 @@ def test_retranscription_merge_drops_pre_run_marks(monkeypatch, tmp_path):
                     "created": "2026-03-01T12:00:00+00:00",
                 },
                 {
+                    # Made on the old transcript while the re-run sat queued.
+                    "id": "m_queued",
+                    "segment_id": "P01:2",
+                    "created": "2026-03-01T03:00:00+00:00",
+                },
+                {
                     "id": "m_other",
                     "segment_id": "P02:0",
                     "created": "2026-01-01T00:00:00+00:00",
@@ -3791,6 +3797,7 @@ def test_retranscription_merge_drops_pre_run_marks(monkeypatch, tmp_path):
         "participant": "P01",
         "status": transcripts.TASK_STATUS_COMPLETED,
         "created_at": "2026-03-01T00:00:00+00:00",
+        "started_at": "2026-03-01T06:00:00+00:00",
         "result": {"segments": [{"start": 0.0, "end": 2.0, "text": "new"}]},
     }
     monkeypatch.setattr(transcripts_server, "_worker", _CompletedTasksWorker([task]))

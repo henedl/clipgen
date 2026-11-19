@@ -2692,9 +2692,12 @@ class TestSpeakerWorkerTasks:
         )
         worker = transcripts.TranscriptWorker()
         task = transcripts.create_transcript_task("P01", ["/v.mp4"])
+        task["created_at"] = "2000-01-01T00:00:00+00:00"  # queued long ago
         worker._execute_task(task)
         assert task["status"] == transcripts.TASK_STATUS_COMPLETED
         assert "speakers" not in task["result"]
+        # The merge drops marks older than this, so it must be the run start.
+        assert task["started_at"] > task["created_at"]
 
 
 # ---- windowed transcription ----------------------------------------------------

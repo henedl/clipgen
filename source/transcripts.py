@@ -2169,6 +2169,8 @@ class TranscriptWorker:
             task["phase"] = "transcribing"
             # Progress/ETA baseline: excludes queue-wait and the model load.
             task["transcribe_started_at"] = datetime.now(UTC).isoformat()
+            # The diarize phase restamps the above; the merge's mark cutoff needs this.
+            task["started_at"] = task["transcribe_started_at"]
 
         def _on_seg(end_time: float, segment: TranscriptSegment) -> None:
             # Check the cancel flag outside the lock; the except handler also takes self._lock.

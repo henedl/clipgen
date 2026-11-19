@@ -3128,9 +3128,8 @@ def _merge_completed_results_locked() -> list[str]:
                 for seg in task["result"].get("segments") or []:
                     seg.pop("speaker", None)
             if existing.get("segments"):
-                # A re-transcription re-mints the same "{pid}:{index}" ids; drop
-                # marks older than this run.
-                task_started = task.get("created_at") or ""
+                # Re-minted ids: drop marks made before this run started, not queued.
+                task_started = task.get("started_at") or ""
                 _manifest["marks"] = [
                     m
                     for m in _manifest.get("marks", [])
