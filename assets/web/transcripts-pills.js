@@ -1056,7 +1056,10 @@
       // Adopt the server records now: they paint pills and gate the next enqueue.
       state.tasks = state.tasks.concat(data.tasks);
       _clearTranscribeInFlight(pids);
-      showToast("Enqueued " + clipgenPluralUnit(data.tasks.length, "transcription", "transcriptions"));
+      // An empty list means every pick was already queued, running or done.
+      showToast(data.tasks.length
+        ? "Enqueued " + clipgenPluralUnit(data.tasks.length, "transcription", "transcriptions")
+        : "Already queued or transcribed");
       renderPills();
       // Flip the empty pane to "Queued" now, not at the poll.
       refreshTranscribeWording();

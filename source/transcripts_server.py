@@ -522,7 +522,7 @@ def api_participants() -> FlaskResponse:
 
     _refresh_participants()
     result = []
-    # Before the lock: the worker lock never nests inside ours.
+    # Queued or running transcribe tasks read as "running".
     transcribing = {t["participant"] for t in _active_tasks("transcribe")}
     with _manifest_lock:
         src = _manifest.get("source_transcripts", {})
@@ -2907,11 +2907,11 @@ def api_transcribe() -> FlaskResponse:
     _refresh_participants()
     available = {p["id"]: p for p in _participants}
     enqueued = []
-    # A second click must not queue a duplicate run.
-    transcribing = {t["participant"] for t in _active_tasks("transcribe")}
 
     with _manifest_lock:
         src = _manifest.get("source_transcripts", {})
+        # Under the lock that covers the enqueue, so a concurrent POST cannot duplicate.
+        transcribing = {t["participant"] for t in _active_tasks("transcribe")}
 
         # Resolve eligible participants and their effective Whisper model
         # (override → default).

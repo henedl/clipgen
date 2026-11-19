@@ -456,6 +456,38 @@ def test_transcribe_in_flight_reads_running_and_blocks_duplicate(
     assert again.get_json()["tasks"] == []
 
 
+def test_concurrent_transcribe_posts_enqueue_once(tr_app, tr_client, monkeypatch):
+    """Two simultaneous POSTs for one participant must not both enqueue."""
+    monkeypatch.setattr(
+        transcripts_server,
+        "_participants",
+        [{"id": "P01", "video_paths": ["/tmp/P01.mp4"], "has_video": True}],
+    )
+    monkeypatch.setattr(transcripts_server, "_refresh_participants", lambda: None)
+    worker = transcripts.TranscriptWorker()  # never started: tasks stay queued
+    monkeypatch.setattr(transcripts_server, "_worker", worker)
+    monkeypatch.setattr(transcripts, "is_whisper_model_cached", lambda n=None: True)
+
+    real_active = transcripts_server._active_tasks
+    other = threading.Thread(
+        target=lambda: tr_app.test_client().post(
+            "/transcripts/api/transcribe", json={"participants": ["P01"]}
+        )
+    )
+
+    def racing_active(kind, pid=None):
+        out = real_active(kind, pid)
+        if kind == "transcribe" and not other.is_alive() and other.ident is None:
+            other.start()  # the second POST lands between check and enqueue
+            other.join(0.2)
+        return out
+
+    monkeypatch.setattr(transcripts_server, "_active_tasks", racing_active)
+    tr_client.post("/transcripts/api/transcribe", json={"participants": ["P01"]})
+    other.join(5.0)
+    assert len(worker.get_all_tasks(include_partials=False)) == 1
+
+
 def test_transcribe_applies_per_participant_overrides(tr_client, monkeypatch):
     """POST /api/transcribe threads {model, language} overrides onto the task."""
 
