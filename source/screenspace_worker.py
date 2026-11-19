@@ -17,6 +17,7 @@ from typing import Any
 
 import config
 import profiling
+import redact
 import utils
 import video
 from screenspace_tools import TOOLS
@@ -431,6 +432,11 @@ class ScreenspaceWorker:
             start = max(since, 0)
             tail = res[start:] if start < total else []
             return copy.deepcopy(_strip_server_grids(tail)), total
+
+    def scrub_tasks(self, sub: Callable[[str], str]) -> int:
+        """Apply a permanent redaction to every task; returns the change count."""
+        with self._lock:
+            return redact.scrub_in_place(self._tasks, sub)
 
     def reorder(self, task_ids: list[str]) -> bool:
         """Reorder queued tasks by the given ID sequence.

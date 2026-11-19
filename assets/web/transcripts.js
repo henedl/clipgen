@@ -1665,6 +1665,8 @@
     apiPut("api/transcript/" + encodeURIComponent(pid) + "/segment", { segment_id: segId, text: text })
       .then(function (data) {
         showToast(data.ok ? "Segment saved" : (data.error || "Failed to save segment"));
+        // A changed segment may requeue the redact pass.
+        if (data.ok) pollTaskStatus();
       }, function () {
         showToast("Failed to save segment");
       })
@@ -1753,6 +1755,7 @@
         loadTranscript(pid);
         loadCorrections();
       }
+      pollTaskStatus();
     }).catch(function () {
       showToast("Failed to save correction");
       // Drop the unsaved edit from the DOM rather than leave it looking saved.

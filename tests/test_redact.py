@@ -2,7 +2,9 @@
 
 import json
 import os
+import random
 import struct
+import unicodedata
 from pathlib import Path
 from typing import Any
 
@@ -43,18 +45,67 @@ def test_parse_tokenizer_rejects_bad_magic_and_trailing_bytes():
 
 def test_tokenize_prefers_whole_piece_and_falls_back_to_unk():
     tok = redact.Tokenizer(_blob())
-    assert tok.tokenize("Anna") == [(4, "▁Anna")]
-    ids = [i for i, _ in tok.tokenize("x  y")]
+    assert tok.tokenize("Anna") == [(4, "▁Anna", (0, 4))]
+    ids = [i for i, _s, _o in tok.tokenize("x  y")]
     assert ids == [8, 3, 9]
 
 
-def test_reconstruct_offsets_scans_forward():
+def test_tokenize_offsets_index_source_text():
     tok = redact.Tokenizer(_blob())
     text = "Anna x"
-    tokens = tok.tokenize(text)
-    offsets = redact._reconstruct_offsets(text, tokens)
+    offsets = [o for _i, _s, o in tok.tokenize(text)]
     assert offsets[0] == (0, 4)
     assert offsets[-1] == (5, 6)
+
+
+def test_tokenize_keeps_offsets_after_changed_char():
+    # ² normalizes to 2; later tokens must not drift.
+    tok = redact.Tokenizer(_blob([*_PIECES, "2", "▁m"]))
+    text = "m² m² Anna x"
+    tokens = tok.tokenize(text)
+    assert [text[a:b] for _i, _s, (a, b) in tokens] == [
+        "m",
+        "²",
+        "m",
+        "²",
+        "Anna",
+        "x",
+    ]
+
+
+def test_tokenize_normalizes_like_whole_string_nfkc():
+    tok = redact.Tokenizer(_blob())
+    samples = [
+        unicodedata.normalize("NFD", "café Åsa ẹ́x"),
+        "ｶﾞ ｷﾞｮ",
+        "\u1100\u1161 jamo",
+        "wait… m² ½ ™ º It´s",
+        "a\u00a0b  c ",
+        "ｆｕｌｌ １２３",
+        "  lead",
+        "Z\u030a\u0323",
+    ]
+    # Deterministic fuzz over marks, ligatures, jamo, katakana and NBSP.
+    pool = (
+        "aeoZu \u00a0\u0301\u0308\u030a\u0323\u0327\u0345\u0344"
+        "\ufb01\u00b2\u00bd\u2122\u00b4\u1100\u1161\u11a8\uff76\uff9e"
+    )
+    rng = random.Random(7)
+    samples += ["".join(rng.choice(pool) for _ in range(8)) for _ in range(300)]
+    for text in samples:
+        expected = []
+        last_space = True
+        for ch in unicodedata.normalize("NFKC", text):
+            if ch == " " and last_space:
+                continue
+            last_space = ch == " "
+            expected.append("▁" if ch == " " else ch)
+        if expected and expected[-1] == "▁":
+            expected.pop()
+        tokens = tok.tokenize(text)
+        surfaces = [s for _i, s, _o in tokens]
+        assert "".join(surfaces) == "▁" + "".join(expected), text
+        assert all(0 <= a <= b <= len(text) for _i, _s, (a, b) in tokens), text
 
 
 # ---- Span algebra ----------------------------------------------------------
@@ -115,7 +166,12 @@ class _WordTokenizer:
     eos_id = 2
 
     def tokenize(self, text):
-        return [(i, "▁" + w) for i, w in enumerate(text.split())]
+        out, pos = [], 0
+        for i, w in enumerate(text.split()):
+            pos = text.index(w, pos)
+            out.append((i, "▁" + w, (pos, pos + len(w))))
+            pos += len(w)
+        return out
 
 
 def test_document_spans_windows_with_stride_and_dedupes(monkeypatch):
@@ -307,6 +363,17 @@ def test_scrub_text_hides_known_surfaces_and_name_parts():
     )
 
 
+def test_sharp_s_term_matches_its_own_spelling():
+    pattern = redact.term_pattern(["Weiß"])
+    assert pattern is not None
+    assert [m.group(0) for m in pattern.finditer("Herr Weiß and weiß")] == [
+        "Weiß",
+        "weiß",
+    ]
+    placeholders = {redact.surface_key("Weiß"): "[SURNAME_1]"}
+    assert redact.scrub_text("Ask Weiß.", placeholders) == "Ask [SURNAME_1]."
+
+
 def test_scrub_text_keeps_restored_surfaces():
     seg = _seg("Anna met Anna Berg", ("GIVEN_NAME", 0, 4), ("GIVEN_NAME", 9, 18))
     excluded = [{"label": "GIVEN_NAME", "key": redact.surface_key("Anna")}]
@@ -490,11 +557,14 @@ def test_scrub_files_rewrites_text_and_escaped_json(tmp_path):
     (tmp_path / "clips").mkdir()
     (tmp_path / "clips" / "a.srt").write_text("1\nZoë said hi\n", encoding="utf-8")
     (tmp_path / "run.json").write_text(json.dumps({"t": "by Zoë", "n": 1}))
+    (tmp_path / "tabs.json").write_text(
+        json.dumps(["a.\nZoë", "\tZoë"], ensure_ascii=False), encoding="utf-8"
+    )
     (tmp_path / "clipgen.json").write_text('{"x": "Zoë"}', encoding="utf-8")
     (tmp_path / "Zoë.mp4").write_bytes(b"\x00")
     (tmp_path / "plain.md").write_text("nothing here")
     changed, named = redact.scrub_files(tmp_path, sub, tmp_path / "clipgen.json")
-    assert changed == ["clips/a.srt", "run.json"]
+    assert changed == ["clips/a.srt", "run.json", "tabs.json"]
     assert named == ["Zoë.mp4"]
     assert (
         (tmp_path / "clips" / "a.srt")
@@ -505,6 +575,10 @@ def test_scrub_files_rewrites_text_and_escaped_json(tmp_path):
         "t": "by [REDACTED_1]",
         "n": 1,
     }
+    assert json.loads((tmp_path / "tabs.json").read_text(encoding="utf-8")) == [
+        "a.\n[REDACTED_1]",
+        "\t[REDACTED_1]",
+    ]
     assert "Zoë" in (tmp_path / "clipgen.json").read_text(encoding="utf-8")
     assert not list(tmp_path.rglob("*.tmp"))
 
