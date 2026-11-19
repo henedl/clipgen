@@ -283,6 +283,28 @@ def test_generate_range_timestamps_skips_filename_row():
         assert ".mp4" not in clip["cell"].value
 
 
+def test_baseline_row_below_header_is_never_a_clip():
+    """A Baseline time row under the header holds clock anchors, not observations."""
+    sheet_data = [
+        ["Study"],
+        ["ID", "P01", "P02", "Observation", "Category"],
+        ["Baseline time", "09:12:00", "", "", ""],
+        ["1", "09:15:00-09:16:30", "", "Obs one", "CatA"],
+        ["2", "", "00:20-00:40", "Obs two", "CatB"],
+    ]
+    ctx = _make_context(sheet_data=sheet_data, baseline_row_idx=2)
+    sheet_rows = {
+        "batch": spreadsheet.generate_batch_timestamps(ctx),
+        "participant": spreadsheet.generate_participant_timestamps(ctx, "P01"),
+        "range": spreadsheet.generate_range_timestamps(ctx, 3, 5),
+        "line": spreadsheet.generate_line_timestamps(ctx, [3, 4]),
+        "cell": spreadsheet.generate_cell_timestamps(ctx, [("P01", 3), ("P01", 4)]),
+    }
+    for mode, clips in sheet_rows.items():
+        assert 3 not in {c["cell"].row for c in clips}, mode
+        assert clips, mode
+
+
 def test_baseline_and_relative_timestamps_integration(monkeypatch):
     # Sheet layout with a clock baseline row for P01 only.
     # Row 0: Study
