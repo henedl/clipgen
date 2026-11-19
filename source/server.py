@@ -865,6 +865,11 @@ def api_sheet_baseline() -> FlaskResponse:
 def api_sheet_refresh() -> FlaskResponse:
     if _worksheet is None:
         return err("No spreadsheet loaded — pick one from the Start panel.")
+    import excel_io
+
+    # The adapter caches cells at open; reread so saved edits show up.
+    if isinstance(_worksheet, excel_io.ExcelSheetAdapter) and not _worksheet.reload():
+        return err("Could not reread the Excel file", 500)
     new_context = spreadsheet.build_sheet_context(_worksheet)
     if new_context is None:
         return err("Failed to refresh sheet data", 500)

@@ -676,6 +676,30 @@ def test_api_sheet_refresh_success(client, monkeypatch):
     assert server._sheet_context is fake_context
 
 
+def test_api_sheet_refresh_rereads_excel_workbook(client, monkeypatch, tmp_path):
+    """Refresh picks up edits saved to the .xlsx after it was opened."""
+    import excel_io
+    import openpyxl
+
+    path = tmp_path / "study.xlsx"
+
+    def write(ts):
+        wb = openpyxl.Workbook()
+        for row in [["Study"], ["ID", "P01", "Observation", "Category"], ["1", ts]]:
+            wb.active.append(row)
+        wb.save(path)
+
+    write("1:23-1:45")
+    monkeypatch.setattr(server, "_worksheet", excel_io.open_excel_workbook(str(path)))
+    write("5:00-5:30")
+
+    resp = client.post("/studio/api/sheet/refresh")
+    assert resp.get_json()["ok"] is True
+    ctx = server._sheet_context
+    assert ctx is not None
+    assert ctx.sheet_data[2][1] == "5:00-5:30"
+
+
 def test_api_sheet_refresh_500_when_build_fails(client, monkeypatch):
     import spreadsheet
 
