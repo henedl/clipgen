@@ -1358,6 +1358,51 @@ def test_spreadsheets_close_rejected_during_reel(client, monkeypatch):
     assert resp.get_json()["ok"] is False
 
 
+@pytest.mark.parametrize("make_live", _LIVE_WORK)
+def test_spreadsheets_open_rejected_during_tool_work(
+    client, monkeypatch, tmp_path, make_live
+):
+    """A sheet swap retires the workers, so live work blocks it."""
+    path = tmp_path / "study.xlsx"
+    _write_valid_workbook(path, [("Sheet", "P01")])
+    make_live(monkeypatch)
+    resp = client.post(
+        "/api/spreadsheets/open", json={"type": "excel", "id_or_path": str(path)}
+    )
+    assert resp.status_code == 409
+    assert resp.get_json()["error"] == server._TOOL_BUSY_MESSAGE
+    assert server._worksheet is None
+
+
+def test_spreadsheets_open_keeps_a_queued_transcription(client, monkeypatch, tmp_path):
+    """Opening a sheet must not cancel the transcription queue."""
+    import transcripts
+    import transcripts_server
+
+    path = tmp_path / "study.xlsx"
+    _write_valid_workbook(path, [("Sheet", "P01")])
+    worker = transcripts.TranscriptWorker()  # never started, so the task stays queued
+    monkeypatch.setattr(transcripts_server, "_worker", worker)
+    task_id = worker.enqueue(transcripts._new_task("transcribe", "tr", "P01"))
+    resp = client.post(
+        "/api/spreadsheets/open", json={"type": "excel", "id_or_path": str(path)}
+    )
+    assert resp.status_code == 409
+    task = worker.get_task(task_id)
+    assert task is not None and task["status"] == "queued"
+
+
+@pytest.mark.parametrize("make_live", _LIVE_WORK)
+def test_spreadsheets_close_rejected_during_tool_work(client, monkeypatch, make_live):
+    """Closing the sheet swaps too, so live work blocks it."""
+    sentinel = object()
+    monkeypatch.setattr(server, "_worksheet", sentinel)
+    make_live(monkeypatch)
+    resp = client.post("/api/spreadsheets/close")
+    assert resp.status_code == 409
+    assert server._worksheet is sentinel
+
+
 def test_combined_server_forces_non_interactive(monkeypatch):
     """The web server has no console: serve_combined_app must flip
     utils.NO_INPUT_MODE on so a missing source video is skipped-and-reported
