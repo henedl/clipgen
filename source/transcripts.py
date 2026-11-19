@@ -1765,7 +1765,7 @@ class TranscriptWorker:
         it can only finish its current (cancelled) task and exit.
         """
         self._running = False
-        self._queue.put((0, _TRANSCRIPT_SENTINEL))
+        self._queue.put((0, "", _TRANSCRIPT_SENTINEL))
         if self._thread is not None:
             self._thread.join(timeout=join_timeout)
 
@@ -1788,7 +1788,8 @@ class TranscriptWorker:
             op_id=task_id,
             meta={"participant": task.get("participant", "")},
         )
-        self._queue.put((100, task_id))
+        # created_at breaks ties, so equal-priority tasks run in enqueue order.
+        self._queue.put((100, task["created_at"], task_id))
         return task_id
 
     def cancel(self, task_id: str) -> bool:
@@ -1876,7 +1877,7 @@ class TranscriptWorker:
             except queue.Empty:
                 continue
 
-            _priority, task_id = item
+            _priority, _created, task_id = item
             if task_id is _TRANSCRIPT_SENTINEL:
                 break
 

@@ -1612,6 +1612,18 @@ class TestTranscriptWorker:
         assert t is not None
         assert t["_cancelled"] is True
 
+    def test_queue_runs_in_enqueue_order(self):
+        """Equal-priority tasks dequeue in enqueue order, not by random id."""
+        worker = transcripts.TranscriptWorker()
+        ids = ["t_zz", "t_aa", "t_mm"]
+        for i, task_id in enumerate(ids):
+            task = transcripts.create_transcript_task(f"P0{i}", ["/v.mp4"])
+            task["id"] = task_id
+            task["created_at"] = f"2026-01-01T00:00:0{i}"
+            worker.enqueue(task)
+        drained = [worker._queue.get_nowait()[-1] for _ in ids]
+        assert drained == ids
+
     def test_cancel_nonexistent(self):
         worker = transcripts.TranscriptWorker()
         assert worker.cancel("nonexistent") is False
