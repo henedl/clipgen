@@ -4274,6 +4274,7 @@ def test_merge_speakers_task_copies_labels_by_id_without_agent_reset(monkeypatch
         "participant": pid,
         "status": transcripts.TASK_STATUS_COMPLETED,
         "created_at": "9999",
+        "transcribed_at": "then",
         "result": {
             "segments": [
                 {"id": "P01:0", "text": "a", "speaker": "1"},
@@ -4309,6 +4310,39 @@ def test_merge_speakers_task_copies_labels_by_id_without_agent_reset(monkeypatch
     assert chained == []
     assert transcripts_server._corrections_version > before
     assert "sp_done" in transcripts_server._merged_task_ids
+
+
+def test_merge_drops_speakers_from_before_a_retranscription(monkeypatch):
+    """Labels computed on the old transcript must not land on re-minted ids."""
+    entry = {
+        "segments": [{"id": "P01:0", "text": "new words"}],
+        "speakers": {"enabled": True, "labels": {}, "count": 0},
+        "transcribed_at": "second run",
+    }
+    monkeypatch.setattr(
+        transcripts_server, "_manifest", {"source_transcripts": {"P01": entry}}
+    )
+    task = {
+        "id": "sp_stale",
+        "kind": "speakers",
+        "participant": "P01",
+        "status": transcripts.TASK_STATUS_COMPLETED,
+        "transcribed_at": "first run",
+        "result": {
+            "segments": [{"id": "P01:0", "text": "old words", "speaker": "2"}],
+            "speakers": {"enabled": True, "labels": {}, "count": 2},
+        },
+    }
+    monkeypatch.setattr(transcripts_server, "_worker", _CompletedTasksWorker([task]))
+    monkeypatch.setattr(transcripts_server, "_merged_task_ids", set())
+    monkeypatch.setattr(transcripts_server, "_pending_chain_pids", [])
+
+    with transcripts_server._manifest_lock:
+        transcripts_server._merge_completed_results_locked()
+
+    assert "speaker" not in entry["segments"][0]
+    assert entry["speakers"]["count"] == 0
+    assert "sp_stale" in transcripts_server._merged_task_ids
 
 
 def test_speakers_segment_override_and_new_speaker(tr_client, monkeypatch, tmp_path):

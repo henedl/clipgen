@@ -319,6 +319,8 @@ def _enqueue_speakers_task(pid: str, entry: dict[str, Any]) -> dict[str, Any] | 
     task = transcripts.create_speakers_task(
         pid, video_paths, entry["segments"], audio_index=entry.get("audio_index")
     )
+    # The merge drops the labels if a re-transcription lands first.
+    task["transcribed_at"] = entry.get("transcribed_at")
     _worker.enqueue(task)
     return _task_info(task)
 
@@ -3109,7 +3111,12 @@ def _merge_completed_results_locked() -> list[str]:
             if task.get("kind") == "speakers":
                 # Labels land by id on the live list; marks and agents stay put.
                 live = src.get(pid)
-                if live and live.get("segments") and not _speakers_off(live):
+                if (
+                    live
+                    and live.get("segments")
+                    and not _speakers_off(live)
+                    and task.get("transcribed_at") == live.get("transcribed_at")
+                ):
                     _apply_speaker_result(live, task["result"])
                     entries_changed = True
                 _merged_task_ids.add(task["id"])
