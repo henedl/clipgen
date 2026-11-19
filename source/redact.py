@@ -228,20 +228,36 @@ class Tokenizer:
         self._max_len = min(longest, 32)
         self._unknown_penalty = min(scores) - 10.0
 
-    def tokenize(self, text: str) -> list[tuple[int, str]]:
-        """Viterbi-optimal ``(id, surface)`` pairs; surfaces keep their ``▁``."""
+    def tokenize(self, text: str) -> list[tuple[int, str, tuple[int, int]]]:
+        """Viterbi-optimal ``(id, surface, (start, end))``; offsets index *text*."""
+        # Normalize per cluster so each output char knows its source range.
         squeezed: list[str] = []
+        origin: list[tuple[int, int]] = []
         last_space = True
-        for ch in unicodedata.normalize("NFKC", text):
-            if ch == " ":
-                if last_space:
-                    continue
-                last_space = True
-            else:
-                last_space = False
-            squeezed.append(ch)
+        i = 0
+        while i < len(text):
+            j = i + 1
+            norm = unicodedata.normalize("NFKC", text[i:j])
+            while j < len(text):
+                nxt = unicodedata.normalize("NFKC", text[j])
+                joined = unicodedata.normalize("NFKC", text[i : j + 1])
+                if joined == norm + nxt:
+                    break
+                j += 1
+                norm = joined
+            for ch in norm:
+                if ch == " ":
+                    if last_space:
+                        continue
+                    last_space = True
+                else:
+                    last_space = False
+                squeezed.append(ch)
+                origin.append((i, j))
+            i = j
         if squeezed and squeezed[-1] == " ":
             squeezed.pop()
+            origin.pop()
         s = _META + "".join(_META if c == " " else c for c in squeezed)
         n = len(s)
         best = [-1e18] * (n + 1)
@@ -264,34 +280,25 @@ class Tokenizer:
                 best[end] = unknown
                 back_pos[end] = end - 1
                 back_id[end] = self.unk_id
-        out: list[tuple[int, str]] = []
+        cuts: list[int] = []
         pos = n
         while pos > 0:
-            start = back_pos[pos]
-            out.append((back_id[pos], s[start:pos]))
-            pos = start
-        out.reverse()
+            cuts.append(pos)
+            pos = back_pos[pos]
+        cuts.reverse()
+        out: list[tuple[int, str, tuple[int, int]]] = []
+        start = 0
+        cursor = 0
+        for end in cuts:
+            # Index k of s is squeezed[k - 1]; the leading ▁ has no source.
+            real = [k - 1 for k in range(max(start, 1), end) if squeezed[k - 1] != " "]
+            if real:
+                cursor = origin[real[-1]][1]
+                out.append((back_id[end], s[start:end], (origin[real[0]][0], cursor)))
+            else:
+                out.append((back_id[end], s[start:end], (cursor, cursor)))
+            start = end
         return out
-
-
-def _reconstruct_offsets(
-    text: str, tokens: list[tuple[int, str]]
-) -> list[tuple[int, int]]:
-    """Map token surfaces back onto *text* by scanning forward."""
-    cursor = 0
-    offsets: list[tuple[int, int]] = []
-    for _tid, surface in tokens:
-        surface = surface.replace(_META, "")
-        if not surface:
-            offsets.append((cursor, cursor))
-            continue
-        found = text.find(surface, cursor)
-        if found < 0:
-            offsets.append((cursor, cursor))
-        else:
-            offsets.append((found, found + len(surface)))
-            cursor = found + len(surface)
-    return offsets
 
 
 # ---------------------------------------------------------------------------
@@ -546,8 +553,8 @@ def _document_spans(
     """Windowed inference over one document; spans carry code-point offsets."""
     _graph, tokenizer, _id2label = _load_runtime()
     tokens = tokenizer.tokenize(text)
-    offsets = _reconstruct_offsets(text, tokens)
-    ids = [tid for tid, _ in tokens]
+    offsets = [span for _tid, _surface, span in tokens]
+    ids = [tid for tid, _surface, _span in tokens]
     low = min(LOW_SCORE, min_score)
     best: dict[tuple[int, int, str], dict[str, Any]] = {}
     index = 0

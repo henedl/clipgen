@@ -3,6 +3,7 @@
 import json
 import os
 import struct
+import unicodedata
 from pathlib import Path
 from typing import Any
 
@@ -43,18 +44,57 @@ def test_parse_tokenizer_rejects_bad_magic_and_trailing_bytes():
 
 def test_tokenize_prefers_whole_piece_and_falls_back_to_unk():
     tok = redact.Tokenizer(_blob())
-    assert tok.tokenize("Anna") == [(4, "▁Anna")]
-    ids = [i for i, _ in tok.tokenize("x  y")]
+    assert tok.tokenize("Anna") == [(4, "▁Anna", (0, 4))]
+    ids = [i for i, _s, _o in tok.tokenize("x  y")]
     assert ids == [8, 3, 9]
 
 
-def test_reconstruct_offsets_scans_forward():
+def test_tokenize_offsets_index_source_text():
     tok = redact.Tokenizer(_blob())
     text = "Anna x"
-    tokens = tok.tokenize(text)
-    offsets = redact._reconstruct_offsets(text, tokens)
+    offsets = [o for _i, _s, o in tok.tokenize(text)]
     assert offsets[0] == (0, 4)
     assert offsets[-1] == (5, 6)
+
+
+def test_tokenize_keeps_offsets_after_changed_char():
+    # ² normalizes to 2; later tokens must not drift.
+    tok = redact.Tokenizer(_blob([*_PIECES, "2", "▁m"]))
+    text = "m² m² Anna x"
+    tokens = tok.tokenize(text)
+    assert [text[a:b] for _i, _s, (a, b) in tokens] == [
+        "m",
+        "²",
+        "m",
+        "²",
+        "Anna",
+        "x",
+    ]
+
+
+def test_tokenize_normalizes_like_whole_string_nfkc():
+    tok = redact.Tokenizer(_blob())
+    samples = [
+        unicodedata.normalize("NFD", "café Åsa ẹ́x"),
+        "ｶﾞ ｷﾞｮ",
+        "\u1100\u1161 jamo",
+        "wait… m² ½ ™ º It´s",
+        "a\u00a0b  c ",
+        "ｆｕｌｌ １２３",
+        "  lead",
+    ]
+    for text in samples:
+        expected = []
+        last_space = True
+        for ch in unicodedata.normalize("NFKC", text):
+            if ch == " " and last_space:
+                continue
+            last_space = ch == " "
+            expected.append("▁" if ch == " " else ch)
+        if expected and expected[-1] == "▁":
+            expected.pop()
+        surfaces = [s for _i, s, _o in tok.tokenize(text)]
+        assert "".join(surfaces) == "▁" + "".join(expected), text
 
 
 # ---- Span algebra ----------------------------------------------------------
@@ -115,7 +155,12 @@ class _WordTokenizer:
     eos_id = 2
 
     def tokenize(self, text):
-        return [(i, "▁" + w) for i, w in enumerate(text.split())]
+        out, pos = [], 0
+        for i, w in enumerate(text.split()):
+            pos = text.index(w, pos)
+            out.append((i, "▁" + w, (pos, pos + len(w))))
+            pos += len(w)
+        return out
 
 
 def test_document_spans_windows_with_stride_and_dedupes(monkeypatch):
