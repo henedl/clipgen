@@ -1121,6 +1121,15 @@ def test_get_duration_accepts_every_pair_the_parser_emits():
     assert video.get_duration(start, end) == 300
 
 
+def test_get_duration_keeps_milliseconds():
+    """Local cuts carry .mmm; whole seconds still return an int for the argv."""
+    assert video.get_duration("0:00:12.600", "0:00:17.400") == 4.8
+    assert video.get_duration("0:00:10.100", "0:00:10.400") == 0.3
+    assert video.get_duration("0:00:10.500", "0:00:11.500") == 1
+    assert isinstance(video.get_duration("0:00:10", "0:00:12"), int)
+    assert video.get_duration("0:00:10.x", "0:00:12") is None
+
+
 def test_calculate_target_bitrate_typical_and_min_floor():
     kbps = video.calculate_target_bitrate(target_size_mb=50, duration_seconds=600)
     assert kbps > 100

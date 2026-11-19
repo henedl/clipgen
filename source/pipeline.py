@@ -305,16 +305,17 @@ def _prepare_and_check_clip(
 
 
 def _local_timestamp(seconds: float) -> str:
-    """Format local *seconds* as ``H:MM:SS`` for ffmpeg.
+    """Format local *seconds* as ``H:MM:SS`` for ffmpeg, plus ``.mmm`` if fractional.
 
     Always emits the hours component so every ffmpeg-bound timestamp shares one
-    uniform shape. This is a consistency/readability invariant, not a
-    correctness requirement: ``video.get_duration`` parses each end
-    independently (via ``utils.timestamp_to_seconds``) and tolerates mixed
-    ``M:SS`` / ``H:MM:SS`` pairs. These strings feed ffmpeg, not the
-    spreadsheet, so the explicit hours are harmless.
+    uniform shape. Whole seconds (every sheet timestamp) carry no fraction;
+    Composer, transcript and Screenspace spans keep their milliseconds, which
+    ``video.get_duration`` parses. These strings feed ffmpeg, not the
+    spreadsheet.
     """
-    return utils.seconds_to_timestamp(round(seconds), force_hours=True)
+    whole, ms = divmod(round(seconds * 1000), 1000)
+    ts = utils.seconds_to_timestamp(whole, force_hours=True)
+    return f"{ts}.{ms:03d}" if ms else ts
 
 
 def _point_source(

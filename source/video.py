@@ -886,7 +886,7 @@ def build_ffmpeg_cut_command(
     input_file: str,
     output_file: str,
     start_pos: str,
-    duration_seconds: int,
+    duration_seconds: float,
     reencode: bool,
     audio_normalize: bool,
     encoder: str | None = None,
@@ -956,14 +956,14 @@ def _check_input(input_file: str, skip_noun: str | None = None) -> bool:
 
 def _clamp_to_eof(
     start_s: float,
-    duration: int,
+    duration: float,
     file_duration: float,
     *,
     noun: str,
     start_label: str,
     range_label: str,
     input_file: str,
-) -> int | None:
+) -> float | None:
     """Shorten a span running past EOF; None when nothing is left to cut."""
     title = noun[0].upper() + noun[1:]
     details = [f"Video file: '{input_file}'"]
@@ -1157,7 +1157,7 @@ def run_ffmpeg(
         return False
     # Shorten, never drop, a span past EOF (end-of-session timestamps overshoot).
     clamped = _clamp_to_eof(
-        utils.timestamp_to_seconds(start_pos) or 0.0,
+        _timestamp_seconds(start_pos) or 0.0,
         duration,
         duration_seconds,
         noun="clip",
@@ -1263,7 +1263,7 @@ def extract_screenshot(
 
     file_duration = get_file_duration(input_file)
     if file_duration is not None:
-        start_seconds = utils.timestamp_to_seconds(timestamp)
+        start_seconds = _timestamp_seconds(timestamp)
         if start_seconds is not None and start_seconds >= file_duration:
             utils.error_print(
                 f"Screenshot timestamp ({timestamp}) is beyond video duration ({file_duration}s). Skipping.",
@@ -1586,7 +1586,7 @@ def extract_gif(
         return False
 
     file_duration = get_file_duration(input_file)
-    start_seconds = utils.timestamp_to_seconds(timestamp)
+    start_seconds = _timestamp_seconds(timestamp)
     if file_duration is not None and start_seconds is not None:
         clamped = _clamp_to_eof(
             start_seconds,
@@ -1599,7 +1599,7 @@ def extract_gif(
         )
         if clamped is None:
             return False
-        duration_seconds = clamped
+        duration_seconds = int(clamped)
 
     utils.verbose_print(
         f"Extracting GIF from {input_file} at {timestamp} ({duration_seconds}s)."
@@ -2957,15 +2957,24 @@ def extract_frame_at_timestamp(
 # ---- Filesize targeting and compression ----
 
 
-def get_duration(start_time: str, end_time: str | None) -> int | None:
+def _timestamp_seconds(ts: str | None) -> float | None:
+    """``utils.timestamp_to_seconds`` plus an optional ``.mmm`` fraction for local cuts."""
+    whole, _, frac = (ts or "").partition(".")
+    seconds = utils.timestamp_to_seconds(whole)
+    if seconds is None or (frac and not frac.isdigit()):
+        return None
+    return seconds + (float("0." + frac) if frac else 0.0)
+
+
+def get_duration(start_time: str, end_time: str | None) -> float | None:
     """Calculate the duration between two timestamps.
 
     Args:
-        start_time: Start timestamp (format: HH:MM:SS or MM:SS)
-        end_time: End timestamp (format: HH:MM:SS or MM:SS)
+        start_time: Start timestamp (format: HH:MM:SS or MM:SS, optional ``.mmm``)
+        end_time: End timestamp (format: HH:MM:SS or MM:SS, optional ``.mmm``)
 
     Returns:
-        Duration in seconds, or None if timestamps are invalid.
+        Duration in seconds (an int for whole-second input), or None if invalid.
     """
     if config.DEBUGGING:
         config.debug_ic(start_time, end_time)
@@ -2980,8 +2989,8 @@ def get_duration(start_time: str, end_time: str | None) -> int | None:
 
     # Parse ends separately: formats differ across the hour boundary, and minutes may
     # exceed 59.
-    start_seconds = utils.timestamp_to_seconds(start_time)
-    end_seconds = utils.timestamp_to_seconds(end_time)
+    start_seconds = _timestamp_seconds(start_time)
+    end_seconds = _timestamp_seconds(end_time)
     if start_seconds is None or end_seconds is None:
         utils.error_print(
             "Timestamp formatting error in get_duration().",
@@ -2992,7 +3001,9 @@ def get_duration(start_time: str, end_time: str | None) -> int | None:
         )
         return None
 
-    duration = int(end_seconds - start_seconds)
+    span = end_seconds - start_seconds
+    # Whole seconds stay int, so sheet cuts keep their "-t 22" argv.
+    duration = int(span) if span == int(span) else round(span, 3)
     if config.DEBUGGING:
         config.debug_ic(duration)
     return duration
