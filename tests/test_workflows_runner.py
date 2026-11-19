@@ -438,6 +438,27 @@ def test_cancel_skips_remaining_nodes(tmp_path):
     assert all(s["status"] == "skipped" for s in runner.node_states.values())
 
 
+def test_node_cancelled_mid_run_is_not_reusable(tmp_path, monkeypatch):
+    """A detector cancelled mid-scan returns partial events; Resume must rerun it."""
+
+    def cancel_mid_scan(ctx, inputs, params):
+        ctx.cancel_event.set()
+        return {"events": {"events": [{"id": "e1"}], "source": {}, "raw_results": []}}
+
+    monkeypatch.setitem(workflows.NODE_TYPES["ss_color"], "execute", cancel_mid_scan)
+    nodes = [{"id": "n1", "type": "ss_color", "params": {}}]
+    runner = _runner(tmp_path, nodes, [])
+    runner.run()
+    assert runner.status == "cancelled"
+    assert runner.node_states["n1"]["status"] == "skipped"
+    seeds, _notes = workflows_runner.compute_resume_plan(
+        {"nodes": nodes, "edges": []},
+        runner.snapshot()["nodeStates"],
+        lambda nid: workflows_runner.read_node_sidecar(tmp_path, "run_test", nid),
+    )
+    assert seeds == {}
+
+
 def test_control_edges_are_excluded_from_inputs(tmp_path):
     # A gate's control edge establishes a dependency but never feeds data: 'm'
     # gets its 'video' input but not '__gate__'.

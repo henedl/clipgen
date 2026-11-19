@@ -824,6 +824,13 @@ class WorkflowRunner:
             try:
                 with profiling.span(f"workflows.node {node['type']}"):
                     result = executor(self.ctx, inputs, params)
+                # A cancelled executor returns partial output; Resume must not reuse it.
+                if self.ctx.cancel_event.is_set():
+                    self._set_node(
+                        node_id, status=NODE_STATUS_SKIPPED, completed_at=_now_iso()
+                    )
+                    self._notify(force=True)
+                    continue
                 result = result if isinstance(result, dict) else {}
                 # Reserved keys shown on the node, never a port: informational note or
                 # degraded reason.
