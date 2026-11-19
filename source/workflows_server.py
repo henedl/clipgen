@@ -1280,6 +1280,7 @@ def _start_watch_thread() -> None:
 def _init_workflows_state(
     sheet_context: Any = None,
     worksheet: Any = None,
+    keep_video_watch: bool = False,
 ) -> None:
     """Initialize module-level state for Workflows routes.
 
@@ -1293,7 +1294,9 @@ def _init_workflows_state(
     ``thinking_agents.configure``) are initialized. ``server._init_combined_state``
     calls :func:`_start_watch_thread` as its last step instead.
 
-    Called from ``build_combined_app`` and on an output-dir switch. A worksheet swap goes through
+    Called from ``build_combined_app`` and on an output-dir switch, which passes
+    *keep_video_watch*: the new-video watcher follows the input dir, so its
+    pending copies must survive. A worksheet swap goes through
     :func:`repin_sheet_state` instead — re-running this would reload the
     manifest, reseed the watch baseline and restart the trigger daemon on
     every spreadsheet the user opens.
@@ -1306,7 +1309,11 @@ def _init_workflows_state(
     # Reclaim a stale empty manifest from a prior session (the save deletes empty files).
     with _manifest_lock:
         _persist_locked()
-    _seed_watch_seen()
+    if keep_video_watch:
+        _seed_watch_seen("transcript_complete")
+        _seed_watch_seen("scan_event")
+    else:
+        _seed_watch_seen()
 
 
 def repin_sheet_state(sheet_context: Any = None, worksheet: Any = None) -> None:

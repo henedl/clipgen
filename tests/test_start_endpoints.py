@@ -346,6 +346,26 @@ def test_dirs_post_same_output_ignores_tool_work(client, monkeypatch, tmp_path):
     assert resp.status_code == 200
 
 
+def test_dirs_post_keeps_the_new_video_watch(client, monkeypatch, tmp_path):
+    """The video watch follows the input dir; transcript baselines follow the output."""
+    import workflows_server
+
+    copying = (("study_P07.mp4", 10, 1.0),)
+    monkeypatch.setitem(workflows_server._watch_pending, "P07", copying)
+    new_out = tmp_path / "B"
+    new_out.mkdir()
+    entry = {"segments": [], "transcribed_at": "2026-01-01T00:00:00"}
+    doc = {"transcripts": {"source_transcripts": {"P09": entry}}}
+    (new_out / "clipgen.json").write_text(json.dumps(doc))
+
+    assert client.post("/api/dirs", json={"output": str(new_out)}).status_code == 200
+
+    assert workflows_server._watch_pending["P07"] == copying
+    assert workflows_server._watch_transcript_baseline == {
+        "P09": entry["transcribed_at"]
+    }
+
+
 # ---------- /api/folder-picker ---------------------------------------------
 
 

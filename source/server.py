@@ -3702,7 +3702,9 @@ def api_dirs_post() -> FlaskResponse:
                 screenspace_server._init_screenspace_state(sheet_context=_sheet_context)
                 transcripts_server._init_transcripts_state(sheet_context=_sheet_context)
                 workflows_server._init_workflows_state(
-                    sheet_context=_sheet_context, worksheet=_worksheet
+                    sheet_context=_sheet_context,
+                    worksheet=_worksheet,
+                    keep_video_watch=True,
                 )
                 composer_server._init_composer_state(sheet_context=_sheet_context)
 
