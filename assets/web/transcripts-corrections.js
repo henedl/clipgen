@@ -19,7 +19,8 @@
   var TS = window.ClipgenTranscripts;
   var state = TS.state;
   var showToast = TS.showToast,
-    loadTranscript = TS.loadTranscript;
+    loadTranscript = TS.loadTranscript,
+    pollTaskStatus = TS.pollTaskStatus;
 
   function closeCorrectionsModal() {
     var modal = qs("#correctionsModal");
@@ -140,6 +141,8 @@
         loadCorrections();
         // Reload transcript to apply new correction
         if (state.selectedParticipant) loadTranscript(state.selectedParticipant);
+        // The server may requeue a redact pass; poll until it lands.
+        pollTaskStatus();
       }
     }).catch(function () {
       showToast("Failed to add correction");
@@ -153,6 +156,7 @@
         loadCorrections();
         // Reload transcript to unapply correction
         if (state.selectedParticipant) loadTranscript(state.selectedParticipant);
+        pollTaskStatus();
       }
     }).catch(function () {
       showToast("Failed to remove correction");
@@ -273,6 +277,7 @@
     loadCorrections();
     loadKnownTerms();
     if (data.corrections && state.selectedParticipant) loadTranscript(state.selectedParticipant);
+    if (data.corrections) pollTaskStatus();
   }
 
   function exportDictionary() {
