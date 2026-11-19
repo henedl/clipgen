@@ -180,8 +180,6 @@
         return null;
       }
       p.scene_references = step._scenes.map(sceneRefPayload);
-    } else if (stepType === "inactivity") {
-      p.threshold = intv("paramInactThresh", 10);
     }
     var stepRegionRef = normalizeRegionRef(state.multitoolSteps[idx].region_ref)
       || (state.multitoolSteps[idx].region ? activeRegionRef(state.multitoolSteps[idx].region) : null);

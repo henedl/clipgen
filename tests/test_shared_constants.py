@@ -425,6 +425,14 @@ def test_detector_registries_stay_aligned():
         f"screenspace_server._VALID_STEP_TYPES drifted from TOOLS minus "
         f"{sorted(_SERVER_STEP_EXCLUDES)}: {sorted(screenspace_server._VALID_STEP_TYPES)}."
     )
+    mt_src = (WEB / "screenspace-multitool-params.js").read_text(encoding="utf-8")
+    mt_list = re.search(r"var MULTITOOL_ALLOWED_TYPES = \[(.+?)\];", mt_src, re.DOTALL)
+    assert mt_list, "MULTITOOL_ALLOWED_TYPES not found"
+    js_steps = set(re.findall(r'"([^"]+)"', mt_list.group(1)))
+    assert js_steps == set(screenspace_server._VALID_STEP_TYPES), (
+        f"MULTITOOL_ALLOWED_TYPES offers steps the server rejects (or misses some): "
+        f"js={sorted(js_steps)} vs server={sorted(screenspace_server._VALID_STEP_TYPES)}."
+    )
 
     assert set(cli_screenspace._SS_VALID_TASK_TYPES) == engine - _CLI_TASK_EXCLUDES, (
         f"cli_screenspace._SS_VALID_TASK_TYPES drifted from TOOLS minus {_CLI_TASK_EXCLUDES}. "

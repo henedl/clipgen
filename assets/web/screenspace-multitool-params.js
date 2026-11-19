@@ -43,7 +43,7 @@
   // ---- Multitool step list (drag reorder + drop-to-import from task queue) ----
 
   var MULTITOOL_ALLOWED_TYPES = [
-    "color", "change", "similarity", "text", "numbers", "template", "flow", "scene", "inactivity",
+    "color", "change", "similarity", "text", "numbers", "template", "flow", "scene",
   ];
 
   function renderMultitoolStepBody(body, stepType, idx) {
@@ -391,21 +391,6 @@
     body.appendChild(addScRow);
   }
 
-  function _mtRenderInactivity(body, idx, sfx) {
-    var init = state.multitoolSteps[idx]._values || {};
-    var r1 = el("div", "param-row");
-    r1.appendChild(el("span", "param-label", "Sensitivity"));
-    var c1 = el("div", "param-control");
-    var inactSlider = rangeInput("paramInactThresh" + sfx, 0, 30, intOrDefault(init.threshold, 10), 1);
-    c1.appendChild(inactSlider);
-    var inactVal = el("span", "param-value");
-    inactVal.textContent = inactSlider.value;
-    inactSlider.addEventListener("input", function () { inactVal.textContent = inactSlider.value; });
-    c1.appendChild(inactVal);
-    r1.appendChild(c1);
-    body.appendChild(r1);
-  }
-
   // Helpers used by multiple per-type renderers above.
   function _mtAddNumberRow(body, label, id, min, max, def, step) {
     var r = el("div", "param-row");
@@ -463,7 +448,6 @@
     template:   _mtRenderTemplate,
     flow:       _mtRenderFlow,
     scene:      _mtRenderScene,
-    inactivity: _mtRenderInactivity,
   };
 
   var _multitoolDragMidpoints = null;
@@ -536,8 +520,6 @@
       init.template_scale = tScalePct / 100;
     } else if (step.type === "flow") {
       init.magnitude_threshold = numberOrDefault((qs("#paramFlowMag" + sfx) || {}).value, init.magnitude_threshold);
-    } else if (step.type === "inactivity") {
-      init.threshold = intOrDefault((qs("#paramInactThresh" + sfx) || {}).value, init.threshold);
     }
     step._values = init;
   }
