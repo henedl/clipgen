@@ -16,15 +16,19 @@ these files are missing.
 
 Provenance (THIRD-PARTY-LICENSES cites this block):
   macos-arm64: Martin Riedl's FFmpeg build server, https://ffmpeg.martin-riedl.de
-    Build 1783011502_8.1.2 — FFmpeg 8.1.2 release, GPLv3 build
+    Build 1795207104_9.1 — FFmpeg 9.1 release, GPLv3 build
     (--enable-gpl --enable-version3, with libx264/libvpx/libwebp/libfreetype;
     VideoToolbox enabled by default on macOS). Permanent per-build URLs.
+    --repin cannot match these (no platform token in the filename); edit by
+    hand against the provider's published <url>.sha256.
   windows-x64: Gyan Doshi's builds, https://www.gyan.dev/ffmpeg/builds/
-    Package ffmpeg-8.1.2-essentials_build.zip — FFmpeg 8.1.2 release, GPLv3
+    Package ffmpeg-9.1-essentials_build.zip — FFmpeg 9.1 release, GPLv3
     build (--enable-gpl --enable-version3, with libx264/libvpx/libwebp/
-    libfreetype). Versioned packages under /builds/packages/ are permanent;
-    the archive hash matches the provider's published .sha256 file. Never pin
-    the "release-essentials" / "git-essentials" aliases: those move. (The
+    libfreetype). Versioned packages under /builds/packages/ keep only the
+    two newest releases (8.1.2 vanished when 9.1 shipped), so pin-health
+    flags a forced bump. The archive hash matches the provider's published
+    .sha256 file. Never pin the "release-essentials" / "git-essentials"
+    aliases: those move. (The
     earlier BtbN autobuild pin was dropped because BtbN prunes dated tags
     after ~2 weeks and any edit here rotates the CI cache key.)
 
@@ -71,22 +75,22 @@ from urllib.parse import urlsplit
 PINS: dict[str, list[dict]] = {
     "macos-arm64": [
         {
-            "url": "https://ffmpeg.martin-riedl.de/download/macos/arm64/1783011502_8.1.2/ffmpeg.zip",
-            "sha256": "ef1aa60006c7b77ce170c1608c08d8e4ba1c30c5746f2ac986ded932d0ac2c3c",
+            "url": "https://ffmpeg.martin-riedl.de/download/macos/arm64/1795207104_9.1/ffmpeg.zip",
+            "sha256": "1f66e9a690a7f1c9e60b012379f8869c11818d1797f45b21dbb2f2564ba61ae1",
             "members": {
                 "ffmpeg": {
                     "target": "ffmpeg",
-                    "sha256": "eaf91238e104dd0e262bc6510e25061855cc99a6955a721b0ac99660d58c473d",
+                    "sha256": "bc18dd239c4e699e080f0d92d3707004a160da54e12f8d4946e4145080143d40",
                 },
             },
         },
         {
-            "url": "https://ffmpeg.martin-riedl.de/download/macos/arm64/1783011502_8.1.2/ffprobe.zip",
-            "sha256": "c39787f4af7a3932502d2d48db6f6feaaa836b48a73ef78c32cc3285df61dfaf",
+            "url": "https://ffmpeg.martin-riedl.de/download/macos/arm64/1795207104_9.1/ffprobe.zip",
+            "sha256": "6ef2df5f575042923a28537ab37adf936f28bf3e7b85de23a1447ed447ec1dbd",
             "members": {
                 "ffprobe": {
                     "target": "ffprobe",
-                    "sha256": "ed9dc5871914b466b96b402c9ec0ba68ce4f836e72faa464b1b4e279835bd4a6",
+                    "sha256": "9f0f5582b5d59c26279309b71fa8d7e2cec23910a2dfb0212e6724f2e18a521d",
                 },
             },
         },
@@ -143,16 +147,16 @@ PINS: dict[str, list[dict]] = {
     ],
     "windows-x64": [
         {
-            "url": "https://www.gyan.dev/ffmpeg/builds/packages/ffmpeg-8.1.2-essentials_build.zip",
-            "sha256": "db580001caa24ac104c8cb856cd113a87b0a443f7bdf47d8c12b1d740584a2ec",
+            "url": "https://www.gyan.dev/ffmpeg/builds/packages/ffmpeg-9.1-essentials_build.zip",
+            "sha256": "b9bbbb3acece000cbeec994f856649354e52c773807841e78908374b24d658fd",
             "members": {
-                "ffmpeg-8.1.2-essentials_build/bin/ffmpeg.exe": {
+                "ffmpeg-9.1-essentials_build/bin/ffmpeg.exe": {
                     "target": "ffmpeg.exe",
-                    "sha256": "1326dde4c84ff1f96fe6b8916c5bed29e163e9b5dccf995f6f3db069d143ec5e",
+                    "sha256": "ed8f66cb877087a96f5bbb40a2944f0e764f2ad8870d5cb647360d912e62bc07",
                 },
-                "ffmpeg-8.1.2-essentials_build/bin/ffprobe.exe": {
+                "ffmpeg-9.1-essentials_build/bin/ffprobe.exe": {
                     "target": "ffprobe.exe",
-                    "sha256": "b49ccc7c6547b141ad5a2f6ec69cc04323d7133d7704d70b331b904c63eecb07",
+                    "sha256": "df0199f606faa88e9ad192732a7c3987acfb647663534c297772e17730611a08",
                 },
             },
         },

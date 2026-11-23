@@ -1001,7 +1001,7 @@ SUBTITLE_CODEC_BY_CONTAINER = {
     ".mkv": "srt",
     ".webm": "webvtt",
 }
-# ISOBMFF ignores -disposition:s:0 (measured, ffmpeg 8.1.2); only .mkv/.webm honour it.
+# ISOBMFF ignores -disposition:s:0 (measured, ffmpeg 9.1); only .mkv/.webm honour it.
 SUBTITLE_ALWAYS_DEFAULT_CONTAINERS = frozenset({".mp4", ".m4v", ".mov"})
 
 
@@ -1024,7 +1024,7 @@ def mux_subtitles(
     *set_default* controls whether the new track carries the ``default``
     disposition (players turn it on without the viewer picking it). The False
     case writes ``0`` rather than omitting the flag, but **only .mkv/.webm
-    honour it**: measured on ffmpeg 8.1.2, the mp4 muxer reports ``default=1``
+    honour it**: measured on ffmpeg 9.1, the mp4 muxer reports ``default=1``
     for the subtitle track no matter what is passed (an ISOBMFF track is
     enabled or absent — there is no "present but off"), while ``forced`` on the
     same command does take effect, so this is the muxer and not the argument.

@@ -9,7 +9,7 @@ SUMMARY
 
 Component                   Version    License
 -------------------------   --------   ---------------
-FFmpeg (ffmpeg + ffprobe)   8.1.x      GPL-3.0-or-later
+FFmpeg (ffmpeg + ffprobe)   9.1        GPL-3.0-or-later
 llama.cpp (llama-server)    b10588     MIT
 gspread                     6.2.1      MIT
 openpyxl                    3.1.5      MIT
@@ -1841,10 +1841,10 @@ macOS cv2 is self-built without FFmpeg -- see the previous section).
 Exact builds (pinned by SHA256 in build/fetch_binaries.py, which also records
 this provenance):
 
-  macOS arm64:  FFmpeg 8.1.2 release, build 1783011502_8.1.2 from Martin
+  macOS arm64:  FFmpeg 9.1 release, build 1795207104_9.1 from Martin
                 Riedl's FFmpeg build server. Binaries, checksums, and the full
                 build configuration: https://ffmpeg.martin-riedl.de
-  Windows x64:  FFmpeg 8.1.2 release, package ffmpeg-8.1.2-essentials_build
+  Windows x64:  FFmpeg 9.1 release, package ffmpeg-9.1-essentials_build
                 from Gyan Doshi's build site. Binaries, checksums, and the
                 full build configuration: https://www.gyan.dev/ffmpeg/builds/
 
