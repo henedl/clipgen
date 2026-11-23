@@ -123,6 +123,10 @@ class NodeType(TypedDict):
     # Detector usable as a Multitool step; the frontend's step list derives from
     # this (see _MULTITOOL_STEP_TOOLS).
     multitoolStep: NotRequired[bool]
+    # AI switch that blocks the node: "ai" or "transcription".
+    ai: NotRequired[str]
+    # Narrows ``ai`` to some values of one param: {param, values, default}.
+    aiWhen: NotRequired[dict[str, Any]]
 
 
 # Thinking nodes' model override; a string, not an enum, since installed models
@@ -236,6 +240,7 @@ NODE_TYPES: dict[str, NodeType] = {
     # ---- Transcript ----
     "transcribe": {
         "id": "transcribe",
+        "ai": "transcription",
         "label": "Transcribe",
         "description": "Transcribe a video's audio into a timestamped transcript and segments.",
         "domain": "transcript",
@@ -373,6 +378,7 @@ NODE_TYPES: dict[str, NodeType] = {
     # ---- Thinking (local LLM) ----
     "summarize": {
         "id": "summarize",
+        "ai": "ai",
         "label": "Summarize",
         "description": "Summarize a transcript into a paragraph and key bullet points.",
         "domain": "thinking",
@@ -384,6 +390,7 @@ NODE_TYPES: dict[str, NodeType] = {
     },
     "citations": {
         "id": "citations",
+        "ai": "ai",
         "label": "Citations",
         "description": "Link summary claims back to the transcript segments that support them.",
         "domain": "thinking",
@@ -398,6 +405,7 @@ NODE_TYPES: dict[str, NodeType] = {
     },
     "friction": {
         "id": "friction",
+        "ai": "ai",
         "label": "Friction",
         "description": "Score transcript segments for usability friction and surface the rough moments.",
         "domain": "thinking",
@@ -412,6 +420,7 @@ NODE_TYPES: dict[str, NodeType] = {
     },
     "report": {
         "id": "report",
+        "ai": "ai",
         "label": "Report",
         "description": "Synthesize a per-participant mini-report from the summary plus sheet observations and transcript marks.",
         "domain": "thinking",
@@ -1210,6 +1219,9 @@ _MULTITOOL_STEP_TOOLS = frozenset(
     {"color", "change", "flow", "text", "numbers", "inactivity"}
 )
 
+# OCR detectors; the AI switch blocks them.
+_AI_DETECTORS = ("text", "numbers")
+
 for _ss_tool, _ss_param_spec in _SS_DETECTOR_SPECS.items():
     NODE_TYPES[f"ss_{_ss_tool}"] = {
         "id": f"ss_{_ss_tool}",
@@ -1230,6 +1242,8 @@ for _ss_tool, _ss_param_spec in _SS_DETECTOR_SPECS.items():
         "hidden": True,
         "multitoolStep": _ss_tool in _MULTITOOL_STEP_TOOLS,
     }
+    if _ss_tool in _AI_DETECTORS:
+        NODE_TYPES[f"ss_{_ss_tool}"]["ai"] = "ai"
 
 # Palette-facing detector; its ``detector`` dropdown swaps in the hidden ss_<tool>
 # param sets.
@@ -1255,7 +1269,21 @@ NODE_TYPES["detect"] = {
         }
     ],
     "requires": ["videoDir"],
+    # Gated only while the chosen detector is an OCR one.
+    "ai": "ai",
+    "aiWhen": {"param": "detector", "values": list(_AI_DETECTORS), "default": "text"},
 }
+
+
+def node_ai_kind(node_type: str, params: dict[str, Any]) -> str | None:
+    """The AI switch (``ai`` / ``transcription``) gating a node, or None."""
+    spec = NODE_TYPES.get(node_type) or {}
+    when = spec.get("aiWhen")
+    if when:
+        chosen = str(params.get(when["param"]) or when["default"])
+        if chosen not in when["values"]:
+            return None
+    return spec.get("ai")
 
 
 def serialize_catalog() -> list[dict[str, Any]]:

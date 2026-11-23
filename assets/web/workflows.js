@@ -98,11 +98,14 @@
     item.setAttribute("data-domain", node.domain || "");
     // data-tooltip, not title: native title doesn't render on draggable rows.
     if (node.description) item.setAttribute("data-tooltip", node.description);
+    // Always-gated nodes grey here; Detect depends on its detector, so validation flags it.
+    var aiGated = node.ai && !node.aiWhen;
+    if (aiGated) item.setAttribute("data-ai", node.ai);
     if (nodeContextMet(node)) {
       item.draggable = true;
       item.dataset.nodeType = node.id;
       item.addEventListener("dragstart", function (e) {
-        if (!state.ready) {
+        if (!state.ready || (aiGated && clipgenAiOff(node.ai))) {
           e.preventDefault(); // don't start a drag the canvas can't accept yet
           return;
         }

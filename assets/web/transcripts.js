@@ -579,6 +579,7 @@
   // Preload the Whisper model once per page load; the flag resets unless a load began.
   function tryPostTranscriptionWarmup() {
     if (_transcriptionWarmupPosted) return;
+    if (clipgenAiOff("transcription")) return;
     if (state.transcribePrewarm === "off") return;
     if (!needsTranscription()) return;
     _transcriptionWarmupPosted = true;
@@ -2892,10 +2893,12 @@
           icon: "microphone",
           label: "Transcribe All",
           action: runTranscribeAll,
-          disabled: pending === 0,
-          title: pending
-            ? "Queue transcription for the " + clipgenPluralUnit(pending, "participant", "participants") + " without a transcript"
-            : "Every participant with a video already has a transcript or is queued.",
+          disabled: pending === 0 || clipgenAiOff("transcription"),
+          title: clipgenAiOff("transcription")
+            ? CLIPGEN_CONFIG.aiOffMessages.transcription
+            : pending
+              ? "Queue transcription for the " + clipgenPluralUnit(pending, "participant", "participants") + " without a transcript"
+              : "Every participant with a video already has a transcript or is queued.",
         },
         {
           icon: "language",

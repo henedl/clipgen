@@ -16,7 +16,7 @@ import numpy as np
 
 import config
 import profiling
-from utils import get_bundled_assets_root
+from utils import ai_blocked, ai_off_message, get_bundled_assets_root
 from screenspace_primitives import extract_region, point_in_mask_points
 
 
@@ -151,6 +151,9 @@ def _checkout_ocr_reader(languages: list[str]) -> Iterator[Any]:
     a first-use model fetch (dev fallback) can't race. The slot always goes
     back — ``None`` again if construction raised — so the pool never shrinks.
     """
+    # Every OCR read passes here, so a warm pool obeys the switch too.
+    if ai_blocked():
+        raise RuntimeError(ai_off_message())
     model = _resolve_ocr_model(languages)
     pool = _get_ocr_pool(languages)
     # Wait time here is OCR concurrency the pool refuses; sizes

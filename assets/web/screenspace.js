@@ -1890,11 +1890,37 @@
     renderWorkflowParams();
   }
 
+  // ---- AI switch ----
+
+  // OCR tools carry `ai` in the catalog; pickers grey them, Run refuses.
+  function toolAiOff(type) {
+    var tool = state.tools[type];
+    return !!(tool && tool.ai) && clipgenAiOff("ai");
+  }
+
+  // The active tool, or any multitool step, needs a model the switch blocks.
+  function activeToolAiOff() {
+    if (state.activeWorkflow === "multitool") {
+      return state.multitoolSteps.some(function (s) { return toolAiOff(s.type); });
+    }
+    return toolAiOff(state.activeWorkflow);
+  }
+
+  // The tag is inert while AI is on, so it follows the catalog alone.
+  function markAiTools() {
+    qsa("#workflowCategories .ss-cat-item[data-type]").forEach(function (item) {
+      var tool = state.tools[item.getAttribute("data-type")];
+      if (tool && tool.ai) item.setAttribute("data-ai", "ai");
+      else item.removeAttribute("data-ai");
+    });
+  }
+
   // Z/X tool cycling in on-screen order; delegates to the tab click path.
   function cycleTool(delta) {
     if (state.groupedToolNav) {
       var order = [];
       TOOL_CATEGORIES.forEach(function (c) { order.push.apply(order, c.tools); });
+      order = order.filter(function (type) { return !toolAiOff(type); });
       var idx = order.indexOf(state.activeWorkflow);
       if (idx === -1) idx = 0;
       selectWorkflowType(order[(idx + delta + order.length) % order.length]);
@@ -2056,6 +2082,7 @@
     }
     syncToolCategoryNav();
     _refreshCatHints();
+    markAiTools();
   }
 
   // Active chip: solid tool-color fill, tool icon + name only. Resting: category icon +
@@ -2238,6 +2265,8 @@
     if (!btn.disabled && state.calibrationGreen) {
       btn.setAttribute("data-tooltip", "Calibrated: pins satisfied");
     }
+    if (activeToolAiOff()) btn.setAttribute("data-ai", "ai");
+    else btn.removeAttribute("data-ai");
   }
 
   // ---- Run analysis (impl in screenspace-run.js) ----
@@ -2962,6 +2991,7 @@
             icon: TOOL_ICON_NAMES[type] || "cube",
             keywords: "tool detector select analysis " + cat.label.toLowerCase() + " " + type,
             section: "Tools",
+            enabled: function () { return !toolAiOff(type); },
             run: function () { selectWorkflowType(type); },
           });
         });
@@ -3070,7 +3100,12 @@
 
     // Load initial data; the tool catalog first so the pickers can consult it.
     apiGet("api/tools")
-      .then(function (data) { if (data.ok) state.tools = data.tools || {}; })
+      .then(function (data) {
+        if (!data.ok) return;
+        state.tools = data.tools || {};
+        markAiTools();
+        updateRunButton();
+      })
       .catch(function () {})
       .then(function () { return apiGet("api/participants"); })
       .then(function (data) {

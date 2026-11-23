@@ -2335,6 +2335,8 @@ def _settings_records() -> list[dict[str, Any]]:
                 "step": meta.get("step"),
                 "provider": meta.get("provider"),
                 "kind": meta.get("kind"),
+                # Which AI switch greys this row, if any.
+                "ai": meta.get("ai"),
                 "emptyLabel": meta.get("emptyLabel"),
                 "placeholders": meta.get("placeholders"),
             }
@@ -2360,6 +2362,12 @@ def _apply_settings_payload(data: dict[str, Any]) -> tuple[dict[str, Any], str |
             ]
         else:
             return {}, f"Invalid reset directive: {reset!r}"
+        # A reset never flips the AI switches back on.
+        target_names = [
+            name
+            for name in target_names
+            if config.STUDIO_SETTINGS[name].get("group") != "AI"
+        ]
 
         applied: dict[str, Any] = {}
         with config.SETTINGS_LOCK:
@@ -2421,9 +2429,16 @@ def _apply_settings_payload(data: dict[str, Any]) -> tuple[dict[str, Any], str |
                 return {}, error
             continue
         applied[name] = coerced
+    was_blocked = {kind: utils.ai_blocked(kind) for kind in config.AI_OFF_MESSAGES}
     with config.SETTINGS_LOCK:
         for name, coerced in applied.items():
             setattr(config, name, coerced)
+    # A switch that just turned off stops its live work.
+    for kind, before in was_blocked.items():
+        if utils.ai_blocked(kind) and not before:
+            import transcripts_server
+
+            transcripts_server.stop_ai_work(kind)
 
     # Snapshot every setting, not just submitted keys, so a partial PUT keeps other
     # overrides.
@@ -4296,6 +4311,12 @@ def api_start_settings_get() -> Response:
     return ok(
         settings=start_settings.load_start_settings(),
         desktop=utils.GUI_LAUNCH,
+        # Drives the overlay's first-run AI question.
+        ai={
+            "choice_made": config.AI_CHOICE_MADE,
+            "enabled": config.AI_ENABLED,
+            "transcription": config.AI_TRANSCRIPTION_ENABLED,
+        },
     )
 
 
@@ -4482,6 +4503,18 @@ def _register_settings_routes(combined: Flask) -> None:
             "/api/models/redact",
             "combined_redact_delete",
             transcripts_server.api_redact_delete,
+            ["DELETE"],
+        ),
+        (
+            "/api/models/downloaded",
+            "combined_models_downloaded",
+            transcripts_server.api_models_downloaded,
+            ["GET"],
+        ),
+        (
+            "/api/models/downloaded/<kind>",
+            "combined_models_remove",
+            transcripts_server.api_models_remove,
             ["DELETE"],
         ),
     ):

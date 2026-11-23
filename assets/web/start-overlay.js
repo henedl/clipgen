@@ -261,6 +261,11 @@
     els.aboutGrid = root.querySelector('[data-role="about-grid"]');
     els.attributionList = root.querySelector('[data-role="attribution-list"]');
 
+    els.aiChoice = root.querySelector('[data-role="ai-choice"]');
+    els.aiChoiceAi = root.querySelector('[data-role="ai-choice-ai"]');
+    els.aiChoiceTranscription = root.querySelector('[data-role="ai-choice-transcription"]');
+    els.aiChoiceSave = root.querySelector('[data-role="ai-choice-save"]');
+
     els.persist = root.querySelector("#startPersistEnabled");
     els.rememberWindow = root.querySelector("#startRememberWindow");
     els.rememberWindowRow = root.querySelector("#startRememberWindowRow");
@@ -362,6 +367,11 @@
         setRecentsExpanded(false);
       }
     });
+
+    on(els.aiChoiceSave, "click", saveAiChoice);
+    // Hotkeys treat a focused checkbox as a typing target; keep focus off both.
+    on(els.aiChoiceAi, "change", function () { els.aiChoiceAi.blur(); });
+    on(els.aiChoiceTranscription, "change", function () { els.aiChoiceTranscription.blur(); });
 
     on(els.persist, "change", function () {
       state.persistEnabled = !!els.persist.checked;
@@ -1342,10 +1352,40 @@
       if (els.rememberWindowRow) els.rememberWindowRow.hidden = !r.desktop;
       state.recentProjects = r.settings.recent_projects || [];
       renderRailRecents(state.recentProjects);
+      applyAiChoice(r.ai);
     }).catch(function (err) {
       // Log and continue; still render the rail so it shows its empty state.
       console.error("Start settings load failed", err);
       renderRailRecents(state.recentProjects || []);
+    });
+  }
+
+  // ---- First-run AI choice ----
+
+  // Shown until answered once; the switches themselves live in Settings.
+
+  function applyAiChoice(ai) {
+    if (!els.aiChoice || !ai) return;
+    state.aiChoice = ai;
+    els.aiChoice.hidden = !!ai.choice_made;
+    els.aiChoiceAi.checked = ai.enabled !== false;
+    els.aiChoiceTranscription.checked = ai.transcription !== false;
+  }
+
+  function saveAiChoice() {
+    var was = state.aiChoice || {};
+    var ai = !!els.aiChoiceAi.checked;
+    var transcription = !!els.aiChoiceTranscription.checked;
+    els.aiChoiceSave.disabled = true;
+    apiPut("/api/settings", {
+      settings: { AI_ENABLED: ai, AI_TRANSCRIPTION_ENABLED: transcription, AI_CHOICE_MADE: true }
+    }).then(function () {
+      els.aiChoice.hidden = true;
+      // Page controls read the switches at load, so a change needs a fresh page.
+      var changed = ai !== (was.enabled !== false) || transcription !== (was.transcription !== false);
+      if (changed) window.location.reload();
+    }).catch(function () {
+      els.aiChoiceSave.disabled = false;
     });
   }
 

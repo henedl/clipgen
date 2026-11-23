@@ -562,6 +562,12 @@ def _terminate_server() -> None:
 atexit.register(_terminate_server)
 
 
+def stop_server() -> None:
+    """Stop the ``llama-server`` this process started, if any."""
+    with _start_server_lock:
+        _terminate_server()
+
+
 def _router_model_ids() -> list[str] | None:
     """Model ids the running router can serve, or None when unreachable."""
     try:
@@ -680,6 +686,9 @@ def ensure_server() -> bool:
     ``start_server()`` is idempotent and lock-serialized; this names the intent
     at the call sites that only need the server up, not started specifically.
     """
+    if utils.ai_blocked():
+        _fail(utils.ai_off_message())
+        return False
     return is_available() or start_server()
 
 
@@ -693,6 +702,9 @@ def start_server() -> bool:
     Returns True if the server is responding after startup, False otherwise.
     """
     global _server_proc
+    if utils.ai_blocked():
+        _fail(utils.ai_off_message())
+        return False
     binary = resolve_server_bin()
     if binary is None:
         _fail("llama-server is not installed.", install_guidance_lines())
@@ -1040,6 +1052,9 @@ def generate(
 
     Returns the generated text string, or None on any failure or cancellation.
     """
+    if utils.ai_blocked():
+        _fail(utils.ai_off_message())
+        return None
     resolved_model = model or config.LLM_SUMMARY_MODEL
     if not model_file(resolved_model).is_file():
         _materialize_external(resolved_model)
@@ -1153,6 +1168,9 @@ def download_model(
     (``status``/``completed``/``total``). Never raises; returns False on any
     failure. Idempotent: an already-downloaded model returns True immediately.
     """
+    if utils.ai_blocked():
+        _fail(utils.ai_off_message())
+        return False
     ref = (ref or "").strip()
     if not ref:
         return False
@@ -1225,6 +1243,9 @@ def stream_download(
         ):
             total = int(response.headers.get("Content-Length") or size)
             while chunk := response.read(_DOWNLOAD_CHUNK):
+                # Both callers are AI downloads; a switch flip aborts mid-file.
+                if utils.ai_blocked():
+                    raise OSError(utils.ai_off_message())
                 if time.monotonic() > deadline:
                     raise TimeoutError(
                         f"download exceeded the {_DOWNLOAD_DEADLINE}s deadline "

@@ -154,6 +154,9 @@ def test_clipgen_config_defaults_match_python():
     assert js_config["transcribeSpeakers"] == py_config["transcribeSpeakers"]
     assert js_config["speakerLabelMaxLen"] == py_config["speakerLabelMaxLen"]
     assert js_config["transcribeRedact"] == py_config["transcribeRedact"]
+    assert js_config["aiEnabled"] == py_config["aiEnabled"]
+    assert js_config["aiTranscriptionEnabled"] == py_config["aiTranscriptionEnabled"]
+    assert js_config["aiOffMessages"] == py_config["aiOffMessages"]
     # The Embed Subtitles dialog filters its target list against these, so JS
     # drifting from video.SUBTITLE_CODEC_BY_CONTAINER means promising output
     # ffmpeg will refuse to write (or hiding one it would have written).
@@ -214,6 +217,9 @@ def test_get_frontend_config_shape():
         "transcribeSpeakers",
         "speakerLabelMaxLen",
         "transcribeRedact",
+        "aiEnabled",
+        "aiTranscriptionEnabled",
+        "aiOffMessages",
         "subtitleContainers",
         "hotkeyOverrides",
         "profiling",
@@ -265,6 +271,9 @@ def test_get_frontend_config_shape():
     assert cfg["transcribeSpeakers"] is config.TRANSCRIBE_SPEAKERS
     assert cfg["speakerLabelMaxLen"] == config.SPEAKER_LABEL_MAX_LEN
     assert cfg["transcribeRedact"] is config.TRANSCRIBE_REDACT
+    assert cfg["aiEnabled"] is config.AI_ENABLED
+    assert cfg["aiTranscriptionEnabled"] is config.AI_TRANSCRIPTION_ENABLED
+    assert cfg["aiOffMessages"] == config.AI_OFF_MESSAGES
 
 
 def test_severity_css_class_mapping():

@@ -7,6 +7,7 @@ Both the orchestrator **and** the HTTP routes in `transcripts_server.py` auto-pi
 1. **Config** (`config.py`)
    - Add `LLM_{NAME}_ENABLED: bool` toggle
    - Add `LLM_{NAME}_MODEL: str` default model value (HF ref or GGUF stem)
+   - Tag each new `STUDIO_SETTINGS` entry `"ai": "ai"` so the AI switch greys it (`tests/test_ai_switch.py` checks the Summaries tab)
 
 2. **Agent implementation** (`thinking_agents.py`)
    - Write a `run(transcript_entry: dict) -> value | None` callable

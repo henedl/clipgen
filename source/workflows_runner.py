@@ -19,7 +19,7 @@ from typing import Any
 
 import profiling
 import utils
-from workflows_catalog import ADAPTERS, NODE_TYPES, NodeContext
+from workflows_catalog import ADAPTERS, NODE_TYPES, NodeContext, node_ai_kind
 
 # ``WorkflowRunner`` calls executors directly, bypassing the per-domain worker
 # queues. Sequential: Whisper/LLM are single-resource.
@@ -815,6 +815,17 @@ class WorkflowRunner:
                     node_id,
                     status=NODE_STATUS_FAILED,
                     error=f"No executor for node type: {node.get('type')}",
+                    completed_at=_now_iso(),
+                )
+                self._notify(force=True)
+                continue
+
+            ai_kind = node_ai_kind(node["type"], params)
+            if ai_kind and utils.ai_blocked(ai_kind):
+                self._set_node(
+                    node_id,
+                    status=NODE_STATUS_FAILED,
+                    error=utils.ai_off_message(ai_kind),
                     completed_at=_now_iso(),
                 )
                 self._notify(force=True)

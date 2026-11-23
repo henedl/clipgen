@@ -136,6 +136,7 @@
 
   // Block only on a positively missing runtime or model; unknown or stopped never blocks.
   function llmGate() {
+    if (clipgenAiOff("ai")) return CLIPGEN_CONFIG.aiOffMessages.ai;
     var o = rpState.llm;
     if (!o) return null;
     var status = clipgenLlmStatus(o);
@@ -331,7 +332,10 @@
       } else {
         frag.appendChild(sourceRow(
           "Transcript summary", "no transcript", "warn",
-          P.createBtn({ label: "Transcribe", icon: "microphone", size: "sm", onClick: function () { transcribe(false); } })
+          clipgenMarkAi(
+            P.createBtn({ label: "Transcribe", icon: "microphone", size: "sm", onClick: function () { transcribe(false); } }),
+            "transcription"
+          )
         ));
       }
     } else if (summary === "running") {
@@ -346,6 +350,7 @@
         onClick: generateSummary,
       });
       summaryBtn.setAttribute("data-tooltip", "Runs a local AI thinking agent");
+      clipgenMarkAi(summaryBtn);
       frag.appendChild(sourceRow("Transcript summary", "no summary", "warn", summaryBtn));
     }
 
@@ -496,10 +501,12 @@
       icon: "octicon/dependabot-16",
       variant: "solid",
       size: "sm",
-      disabled: !canGenerate || !!gate,
+      // AI off greys through data-ai instead, so the click can link to Settings.
+      disabled: !canGenerate || (!!gate && !clipgenAiOff("ai")),
       onClick: generateReport,
     });
     genBtn.setAttribute("data-tooltip", "Runs a local AI thinking agent");
+    clipgenMarkAi(genBtn);
     dom.actions.appendChild(genBtn);
 
     if (rpState.report) {

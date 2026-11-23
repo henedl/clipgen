@@ -139,6 +139,10 @@ def download(on_progress: Callable[[dict[str, Any]], None] | None = None) -> boo
     """Fetch the missing assets; progress sums across files. Never raises."""
     import llm_client
 
+    if utils.ai_blocked():
+        utils.warning_print(utils.ai_off_message())
+        return False
+
     base = models_dir()
     total = sum(int(a["size"]) for a in ASSETS)
     done_before = 0
@@ -667,7 +671,10 @@ def redact_entry(
     cancel_flag: Callable[[], bool] | None = None,
     on_progress: Callable[[float], None] | None = None,
 ) -> bool:
-    """Tag *segments* in place; False when the model is not installed."""
+    """Tag *segments* in place; False when the model is missing or AI is off."""
+    if utils.ai_blocked():
+        utils.warning_print(utils.ai_off_message())
+        return False
     if not segments:
         return True
     if not config.DEBUGGING and not is_redact_model_available():

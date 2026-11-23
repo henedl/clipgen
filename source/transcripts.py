@@ -204,6 +204,36 @@ _WHISPER_ALLOW_PATTERNS = [
 ]
 
 
+def whisper_cache_dirs() -> list[Path]:
+    """Hub cache folders of downloaded Whisper models: the catalog plus the configured one."""
+    try:
+        from huggingface_hub.constants import HF_HUB_CACHE
+    except ImportError:
+        return []
+    names = {str(m["name"]) for m in WHISPER_MODELS} | {config.TRANSCRIBE_MODEL}
+    found = []
+    for name in sorted(names):
+        repo_id = name if "/" in name else _WHISPER_REPO_PREFIX + name
+        path = Path(HF_HUB_CACHE) / ("models--" + repo_id.replace("/", "--"))
+        if path.is_dir():
+            found.append(path)
+    return found
+
+
+def unload_transcription_model() -> None:
+    """Drop the cached Whisper model so its memory is released."""
+    global _cached_model, _cached_model_name, _cached_model_key
+    with _model_load_lock:
+        if _cached_model is None:
+            return
+        import gc
+
+        _cached_model = None
+        _cached_model_name = None
+        _cached_model_key = None
+        gc.collect()
+
+
 def is_whisper_model_cached(model_name: str | None = None) -> bool:
     """Return True if *model_name* is already downloaded to the local HF cache.
 
@@ -244,6 +274,8 @@ def warmup_transcription_model() -> bool:
     Returns True when a model is available for transcription (including DEBUGGING
     stub mode). Returns False if loading failed (e.g. missing faster-whisper).
     """
+    if utils.ai_blocked("transcription"):
+        return False
     if config.DEBUGGING:
         return True
     return _load_model() is not None
@@ -355,6 +387,9 @@ def _load_model(model_name: str | None = None) -> Any:
     """
     global _cached_model, _cached_model_name, _cached_model_key
 
+    if utils.ai_blocked("transcription"):
+        utils.warning_print(utils.ai_off_message("transcription"))
+        return None
     model_name = model_name or config.TRANSCRIBE_MODEL
     load_key = _model_load_key(model_name)
     if _cached_model is not None and _cached_model_key == load_key:
@@ -712,6 +747,10 @@ def transcribe_video(
     Returns:
         TranscriptResult with segments, or None on failure.
     """
+    # Before the DEBUGGING stub, so the switch holds in debug runs too.
+    if utils.ai_blocked("transcription"):
+        utils.warning_print(utils.ai_off_message("transcription"))
+        return None
     span_kwargs: dict[str, Any] = {
         "model_name": model_name,
         "initial_prompt": initial_prompt,

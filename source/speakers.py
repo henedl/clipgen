@@ -447,8 +447,11 @@ def diarize_entry(
     decoded once over the span its segments cover, segment windows are sliced
     out of that array, and the whole session is clustered together so a
     speaker keeps one id across parts. Returns None when audio cannot be
-    decoded or the model is missing; the caller decides how to report that.
+    decoded, the model is missing or AI is off; the caller reports that.
     """
+    if utils.ai_blocked():
+        utils.warning_print(utils.ai_off_message())
+        return None
     if config.DEBUGGING:
         width = min(2, max(1, max_speakers))
         for i, seg in enumerate(segments):

@@ -1,6 +1,6 @@
 /* clipgen shared settings modal — settings-modal.js
  *
- * Exposes window.openSettingsModal({ initialTab, onSave, onReset }).
+ * Exposes window.openSettingsModal({ initialTab, focusSetting, onSave, onReset }).
  * Loaded on every frontend page that needs the settings UI.
  *
  * Tabs are rendered in a fixed order; settings are grouped by the `tab`
@@ -47,6 +47,149 @@
 
   // Settings and models live at the combined-app root, not a page prefix.
   var API_ROOT = "/api";
+
+  // The page's wireSettingsButton options; every open inherits them.
+  var _pageOpts = {};
+  // Set by a switch toggle; other saves leave the AI group out.
+  var _aiDirty = false;
+  // Survives the reload a switch toggle triggers; names the tab to reopen.
+  var REOPEN_KEY = "clipgen-settings-reopen";
+  var AI_SWITCHES = {
+    ai: { setting: "AI_ENABLED", title: "AI features" },
+    transcription: { setting: "AI_TRANSCRIPTION_ENABLED", title: "Transcription" },
+  };
+
+  // Reads the loaded settings, not the page flag: the modal holds fresher state.
+  function _aiBlocked(kind) {
+    var sw = AI_SWITCHES[kind];
+    var s = sw && _findSetting(sw.setting);
+    return !!s && s.value === false;
+  }
+
+  // Jump to General and land on the switch that greys the caller.
+  function _showAiSwitch(kind) {
+    _switchTab("General");
+    _focusSetting(AI_SWITCHES[kind].setting);
+  }
+
+  function _focusSetting(name) {
+    var row = _panelsEl.querySelector('.settings-row[data-setting="' + name + '"]');
+    if (!row) return;
+    if (row.scrollIntoView) row.scrollIntoView({ block: "center" });
+    row.classList.add("settings-row--flash");
+    setTimeout(function () { row.classList.remove("settings-row--flash"); }, 1600);
+  }
+
+  // "Greyed settings need X." plus a link to the switch.
+  function _aiNote(kind) {
+    var note = el("div", "settings-ai-note");
+    note.appendChild(document.createTextNode(
+      "Greyed settings need " + AI_SWITCHES[kind].title + ". "));
+    var link = el("button", "settings-ai-link", "Turn on in General");
+    link.type = "button";
+    link.addEventListener("click", function () { _showAiSwitch(kind); });
+    note.appendChild(link);
+    return note;
+  }
+
+  function _lockRow(row, kind) {
+    row.classList.add("settings-row--ai-off");
+    row.setAttribute("data-ai-locked", kind);
+    var controls = row.querySelectorAll("input, select, textarea, button");
+    for (var i = 0; i < controls.length; i++) controls[i].disabled = true;
+  }
+
+  function _rowLocked(node) {
+    while (node && node !== _panelsEl) {
+      if (node.getAttribute && node.getAttribute("data-ai-locked")) return true;
+      node = node.parentNode;
+    }
+    return false;
+  }
+
+  // Count and size of one switch's downloaded models, with a Remove action.
+  function _buildModelUsage(kind) {
+    var line = el("div", "settings-ai-usage");
+    var text = el("span", "settings-ai-usage-text", "Checking downloaded models\u2026");
+    line.appendChild(text);
+    var removeBtn = el("button", "btn btn-small", "Remove");
+    removeBtn.type = "button";
+    removeBtn.classList.add("hidden");
+    line.appendChild(removeBtn);
+
+    function refresh() {
+      apiGet(API_ROOT + "/models/downloaded").then(function (data) {
+        var use = (data && data[kind]) || { count: 0, bytes: 0 };
+        if (!use.count) {
+          text.textContent = "No downloaded models.";
+          removeBtn.classList.add("hidden");
+          return;
+        }
+        text.textContent = use.count + (use.count === 1 ? " downloaded model, " : " downloaded models, ") +
+          formatModelSize(Math.round(use.bytes / 1048576)) + ".";
+        removeBtn.classList.remove("hidden");
+        removeBtn.disabled = false;
+      }).catch(function () {
+        text.textContent = "Model status unavailable.";
+      });
+    }
+
+    removeBtn.addEventListener("click", function () {
+      var what = kind === "transcription" ? "Whisper models" : "AI and Redact models";
+      if (!window.confirm("Delete the downloaded " + what + " from this computer?")) return;
+      removeBtn.disabled = true;
+      apiDelete(API_ROOT + "/models/downloaded/" + kind).then(function () {
+        _setStatus("Models removed");
+        refresh();
+        _refreshLlmViews();
+      }).catch(function (err) {
+        removeBtn.disabled = false;
+        _setStatus((err && err.serverMessage) || "Remove failed");
+      });
+    });
+    refresh();
+    return line;
+  }
+
+  // The switch card: title, what it turns off, toggle, and its downloaded models.
+  function _buildAiSwitchRow(s) {
+    var kind = s.kind || "ai";
+    var row = el("div", "settings-row settings-row-stacked settings-ai-switch");
+    if (_isChanged(s)) row.classList.add("settings-changed");
+    row.setAttribute("data-setting", s.name);
+    var head = el("div", "settings-ai-switch-head");
+    head.appendChild(el("div", "settings-ai-switch-title", AI_SWITCHES[kind].title));
+    var toggle = document.createElement("input");
+    toggle.type = "checkbox";
+    toggle.className = "settings-toggle";
+    toggle.checked = !!s.value;
+    toggle.setAttribute("aria-label", AI_SWITCHES[kind].title);
+    toggle.addEventListener("change", function () {
+      s.value = toggle.checked;
+      _aiDirty = true;
+      toggle.disabled = true;
+      // Answering here also answers the Start overlay's first-run question.
+      var asked = _findSetting("AI_CHOICE_MADE");
+      if (asked) asked.value = true;
+      // Save now, then reload so every page element picks up the new state.
+      if (_saveTimer) clearTimeout(_saveTimer);
+      _save(function (saved) {
+        if (!saved) {
+          s.value = !toggle.checked;
+          toggle.checked = s.value;
+          toggle.disabled = false;
+          return;
+        }
+        try { sessionStorage.setItem(REOPEN_KEY, "General"); } catch (_e) { /* private mode */ }
+        window.location.reload();
+      });
+    });
+    head.appendChild(toggle);
+    row.appendChild(head);
+    row.appendChild(el("div", "settings-label-desc", s.description));
+    row.appendChild(_buildModelUsage(kind));
+    return row;
+  }
 
   var FIT_LABELS = { fits: "Fits", tight: "Tight", too_big: "Too large" };
 
@@ -228,6 +371,10 @@
       _watchDownload(spec, onProgress);
     }
     dlBtn.addEventListener("click", startWatching);
+    if (_aiBlocked("ai")) {
+      dlBtn.disabled = true;
+      return dlBtn;
+    }
     apiGet(spec.statusUrl)
       .then(function (st) {
         if (st && st.ok && st.found && !st.done) startWatching();
@@ -240,6 +387,7 @@
   function _buildRedactModelBlock() {
     var wrap = el("div", "settings-llm-models settings-redact-model");
     wrap.appendChild(el("div", "settings-group-label", "Redact model"));
+    if (_aiBlocked("ai")) wrap.appendChild(_aiNote("ai"));
     var list = el("div", "settings-llm-models-list");
     wrap.appendChild(list);
 
@@ -318,6 +466,7 @@
   function _buildLlmModelsBlock() {
     var wrap = el("div", "settings-llm-models");
     wrap.appendChild(el("div", "settings-group-label", "Recommendation"));
+    if (_aiBlocked("ai")) wrap.appendChild(_aiNote("ai"));
     var reco = el("div", "settings-llm-reco");
     wrap.appendChild(reco);
     wrap.appendChild(el("div", "settings-group-label", "Suggested models"));
@@ -395,7 +544,7 @@
       var current = _findSetting("LLM_SUMMARY_MODEL");
       var inUse = !!current && current.value === pick.name;
       useBtn.textContent = inUse ? "In use" : "Use recommended";
-      useBtn.disabled = inUse;
+      useBtn.disabled = inUse || _aiBlocked("ai");
       // Goes through the row's select so the change marks, saves, and refreshes as usual.
       useBtn.addEventListener("click", function () {
         var sel = _panelsEl.querySelector(
@@ -526,7 +675,7 @@
 
   function _loadModelsForSelect(sel, provider, currentValue, emptyLabel) {
     _fetchModels().then(function (data) {
-      if (!data || !data.ok) { sel.disabled = false; return; }
+      if (!data || !data.ok) { sel.disabled = _rowLocked(sel); return; }
 
       var models = [];
       if (provider === "whisper") {
@@ -599,13 +748,14 @@
         custom.selected = true;
         sel.insertBefore(custom, sel.firstChild);
       }
-      sel.disabled = false;
+      sel.disabled = _rowLocked(sel);
 
       // A single "(current)" option looks populated; say next to it when no runtime exists.
       if (provider === "llm") {
         var status = clipgenLlmStatus(data.llm);
         var note = sel.parentNode && sel.parentNode.querySelector(".settings-model-note");
-        if (status.state !== "ok" && sel.parentNode) {
+        // A greyed row needs no server status beside it.
+        if (status.state !== "ok" && sel.parentNode && !_rowLocked(sel)) {
           if (!note) {
             note = document.createElement("div");
             note.className = "settings-model-note";
@@ -761,6 +911,7 @@
         _settings = data.settings;
         _syncRevealBtn(data.desktop, data.path);
         _render();
+        if (_opts.focusSetting) _focusSetting(_opts.focusSetting);
       })
       .catch(function () {
         _panelsEl.textContent = "Failed to load settings.";
@@ -817,11 +968,15 @@
     _saveTimer = setTimeout(_save, 400);
   }
 
-  function _save() {
+  // *done* (optional) hears whether the save landed.
+  function _save(done) {
+    done = typeof done === "function" ? done : function () {};
     if (!_settings) return;
     var payload = {};
     for (var i = 0; i < _settings.length; i++) {
       var s = _settings[i];
+      // A stale modal in another tab must not re-save an old switch value.
+      if (s.group === "AI" && !_aiDirty) continue;
       payload[s.name] = s.value;
     }
     _setStatus("Saving\u2026", true);
@@ -830,6 +985,7 @@
       .then(function (data) {
         if (!data || !data.ok) {
           _setStatus(data && data.error ? "Save failed: " + data.error : "Save failed");
+          done(false);
           return;
         }
         _setStatus("Saved");
@@ -844,9 +1000,11 @@
             }
           }
         }
+        done(true);
       })
       .catch(function (err) {
         _setStatus(err.serverMessage ? "Save failed: " + err.serverMessage : "Save failed");
+        done(false);
       });
   }
 
@@ -1032,6 +1190,7 @@
 
     row.appendChild(labelDiv);
     row.appendChild(controlDiv);
+    if (s.ai && _aiBlocked(s.ai)) _lockRow(row, s.ai);
     return row;
   }
 
@@ -1634,8 +1793,18 @@
         var gname = groupOrder[go];
         if (gname) panel.appendChild(el("div", "settings-group-label", gname));
         var gitems = groups[gname];
+        // One note per switch that greys a row in this group.
+        var noted = {};
+        for (var gn = 0; gn < gitems.length; gn++) {
+          var gate = gitems[gn].ai;
+          if (gate && !noted[gate] && _aiBlocked(gate)) {
+            noted[gate] = true;
+            panel.appendChild(_aiNote(gate));
+          }
+        }
         for (var gii = 0; gii < gitems.length; gii++) {
-          panel.appendChild(_buildRow(gitems[gii]));
+          var gitem = gitems[gii];
+          panel.appendChild(gitem.type === "ai_switch" ? _buildAiSwitchRow(gitem) : _buildRow(gitem));
         }
       }
 
@@ -1894,7 +2063,16 @@
   ]);
 
   window.openSettingsModal = function (options) {
-    _opts = options || {};
+    // Page hooks first, so an open from elsewhere still reaches onApply.
+    _opts = {};
+    var sources = [_pageOpts, options || {}];
+    for (var i = 0; i < sources.length; i++) {
+      for (var key in sources[i]) {
+        if (Object.prototype.hasOwnProperty.call(sources[i], key) && sources[i][key] !== undefined) {
+          _opts[key] = sources[i][key];
+        }
+      }
+    }
     if (_opts.initialTab) _activeTab = _opts.initialTab;
     _open();
     _load();
@@ -1903,22 +2081,28 @@
   // Wire TopNav #settingsBtn to the modal. opts: initialTab, version (string|function), onApply(applied, settings).
   window.wireSettingsButton = function (opts) {
     opts = opts || {};
-    var btn = document.getElementById("settingsBtn");
-    if (!btn) return;
-    btn.addEventListener("click", function () {
-      var options = {
-        initialTab: opts.initialTab,
-        version: typeof opts.version === "function" ? opts.version() : opts.version,
+    if (opts.onApply) {
+      _pageOpts.onSave = function (applied, settings) {
+        opts.onApply(applied, settings);
       };
-      if (opts.onApply) {
-        options.onSave = function (applied, settings) {
-          opts.onApply(applied, settings);
-        };
-        options.onReset = function (_scope, settings) {
-          opts.onApply(null, settings);
-        };
-      }
-      window.openSettingsModal(options);
-    });
+      _pageOpts.onReset = function (_scope, settings) {
+        opts.onApply(null, settings);
+      };
+    }
+    var open = function (tab) {
+      window.openSettingsModal({
+        initialTab: tab,
+        version: typeof opts.version === "function" ? opts.version() : opts.version,
+      });
+    };
+    var btn = document.getElementById("settingsBtn");
+    if (btn) btn.addEventListener("click", function () { open(opts.initialTab); });
+    // An AI switch toggle reloaded the page; put Settings back where it was.
+    var reopen = null;
+    try {
+      reopen = sessionStorage.getItem(REOPEN_KEY);
+      sessionStorage.removeItem(REOPEN_KEY);
+    } catch (_e) { /* private mode */ }
+    if (reopen) open(reopen);
   };
 })();

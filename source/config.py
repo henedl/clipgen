@@ -90,6 +90,20 @@ def debug_ic(*args: Any, **kwargs: Any) -> Any:
 SETTINGS_LOCK = threading.RLock()
 
 
+# ── AI switches ──────────────────────────────────────────────────────
+# Off blocks agents, speakers, PII detection, OCR and their model downloads.
+AI_ENABLED: bool = True
+# Off blocks Whisper transcription and Whisper downloads.
+AI_TRANSCRIPTION_ENABLED: bool = True
+# Set once the Start overlay's first-run question is answered.
+AI_CHOICE_MADE: bool = False
+# Shown wherever a switch refuses work; keyed by switch kind.
+AI_OFF_MESSAGES: dict[str, str] = {
+    "ai": "AI features are off in Settings.",
+    "transcription": "Transcription is off in Settings.",
+}
+
+
 # ── Directories ──────────────────────────────────────────────────────
 # Empty means the current working directory.
 INPUT_DIR: str = ""
@@ -650,6 +664,27 @@ CLI_SETTING_DESCRIPTIONS: dict[str, str] = {
 
 # Studio-exposed settings: tab, group, type, constraints and description.
 STUDIO_SETTINGS: dict[str, dict[str, Any]] = {
+    "AI_ENABLED": {
+        "tab": "General",
+        "group": "AI",
+        "type": "ai_switch",
+        "kind": "ai",
+        "description": "Runs local models for summaries, citations, friction moments, reports, speaker labels, personal-data detection and Screenspace Text / Numbers. Off stops all of them and blocks their model downloads. Existing results stay readable; nothing is deleted.",
+    },
+    "AI_TRANSCRIPTION_ENABLED": {
+        "tab": "General",
+        "group": "AI",
+        "type": "ai_switch",
+        "kind": "transcription",
+        "description": "Runs the local Whisper model to turn speech into transcripts. Off stops transcription and blocks Whisper downloads. Existing transcripts stay readable and editable.",
+    },
+    # Persisted only; the Start overlay's first-run question sets it.
+    "AI_CHOICE_MADE": {
+        "tab": "General",
+        "group": "AI",
+        "type": "hidden",
+        "description": "Whether the first-run AI question has been answered.",
+    },
     "MANIFEST_ENABLED": {
         "tab": "General",
         "group": "Manifest",
@@ -824,12 +859,14 @@ STUDIO_SETTINGS: dict[str, dict[str, Any]] = {
     },
     "TRANSCRIBE_ENABLED": {
         "tab": "Transcription",
+        "ai": "transcription",
         "group": "Transcription",
         "type": "bool",
         "description": "Generate transcripts alongside clips using faster-whisper.",
     },
     "TRANSCRIBE_MODEL": {
         "tab": "Transcription",
+        "ai": "transcription",
         "group": "Transcription",
         "type": "model_select",
         "provider": "whisper",
@@ -844,6 +881,7 @@ STUDIO_SETTINGS: dict[str, dict[str, Any]] = {
     },
     "TRANSCRIBE_PREWARM": {
         "tab": "Transcription",
+        "ai": "transcription",
         "group": "Transcription",
         "type": "select",
         "options": ["off", "queue_open", "page_load"],
@@ -851,6 +889,7 @@ STUDIO_SETTINGS: dict[str, dict[str, Any]] = {
     },
     "TRANSCRIBE_CPU_THREADS": {
         "tab": "Transcription",
+        "ai": "transcription",
         "group": "Transcription",
         "type": "int",
         "min": 0,
@@ -860,6 +899,7 @@ STUDIO_SETTINGS: dict[str, dict[str, Any]] = {
     },
     "TRANSCRIBE_DEVICE": {
         "tab": "Transcription",
+        "ai": "transcription",
         "group": "Transcription",
         "type": "select",
         "options": ["auto", "cpu", "cuda"],
@@ -867,6 +907,7 @@ STUDIO_SETTINGS: dict[str, dict[str, Any]] = {
     },
     "TRANSCRIBE_BEAM_SIZE": {
         "tab": "Transcription",
+        "ai": "transcription",
         "group": "Transcription quality",
         "type": "int",
         "min": 1,
@@ -876,12 +917,14 @@ STUDIO_SETTINGS: dict[str, dict[str, Any]] = {
     },
     "TRANSCRIBE_VAD_FILTER": {
         "tab": "Transcription",
+        "ai": "transcription",
         "group": "Transcription quality",
         "type": "bool",
         "description": "Use Silero VAD to transcribe speech spans only, skipping long silence (reduces silence hallucinations).",
     },
     "TRANSCRIBE_VAD_THRESHOLD": {
         "tab": "Transcription",
+        "ai": "transcription",
         "group": "Transcription quality",
         "type": "float",
         "min": 0.0,
@@ -891,6 +934,7 @@ STUDIO_SETTINGS: dict[str, dict[str, Any]] = {
     },
     "TRANSCRIBE_VAD_SPEECH_PAD_MS": {
         "tab": "Transcription",
+        "ai": "transcription",
         "group": "Transcription quality",
         "type": "int",
         "min": 0,
@@ -900,6 +944,7 @@ STUDIO_SETTINGS: dict[str, dict[str, Any]] = {
     },
     "TRANSCRIBE_VAD_MIN_SILENCE_MS": {
         "tab": "Transcription",
+        "ai": "transcription",
         "group": "Transcription quality",
         "type": "int",
         "min": 0,
@@ -909,6 +954,7 @@ STUDIO_SETTINGS: dict[str, dict[str, Any]] = {
     },
     "TRANSCRIBE_NO_SPEECH_THRESHOLD": {
         "tab": "Transcription",
+        "ai": "transcription",
         "group": "Transcription quality",
         "type": "float",
         "min": 0.0,
@@ -918,6 +964,7 @@ STUDIO_SETTINGS: dict[str, dict[str, Any]] = {
     },
     "TRANSCRIBE_LOG_PROB_THRESHOLD": {
         "tab": "Transcription",
+        "ai": "transcription",
         "group": "Transcription quality",
         "type": "float",
         "min": -2.0,
@@ -927,6 +974,7 @@ STUDIO_SETTINGS: dict[str, dict[str, Any]] = {
     },
     "TRANSCRIBE_COMPRESSION_RATIO_THRESHOLD": {
         "tab": "Transcription",
+        "ai": "transcription",
         "group": "Transcription quality",
         "type": "float",
         "min": 1.0,
@@ -936,6 +984,7 @@ STUDIO_SETTINGS: dict[str, dict[str, Any]] = {
     },
     "TRANSCRIBE_HALLUCINATION_SILENCE_THRESHOLD": {
         "tab": "Transcription",
+        "ai": "transcription",
         "group": "Transcription quality",
         "type": "float",
         "min": 0.0,
@@ -945,30 +994,35 @@ STUDIO_SETTINGS: dict[str, dict[str, Any]] = {
     },
     "TRANSCRIBE_CONDITION_ON_PREVIOUS_TEXT": {
         "tab": "Transcription",
+        "ai": "transcription",
         "group": "Transcription quality",
         "type": "bool",
         "description": "Use prior segment text as context for the next decode; disable to reduce chained hallucinations.",
     },
     "TRANSCRIBE_WORD_TIMESTAMPS": {
         "tab": "Transcription",
+        "ai": "transcription",
         "group": "Transcription quality",
         "type": "bool",
         "description": "Per-word timing via alignment. Tightens segment boundaries to the spoken words and enables the word-level playback highlight; adds decode time (roughly 10–30%).",
     },
     "TRANSCRIBE_EDGE_SNAP": {
         "tab": "Transcription",
+        "ai": "transcription",
         "group": "Transcription quality",
         "type": "bool",
         "description": "Snap segment boundaries to measured speech energy in the decoded audio, trimming silence overshoot at segment edges. Effectively free.",
     },
     "TRANSCRIBE_SPEAKERS": {
         "tab": "Transcription",
+        "ai": "ai",
         "group": "Speakers",
         "type": "bool",
         "description": "Detect who is speaking and label each transcript line (Speaker 1, Speaker 2, …). Runs the bundled speaker model after transcription; each participant pill can override this.",
     },
     "TRANSCRIBE_SPEAKER_MAX": {
         "tab": "Transcription",
+        "ai": "ai",
         "group": "Speakers",
         "type": "int",
         "min": 2,
@@ -1011,30 +1065,35 @@ STUDIO_SETTINGS: dict[str, dict[str, Any]] = {
     },
     "LLM_SUMMARY_ENABLED": {
         "tab": "Summaries",
+        "ai": "ai",
         "group": "AI Summary",
         "type": "bool",
         "description": "Auto-generate an AI summary of each transcript after transcription completes. Disable to keep summaries manual-only (the per-participant Regenerate Summary button still works).",
     },
     "LLM_CITATIONS_ENABLED": {
         "tab": "Summaries",
+        "ai": "ai",
         "group": "AI Summary",
         "type": "bool",
         "description": "Auto-generate citation links between summary claims and transcript segments after the summary completes. Disable to keep citations manual-only (the per-participant Regenerate Citations button still works).",
     },
     "LLM_FRICTION_ENABLED": {
         "tab": "Summaries",
+        "ai": "ai",
         "group": "AI Summary",
         "type": "bool",
         "description": "Auto-detect friction moments after the summary completes. Disable to keep friction manual-only (the per-participant Run/Re-run friction button still works). Uses the AI summary model.",
     },
     "LLM_REPORT_ENABLED": {
         "tab": "Summaries",
+        "ai": "ai",
         "group": "AI Summary",
         "type": "bool",
         "description": "Auto-generate a per-participant mini-report after the summary completes. Off by default: generate reports from the Overview page's Reports tab instead.",
     },
     "LLM_SUMMARY_MODEL": {
         "tab": "Summaries",
+        "ai": "ai",
         "group": "AI Summary",
         "type": "model_select",
         "provider": "llm",
@@ -1042,6 +1101,7 @@ STUDIO_SETTINGS: dict[str, dict[str, Any]] = {
     },
     "LLM_FRICTION_MODEL": {
         "tab": "Summaries",
+        "ai": "ai",
         "group": "AI Summary",
         "type": "model_select",
         "provider": "llm",
@@ -1051,6 +1111,7 @@ STUDIO_SETTINGS: dict[str, dict[str, Any]] = {
     },
     "LLM_REPORT_MODEL": {
         "tab": "Summaries",
+        "ai": "ai",
         "group": "AI Summary",
         "type": "model_select",
         "provider": "llm",
@@ -1060,12 +1121,14 @@ STUDIO_SETTINGS: dict[str, dict[str, Any]] = {
     },
     "LLM_BASE_URL": {
         "tab": "Summaries",
+        "ai": "ai",
         "group": "AI Summary",
         "type": "str",
         "description": "Base URL of the local llama-server router.",
     },
     "LLM_SUMMARY_PROMPT": {
         "tab": "Summaries",
+        "ai": "ai",
         "group": "Agent prompts",
         "type": "prompt",
         "placeholders": ["text"],
@@ -1073,6 +1136,7 @@ STUDIO_SETTINGS: dict[str, dict[str, Any]] = {
     },
     "LLM_CITATIONS_SYSTEM": {
         "tab": "Summaries",
+        "ai": "ai",
         "group": "Agent prompts",
         "type": "prompt",
         "placeholders": [],
@@ -1080,6 +1144,7 @@ STUDIO_SETTINGS: dict[str, dict[str, Any]] = {
     },
     "LLM_CITATIONS_PROMPT": {
         "tab": "Summaries",
+        "ai": "ai",
         "group": "Agent prompts",
         "type": "prompt",
         "placeholders": ["claims", "transcript"],
@@ -1087,6 +1152,7 @@ STUDIO_SETTINGS: dict[str, dict[str, Any]] = {
     },
     "LLM_FRICTION_SYSTEM": {
         "tab": "Summaries",
+        "ai": "ai",
         "group": "Agent prompts",
         "type": "prompt",
         "placeholders": [],
@@ -1094,6 +1160,7 @@ STUDIO_SETTINGS: dict[str, dict[str, Any]] = {
     },
     "LLM_FRICTION_PROMPT": {
         "tab": "Summaries",
+        "ai": "ai",
         "group": "Agent prompts",
         "type": "prompt",
         "placeholders": ["summary", "segments", "limit"],
@@ -1101,6 +1168,7 @@ STUDIO_SETTINGS: dict[str, dict[str, Any]] = {
     },
     "LLM_REPORT_SYSTEM": {
         "tab": "Summaries",
+        "ai": "ai",
         "group": "Agent prompts",
         "type": "prompt",
         "placeholders": [],
@@ -1108,6 +1176,7 @@ STUDIO_SETTINGS: dict[str, dict[str, Any]] = {
     },
     "LLM_REPORT_PROMPT": {
         "tab": "Summaries",
+        "ai": "ai",
         "group": "Agent prompts",
         "type": "prompt",
         "placeholders": ["participant", "summary", "observations", "bookmarks"],

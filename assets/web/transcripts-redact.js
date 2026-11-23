@@ -317,7 +317,9 @@
     var task = latestTask(state.selectedParticipant, "redact");
     var live = !!task && (task.status === "running" || task.status === "queued");
     var enabled = row ? redactEnabledFor(row) : false;
-    var modelOk = state.redactModel !== false;
+    // With AI off the model cannot run, installed or not.
+    var aiOff = clipgenAiOff("ai");
+    var modelOk = state.redactModel !== false && !aiOff;
     // Terms need no model, so one term is enough to use the switch.
     var hasTerms = state.redactTerms.length > 0;
     var rd = state.redaction || {};
@@ -335,7 +337,9 @@
       : "Redaction queued";
     else if (task && task.status === "failed" && enabled) status = "Redaction failed" + (task.error ? " (" + task.error + ")" : "");
     else if (!enabled) status = "Off";
-    else if (!rd.detected && !items.length) status = modelOk ? "Not run yet" : "Model not downloaded";
+    else if (!rd.detected && !items.length) {
+      status = modelOk ? "Not run yet" : aiOff ? CLIPGEN_CONFIG.aiOffMessages.ai : "Model not downloaded";
+    }
     else status = clipgenPluralUnit(items.length, "item", "items") + ", " + clipgenPluralUnit(mentions, "mention", "mentions");
     var statusEl = document.getElementById("redactStatus");
     statusEl.textContent = status;
@@ -349,10 +353,11 @@
     document.querySelector("#redactTab .redact-switch").classList.toggle("hidden", !ran && !live);
     document.getElementById("redactForeverAll").classList.toggle("hidden", !ran || live || !items.length);
     var rerun = document.getElementById("redactRerun");
-    rerun.classList.toggle("hidden", !ran || !modelOk || live);
+    // Greyed, not hidden, while AI is off: the click links to Settings.
+    rerun.classList.toggle("hidden", !ran || !(modelOk || aiOff) || live);
     document.getElementById("redactCancel").classList.toggle("hidden", !live);
 
-    document.getElementById("redactModel").classList.toggle("hidden", modelOk);
+    document.getElementById("redactModel").classList.toggle("hidden", modelOk || aiOff);
     var showEmpty = !live && (!ran || items.length === 0);
     var empty = document.getElementById("redactEmpty");
     empty.classList.toggle("hidden", !showEmpty);
@@ -361,8 +366,11 @@
       document.getElementById("redactEmptyText").textContent = ran
         ? "No personal data found."
         : "No redaction yet.";
-      cta.classList.toggle("hidden", ran || !(modelOk || hasTerms));
+      cta.classList.toggle("hidden", ran || !(modelOk || hasTerms || aiOff));
       cta.disabled = !row;
+      // Terms still work with AI off; without any, the CTA only explains.
+      if (aiOff && !hasTerms) cta.setAttribute("data-ai", "ai");
+      else cta.removeAttribute("data-ai");
     }
 
     var list = document.getElementById("redactList");

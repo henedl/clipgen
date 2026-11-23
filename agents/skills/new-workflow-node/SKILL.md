@@ -9,6 +9,7 @@ A node is one `NODE_TYPES` entry (declarative shape) plus one executor callable.
    - Ports are `{"name", "type", "optional"?}`. Reuse an existing port type (`segments`, `timeRange`, `timestamps`, `events`, `clipRecords`, `transcript`, …) so wires stay compatible; a new type needs `ADAPTERS` entries for every conversion the canvas should accept.
    - Params are `ParamSpec` dicts; the frontend renders the editor from `type`/`default`/`choices`/`min`/`max`. `required: True` blocks Run on empty; `showIf` hides a row behind a sibling param.
    - `hidden: True` keeps a node out of the palette (the per-detector `ss_<tool>` nodes); `multitoolStep: True` offers a detector as a Multitool step.
+   - A node that runs a model sets `ai: "ai"` (or `"transcription"`); the runner fails it and the palette greys it while that switch is off. `aiWhen` narrows the gate to some values of one param (see `detect`).
    - Keep `workflows_catalog.py` import-light: only `config`/`utils` at module level (`tests/test_import_layering.py` enforces it).
 
 2. **Executor** (`workflows.py`)

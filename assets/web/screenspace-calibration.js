@@ -564,6 +564,11 @@
       || (tool === "multitool" && (built.body.parameters.steps || []).some(function (s) {
         return s.type === "text" || s.type === "numbers";
       }));
+    // Refresh runs unprompted; say why here instead of letting the server refuse.
+    if (needsOcr && clipgenAiOff("ai")) {
+      _calClear(CLIPGEN_CONFIG.aiOffMessages.ai);
+      return;
+    }
     // Flag cold-start OCR; otherwise "Evaluating…" only on first load, so re-evals don't flicker.
     if (needsOcr && !state.calibrationOcrWarmed) {
       _calStatus("Preparing OCR… (first run only)", "loading");

@@ -63,6 +63,21 @@
 
         <section class="start-tabpanel" data-start-panel="open" role="tabpanel">
           <div class="start-tabpanel__scroll">
+            <!-- Asked once; the answer lands in Settings → General. -->
+            <section class="start-section ai-choice cascade-in" data-cascade="1" data-role="ai-choice" hidden>
+              <div class="eyebrow">Local AI</div>
+              <p class="ai-choice__text">clipgen can run AI models on this computer. Nothing is sent anywhere. Change this later in Settings.</p>
+              <label class="persist-check">
+                <input type="checkbox" data-role="ai-choice-ai" tabindex="-1" checked>
+                <span>AI features: summaries, speaker labels, personal-data detection, text detection</span>
+              </label>
+              <label class="persist-check">
+                <input type="checkbox" data-role="ai-choice-transcription" tabindex="-1" checked>
+                <span>Transcription: speech to text</span>
+              </label>
+              <button type="button" class="so-btn so-btn--sm" data-role="ai-choice-save">Save choice</button>
+            </section>
+
             <section class="start-section cascade-in" data-cascade="1">
               <div class="path-field" data-role="name-field">
                 <label for="startProjectName">

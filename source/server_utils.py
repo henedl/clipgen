@@ -83,6 +83,38 @@ def err_no_video(participant: str, code: int = 404):
     return err(f"No video for participant {participant}", code)
 
 
+def ai_refusal(kind: str = "ai"):
+    """403 envelope when the *kind* switch is off, else None.
+
+    ``ai_disabled`` names the switch so the client can link to it.
+    """
+    if not utils.ai_blocked(kind):
+        return None
+    return err(utils.ai_off_message(kind), 403, ai_disabled=kind)
+
+
+def check_ai(kind: str = "ai") -> None:
+    """Raise the :func:`ai_refusal` as an ``ApiError`` while *kind* is off."""
+    if utils.ai_blocked(kind):
+        raise ApiError(utils.ai_off_message(kind), 403, ai_disabled=kind)
+
+
+def require_ai(kind: str = "ai") -> Callable[[Callable[..., Any]], Callable[..., Any]]:
+    """Route decorator: refuse with :func:`ai_refusal` while *kind* is off."""
+
+    def decorate(fn: Callable[..., Any]) -> Callable[..., Any]:
+        @wraps(fn)
+        def wrapper(*args: Any, **kwargs: Any):
+            refusal = ai_refusal(kind)
+            if refusal is not None:
+                return refusal
+            return fn(*args, **kwargs)
+
+        return wrapper
+
+    return decorate
+
+
 class ApiError(Exception):
     """Raised inside a :func:`json_endpoint` handler to short-circuit to ``err``.
 
@@ -91,10 +123,11 @@ class ApiError(Exception):
     ``err(...)`` tuple, so deeply-nested validation guards stay one-liners.
     """
 
-    def __init__(self, message: str, code: int = 400):
+    def __init__(self, message: str, code: int = 400, **fields: Any):
         super().__init__(message)
         self.message = message
         self.code = code
+        self.fields = fields
 
 
 def json_endpoint(fn: Callable[..., Any]) -> Callable[..., Any]:
@@ -110,7 +143,7 @@ def json_endpoint(fn: Callable[..., Any]) -> Callable[..., Any]:
         try:
             return fn(*args, **kwargs)
         except ApiError as exc:
-            return err(exc.message, exc.code)
+            return err(exc.message, exc.code, **exc.fields)
 
     return wrapper
 
@@ -714,8 +747,8 @@ def make_sse_channel(
 # are self-contained and skip it.
 _HEAD_MARKER = "<!-- CLIPGEN_HEAD_HERE -->"
 
-# Keyed str(index path) -> (index_mtime_ns, head_mtime_ns|None, desktop_chrome,
-# rendered); chrome varies per launch, not per file.
+# str(index path) -> (index_mtime_ns, head_mtime_ns|None, variant, rendered);
+# variant is chrome plus AI switch state.
 _index_html_cache: dict[str, tuple[int | None, int | None, str | None, str]] = {}
 _index_html_lock = threading.Lock()
 
@@ -738,6 +771,23 @@ def _desktop_chrome_head(chrome: str) -> str:
     )
 
 
+def _ai_switch_head() -> str:
+    """Inline ``<script>`` marking which AI switches are off, for first paint."""
+    flags = [
+        name
+        for name, kind in (("aiOff", "ai"), ("transcriptionOff", "transcription"))
+        if utils.ai_blocked(kind)
+    ]
+    if not flags:
+        return ""
+    lines = "".join(f'd.dataset.{name} = "";' for name in flags)
+    return (
+        "\n  <script>(function () {"
+        f" var d = document.documentElement; {lines} "
+        "})();</script>"
+    )
+
+
 def render_index_html(assets_dir: Path, index_html: str) -> str:
     """Read an index page, expanding the shared ``<head>`` marker if present.
 
@@ -747,7 +797,9 @@ def render_index_html(assets_dir: Path, index_html: str) -> str:
     """
     index_path = assets_dir / index_html
     head_path = assets_dir / "_head.html"
-    chrome = utils.DESKTOP_CHROME
+    ai_head = _ai_switch_head()
+    # One cache slot per chrome and switch state.
+    chrome = f"{utils.DESKTOP_CHROME or ''}|{ai_head}"
     try:
         index_mtime: int | None = index_path.stat().st_mtime_ns
     except OSError:
@@ -770,8 +822,9 @@ def render_index_html(assets_dir: Path, index_html: str) -> str:
         head_mtime_used: int | None = None
         if _HEAD_MARKER in html:
             head = head_path.read_text(encoding="utf-8").rstrip("\n")
-            if chrome:
-                head += _desktop_chrome_head(chrome)
+            if utils.DESKTOP_CHROME:
+                head += _desktop_chrome_head(utils.DESKTOP_CHROME)
+            head += ai_head
             html = html.replace(_HEAD_MARKER, head)
             try:
                 head_mtime_used = head_path.stat().st_mtime_ns

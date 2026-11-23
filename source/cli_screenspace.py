@@ -439,6 +439,9 @@ def _run_ss_task(args: argparse.Namespace) -> None:
             [f"Valid types: {', '.join(_SS_VALID_TASK_TYPES)}"],
         )
         sys.exit(1)
+    if screenspace.task_uses_ai(task_type, {}) and utils.ai_blocked():
+        utils.error_print(f"--ss-task {task_type}: {utils.ai_off_message()}")
+        sys.exit(1)
     if task_type == "attention" and region_name != screenspace.FULL_FRAME_REGION_NAME:
         # Attention is full-frame only (the server forces this too); a region would
         # mislabel events.
@@ -685,6 +688,9 @@ def _run_ss_rerun_task(args: argparse.Namespace) -> None:
     participant = saved.get("participant", "")
     region_name = saved.get("region", "")
     parameters = copy.deepcopy(saved.get("parameters", {}))
+    if screenspace.task_uses_ai(task_type, parameters) and utils.ai_blocked():
+        utils.error_print(f"Task {task_id}: {utils.ai_off_message()}")
+        sys.exit(1)
 
     video_paths = _ss_resolve_videos_for_participant(participant)
     if not video_paths:

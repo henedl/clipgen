@@ -1207,6 +1207,34 @@ def _validate_mode_conflicts(args: Any) -> dict[str, Any]:
     return result
 
 
+# (argparse attribute, switch kind, flag) for modes a switch blocks outright.
+_AI_GATED_FLAGS = (
+    ("pre_transcribe", "transcription", "--pre-transcribe"),
+    ("summarize", "ai", "--summarize"),
+    ("citations", "ai", "--citations"),
+    ("friction", "ai", "--friction"),
+)
+
+
+def _apply_ai_switches(args: Any) -> None:
+    """Load the AI switches from ``studio_settings.json`` and refuse blocked modes.
+
+    CLI runs read nothing else from that file; the switches must hold everywhere.
+    """
+    import start_settings
+
+    saved = start_settings.load_config_json(config.STUDIO_SETTINGS_FILENAME, default={})
+    for name in ("AI_ENABLED", "AI_TRANSCRIPTION_ENABLED"):
+        if name in saved:
+            setattr(config, name, utils.coerce_bool(saved[name]))
+    for attr, kind, flag in _AI_GATED_FLAGS:
+        # A bare flag parses to [], so test presence, not truth.
+        given = getattr(args, attr, None) not in (None, False)
+        if given and utils.ai_blocked(kind):
+            utils.error_print(f"{flag}: {utils.ai_off_message(kind)}")
+            sys.exit(1)
+
+
 def _apply_config_overrides(args: Any, cli_mode: bool) -> CliModeArgs:
     """Apply per-run config overrides from CLI args.
 
@@ -1522,6 +1550,7 @@ def main() -> None:
     )
 
     cli_mode_args = _apply_config_overrides(args, cli_mode)
+    _apply_ai_switches(args)
 
     # Change working directory to runtime location (script/executable)
     os.chdir(get_runtime_working_dir())
