@@ -13,6 +13,7 @@ public/test-touched name must be added to the facade's re-export block (see
    - Implement `scan_{name}` following the pattern of existing scans (color, change, similarity, etc.); scans never call each other
    - Add the `AnalysisTool` subclass and register it in the `TOOLS` registry; wire per-frame dispatch in `check_frame_for_tool` / `score_frame_for_tool`
    - Declare the client facts on the class: `fast_scan_description`, `has_confidence`, and for preview/media handling `preview_float_args` / `preview_args`, `needs_prev_frame` (+ `prev_gap_setting`), `reference` (upload key, image param, mask param) or `reference_region_param`. `screenspace_server.py` reads these; it has no per-tool branches for them
+   - A tool that runs a learned model sets `uses_ai = True`; task creation, the CLI and the tool picker then follow the AI switch
    - Re-export the new public names from `screenspace.py`
    - **Reuse primitives, don't reimplement.** Static-frame skipping, template preparation, resolution scaling and the like already exist in `screenspace_primitives.py`. `scan_scene` grew its own mean-luminance static skip while every sibling used `_frame_is_static()`'s per-pixel absdiff, and silently skipped visually different frames (`d96c77a1`)
 

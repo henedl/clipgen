@@ -3187,7 +3187,7 @@ def test_api_settings_reset_tab(client, monkeypatch):
 
 
 def test_api_settings_reset_all(client, monkeypatch):
-    """PUT {reset: 'all'} resets every setting to its default."""
+    """PUT {reset: 'all'} resets every setting but the AI switches."""
     import config
 
     monkeypatch.setattr(server, "_save_studio_settings", lambda o: None)
@@ -3205,6 +3205,9 @@ def test_api_settings_reset_all(client, monkeypatch):
         applied = data["applied"]
 
         for name, default in server._settings_defaults.items():
+            if config.STUDIO_SETTINGS[name].get("group") == "AI":
+                assert name not in applied
+                continue
             assert applied[name] == default
             assert getattr(config, name) == default
     finally:

@@ -63,6 +63,7 @@ import atexit
 import json
 import math
 import os
+import shutil
 import sys
 import tempfile
 import threading
@@ -96,6 +97,8 @@ from server_utils import (
     refused,
     pending,
     ApiError,
+    ai_refusal,
+    require_ai,
     JobSlot,
     err,
     err_no_video,
@@ -286,6 +289,20 @@ def _cancel_tasks(kind: str, pid: str) -> bool:
     return cancelled
 
 
+def stop_ai_work(kind: str) -> None:
+    """Cancel the live work a switch (``ai`` / ``transcription``) just blocked."""
+    task_kinds = ("transcribe",) if kind == "transcription" else ("speakers", "redact")
+    for task_kind in task_kinds:
+        for task in _active_tasks(task_kind):
+            if _worker:
+                _worker.cancel(task["id"])
+    if kind == "transcription":
+        transcripts.unload_transcription_model()
+        return
+    _orchestrator.stop_all()
+    llm_client.stop_server()
+
+
 def _speakers_on_block(old: dict[str, Any]) -> dict[str, Any]:
     """Enabled speakers block keeping *old*'s labels, count and stash."""
     block = {
@@ -412,7 +429,7 @@ def _requeue_stale_redactions() -> None:
     Takes _manifest_lock itself; call it after the route's own lock block.
     """
     with _manifest_lock:
-        if not _worker or not _redact_model_ready():
+        if not _worker or not _redact_model_ready() or utils.ai_blocked():
             return
         src = _manifest.get("source_transcripts", {})
         corrections = list(_manifest.get("corrections", []))
@@ -906,6 +923,10 @@ def api_speakers_set(participant: str) -> FlaskResponse:
     enabled = data.get("enabled")
     if not isinstance(enabled, bool):
         raise ApiError("enabled must be true or false")
+    if enabled:
+        refusal = ai_refusal()
+        if refusal is not None:
+            return refusal
     if enabled and not _speaker_model_ready():
         raise ApiError("Speaker model is not installed", 409)
     with _manifest_lock:
@@ -953,6 +974,7 @@ def api_speakers_set(participant: str) -> FlaskResponse:
 
 
 @transcripts_bp.route("/api/speakers/<participant>/regenerate", methods=["POST"])
+@require_ai()
 @json_endpoint
 def api_speakers_regenerate(participant: str) -> FlaskResponse:
     """Re-run speaker detection; the merge maps new ids onto the old ones."""
@@ -989,10 +1011,13 @@ def api_redact_set(participant: str) -> FlaskResponse:
     enabled = data.get("enabled")
     if not isinstance(enabled, bool):
         raise ApiError("enabled must be true or false")
-    model_ready = _redact_model_ready()
+    model_ready = _redact_model_ready() and not utils.ai_blocked()
     with _manifest_lock:
         # Manual terms need no model, so the switch works once one exists.
         if enabled and not model_ready and not _redact_terms():
+            refusal = ai_refusal()
+            if refusal is not None:
+                return refusal
             return err("Redact model is not installed", 409, reason="model_missing")
         src = _manifest.setdefault("source_transcripts", {})
         if participant not in src and not _video_paths_for_participant(participant):
@@ -1015,6 +1040,7 @@ def api_redact_set(participant: str) -> FlaskResponse:
 
 
 @transcripts_bp.route("/api/redact/<participant>/regenerate", methods=["POST"])
+@require_ai()
 @json_endpoint
 def api_redact_regenerate(participant: str) -> FlaskResponse:
     """Re-run PII detection with the current settings."""
@@ -1628,6 +1654,7 @@ def api_agent_get(agent_key: str, participant: str) -> FlaskResponse:
 @transcripts_bp.route(
     "/api/agent/<agent_key>/<participant>/regenerate", methods=["POST"]
 )
+@require_ai()
 def api_agent_regenerate(agent_key: str, participant: str) -> FlaskResponse:
     """Clear an agent's result and re-trigger it (bypassing its enabled config).
 
@@ -2683,6 +2710,9 @@ def api_transcribe_warmup() -> FlaskResponse:
     frontend can confirm the download. Re-post with ``{"force": true}`` to
     proceed after the user agrees.
     """
+    # A skip, not a 403: pages post this unprompted.
+    if utils.ai_blocked("transcription"):
+        return ok(skipped=True, reason="ai_disabled")
     if _transcribe_prewarm_setting() == "off":
         return ok(
             skipped=True,
@@ -2770,6 +2800,7 @@ def _download_job(
 
 
 @transcripts_bp.route("/api/models/llm/download", methods=["POST"])
+@require_ai()
 def api_llm_download() -> FlaskResponse:
     """Download a GGUF model in the background, tracking progress.
 
@@ -2835,6 +2866,7 @@ def api_llm_delete(name: str) -> FlaskResponse:
 
 
 @transcripts_bp.route("/api/models/redact/download", methods=["POST"])
+@require_ai()
 def api_redact_download() -> FlaskResponse:
     """Download the Redact model in the background; poll download-status."""
     if redact.is_redact_model_available():
@@ -2870,7 +2902,99 @@ def api_redact_delete() -> FlaskResponse:
     return ok(deleted=True)
 
 
+def _downloaded_model_paths(kind: str) -> list[Path]:
+    """Files and folders clipgen downloaded for one switch's models."""
+    if kind == "transcription":
+        return transcripts.whisper_cache_dirs()
+    paths: list[Path] = []
+    directory = llm_client.models_dir()
+    if directory.is_dir():
+        paths.extend(sorted(directory.glob("*.gguf")))
+    base = redact.models_dir()
+    paths.extend(
+        base / a["filename"] for a in redact.ASSETS if (base / a["filename"]).is_file()
+    )
+    return paths
+
+
+def _path_bytes(path: Path) -> int:
+    """Bytes of regular files at or under *path*; symlinks count as nothing."""
+    if path.is_symlink():
+        return 0
+    if path.is_file():
+        return path.stat().st_size
+    return sum(
+        item.stat().st_size
+        for item in path.rglob("*")
+        if item.is_file() and not item.is_symlink()
+    )
+
+
+def _models_in_use(kind: str) -> bool:
+    """True while a task, agent or download is using *kind*'s models."""
+    if kind == "transcription":
+        with _transcript_model_warming_lock:
+            warming = _transcript_model_warming
+        return warming or bool(_active_tasks("transcribe"))
+    downloading = any(
+        not token["done"]
+        for registry in (_llm_downloads, _redact_downloads)
+        for token in registry.snapshot().values()
+    )
+    return (
+        downloading
+        or bool(_orchestrator.busy_models())
+        or bool(_active_tasks("redact"))
+    )
+
+
+@transcripts_bp.route("/api/models/downloaded")
+def api_models_downloaded() -> FlaskResponse:
+    """Count and size of the downloaded models, per AI switch."""
+    usage = {}
+    for kind in config.AI_OFF_MESSAGES:
+        paths = _downloaded_model_paths(kind)
+        try:
+            size = sum(_path_bytes(p) for p in paths)
+        except OSError:
+            size = 0
+        usage[kind] = {"count": len(paths), "bytes": size}
+    return ok(**usage)
+
+
+@transcripts_bp.route("/api/models/downloaded/<kind>", methods=["DELETE"])
+def api_models_remove(kind: str) -> FlaskResponse:
+    """Delete every model downloaded for one switch; refused while in use.
+
+    LLM symlinks into another tool's cache lose the link only. Ollama's own
+    store is never touched.
+    """
+    if kind not in config.AI_OFF_MESSAGES:
+        return err("Unknown model kind", 404)
+    if _models_in_use(kind):
+        return err("Models are in use")
+    paths = _downloaded_model_paths(kind)
+    if kind == "transcription":
+        transcripts.unload_transcription_model()
+    else:
+        llm_client.stop_server()
+    removed = 0
+    try:
+        for path in paths:
+            if path.is_dir() and not path.is_symlink():
+                shutil.rmtree(path)
+            else:
+                path.unlink(missing_ok=True)
+            removed += 1
+        if kind == "ai":
+            redact.remove()
+    except OSError as exc:
+        return err(f"Delete failed: {exc}", removed=removed)
+    return ok(removed=removed)
+
+
 @transcripts_bp.route("/api/models/llm/start", methods=["POST"])
+@require_ai()
 def api_llm_start() -> FlaskResponse:
     """Start ``llama-server`` on the user's behalf and report the outcome.
 
@@ -2890,6 +3014,7 @@ def api_llm_start() -> FlaskResponse:
 
 
 @transcripts_bp.route("/api/transcribe", methods=["POST"])
+@require_ai("transcription")
 @json_endpoint
 def api_transcribe() -> FlaskResponse:
     """Enqueue participant(s) for background transcription."""
@@ -2963,7 +3088,7 @@ def api_transcribe() -> FlaskResponse:
                 return err(f"Invalid marker range for {pid}")
             effective_model = model_override or config.TRANSCRIBE_MODEL
             entry = src.get(pid) or {}
-            diarize = _diarize_wanted(entry)
+            diarize = _diarize_wanted(entry) and not utils.ai_blocked()
             if diarize and not _speaker_model_ready():
                 if "enabled" in (entry.get("speakers") or {}):
                     return err("Speaker model is not installed", 409)
@@ -3273,7 +3398,11 @@ def _on_task_complete() -> None:
             for agent in thinking_agents.AGENTS:
                 entry.pop(agent["manifest_field"], None)
             # Fresh text carries no spans; queue the pass when wanted.
-            if redact.entry_wanted(entry) and _redact_model_ready():
+            if (
+                redact.entry_wanted(entry)
+                and _redact_model_ready()
+                and not utils.ai_blocked()
+            ):
                 _enqueue_redact_task(pid, entry)
 
     # run_chain re-acquires the non-reentrant _manifest_lock, so it runs outside
@@ -3286,6 +3415,8 @@ def _on_task_complete() -> None:
 
 def _agent_enabled(agent: thinking_agents.Agent) -> bool:
     """Return True if *agent* is enabled in the current config."""
+    if utils.ai_blocked():
+        return False
     return bool(getattr(config, agent["enabled_config_key"]))
 
 
@@ -3513,6 +3644,9 @@ class AgentOrchestrator:
         """
         agent = thinking_agents.get_agent(agent_key)
         if agent is None:
+            return
+        # The switch beats force; manual triggers obey it too.
+        if utils.ai_blocked():
             return
         if not force and not _agent_enabled(agent):
             return

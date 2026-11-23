@@ -59,6 +59,17 @@
     return value === undefined || value === null || value === "";
   }
 
+  // The AI switch gating a node, or ""; mirrors workflows_catalog.node_ai_kind.
+  function nodeAiKind(node, type) {
+    if (!type.ai) return "";
+    var when = type.aiWhen;
+    if (when) {
+      var chosen = String((node.params || {})[when.param] || when["default"]);
+      if (when.values.indexOf(chosen) < 0) return "";
+    }
+    return type.ai;
+  }
+
   // Per-node {errors, warnings}; shared by the node-card cue and panel rows.
   function nodeIssues(node) {
     // Muted nodes and sticky notes never run, so they report no issues.
@@ -83,6 +94,11 @@
     // error — launch context can't satisfy `requires` (sheet/videoDir).
     if (!WF.nodeContextMet(type)) {
       errors.push("Requires " + ((type.requires || []).join(", ") || "context"));
+    }
+    // error — an AI switch blocks the node; the runner would fail it.
+    var aiKind = nodeAiKind(node, type);
+    if (aiKind && clipgenAiOff(aiKind)) {
+      errors.push(CLIPGEN_CONFIG.aiOffMessages[aiKind]);
     }
     // error — a required input port is unwired.
     if (!requiredInputsSatisfied(node, type)) {

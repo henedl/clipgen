@@ -473,6 +473,8 @@
     btn.setAttribute("data-tooltip", cfg.label);
     // Inert while the cancel is in flight; tokens.css keeps the tooltip reachable.
     if (s.status === "cancelling") btn.setAttribute("disabled", "disabled");
+    // Cancel stays live so a run in flight can always be stopped.
+    if (cfg.action !== "cancel") btn.setAttribute("data-ai", "transcription");
 
     // Two stacked icons; CSS hides one and shows the other on hover/focus.
     var rest = document.createElement("span");
@@ -539,6 +541,7 @@
     });
     modelRow.appendChild(modelLabel);
     modelRow.appendChild(modelSelect);
+    _gateRow(modelRow, modelSelect, "transcription");
     pane.appendChild(modelRow);
 
     // Language row
@@ -560,6 +563,7 @@
     });
     langRow.appendChild(langLabel);
     langRow.appendChild(langSelect);
+    _gateRow(langRow, langSelect, "transcription");
     pane.appendChild(langRow);
 
     // Multitrack only, rendered off the warm cache so the poll cannot strobe it.
@@ -617,6 +621,12 @@
     return pane;
   }
 
+  // Grey a transcription option row; a disabled select fires no click of its own.
+  function _gateRow(row, control, kind) {
+    row.setAttribute("data-ai", kind);
+    if (clipgenAiOff(kind)) control.disabled = true;
+  }
+
   // Per-participant switch; unset follows the global TRANSCRIBE_SPEAKERS.
   function buildSpeakersRow(p) {
     var row = document.createElement("div");
@@ -640,6 +650,8 @@
       box.disabled = true; // the reload rebuilds the pane
       setSpeakersEnabled(p.id, box.checked);
     });
+    // Turning speakers off needs no model, so only the off state is gated.
+    if (!box.checked) row.setAttribute("data-ai", "ai");
     row.appendChild(label);
     row.appendChild(box);
     return row;
@@ -677,6 +689,7 @@
     });
     row.appendChild(label);
     row.appendChild(select);
+    _gateRow(row, select, "transcription");
     group.appendChild(row);
 
     // What the last run used: the only way to explain a changed transcript.
@@ -853,6 +866,10 @@
 
     if (mode === "disabled") btn.setAttribute("disabled", "disabled");
     if (title) btn.setAttribute("data-tooltip", title);
+    // Stop stays live; only starting a run needs the switch.
+    if (mode === "start") {
+      btn.setAttribute("data-ai", opts.agent === "transcription" ? "transcription" : "ai");
+    }
 
     btn.addEventListener("click", function (e) {
       e.stopPropagation();

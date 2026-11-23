@@ -46,6 +46,8 @@ Two optional rows: a `Baseline time` row converts clock timestamps (e.g. `09:12:
 
 Transcript summaries and Overview reports run on a local LLM via [llama.cpp](https://github.com/ggml-org/llama.cpp)'s `llama-server`. Models download on first use, with your confirmation, and models you already have installed are reused automatically. Settings → Summaries lists a few suggested models. Transcription itself does not need the AI server.
 
+Two switches in Settings → General turn models off. **AI features** covers summaries, citations, friction moments, reports, speaker labels, personal-data detection and Screenspace Text / Numbers. **Transcription** covers Whisper. Off stops the work, blocks the model downloads and greys the controls; existing results stay readable. Each switch can also remove its downloaded models. The Start panel asks once on first run.
+
 ## Command line
 
 Launch with no flags for the interactive prompt, or script it:

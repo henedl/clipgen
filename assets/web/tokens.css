@@ -812,6 +812,34 @@ body {
    still blocks click regardless of pointer-events. */
 button[data-tooltip]:disabled { pointer-events: auto; cursor: not-allowed; }
 
+/* AI switches: utils.js intercepts clicks on these and links to Settings. */
+html[data-ai-off] [data-ai="ai"],
+html[data-transcription-off] [data-ai="transcription"] {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+/* A locked control inside a greyed row must not dim twice. */
+html[data-ai-off] [data-ai="ai"] :disabled,
+html[data-transcription-off] [data-ai="transcription"] :disabled {
+  opacity: 1;
+}
+.cg-ai-notice {
+  position: fixed;
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  font-size: var(--text-sm);
+  color: var(--color-text);
+  z-index: var(--z-toast);
+}
+/* No anchor (an API refusal): sit where toasts do. */
+.cg-ai-notice--floating {
+  left: 50%;
+  bottom: var(--space-6);
+  transform: translateX(-50%);
+}
+
 /* Floating menu / dropdown visual shell — shared across pages. Add ALONGSIDE a
    page-local class that owns geometry (display, position, anchor offsets, sizing)
    and the show/hide toggle, e.g. class="wf-run-menu cg-menu". Deliberately does

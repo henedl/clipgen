@@ -400,6 +400,8 @@ class AnalysisTool:
     preview_float_args: ClassVar[tuple[str, ...]] = ()
     # Preview query args as (arg, param, kind) with kind int | float | bool.
     preview_args: ClassVar[tuple[tuple[str, str, str], ...]] = ()
+    # Runs a learned model (OCR); the AI switch blocks it.
+    uses_ai: ClassVar[bool] = False
 
     def check_frame(
         self,
@@ -590,6 +592,7 @@ class SimilarityTool(AnalysisTool):
 
 class TextTool(AnalysisTool):
     name = "text"
+    uses_ai = True
     fast_scan_description = "Skips unchanged frames"
     has_confidence = True
     preview_args = (("ocr_preprocess", "ocr_preprocess", "bool"),)
@@ -633,6 +636,7 @@ class TextTool(AnalysisTool):
 
 class NumbersTool(AnalysisTool):
     name = "numbers"
+    uses_ai = True
     fast_scan_description = "Skips unchanged frames"
     has_confidence = True
     preview_args = (("ocr_preprocess", "ocr_preprocess", "bool"),)
@@ -1165,9 +1169,22 @@ def tool_catalog() -> dict[str, dict[str, Any]]:
             "fast_scan_description": tool.fast_scan_description,
             "has_confidence": tool.has_confidence,
             "score_key": tool.score_key,
+            "ai": tool.uses_ai,
         }
         for name, tool in TOOLS.items()
     }
+
+
+def task_uses_ai(tool_type: str, params: dict[str, Any]) -> bool:
+    """True when a task, or any multitool step, runs an AI-gated tool."""
+    if tool_type == "multitool":
+        steps = params.get("steps") or []
+        return any(
+            isinstance(s, dict) and task_uses_ai(str(s.get("type", "")), s)
+            for s in steps
+        )
+    tool = TOOLS.get(tool_type)
+    return bool(tool and tool.uses_ai)
 
 
 # Keeps the by-name scan_<x> imports referenced; a typo'd scan_fn_name fails at import, not mid-scan.

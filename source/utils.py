@@ -1147,6 +1147,9 @@ def get_frontend_config() -> dict[str, Any]:
         "transcribeSpeakers": config.TRANSCRIBE_SPEAKERS,
         "speakerLabelMaxLen": config.SPEAKER_LABEL_MAX_LEN,
         "transcribeRedact": config.TRANSCRIBE_REDACT,
+        "aiEnabled": config.AI_ENABLED,
+        "aiTranscriptionEnabled": config.AI_TRANSCRIPTION_ENABLED,
+        "aiOffMessages": dict(config.AI_OFF_MESSAGES),
         "subtitleContainers": _subtitle_container_config(),
         "hotkeyOverrides": dict(config.HOTKEY_OVERRIDES),
         "profiling": config.PROFILING,
@@ -1906,6 +1909,18 @@ def suggest_close_match(
     if yn.strip().lower() == "y":
         return original
     return None
+
+
+def ai_blocked(kind: str = "ai") -> bool:
+    """True when the switch for *kind* (``ai`` / ``transcription``) is off."""
+    if kind == "transcription":
+        return not config.AI_TRANSCRIPTION_ENABLED
+    return not config.AI_ENABLED
+
+
+def ai_off_message(kind: str = "ai") -> str:
+    """The user-facing line for a refused *kind* of model work."""
+    return config.AI_OFF_MESSAGES[kind]
 
 
 def coerce_bool(value: Any) -> bool:

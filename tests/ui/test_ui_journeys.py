@@ -314,6 +314,57 @@ def test_settings_change_persists_across_reload(
         urllib.request.urlopen(request, timeout=10).read()
 
 
+def test_ai_switch_greys_the_page_and_links_back(
+    live_server: LiveServer, browser_context: Any
+) -> None:
+    """Turn AI off in the modal; the page reloads greyed and links to the switch.
+
+    The toggle saves, reloads and reopens Settings on General. A greyed button
+    then shows the notice whose button opens the same switch again.
+    """
+    settings_path = _ui_fixtures.SETTINGS_DIR / config.STUDIO_SETTINGS_FILENAME
+    switch = '.settings-ai-switch[data-setting="AI_ENABLED"]'
+    try:
+        with _journey(
+            browser_context, live_server, "transcripts", "journey-ai-switch"
+        ) as (page, log):
+            result = _ui_states.enter_overlay(page, _overlay("settings"))
+            assert result.reached, result.detail
+            page.locator(switch + " .settings-toggle").click()
+            page.wait_for_function(
+                "() => document.documentElement.hasAttribute('data-ai-off')"
+                " && !!document.querySelector('.settings-ai-switch')",
+                timeout=_WAIT_MS,
+            )
+            saved = json.loads(settings_path.read_text(encoding="utf-8"))
+            assert saved.get("AI_ENABLED") is False
+            assert saved.get("AI_CHOICE_MADE") is True
+            assert not page.locator(switch + " .settings-toggle").is_checked()
+
+            page.keyboard.press("Escape")
+            page.wait_for_selector("#summaryRunCta", state="visible", timeout=_WAIT_MS)
+            page.locator("#summaryRunCta").click()
+            notice = page.locator(".cg-ai-notice")
+            notice.wait_for(state="visible", timeout=_WAIT_MS)
+            assert "AI features are off" in (notice.text_content() or "")
+            notice.locator("button").click()
+            page.wait_for_selector(switch, state="visible", timeout=_WAIT_MS)
+            active = page.locator(".settings-tab.is-active").text_content()
+            assert active == "General"
+        assert not log.fatal, _fatal_message("ai-switch", log, "journey-ai-switch")
+    finally:
+        # The server process is shared; put both settings back for later tests.
+        request = urllib.request.Request(
+            live_server.origin + "/api/settings",
+            data=json.dumps(
+                {"settings": {"AI_ENABLED": True, "AI_CHOICE_MADE": False}}
+            ).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+            method="PUT",
+        )
+        urllib.request.urlopen(request, timeout=10).read()
+
+
 def test_start_overlay_opens_the_fixture_workbook(
     live_server: LiveServer, browser: Any
 ) -> None:

@@ -80,6 +80,7 @@ import video
 from server_utils import (
     ApiError,
     MediaCache,
+    check_ai,
     err,
     err_no_video,
     find_by_id,
@@ -1764,6 +1765,8 @@ def _validate_task_request(
         parameters = raw_parameters
     else:
         raise ApiError("parameters must be an object")
+    if screenspace.task_uses_ai(task_type, parameters):
+        check_ai()
 
     # Template/shape tasks with an uploaded image scan the full frame; no
     # region needed.

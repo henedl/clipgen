@@ -60,6 +60,12 @@ var CLIPGEN_CONFIG = {
   transcribeSpeakers: false,
   speakerLabelMaxLen: 40,
   transcribeRedact: false,
+  aiEnabled: true,
+  aiTranscriptionEnabled: true,
+  aiOffMessages: {
+    ai: "AI features are off in Settings.",
+    transcription: "Transcription is off in Settings.",
+  },
   // Mirrors video.SUBTITLE_CODEC_BY_CONTAINER / SUBTITLE_ALWAYS_DEFAULT_CONTAINERS;
   // the mp4 muxer ignores -disposition:s:0.
   subtitleContainers: {
@@ -86,7 +92,97 @@ var clipgenApplyConfig = function (payload) {
   if (payload.profiling === true && window.clipgenPerf) {
     window.clipgenPerf.observe();
   }
+  if (typeof payload.aiEnabled === "boolean") clipgenSyncAiFlags();
 };
+
+// ---- AI switches ----
+
+// data-ai="ai|transcription" marks a control; html[data-*-off] greys and intercepts it.
+
+var CLIPGEN_AI_FLAGS = { ai: "data-ai-off", transcription: "data-transcription-off" };
+var CLIPGEN_AI_SETTINGS = { ai: "AI_ENABLED", transcription: "AI_TRANSCRIPTION_ENABLED" };
+
+var clipgenAiOff = function (kind) {
+  return document.documentElement.hasAttribute(CLIPGEN_AI_FLAGS[kind || "ai"]);
+};
+
+// The server writes the flags at page load; a later config payload keeps them current.
+var clipgenSyncAiFlags = function () {
+  var root = document.documentElement;
+  var set = function (attr, off) {
+    if (off) root.setAttribute(attr, "");
+    else root.removeAttribute(attr);
+  };
+  set(CLIPGEN_AI_FLAGS.ai, !CLIPGEN_CONFIG.aiEnabled);
+  set(CLIPGEN_AI_FLAGS.transcription, !CLIPGEN_CONFIG.aiTranscriptionEnabled);
+};
+
+// Tag a control as model work; a select also locks, since it opens before click.
+var clipgenMarkAi = function (el, kind) {
+  kind = kind || "ai";
+  el.setAttribute("data-ai", kind);
+  if (clipgenAiOff(kind) && /^(SELECT|INPUT|TEXTAREA)$/.test(el.tagName)) el.disabled = true;
+  return el;
+};
+
+// The switch kind gating a node, or "" when it is live.
+var clipgenAiGate = function (node) {
+  var el = node && node.closest ? node.closest("[data-ai]") : null;
+  if (!el) return "";
+  var kind = el.getAttribute("data-ai");
+  return clipgenAiOff(kind) ? kind : "";
+};
+
+var _aiNotice = null;
+
+var clipgenHideAiNotice = function () {
+  if (!_aiNotice) return false;
+  _aiNotice.remove();
+  _aiNotice = null;
+  return true;
+};
+
+// Small popover naming the switch, with a button that opens it in Settings.
+var clipgenShowAiOff = function (kind, anchor) {
+  kind = CLIPGEN_AI_SETTINGS[kind] ? kind : "ai";
+  clipgenHideAiNotice();
+  var box = document.createElement("div");
+  box.className = "cg-ai-notice cg-menu";
+  box.setAttribute("role", "status");
+  var text = document.createElement("span");
+  text.textContent = CLIPGEN_CONFIG.aiOffMessages[kind];
+  box.appendChild(text);
+  if (window.openSettingsModal) {
+    var btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "btn btn-small";
+    btn.textContent = "Open Settings";
+    btn.addEventListener("click", function () {
+      clipgenHideAiNotice();
+      window.openSettingsModal({ initialTab: "General", focusSetting: CLIPGEN_AI_SETTINGS[kind] });
+    });
+    box.appendChild(btn);
+  }
+  document.body.appendChild(box);
+  _aiNotice = box;
+  if (anchor && anchor.getBoundingClientRect) {
+    positionTooltipAnchored(box, anchor.getBoundingClientRect());
+  } else {
+    box.classList.add("cg-ai-notice--floating");
+  }
+  clearTimeout(clipgenShowAiOff._timer);
+  clipgenShowAiOff._timer = setTimeout(clipgenHideAiNotice, 6000);
+};
+
+// Capture phase: runs before any page handler, so a gated control never acts.
+document.addEventListener("click", function (e) {
+  if (_aiNotice && !_aiNotice.contains(e.target)) clipgenHideAiNotice();
+  var kind = clipgenAiGate(e.target);
+  if (!kind) return;
+  e.preventDefault();
+  e.stopImmediatePropagation();
+  clipgenShowAiOff(kind, e.target.closest("[data-ai]"));
+}, true);
 
 // ---- Performance instrumentation ----
 // No-op unless CLIPGEN_CONFIG.profiling; read via `tests/ui/shot.py --perf`. See agents/skills/profile/SKILL.md.
@@ -505,7 +601,8 @@ var clipgenInitDataTooltips = function () {
   // data-tooltip-icon rides along with data-tooltip; alone it shows nothing.
   var showFor = function (el) {
     if (shouldSuppress(el)) return;
-    var text = el.getAttribute("data-tooltip");
+    var gate = clipgenAiGate(el);
+    var text = gate ? CLIPGEN_CONFIG.aiOffMessages[gate] : el.getAttribute("data-tooltip");
     if (!text) return;
     current = el;
     ensureTip().show(el, text, el.getAttribute("data-tooltip-icon"));
@@ -516,7 +613,7 @@ var clipgenInitDataTooltips = function () {
     current = null;
   };
   document.addEventListener("mouseover", function (e) {
-    var el = e.target.closest && e.target.closest("[data-tooltip]");
+    var el = e.target.closest && e.target.closest("[data-tooltip], [data-ai]");
     if (!el || el === current) return;
     if (current && !current.contains(el)) hide();
     showFor(el);
@@ -1145,7 +1242,13 @@ var _apiJson = function (r) {
     };
     return r.json().then(
       function (data) {
-        throw mkError(data && data.error);
+        var e = mkError(data && data.error);
+        // A switch refused: show the notice once; toastError then stays quiet.
+        if (data && data.ai_disabled) {
+          e.aiDisabled = data.ai_disabled;
+          clipgenShowAiOff(data.ai_disabled);
+        }
+        throw e;
       },
       function () {
         throw mkError(null);
@@ -1199,6 +1302,7 @@ var apiPostBlob = function (path, body) {
 // .catch handler that toasts the failure; for user-initiated calls, not background polling.
 var toastError = function (prefix) {
   return function (err) {
+    if (err && err.aiDisabled) return;
     showToast(prefix + (err && err.message ? ": " + err.message : ""));
   };
 };
