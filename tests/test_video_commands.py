@@ -1984,7 +1984,7 @@ def test_mux_subtitles_mp4_uses_mov_text(monkeypatch, tmp_path):
 def test_mux_subtitles_normalizes_the_language_to_three_letters(monkeypatch, tmp_path):
     """Whisper reports ISO 639-1 ("en"), containers store only ISO 639-2.
 
-    Measured on ffmpeg 8.1.2: the mp4 muxer drops an "en" tag outright and
+    Measured on ffmpeg 9.1: the mp4 muxer drops an "en" tag outright and
     truncates transcripts.py's "unknown" fallback to the nonsense tag "unk" —
     both silently. So the code is normalized before it reaches the muxer, not
     trusted.

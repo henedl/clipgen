@@ -675,7 +675,7 @@ def test_embed_subs_is_one_quick_action():
 
 
 def test_embed_subs_warns_the_default_toggle_is_inert_on_mp4():
-    """Measured on ffmpeg 8.1.2: the mp4 muxer reports default=1 for the
+    """Measured on ffmpeg 9.1: the mp4 muxer reports default=1 for the
     subtitle track whatever -disposition:s:0 is given (only .mkv/.webm have a
     present-but-off state). Unticking the box therefore changes nothing for the
     commonest source container, and a control that silently no-ops is the

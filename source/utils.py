@@ -2006,7 +2006,7 @@ def normalize_track_language(code: str | None) -> str:
     """Coerce *code* into a three-letter media-container language tag.
 
     Containers store only ISO 639-2, and they fail *silently* on anything else:
-    measured on ffmpeg 8.1.2, an ``en`` tag is dropped outright by the mp4
+    measured on ffmpeg 9.1, an ``en`` tag is dropped outright by the mp4
     muxer, while ``unknown`` (transcripts.py's detection fallback) is truncated
     to the nonsense tag ``unk``. Neither raises, so an unnormalized code costs
     the track its language with no error anywhere.
