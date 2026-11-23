@@ -280,8 +280,10 @@ def test_speaker_model_pin_matches_speakers_module() -> None:
     assert len(pins) == 1
     pin = pins[0]
     assert pin["target"] == speakers.MODEL_FILENAME
-    assert pin["url"].startswith(
-        "https://github.com/k2-fsa/sherpa-onnx/releases/download/"
+    # A commit-pinned mirror URL; the GitHub release assets get overwritten.
+    assert re.match(
+        r"https://huggingface\.co/csukuangfj/speaker-embedding-models/resolve/[0-9a-f]{40}/",
+        pin["url"],
     )
     assert pin["url"].endswith("_16k.onnx") or "wespeaker" in pin["url"]
     assert re.fullmatch(r"[0-9a-f]{64}", pin["sha256"])

@@ -43,12 +43,15 @@ Provenance (THIRD-PARTY-LICENSES cites this block):
     the archives at pin time.
 
   Speaker model: WeSpeaker CAM++ (VoxCeleb, large-margin fine-tune), the
-    ONNX export distributed by k2-fsa/sherpa-onnx under the permanent
-    `speaker-recongition-models` release tag (sic, upstream spelling),
-    Apache-2.0, 29 MB. GitHub publishes no .sha256 for release assets, so
-    the pin trusts the first download. speakers.py computes its own fbank
-    and reads the model's metadata, so a re-pin only needs a 16 kHz
-    wespeaker/3d-speaker export.
+    sherpa-onnx ONNX export, Apache-2.0, 29 MB. Pinned to a commit of the
+    sherpa-onnx maintainer's Hugging Face mirror
+    (csukuangfj/speaker-embedding-models), whose LFS sha256 equals the pin.
+    The sherpa-onnx `speaker-recongition-models` GitHub release (sic) is not
+    a usable pin: its assets were re-uploaded in place on 2026-11-19 under
+    the same URLs. That re-export changes embeddings, and CLUSTER_THRESHOLD
+    in speakers.py was tuned on this file, so moving to it needs a retune.
+    speakers.py computes its own fbank and reads the model's metadata, so a
+    re-pin only needs a 16 kHz wespeaker/3d-speaker export.
 
 Updating the pins: `uv run build/fetch_binaries.py --repin <new-url>` finds
 the entry the URL replaces (same host, same platform), downloads it, checks
@@ -288,7 +291,7 @@ OCR_MODEL_PINS: list[dict] = [
 # Vendored speaker-embedding model; target name matches speakers.MODEL_FILENAME.
 SPEAKER_MODEL_PINS: list[dict] = [
     {
-        "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/speaker-recongition-models/wespeaker_en_voxceleb_CAM%2B%2B_LM.onnx",
+        "url": "https://huggingface.co/csukuangfj/speaker-embedding-models/resolve/0743f301363dec56491a490f6d6cbc9d67f9a3bf/wespeaker_en_voxceleb_CAM%2B%2B_LM.onnx",
         "sha256": "e197af7e9d473030cf486b3124149a19bf37014d0e4485e4c70c483b0ec10cb2",
         "target": "speaker_embed.onnx",
     },
