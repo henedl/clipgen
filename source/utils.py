@@ -586,6 +586,28 @@ def prepend_bundled_bin_to_path() -> str | None:
     return bundled
 
 
+def use_bundled_certs() -> str | None:
+    """Point urllib's TLS at certifi's CA file in a frozen launch.
+
+    Returns the file now in ``SSL_CERT_FILE``, or None when nothing changed.
+
+    A bundled Python has no system CA store on macOS, so every ``urlopen`` to
+    GitHub or Hugging Face failed certificate verification. A value the user
+    already set (a corporate CA bundle) wins. Source runs are left alone.
+    """
+    if not getattr(sys, "frozen", False) or os.environ.get("SSL_CERT_FILE"):
+        return None
+    try:
+        import certifi
+    except ImportError:
+        return None
+    path = certifi.where()
+    if not Path(path).is_file():
+        return None
+    os.environ["SSL_CERT_FILE"] = path
+    return path
+
+
 def install_guidance_lines(
     *,
     brew_command: str,
