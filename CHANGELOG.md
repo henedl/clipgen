@@ -8,6 +8,25 @@ Notable changes per release. One level-2 heading per version — `## <version> �
 
 `<Tool>` is one of `Core`, `Studio`, `Screenspace`, `Transcripts`, `Workflows`, `Composer`, `Overview`. Write for someone using clipgen, not building it: name the thing by what it is called in the interface, say what changed for them, and leave the internals in the commit. Add a second sentence only when the first leaves an obvious "so what". Lines render as **plain text** in the Start overlay's Recent updates tab — no backticks or markdown inside them, or it shows up literally.
 
+## v0.19.0 — 2026-11-24
+**Core:** Feat: Two switches in Settings, General turn off AI features and transcription everywhere. Saved results stay readable, and each switch can remove its downloaded models.
+**Screenspace:** Feat: Scans use about half the CPU and finish up to twice as fast on long recordings.
+**Screenspace:** Feat: Template and Shape can keep only frames with a set number of matches.
+**Screenspace:** Feat: Click the number beside a slider to type a value.
+**Core:** Fix: Switching the output folder reloads every tool, so one project no longer overwrites another.
+**Core:** Fix: A failed update reopens the old app instead of leaving it closed.
+**Studio:** Fix: Reels with mixed video formats build correctly, and a reel that cut nothing shows as failed.
+**Studio:** Fix: Composer and intake clips cut to the millisecond, and the Baseline time row is never cut as a clip.
+**Studio:** Fix: Refresh rereads an Excel workbook, and only the cut parts of a cell turn green.
+**Transcripts:** Fix: Editing a whole line changes only that line, not matching text in other participants.
+**Transcripts:** Fix: Redaction catches names after special characters, and Redact forever reaches running Screenspace tasks.
+**Transcripts:** Fix: Queued tasks run in order, and a second Transcribe click no longer starts a duplicate run.
+**Screenspace:** Fix: Odd-sized regions and small icons on a still screen are detected correctly.
+**Screenspace:** Fix: Multitool keeps step values across tool switches and works at any CV scale.
+**Screenspace:** Fix: Edit restores the task's participant, Attention settings and template reference.
+**Screenspace:** Fix: Multi-part videos keep playing across parts, and the preview updates after a region moves.
+**Overview:** Fix: The Convergence sort menu no longer clips its label.
+
 ## v0.18.3 — 2026-11-09
 **Transcripts:** Feat: Add your own redaction terms in the Corrections window or with Redact All in search. They hide every match without the Redact model.
 **Transcripts:** Feat: Redact forever rewrites the saved text for one item, one term or the whole study after you confirm. Audio and video stay as they are.
