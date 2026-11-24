@@ -344,9 +344,10 @@
         var threshSlider = document.createElement("input");
         threshSlider.type = "range";
         threshSlider.min = "0.50"; threshSlider.max = "1.00"; threshSlider.step = "0.01";
-        threshSlider.value = String(ref.threshold);
         threshSlider.className = "scene-ref-thresh";
         var threshVal = el("span", "param-value", String(ref.threshold));
+        rangeReadoutEdit(threshSlider, threshVal);
+        setRangeValue(threshSlider, ref.threshold);
         threshSlider.addEventListener("input", (function (ri) {
           return function () {
             state.multitoolSteps[idx]._scenes[ri].threshold = parseFloat(threshSlider.value);

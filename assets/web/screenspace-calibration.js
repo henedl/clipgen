@@ -183,7 +183,8 @@
     var narrowGap = false;
     if (suggestion && suggestion.separated) {
       var slider = qs("#" + sliderId);
-      var step = slider ? parseFloat(slider.step) : 0;
+      // Declared step: a typed value leaves a finer one on the slider.
+      var step = slider ? parseFloat(slider.getAttribute("data-step") || slider.step) : 0;
       if (!isFinite(step)) step = 0;
       // Step-aligned; a raw target can snap onto a boundary and leak a pin.
       var applyVal = _calApplyValue(suggestion.lo, suggestion.hi, axis.compare, step, range.min, range.max);

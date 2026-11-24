@@ -959,6 +959,7 @@
 
     var wandToleranceInput = qs("#wandToleranceInput");
     wandToleranceInput.value = String(state.wandTolerance);
+    rangeReadoutEdit(wandToleranceInput, qs("#wandToleranceValue"));
     wandToleranceInput.addEventListener("input", function () {
       state.wandTolerance = parseInt(wandToleranceInput.value, 10) || 32;
       qs("#wandToleranceValue").textContent = String(state.wandTolerance);
@@ -966,6 +967,7 @@
 
     var shapeBrushInput = qs("#shapeBrushInput");
     shapeBrushInput.value = String(state.shapeBrushSize);
+    rangeReadoutEdit(shapeBrushInput, qs("#shapeBrushValue"));
     shapeBrushInput.addEventListener("input", function () {
       state.shapeBrushSize = parseInt(shapeBrushInput.value, 10) || 24;
       qs("#shapeBrushValue").textContent = String(state.shapeBrushSize);

@@ -2513,10 +2513,19 @@
   function ssAdjustControl(ctrl, dir) {
     if (!ctrl) return;
     if (ctrl.type === "range" || ctrl.type === "number") {
-      var step = parseFloat(ctrl.step) || 1;
+      var declared = ctrl.getAttribute("data-step");
+      var step = parseFloat(declared || ctrl.step) || 1;
       var value = parseFloat(ctrl.value);
       if (isNaN(value)) value = 0;
-      value += step * dir;
+      if (declared && ctrl.step !== declared) {
+        // A typed off-step value moves to the neighbouring declared step.
+        var base = numberOrDefault(ctrl.min, 0);
+        var k = (value - base) / step;
+        value = base + (dir > 0 ? Math.ceil(k) : Math.floor(k)) * step;
+        ctrl.step = declared;
+      } else {
+        value += step * dir;
+      }
       if (ctrl.min !== "") value = Math.max(value, parseFloat(ctrl.min));
       if (ctrl.max !== "") value = Math.min(value, parseFloat(ctrl.max));
       value = Math.round(value * 1e6) / 1e6; // trim fractional-step float drift
