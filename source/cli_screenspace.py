@@ -129,6 +129,21 @@ def _ss_parse_scene_ref(raw: str) -> dict[str, Any]:
     return ref
 
 
+def _ss_match_range(args: argparse.Namespace, params: dict[str, Any]) -> None:
+    """Copy --ss-min-matches / --ss-max-matches into *params*, validated."""
+    low, cap = args.ss_min_matches, args.ss_max_matches
+    if low is not None:
+        if low < 1:
+            raise ValueError("--ss-min-matches must be at least 1")
+        params["min_matches"] = low
+    if cap is not None:
+        if cap < 0:
+            raise ValueError("--ss-max-matches must be 0 (no limit) or more")
+        params["max_matches"] = cap
+    if cap and (low or 1) > cap:
+        raise ValueError("--ss-min-matches must not exceed --ss-max-matches")
+
+
 def _ss_build_params(
     args: argparse.Namespace,
     task_type: str,
@@ -219,6 +234,7 @@ def _ss_build_params(
             raise ValueError("template task requires --ss-threshold FLOAT")
         params["reference_timestamp"] = args.ss_reference_timestamp
         params["threshold"] = args.ss_threshold
+        _ss_match_range(args, params)
 
     elif task_type == "shape":
         if args.ss_reference_timestamp is None:
@@ -236,6 +252,7 @@ def _ss_build_params(
         ):
             if getattr(args, f"ss_{key}") is not None:
                 params[key] = getattr(args, f"ss_{key}")
+        _ss_match_range(args, params)
 
     elif task_type == "scene":
         raw_refs = getattr(args, "ss_scene_ref", None) or []

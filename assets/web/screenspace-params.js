@@ -502,6 +502,14 @@
     container.appendChild(tmplRefRow);
   }
 
+  // Template + Shape: a frame counts only inside this matches-per-frame range.
+  function renderMatchRangeRows(container, prefix) {
+    addParamRow(container, "Min matches", numberInput(prefix + "MinMatches", 1, 99, 1, 1));
+    addParamRow(container, "Max matches", numberInput(prefix + "MaxMatches", 0, 99, 0, 1));
+    var capHint = el("span", "param-hint", "per frame (0 = no limit)");
+    container.lastChild.querySelector(".param-control").appendChild(capHint);
+  }
+
   function renderTemplateParams(container) {
     renderRefCaptureRow(container, "Template");
     addParamRow(container, "Threshold", rangeInput("paramTemplateThresh", 0.50, 1.00, 0.70, 0.01), "paramTemplateThreshVal");
@@ -516,6 +524,7 @@
         SS.renderOverlay();
       });
     }
+    renderMatchRangeRows(container, "paramTemplate");
 
     renderIntervalSlot("paramTemplateInterval", 0.5, 60, 1.0, 0.5);
   }
@@ -550,6 +559,7 @@
     }
     linkCb.addEventListener("change", syncAxisRows);
     syncAxisRows();
+    renderMatchRangeRows(container, "paramShape");
     renderIntervalSlot("paramShapeInterval", 0.5, 60, 1.0, 0.5);
   }
 

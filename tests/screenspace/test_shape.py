@@ -419,6 +419,34 @@ class TestScanShape:
         assert 0.5 <= row["best_score"] <= 1.0
         assert "scale" in row["matches"][0]
 
+    def test_match_range_rejects_frame(self, monkeypatch):
+        frame = _make_outline_frame(320, 240, 110, 90, 60)
+        region = {"x": 0, "y": 0, "w": 320, "h": 240}
+        self._patch_single_frame(monkeypatch, frame)
+        too_few = screenspace.scan_shape(
+            "/fake.mp4", region, _make_outline(60), threshold=0.5, min_matches=2
+        )
+        assert too_few == []
+        self._patch_single_frame(monkeypatch, frame)
+        in_range = screenspace.scan_shape(
+            "/fake.mp4", region, _make_outline(60), threshold=0.5, max_matches=1
+        )
+        assert [r["match_count"] for r in in_range] == [1]
+
+    def test_check_frame_honors_match_range(self):
+        frame = _make_outline_frame(320, 240, 110, 90, 60)
+        region = {"x": 0, "y": 0, "w": 320, "h": 240}
+        tool = screenspace.TOOLS["shape"]
+        base = {"shape_image": _make_outline(60), "threshold": 0.5}
+        passed, detail = tool.check_frame(frame, None, region, dict(base))
+        assert passed is True and detail is not None
+        assert detail["match_count"] == 1
+        passed, detail = tool.check_frame(
+            frame, None, region, {**base, "min_matches": 2}
+        )
+        assert passed is False and detail is not None
+        assert detail["match_count"] == 1
+
     def test_degenerate_reference_skips_pipe(self, monkeypatch):
         def boom(*args, **kwargs):
             raise AssertionError("pipe opened for a degenerate reference")

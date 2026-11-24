@@ -2418,8 +2418,27 @@ def _coerce_offset(step: dict[str, Any], *, context: str = "") -> None:
     step["offset"] = {"min": off_min, "max": off_max}
 
 
+def _coerce_match_range(params: dict[str, Any], *, context: str = "") -> None:
+    """Validate min_matches / max_matches in place; a zero max means no cap."""
+    for key, floor in (("min_matches", 1), ("max_matches", 0)):
+        if params.get(key) is None:
+            params.pop(key, None)
+            continue
+        try:
+            count = int(params[key])
+        except (TypeError, ValueError, OverflowError) as exc:
+            raise ValueError(f"{context}{key} must be an integer") from exc
+        if count < floor:
+            raise ValueError(f"{context}{key} must be at least {floor}")
+        params[key] = count
+    cap = params.get("max_matches", 0)
+    if cap and params.get("min_matches", 1) > cap:
+        raise ValueError(f"{context}min_matches must not exceed max_matches")
+
+
 def _coerce_template_controls(params: dict[str, Any], *, context: str = "") -> None:
-    """Validate template-tool controls: template_scale."""
+    """Validate template-tool controls: template_scale and the match range."""
+    _coerce_match_range(params, context=context)
     if "template_scale" in params and params["template_scale"] is not None:
         scale = _coerce_float(
             params["template_scale"], "template_scale", context=context
@@ -2432,7 +2451,8 @@ def _coerce_template_controls(params: dict[str, Any], *, context: str = "") -> N
 
 
 def _coerce_shape_controls(params: dict[str, Any], *, context: str = "") -> None:
-    """Validate shape-tool controls: the horizontal + optional vertical ladders."""
+    """Validate shape-tool controls: scale ladders and the match range."""
+    _coerce_match_range(params, context=context)
     for min_key, max_key, steps_key in (
         ("scale_min", "scale_max", "scale_steps"),
         ("scale_y_min", "scale_y_max", "scale_y_steps"),

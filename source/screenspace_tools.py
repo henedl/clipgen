@@ -41,6 +41,7 @@ from screenspace_primitives import (
     compute_scene_fingerprint,
     extract_region,
     filter_matches_by_region_mask,
+    match_count_ok,
     mask_points_key,
     match_shape,
     region_mask_for,
@@ -672,6 +673,11 @@ class NumbersTool(AnalysisTool):
         return params.get("require_consecutive", 1) <= 1
 
 
+def _match_range(params: dict[str, Any]) -> tuple[int, int]:
+    """A task's (min_matches, max_matches); a zero max means no cap."""
+    return int(params.get("min_matches") or 1), int(params.get("max_matches") or 0)
+
+
 class TemplateTool(AnalysisTool):
     name = "template"
     fast_scan_description = "Downscales template 2\u00d7, skips unchanged frames"
@@ -734,11 +740,10 @@ class TemplateTool(AnalysisTool):
             corr,
             origin=origin,
         )
-        # Region polygon filters detections; passing needs a surviving match. best_score stays the window peak.
+        # The region polygon filters detections; best_score stays the window peak.
         matches = filter_matches_by_region_mask(matches, region)
-        if region.get("mask_points") and not matches:
-            return False, {"best_score": round(peak, 4), "match_count": 0}
-        return True, {"best_score": round(peak, 4), "match_count": len(matches)}
+        passed = match_count_ok(len(matches), *_match_range(params))
+        return passed, {"best_score": round(peak, 4), "match_count": len(matches)}
 
     def scan(
         self,
@@ -760,6 +765,7 @@ class TemplateTool(AnalysisTool):
         # Fast scan halves template + mask; the template_downscale fast_opts flag halves frames.
         if scan_mode == "fast":
             template_img, tmpl_mask = _halve_reference(template_img, tmpl_mask)
+        min_matches, max_matches = _match_range(params)
         return scan_template(
             video_path,
             region,
@@ -768,6 +774,8 @@ class TemplateTool(AnalysisTool):
             interval_seconds=params.get("interval", 0),
             template_mask=tmpl_mask,
             template_scale=float(params.get("template_scale", 1.0)),
+            min_matches=min_matches,
+            max_matches=max_matches,
             start_seconds=params.get("start_seconds", 0.0),
             end_seconds=params.get("end_seconds"),
             on_progress=on_progress,
@@ -830,9 +838,8 @@ class ShapeTool(AnalysisTool):
             return False, {"best_score": round(peak, 4), "match_count": 0}
         # Shaped region: the polygon refines the window as a detection filter.
         matches = filter_matches_by_region_mask(matches, region)
-        if region.get("mask_points") and not matches:
-            return False, {"best_score": round(peak, 4), "match_count": 0}
-        return True, {"best_score": round(peak, 4), "match_count": len(matches)}
+        passed = match_count_ok(len(matches), *_match_range(params))
+        return passed, {"best_score": round(peak, 4), "match_count": len(matches)}
 
     def scan(
         self,
@@ -854,6 +861,7 @@ class ShapeTool(AnalysisTool):
         # Fast scan halves reference + mask like TemplateTool; template_downscale halves frames.
         if scan_mode == "fast":
             shape_img, shape_mask = _halve_reference(shape_img, shape_mask)
+        min_matches, max_matches = _match_range(params)
         return scan_shape(
             video_path,
             region,
@@ -867,6 +875,8 @@ class ShapeTool(AnalysisTool):
             scale_y_min=float(params.get("scale_y_min", 0.0)),
             scale_y_max=float(params.get("scale_y_max", 0.0)),
             scale_y_steps=int(params.get("scale_y_steps", 0)),
+            min_matches=min_matches,
+            max_matches=max_matches,
             start_seconds=params.get("start_seconds", 0.0),
             end_seconds=params.get("end_seconds"),
             on_progress=on_progress,

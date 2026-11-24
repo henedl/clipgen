@@ -126,8 +126,10 @@
       lines.push("magnitude " + s.toFixed(2));
     } else {
       lines.push("score " + s.toFixed(3));
+      if (d.match_count) lines.push(d.match_count + (d.match_count === 1 ? " match" : " matches"));
     }
-    lines.push(sc.passed ? "✓ matches" : "✗ no match");
+    // A failed template/shape pin that still counted matches fell outside the match range.
+    lines.push(sc.passed ? "✓ matches" : (d.match_count ? "✗ match count out of range" : "✗ no match"));
     return lines.join("\n");
   }
 

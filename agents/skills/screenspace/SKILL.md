@@ -39,6 +39,7 @@ uv run clipgen.py --ss-task TYPE PARTICIPANT REGION [options] -i INPUT_DIR -o OU
 - **text**: `--ss-text "needle"` and/or `--ss-operator contains|equals|regex`
 - **numbers**: `--ss-ranges "0-100,200-300"` (expected value ranges)
 - **template**: requires a saved reference frame (set via UI first)
+- **template**, **shape**: `--ss-min-matches N --ss-max-matches N` keep only frames whose match count is in range (max `0` = no limit)
 - **timelapse**: `--ss-interval SECONDS`
 - **scene**: `--ss-scene-ref NAME:TIMESTAMP[:THRESHOLD]` (repeatable; TIMESTAMP in seconds, NAME has no `:`). Each reference frame is cropped from the region at TIMESTAMP. Optional per-scene THRESHOLD overrides `--ss-threshold`.
 

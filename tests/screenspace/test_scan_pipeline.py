@@ -289,6 +289,8 @@ class TestFastScanDispatchIntervalMultiplier:
             interval_seconds=0,
             template_mask=None,
             template_scale=1.0,
+            min_matches=1,
+            max_matches=0,
             start_seconds=0.0,
             end_seconds=None,
             on_progress=None,

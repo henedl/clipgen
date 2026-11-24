@@ -473,6 +473,12 @@
     }
   }
 
+  // Template + Shape: write a saved task's match range into the panel.
+  function restoreMatchRange(prefix, params) {
+    setInputValue("#" + prefix + "MinMatches", intOrDefault(params.min_matches, 1));
+    setInputValue("#" + prefix + "MaxMatches", intOrDefault(params.max_matches, 0));
+  }
+
   function restoreTaskToWorkflow(task) {
     // Switch workflow tab
     state.activeWorkflow = task.type;
@@ -646,6 +652,7 @@
       if (params.template_scale) {
         setInputValue("#paramTemplateScale", Math.round(params.template_scale * 100));
       }
+      restoreMatchRange("paramTemplate", params);
     } else if (task.type === "shape") {
       setInputValue("#paramShapeThresh", numberOrDefault(params.threshold, 0.55));
       if (params.scale_min) {
@@ -670,6 +677,7 @@
         }
         setInputValue("#paramShapeStepsY", intOrDefault(params.scale_y_steps, 3));
       }
+      restoreMatchRange("paramShape", params);
       setInputValue("#paramShapeInterval", numberOrDefault(params.interval, 1.0));
     } else if (task.type === "flow") {
       setInputValue("#paramFlowMag", numberOrDefault(params.magnitude_threshold, 2.0));

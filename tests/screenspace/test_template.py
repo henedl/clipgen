@@ -400,6 +400,107 @@ class TestScanTemplateControls:
         assert total < 50, f"Expected few/no matches, got {total}"
 
 
+class TestMatchRange:
+    """min_matches / max_matches reject frames by match count."""
+
+    REGION = {"x": 0, "y": 0, "w": 400, "h": 200}
+
+    def _scan(self, monkeypatch, icons, **kwargs):
+        frame = _make_icon_frame(400, 200, icons)
+
+        def fake_scan(video_path, interval, callback, **_kwargs):
+            callback(0.0, frame)
+
+        monkeypatch.setattr(screenspace_scans, "scan_video_full_frames", fake_scan)
+        monkeypatch.setattr(
+            screenspace_frames, "_probe_video_meta", lambda p: (30.0, 1.0)
+        )
+        return screenspace.scan_template(
+            "/fake.mp4", self.REGION, _make_icon(40), threshold=0.70, **kwargs
+        )
+
+    def test_count_gate(self):
+        ok = screenspace_primitives.match_count_ok
+        assert ok(1) and ok(50)
+        assert not ok(0)
+        assert not ok(1, 2)
+        assert ok(2, 2, 2)
+        assert not ok(3, 1, 2)
+        # A zero minimum still needs one match.
+        assert not ok(0, 0, 0)
+
+    def test_scan_defaults_keep_every_count(self, monkeypatch):
+        rows = self._scan(monkeypatch, [(60, 50, 40), (250, 50, 40)])
+        assert [r["match_count"] for r in rows] == [2]
+
+    def test_scan_rejects_below_min(self, monkeypatch):
+        assert self._scan(monkeypatch, [(60, 50, 40)], min_matches=2) == []
+        rows = self._scan(monkeypatch, [(60, 50, 40), (250, 50, 40)], min_matches=2)
+        assert [r["match_count"] for r in rows] == [2]
+
+    def test_scan_rejects_above_max(self, monkeypatch):
+        assert (
+            self._scan(monkeypatch, [(60, 50, 40), (250, 50, 40)], max_matches=1) == []
+        )
+        rows = self._scan(monkeypatch, [(60, 50, 40)], max_matches=1)
+        assert [r["match_count"] for r in rows] == [1]
+
+    def test_rejected_frame_is_not_carried(self, monkeypatch):
+        """A static frame after a rejected one has no row to re-emit."""
+        frame = _make_icon_frame(400, 200, [(60, 50, 40), (250, 50, 40)])
+
+        def fake_scan(video_path, interval, callback, **_kwargs):
+            callback(0.0, frame)
+            callback(1.0, frame.copy())
+
+        monkeypatch.setattr(screenspace_scans, "scan_video_full_frames", fake_scan)
+        monkeypatch.setattr(
+            screenspace_frames, "_probe_video_meta", lambda p: (30.0, 2.0)
+        )
+        rows = screenspace.scan_template(
+            "/fake.mp4", self.REGION, _make_icon(40), threshold=0.70, max_matches=1
+        )
+        assert rows == []
+
+    def test_check_frame_reports_rejected_count(self):
+        frame = _make_icon_frame(400, 200, [(60, 50, 40), (250, 50, 40)])
+        tool = screenspace.TOOLS["template"]
+        base = {"template_image": _make_icon(40), "threshold": 0.70}
+        passed, detail = tool.check_frame(frame, None, self.REGION, dict(base))
+        assert passed is True and detail is not None
+        assert detail["match_count"] == 2
+        passed, detail = tool.check_frame(
+            frame, None, self.REGION, {**base, "max_matches": 1}
+        )
+        assert passed is False and detail is not None
+        assert detail["match_count"] == 2 and detail["best_score"] >= 0.70
+        passed, _detail = tool.check_frame(
+            frame, None, self.REGION, {**base, "min_matches": 2, "max_matches": 2}
+        )
+        assert passed is True
+
+    def test_tool_scan_forwards_range(self, monkeypatch):
+        seen = {}
+
+        def fake_scan_template(video_path, region, **kwargs):
+            seen.update(kwargs)
+            return []
+
+        monkeypatch.setattr(screenspace_tools, "scan_template", fake_scan_template)
+        screenspace.TOOLS["template"].scan(
+            "/fake.mp4",
+            self.REGION,
+            {"template_image": _make_icon(40), "min_matches": 2, "max_matches": 3},
+            task_id="t",
+            scan_mode="full",
+            on_progress=lambda _fraction: None,
+            cancel_flag=lambda: False,
+            on_result=None,
+            fast_opts=None,
+        )
+        assert (seen["min_matches"], seen["max_matches"]) == (2, 3)
+
+
 class TestGenerateTemplateHeatmap:
     def test_basic_heatmap(self, tmp_path):
         results = [
