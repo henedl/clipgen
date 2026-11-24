@@ -273,7 +273,9 @@
     targetRow.id = "paramNumTargetRow";
     targetRow.appendChild(el("span", "param-label", "Target value"));
     var targetCtrl = el("div", "param-control");
-    targetCtrl.appendChild(numberInput("paramNumTarget", -999999, 999999, 100, 1));
+    var targetInp = numberInput("paramNumTarget", -999999, 999999, 100, 1);
+    targetInp.className = "param-input-wide";
+    targetCtrl.appendChild(targetInp);
     targetRow.appendChild(targetCtrl);
     container.appendChild(targetRow);
     var numRangeRow = el("div", "param-row");
@@ -281,9 +283,12 @@
     numRangeRow.style.display = "none";
     numRangeRow.appendChild(el("span", "param-label", "Range"));
     var rangeCtrl = el("div", "param-control");
-    rangeCtrl.appendChild(numberInput("paramNumMin", -999999, 999999, 0, 1));
+    var minInp = numberInput("paramNumMin", -999999, 999999, 0, 1);
+    var maxInp = numberInput("paramNumMax", -999999, 999999, 100, 1);
+    minInp.className = maxInp.className = "param-input-wide";
+    rangeCtrl.appendChild(minInp);
     rangeCtrl.appendChild(el("span", "param-value", "\u2013"));
-    rangeCtrl.appendChild(numberInput("paramNumMax", -999999, 999999, 100, 1));
+    rangeCtrl.appendChild(maxInp);
     numRangeRow.appendChild(rangeCtrl);
     container.appendChild(numRangeRow);
     addParamRow(container, "Min OCR conf.", rangeInput("paramNumOcrConf", 0.00, 1.00, numberOrDefault(CLIPGEN_CONFIG.screenspaceOcrMinConfidence, 0.6), 0.01), "paramNumOcrConfVal");

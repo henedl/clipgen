@@ -230,7 +230,7 @@
     r2.appendChild(el("span", "param-label", "Target"));
     var c2 = el("div", "param-control");
     var targetIn = document.createElement("input");
-    targetIn.type = "number"; targetIn.id = "paramNumTarget" + sfx; targetIn.style.width = "4rem";
+    targetIn.type = "number"; targetIn.id = "paramNumTarget" + sfx; targetIn.className = "param-input-wide";
     targetIn.style.fontSize = "var(--text-xs)";
     targetIn.value = numberOrDefault(init.target_value, 0);
     c2.appendChild(targetIn);
