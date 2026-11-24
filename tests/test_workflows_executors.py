@@ -1562,3 +1562,18 @@ def test_transcribe_runs_speaker_pass_per_param(
     out = _run("transcribe", _ctx(tmp_path), {"video": src}, param)
     assert (len(calls) == 1) is expected
     assert (out["segments"]["segments"][0].get("speaker") == "1") is expected
+
+
+@pytest.mark.parametrize("tool", ["template", "shape"])
+def test_ss_scan_params_carry_match_range(tool):
+    built = workflows._build_ss_scan_params(tool, {"min_matches": 2, "max_matches": 3})
+    assert (built["min_matches"], built["max_matches"]) == (2, 3)
+    # A blueprint saved before the params existed falls back to the catalog defaults.
+    legacy = workflows._build_ss_scan_params(tool, {})
+    assert (legacy["min_matches"], legacy["max_matches"]) == (1, 0)
+    # An inverted range would silently reject every frame.
+    with pytest.raises(ValueError, match="must not exceed"):
+        workflows._build_ss_scan_params(tool, {"min_matches": 3, "max_matches": 2})
+    # A zero max is no cap, so any minimum sits beside it.
+    open_ended = workflows._build_ss_scan_params(tool, {"min_matches": 3})
+    assert (open_ended["min_matches"], open_ended["max_matches"]) == (3, 0)

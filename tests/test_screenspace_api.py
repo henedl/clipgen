@@ -1754,6 +1754,45 @@ def test_create_shape_task_invalid_scale_params(client, monkeypatch, params, fra
     assert fragment in resp.get_json()["error"]
 
 
+@pytest.mark.parametrize("tool", ["template", "shape"])
+@pytest.mark.parametrize(
+    "params,fragment",
+    [
+        ({"min_matches": 0}, "min_matches must be at least 1"),
+        ({"max_matches": -1}, "max_matches must be at least 0"),
+        ({"min_matches": "two"}, "min_matches must be an integer"),
+        ({"min_matches": 3, "max_matches": 2}, "must not exceed max_matches"),
+    ],
+)
+def test_create_task_invalid_match_range(client, monkeypatch, tool, params, fragment):
+    _create_region(client, "r")
+    _enable_video_task_setup(monkeypatch, "P01")
+    resp = client.post(
+        "/screenspace/api/tasks",
+        json={
+            "type": tool,
+            "participant": "P01",
+            "region": "r",
+            "parameters": {"reference_timestamp": 0.0, **params},
+        },
+    )
+    assert resp.status_code == 400
+    assert fragment in resp.get_json()["error"]
+
+
+def test_coerce_match_range_normalizes():
+    params = {"min_matches": "2", "max_matches": 4.0}
+    screenspace_server._coerce_match_range(params)
+    assert params == {"min_matches": 2, "max_matches": 4}
+    # A zero max means no cap, so any minimum is valid beside it.
+    unbounded = {"min_matches": 5, "max_matches": 0}
+    screenspace_server._coerce_match_range(unbounded)
+    assert unbounded == {"min_matches": 5, "max_matches": 0}
+    absent = {"min_matches": None}
+    screenspace_server._coerce_match_range(absent)
+    assert absent == {}
+
+
 def test_create_scene_task_invalid_scene_references(client, monkeypatch):
     _create_region(client, "r")
     _enable_video_task_setup(monkeypatch, "P01")

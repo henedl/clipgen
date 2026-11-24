@@ -33,6 +33,7 @@ from screenspace_primitives import (
     _prepare_shape_reference,
     _prepare_template,
     _scale_template,
+    match_count_ok,
     match_shape,
     max_cell_diff,
     region_search_window,
@@ -88,8 +89,13 @@ def _box_match_callback(
     report: Callable[[float], None],
     cancel_flag: Callable[[], bool] | None,
     on_result: Callable[[dict[str, Any]], None] | None,
+    min_matches: int = 1,
+    max_matches: int = 0,
 ) -> ScanCallback:
-    """Template/shape frame callback; *match_fn(frame, gray, scale_back, window)* finds boxes."""
+    """Template/shape frame callback; *match_fn(frame, gray, scale_back, window)* finds boxes.
+
+    A frame whose match count falls outside *min_matches*..*max_matches* is no hit.
+    """
     downscale = bool(fast_opts and fast_opts.get("template_downscale"))
     # Match boxes must undo both the ffmpeg cv_scale and the fast-scan 2x downscale.
     cv_scale = _cv_scale()
@@ -149,7 +155,7 @@ def _box_match_callback(
                     m["h"] = round(m["h"] * inv)
             # The region polygon (not the reference mask) drops outside matches before last_rd caches them.
             matches = filter_matches_by_region_mask(matches, region)
-        if matches:
+        if match_count_ok(len(matches), min_matches, max_matches):
             best = max(m["score"] for m in matches)
             rd = {
                 "timestamp": ts,
@@ -160,7 +166,7 @@ def _box_match_callback(
             last_rd[0] = rd
             _emit(rd)
         else:
-            # No match this frame — a subsequent static frame has nothing to carry.
+            # No hit this frame: a later static frame has nothing to carry.
             last_rd[0] = None
         report(ts)
         return None
@@ -787,6 +793,8 @@ def scan_template(
     *,
     template_mask: np.ndarray | None = None,
     template_scale: float = 1.0,
+    min_matches: int = 1,
+    max_matches: int = 0,
     start_seconds: float = 0.0,
     end_seconds: float | None = None,
     on_progress: Callable[[float], None] | None = None,
@@ -800,7 +808,9 @@ def scan_template(
     (e.g. ``0.5`` for a template captured at 2x the in-video scale).  An
     optional *template_mask* restricts matching to non-transparent regions
     of an uploaded PNG. A real *region* rect scopes the search to matches
-    centered inside it — pick Full frame to search anywhere.
+    centered inside it — pick Full frame to search anywhere. A frame is a hit
+    only when its match count sits in *min_matches*..*max_matches* (a zero
+    max means no cap).
 
     Returns list of ``{timestamp, matches, best_score, match_count}`` dicts.
     """
@@ -839,6 +849,8 @@ def scan_template(
         report,
         cancel_flag,
         on_result,
+        min_matches,
+        max_matches,
     )
 
     scan_video_full_frames(
@@ -871,6 +883,8 @@ def scan_shape(
     scale_y_min: float = 0.0,
     scale_y_max: float = 0.0,
     scale_y_steps: int = 0,
+    min_matches: int = 1,
+    max_matches: int = 0,
     start_seconds: float = 0.0,
     end_seconds: float | None = None,
     on_progress: Callable[[float], None] | None = None,
@@ -887,7 +901,8 @@ def scan_shape(
     *scale_y_min*/*scale_y_max* unlink the axes into an independent vertical
     ladder (see :func:`_prepare_shape_reference`). A real *region* rect scopes
     the search to matches centered inside it — pick Full frame to search
-    anywhere (template's always-full-frame semantics).
+    anywhere (template's always-full-frame semantics). *min_matches* and
+    *max_matches* bound the per-frame match count as in :func:`scan_template`.
 
     Returns list of ``{timestamp, matches, best_score, match_count}`` dicts.
     """
@@ -941,7 +956,15 @@ def scan_shape(
         ]
 
     _cb = _box_match_callback(
-        _match, region, fast_opts, results, report, cancel_flag, on_result
+        _match,
+        region,
+        fast_opts,
+        results,
+        report,
+        cancel_flag,
+        on_result,
+        min_matches,
+        max_matches,
     )
 
     try:

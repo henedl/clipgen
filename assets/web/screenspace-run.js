@@ -119,6 +119,19 @@
     }
   }
 
+  // Matches-per-frame range; defaults stay off the wire. False when min exceeds max.
+  function _matchRange(rd, p, prefix) {
+    var low = rd.intv(prefix + "MinMatches", 1);
+    var cap = rd.intv(prefix + "MaxMatches", 0);
+    if (cap > 0 && low > cap) {
+      rd.toast("Min matches cannot exceed max matches");
+      return false;
+    }
+    if (low > 1) p.min_matches = low;
+    if (cap > 0) p.max_matches = cap;
+    return true;
+  }
+
   function gatherMultitoolStepParams(stepType, idx, opts) {
     var rd = _paramReader("_mt" + idx, opts);
     var num = rd.num, intv = rd.intv, chk = rd.chk, str = rd.str, rawNum = rd.rawNum, toast = rd.toast;
@@ -171,6 +184,7 @@
       if (!isNaN(tScalePct) && tScalePct > 0 && tScalePct !== 100) {
         p.template_scale = tScalePct / 100;
       }
+      if (!_matchRange(rd, p, "paramTemplate")) return null;
     } else if (stepType === "flow") {
       p.magnitude_threshold = num("paramFlowMag", 2.0);
     } else if (stepType === "scene") {
@@ -318,6 +332,8 @@
         }
         params.interval = num("paramShapeInterval", 1.0);
       }
+      var rangePrefix = type === "template" ? "paramTemplate" : "paramShape";
+      if (!_matchRange(rd, params, rangePrefix)) return null;
     } else if (type === "flow") {
       params.magnitude_threshold = num("paramFlowMag", 2.0);
       params.interval = num("paramFlowInterval", 1.0);

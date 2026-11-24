@@ -487,6 +487,18 @@ def _add_screenspace_args(parser: argparse.ArgumentParser) -> None:
         help="Shape vertical scale ladder rungs.",
     )
     screenspace_cli.add_argument(
+        "--ss-min-matches",
+        type=int,
+        metavar="INT",
+        help="Fewest matches a frame needs to count (template, shape). Default: 1.",
+    )
+    screenspace_cli.add_argument(
+        "--ss-max-matches",
+        type=int,
+        metavar="INT",
+        help="Most matches a frame may hold (template, shape). Default: no limit.",
+    )
+    screenspace_cli.add_argument(
         "--ss-scene-ref",
         action="append",
         metavar="NAME:TIMESTAMP[:THRESHOLD]",

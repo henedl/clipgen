@@ -299,6 +299,11 @@ def filter_matches_by_region_mask(
     ]
 
 
+def match_count_ok(count: int, min_matches: int = 1, max_matches: int = 0) -> bool:
+    """Whether a frame's match count is in range; a zero max means no cap."""
+    return count >= max(1, min_matches) and (max_matches <= 0 or count <= max_matches)
+
+
 def region_masker(
     region: dict[str, Any],
 ) -> Callable[[np.ndarray], np.ndarray | None]:

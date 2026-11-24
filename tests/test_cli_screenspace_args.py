@@ -67,6 +67,8 @@ def _ss_args(**overrides):
         "ss_scale_y_min": None,
         "ss_scale_y_max": None,
         "ss_scale_y_steps": None,
+        "ss_min_matches": None,
+        "ss_max_matches": None,
         "ss_scene_ref": None,
         "ss_text": None,
         "ss_fuzzy_threshold": None,
@@ -846,6 +848,55 @@ def test_ss_task_shape_dispatches_and_persists(monkeypatch):
     assert params["scale_min"] == 0.5
     assert params["scale_max"] == 2.0
     assert params["scale_steps"] == 5
+
+
+@pytest.mark.parametrize("tool", ["template", "shape"])
+def test_ss_task_match_range_persists(monkeypatch, tool):
+    fake_manifest = {
+        "regions": {"btn": {"x": 0.0, "y": 0.0, "w": 0.5, "h": 0.5}},
+        "stashes": [],
+        "tasks": [],
+        "events": [],
+    }
+    saved_tasks = _install_ss_stubs(monkeypatch, fake_manifest)
+    args = _ss_args(
+        ss_task=[tool, "P01", "btn"],
+        ss_reference_timestamp=5.0,
+        ss_threshold=0.7,
+        ss_min_matches=2,
+        ss_max_matches=4,
+    )
+    cli_screenspace._run_ss_task(args)
+
+    params = saved_tasks[0]["parameters"]
+    assert (params["min_matches"], params["max_matches"]) == (2, 4)
+
+
+@pytest.mark.parametrize(
+    "flags",
+    [
+        {"ss_min_matches": 0},
+        {"ss_max_matches": -1},
+        {"ss_min_matches": 3, "ss_max_matches": 2},
+    ],
+)
+def test_ss_task_match_range_rejects_bad_values(monkeypatch, capsys, flags):
+    fake_manifest = {
+        "regions": {"btn": {"x": 0.0, "y": 0.0, "w": 0.5, "h": 0.5}},
+        "stashes": [],
+        "tasks": [],
+        "events": [],
+    }
+    _install_ss_stubs(monkeypatch, fake_manifest)
+    args = _ss_args(
+        ss_task=["template", "P01", "btn"],
+        ss_reference_timestamp=5.0,
+        ss_threshold=0.7,
+        **flags,
+    )
+    with pytest.raises(SystemExit):
+        cli_screenspace._run_ss_task(args)
+    assert "matches" in capsys.readouterr().out.lower()
 
 
 def test_ss_task_shape_requires_reference_timestamp(monkeypatch, capsys):

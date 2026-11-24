@@ -611,6 +611,13 @@ def _build_ss_scan_params(tool_name: str, params: dict[str, Any]) -> dict[str, A
         val = params.get(key)
         return float(val) if val not in (None, "") else float(defaults.get(key, 0.0))
 
+    def _match_range() -> dict[str, int]:
+        # An inverted range rejects every frame, so fail the node instead.
+        low, cap = int(_num("min_matches")), int(_num("max_matches"))
+        if cap > 0 and low > cap:
+            raise ValueError("Min matches must not exceed max matches")
+        return {"min_matches": low, "max_matches": cap}
+
     if tool_name == "color":
         return {
             "target_color": {
@@ -664,6 +671,7 @@ def _build_ss_scan_params(tool_name: str, params: dict[str, Any]) -> dict[str, A
         return {
             "threshold": _num("threshold"),
             "template_scale": _num("template_scale"),
+            **_match_range(),
             "interval": _num("interval"),
         }
     if tool_name == "shape":
@@ -675,6 +683,7 @@ def _build_ss_scan_params(tool_name: str, params: dict[str, Any]) -> dict[str, A
             "scale_y_min": _num("scale_y_min"),
             "scale_y_max": _num("scale_y_max"),
             "scale_y_steps": int(_num("scale_y_steps")),
+            **_match_range(),
             "interval": _num("interval"),
         }
     if tool_name == "inactivity":

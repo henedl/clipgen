@@ -323,6 +323,9 @@
 
     _mtAddNumberRow(body, "Threshold", "paramTemplateThresh" + sfx, 0.50, 1.00, numberOrDefault(init.threshold, 0.70), 0.01);
     _mtAddNumberRow(body, "Scale %", "paramTemplateScale" + sfx, 25, 200, init.template_scale != null ? Math.round(init.template_scale * 100) : 100, 5);
+    _mtAddNumberRow(body, "Min matches", "paramTemplateMinMatches" + sfx, 1, 99, intOrDefault(init.min_matches, 1), 1);
+    _mtAddNumberRow(body, "Max matches", "paramTemplateMaxMatches" + sfx, 0, 99, intOrDefault(init.max_matches, 0), 1);
+    body.lastChild.querySelector(".param-control").appendChild(el("span", "param-hint", "0 = no limit"));
   }
 
   function _mtRenderFlow(body, idx, sfx) {
@@ -521,6 +524,8 @@
       init.threshold = numberOrDefault((qs("#paramTemplateThresh" + sfx) || {}).value, init.threshold);
       var tScalePct = numberOrDefault((qs("#paramTemplateScale" + sfx) || {}).value, 100);
       init.template_scale = tScalePct / 100;
+      init.min_matches = intOrDefault((qs("#paramTemplateMinMatches" + sfx) || {}).value, 1);
+      init.max_matches = intOrDefault((qs("#paramTemplateMaxMatches" + sfx) || {}).value, 0);
     } else if (step.type === "flow") {
       init.magnitude_threshold = numberOrDefault((qs("#paramFlowMag" + sfx) || {}).value, init.magnitude_threshold);
     }

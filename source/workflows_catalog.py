@@ -862,6 +862,24 @@ _INTERVAL_PARAM: ParamSpec = {
     "label": "Interval (s, 0=auto)",
 }
 
+# Template and shape: bounds on matches per frame.
+_MATCH_RANGE_PARAMS: list[ParamSpec] = [
+    {
+        "name": "min_matches",
+        "type": "number",
+        "default": 1,
+        "min": 1,
+        "label": "Min matches",
+    },
+    {
+        "name": "max_matches",
+        "type": "number",
+        "default": 0,
+        "min": 0,
+        "label": "Max matches (0=any)",
+    },
+]
+
 _REFERENCE_PARAM: ParamSpec = {
     "name": "reference_seconds",
     "type": "number",
@@ -1058,6 +1076,7 @@ _SS_DETECTOR_SPECS: dict[str, list[ParamSpec]] = {
             "min": 0,
             "label": "Template scale",
         },
+        *_MATCH_RANGE_PARAMS,
         _INTERVAL_PARAM,
     ],
     "shape": [
@@ -1118,6 +1137,7 @@ _SS_DETECTOR_SPECS: dict[str, list[ParamSpec]] = {
             "max": 12,
             "label": "V scale steps",
         },
+        *_MATCH_RANGE_PARAMS,
         _INTERVAL_PARAM,
     ],
     "flow": [
