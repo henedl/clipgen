@@ -23,6 +23,8 @@ dependencies = [
     # from the package), so the Screenspace OCR tools depend on it directly.
     "onnxruntime>=1.24",
     "pywebview>=6.2.1",
+    # Direct: frozen builds point SSL_CERT_FILE at it (utils.use_bundled_certs).
+    "certifi>=2026.10.18",
 ]
 
 [project.optional-dependencies]

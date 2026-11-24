@@ -1133,6 +1133,39 @@ def test_bundled_bin_prepend_wins_over_package_managers(monkeypatch, tmp_path):
     assert os.environ["PATH"].split(os.pathsep)[0] == str(bundled)
 
 
+def test_bundled_certs_only_when_frozen(monkeypatch):
+    """Source runs keep the interpreter's own CA lookup."""
+    import utils
+
+    monkeypatch.delattr("sys.frozen", raising=False)
+    monkeypatch.delenv("SSL_CERT_FILE", raising=False)
+    assert utils.use_bundled_certs() is None
+    assert "SSL_CERT_FILE" not in os.environ
+
+
+def test_bundled_certs_set_certifi_file(monkeypatch):
+    """A frozen launch points SSL_CERT_FILE at certifi, so urlopen verifies GitHub."""
+    import certifi
+
+    import utils
+
+    monkeypatch.setattr("sys.frozen", True, raising=False)
+    monkeypatch.delenv("SSL_CERT_FILE", raising=False)
+    assert utils.use_bundled_certs() == certifi.where()
+    assert os.environ["SSL_CERT_FILE"] == certifi.where()
+
+
+def test_bundled_certs_keep_user_value(monkeypatch, tmp_path):
+    """A user's own CA bundle (corporate proxy) must win over certifi."""
+    import utils
+
+    own = tmp_path / "corp.pem"
+    monkeypatch.setattr("sys.frozen", True, raising=False)
+    monkeypatch.setenv("SSL_CERT_FILE", str(own))
+    assert utils.use_bundled_certs() is None
+    assert os.environ["SSL_CERT_FILE"] == str(own)
+
+
 def test_bundled_bin_prepend_noop_without_bin_dir(monkeypatch, tmp_path):
     """A bundle without bin/ (e.g. a dev-built one-dir before the fetch step
     existed) must fall back to PATH resolution untouched."""

@@ -1529,6 +1529,8 @@ def main() -> None:
     utils.prepend_bundled_bin_to_path()
     # Finder gives GUI processes a bare PATH without Homebrew, hiding ffmpeg.
     utils.augment_path_for_gui_launch()
+    # Frozen Python has no CA store; HTTPS needs certifi's.
+    utils.use_bundled_certs()
 
     if config.DEBUGGING:
         config.debug_ic(args)
