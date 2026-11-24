@@ -168,6 +168,7 @@
           if (region.description) saved.description = region.description;
           state.regions[name] = saved;
           renderOverlay();
+          refreshModelView({ debounce: true });
           refreshCalibration({ debounce: true });
         }
       })

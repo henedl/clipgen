@@ -231,6 +231,21 @@ def test_model_view_overlay_uses_preview_region():
     assert "var oRegion = state.overlayImageRegion;" in body
 
 
+def test_region_edit_refreshes_model_view():
+    """A moved or resized region must refetch the preview, not keep old hits."""
+    start = INTERACTION_JS.index("function saveRegionUpdate(")
+    body = INTERACTION_JS[
+        start : INTERACTION_JS.index("function saveRegionShape(", start)
+    ]
+    assert "refreshModelView({ debounce: true });" in body
+    start = MODEL_VIEW_JS.index("function overlayImageStale()")
+    stale = MODEL_VIEW_JS[
+        start : MODEL_VIEW_JS.index("function _overlayRegionKey()", start)
+    ]
+    assert "state.overlayImageRegionKey !== _overlayRegionKey()" in stale
+    assert "state.overlayImageRegionKey = regionKey;" in MODEL_VIEW_JS
+
+
 def test_multitool_branch_refreshes_model_view():
     """Multitool must reach the shared refresh tail; an early return left the preview stale."""
     start = PARAMS_JS.index("function _renderWorkflowParamsBuild()")

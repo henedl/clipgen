@@ -235,6 +235,7 @@
     overlayImageObjectUrl: null,
     overlayImageScope: null,
     overlayImageRegion: null,
+    overlayImageRegionKey: null,
     overlayImageTimestamp: null,
     overlayImageTool: null,
     overlayLayerSpec: {},

@@ -105,15 +105,22 @@
     state.overlayImage = null;
     state.overlayImageScope = null;
     state.overlayImageRegion = null;
+    state.overlayImageRegionKey = null;
     state.overlayImageTimestamp = null;
     state.overlayImageTool = null;
   }
 
-  // True when the overlay image is missing or from another frame or tool.
+  // True when the overlay image is missing or from another frame, tool, or region.
   function overlayImageStale() {
     var curTs = Number(state.currentTimestamp || 0).toFixed(3);
     return !state.overlayImage || state.overlayImageTimestamp !== curTs
-      || state.overlayImageTool !== _previewToolKey();
+      || state.overlayImageTool !== _previewToolKey()
+      || state.overlayImageRegionKey !== _overlayRegionKey();
+  }
+
+  // Geometry plus mask of the preview region; a move or reshape changes it.
+  function _overlayRegionKey() {
+    return _normalizedRegionString() + "|" + (_regionMaskString() || "");
   }
 
   // The multitool step the preview follows: clamped state.multitoolFocus, or null when empty.
@@ -485,6 +492,7 @@
       upload = focus.step._upload || null;
     }
     var regionStr = _normalizedRegionString();
+    var regionKey = _overlayRegionKey();
     var hasRegion = _hasActiveOrPendingRegion();
     var overlayRegion = null;
     if (hasRegion) {
@@ -621,6 +629,7 @@
           state.overlayImage = oi;
           state.overlayImageScope = resolved.scope;
           state.overlayImageRegion = overlayRegion;
+          state.overlayImageRegionKey = regionKey;
           state.overlayImageTimestamp = ts;
           state.overlayImageTool = toolKey;
           SS.renderOverlay();
