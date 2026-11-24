@@ -2496,6 +2496,11 @@ html[data-theme="light"] .ss-cat-chip.active[data-active-type="numbers"] {
   font-family: var(--font-mono);
 }
 
+/* Fits a signed six-digit value, the Numbers tool's bounds. */
+.param-control input[type="number"].param-input-wide {
+  width: calc(8ch + var(--space-6));
+}
+
 .param-control input[type="text"] {
   flex: 1;
   min-width: 0;
