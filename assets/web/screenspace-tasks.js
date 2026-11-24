@@ -459,7 +459,9 @@
   // Sets value without dispatching input; callers needing listeners must dispatch it themselves.
   function setInputValue(selector, value) {
     var inp = qs(selector);
-    if (inp) inp.value = value;
+    if (!inp) return;
+    if (inp.type === "range") setRangeValue(inp, value);
+    else inp.value = value;
   }
 
   function syncValueDisplays() {

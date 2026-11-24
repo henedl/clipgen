@@ -396,3 +396,35 @@ def test_numbers_range_never_becomes_a_multitool_step():
     assert 'params.operator === "range") return null;' in body
     restore = _tasks_fn("restoreTaskToWorkflow")
     assert 's.operator === "range"' in restore
+
+
+def test_slider_numerals_accept_typed_values():
+    """Every slider readout opens the typed-value field, and every programmatic
+    write goes through setRangeValue so an off-step value survives a rebuild."""
+    utils_js = read("screenspace-utils.js")
+    assert_es5(utils_js, "screenspace-utils.js")
+    start = PARAMS_JS.index("function addParamRow(")
+    add_row = PARAMS_JS[start : PARAMS_JS.index("\n  }", start)]
+    # The step-restoring listener must run before the readout listener.
+    assert add_row.index("rangeReadoutEdit(control, valSpan)") < add_row.index(
+        'control.addEventListener("input"'
+    )
+    for name, src in (
+        ("scene refs", PARAMS_JS),
+        ("multitool scene refs", MULTITOOL_JS),
+    ):
+        assert "rangeReadoutEdit(threshSlider, threshVal)" in src, name
+        assert "setRangeValue(threshSlider, ref.threshold)" in src, name
+    assert "rangeReadoutEdit(brush, brushVal)" in SAMPLE_EDITOR_JS
+    assert (
+        'rangeReadoutEdit(wandToleranceInput, qs("#wandToleranceValue"))'
+        in INTERACTION_JS
+    )
+    assert 'rangeReadoutEdit(shapeBrushInput, qs("#shapeBrushValue"))' in INTERACTION_JS
+    restore = PARAMS_JS[PARAMS_JS.index("function _restoreParamValues(") :]
+    assert "setRangeValue(el, saved)" in restore[: restore.index("\n  }")]
+    assert "setRangeValue(inp, value)" in _tasks_fn("setInputValue")
+    # Calibration snaps to the declared step, not a typed value's finer one.
+    assert 'slider.getAttribute("data-step") || slider.step' in CALIBRATION_JS
+    for cls in (".range-readout {", ".range-readout-input,"):
+        assert cls in SCREENSPACE_CSS, f"{cls} is set in JS but never styled"

@@ -580,9 +580,10 @@
       threshSlider.min = "0.50";
       threshSlider.max = "1.00";
       threshSlider.step = "0.01";
-      threshSlider.value = String(ref.threshold);
       threshSlider.className = "scene-ref-thresh";
       var threshVal = el("span", "param-value", String(ref.threshold));
+      rangeReadoutEdit(threshSlider, threshVal);
+      setRangeValue(threshSlider, ref.threshold);
       threshSlider.addEventListener("input", (function (idx) {
         return function () {
           state.sceneReferences[idx].threshold = parseFloat(threshSlider.value);
@@ -685,7 +686,8 @@
         else segTrackSetValue(el.parentNode, saved);
       } else {
         if (el.value === String(saved)) return;
-        el.value = saved;
+        if (el.type === "range") setRangeValue(el, saved);
+        else el.value = saved;
       }
       // Fire input for readouts and model view, change for change-only listeners (numbers
       // operator row).
@@ -929,6 +931,7 @@
       valSpan.id = valueDisplayId;
       valSpan.textContent = control.value;
       ctrl.appendChild(valSpan);
+      if (control.type === "range") rangeReadoutEdit(control, valSpan);
       control.addEventListener("input", function () {
         valSpan.textContent = control.value;
         if (state.activeWorkflow === "color" && control.id && control.id.startsWith("paramColor")) {

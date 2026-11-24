@@ -182,6 +182,7 @@
       brush.step = "1";
       brush.value = String(_brushSize);
       var brushVal = el("span", "ss-sample-modal__brush-val", String(_brushSize));
+      rangeReadoutEdit(brush, brushVal);
       brush.addEventListener("input", function () {
         _brushSize = parseInt(brush.value, 10) || 24;
         brushVal.textContent = String(_brushSize);

@@ -558,3 +558,68 @@ def test_result_row_accepts_streamed_color_instants():
         snippet=_RESULT_ROW,
     )
     assert out == [["4"], ["1 – 3", "2.0s"]]
+
+
+_SET_RANGE = slice_between(
+    read("screenspace-utils.js"), "function setRangeValue(", "// Click the numeral"
+)
+_SET_RANGE_STUBS = """
+function numberOrDefault(v, d) { var n = parseFloat(v); return isNaN(n) ? d : n; }
+function slider(min, step) {
+  return { min: String(min), step: String(step), value: "",
+    getAttribute: function () { return String(step); } };
+}
+function typed(min, step, value) {
+  var s = slider(min, step);
+  setRangeValue(s, value);
+  return s.step;
+}
+"""
+
+
+def test_typed_slider_value_keeps_off_step_precision():
+    """A range input snaps its value to `step`, so a typed 137 on a step-5
+    slider read back as 135 unless the step is refined first."""
+    out = _probe(
+        "[typed(25, 5, 137), typed(25, 5, 140), typed(0.5, 0.01, 0.755),"
+        " typed(0.5, 0.01, 0.7), typed(0.5, 0.5, 2.25), typed(0, 1, 30)]",
+        prelude=_SET_RANGE_STUBS,
+        snippet=_SET_RANGE,
+    )
+    assert out == ["1", "5", "0.001", "0.01", "0.05", "1"]
+
+
+_ADJUST = slice_between(
+    read("screenspace.js"), "function ssAdjustControl(", "// Only the tool region"
+)
+_ADJUST_STUBS = """
+function numberOrDefault(v, d) { var n = parseFloat(v); return isNaN(n) ? d : n; }
+function Event() {}
+function nudge(min, declared, live, value, dir) {
+  var c = { type: "range", min: String(min), max: "400", step: String(live),
+    value: String(value), dispatchEvent: function () {},
+    getAttribute: function () { return declared === null ? null : String(declared); } };
+  ssAdjustControl(c, dir);
+  return [c.value, c.step];
+}
+"""
+
+
+def test_keyboard_nudge_leaves_a_typed_fine_step():
+    """Typing 137 leaves step 1 on a step-5 slider; arrow-key navigation fires
+    synthetic input events, so it kept nudging by the fine step."""
+    out = _probe(
+        "[nudge(25, 5, 1, 137, 1), nudge(25, 5, 1, 137, -1), nudge(25, 5, 5, 135, 1),"
+        " nudge(0.5, 0.01, 0.001, 0.755, 1), nudge(0.5, 0.01, 0.001, 0.755, -1),"
+        " nudge(0, null, 2, 10, 1)]",
+        prelude=_ADJUST_STUBS,
+        snippet=_ADJUST,
+    )
+    assert out == [
+        [140, "5"],
+        [135, "5"],
+        [140, "5"],
+        [0.76, "0.01"],
+        [0.75, "0.01"],
+        [12, "2"],
+    ]

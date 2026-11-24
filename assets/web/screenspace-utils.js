@@ -72,6 +72,77 @@ function rangeInput(id, min, max, value, step) {
   return inp;
 }
 
+// Typed values may sit between slider steps; "data-step" holds the declared step.
+function setRangeValue(slider, value) {
+  var declared = slider.getAttribute("data-step");
+  if (declared) {
+    var step = parseFloat(declared);
+    var k = (parseFloat(value) - numberOrDefault(slider.min, 0)) / step;
+    var onStep = Math.abs(k - Math.round(k)) < 1e-6;
+    // Whole-number sliders stay whole; fractional ones gain one decimal.
+    slider.step = onStep ? declared : String(step >= 1 ? 1 : step / 10);
+  }
+  slider.value = value;
+}
+
+// Click the numeral, or press Enter on the slider, to type a value.
+function rangeReadoutEdit(slider, readout) {
+  if (!slider.hasAttribute("data-step")) slider.setAttribute("data-step", slider.step || "1");
+  readout.classList.add("range-readout");
+  // Dragging or arrow keys return the slider to its declared step.
+  slider.addEventListener("input", function (e) {
+    var declared = slider.getAttribute("data-step");
+    if (e.isTrusted && slider.step !== declared) slider.step = declared;
+  });
+
+  function open() {
+    if (readout.style.display === "none") return;
+    var input = document.createElement("input");
+    input.type = "text";
+    input.inputMode = "decimal";
+    input.autocomplete = "off";
+    input.className = "range-readout-input";
+    input.setAttribute("aria-label", "Value");
+    input.value = slider.value;
+    var done = false;
+    function close(commit, refocus) {
+      if (done) return;
+      done = true;
+      // Comma decimals: Nordic keyboards and numpads type them.
+      var typed = parseFloat(input.value.replace(",", "."));
+      if (input.parentNode) input.parentNode.removeChild(input);
+      readout.style.display = "";
+      if (commit && !isNaN(typed)) {
+        var before = slider.value;
+        setRangeValue(slider, clamp(typed, numberOrDefault(slider.min, 0), numberOrDefault(slider.max, 100)));
+        if (slider.value !== before) {
+          slider.dispatchEvent(new Event("input", { bubbles: true }));
+          slider.dispatchEvent(new Event("change", { bubbles: true }));
+        }
+      }
+      if (refocus) slider.focus();
+    }
+    input.addEventListener("keydown", function (e) {
+      if (e.key === "Enter") { e.preventDefault(); close(true, true); }
+      else if (e.key === "Escape") { e.preventDefault(); close(false, true); }
+    });
+    input.addEventListener("blur", function () { close(true, false); });
+    // Keystrokes stay private; the slider speaks for the committed value.
+    input.addEventListener("input", function (e) { e.stopPropagation(); });
+    input.addEventListener("change", function (e) { e.stopPropagation(); });
+    input.style.width = readout.offsetWidth + "px";
+    readout.style.display = "none";
+    readout.parentNode.insertBefore(input, readout.nextSibling);
+    input.focus();
+    input.select();
+  }
+
+  readout.addEventListener("click", open);
+  slider.addEventListener("keydown", function (e) {
+    if (e.key === "Enter") { e.preventDefault(); open(); }
+  });
+}
+
 function numberInput(id, min, max, value, step) {
   var inp = document.createElement("input");
   inp.type = "number";
